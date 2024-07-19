@@ -6,8 +6,6 @@ authors = [
     {name = "DBOS, Inc.", email = "contact@dbos.dev"},
 ]
 dependencies = [
-    "pytest>=8.2.2",
-    "mypy>=1.11.0",
 ]
 requires-python = ">=3.12"
 readme = "README.md"
@@ -20,6 +18,11 @@ build-backend = "pdm.backend"
 [tool.pdm]
 distribution = true
 
+[tool.pdm.dev-dependencies]
+dev = [
+    "pytest>=8.2.2",
+    "mypy>=1.11.0",
+]
 [tool.mypy]
 strict = true
 exclude = "tests/"
