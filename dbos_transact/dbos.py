@@ -2,7 +2,7 @@ import logging
 
 class DBOS:
     def __init__(self):
-        logger = logging.getLogger(__name__)
+        logger = logging.getLogger("dbos")
         logger.info("Initializing DBOS!")
 
     def example(self):
