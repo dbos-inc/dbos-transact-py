@@ -33,7 +33,7 @@ jobs:
       run: pdm install
       working-directory: ./
 
-    - name: Run E2E Tests
+    - name: Run Unit Tests
       run: pdm run pytest -s tests
       working-directory: ./
 
