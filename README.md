@@ -16,7 +16,7 @@ pdm install
 To run unit tests:
 
 ```
-pdm run pytest -s tests
+pdm run pytest
 ```
 
 To check types:

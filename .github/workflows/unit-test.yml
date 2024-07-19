@@ -34,7 +34,7 @@ jobs:
       working-directory: ./
 
     - name: Run Unit Tests
-      run: pdm run pytest -s tests
+      run: pdm run pytest
       working-directory: ./
 
     - name: Check Types
