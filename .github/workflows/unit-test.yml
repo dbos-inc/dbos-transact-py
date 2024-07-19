@@ -1,0 +1,34 @@
+name: Run Unit  Tests
+
+on:
+    pull_request:
+      branches:
+        - main
+        - release/*
+      types:
+        - ready_for_review
+        - opened
+        - reopened
+        - synchronize
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup PDM
+      uses: pdm-project/setup-pdm@v4
+      with:
+        python-version: '3.12.x'
+        architecture: 'x64'
+
+    - name: Install Dependencies
+      run: pdm install
+      working-directory: ./
+
+    - name: Run E2E Tests
+      run: pdm run pytest -s
+      working-directory: ./
+
