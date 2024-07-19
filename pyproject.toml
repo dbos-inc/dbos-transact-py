@@ -1,0 +1,35 @@
+[project]
+name = "dbos_transact"
+version = "0.1.0"
+description = "A Python framework for backends that scale"
+authors = [
+    {name = "DBOS, Inc.", email = "contact@dbos.dev"},
+]
+dependencies = [
+]
+requires-python = ">=3.10"
+readme = "README.md"
+license = {text = "MIT"}
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pdm]
+distribution = true
+
+[tool.pdm.dev-dependencies]
+dev = [
+    "pytest>=8.2.2",
+    "mypy>=1.11.0",
+]
+
+[tool.mypy]
+strict = true
+exclude = "tests/"
+
+[tool.pytest.ini_options]
+addopts = "-s"
+log_cli_format = "%(asctime)s [%(levelname)8s] (%(filename)s:%(lineno)s) %(message)s"
+log_cli_level = "INFO"
+log_cli = true

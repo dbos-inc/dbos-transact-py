@@ -1,0 +1,42 @@
+name: Run Unit Tests
+
+on:
+    push:
+      branches:
+        - main
+        - release/*
+    pull_request:
+      branches:
+        - main
+        - release/*
+      types:
+        - ready_for_review
+        - opened
+        - reopened
+        - synchronize
+    workflow_dispatch:
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup PDM
+      uses: pdm-project/setup-pdm@v4
+      with:
+        python-version: '3.10.x'
+        architecture: 'x64'
+
+    - name: Install Dependencies
+      run: pdm install
+      working-directory: ./
+
+    - name: Run Unit Tests
+      run: pdm run pytest
+      working-directory: ./
+
+    - name: Check Types
+      run: pdm run mypy .
+      working-directory: ./
