@@ -1,4 +1,4 @@
-from dbos_transact.dbos import DBOS
+from dbos_transact import DBOS
 
 def test_dbos():
     dbos = DBOS()
