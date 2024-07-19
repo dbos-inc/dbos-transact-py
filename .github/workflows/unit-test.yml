@@ -34,6 +34,6 @@ jobs:
       working-directory: ./
 
     - name: Run E2E Tests
-      run: pdm run pytest -s
+      run: pdm run pytest -s tests
       working-directory: ./
 
