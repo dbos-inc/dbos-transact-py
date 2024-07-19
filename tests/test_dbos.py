@@ -1,2 +1,5 @@
+from dbos_transact.dbos import DBOS
+
 def test_dbos():
-    assert True
+    dbos = DBOS()
+    assert dbos.example() == 0
