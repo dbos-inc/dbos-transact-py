@@ -18,3 +18,9 @@ To run unit tests:
 ```
 pdm run pytest -s tests
 ```
+
+To check types:
+
+```
+pdm run mypy .
+```

@@ -37,3 +37,6 @@ jobs:
       run: pdm run pytest -s tests
       working-directory: ./
 
+    - name: Check Types
+      run: pdm run mypy .
+      working-directory: ./
