@@ -23,6 +23,7 @@ dev = [
     "pytest>=8.2.2",
     "mypy>=1.11.0",
 ]
+
 [tool.mypy]
 strict = true
 exclude = "tests/"
