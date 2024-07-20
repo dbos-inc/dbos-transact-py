@@ -9,6 +9,7 @@ class DBOS:
         self.logger.info("Initializing DBOS!")
         if config is None:
             config = load_config()
+        self.config = config
 
     def example(self) -> int:
-        return 0
+        return self.config['database']["username"]

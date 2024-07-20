@@ -3,4 +3,4 @@ from . import conftest
 
 def test_dbos():
     dbos = DBOS(conftest.defaultConfig)
-    assert dbos.example() == 0
+    assert dbos.example() == 'postgres'
