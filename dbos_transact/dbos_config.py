@@ -31,7 +31,7 @@ class ConfigFile(TypedDict):
     application: Dict[str, Any]
     env: Dict[str, str]
 
-def load_config(configFilePath: str) -> ConfigFile:
+def load_config(configFilePath: str = 'dbos-config.yaml') -> ConfigFile:
     # Load the YAML file
     with open(configFilePath, 'r') as file:
         data = yaml.safe_load(file)
