@@ -18,32 +18,18 @@ class DatabaseConfig(TypedDict, total=False):
     migrate: Optional[List[str]]
     rollback: Optional[List[str]]
 
-class HttpConfig(TypedDict, total=False):
-    cors_middleware: Optional[bool]
-    credentials: Optional[bool]
-    allowed_origins: Optional[List[str]]
-
 class OTLPExporterConfig(TypedDict, total=False):
     logsEndpoint: Optional[str]
     tracesEndpoint: Optional[str]
 
-class LoggerConfig(TypedDict, total=False):
-    pass # Not used in Python
-
 class TelemetryConfig(TypedDict, total=False):
-    logs: Optional[LoggerConfig]
     OTLPExporter: Optional[OTLPExporterConfig]
-
-class DBOSRuntimeConfig(TypedDict):
-    pass # Not used in Python
 
 class ConfigFile(TypedDict):
     database: DatabaseConfig
-    http: Optional[HttpConfig]
     telemetry: Optional[TelemetryConfig]
     application: Dict[str, Any]
     env: Dict[str, str]
-    runtimeConfig: Optional[DBOSRuntimeConfig]
 
 def load_config(configFilePath: str) -> ConfigFile:
     # Load the YAML file
