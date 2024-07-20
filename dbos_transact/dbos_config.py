@@ -1,4 +1,4 @@
-from typing import TypedDict, Optional, List, Dict
+from typing import Any, TypedDict, Optional, List, Dict
 import yaml
 import json
 from jsonschema import validate, ValidationError
@@ -41,7 +41,7 @@ class ConfigFile(TypedDict):
     database: DatabaseConfig
     http: Optional[HttpConfig]
     telemetry: Optional[TelemetryConfig]
-    application: dict
+    application: Dict[str, Any]
     env: Dict[str, str]
     runtimeConfig: Optional[DBOSRuntimeConfig]
 
