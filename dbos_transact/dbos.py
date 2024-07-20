@@ -11,5 +11,5 @@ class DBOS:
             config = load_config()
         self.config = config
 
-    def example(self) -> int:
+    def example(self) -> str:
         return self.config['database']["username"]
