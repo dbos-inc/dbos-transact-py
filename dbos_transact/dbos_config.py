@@ -49,15 +49,15 @@ def load_config(configFilePath: str) -> ConfigFile:
     with open(configFilePath, 'r') as file:
         data = yaml.safe_load(file)
 
-    # # Load the JSON schema
-    # with open('dbos-config.schema.json', 'r') as schema_file:
-    #     schema = json.load(schema_file)
+    # Load the JSON schema
+    with open('dbos-config.schema.json', 'r') as schema_file:
+        schema = json.load(schema_file)
 
-    # # Validate the data against the schema
-    # try:
-    #     validate(instance=data, schema=schema)
-    # except ValidationError as e:
-    #     raise ValueError(f"Validation error: {e}")
+    # Validate the data against the schema
+    try:
+        validate(instance=data, schema=schema)
+    except ValidationError as e:
+        raise ValueError(f"Validation error: {e}")
 
     # Return data as ConfigFile type
     return data  # type: ignore
