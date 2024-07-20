@@ -2,6 +2,7 @@ from typing import TypedDict, Optional, List, Dict
 import yaml
 import json
 from jsonschema import validate, ValidationError
+from importlib import resources
 
 class DatabaseConfig(TypedDict, total=False):
     hostname: str
@@ -50,7 +51,7 @@ def load_config(configFilePath: str) -> ConfigFile:
         data = yaml.safe_load(file)
 
     # Load the JSON schema
-    with open('dbos-config.schema.json', 'r') as schema_file:
+    with resources.open_text('dbos_transact', 'dbos-config.schema.json') as schema_file:
         schema = json.load(schema_file)
 
     # Validate the data against the schema
