@@ -50,7 +50,7 @@ def load_config(configFilePath: str) -> ConfigFile:
     with open(configFilePath, 'r') as file:
         data = yaml.safe_load(file)
 
-    # Load the JSON schema
+    # Load the JSON schema relative to the package root
     with resources.open_text('dbos_transact', 'dbos-config.schema.json') as schema_file:
         schema = json.load(schema_file)
 
