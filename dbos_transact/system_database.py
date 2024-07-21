@@ -1,4 +1,5 @@
-from sqlalchemy import MetaData, Table, Column, Integer, Text, PrimaryKeyConstraint, ForeignKey, BigInteger, String, text
+from sqlalchemy import Table, Column, Integer, Text, PrimaryKeyConstraint, ForeignKey, BigInteger, String, text, Index
+from sqlalchemy import MetaData
 
 metadata_obj = MetaData(schema="dbos")
 
@@ -22,12 +23,14 @@ workflow_status = Table(
     Column('class_name', String(255), nullable=True, server_default=text("NULL")),
     Column('config_name', String(255), nullable=True, server_default=text("NULL")),
     Column('recovery_attempts', BigInteger, nullable=True, server_default=text("'0'::bigint")),
+    Index("workflow_status_created_at_index", "created_at"),
+    Index("workflow_status_executor_id_index", "executor_id"),
 )
 
 operation_outputs = Table(
     "operation_outputs",
     metadata_obj,
-    Column("workflow_uuid", Text, ForeignKey("workflow_status.workflow_uuid"), nullable=False),
+    Column("workflow_uuid", Text, ForeignKey("workflow_status.workflow_uuid", onupdate="CASCADE", ondelete="CASCADE"), nullable=False),
     Column("function_id", Integer, nullable=False),
     Column("output", Text, nullable=True),
     Column("error", Text, nullable=True),
@@ -37,7 +40,33 @@ operation_outputs = Table(
 workflow_inputs = Table(
     "workflow_inputs",
     metadata_obj,
-    Column("workflow_uuid", Text, ForeignKey("workflow_status.workflow_uuid"), primary_key=True, nullable=False),
+    Column("workflow_uuid", Text, ForeignKey("workflow_status.workflow_uuid", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True, nullable=False),
     Column("inputs", Text, nullable=False),
 )
 
+notifications = Table(
+    "notifications",
+    metadata_obj,
+    Column("destination_uuid", Text, ForeignKey("workflow_status.workflow_uuid", onupdate="CASCADE", ondelete="CASCADE"), nullable=False),
+    Column("topic", Text, nullable=True),
+    Column("message", Text, nullable=False),
+    Column("created_at_epoch_ms", BigInteger, nullable=False, server_default=text("(EXTRACT(epoch FROM now()) * 1000::numeric)::bigint")),
+    Column("message_uuid", Text, nullable=False, server_default=text("uuid_generate_v4()")),
+    Index("idx_workflow_topic", "destination_uuid", "topic"),
+)
+
+workflow_events = Table(
+    "workflow_events",
+    metadata_obj,
+    Column("workflow_uuid", Text, ForeignKey("workflow_status.workflow_uuid", onupdate="CASCADE", ondelete="CASCADE"), nullable=False),
+    Column("key", Text, nullable=False),
+    Column("value", Text, nullable=False),
+    PrimaryKeyConstraint("workflow_uuid", "key"),
+)
+
+scheduler_state = Table(
+    "scheduler_state",
+    metadata_obj,
+    Column("workflow_fn_name", Text, primary_key=True, nullable=False),
+    Column("last_run_time", BigInteger, nullable=False),
+)
