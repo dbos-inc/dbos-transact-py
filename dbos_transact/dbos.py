@@ -1,9 +1,15 @@
 import logging
+from typing import Optional
+from .dbos_config import load_config, ConfigFile
 
 class DBOS:
-    def __init__(self) -> None:
-        logger = logging.getLogger("dbos")
-        logger.info("Initializing DBOS!")
+    logger = logging.getLogger("dbos")
 
-    def example(self) -> int:
-        return 0
+    def __init__(self, config: Optional[ConfigFile] = None) -> None:
+        self.logger.info("Initializing DBOS!")
+        if config is None:
+            config = load_config()
+        self.config = config
+
+    def example(self) -> str:
+        return self.config['database']["username"]

@@ -36,6 +36,8 @@ jobs:
     - name: Run Unit Tests
       run: pdm run pytest
       working-directory: ./
+      env:
+        PGPASSWORD: dbos
 
     - name: Check Types
       run: pdm run mypy .
