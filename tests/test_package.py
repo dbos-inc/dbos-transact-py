@@ -1,3 +1,4 @@
+import glob
 import os
 import shutil
 import subprocess
@@ -16,8 +17,9 @@ def test_package():
     )
 
     # Install the dbos_transact package into the virtual environment
-    wheel_path = os.path.join("dist", "dbos_transact-0.1.0-py3-none-any.whl")
-    subprocess.check_call([pip_executable, "install", wheel_path])
+    wheel_files = glob.glob(os.path.join("dist", "*.whl"))
+    assert len(wheel_files) == 1
+    subprocess.check_call([pip_executable, "install", wheel_files[0]])
     python_executable = (
         os.path.join(venv_path, "bin", "python")
         if os.name != "nt"
