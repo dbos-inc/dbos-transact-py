@@ -16,8 +16,8 @@ if config.config_file_name is not None:
 
 # add your model's MetaData object here
 # for 'autogenerate' support
-from dbos_transact.system_database import metadata_obj
-target_metadata = metadata_obj
+from dbos_transact.system_database import SystemSchema
+target_metadata = SystemSchema.metadata_obj
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
