@@ -24,3 +24,8 @@ To check types:
 ```
 pdm run mypy .
 ```
+
+To generate a new migration with alembic, run:
+```
+pdm run alembic revision -m "<new migration name>"
+```
