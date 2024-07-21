@@ -27,7 +27,15 @@ dev = [
     "pytest-mock>=3.14.0",
     "types-PyYAML>=6.0.12.20240311",
     "types-jsonschema>=4.23.0.20240712",
+    "black>=24.4.2",
+    "pre-commit>=3.7.1",
+    "isort>=5.13.2",
 ]
+
+[tool.isort]
+profile = "black"
+filter_files = true
+atomic = true
 
 [tool.mypy]
 strict = true
