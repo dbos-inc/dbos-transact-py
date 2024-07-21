@@ -3,9 +3,9 @@ import os
 import subprocess
 
 import pytest
+import sqlalchemy as sa
 
 from dbos_transact import ConfigFile
-import sqlalchemy as sa
 
 defaultConfig: ConfigFile = {
     "database": {
@@ -25,12 +25,13 @@ def build_wheel():
     assert len(wheel_files) == 1
     return wheel_files[0]
 
+
 def get_db_url(config: ConfigFile) -> sa.URL:
     return sa.URL.create(
         "postgresql",
-        username=config['database']['username'],
-        password=config['database']['password'],
-        host=config['database']['hostname'],
-        port=config['database']['port'],
+        username=config["database"]["username"],
+        password=config["database"]["password"],
+        host=config["database"]["hostname"],
+        port=config["database"]["port"],
         database="postgres",
     )
