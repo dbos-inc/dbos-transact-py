@@ -4,12 +4,12 @@ import subprocess
 
 
 def test_package(build_wheel):
-    # Create a new virtual environment in the template
+    # Create a new virtual environment in the template directory
     template_path = os.path.abspath(os.path.join("templates", "hello"))
     venv_path = os.path.join(template_path, ".venv")
     if os.path.exists(venv_path):
         shutil.rmtree(venv_path)
-    # This needs the system Python executable to create a venv. TODO: Don't hardcode the path.
+    # To create a venv, we need the system Python executable. TODO: Don't hardcode the path.
     subprocess.check_call(
         [os.path.join("/", "usr", "bin", "python3"), "-m", "venv", venv_path]
     )
