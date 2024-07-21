@@ -113,7 +113,11 @@ def test_custom_sysdb_name_migration():
 
 
 def rollback_system_db(sysdb_url: str) -> None:
-    migration_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "dbos_transact", "migrations")
+    migration_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+        "dbos_transact",
+        "migrations",
+    )
     alembic_cfg = Config()
     alembic_cfg.set_main_option("script_location", migration_dir)
     alembic_cfg.set_main_option("sqlalchemy.url", sysdb_url)

@@ -35,7 +35,7 @@ dev = [
 ]
 
 [tool.black]
-line-length = 150
+line-length = 88
 
 [tool.isort]
 profile = "black"

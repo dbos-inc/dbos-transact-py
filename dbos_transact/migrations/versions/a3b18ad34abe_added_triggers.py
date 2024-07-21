@@ -61,8 +61,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP TRIGGER IF EXISTS dbos_notifications_trigger ON dbos.notifications;")
+    op.execute(
+        "DROP TRIGGER IF EXISTS dbos_notifications_trigger ON dbos.notifications;"
+    )
     op.execute("DROP FUNCTION IF EXISTS dbos.notifications_function;")
-    op.execute("DROP TRIGGER IF EXISTS dbos_workflow_events_trigger ON dbos.workflow_events;")
+    op.execute(
+        "DROP TRIGGER IF EXISTS dbos_workflow_events_trigger ON dbos.workflow_events;"
+    )
     op.execute("DROP FUNCTION IF EXISTS dbos.workflow_events_function;")
     # ### end Alembic commands ###
