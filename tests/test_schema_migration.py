@@ -15,7 +15,7 @@ def test_systemdb_migration():
     dbos = DBOS(config)
 
     # Clean up from previous runs
-    db_url = get_db_url(config)
+    db_url = conftest.get_db_url(config)
     engine = sa.create_engine(db_url)
     with engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
@@ -72,7 +72,7 @@ def test_custom_sysdb_name_migration():
     dbos = DBOS(config)
 
     # Clean up from previous runs
-    db_url = get_db_url(config)
+    db_url = conftest.get_db_url(config)
     engine = sa.create_engine(db_url)
     with engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
@@ -104,18 +104,8 @@ def test_custom_sysdb_name_migration():
 """ 
     Utility functions for tests
 """
-def get_db_url(config: ConfigFile) -> sa.URL:
-    return sa.URL.create(
-        "postgresql",
-        username=config['database']['username'],
-        password=config['database']['password'],
-        host=config['database']['hostname'],
-        port=config['database']['port'],
-        database="postgres",
-    )
-
 def rollback_system_db(sysdb_url: str) -> None:
-    migration_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "migrations")
+    migration_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "dbos_transact", "migrations")
     alembic_cfg = Config()
     alembic_cfg.set_main_option("script_location", migration_dir)
     alembic_cfg.set_main_option("sqlalchemy.url", sysdb_url)

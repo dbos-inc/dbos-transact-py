@@ -7,5 +7,5 @@ database:
   hostname: localhost
   port: 5432
   username: postgres
-  password: ${PGPASSWORD}
+  password: dbos
   app_db_name: hello
