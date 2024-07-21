@@ -1,5 +1,6 @@
-from dbos_transact import ConfigFile
 import os
+
+from dbos_transact import ConfigFile
 
 defaultConfig: ConfigFile = {
     "database": {

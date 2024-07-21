@@ -1,4 +1,5 @@
 from unittest.mock import mock_open
+
 import pytest
 
 import dbos_transact.dbos_config

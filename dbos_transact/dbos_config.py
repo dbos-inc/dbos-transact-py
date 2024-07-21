@@ -1,8 +1,9 @@
-from typing import Any, TypedDict, Optional, List, Dict
-import yaml
 import json
-from jsonschema import validate, ValidationError
 from importlib import resources
+from typing import Any, Dict, List, Optional, TypedDict
+
+import yaml
+from jsonschema import ValidationError, validate
 
 
 class DatabaseConfig(TypedDict, total=False):

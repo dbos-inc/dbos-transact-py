@@ -1,6 +1,7 @@
 import logging
 from typing import Optional
-from .dbos_config import load_config, ConfigFile
+
+from .dbos_config import ConfigFile, load_config
 
 
 class DBOS:
