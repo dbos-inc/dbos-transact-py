@@ -25,7 +25,11 @@ To check types:
 pdm run mypy .
 ```
 
-To generate a new migration with alembic, run:
+We use alembic to manage system table schema migrations.
+To generate a new migration, run:
 ```
 pdm run alembic revision -m "<new migration name>"
 ```
+
+This command will add a new file under the `dbos_transact/migrations/versions/` folder.
+For more information, read [alembic tutorial](https://alembic.sqlalchemy.org/en/latest/tutorial.html).
