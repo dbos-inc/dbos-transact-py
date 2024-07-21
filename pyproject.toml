@@ -28,6 +28,7 @@ dev = [
     "types-PyYAML>=6.0.12.20240311",
     "types-jsonschema>=4.23.0.20240712",
     "black>=24.4.2",
+    "pre-commit>=3.7.1",
 ]
 
 [tool.mypy]
