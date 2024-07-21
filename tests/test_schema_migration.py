@@ -2,13 +2,15 @@ import os
 
 import pytest
 import sqlalchemy as sa
+from alembic import command
+from alembic.config import Config
+
 from dbos_transact import DBOS
 from dbos_transact.dbos_config import ConfigFile
 from dbos_transact.system_database import SystemSchema, get_sysdb_url
+
 from . import conftest
 
-from alembic.config import Config
-from alembic import command
 
 def test_systemdb_migration():
     config = conftest.defaultConfig
@@ -64,7 +66,10 @@ def test_systemdb_migration():
         assert "does not exist" in str(exc_info.value)
     engine.dispose()
 
+
 """ Make sure we support system DB with a custom name """
+
+
 def test_custom_sysdb_name_migration():
     config = conftest.defaultConfig
     sysdb_name = "custom_sysdb_name"
@@ -101,12 +106,15 @@ def test_custom_sysdb_name_migration():
         assert "does not exist" in str(exc_info.value)
     engine.dispose()
 
+
 """ 
     Utility functions for tests
 """
+
+
 def rollback_system_db(sysdb_url: str) -> None:
     migration_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "dbos_transact", "migrations")
     alembic_cfg = Config()
     alembic_cfg.set_main_option("script_location", migration_dir)
     alembic_cfg.set_main_option("sqlalchemy.url", sysdb_url)
-    command.downgrade(alembic_cfg, "base") # Rollback all migrations
+    command.downgrade(alembic_cfg, "base")  # Rollback all migrations

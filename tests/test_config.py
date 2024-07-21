@@ -29,9 +29,7 @@ def test_valid_config(mocker):
           app_db_name: 'some db'
           connectionTimeoutMillis: 3000
     """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
+    mocker.patch("builtins.open", side_effect=generate_mock_open(mock_filename, mock_config))
 
     configFile = dbos_transact.dbos_config.load_config(mock_filename)
     assert configFile["database"]["hostname"] == "some host"
@@ -51,9 +49,7 @@ def test_config_missing_params(mocker):
           password: abc123
           connectionTimeoutMillis: 3000
     """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
+    mocker.patch("builtins.open", side_effect=generate_mock_open(mock_filename, mock_config))
 
     with pytest.raises(ValueError) as exc_info:
         dbos_transact.dbos_config.load_config(mock_filename)
@@ -72,14 +68,9 @@ def test_config_extra_params(mocker):
           connectionTimeoutMillis: 3000
         bob: 5555
     """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
+    mocker.patch("builtins.open", side_effect=generate_mock_open(mock_filename, mock_config))
 
     with pytest.raises(ValueError) as exc_info:
         dbos_transact.dbos_config.load_config(mock_filename)
 
-    assert (
-        "Validation error: Additional properties are not allowed ('bob' was unexpected)"
-        in str(exc_info.value)
-    )
+    assert "Validation error: Additional properties are not allowed ('bob' was unexpected)" in str(exc_info.value)

@@ -11,6 +11,7 @@ To install dependencies:
 
 ```
 pdm install
+pdm run pre-commit install
 ```
 
 To run unit tests:

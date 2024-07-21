@@ -1,9 +1,10 @@
 import logging
+import os
 from typing import Optional
 
 from .dbos_config import ConfigFile, load_config
 from .system_database import get_sysdb_url, migrate_system_db
-import os
+
 
 class DBOS:
     logger = logging.getLogger("dbos")
