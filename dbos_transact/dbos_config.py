@@ -4,6 +4,7 @@ import json
 from jsonschema import validate, ValidationError
 from importlib import resources
 
+
 class DatabaseConfig(TypedDict, total=False):
     hostname: str
     port: int
@@ -18,12 +19,15 @@ class DatabaseConfig(TypedDict, total=False):
     migrate: Optional[List[str]]
     rollback: Optional[List[str]]
 
+
 class OTLPExporterConfig(TypedDict, total=False):
     logsEndpoint: Optional[str]
     tracesEndpoint: Optional[str]
 
+
 class TelemetryConfig(TypedDict, total=False):
     OTLPExporter: Optional[OTLPExporterConfig]
+
 
 class ConfigFile(TypedDict):
     database: DatabaseConfig
@@ -31,13 +35,14 @@ class ConfigFile(TypedDict):
     application: Dict[str, Any]
     env: Dict[str, str]
 
-def load_config(configFilePath: str = 'dbos-config.yaml') -> ConfigFile:
+
+def load_config(configFilePath: str = "dbos-config.yaml") -> ConfigFile:
     # Load the YAML file
-    with open(configFilePath, 'r') as file:
+    with open(configFilePath, "r") as file:
         data = yaml.safe_load(file)
 
     # Load the JSON schema relative to the package root
-    with resources.open_text('dbos_transact', 'dbos-config.schema.json') as schema_file:
+    with resources.open_text("dbos_transact", "dbos-config.schema.json") as schema_file:
         schema = json.load(schema_file)
 
     # Validate the data against the schema

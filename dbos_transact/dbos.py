@@ -2,6 +2,7 @@ import logging
 from typing import Optional
 from .dbos_config import load_config, ConfigFile
 
+
 class DBOS:
     logger = logging.getLogger("dbos")
 
@@ -12,4 +13,4 @@ class DBOS:
         self.config = config
 
     def example(self) -> str:
-        return self.config['database']["username"]
+        return self.config["database"]["username"]
