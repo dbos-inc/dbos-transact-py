@@ -6,8 +6,8 @@ from alembic import command
 from alembic.config import Config
 
 from dbos_transact import DBOS
-from dbos_transact.dbos_config import ConfigFile
-from dbos_transact.system_database import SystemSchema, get_sysdb_url
+from dbos_transact.schemas.system_database import SystemSchema
+from dbos_transact.system_database import get_sysdb_url
 
 from . import conftest
 
