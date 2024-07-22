@@ -13,7 +13,6 @@ from . import conftest
 
 def test_systemdb_migration():
     config = conftest.defaultConfig
-    dbos = DBOS(config)
 
     # Clean up from previous runs
     db_url = conftest.get_db_url(config)
@@ -21,10 +20,10 @@ def test_systemdb_migration():
     with engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(sa.text("DROP DATABASE IF EXISTS dbostestpy_dbos_sys"))
-        connection.execute(sa.text("CREATE DATABASE dbostestpy_dbos_sys"))
     engine.dispose()
 
     # Test migrating up
+    dbos = DBOS(config)
     dbos.migrate()
 
     # Make sure all tables exist
@@ -66,14 +65,10 @@ def test_systemdb_migration():
     engine.dispose()
 
 
-""" Make sure we support system DB with a custom name """
-
-
 def test_custom_sysdb_name_migration():
     config = conftest.defaultConfig
     sysdb_name = "custom_sysdb_name"
     config["database"]["sys_db_name"] = sysdb_name
-    dbos = DBOS(config)
 
     # Clean up from previous runs
     db_url = conftest.get_db_url(config)
@@ -81,10 +76,10 @@ def test_custom_sysdb_name_migration():
     with engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sysdb_name}"))
-        connection.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
     engine.dispose()
 
     # Test migrating up
+    dbos = DBOS(config)
     dbos.migrate()
 
     # Make sure all tables exist
@@ -104,11 +99,6 @@ def test_custom_sysdb_name_migration():
             result = connection.execute(sql)
         assert "does not exist" in str(exc_info.value)
     engine.dispose()
-
-
-""" 
-    Utility functions for tests
-"""
 
 
 def rollback_system_db(sysdb_url: str) -> None:
