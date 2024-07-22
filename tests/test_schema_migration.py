@@ -28,7 +28,7 @@ def test_systemdb_migration():
     dbos.migrate()
 
     # Make sure all tables exist
-    sysdb_url = dbos.system_database.db_url
+    sysdb_url = dbos.system_database.system_db_url
     engine = sa.create_engine(sysdb_url)
     with engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
@@ -88,7 +88,7 @@ def test_custom_sysdb_name_migration():
     dbos.migrate()
 
     # Make sure all tables exist
-    sysdb_url = dbos.system_database.db_url
+    sysdb_url = dbos.system_database.system_db_url
     engine = sa.create_engine(sysdb_url)
     with engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()

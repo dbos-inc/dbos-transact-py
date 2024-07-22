@@ -1,6 +1,6 @@
+import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import URL
 
 from .dbos_config import ConfigFile
 from .schemas.system_database import SystemSchema
@@ -11,10 +11,31 @@ class SystemDatabase:
     def __init__(self, config: ConfigFile):
         self.config = config
 
-        sysdb_name = config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
-        if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]:
-            sysdb_name = config["database"]["sys_db_name"]
-        db_url = URL.create(
+        sysdb_name = (
+            config["database"]["sys_db_name"]
+            if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]
+            else config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
+        )
+        postgres_db_url = sa.URL.create(
+            "postgresql",
+            username=config["database"]["username"],
+            password=config["database"]["password"],
+            host=config["database"]["hostname"],
+            port=config["database"]["port"],
+            database="postgres",
+        )
+        engine = sa.create_engine(postgres_db_url)
+        with engine.connect() as conn:
+            conn.execution_options(isolation_level="AUTOCOMMIT")
+            # Check if database exists
+            if not conn.execute(
+                sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
+                parameters={"db_name": sysdb_name},
+            ).scalar():
+                conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
+        engine.dispose()
+
+        system_db_url = sa.URL.create(
             "postgresql",
             username=config["database"]["username"],
             password=config["database"]["password"],
@@ -22,10 +43,10 @@ class SystemDatabase:
             port=config["database"]["port"],
             database=sysdb_name,
         )
-        self.db_url = db_url.render_as_string(hide_password=False)
+        self.system_db_url = system_db_url.render_as_string(hide_password=False)
 
     def migrate(self, migration_dir: str) -> None:
         alembic_cfg = Config()
         alembic_cfg.set_main_option("script_location", migration_dir)
-        alembic_cfg.set_main_option("sqlalchemy.url", self.db_url)
+        alembic_cfg.set_main_option("sqlalchemy.url", self.system_db_url)
         command.upgrade(alembic_cfg, "head")
