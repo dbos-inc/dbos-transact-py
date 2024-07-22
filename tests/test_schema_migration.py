@@ -8,11 +8,9 @@ from alembic.config import Config
 from dbos_transact import DBOS
 from dbos_transact.schemas.system_database import SystemSchema
 
-from . import conftest
-
 
 def test_systemdb_migration(reset_test_database):
-    config = conftest.defaultConfig
+    config, _ = reset_test_database
 
     # Test migrating up
     dbos = DBOS(config)
@@ -58,12 +56,11 @@ def test_systemdb_migration(reset_test_database):
 
 
 def test_custom_sysdb_name_migration(reset_test_database):
-    config = conftest.defaultConfig
+    config, engine = reset_test_database
     sysdb_name = "custom_sysdb_name"
     config["database"]["sys_db_name"] = sysdb_name
 
     # Clean up from previous runs
-    engine = reset_test_database
     with engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sysdb_name}"))

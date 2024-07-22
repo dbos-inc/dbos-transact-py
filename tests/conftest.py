@@ -7,16 +7,6 @@ import sqlalchemy as sa
 
 from dbos_transact import ConfigFile
 
-defaultConfig: ConfigFile = {
-    "database": {
-        "hostname": "localhost",
-        "port": 5432,
-        "username": "postgres",
-        "password": os.environ["PGPASSWORD"],
-        "app_db_name": "dbostestpy",
-    }
-}
-
 
 @pytest.fixture(scope="session")
 def build_wheel():
@@ -28,7 +18,16 @@ def build_wheel():
 
 @pytest.fixture()
 def reset_test_database():
-    config = defaultConfig
+    config: ConfigFile = {
+        "database": {
+            "hostname": "localhost",
+            "port": 5432,
+            "username": "postgres",
+            "password": os.environ["PGPASSWORD"],
+            "app_db_name": "dbostestpy",
+        }
+    }
+
     postgres_db_url = sa.URL.create(
         "postgresql",
         username=config["database"]["username"],
@@ -47,6 +46,6 @@ def reset_test_database():
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}"))
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sys_db_name}"))
 
-    yield engine
+    yield (config, engine)
 
     engine.dispose()
