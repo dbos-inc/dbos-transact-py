@@ -6,10 +6,9 @@ import sqlalchemy as sa
 
 from dbos_transact.dbos_config import load_config
 
-from . import conftest
 
+def test_package(build_wheel, postgres_db_engine):
 
-def test_package(build_wheel):
     # Create a new virtual environment in the template directory
     template_path = os.path.abspath(os.path.join("templates", "hello"))
     venv_path = os.path.join(template_path, ".venv")
@@ -33,21 +32,13 @@ def test_package(build_wheel):
         else os.path.join(venv_path, "Scripts", "python.exe")
     )
 
-    # Prepare the database
+    # Clean up from previous runs
     config = load_config(os.path.join(template_path, "dbos-config.yaml"))
-    db_url = conftest.get_db_url(config)
-    engine = sa.create_engine(db_url)
-    with engine.connect() as connection:
+    app_db_name = config["database"]["app_db_name"]
+    with postgres_db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
-        # TODO: create the database from migration
-        connection.execute(
-            sa.text(
-                f"DROP DATABASE IF EXISTS {config['database']['app_db_name']}_dbos_sys"
-            )
-        )
-        connection.execute(
-            sa.text(f"CREATE DATABASE {config['database']['app_db_name']}_dbos_sys")
-        )
+        connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}"))
+        connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}_dbos_sys"))
 
     # Run the template code and verify it works with the installed package
     subprocess.check_call([python_executable, "main.py"], cwd=template_path)

@@ -6,32 +6,17 @@ from alembic import command
 from alembic.config import Config
 
 from dbos_transact import DBOS
-from dbos_transact.dbos_config import ConfigFile
-from dbos_transact.system_database import SystemSchema, get_sysdb_url
-
-from . import conftest
+from dbos_transact.schemas.system_database import SystemSchema
 
 
-def test_systemdb_migration():
-    config = conftest.defaultConfig
-    dbos = DBOS(config)
-
-    # Clean up from previous runs
-    db_url = conftest.get_db_url(config)
-    engine = sa.create_engine(db_url)
-    with engine.connect() as connection:
-        connection.execution_options(isolation_level="AUTOCOMMIT")
-        connection.execute(sa.text("DROP DATABASE IF EXISTS dbostestpy_dbos_sys"))
-        connection.execute(sa.text("CREATE DATABASE dbostestpy_dbos_sys"))
-    engine.dispose()
-
+def test_systemdb_migration(dbos):
     # Test migrating up
-    dbos.run_migrations()
+    dbos.migrate()
 
     # Make sure all tables exist
-    sysdb_url = get_sysdb_url(config)
-    engine = sa.create_engine(sysdb_url)
-    with engine.connect() as connection:
+    sysdb_url = dbos.system_database.system_db_url
+    sys_db_engine = sa.create_engine(sysdb_url)
+    with sys_db_engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
         result = connection.execute(sql)
         assert result.fetchall() == []
@@ -59,39 +44,31 @@ def test_systemdb_migration():
     # Test migrating down
     rollback_system_db(sysdb_url=sysdb_url)
 
-    with engine.connect() as connection:
+    with sys_db_engine.connect() as connection:
         with pytest.raises(sa.exc.ProgrammingError) as exc_info:
             sql = SystemSchema.workflow_status.select()
             result = connection.execute(sql)
         assert "does not exist" in str(exc_info.value)
-    engine.dispose()
+    sys_db_engine.dispose()
 
 
-""" Make sure we support system DB with a custom name """
-
-
-def test_custom_sysdb_name_migration():
-    config = conftest.defaultConfig
+def test_custom_sysdb_name_migration(config, postgres_db_engine):
     sysdb_name = "custom_sysdb_name"
     config["database"]["sys_db_name"] = sysdb_name
-    dbos = DBOS(config)
 
     # Clean up from previous runs
-    db_url = conftest.get_db_url(config)
-    engine = sa.create_engine(db_url)
-    with engine.connect() as connection:
+    with postgres_db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sysdb_name}"))
-        connection.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
-    engine.dispose()
 
     # Test migrating up
-    dbos.run_migrations()
+    dbos = DBOS(config)
+    dbos.migrate()
 
     # Make sure all tables exist
-    sysdb_url = get_sysdb_url(config)
-    engine = sa.create_engine(sysdb_url)
-    with engine.connect() as connection:
+    sysdb_url = dbos.system_database.system_db_url
+    sys_db_engine = sa.create_engine(sysdb_url)
+    with sys_db_engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
         result = connection.execute(sql)
         assert result.fetchall() == []
@@ -99,17 +76,12 @@ def test_custom_sysdb_name_migration():
     # Test migrating down
     rollback_system_db(sysdb_url=sysdb_url)
 
-    with engine.connect() as connection:
+    with sys_db_engine.connect() as connection:
         with pytest.raises(sa.exc.ProgrammingError) as exc_info:
             sql = SystemSchema.workflow_status.select()
             result = connection.execute(sql)
         assert "does not exist" in str(exc_info.value)
-    engine.dispose()
-
-
-""" 
-    Utility functions for tests
-"""
+    sys_db_engine.dispose()
 
 
 def rollback_system_db(sysdb_url: str) -> None:

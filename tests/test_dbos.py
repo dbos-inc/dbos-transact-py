@@ -1,8 +1,5 @@
 from dbos_transact import DBOS
 
-from . import conftest
 
-
-def test_dbos():
-    dbos = DBOS(conftest.defaultConfig)
+def test_dbos(dbos):
     assert dbos.example() == "postgres"
