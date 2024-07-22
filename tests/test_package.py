@@ -7,7 +7,7 @@ import sqlalchemy as sa
 from dbos_transact.dbos_config import load_config
 
 
-def test_package(build_wheel, reset_test_database):
+def test_package(build_wheel, postgres_db_engine):
 
     # Create a new virtual environment in the template directory
     template_path = os.path.abspath(os.path.join("templates", "hello"))
@@ -35,7 +35,6 @@ def test_package(build_wheel, reset_test_database):
     # Clean up from previous runs
     config = load_config(os.path.join(template_path, "dbos-config.yaml"))
     app_db_name = config["database"]["app_db_name"]
-    _, postgres_db_engine = reset_test_database
     with postgres_db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}"))

@@ -1,7 +1,5 @@
 from dbos_transact import DBOS
 
 
-def test_dbos(reset_test_database):
-    config, _ = reset_test_database
-    dbos = DBOS(config)
+def test_dbos(dbos):
     assert dbos.example() == "postgres"

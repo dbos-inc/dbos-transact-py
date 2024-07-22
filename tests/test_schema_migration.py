@@ -9,11 +9,8 @@ from dbos_transact import DBOS
 from dbos_transact.schemas.system_database import SystemSchema
 
 
-def test_systemdb_migration(reset_test_database):
-    config, _ = reset_test_database
-
+def test_systemdb_migration(dbos):
     # Test migrating up
-    dbos = DBOS(config)
     dbos.migrate()
 
     # Make sure all tables exist
@@ -55,8 +52,7 @@ def test_systemdb_migration(reset_test_database):
     sys_db_engine.dispose()
 
 
-def test_custom_sysdb_name_migration(reset_test_database):
-    config, postgres_db_engine = reset_test_database
+def test_custom_sysdb_name_migration(config, postgres_db_engine):
     sysdb_name = "custom_sysdb_name"
     config["database"]["sys_db_name"] = sysdb_name
 
