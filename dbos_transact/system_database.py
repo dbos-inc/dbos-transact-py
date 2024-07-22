@@ -16,6 +16,8 @@ class SystemDatabase:
             if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]
             else config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
         )
+
+        # If the system database does not already exist, create it
         postgres_db_url = sa.URL.create(
             "postgresql",
             username=config["database"]["username"],
@@ -27,7 +29,6 @@ class SystemDatabase:
         engine = sa.create_engine(postgres_db_url)
         with engine.connect() as conn:
             conn.execution_options(isolation_level="AUTOCOMMIT")
-            # Check if database exists
             if not conn.execute(
                 sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
                 parameters={"db_name": sysdb_name},
