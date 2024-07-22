@@ -18,8 +18,8 @@ def test_systemdb_migration(reset_test_database):
 
     # Make sure all tables exist
     sysdb_url = dbos.system_database.system_db_url
-    engine = sa.create_engine(sysdb_url)
-    with engine.connect() as connection:
+    sys_db_engine = sa.create_engine(sysdb_url)
+    with sys_db_engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
         result = connection.execute(sql)
         assert result.fetchall() == []
@@ -47,21 +47,21 @@ def test_systemdb_migration(reset_test_database):
     # Test migrating down
     rollback_system_db(sysdb_url=sysdb_url)
 
-    with engine.connect() as connection:
+    with sys_db_engine.connect() as connection:
         with pytest.raises(sa.exc.ProgrammingError) as exc_info:
             sql = SystemSchema.workflow_status.select()
             result = connection.execute(sql)
         assert "does not exist" in str(exc_info.value)
-    engine.dispose()
+    sys_db_engine.dispose()
 
 
 def test_custom_sysdb_name_migration(reset_test_database):
-    config, engine = reset_test_database
+    config, postgres_db_engine = reset_test_database
     sysdb_name = "custom_sysdb_name"
     config["database"]["sys_db_name"] = sysdb_name
 
     # Clean up from previous runs
-    with engine.connect() as connection:
+    with postgres_db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sysdb_name}"))
 
@@ -71,8 +71,8 @@ def test_custom_sysdb_name_migration(reset_test_database):
 
     # Make sure all tables exist
     sysdb_url = dbos.system_database.system_db_url
-    engine = sa.create_engine(sysdb_url)
-    with engine.connect() as connection:
+    sys_db_engine = sa.create_engine(sysdb_url)
+    with sys_db_engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
         result = connection.execute(sql)
         assert result.fetchall() == []
@@ -80,12 +80,12 @@ def test_custom_sysdb_name_migration(reset_test_database):
     # Test migrating down
     rollback_system_db(sysdb_url=sysdb_url)
 
-    with engine.connect() as connection:
+    with sys_db_engine.connect() as connection:
         with pytest.raises(sa.exc.ProgrammingError) as exc_info:
             sql = SystemSchema.workflow_status.select()
             result = connection.execute(sql)
         assert "does not exist" in str(exc_info.value)
-    engine.dispose()
+    sys_db_engine.dispose()
 
 
 def rollback_system_db(sysdb_url: str) -> None:

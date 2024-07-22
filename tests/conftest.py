@@ -40,12 +40,12 @@ def reset_test_database():
     app_db_name = config["database"]["app_db_name"]
     sys_db_name = f"{app_db_name}_dbos_sys"
 
-    engine = sa.create_engine(postgres_db_url)
-    with engine.connect() as connection:
+    postgres_db_engine = sa.create_engine(postgres_db_url)
+    with postgres_db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}"))
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sys_db_name}"))
 
-    yield (config, engine)
+    yield (config, postgres_db_engine)
 
-    engine.dispose()
+    postgres_db_engine.dispose()
