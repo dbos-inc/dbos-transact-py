@@ -18,7 +18,7 @@ class DBOS:
     def example(self) -> str:
         return self.config["database"]["username"]
 
-    def run_migrations(self) -> None:
+    def migrate(self) -> None:
         self.logger.info("Migrating system database!")
         sysdb_url = get_sysdb_url(self.config)
         migration_dir = os.path.join(

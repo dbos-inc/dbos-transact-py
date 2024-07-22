@@ -26,7 +26,7 @@ def test_systemdb_migration():
     engine.dispose()
 
     # Test migrating up
-    dbos.run_migrations()
+    dbos.migrate()
 
     # Make sure all tables exist
     sysdb_url = get_sysdb_url(config)
@@ -86,7 +86,7 @@ def test_custom_sysdb_name_migration():
     engine.dispose()
 
     # Test migrating up
-    dbos.run_migrations()
+    dbos.migrate()
 
     # Make sure all tables exist
     sysdb_url = get_sysdb_url(config)
