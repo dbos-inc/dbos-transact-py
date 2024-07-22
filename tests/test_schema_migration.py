@@ -7,7 +7,6 @@ from alembic.config import Config
 
 from dbos_transact import DBOS
 from dbos_transact.schemas.system_database import SystemSchema
-from dbos_transact.system_database import get_sysdb_url
 
 from . import conftest
 
@@ -29,7 +28,7 @@ def test_systemdb_migration():
     dbos.migrate()
 
     # Make sure all tables exist
-    sysdb_url = get_sysdb_url(config)
+    sysdb_url = dbos.system_database.db_url
     engine = sa.create_engine(sysdb_url)
     with engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
@@ -89,7 +88,7 @@ def test_custom_sysdb_name_migration():
     dbos.migrate()
 
     # Make sure all tables exist
-    sysdb_url = get_sysdb_url(config)
+    sysdb_url = dbos.system_database.db_url
     engine = sa.create_engine(sysdb_url)
     with engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
