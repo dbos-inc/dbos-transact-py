@@ -26,8 +26,10 @@ def build_wheel():
     return wheel_files[0]
 
 
-def get_db_url(config: ConfigFile) -> sa.URL:
-    return sa.URL.create(
+@pytest.fixture()
+def reset_test_database():
+    config = defaultConfig
+    postgres_db_url = sa.URL.create(
         "postgresql",
         username=config["database"]["username"],
         password=config["database"]["password"],
@@ -35,3 +37,16 @@ def get_db_url(config: ConfigFile) -> sa.URL:
         port=config["database"]["port"],
         database="postgres",
     )
+
+    app_db_name = config["database"]["app_db_name"]
+    sys_db_name = f"{app_db_name}_dbos_sys"
+
+    engine = sa.create_engine(postgres_db_url)
+    with engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}"))
+        connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sys_db_name}"))
+
+    yield engine
+
+    engine.dispose()

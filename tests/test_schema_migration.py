@@ -11,16 +11,8 @@ from dbos_transact.schemas.system_database import SystemSchema
 from . import conftest
 
 
-def test_systemdb_migration():
+def test_systemdb_migration(reset_test_database):
     config = conftest.defaultConfig
-
-    # Clean up from previous runs
-    db_url = conftest.get_db_url(config)
-    engine = sa.create_engine(db_url)
-    with engine.connect() as connection:
-        connection.execution_options(isolation_level="AUTOCOMMIT")
-        connection.execute(sa.text("DROP DATABASE IF EXISTS dbostestpy_dbos_sys"))
-    engine.dispose()
 
     # Test migrating up
     dbos = DBOS(config)
@@ -65,18 +57,16 @@ def test_systemdb_migration():
     engine.dispose()
 
 
-def test_custom_sysdb_name_migration():
+def test_custom_sysdb_name_migration(reset_test_database):
     config = conftest.defaultConfig
     sysdb_name = "custom_sysdb_name"
     config["database"]["sys_db_name"] = sysdb_name
 
     # Clean up from previous runs
-    db_url = conftest.get_db_url(config)
-    engine = sa.create_engine(db_url)
+    engine = reset_test_database
     with engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sysdb_name}"))
-    engine.dispose()
 
     # Test migrating up
     dbos = DBOS(config)

@@ -33,21 +33,5 @@ def test_package(build_wheel):
         else os.path.join(venv_path, "Scripts", "python.exe")
     )
 
-    # Prepare the database
-    config = load_config(os.path.join(template_path, "dbos-config.yaml"))
-    db_url = conftest.get_db_url(config)
-    engine = sa.create_engine(db_url)
-    with engine.connect() as connection:
-        connection.execution_options(isolation_level="AUTOCOMMIT")
-        # TODO: create the database from migration
-        connection.execute(
-            sa.text(
-                f"DROP DATABASE IF EXISTS {config['database']['app_db_name']}_dbos_sys"
-            )
-        )
-        connection.execute(
-            sa.text(f"CREATE DATABASE {config['database']['app_db_name']}_dbos_sys")
-        )
-
     # Run the template code and verify it works with the installed package
     subprocess.check_call([python_executable, "main.py"], cwd=template_path)
