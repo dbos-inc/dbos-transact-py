@@ -5,6 +5,8 @@ from typing import Optional
 from .dbos_config import ConfigFile, load_config
 from .system_database import SystemDatabase
 
+dbos_logger = logging.getLogger("dbos")
+
 
 class DBOS:
     def __init__(self, config: Optional[ConfigFile] = None) -> None:
@@ -12,9 +14,8 @@ class DBOS:
             config = load_config()
 
         # Configure the DBOS logger. Log to the console by default.
-        self.logger = logging.getLogger("dbos")
-        if not self.logger.handlers:
-            self.logger.propagate = False
+        if not dbos_logger.handlers:
+            dbos_logger.propagate = False
             console_handler = logging.StreamHandler()
             log_level = config.get("telemetry", {}).get("logs", {}).get("logLevel")
             if log_level is not None:
@@ -24,9 +25,9 @@ class DBOS:
                 datefmt="%H:%M:%S",
             )
             console_handler.setFormatter(console_formatter)
-            self.logger.addHandler(console_handler)
+            dbos_logger.addHandler(console_handler)
 
-        self.logger.info("Initializing DBOS!")
+        dbos_logger.info("Initializing DBOS!")
         self.config = config
         self.system_database = SystemDatabase(config)
 
@@ -34,7 +35,7 @@ class DBOS:
         return self.config["database"]["username"]
 
     def migrate(self) -> None:
-        self.logger.info("Migrating system database!")
+        dbos_logger.info("Migrating system database!")
         migration_dir = os.path.join(
             os.path.dirname(os.path.realpath(__file__)), "migrations"
         )
