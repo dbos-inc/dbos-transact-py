@@ -48,11 +48,10 @@ class SystemDatabase:
             database=sysdb_name,
         )
 
-        # Create a pool
+        # Create a connection pool for the system database
         self.engine = sa.create_engine(system_db_url, pool_size=10, pool_timeout=30)
 
-        # Run the migration
-        dbos_logger.info("Migrating system database!")
+        # Run a schema migration for the system database
         migration_dir = os.path.join(
             os.path.dirname(os.path.realpath(__file__)), "migrations"
         )
