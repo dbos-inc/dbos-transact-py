@@ -5,13 +5,13 @@ import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
 
-from dbos_transact import DBOS
+from dbos_transact import DBOS, ConfigFile
 from dbos_transact.schemas.system_database import SystemSchema
 
 
-def test_systemdb_migration(dbos):
+def test_systemdb_migration(dbos: DBOS) -> None:
     # Make sure all tables exist
-    with dbos.system_database.engine.connect() as connection:
+    with dbos.sys_db.engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
         result = connection.execute(sql)
         assert result.fetchall() == []
@@ -38,17 +38,19 @@ def test_systemdb_migration(dbos):
 
     # Test migrating down
     rollback_system_db(
-        sysdb_url=dbos.system_database.engine.url.render_as_string(hide_password=False)
+        sysdb_url=dbos.sys_db.engine.url.render_as_string(hide_password=False)
     )
 
-    with dbos.system_database.engine.connect() as connection:
+    with dbos.sys_db.engine.connect() as connection:
         with pytest.raises(sa.exc.ProgrammingError) as exc_info:
             sql = SystemSchema.workflow_status.select()
             result = connection.execute(sql)
         assert "does not exist" in str(exc_info.value)
 
 
-def test_custom_sysdb_name_migration(config, postgres_db_engine):
+def test_custom_sysdb_name_migration(
+    config: ConfigFile, postgres_db_engine: sa.Engine
+) -> None:
     sysdb_name = "custom_sysdb_name"
     config["database"]["sys_db_name"] = sysdb_name
 
@@ -61,17 +63,17 @@ def test_custom_sysdb_name_migration(config, postgres_db_engine):
     dbos = DBOS(config)
 
     # Make sure all tables exist
-    with dbos.system_database.engine.connect() as connection:
+    with dbos.sys_db.engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
         result = connection.execute(sql)
         assert result.fetchall() == []
 
     # Test migrating down
     rollback_system_db(
-        sysdb_url=dbos.system_database.engine.url.render_as_string(hide_password=False)
+        sysdb_url=dbos.sys_db.engine.url.render_as_string(hide_password=False)
     )
 
-    with dbos.system_database.engine.connect() as connection:
+    with dbos.sys_db.engine.connect() as connection:
         with pytest.raises(sa.exc.ProgrammingError) as exc_info:
             sql = SystemSchema.workflow_status.select()
             result = connection.execute(sql)

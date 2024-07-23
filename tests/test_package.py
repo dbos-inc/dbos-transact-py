@@ -7,7 +7,7 @@ import sqlalchemy as sa
 from dbos_transact.dbos_config import load_config
 
 
-def test_package(build_wheel, postgres_db_engine):
+def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
 
     # Create a new virtual environment in the template directory
     template_path = os.path.abspath(os.path.join("templates", "hello"))
