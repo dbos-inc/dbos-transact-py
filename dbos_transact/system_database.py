@@ -47,24 +47,22 @@ class SystemDatabase:
             port=config["database"]["port"],
             database=sysdb_name,
         )
-        self.system_db_url = system_db_url.render_as_string(hide_password=False)
 
         # Create a pool
         self.engine = sa.create_engine(system_db_url, pool_size=10, pool_timeout=30)
 
         # Run the migration
-        self.migrate()
-
-    # Destroy the pool when finished
-    def destroy(self) -> None:
-        self.engine.dispose()
-
-    def migrate(self) -> None:
         dbos_logger.info("Migrating system database!")
         migration_dir = os.path.join(
             os.path.dirname(os.path.realpath(__file__)), "migrations"
         )
         alembic_cfg = Config()
         alembic_cfg.set_main_option("script_location", migration_dir)
-        alembic_cfg.set_main_option("sqlalchemy.url", self.system_db_url)
+        alembic_cfg.set_main_option(
+            "sqlalchemy.url", self.engine.url.render_as_string(hide_password=False)
+        )
         command.upgrade(alembic_cfg, "head")
+
+    # Destroy the pool when finished
+    def destroy(self) -> None:
+        self.engine.dispose()
