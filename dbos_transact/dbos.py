@@ -1,9 +1,19 @@
-from typing import Optional
+from functools import wraps
+from typing import Any, Callable, Optional, Protocol, Tuple, TypeVar, cast
+
+from dbos_transact.workflows import WorkflowContext
 
 from .application_database import ApplicationDatabase
 from .dbos_config import ConfigFile, load_config
 from .logger import config_logger, dbos_logger
 from .system_database import SystemDatabase
+
+
+class WorkflowProtocol(Protocol):
+    def __call__(self, ctx: WorkflowContext, *args: Any, **kwargs: Any) -> Any: ...
+
+
+Workflow = TypeVar("Workflow", bound=WorkflowProtocol)
 
 
 class DBOS:
@@ -16,9 +26,21 @@ class DBOS:
         self.system_database = SystemDatabase(config)
         self.application_database = ApplicationDatabase(config)
 
-    def example(self) -> str:
-        return self.config["database"]["username"]
-
     def destroy(self) -> None:
         self.system_database.destroy()
         self.application_database.destroy()
+
+    def workflow(self) -> Callable[[Workflow], Workflow]:
+        def decorator(func: Workflow) -> Workflow:
+            @wraps(func)
+            def wrapper(ctx: WorkflowContext, *args: Any, **kwargs: Any) -> Any:
+                output = func(ctx, *args, **kwargs)
+                print(output)
+                return output
+
+            return cast(Workflow, wrapper)
+
+        return decorator
+
+    def wf_ctx(self) -> WorkflowContext:
+        return cast(WorkflowContext, self)
