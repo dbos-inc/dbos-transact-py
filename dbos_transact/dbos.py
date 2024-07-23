@@ -1,6 +1,6 @@
 import uuid
 from functools import wraps
-from typing import Any, Callable, Optional, Protocol, Tuple, TypeVar, cast
+from typing import Any, Callable, Optional, Protocol, TypeVar, cast
 
 from dbos_transact.workflows import WorkflowContext
 
