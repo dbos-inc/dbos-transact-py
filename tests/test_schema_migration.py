@@ -11,7 +11,7 @@ from dbos_transact.schemas.system_database import SystemSchema
 
 def test_systemdb_migration(dbos: DBOS) -> None:
     # Make sure all tables exist
-    with dbos.system_database.engine.connect() as connection:
+    with dbos.sys_db.engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
         result = connection.execute(sql)
         assert result.fetchall() == []
@@ -38,10 +38,10 @@ def test_systemdb_migration(dbos: DBOS) -> None:
 
     # Test migrating down
     rollback_system_db(
-        sysdb_url=dbos.system_database.engine.url.render_as_string(hide_password=False)
+        sysdb_url=dbos.sys_db.engine.url.render_as_string(hide_password=False)
     )
 
-    with dbos.system_database.engine.connect() as connection:
+    with dbos.sys_db.engine.connect() as connection:
         with pytest.raises(sa.exc.ProgrammingError) as exc_info:
             sql = SystemSchema.workflow_status.select()
             result = connection.execute(sql)
@@ -63,17 +63,17 @@ def test_custom_sysdb_name_migration(
     dbos = DBOS(config)
 
     # Make sure all tables exist
-    with dbos.system_database.engine.connect() as connection:
+    with dbos.sys_db.engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
         result = connection.execute(sql)
         assert result.fetchall() == []
 
     # Test migrating down
     rollback_system_db(
-        sysdb_url=dbos.system_database.engine.url.render_as_string(hide_password=False)
+        sysdb_url=dbos.sys_db.engine.url.render_as_string(hide_password=False)
     )
 
-    with dbos.system_database.engine.connect() as connection:
+    with dbos.sys_db.engine.connect() as connection:
         with pytest.raises(sa.exc.ProgrammingError) as exc_info:
             sql = SystemSchema.workflow_status.select()
             result = connection.execute(sql)

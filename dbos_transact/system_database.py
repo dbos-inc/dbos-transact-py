@@ -1,12 +1,30 @@
+import json
 import os
+from enum import Enum
+from typing import Any, Optional, TypedDict
 
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
 
 from .dbos_config import ConfigFile
-from .logger import dbos_logger
 from .schemas.system_database import SystemSchema
+
+
+class WorkflowStatusString(Enum):
+    PENDING = "PENDING"
+    SUCCESS = "SUCCESS"
+    ERRROR = "ERROR"
+    RETRIES_EXCEEDED = "RETRIES_EXCEEDED"
+    CANCELLED = "CANCELLED"
+
+
+class WorkflowStatusInternal(TypedDict):
+    workflow_uuid: str
+    status: WorkflowStatusString
+    name: str
+    output: Optional[Any]
+    error: Optional[Exception]
 
 
 class SystemDatabase:
@@ -65,3 +83,16 @@ class SystemDatabase:
     # Destroy the pool when finished
     def destroy(self) -> None:
         self.engine.dispose()
+
+    def update_workflow_status(self, status: WorkflowStatusInternal) -> None:
+        with self.engine.connect() as c:
+            c.execute(
+                sa.insert(SystemSchema.workflow_status).values(
+                    workflow_uuid=status["workflow_uuid"],
+                    status=status["status"].value,
+                    name=status["name"],
+                    output=json.dumps(status["output"]) if status["output"] else None,
+                    error=None,
+                )
+            )
+            c.commit()
