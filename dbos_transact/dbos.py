@@ -45,16 +45,19 @@ class DBOS:
 
                 status: WorkflowStatusInternal = {
                     "workflow_uuid": workflow_uuid,
-                    "status": WorkflowStatusString.PENDING,
+                    "status": WorkflowStatusString.PENDING.value,
                     "name": func.__qualname__,
                     "output": None,
                     "error": None,
                 }
-
                 self.sys_db.update_workflow_status(status)
 
                 ctx = WorkflowContext(workflow_uuid, self.sys_db)
                 output = func(ctx, *args, **kwargs)
+
+                status["status"] = WorkflowStatusString.SUCCESS.value
+                status["output"] = output
+                self.sys_db.update_workflow_status(status)
                 return output
 
             return cast(Workflow, wrapper)

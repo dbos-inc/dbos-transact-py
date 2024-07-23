@@ -4,6 +4,7 @@ from enum import Enum
 from typing import Any, Optional, TypedDict
 
 import sqlalchemy as sa
+import sqlalchemy.dialects.postgresql as pg
 from alembic import command
 from alembic.config import Config
 
@@ -21,7 +22,7 @@ class WorkflowStatusString(Enum):
 
 class WorkflowStatusInternal(TypedDict):
     workflow_uuid: str
-    status: WorkflowStatusString
+    status: str
     name: str
     output: Optional[Any]
     error: Optional[Exception]
@@ -87,12 +88,21 @@ class SystemDatabase:
     def update_workflow_status(self, status: WorkflowStatusInternal) -> None:
         with self.engine.connect() as c:
             c.execute(
-                sa.insert(SystemSchema.workflow_status).values(
+                pg.insert(SystemSchema.workflow_status)
+                .values(
                     workflow_uuid=status["workflow_uuid"],
-                    status=status["status"].value,
+                    status=status["status"],
                     name=status["name"],
                     output=json.dumps(status["output"]) if status["output"] else None,
                     error=None,
+                )
+                .on_conflict_do_update(
+                    index_elements=["workflow_uuid"],
+                    set_=dict(
+                        status=status["status"],
+                        output=status["output"],
+                        error=status["error"],
+                    ),
                 )
             )
             c.commit()
