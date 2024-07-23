@@ -65,4 +65,4 @@ class DBOS:
         return decorator
 
     def wf_ctx(self) -> WorkflowContext:
-        return cast(WorkflowContext, self)
+        return cast(WorkflowContext, None)
