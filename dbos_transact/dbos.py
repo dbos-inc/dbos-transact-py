@@ -16,10 +16,10 @@ class DBOS:
         # Configure the DBOS logger. Log to the console by default.
         if not dbos_logger.handlers:
             dbos_logger.propagate = False
-            console_handler = logging.StreamHandler()
             log_level = config.get("telemetry", {}).get("logs", {}).get("logLevel")
             if log_level is not None:
-                console_handler.setLevel(log_level)
+                dbos_logger.setLevel(log_level)
+            console_handler = logging.StreamHandler()
             console_formatter = logging.Formatter(
                 "%(asctime)s [%(levelname)8s] (%(name)s:%(filename)s:%(lineno)s) %(message)s",
                 datefmt="%H:%M:%S",
