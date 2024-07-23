@@ -10,9 +10,6 @@ from dbos_transact.schemas.system_database import SystemSchema
 
 
 def test_systemdb_migration(dbos):
-    # Test migrating up
-    dbos.migrate()
-
     # Make sure all tables exist
     sysdb_url = dbos.system_database.system_db_url
     sys_db_engine = sa.create_engine(sysdb_url)
@@ -63,7 +60,6 @@ def test_custom_sysdb_name_migration(config, postgres_db_engine):
 
     # Test migrating up
     dbos = DBOS(config)
-    dbos.migrate()
 
     # Make sure all tables exist
     sysdb_url = dbos.system_database.system_db_url
