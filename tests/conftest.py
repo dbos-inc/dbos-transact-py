@@ -57,7 +57,9 @@ def dbos(config, postgres_db_engine):
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}"))
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sys_db_name}"))
 
-    return DBOS(config)
+    dbos = DBOS(config)
+    yield dbos
+    dbos.destroy()
 
 
 # Pretty-print test names

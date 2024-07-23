@@ -1,8 +1,11 @@
+import os
+
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
 
 from .dbos_config import ConfigFile
+from .logger import dbos_logger
 from .schemas.system_database import SystemSchema
 
 
@@ -44,10 +47,21 @@ class SystemDatabase:
             port=config["database"]["port"],
             database=sysdb_name,
         )
-        self.system_db_url = system_db_url.render_as_string(hide_password=False)
 
-    def migrate(self, migration_dir: str) -> None:
+        # Create a connection pool for the system database
+        self.engine = sa.create_engine(system_db_url, pool_size=10, pool_timeout=30)
+
+        # Run a schema migration for the system database
+        migration_dir = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)), "migrations"
+        )
         alembic_cfg = Config()
         alembic_cfg.set_main_option("script_location", migration_dir)
-        alembic_cfg.set_main_option("sqlalchemy.url", self.system_db_url)
+        alembic_cfg.set_main_option(
+            "sqlalchemy.url", self.engine.url.render_as_string(hide_password=False)
+        )
         command.upgrade(alembic_cfg, "head")
+
+    # Destroy the pool when finished
+    def destroy(self) -> None:
+        self.engine.dispose()
