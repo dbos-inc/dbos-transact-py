@@ -44,7 +44,6 @@ atomic = true
 
 [tool.mypy]
 strict = true
-exclude = "tests/"
 
 [tool.pytest.ini_options]
 addopts = "-s"
