@@ -26,7 +26,12 @@ class OTLPExporterConfig(TypedDict, total=False):
     tracesEndpoint: Optional[str]
 
 
+class LoggerConfig(TypedDict, total=False):
+    logLevel: Optional[str]
+
+
 class TelemetryConfig(TypedDict, total=False):
+    logs: Optional[LoggerConfig]
     OTLPExporter: Optional[OTLPExporterConfig]
 
 

@@ -9,3 +9,6 @@ database:
   username: postgres
   password: dbos
   app_db_name: hello
+telemetry:
+  logs:
+    logLevel: INFO

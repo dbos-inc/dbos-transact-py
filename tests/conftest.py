@@ -58,3 +58,9 @@ def dbos(config, postgres_db_engine):
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sys_db_name}"))
 
     return DBOS(config)
+
+
+# Pretty-print test names
+def pytest_collection_modifyitems(session, config, items):
+    for item in items:
+        item._nodeid = "\n" + item.nodeid + "\n"
