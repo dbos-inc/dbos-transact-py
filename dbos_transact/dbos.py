@@ -7,12 +7,26 @@ from .system_database import SystemDatabase
 
 
 class DBOS:
-    logger = logging.getLogger("dbos")
-
     def __init__(self, config: Optional[ConfigFile] = None) -> None:
-        self.logger.info("Initializing DBOS!")
         if config is None:
             config = load_config()
+
+        # Configure the DBOS logger. Log to the console by default.
+        self.logger = logging.getLogger("dbos")
+        if not self.logger.handlers:
+            self.logger.propagate = False
+            console_handler = logging.StreamHandler()
+            log_level = config.get("telemetry", {}).get("logs", {}).get("logLevel")
+            if log_level is not None:
+                console_handler.setLevel(log_level)
+            console_formatter = logging.Formatter(
+                "%(asctime)s [%(levelname)8s] (%(name)s:%(filename)s:%(lineno)s) %(message)s",
+                datefmt="%H:%M:%S",
+            )
+            console_handler.setFormatter(console_formatter)
+            self.logger.addHandler(console_handler)
+
+        self.logger.info("Initializing DBOS!")
         self.config = config
         self.system_database = SystemDatabase(config)
 
