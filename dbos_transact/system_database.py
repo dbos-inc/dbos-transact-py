@@ -50,14 +50,14 @@ class SystemDatabase:
         self.system_db_url = system_db_url.render_as_string(hide_password=False)
 
         # Create a pool
-        self.pool = sa.create_engine(system_db_url, pool_size=10, pool_timeout=30)
+        self.engine = sa.create_engine(system_db_url, pool_size=10, pool_timeout=30)
 
         # Run the migration
         self.migrate()
 
     # Destroy the pool when finished
     def destroy(self) -> None:
-        self.pool.dispose()
+        self.engine.dispose()
 
     def migrate(self) -> None:
         dbos_logger.info("Migrating system database!")
