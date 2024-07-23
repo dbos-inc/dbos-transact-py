@@ -12,7 +12,7 @@ class ApplicationDatabase:
 
         app_db_name = config["database"]["app_db_name"]
 
-        # If the system database does not already exist, create it
+        # If the application database does not already exist, create it
         postgres_db_url = sa.URL.create(
             "postgresql",
             username=config["database"]["username"],
@@ -31,6 +31,7 @@ class ApplicationDatabase:
                 conn.execute(sa.text(f"CREATE DATABASE {app_db_name}"))
         postgres_db_engine.dispose()
 
+        # Create a connection pool for the application database
         app_db_url = sa.URL.create(
             "postgresql",
             username=config["database"]["username"],
@@ -40,6 +41,8 @@ class ApplicationDatabase:
             database=app_db_name,
         )
         self.engine = sa.create_engine(app_db_url)
+
+        # Create the dbos schema and transaction_outputs table in the application database
         with self.engine.connect() as conn:
             schema_creation_query = sa.text(
                 f"CREATE SCHEMA IF NOT EXISTS {ApplicationSchema.schema}"
