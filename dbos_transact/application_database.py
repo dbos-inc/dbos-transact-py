@@ -57,12 +57,11 @@ class ApplicationDatabase:
         self.engine = sa.create_engine(app_db_url)
 
         # Create the dbos schema and transaction_outputs table in the application database
-        with self.engine.connect() as conn:
+        with self.engine.begin() as conn:
             schema_creation_query = sa.text(
                 f"CREATE SCHEMA IF NOT EXISTS {ApplicationSchema.schema}"
             )
             conn.execute(schema_creation_query)
-            conn.commit()
         ApplicationSchema.metadata_obj.create_all(self.engine)
 
     def destroy(self) -> None:

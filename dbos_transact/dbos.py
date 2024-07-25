@@ -120,7 +120,9 @@ class DBOS:
                         self.app_db.record_transaction_error(txn_output)
                         raise error
 
-                    ApplicationDatabase.record_transaction_output(conn, txn_output)
+                    ApplicationDatabase.record_transaction_output(
+                        txn_ctxt.connection, txn_output
+                    )
                 return output
 
             return cast(Transaction, wrapper)

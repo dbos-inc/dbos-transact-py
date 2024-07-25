@@ -92,7 +92,7 @@ class SystemDatabase:
         self.engine.dispose()
 
     def update_workflow_status(self, status: WorkflowStatusInternal) -> None:
-        with self.engine.connect() as c:
+        with self.engine.begin() as c:
             c.execute(
                 pg.insert(SystemSchema.workflow_status)
                 .values(
@@ -111,10 +111,9 @@ class SystemDatabase:
                     ),
                 )
             )
-            c.commit()
 
     def update_workflow_inputs(self, workflow_uuid: str, inputs: str) -> None:
-        with self.engine.connect() as c:
+        with self.engine.begin() as c:
             c.execute(
                 pg.insert(SystemSchema.workflow_inputs)
                 .values(
@@ -123,4 +122,3 @@ class SystemDatabase:
                 )
                 .on_conflict_do_nothing()
             )
-            c.commit()
