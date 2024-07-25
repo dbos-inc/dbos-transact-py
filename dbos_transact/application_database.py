@@ -68,6 +68,7 @@ class ApplicationDatabase:
     def destroy(self) -> None:
         self.engine.dispose()
 
+    @staticmethod
     def record_transaction_output(
         conn: sa.Connection, output: TransactionResultInternal
     ) -> None:

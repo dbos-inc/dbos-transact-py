@@ -6,7 +6,7 @@ import dbos_transact.utils as utils
 from dbos_transact.transaction import TransactionContext
 from dbos_transact.workflows import WorkflowContext
 
-from .application_database import ApplicationDatabase
+from .application_database import ApplicationDatabase, TransactionResultInternal
 from .dbos_config import ConfigFile, load_config
 from .logger import config_logger, dbos_logger
 from .system_database import (
@@ -104,13 +104,14 @@ class DBOS:
                 with self.app_db.engine.begin() as conn:
                     txn_ctxt = TransactionContext(conn, ctxt.function_id)
                     # TODO: Check transaction output
-                    txn_output = {
+                    txn_output: TransactionResultInternal = {
                         "workflow_uuid": ctxt.workflow_uuid,
                         "function_id": ctxt.function_id,
                         "output": None,
                         "error": None,
                         "txn_snapshot": "",
                         "executor_id": None,
+                        "txn_id": None,
                     }
                     try:
                         output = func(txn_ctxt, *args, **kwargs)
