@@ -21,12 +21,18 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
 def test_exception_workflow(dbos: DBOS) -> None:
 
+    @dbos.transaction()
+    def exception_transaction(ctx: TransactionContext, var: str) -> str:
+        raise Exception(var)
+
     @dbos.workflow()
     def exception_workflow(ctx: WorkflowContext) -> None:
-        raise Exception("test error")
+        try:
+            exception_transaction(ctx.txn_ctx(), "test error")
+        except Exception as e:
+            raise e
 
     with pytest.raises(Exception) as exc_info:
         exception_workflow(dbos.wf_ctx())
 
     assert "test error" in str(exc_info.value)
-

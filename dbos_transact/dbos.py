@@ -72,7 +72,7 @@ class DBOS:
                     workflow_uuid, utils.serialize(inputs)
                 )
 
-                ctx = WorkflowContext(workflow_uuid, self.sys_db)
+                ctx = WorkflowContext(workflow_uuid)
 
                 try:
                     output = func(ctx, *args, **kwargs)
@@ -104,15 +104,21 @@ class DBOS:
                 with self.app_db.engine.begin() as conn:
                     txn_ctxt = TransactionContext(conn, ctxt.function_id)
                     # TODO: Check transaction output
-                    output = func(txn_ctxt, *args, **kwargs)
                     txn_output = {
                         "workflow_uuid": ctxt.workflow_uuid,
                         "function_id": ctxt.function_id,
-                        "output": output,
+                        "output": None,
                         "error": None,
                         "txn_snapshot": "",
                         "executor_id": None,
                     }
+                    try:
+                        output = func(txn_ctxt, *args, **kwargs)
+                    except Exception as error:
+                        txn_output["error"] = utils.serialize(error)
+                        self.app_db.record_transaction_error(txn_output)
+                        raise error
+
                     ApplicationDatabase.record_transaction_output(conn, txn_output)
                 return output
 
