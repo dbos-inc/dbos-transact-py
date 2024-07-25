@@ -1,8 +1,22 @@
+import json
+from typing import Any, Optional, TypedDict
+
 import sqlalchemy as sa
+import sqlalchemy.dialects.postgresql as pg
 
 from dbos_transact.schemas.application_database import ApplicationSchema
 
 from .dbos_config import ConfigFile
+
+
+class TransactionResultInternal(TypedDict):
+    workflow_uuid: str
+    function_id: int
+    output: Optional[str]  # Base64-encoded pickle
+    error: Optional[str]  # Base64-encoded pickle
+    txn_id: Optional[str]
+    txn_snapshot: str
+    executor_id: Optional[str]
 
 
 class ApplicationDatabase:
@@ -53,3 +67,35 @@ class ApplicationDatabase:
 
     def destroy(self) -> None:
         self.engine.dispose()
+
+    @staticmethod
+    def record_transaction_output(
+        conn: sa.Connection, output: TransactionResultInternal
+    ) -> None:
+        conn.execute(
+            pg.insert(ApplicationSchema.transaction_outputs).values(
+                workflow_uuid=output["workflow_uuid"],
+                function_id=output["function_id"],
+                output=output["output"] if output["output"] else None,
+                error=None,
+                txn_id=sa.text("(select pg_current_xact_id_if_assigned()::text)"),
+                txn_snapshot=output["txn_snapshot"],
+                executor_id=output["executor_id"] if output["executor_id"] else None,
+            )
+        )
+
+    def record_transaction_error(self, output: TransactionResultInternal) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                pg.insert(ApplicationSchema.transaction_outputs).values(
+                    workflow_uuid=output["workflow_uuid"],
+                    function_id=output["function_id"],
+                    output=None,
+                    error=output["error"] if output["error"] else None,
+                    txn_id=sa.text("(select pg_current_xact_id_if_assigned()::text)"),
+                    txn_snapshot=output["txn_snapshot"],
+                    executor_id=(
+                        output["executor_id"] if output["executor_id"] else None
+                    ),
+                )
+            )
