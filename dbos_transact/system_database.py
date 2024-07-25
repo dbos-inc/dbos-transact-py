@@ -15,7 +15,7 @@ from .schemas.system_database import SystemSchema
 class WorkflowStatusString(Enum):
     PENDING = "PENDING"
     SUCCESS = "SUCCESS"
-    ERRROR = "ERROR"
+    ERROR = "ERROR"
     RETRIES_EXCEEDED = "RETRIES_EXCEEDED"
     CANCELLED = "CANCELLED"
 
@@ -24,8 +24,8 @@ class WorkflowStatusInternal(TypedDict):
     workflow_uuid: str
     status: str
     name: str
-    output: Optional[Any]
-    error: Optional[Exception]
+    output: Optional[str]  # Base64-encoded pickle
+    error: Optional[str]  # Base64-encoded pickle
 
 
 class SystemDatabase:
@@ -93,8 +93,8 @@ class SystemDatabase:
                     workflow_uuid=status["workflow_uuid"],
                     status=status["status"],
                     name=status["name"],
-                    output=json.dumps(status["output"]) if status["output"] else None,
-                    error=None,
+                    output=status["output"],
+                    error=status["error"],
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid"],
