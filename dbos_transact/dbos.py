@@ -1,6 +1,6 @@
 import uuid
 from functools import wraps
-from typing import Any, Callable, Optional, Protocol, TypeVar, cast
+from typing import Any, Callable, Optional, Protocol, TypedDict, TypeVar, cast
 
 import dbos_transact.utils as utils
 from dbos_transact.transaction import TransactionContext
@@ -35,6 +35,10 @@ class TransactionProtocol(Protocol):
 Transaction = TypeVar("Transaction", bound=TransactionProtocol)
 
 
+class WorkflowInputContext(TypedDict):
+    workflow_uuid: str
+
+
 class DBOS:
     def __init__(self, config: Optional[ConfigFile] = None) -> None:
         if config is None:
@@ -52,9 +56,9 @@ class DBOS:
     def workflow(self) -> Callable[[Workflow], Workflow]:
         def decorator(func: Workflow) -> Workflow:
             @wraps(func)
-            def wrapper(_: WorkflowContext, *args: Any, **kwargs: Any) -> Any:
-                workflow_uuid = str(uuid.uuid4())
-
+            def wrapper(_ctxt: WorkflowContext, *args: Any, **kwargs: Any) -> Any:
+                input_ctxt = cast(WorkflowInputContext, _ctxt)
+                workflow_uuid = input_ctxt["workflow_uuid"]
                 status: WorkflowStatusInternal = {
                     "workflow_uuid": workflow_uuid,
                     "status": WorkflowStatusString.PENDING.value,
@@ -91,15 +95,17 @@ class DBOS:
 
         return decorator
 
-    def wf_ctx(self) -> WorkflowContext:
-        return cast(WorkflowContext, None)
+    def wf_ctx(self, workflow_uuid: Optional[str] = None) -> WorkflowContext:
+        workflow_uuid = workflow_uuid if workflow_uuid else str(uuid.uuid4())
+        input_ctxt: WorkflowInputContext = {"workflow_uuid": workflow_uuid}
+        return cast(WorkflowContext, input_ctxt)
 
     def transaction(self) -> Callable[[Transaction], Transaction]:
         def decorator(func: Transaction) -> Transaction:
             @wraps(func)
-            def wrapper(wf_ctxt: TransactionContext, *args: Any, **kwargs: Any) -> Any:
-                ctxt = cast(WorkflowContext, wf_ctxt)
-                ctxt.function_id += 1
+            def wrapper(_ctxt: TransactionContext, *args: Any, **kwargs: Any) -> Any:
+                input_ctxt = cast(WorkflowContext, _ctxt)
+                input_ctxt.function_id += 1
                 with self.app_db.sessionmaker() as session:
                     try:
                         # TODO: support multiple isolation levels
@@ -107,11 +113,13 @@ class DBOS:
                             session.connection(
                                 execution_options={"isolation_level": "SERIALIZABLE"}
                             )
-                            txn_ctxt = TransactionContext(session, ctxt.function_id)
+                            txn_ctxt = TransactionContext(
+                                session, input_ctxt.function_id
+                            )
                             # TODO: Check transaction output for OAOO
                             txn_output: TransactionResultInternal = {
-                                "workflow_uuid": ctxt.workflow_uuid,
-                                "function_id": ctxt.function_id,
+                                "workflow_uuid": input_ctxt.workflow_uuid,
+                                "function_id": input_ctxt.function_id,
                                 "output": None,
                                 "error": None,
                                 "txn_snapshot": "",
