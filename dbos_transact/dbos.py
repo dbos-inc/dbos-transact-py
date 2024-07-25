@@ -10,6 +10,7 @@ from .dbos_config import ConfigFile, load_config
 from .logger import config_logger, dbos_logger
 from .system_database import (
     SystemDatabase,
+    WorkflowInputs,
     WorkflowStatusInternal,
     WorkflowStatusString,
 )
@@ -52,6 +53,14 @@ class DBOS:
                     "error": None,
                 }
                 self.sys_db.update_workflow_status(status)
+
+                inputs: WorkflowInputs = {
+                    "args": args,
+                    "kwargs": kwargs,
+                }
+                self.sys_db.update_workflow_inputs(
+                    workflow_uuid, utils.serialize(inputs)
+                )
 
                 ctx = WorkflowContext(workflow_uuid, self.sys_db)
 

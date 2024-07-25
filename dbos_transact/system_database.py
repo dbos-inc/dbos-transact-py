@@ -1,12 +1,14 @@
 import json
 import os
 from enum import Enum
-from typing import Any, Optional, TypedDict
+from typing import Any, Optional, Tuple, TypedDict
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 from alembic import command
 from alembic.config import Config
+
+import dbos_transact.utils as utils
 
 from .dbos_config import ConfigFile
 from .schemas.system_database import SystemSchema
@@ -18,6 +20,11 @@ class WorkflowStatusString(Enum):
     ERROR = "ERROR"
     RETRIES_EXCEEDED = "RETRIES_EXCEEDED"
     CANCELLED = "CANCELLED"
+
+
+class WorkflowInputs(TypedDict):
+    args: Any
+    kwargs: Any
 
 
 class WorkflowStatusInternal(TypedDict):
@@ -104,5 +111,17 @@ class SystemDatabase:
                         error=status["error"],
                     ),
                 )
+            )
+            c.commit()
+
+    def update_workflow_inputs(self, workflow_uuid: str, inputs: str) -> None:
+        with self.engine.connect() as c:
+            c.execute(
+                pg.insert(SystemSchema.workflow_inputs)
+                .values(
+                    workflow_uuid=workflow_uuid,
+                    inputs=utils.serialize(inputs),
+                )
+                .on_conflict_do_nothing()
             )
             c.commit()
