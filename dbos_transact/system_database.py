@@ -1,4 +1,3 @@
-import json
 import os
 from enum import Enum
 from typing import Any, Optional, TypedDict
@@ -8,6 +7,8 @@ import sqlalchemy.dialects.postgresql as pg
 from alembic import command
 from alembic.config import Config
 
+import dbos_transact.utils as utils
+
 from .dbos_config import ConfigFile
 from .schemas.system_database import SystemSchema
 
@@ -15,17 +16,22 @@ from .schemas.system_database import SystemSchema
 class WorkflowStatusString(Enum):
     PENDING = "PENDING"
     SUCCESS = "SUCCESS"
-    ERRROR = "ERROR"
+    ERROR = "ERROR"
     RETRIES_EXCEEDED = "RETRIES_EXCEEDED"
     CANCELLED = "CANCELLED"
+
+
+class WorkflowInputs(TypedDict):
+    args: Any
+    kwargs: Any
 
 
 class WorkflowStatusInternal(TypedDict):
     workflow_uuid: str
     status: str
     name: str
-    output: Optional[Any]
-    error: Optional[Exception]
+    output: Optional[str]  # Base64-encoded pickle
+    error: Optional[str]  # Base64-encoded pickle
 
 
 class SystemDatabase:
@@ -93,8 +99,8 @@ class SystemDatabase:
                     workflow_uuid=status["workflow_uuid"],
                     status=status["status"],
                     name=status["name"],
-                    output=json.dumps(status["output"]) if status["output"] else None,
-                    error=None,
+                    output=status["output"],
+                    error=status["error"],
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid"],
@@ -104,5 +110,17 @@ class SystemDatabase:
                         error=status["error"],
                     ),
                 )
+            )
+            c.commit()
+
+    def update_workflow_inputs(self, workflow_uuid: str, inputs: str) -> None:
+        with self.engine.connect() as c:
+            c.execute(
+                pg.insert(SystemSchema.workflow_inputs)
+                .values(
+                    workflow_uuid=workflow_uuid,
+                    inputs=utils.serialize(inputs),
+                )
+                .on_conflict_do_nothing()
             )
             c.commit()

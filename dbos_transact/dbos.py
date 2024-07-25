@@ -2,6 +2,7 @@ import uuid
 from functools import wraps
 from typing import Any, Callable, Optional, Protocol, TypeVar, cast
 
+import dbos_transact.utils as utils
 from dbos_transact.workflows import WorkflowContext
 
 from .application_database import ApplicationDatabase
@@ -9,6 +10,7 @@ from .dbos_config import ConfigFile, load_config
 from .logger import config_logger, dbos_logger
 from .system_database import (
     SystemDatabase,
+    WorkflowInputs,
     WorkflowStatusInternal,
     WorkflowStatusString,
 )
@@ -52,11 +54,26 @@ class DBOS:
                 }
                 self.sys_db.update_workflow_status(status)
 
+                inputs: WorkflowInputs = {
+                    "args": args,
+                    "kwargs": kwargs,
+                }
+                self.sys_db.update_workflow_inputs(
+                    workflow_uuid, utils.serialize(inputs)
+                )
+
                 ctx = WorkflowContext(workflow_uuid, self.sys_db)
-                output = func(ctx, *args, **kwargs)
+
+                try:
+                    output = func(ctx, *args, **kwargs)
+                except Exception as error:
+                    status["status"] = WorkflowStatusString.ERROR.value
+                    status["error"] = utils.serialize(error)
+                    self.sys_db.update_workflow_status(status)
+                    raise error
 
                 status["status"] = WorkflowStatusString.SUCCESS.value
-                status["output"] = output
+                status["output"] = utils.serialize(output)
                 self.sys_db.update_workflow_status(status)
                 return output
 
