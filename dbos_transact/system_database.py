@@ -1,7 +1,6 @@
-import json
 import os
 from enum import Enum
-from typing import Any, Optional, Tuple, TypedDict
+from typing import Any, Optional, TypedDict
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
