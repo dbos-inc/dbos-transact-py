@@ -1,4 +1,5 @@
 import pytest
+import sqlalchemy as sa
 
 from dbos_transact.dbos import DBOS
 from dbos_transact.transaction import TransactionContext
@@ -14,9 +15,10 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     @dbos.transaction()
     def test_transaction(ctx: TransactionContext, var2: str) -> str:
-        return var2
+        rows = ctx.session.execute(sa.text("SELECT 1")).fetchall()
+        return var2 + str(rows[0][0])
 
-    assert test_workflow(dbos.wf_ctx(), "bob", "bob") == "bobbob"
+    assert test_workflow(dbos.wf_ctx(), "bob", "bob") == "bob1bob"
 
 
 def test_exception_workflow(dbos: DBOS) -> None:
