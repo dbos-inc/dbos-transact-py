@@ -1,6 +1,6 @@
 import os
 from enum import Enum
-from typing import Any, Optional, TypedDict
+from typing import Any, Literal, Optional, TypedDict
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
@@ -21,6 +21,11 @@ class WorkflowStatusString(Enum):
     CANCELLED = "CANCELLED"
 
 
+WorkflowStatuses = Literal[
+    "PENDING", "SUCCESS", "ERROR", "RETRIES_EXCEEDED", "CANCELLED"
+]
+
+
 class WorkflowInputs(TypedDict):
     args: Any
     kwargs: Any
@@ -28,7 +33,7 @@ class WorkflowInputs(TypedDict):
 
 class WorkflowStatusInternal(TypedDict):
     workflow_uuid: str
-    status: str
+    status: WorkflowStatuses
     name: str
     output: Optional[str]  # Base64-encoded pickle
     error: Optional[str]  # Base64-encoded pickle

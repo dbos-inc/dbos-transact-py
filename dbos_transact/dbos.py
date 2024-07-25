@@ -9,12 +9,7 @@ from dbos_transact.workflows import WorkflowContext
 from .application_database import ApplicationDatabase, TransactionResultInternal
 from .dbos_config import ConfigFile, load_config
 from .logger import config_logger, dbos_logger
-from .system_database import (
-    SystemDatabase,
-    WorkflowInputs,
-    WorkflowStatusInternal,
-    WorkflowStatusString,
-)
+from .system_database import SystemDatabase, WorkflowInputs, WorkflowStatusInternal
 
 
 class WorkflowProtocol(Protocol):
@@ -61,7 +56,7 @@ class DBOS:
                 workflow_uuid = input_ctxt["workflow_uuid"]
                 status: WorkflowStatusInternal = {
                     "workflow_uuid": workflow_uuid,
-                    "status": WorkflowStatusString.PENDING.value,
+                    "status": "PENDING",
                     "name": func.__qualname__,
                     "output": None,
                     "error": None,
@@ -81,12 +76,12 @@ class DBOS:
                 try:
                     output = func(ctx, *args, **kwargs)
                 except Exception as error:
-                    status["status"] = WorkflowStatusString.ERROR.value
+                    status["status"] = "ERROR"
                     status["error"] = utils.serialize(error)
                     self.sys_db.update_workflow_status(status)
                     raise error
 
-                status["status"] = WorkflowStatusString.SUCCESS.value
+                status["status"] = "SUCCESS"
                 status["output"] = utils.serialize(output)
                 self.sys_db.update_workflow_status(status)
                 return output
