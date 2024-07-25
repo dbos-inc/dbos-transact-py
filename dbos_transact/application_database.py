@@ -1,8 +1,8 @@
-import json
-from typing import Any, Optional, TypedDict
+from typing import Optional, TypedDict
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
+from sqlalchemy.orm import Session, sessionmaker
 
 from dbos_transact.schemas.application_database import ApplicationSchema
 
@@ -55,6 +55,7 @@ class ApplicationDatabase:
             database=app_db_name,
         )
         self.engine = sa.create_engine(app_db_url)
+        self.sessionmaker = sessionmaker(bind=self.engine)
 
         # Create the dbos schema and transaction_outputs table in the application database
         with self.engine.begin() as conn:
@@ -69,9 +70,9 @@ class ApplicationDatabase:
 
     @staticmethod
     def record_transaction_output(
-        conn: sa.Connection, output: TransactionResultInternal
+        session: Session, output: TransactionResultInternal
     ) -> None:
-        conn.execute(
+        session.execute(
             pg.insert(ApplicationSchema.transaction_outputs).values(
                 workflow_uuid=output["workflow_uuid"],
                 function_id=output["function_id"],

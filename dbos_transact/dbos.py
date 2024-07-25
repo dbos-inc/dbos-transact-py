@@ -100,29 +100,33 @@ class DBOS:
             def wrapper(wf_ctxt: TransactionContext, *args: Any, **kwargs: Any) -> Any:
                 ctxt = cast(WorkflowContext, wf_ctxt)
                 ctxt.function_id += 1
-                # engine.begin() commits the transaction when the block exits
-                with self.app_db.engine.begin() as conn:
-                    txn_ctxt = TransactionContext(conn, ctxt.function_id)
-                    # TODO: Check transaction output
-                    txn_output: TransactionResultInternal = {
-                        "workflow_uuid": ctxt.workflow_uuid,
-                        "function_id": ctxt.function_id,
-                        "output": None,
-                        "error": None,
-                        "txn_snapshot": "",
-                        "executor_id": None,
-                        "txn_id": None,
-                    }
+                with self.app_db.sessionmaker() as session:
                     try:
-                        output = func(txn_ctxt, *args, **kwargs)
+                        # TODO: support multiple isolation levels
+                        with session.begin():
+                            session.connection(
+                                execution_options={"isolation_level": "SERIALIZABLE"}
+                            )
+                            txn_ctxt = TransactionContext(session, ctxt.function_id)
+                            # TODO: Check transaction output for OAOO
+                            txn_output: TransactionResultInternal = {
+                                "workflow_uuid": ctxt.workflow_uuid,
+                                "function_id": ctxt.function_id,
+                                "output": None,
+                                "error": None,
+                                "txn_snapshot": "",
+                                "executor_id": None,
+                                "txn_id": None,
+                            }
+                            output = func(txn_ctxt, *args, **kwargs)
+                            ApplicationDatabase.record_transaction_output(
+                                txn_ctxt.session, txn_output
+                            )
                     except Exception as error:
+                        # TODO: handle serialization errors properly
                         txn_output["error"] = utils.serialize(error)
                         self.app_db.record_transaction_error(txn_output)
                         raise error
-
-                    ApplicationDatabase.record_transaction_output(
-                        txn_ctxt.connection, txn_output
-                    )
                 return output
 
             return cast(Transaction, wrapper)
