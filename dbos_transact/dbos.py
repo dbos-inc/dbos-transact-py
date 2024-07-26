@@ -44,6 +44,7 @@ class DBOS:
         self.config = config
         self.sys_db = SystemDatabase(config)
         self.app_db = ApplicationDatabase(config)
+        self.workflow_info_map: dict[str, WorkflowProtocol] = {}
 
     def destroy(self) -> None:
         self.sys_db.destroy()
@@ -90,7 +91,9 @@ class DBOS:
                 self.sys_db.update_workflow_status(status)
                 return output
 
-            return cast(Workflow, wrapper)
+            wrapped_func = cast(Workflow, wrapper)
+            self.workflow_info_map[func.__qualname__] = wrapped_func
+            return wrapped_func
 
         return decorator
 
@@ -163,3 +166,24 @@ class DBOS:
             return cast(Transaction, wrapper)
 
         return decorator
+
+    """
+    This function is used to execute a workflow by a UUID for recovery.
+    """
+
+    def execute_workflow_uuid(self, workflow_uuid: str) -> None:
+        status = self.sys_db.get_workflow_status(workflow_uuid)
+        if not status:
+            raise Exception("Workflow status not found")
+        inputs = self.sys_db.get_workflow_inputs(workflow_uuid)
+        if not inputs:
+            raise Exception("Workflow inputs not found")
+        wf_func = self.workflow_info_map[status["name"]]
+        if not wf_func:
+            raise Exception("Workflow function not found")
+        ctx = self.wf_ctx(workflow_uuid)
+        try:
+            wf_func(ctx, *inputs["args"], **inputs["kwargs"])
+        except Exception as error:
+            # Don't raise the error because it's in recovery mode
+            dbos_logger.error(f"Error executing workflow by UUID: {error}")

@@ -117,13 +117,47 @@ class SystemDatabase:
                 )
             )
 
+    def get_workflow_status(
+        self, workflow_uuid: str
+    ) -> Optional[WorkflowStatusInternal]:
+        # `SELECT status, name, class_name, config_name, authenticated_user, assumed_role, authenticated_roles, request FROM ${DBOSExecutor.systemDBSchemaName}.workflow_status WHERE workflow_uuid=$1`, [workflowUUID]
+        with self.engine.begin() as c:
+            row = c.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.status,
+                    SystemSchema.workflow_status.c.name,
+                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
+            ).fetchone()
+            if row is None:
+                return None
+            status: WorkflowStatusInternal = {
+                "workflow_uuid": workflow_uuid,
+                "status": row[0],
+                "name": row[1],
+                "output": None,
+                "error": None,
+            }
+            return status
+
     def update_workflow_inputs(self, workflow_uuid: str, inputs: str) -> None:
         with self.engine.begin() as c:
             c.execute(
                 pg.insert(SystemSchema.workflow_inputs)
                 .values(
                     workflow_uuid=workflow_uuid,
-                    inputs=utils.serialize(inputs),
+                    inputs=inputs,
                 )
                 .on_conflict_do_nothing()
             )
+
+    def get_workflow_inputs(self, workflow_uuid: str) -> Optional[WorkflowInputs]:
+        with self.engine.begin() as c:
+            row = c.execute(
+                sa.select(SystemSchema.workflow_inputs.c.inputs).where(
+                    SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid
+                )
+            ).fetchone()
+            if row is None:
+                return None
+            inputs: WorkflowInputs = utils.deserialize(row[0])
+            return inputs

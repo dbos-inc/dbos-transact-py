@@ -10,9 +10,12 @@ from dbos_transact.workflows import WorkflowContext
 
 def test_simple_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
+    wf_counter: int = 0
 
     @dbos.workflow()
     def test_workflow(ctx: WorkflowContext, var: str, var2: str) -> str:
+        nonlocal wf_counter
+        wf_counter += 1
         res = test_transaction(ctx.txn_ctx(), var2)
         return res + var
 
@@ -31,9 +34,14 @@ def test_simple_workflow(dbos: DBOS) -> None:
     assert test_workflow(dbos.wf_ctx(wfuuid), "alice", "alice") == "alice1alice"
     assert txn_counter == 2  # Only increment once
 
+    # Test we can execute the workflow by uuid
+    dbos.execute_workflow_uuid(wfuuid)
+    assert wf_counter == 4
+
 
 def test_exception_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
+    wf_counter: int = 0
 
     @dbos.transaction()
     def exception_transaction(ctx: TransactionContext, var: str) -> str:
@@ -43,6 +51,8 @@ def test_exception_workflow(dbos: DBOS) -> None:
 
     @dbos.workflow()
     def exception_workflow(ctx: WorkflowContext) -> None:
+        nonlocal wf_counter
+        wf_counter += 1
         try:
             exception_transaction(ctx.txn_ctx(), "test error")
         except Exception as e:
@@ -63,3 +73,7 @@ def test_exception_workflow(dbos: DBOS) -> None:
         exception_workflow(dbos.wf_ctx(wfuuid))
     assert "test error" in str(exc_info.value)
     assert txn_counter == 2  # Only increment once
+
+    # Test we can execute the workflow by uuid, shouldn't throw errors
+    dbos.execute_workflow_uuid(wfuuid)
+    assert wf_counter == 4
