@@ -111,7 +111,7 @@ class DBOS:
                         "function_id": input_ctxt.function_id,
                         "output": None,
                         "error": None,
-                        "txn_snapshot": "",
+                        "txn_snapshot": "",  # TODO: add actual snapshot
                         "executor_id": None,
                         "txn_id": None,
                     }
@@ -120,8 +120,9 @@ class DBOS:
                         # TODO: support multiple isolation levels
                         # TODO: handle serialization errors properly
                         with session.begin():
+                            # This must be the first statement in the transaction!
                             session.connection(
-                                execution_options={"isolation_level": "SERIALIZABLE"}
+                                execution_options={"isolation_level": "REPEATABLE READ"}
                             )
                             txn_ctxt = TransactionContext(
                                 session, input_ctxt.function_id
@@ -150,6 +151,7 @@ class DBOS:
                             ApplicationDatabase.record_transaction_output(
                                 txn_ctxt.session, txn_output
                             )
+
                     except Exception as error:
                         # Don't record the error if it was already recorded
                         if not has_recorded_error:
