@@ -3,6 +3,7 @@ from functools import wraps
 from typing import Any, Callable, Optional, Protocol, TypedDict, TypeVar, cast
 
 import dbos_transact.utils as utils
+from dbos_transact.error import DBOSWorkflowConflictUUIDError
 from dbos_transact.transaction import TransactionContext
 from dbos_transact.workflows import WorkflowContext
 
@@ -75,6 +76,9 @@ class DBOS:
 
                 try:
                     output = func(ctx, *args, **kwargs)
+                except DBOSWorkflowConflictUUIDError as wferror:
+                    # TODO: handle this properly by waiting/returning the output
+                    raise wferror
                 except Exception as error:
                     status["status"] = "ERROR"
                     status["error"] = utils.serialize(error)
@@ -102,8 +106,19 @@ class DBOS:
                 input_ctxt = cast(WorkflowContext, _ctxt)
                 input_ctxt.function_id += 1
                 with self.app_db.sessionmaker() as session:
+                    txn_output: TransactionResultInternal = {
+                        "workflow_uuid": input_ctxt.workflow_uuid,
+                        "function_id": input_ctxt.function_id,
+                        "output": None,
+                        "error": None,
+                        "txn_snapshot": "",
+                        "executor_id": None,
+                        "txn_id": None,
+                    }
+                    has_recorded_error = False
                     try:
                         # TODO: support multiple isolation levels
+                        # TODO: handle serialization errors properly
                         with session.begin():
                             session.connection(
                                 execution_options={"isolation_level": "SERIALIZABLE"}
@@ -111,24 +126,35 @@ class DBOS:
                             txn_ctxt = TransactionContext(
                                 session, input_ctxt.function_id
                             )
-                            # TODO: Check transaction output for OAOO
-                            txn_output: TransactionResultInternal = {
-                                "workflow_uuid": input_ctxt.workflow_uuid,
-                                "function_id": input_ctxt.function_id,
-                                "output": None,
-                                "error": None,
-                                "txn_snapshot": "",
-                                "executor_id": None,
-                                "txn_id": None,
-                            }
+                            # Check recorded output for OAOO
+                            recorded_output = (
+                                ApplicationDatabase.check_transaction_execution(
+                                    session,
+                                    input_ctxt.workflow_uuid,
+                                    txn_ctxt.function_id,
+                                )
+                            )
+                            if recorded_output:
+                                if recorded_output["error"]:
+                                    deserialized_error = utils.deserialize(
+                                        recorded_output["error"]
+                                    )
+                                    has_recorded_error = True
+                                    raise deserialized_error
+                                elif recorded_output["output"]:
+                                    return utils.deserialize(recorded_output["output"])
+                                else:
+                                    raise Exception("Output and error are both None")
                             output = func(txn_ctxt, *args, **kwargs)
+                            txn_output["output"] = utils.serialize(output)
                             ApplicationDatabase.record_transaction_output(
                                 txn_ctxt.session, txn_output
                             )
                     except Exception as error:
-                        # TODO: handle serialization errors properly
-                        txn_output["error"] = utils.serialize(error)
-                        self.app_db.record_transaction_error(txn_output)
+                        # Don't record the error if it was already recorded
+                        if not has_recorded_error:
+                            txn_output["error"] = utils.serialize(error)
+                            self.app_db.record_transaction_error(txn_output)
                         raise error
                 return output
 
