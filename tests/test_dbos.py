@@ -10,9 +10,12 @@ from dbos_transact.workflows import WorkflowContext
 
 def test_simple_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
+    wf_counter: int = 0
 
     @dbos.workflow()
     def test_workflow(ctx: WorkflowContext, var: str, var2: str) -> str:
+        nonlocal wf_counter
+        wf_counter += 1
         res = test_transaction(ctx.txn_ctx(), var2)
         return res + var
 
@@ -31,9 +34,14 @@ def test_simple_workflow(dbos: DBOS) -> None:
     assert test_workflow(dbos.wf_ctx(wfuuid), "alice", "alice") == "alice1alice"
     assert txn_counter == 2  # Only increment once
 
+    # Test we can execute the workflow by uuid
+    dbos.execute_workflow_uuid(wfuuid)
+    assert wf_counter == 4
+
 
 def test_exception_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
+    wf_counter: int = 0
 
     @dbos.transaction()
     def exception_transaction(ctx: TransactionContext, var: str) -> str:
@@ -43,6 +51,8 @@ def test_exception_workflow(dbos: DBOS) -> None:
 
     @dbos.workflow()
     def exception_workflow(ctx: WorkflowContext) -> None:
+        nonlocal wf_counter
+        wf_counter += 1
         try:
             exception_transaction(ctx.txn_ctx(), "test error")
         except Exception as e:
@@ -63,3 +73,45 @@ def test_exception_workflow(dbos: DBOS) -> None:
         exception_workflow(dbos.wf_ctx(wfuuid))
     assert "test error" in str(exc_info.value)
     assert txn_counter == 2  # Only increment once
+
+    # Test we can execute the workflow by uuid, shouldn't throw errors
+    dbos.execute_workflow_uuid(wfuuid)
+    assert wf_counter == 4
+
+
+def test_recovery_workflow(dbos: DBOS) -> None:
+    txn_counter: int = 0
+    wf_counter: int = 0
+
+    @dbos.workflow()
+    def test_workflow(ctx: WorkflowContext, var: str, var2: str) -> str:
+        nonlocal wf_counter
+        wf_counter += 1
+        res = test_transaction(ctx.txn_ctx(), var2)
+        return res + var
+
+    @dbos.transaction()
+    def test_transaction(ctx: TransactionContext, var2: str) -> str:
+        rows = ctx.session.execute(sa.text("SELECT 1")).fetchall()
+        nonlocal txn_counter
+        txn_counter += 1
+        return var2 + str(rows[0][0])
+
+    wfuuid = str(uuid.uuid4())
+    assert test_workflow(dbos.wf_ctx(wfuuid), "bob", "bob") == "bob1bob"
+
+    # Change the workflow status to pending
+    dbos.sys_db.update_workflow_status(
+        {
+            "workflow_uuid": wfuuid,
+            "status": "PENDING",
+            "name": test_workflow.__qualname__,
+            "output": None,
+            "error": None,
+        }
+    )
+
+    # Recovery should execute the workflow again but skip the transaction
+    dbos.recover_pending_workflows()
+    assert wf_counter == 2
+    assert txn_counter == 1

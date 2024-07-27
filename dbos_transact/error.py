@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Optional
 
 
@@ -13,11 +14,22 @@ class DBOSException(Exception):
         return f"DBOS Error: {self.message}"
 
 
-ConflictingUUIDError = 1
+class DBOSErrorCode(Enum):
+    ConflictingUUIDError = 1
+    RecoveryError = 2
 
 
 class DBOSWorkflowConflictUUIDError(DBOSException):
     def __init__(self, workflow_uuid: str):
         super().__init__(
-            f"Conflicting UUID {workflow_uuid}", dbos_error_code=ConflictingUUIDError
+            f"Conflicting workflow UUID {workflow_uuid}",
+            dbos_error_code=DBOSErrorCode.ConflictingUUIDError.value,
+        )
+
+
+class DBOSRecoveryError(DBOSException):
+    def __init__(self, workflow_uuid: str, message: Optional[str] = None):
+        super().__init__(
+            f"Recovery error for workflow UUID {workflow_uuid}: {message}",
+            dbos_error_code=DBOSErrorCode.RecoveryError.value,
         )

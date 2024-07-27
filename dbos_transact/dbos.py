@@ -3,7 +3,7 @@ from functools import wraps
 from typing import Any, Callable, Optional, Protocol, TypedDict, TypeVar, cast
 
 import dbos_transact.utils as utils
-from dbos_transact.error import DBOSWorkflowConflictUUIDError
+from dbos_transact.error import DBOSRecoveryError, DBOSWorkflowConflictUUIDError
 from dbos_transact.transaction import TransactionContext
 from dbos_transact.workflows import WorkflowContext
 
@@ -44,6 +44,7 @@ class DBOS:
         self.config = config
         self.sys_db = SystemDatabase(config)
         self.app_db = ApplicationDatabase(config)
+        self.workflow_info_map: dict[str, WorkflowProtocol] = {}
 
     def destroy(self) -> None:
         self.sys_db.destroy()
@@ -90,7 +91,9 @@ class DBOS:
                 self.sys_db.update_workflow_status(status)
                 return output
 
-            return cast(Workflow, wrapper)
+            wrapped_func = cast(Workflow, wrapper)
+            self.workflow_info_map[func.__qualname__] = wrapped_func
+            return wrapped_func
 
         return decorator
 
@@ -163,3 +166,36 @@ class DBOS:
             return cast(Transaction, wrapper)
 
         return decorator
+
+    def execute_workflow_uuid(self, workflow_uuid: str) -> None:
+        """
+        This function is used to execute a workflow by a UUID for recovery.
+        """
+        status = self.sys_db.get_workflow_status(workflow_uuid)
+        if not status:
+            raise DBOSRecoveryError(workflow_uuid, "Workflow status not found")
+        inputs = self.sys_db.get_workflow_inputs(workflow_uuid)
+        if not inputs:
+            raise DBOSRecoveryError(workflow_uuid, "Workflow inputs not found")
+        wf_func = self.workflow_info_map[status["name"]]
+        if not wf_func:
+            raise DBOSRecoveryError(workflow_uuid, "Workflow function not found")
+        ctx = self.wf_ctx(workflow_uuid)
+        try:
+            wf_func(ctx, *inputs["args"], **inputs["kwargs"])
+        except Exception as error:
+            # Don't raise the error because it's in recovery mode
+            dbos_logger.error(f"Error executing workflow by UUID: {error}")
+
+    def recover_pending_workflows(self) -> None:
+        """
+        Find all PENDING workflows and execute them.
+        """
+        # TODO: need to run this in a background thread, after everything is initialized and all functions are properly decorated.
+        # Therefore, cannot run in the constructor
+        workflowIDs = self.sys_db.get_pending_workflows()
+        dbos_logger.debug(f"Pending workflows: {workflowIDs}")
+        for workflowID in workflowIDs:
+            self.execute_workflow_uuid(workflowID)
+
+        dbos_logger.info("Recovered pending workflows")
