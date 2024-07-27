@@ -167,11 +167,10 @@ class DBOS:
 
         return decorator
 
-    """
-    This function is used to execute a workflow by a UUID for recovery.
-    """
-
     def execute_workflow_uuid(self, workflow_uuid: str) -> None:
+        """
+        This function is used to execute a workflow by a UUID for recovery.
+        """
         status = self.sys_db.get_workflow_status(workflow_uuid)
         if not status:
             raise Exception("Workflow status not found")
@@ -187,3 +186,15 @@ class DBOS:
         except Exception as error:
             # Don't raise the error because it's in recovery mode
             dbos_logger.error(f"Error executing workflow by UUID: {error}")
+
+    def recover_pending_workflows(self) -> None:
+        """
+        Find all PENDING workflows and execute them.
+        """
+        # TODO: need to run this in a background thread, after everything is initialized and all functions are properly decorated.
+        # Therefore, cannot run in the constructor
+        workflowIDs = self.sys_db.get_pending_workflows()
+        dbos_logger.debug(f"Pending workflows: {workflowIDs}")
+        for workflowID in workflowIDs:
+            self.execute_workflow_uuid(workflowID)
+        dbos_logger.info("Recovered pending workflows")

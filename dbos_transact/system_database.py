@@ -120,7 +120,6 @@ class SystemDatabase:
     def get_workflow_status(
         self, workflow_uuid: str
     ) -> Optional[WorkflowStatusInternal]:
-        # `SELECT status, name, class_name, config_name, authenticated_user, assumed_role, authenticated_roles, request FROM ${DBOSExecutor.systemDBSchemaName}.workflow_status WHERE workflow_uuid=$1`, [workflowUUID]
         with self.engine.begin() as c:
             row = c.execute(
                 sa.select(
@@ -161,3 +160,13 @@ class SystemDatabase:
                 return None
             inputs: WorkflowInputs = utils.deserialize(row[0])
             return inputs
+
+    def get_pending_workflows(self) -> list[str]:
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                    SystemSchema.workflow_status.c.status
+                    == WorkflowStatusString.PENDING.value
+                )
+            ).fetchall()
+            return [row[0] for row in rows]
