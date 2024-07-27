@@ -3,7 +3,7 @@ from functools import wraps
 from typing import Any, Callable, Optional, Protocol, TypedDict, TypeVar, cast
 
 import dbos_transact.utils as utils
-from dbos_transact.error import DBOSWorkflowConflictUUIDError
+from dbos_transact.error import DBOSRecoveryError, DBOSWorkflowConflictUUIDError
 from dbos_transact.transaction import TransactionContext
 from dbos_transact.workflows import WorkflowContext
 
@@ -173,13 +173,13 @@ class DBOS:
         """
         status = self.sys_db.get_workflow_status(workflow_uuid)
         if not status:
-            raise Exception("Workflow status not found")
+            raise DBOSRecoveryError(workflow_uuid, "Workflow status not found")
         inputs = self.sys_db.get_workflow_inputs(workflow_uuid)
         if not inputs:
-            raise Exception("Workflow inputs not found")
+            raise DBOSRecoveryError(workflow_uuid, "Workflow inputs not found")
         wf_func = self.workflow_info_map[status["name"]]
         if not wf_func:
-            raise Exception("Workflow function not found")
+            raise DBOSRecoveryError(workflow_uuid, "Workflow function not found")
         ctx = self.wf_ctx(workflow_uuid)
         try:
             wf_func(ctx, *inputs["args"], **inputs["kwargs"])
@@ -197,4 +197,5 @@ class DBOS:
         dbos_logger.debug(f"Pending workflows: {workflowIDs}")
         for workflowID in workflowIDs:
             self.execute_workflow_uuid(workflowID)
+
         dbos_logger.info("Recovered pending workflows")
