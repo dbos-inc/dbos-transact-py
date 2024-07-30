@@ -1,4 +1,5 @@
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from typing import (
     Any,
@@ -60,6 +61,7 @@ class DBOS:
         self.sys_db = SystemDatabase(config)
         self.app_db = ApplicationDatabase(config)
         self.workflow_info_map: dict[str, WorkflowProtocol[Any, Any]] = {}
+        self.executor = ThreadPoolExecutor(max_workers=64)
 
     def destroy(self) -> None:
         self.sys_db.destroy()
@@ -141,21 +143,25 @@ class DBOS:
 
         ctx = WorkflowContext(workflow_uuid)
 
-        try:
-            output = func(ctx, *args, **kwargs)
-        except DBOSWorkflowConflictUUIDError as wferror:
-            # TODO: handle this properly by waiting/returning the output
-            raise wferror
-        except Exception as error:
-            status["status"] = "ERROR"
-            status["error"] = utils.serialize(error)
-            self.sys_db.update_workflow_status(status)
-            raise error
+        def execute_workflow() -> R:
+            try:
+                output = func(ctx, *args, **kwargs)
+            except DBOSWorkflowConflictUUIDError as wferror:
+                # TODO: handle this properly by waiting/returning the output
+                raise wferror
+            except Exception as error:
+                status["status"] = "ERROR"
+                status["error"] = utils.serialize(error)
+                self.sys_db.update_workflow_status(status)
+                raise error
 
-        status["status"] = "SUCCESS"
-        status["output"] = utils.serialize(output)
-        self.sys_db.update_workflow_status(status)
-        return output
+            status["status"] = "SUCCESS"
+            status["output"] = utils.serialize(output)
+            self.sys_db.update_workflow_status(status)
+            return output
+
+        future = self.executor.submit(execute_workflow)
+        return future.result()
 
     def wf_ctx(self, workflow_uuid: Optional[str] = None) -> WorkflowContext:
         workflow_uuid = workflow_uuid if workflow_uuid else str(uuid.uuid4())
