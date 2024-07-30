@@ -115,3 +115,31 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     dbos.recover_pending_workflows()
     assert wf_counter == 2
     assert txn_counter == 1
+
+
+def test_start_workflow(dbos: DBOS) -> None:
+    txn_counter: int = 0
+    wf_counter: int = 0
+
+    @dbos.workflow()
+    def test_workflow(ctx: WorkflowContext, var: str, var2: str) -> str:
+        nonlocal wf_counter
+        wf_counter += 1
+        res = test_transaction(ctx.txn_ctx(), var2)
+        return res + var
+
+    @dbos.transaction()
+    def test_transaction(ctx: TransactionContext, var2: str) -> str:
+        rows = ctx.session.execute(sa.text("SELECT 1")).fetchall()
+        nonlocal txn_counter
+        txn_counter += 1
+        return var2 + str(rows[0][0])
+
+    wfuuid = str(uuid.uuid4())
+    handle = dbos.start_workflow(test_workflow, dbos.wf_ctx(wfuuid), "bob", "bob")
+    assert handle.get_result() == "bob1bob"
+    handle = dbos.start_workflow(test_workflow, dbos.wf_ctx(wfuuid), "bob", "bob")
+    assert handle.get_result() == "bob1bob"
+    assert test_workflow(dbos.wf_ctx(wfuuid), "bob", "bob") == "bob1bob"
+    assert txn_counter == 1
+    assert wf_counter == 3
