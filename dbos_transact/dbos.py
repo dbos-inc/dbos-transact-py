@@ -7,6 +7,7 @@ from typing import (
     Optional,
     ParamSpec,
     Protocol,
+    Tuple,
     TypeAlias,
     TypedDict,
     TypeVar,
@@ -72,27 +73,18 @@ class DBOS:
             func.__orig_func = func  # type: ignore
 
             @wraps(func)
-            def wrapper(_ctxt: WorkflowContext, *args: P.args, **kwargs: P.kwargs) -> R:
-                input_ctxt = cast(WorkflowInputContext, _ctxt)
-                workflow_uuid = input_ctxt["workflow_uuid"]
-                status: WorkflowStatusInternal = {
-                    "workflow_uuid": workflow_uuid,
-                    "status": "PENDING",
-                    "name": func.__qualname__,
-                    "output": None,
-                    "error": None,
-                }
-                self.sys_db.update_workflow_status(status)
-
+            def wrapper(
+                input_ctxt: WorkflowContext, *args: P.args, **kwargs: P.kwargs
+            ) -> R:
                 inputs: WorkflowInputs = {
                     "args": args,
                     "kwargs": kwargs,
                 }
-                self.sys_db.update_workflow_inputs(
-                    workflow_uuid, utils.serialize(inputs)
+                ctx, status = self._init_workflow(
+                    input_ctxt=cast(WorkflowInputContext, input_ctxt),
+                    inputs=inputs,
+                    wf_name=func.__qualname__,
                 )
-
-                ctx = WorkflowContext(workflow_uuid)
 
                 try:
                     output = func(ctx, *args, **kwargs)
@@ -119,29 +111,20 @@ class DBOS:
     def start_workflow(
         self,
         func: Workflow[P, R],
-        _ctxt: WorkflowContext,
+        input_ctxt: WorkflowContext,
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         func = cast(Workflow[P, R], func.__orig_func)  # type: ignore
-        input_ctxt = cast(WorkflowInputContext, _ctxt)
-        workflow_uuid = input_ctxt["workflow_uuid"]
-        status: WorkflowStatusInternal = {
-            "workflow_uuid": workflow_uuid,
-            "status": "PENDING",
-            "name": func.__qualname__,
-            "output": None,
-            "error": None,
-        }
-        self.sys_db.update_workflow_status(status)
-
         inputs: WorkflowInputs = {
             "args": args,
             "kwargs": kwargs,
         }
-        self.sys_db.update_workflow_inputs(workflow_uuid, utils.serialize(inputs))
-
-        ctx = WorkflowContext(workflow_uuid)
+        ctx, status = self._init_workflow(
+            input_ctxt=cast(WorkflowInputContext, input_ctxt),
+            inputs=inputs,
+            wf_name=func.__qualname__,
+        )
 
         def execute_workflow() -> R:
             try:
@@ -161,12 +144,30 @@ class DBOS:
             return output
 
         future = self.executor.submit(execute_workflow)
-        return WorkflowHandle(workflow_uuid, future)
+        return WorkflowHandle(status["workflow_uuid"], future)
 
     def wf_ctx(self, workflow_uuid: Optional[str] = None) -> WorkflowContext:
         workflow_uuid = workflow_uuid if workflow_uuid else str(uuid.uuid4())
         input_ctxt: WorkflowInputContext = {"workflow_uuid": workflow_uuid}
         return cast(WorkflowContext, input_ctxt)
+
+    def _init_workflow(
+        self, input_ctxt: WorkflowInputContext, inputs: WorkflowInputs, wf_name: str
+    ) -> Tuple[WorkflowContext, WorkflowStatusInternal]:
+        workflow_uuid = input_ctxt["workflow_uuid"]
+        status: WorkflowStatusInternal = {
+            "workflow_uuid": workflow_uuid,
+            "status": "PENDING",
+            "name": wf_name,
+            "output": None,
+            "error": None,
+        }
+        self.sys_db.update_workflow_status(status)
+
+        self.sys_db.update_workflow_inputs(workflow_uuid, utils.serialize(inputs))
+
+        ctx = WorkflowContext(workflow_uuid)
+        return ctx, status
 
     def transaction(self) -> Callable[[Transaction], Transaction]:
         def decorator(func: Transaction) -> Transaction:
