@@ -67,7 +67,6 @@ class DBOS:
 
     def workflow(self) -> Callable[[Workflow[P, R]], Workflow[P, R]]:
         def decorator(func: Workflow[P, R]) -> Workflow[P, R]:
-            func.__orig_function = func  # type: ignore
 
             @wraps(func)
             def wrapper(_ctxt: WorkflowContext, *args: P.args, **kwargs: P.kwargs) -> R:
@@ -113,6 +112,15 @@ class DBOS:
             return wrapped_func
 
         return decorator
+
+    def start_workflow(
+        self,
+        func: Workflow[P, R],
+        ctx: WorkflowContext,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R:
+        return func(ctx, *args, **kwargs)
 
     def wf_ctx(self, workflow_uuid: Optional[str] = None) -> WorkflowContext:
         workflow_uuid = workflow_uuid if workflow_uuid else str(uuid.uuid4())
