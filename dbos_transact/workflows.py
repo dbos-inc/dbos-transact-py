@@ -1,6 +1,7 @@
 from concurrent.futures import Future
 from typing import Generic, TypeVar, cast
 
+from dbos_transact.communicator import CommunicatorContext
 from dbos_transact.transaction import TransactionContext
 
 R = TypeVar("R")
@@ -14,6 +15,9 @@ class WorkflowContext:
 
     def txn_ctx(self) -> TransactionContext:
         return cast(TransactionContext, self)
+
+    def comm_ctx(self) -> CommunicatorContext:
+        return cast(CommunicatorContext, self)
 
 
 class WorkflowHandle(Generic[R]):
