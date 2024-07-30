@@ -135,5 +135,11 @@ def test_start_workflow(dbos: DBOS) -> None:
         txn_counter += 1
         return var2 + str(rows[0][0])
 
-    handle = dbos.start_workflow(test_workflow, dbos.wf_ctx(), "bob", "bob")
+    wfuuid = str(uuid.uuid4())
+    handle = dbos.start_workflow(test_workflow, dbos.wf_ctx(wfuuid), "bob", "bob")
     assert handle.get_result() == "bob1bob"
+    handle = dbos.start_workflow(test_workflow, dbos.wf_ctx(wfuuid), "bob", "bob")
+    assert handle.get_result() == "bob1bob"
+    assert test_workflow(dbos.wf_ctx(wfuuid), "bob", "bob") == "bob1bob"
+    assert txn_counter == 1
+    assert wf_counter == 3
