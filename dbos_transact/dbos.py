@@ -1,6 +1,16 @@
 import uuid
 from functools import wraps
-from typing import Any, Callable, Optional, Protocol, TypedDict, TypeVar, cast
+from typing import (
+    Any,
+    Callable,
+    Optional,
+    ParamSpec,
+    Protocol,
+    TypeAlias,
+    TypedDict,
+    TypeVar,
+    cast,
+)
 
 import dbos_transact.utils as utils
 from dbos_transact.error import DBOSRecoveryError, DBOSWorkflowConflictUUIDError
@@ -12,14 +22,19 @@ from .dbos_config import ConfigFile, load_config
 from .logger import config_logger, dbos_logger
 from .system_database import SystemDatabase, WorkflowInputs, WorkflowStatusInternal
 
+P = ParamSpec("P")
+R = TypeVar("R", covariant=True)
 
-class WorkflowProtocol(Protocol):
+
+class WorkflowProtocol(Protocol[P, R]):
     __qualname__: str
 
-    def __call__(self, ctx: WorkflowContext, *args: Any, **kwargs: Any) -> Any: ...
+    def __call__(
+        self, ctx: WorkflowContext, *args: P.args, **kwargs: P.kwargs
+    ) -> R: ...
 
 
-Workflow = TypeVar("Workflow", bound=WorkflowProtocol)
+Workflow: TypeAlias = WorkflowProtocol[P, R]
 
 
 class TransactionProtocol(Protocol):
@@ -44,16 +59,18 @@ class DBOS:
         self.config = config
         self.sys_db = SystemDatabase(config)
         self.app_db = ApplicationDatabase(config)
-        self.workflow_info_map: dict[str, WorkflowProtocol] = {}
+        self.workflow_info_map: dict[str, WorkflowProtocol[Any, Any]] = {}
 
     def destroy(self) -> None:
         self.sys_db.destroy()
         self.app_db.destroy()
 
-    def workflow(self) -> Callable[[Workflow], Workflow]:
-        def decorator(func: Workflow) -> Workflow:
+    def workflow(self) -> Callable[[Workflow[P, R]], Workflow[P, R]]:
+        def decorator(func: Workflow[P, R]) -> Workflow[P, R]:
+            func.__orig_function = func  # type: ignore
+
             @wraps(func)
-            def wrapper(_ctxt: WorkflowContext, *args: Any, **kwargs: Any) -> Any:
+            def wrapper(_ctxt: WorkflowContext, *args: P.args, **kwargs: P.kwargs) -> R:
                 input_ctxt = cast(WorkflowInputContext, _ctxt)
                 workflow_uuid = input_ctxt["workflow_uuid"]
                 status: WorkflowStatusInternal = {
@@ -91,7 +108,7 @@ class DBOS:
                 self.sys_db.update_workflow_status(status)
                 return output
 
-            wrapped_func = cast(Workflow, wrapper)
+            wrapped_func = cast(Workflow[P, R], wrapper)
             self.workflow_info_map[func.__qualname__] = wrapped_func
             return wrapped_func
 
