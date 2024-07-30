@@ -5,7 +5,7 @@
 
 appCommands:
   start:
-    - "python3 main.py"
+    - "fastapi run"
 database:
   hostname: localhost
   port: 5432
