@@ -84,7 +84,7 @@ class ApplicationDatabase:
                 pg.insert(ApplicationSchema.transaction_outputs).values(
                     workflow_uuid=output["workflow_uuid"],
                     function_id=output["function_id"],
-                    output=output["output"] if output["output"] else None,
+                    output=output["output"],
                     error=None,
                     txn_id=sa.text("(select pg_current_xact_id_if_assigned()::text)"),
                     txn_snapshot=output["txn_snapshot"],
@@ -106,7 +106,7 @@ class ApplicationDatabase:
                         workflow_uuid=output["workflow_uuid"],
                         function_id=output["function_id"],
                         output=None,
-                        error=output["error"] if output["error"] else None,
+                        error=output["error"],
                         txn_id=sa.text(
                             "(select pg_current_xact_id_if_assigned()::text)"
                         ),

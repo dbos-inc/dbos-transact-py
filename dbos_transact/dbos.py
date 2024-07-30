@@ -10,6 +10,7 @@ else:
     from typing import ParamSpec, TypeAlias
 
 import dbos_transact.utils as utils
+from dbos_transact.communicator import CommunicatorContext
 from dbos_transact.error import DBOSRecoveryError, DBOSWorkflowConflictUUIDError
 from dbos_transact.transaction import TransactionContext
 from dbos_transact.workflows import WorkflowContext, WorkflowHandle
@@ -17,7 +18,12 @@ from dbos_transact.workflows import WorkflowContext, WorkflowHandle
 from .application_database import ApplicationDatabase, TransactionResultInternal
 from .dbos_config import ConfigFile, load_config
 from .logger import config_logger, dbos_logger
-from .system_database import SystemDatabase, WorkflowInputs, WorkflowStatusInternal
+from .system_database import (
+    OperationResultInternal,
+    SystemDatabase,
+    WorkflowInputs,
+    WorkflowStatusInternal,
+)
 
 P = ParamSpec("P")
 R = TypeVar("R", covariant=True)
@@ -41,6 +47,15 @@ class TransactionProtocol(Protocol):
 
 
 Transaction = TypeVar("Transaction", bound=TransactionProtocol)
+
+
+class CommunicatorProtocol(Protocol):
+    __qualname__: str
+
+    def __call__(self, ctx: CommunicatorContext, *args: Any, **kwargs: Any) -> Any: ...
+
+
+Communicator = TypeVar("Communicator", bound=CommunicatorProtocol)
 
 
 class WorkflowInputContext(TypedDict):
@@ -225,6 +240,46 @@ class DBOS:
                 return output
 
             return cast(Transaction, wrapper)
+
+        return decorator
+
+    def communicator(self) -> Callable[[Communicator], Communicator]:
+        def decorator(func: Communicator) -> Communicator:
+            @wraps(func)
+            def wrapper(_ctxt: CommunicatorContext, *args: Any, **kwargs: Any) -> Any:
+                input_ctxt = cast(WorkflowContext, _ctxt)
+                input_ctxt.function_id += 1
+                comm_output: OperationResultInternal = {
+                    "workflow_uuid": input_ctxt.workflow_uuid,
+                    "function_id": input_ctxt.function_id,
+                    "output": None,
+                    "error": None,
+                }
+                comm_ctxt = CommunicatorContext(input_ctxt.function_id)
+                recorded_output = self.sys_db.check_operation_execution(
+                    input_ctxt.workflow_uuid, comm_ctxt.function_id
+                )
+                if recorded_output:
+                    if recorded_output["error"]:
+                        deserialized_error = utils.deserialize(recorded_output["error"])
+                        raise deserialized_error
+                    elif recorded_output["output"]:
+                        return utils.deserialize(recorded_output["output"])
+                    else:
+                        raise Exception("Output and error are both None")
+                output = None
+                try:
+                    # TODO: support configurable retries
+                    output = func(comm_ctxt, *args, **kwargs)
+                    comm_output["output"] = utils.serialize(output)
+                except Exception as error:
+                    comm_output["error"] = utils.serialize(error)
+                    raise error
+                finally:
+                    self.sys_db.record_operation_result(comm_output)
+                return output
+
+            return cast(Communicator, wrapper)
 
         return decorator
 
