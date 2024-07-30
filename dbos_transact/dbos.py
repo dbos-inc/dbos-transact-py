@@ -1,18 +1,13 @@
+import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
-from typing import (
-    Any,
-    Callable,
-    Optional,
-    ParamSpec,
-    Protocol,
-    Tuple,
-    TypeAlias,
-    TypedDict,
-    TypeVar,
-    cast,
-)
+from typing import Any, Callable, Optional, Protocol, Tuple, TypedDict, TypeVar, cast
+
+if sys.version_info < (3, 10):
+    from typing_extensions import ParamSpec, TypeAlias
+else:
+    from typing import ParamSpec, TypeAlias
 
 import dbos_transact.utils as utils
 from dbos_transact.error import DBOSRecoveryError, DBOSWorkflowConflictUUIDError
