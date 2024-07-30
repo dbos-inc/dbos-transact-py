@@ -86,21 +86,7 @@ class DBOS:
                     wf_name=func.__qualname__,
                 )
 
-                try:
-                    output = func(ctx, *args, **kwargs)
-                except DBOSWorkflowConflictUUIDError as wferror:
-                    # TODO: handle this properly by waiting/returning the output
-                    raise wferror
-                except Exception as error:
-                    status["status"] = "ERROR"
-                    status["error"] = utils.serialize(error)
-                    self.sys_db.update_workflow_status(status)
-                    raise error
-
-                status["status"] = "SUCCESS"
-                status["output"] = utils.serialize(output)
-                self.sys_db.update_workflow_status(status)
-                return output
+                return self._execute_workflow(status, func, ctx, *args, **kwargs)
 
             wrapped_func = cast(Workflow[P, R], wrapper)
             self.workflow_info_map[func.__qualname__] = wrapped_func
@@ -125,25 +111,14 @@ class DBOS:
             inputs=inputs,
             wf_name=func.__qualname__,
         )
-
-        def execute_workflow() -> R:
-            try:
-                output = func(ctx, *args, **kwargs)
-            except DBOSWorkflowConflictUUIDError as wferror:
-                # TODO: handle this properly by waiting/returning the output
-                raise wferror
-            except Exception as error:
-                status["status"] = "ERROR"
-                status["error"] = utils.serialize(error)
-                self.sys_db.update_workflow_status(status)
-                raise error
-
-            status["status"] = "SUCCESS"
-            status["output"] = utils.serialize(output)
-            self.sys_db.update_workflow_status(status)
-            return output
-
-        future = self.executor.submit(execute_workflow)
+        future = self.executor.submit(
+            cast(Callable[..., R], self._execute_workflow),
+            status,
+            func,
+            ctx,
+            *args,
+            **kwargs,
+        )
         return WorkflowHandle(status["workflow_uuid"], future)
 
     def wf_ctx(self, workflow_uuid: Optional[str] = None) -> WorkflowContext:
@@ -168,6 +143,30 @@ class DBOS:
 
         ctx = WorkflowContext(workflow_uuid)
         return ctx, status
+
+    def _execute_workflow(
+        self,
+        status: WorkflowStatusInternal,
+        func: Workflow[P, R],
+        ctx: WorkflowContext,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R:
+        try:
+            output = func(ctx, *args, **kwargs)
+        except DBOSWorkflowConflictUUIDError as wferror:
+            # TODO: handle this properly by waiting/returning the output
+            raise wferror
+        except Exception as error:
+            status["status"] = "ERROR"
+            status["error"] = utils.serialize(error)
+            self.sys_db.update_workflow_status(status)
+            raise error
+
+        status["status"] = "SUCCESS"
+        status["output"] = utils.serialize(output)
+        self.sys_db.update_workflow_status(status)
+        return output
 
     def transaction(self) -> Callable[[Transaction], Transaction]:
         def decorator(func: Transaction) -> Transaction:
