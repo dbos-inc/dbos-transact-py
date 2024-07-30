@@ -16,7 +16,7 @@ from typing import (
 import dbos_transact.utils as utils
 from dbos_transact.error import DBOSRecoveryError, DBOSWorkflowConflictUUIDError
 from dbos_transact.transaction import TransactionContext
-from dbos_transact.workflows import WorkflowContext
+from dbos_transact.workflows import WorkflowContext, WorkflowHandle
 
 from .application_database import ApplicationDatabase, TransactionResultInternal
 from .dbos_config import ConfigFile, load_config
@@ -122,7 +122,7 @@ class DBOS:
         _ctxt: WorkflowContext,
         *args: P.args,
         **kwargs: P.kwargs,
-    ) -> R:
+    ) -> WorkflowHandle[R]:
         func = cast(Workflow[P, R], func.__orig_func)  # type: ignore
         input_ctxt = cast(WorkflowInputContext, _ctxt)
         workflow_uuid = input_ctxt["workflow_uuid"]
@@ -161,7 +161,7 @@ class DBOS:
             return output
 
         future = self.executor.submit(execute_workflow)
-        return future.result()
+        return WorkflowHandle(workflow_uuid, future)
 
     def wf_ctx(self, workflow_uuid: Optional[str] = None) -> WorkflowContext:
         workflow_uuid = workflow_uuid if workflow_uuid else str(uuid.uuid4())

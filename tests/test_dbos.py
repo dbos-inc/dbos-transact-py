@@ -135,4 +135,5 @@ def test_start_workflow(dbos: DBOS) -> None:
         txn_counter += 1
         return var2 + str(rows[0][0])
 
-    assert dbos.start_workflow(test_workflow, dbos.wf_ctx(), "bob", "bob") == "bob1bob"
+    handle = dbos.start_workflow(test_workflow, dbos.wf_ctx(), "bob", "bob")
+    assert handle.get_result() == "bob1bob"
