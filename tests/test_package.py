@@ -24,13 +24,12 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
         else os.path.join(venv_path, "Scripts", "pip.exe")
     )
 
+    # Install the requirements of the virtual environment
+    requirements_path = os.path.join(template_path, "requirements.txt")
+    subprocess.check_call([pip_executable, "install", "-r", requirements_path])
+
     # Install the dbos_transact package into the virtual environment
     subprocess.check_call([pip_executable, "install", build_wheel])
-    python_executable = (
-        os.path.join(venv_path, "bin", "python")
-        if os.name != "nt"
-        else os.path.join(venv_path, "Scripts", "python.exe")
-    )
 
     # Clean up from previous runs
     config = load_config(os.path.join(template_path, "dbos-config.yaml"))
@@ -41,4 +40,9 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}_dbos_sys"))
 
     # Run the template code and verify it works with the installed package
+    python_executable = (
+        os.path.join(venv_path, "bin", "python")
+        if os.name != "nt"
+        else os.path.join(venv_path, "Scripts", "python.exe")
+    )
     subprocess.check_call([python_executable, "main.py"], cwd=template_path)
