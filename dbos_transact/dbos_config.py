@@ -6,6 +6,10 @@ import yaml
 from jsonschema import ValidationError, validate
 
 
+class AppCommands(TypedDict, total=False):
+    start: List[str]
+
+
 class DatabaseConfig(TypedDict, total=False):
     hostname: str
     port: int
@@ -36,6 +40,7 @@ class TelemetryConfig(TypedDict, total=False):
 
 
 class ConfigFile(TypedDict):
+    appCommands: AppCommands
     database: DatabaseConfig
     telemetry: Optional[TelemetryConfig]
     application: Dict[str, Any]
