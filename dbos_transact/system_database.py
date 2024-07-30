@@ -8,6 +8,7 @@ from alembic import command
 from alembic.config import Config
 
 import dbos_transact.utils as utils
+from dbos_transact.error import DBOSWorkflowConflictUUIDError
 
 from .dbos_config import ConfigFile
 from .schemas.system_database import SystemSchema
@@ -35,6 +36,18 @@ class WorkflowStatusInternal(TypedDict):
     workflow_uuid: str
     status: WorkflowStatuses
     name: str
+    output: Optional[str]  # Base64-encoded pickle
+    error: Optional[str]  # Base64-encoded pickle
+
+
+class RecordedResult(TypedDict):
+    output: Optional[str]  # Base64-encoded pickle
+    error: Optional[str]  # Base64-encoded pickle
+
+
+class OperationResultInternal(TypedDict):
+    workflow_uuid: str
+    function_id: int
     output: Optional[str]  # Base64-encoded pickle
     error: Optional[str]  # Base64-encoded pickle
 
@@ -170,3 +183,43 @@ class SystemDatabase:
                 )
             ).fetchall()
             return [row[0] for row in rows]
+
+    def record_operation_result(self, result: OperationResultInternal) -> None:
+        error = result["error"]
+        output = result["output"]
+        assert error is None or output is None, "Only one of error or output can be set"
+        with self.engine.begin() as c:
+            try:
+                c.execute(
+                    pg.insert(SystemSchema.operation_outputs).values(
+                        workflow_uuid=result["workflow_uuid"],
+                        function_id=result["function_id"],
+                        output=output,
+                        error=error,
+                    )
+                )
+            except sa.exc.IntegrityError:
+                raise DBOSWorkflowConflictUUIDError(result["workflow_uuid"])
+            except Exception as e:
+                raise e
+
+    def check_operation_execution(
+        self, workflow_uuid: str, function_id: int
+    ) -> Optional[RecordedResult]:
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.operation_outputs.c.output,
+                    SystemSchema.operation_outputs.c.error,
+                ).where(
+                    SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
+                    SystemSchema.operation_outputs.c.function_id == function_id,
+                )
+            ).all()
+            if len(rows) == 0:
+                return None
+            result: RecordedResult = {
+                "output": rows[0][0],
+                "error": rows[0][1],
+            }
+            return result
