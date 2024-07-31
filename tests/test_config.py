@@ -1,5 +1,6 @@
 # type: ignore
 
+import os
 from unittest.mock import mock_open
 
 import pytest
@@ -27,7 +28,7 @@ def test_valid_config(mocker):
           hostname: 'some host'
           port: 1234
           username: 'some user'
-          password: abc123
+          password: ${PGPASSWORD}
           app_db_name: 'some db'
           connectionTimeoutMillis: 3000
     """
@@ -39,7 +40,7 @@ def test_valid_config(mocker):
     assert configFile["database"]["hostname"] == "some host"
     assert configFile["database"]["port"] == 1234
     assert configFile["database"]["username"] == "some user"
-    assert configFile["database"]["password"] == "abc123"
+    assert configFile["database"]["password"] == os.environ["PGPASSWORD"]
     assert configFile["database"]["app_db_name"] == "some db"
     assert configFile["database"]["connectionTimeoutMillis"] == 3000
 
