@@ -59,25 +59,23 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
     process = subprocess.Popen(["dbos", "start"], cwd=template_path, env=venv)
 
     try:
-        # Wait for the server to start (adjust the sleep time as needed)
-        time.sleep(5)
-
         # Send an HTTP request
         url = "http://0.0.0.0:8000/greeting/bob"
-        try:
-            with urllib.request.urlopen(url, timeout=10) as response:
-                status_code = response.getcode()
-                # Verify status code
-                assert (
-                    status_code == 200
-                ), f"Expected status code 200, but got {status_code}"
-                print("HTTP request successful with status code 200")
-        except urllib.error.URLError as e:
-            print(f"HTTP request failed: {e}")
-            raise
-        except AssertionError as e:
-            print(f"Assertion failed: {e}")
-            raise
-
+        max_retries = 10
+        for attempt in range(max_retries):
+            try:
+                with urllib.request.urlopen(url, timeout=1) as response:
+                    status_code = response.getcode()
+                    assert (
+                        status_code == 200
+                    ), f"Expected status code 200, but got {status_code}"
+                    break
+            except (urllib.error.URLError, AssertionError) as e:
+                if attempt < max_retries - 1:  # If not the last attempt
+                    print(f"Attempt {attempt + 1} failed: {e}. Retrying in 1 second...")
+                    time.sleep(1)
+                else:
+                    print(f"All {max_retries} attempts failed. Last error: {e}")
+                    raise
     finally:
         terminate_process_tree(process.pid)
