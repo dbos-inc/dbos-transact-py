@@ -2,7 +2,6 @@ import sqlalchemy as sa
 from fastapi import FastAPI
 
 from dbos_transact import DBOS, WorkflowContext
-from dbos_transact.communicator import CommunicatorContext
 from dbos_transact.transaction import TransactionContext
 
 dbos = DBOS()
