@@ -1,10 +1,28 @@
 import os
 import shutil
 import subprocess
+import time
+import urllib.error
+import urllib.request
 
+import psutil
 import sqlalchemy as sa
 
 from dbos_transact.dbos_config import load_config
+
+
+def terminate_process_tree(pid):
+    try:
+        parent = psutil.Process(pid)
+        children = parent.children(recursive=True)
+        for child in children:
+            child.terminate()
+        parent.terminate()
+        _, alive = psutil.wait_procs(children + [parent], timeout=5)
+        for p in alive:
+            p.kill()
+    except psutil.NoSuchProcess:
+        pass
 
 
 def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
@@ -37,5 +55,29 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
     # Install the dbos_transact package into the virtual environment
     subprocess.check_call(["pip", "install", build_wheel], env=venv)
 
-    # Launch the application in the virtual environment
-    subprocess.check_call(["dbos", "start"], cwd=template_path, env=venv)
+    # Launch the application in the virtual environment as a background process
+    process = subprocess.Popen(["dbos", "start"], cwd=template_path, env=venv)
+
+    try:
+        # Wait for the server to start (adjust the sleep time as needed)
+        time.sleep(5)
+
+        # Send an HTTP request
+        url = "http://0.0.0.0:8000/greeting/bob"
+        try:
+            with urllib.request.urlopen(url, timeout=10) as response:
+                status_code = response.getcode()
+                # Verify status code
+                assert (
+                    status_code == 200
+                ), f"Expected status code 200, but got {status_code}"
+                print("HTTP request successful with status code 200")
+        except urllib.error.URLError as e:
+            print(f"HTTP request failed: {e}")
+            raise
+        except AssertionError as e:
+            print(f"Assertion failed: {e}")
+            raise
+
+    finally:
+        terminate_process_tree(process.pid)
