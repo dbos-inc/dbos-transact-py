@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -59,16 +60,16 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
     process = subprocess.Popen(["dbos", "start"], cwd=template_path, env=venv)
 
     try:
-        # Send an HTTP request
-        url = "http://0.0.0.0:8000/greeting/bob"
+        url = "http://0.0.0.0:8000/greeting/dbos"
         max_retries = 10
         for attempt in range(max_retries):
             try:
                 with urllib.request.urlopen(url, timeout=1) as response:
                     status_code = response.getcode()
-                    assert (
-                        status_code == 200
-                    ), f"Expected status code 200, but got {status_code}"
+                    assert status_code == 200
+                    response_data = response.read().decode("utf-8")
+                    json_data = json.loads(response_data)
+                    assert json_data.get("name") == "dbos1"
                     break
             except (urllib.error.URLError, AssertionError) as e:
                 if attempt < max_retries - 1:  # If not the last attempt
