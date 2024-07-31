@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from dbos_transact.dbos_config import load_config
 
 
-def terminate_process_tree(pid):
+def terminate_process_tree(pid: int) -> None:
     try:
         parent = psutil.Process(pid)
         children = parent.children(recursive=True)

@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:4289a2ee38664c15a11070571dd7696a8b41702c1bda74be636f406ae22e5d93"
+content_hash = "sha256:ad7cc16a95d25f882070747735df1f6d3455566f1578924057aed1d6fef6b8b1"
 
 [[metadata.targets]]
 requires_python = ">=3.9"
@@ -848,6 +848,17 @@ dependencies = [
 files = [
     {file = "types-jsonschema-4.23.0.20240712.tar.gz", hash = "sha256:b20db728dcf7ea3e80e9bdeb55e8b8420c6c040cda14e8cf284465adee71d217"},
     {file = "types_jsonschema-4.23.0.20240712-py3-none-any.whl", hash = "sha256:8c33177ce95336241c1d61ccb56a9964d4361b99d5f1cd81a1ab4909b0dd7cf4"},
+]
+
+[[package]]
+name = "types-psutil"
+version = "6.0.0.20240621"
+requires_python = ">=3.8"
+summary = "Typing stubs for psutil"
+groups = ["dev"]
+files = [
+    {file = "types-psutil-6.0.0.20240621.tar.gz", hash = "sha256:1be027326c42ff51ebd65255a5146f9dc57e5cf8c4f9519a88b3f3f6a7fcd00e"},
+    {file = "types_psutil-6.0.0.20240621-py3-none-any.whl", hash = "sha256:b02f05d2c4141cd5926d82d8b56e4292a4d8f483d8a3400b73edf153834a3c64"},
 ]
 
 [[package]]

@@ -1,3 +1,5 @@
+# type: ignore
+
 import sqlalchemy as sa
 from fastapi import FastAPI
 

@@ -38,6 +38,7 @@ dev = [
     "pre-commit>=3.7.1",
     "isort>=5.13.2",
     "psutil>=6.0.0",
+    "types-psutil>=6.0.0.20240621",
 ]
 
 [tool.black]
