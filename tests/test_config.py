@@ -31,7 +31,10 @@ def test_valid_config(mocker):
           password: ${PGPASSWORD}
           app_db_name: 'some db'
           connectionTimeoutMillis: 3000
+        env:
+            foo: ${BARBAR}
     """
+    os.environ["BARBAR"] = "FOOFOO"
     mocker.patch(
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
     )
@@ -43,6 +46,7 @@ def test_valid_config(mocker):
     assert configFile["database"]["password"] == os.environ["PGPASSWORD"]
     assert configFile["database"]["app_db_name"] == "some db"
     assert configFile["database"]["connectionTimeoutMillis"] == 3000
+    assert configFile["env"]["foo"] == "FOOFOO"
 
 
 def test_config_missing_params(mocker):
