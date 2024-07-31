@@ -52,7 +52,7 @@ class ConfigFile(TypedDict):
 def substitute_env_vars(content: str) -> str:
     regex = r"\$\{([^}]+)\}"  # Regex to match ${VAR_NAME} style placeholders
 
-    def replace_func(match):
+    def replace_func(match: re.Match[str]) -> str:
         var_name = match.group(1)
         return os.environ.get(
             var_name, '""'
