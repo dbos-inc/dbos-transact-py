@@ -51,6 +51,7 @@ atomic = true
 
 [tool.mypy]
 strict = true
+exclude = "templates/hello"
 
 [tool.pytest.ini_options]
 addopts = "-s"
