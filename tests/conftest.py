@@ -19,6 +19,7 @@ def build_wheel() -> str:
 
 def default_config() -> ConfigFile:
     return {
+        "appCommands": {"start": ["python3 main.py"]},
         "database": {
             "hostname": "localhost",
             "port": 5432,

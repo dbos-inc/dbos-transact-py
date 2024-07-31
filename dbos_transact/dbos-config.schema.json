@@ -4,6 +4,12 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "appCommands": {
+        "start": {
+          "type": "array",
+          "description": "Specify commands to run to start your application (Python only)"
+        }
+      },
       "database": {
         "type": "object",
         "additionalProperties": false,
