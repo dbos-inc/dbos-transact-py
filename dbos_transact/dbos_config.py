@@ -1,4 +1,6 @@
 import json
+import os
+import re
 from importlib import resources
 from typing import Any, Dict, List, Optional, TypedDict
 
@@ -47,10 +49,24 @@ class ConfigFile(TypedDict):
     env: Dict[str, str]
 
 
+def substitute_env_vars(content: str) -> str:
+    regex = r"\$\{([^}]+)\}"  # Regex to match ${VAR_NAME} style placeholders
+
+    def replace_func(match: re.Match[str]) -> str:
+        var_name = match.group(1)
+        return os.environ.get(
+            var_name, '""'
+        )  # If the env variable is not set, return an empty string
+
+    return re.sub(regex, replace_func, content)
+
+
 def load_config(configFilePath: str = "dbos-config.yaml") -> ConfigFile:
     # Load the YAML file
     with open(configFilePath, "r") as file:
-        data = yaml.safe_load(file)
+        content = file.read()
+        substituted_content = substitute_env_vars(content)
+        data = yaml.safe_load(substituted_content)
 
     # Load the JSON schema relative to the package root
     with resources.open_text("dbos_transact", "dbos-config.schema.json") as schema_file:

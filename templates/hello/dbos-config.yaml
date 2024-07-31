@@ -10,7 +10,7 @@ database:
   hostname: localhost
   port: 5432
   username: postgres
-  password: dbos
+  password: ${PGPASSWORD}
   app_db_name: hello
 telemetry:
   logs:
