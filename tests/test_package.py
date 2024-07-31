@@ -18,11 +18,7 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
     subprocess.check_call(
         [os.path.join("/", "usr", "bin", "python3"), "-m", "venv", venv_path]
     )
-    pip_executable = (
-        os.path.join(venv_path, "bin", "pip")
-        if os.name != "nt"
-        else os.path.join(venv_path, "Scripts", "pip.exe")
-    )
+    pip_executable = os.path.join(venv_path, "bin", "pip")
 
     # Install the requirements of the virtual environment
     requirements_path = os.path.join(template_path, "requirements.txt")
@@ -40,9 +36,9 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}_dbos_sys"))
 
     # Run the template code and verify it works with the installed package
-    python_executable = (
-        os.path.join(venv_path, "bin", "python")
-        if os.name != "nt"
-        else os.path.join(venv_path, "Scripts", "python.exe")
-    )
-    subprocess.check_call([python_executable, "main.py"], cwd=template_path)
+
+    # Launch the application in the virtual environment
+    venv = os.environ.copy()
+    venv["PATH"] = f"{os.path.join(venv_path, 'bin')}:{venv['PATH']}"
+    venv["VIRTUAL_ENV"] = venv_path
+    subprocess.check_call(["dbos", "start"], cwd=template_path, env=venv)
