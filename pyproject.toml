@@ -39,6 +39,8 @@ dev = [
     "isort>=5.13.2",
     "psutil>=6.0.0",
     "types-psutil>=6.0.0.20240621",
+    "requests>=2.32.3",
+    "types-requests>=2.32.0.20240712",
 ]
 
 [tool.black]
