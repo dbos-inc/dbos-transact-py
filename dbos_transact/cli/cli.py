@@ -58,7 +58,8 @@ def migrate() -> None:
                 typer.echo(f"Migration command failed: {command}")
                 typer.echo(result.stderr)
                 raise typer.Exit(1)
-            typer.echo(result.stdout.rstrip())
+            if result.stdout:
+                typer.echo(result.stdout.rstrip())
     except Exception as e:
         typer.echo(f"An error occurred during schema migration: {e}")
         raise typer.Exit(code=1)
