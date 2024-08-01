@@ -38,19 +38,28 @@ def migrate() -> None:
     app_db_name = config["database"]["app_db_name"]
 
     typer.echo(f"Starting schema migration for database {app_db_name}")
-    sys_db = SystemDatabase(config)  # This runs migrations on the system database
-    sys_db.destroy()
 
-    app_db = ApplicationDatabase(
-        config
-    )  # This runs migrations on the application database
-
-    migrate_commands = (
-        config["database"]["migrate"]
-        if "migrate" in config["database"] and config["database"]["migrate"]
-        else []
-    )
+    # First, run DBOS migrations on the system database and the application database
+    app_db = None
+    sys_db = None
     try:
+        sys_db = SystemDatabase(config)
+        app_db = ApplicationDatabase(config)
+    except Exception as e:
+        typer.echo(f"DBOS system schema migration failed: {e}")
+    finally:
+        if sys_db:
+            sys_db.destroy()
+        if app_db:
+            app_db.destroy()
+
+    # Next, run any custom migration commands specified in the configuration
+    try:
+        migrate_commands = (
+            config["database"]["migrate"]
+            if "migrate" in config["database"] and config["database"]["migrate"]
+            else []
+        )
         for command in migrate_commands:
             typer.echo(f"Executing migration command: {command}")
             result = subprocess.run(command, shell=True, text=True)
@@ -63,8 +72,6 @@ def migrate() -> None:
     except Exception as e:
         typer.echo(f"An error occurred during schema migration: {e}")
         raise typer.Exit(code=1)
-    finally:
-        app_db.destroy()
 
     typer.echo(f"Completed schema migration for database {app_db_name}")
 
