@@ -16,7 +16,11 @@ def example_workflow(ctx: WorkflowContext, var: str) -> str:
 
 @dbos.transaction()
 def example_transaction(ctx: TransactionContext, var: str) -> str:
-    rows = ctx.session.execute(sa.text("SELECT 1")).fetchall()
+    rows = ctx.session.execute(
+        sa.text(
+            "INSERT INTO dbos_hello (name, greet_count) VALUES ('dbos', 1) ON CONFLICT (name) DO UPDATE SET greet_count = dbos_hello.greet_count + 1 RETURNING greet_count;"
+        )
+    ).all()
     return var + str(rows[0][0])
 
 

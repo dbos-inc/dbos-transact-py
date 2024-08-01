@@ -56,6 +56,9 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
     # Install the dbos_transact package into the virtual environment
     subprocess.check_call(["pip", "install", build_wheel], env=venv)
 
+    # Run schema migration
+    subprocess.check_call(["dbos", "migrate"], cwd=template_path, env=venv)
+
     # Launch the application in the virtual environment as a background process
     process = subprocess.Popen(["dbos", "start"], cwd=template_path, env=venv)
 

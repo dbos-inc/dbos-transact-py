@@ -14,6 +14,8 @@ database:
   username: postgres
   password: ${PGPASSWORD}
   app_db_name: hello
+  migrate:
+    - alembic upgrade head
 telemetry:
   logs:
     logLevel: INFO
