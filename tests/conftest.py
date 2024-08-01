@@ -19,13 +19,17 @@ def build_wheel() -> str:
 
 def default_config() -> ConfigFile:
     return {
-        "appCommands": {"start": ["python3 main.py"]},
+        "name": "test-app",
+        "language": "python",
         "database": {
             "hostname": "localhost",
             "port": 5432,
             "username": "postgres",
             "password": os.environ["PGPASSWORD"],
             "app_db_name": "dbostestpy",
+        },
+        "runtimeConfig": {
+            "start": ["python3 main.py"],
         },
         "telemetry": {},
         "application": {},

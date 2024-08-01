@@ -17,6 +17,7 @@ class DBOSException(Exception):
 class DBOSErrorCode(Enum):
     ConflictingUUIDError = 1
     RecoveryError = 2
+    InitializationError = 3
 
 
 class DBOSWorkflowConflictUUIDError(DBOSException):
@@ -32,4 +33,12 @@ class DBOSRecoveryError(DBOSException):
         super().__init__(
             f"Recovery error for workflow UUID {workflow_uuid}: {message}",
             dbos_error_code=DBOSErrorCode.RecoveryError.value,
+        )
+
+
+class DBOSInitializationError(DBOSException):
+    def __init__(self, message: str):
+        super().__init__(
+            f"Error initializing DBOS Transact: {message}",
+            DBOSErrorCode.InitializationError.value,
         )

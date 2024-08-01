@@ -12,7 +12,7 @@ app = typer.Typer()
 @app.command()
 def start() -> None:
     config = load_config()
-    start_commands = config["appCommands"]["start"]
+    start_commands = config["runtimeConfig"]["start"]
     for command in start_commands:
         typer.echo(f"Executing: {command}")
         result = subprocess.run(command, shell=True, text=True)

@@ -3,7 +3,9 @@
 
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dbos-inc/dbos-transact/main/dbos-config.schema.json
 
-appCommands:
+name: hello-python
+language: python
+runtimeConfig:
   start:
     - "fastapi run"
 database:

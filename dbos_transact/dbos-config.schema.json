@@ -4,11 +4,17 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "appCommands": {
-        "start": {
-          "type": "array",
-          "description": "Specify commands to run to start your application (Python only)"
-        }
+      "name": {
+        "type": "string",
+        "description": "The name of your application"
+      },
+      "language": {
+        "type": "string",
+        "description": "The language used in your application",
+        "enum": [
+          "typescript",
+          "python"
+        ]
       },
       "database": {
         "type": "object",
@@ -130,6 +136,10 @@
           },
           "port": {
             "type": "number"
+          },
+          "start": {
+            "type": "array",
+            "description": "Specify commands to run to start your application (Python only)"
           }
         }
       },

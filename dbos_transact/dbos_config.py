@@ -7,8 +7,10 @@ from typing import Any, Dict, List, Optional, TypedDict
 import yaml
 from jsonschema import ValidationError, validate
 
+from dbos_transact.error import DBOSInitializationError
 
-class AppCommands(TypedDict, total=False):
+
+class RuntimeConfig(TypedDict, total=False):
     start: List[str]
 
 
@@ -42,7 +44,9 @@ class TelemetryConfig(TypedDict, total=False):
 
 
 class ConfigFile(TypedDict):
-    appCommands: AppCommands
+    name: str
+    language: str
+    runtimeConfig: RuntimeConfig
     database: DatabaseConfig
     telemetry: Optional[TelemetryConfig]
     application: Dict[str, Any]
@@ -76,7 +80,25 @@ def load_config(configFilePath: str = "dbos-config.yaml") -> ConfigFile:
     try:
         validate(instance=data, schema=schema)
     except ValidationError as e:
-        raise ValueError(f"Validation error: {e}")
+        raise DBOSInitializationError(f"Validation error: {e}")
+
+    if "name" not in data:
+        raise DBOSInitializationError(
+            f"dbos-config.yaml must specify an application name"
+        )
+
+    if "language" not in data:
+        raise DBOSInitializationError(
+            f"dbos-config.yaml must specify the application language is Python"
+        )
+
+    if data["language"] != "python":
+        raise DBOSInitializationError(
+            f'dbos-config.yaml specifies invalid language { data["language"] }'
+        )
+
+    if "runtimeConfig" not in data or "start" not in data["runtimeConfig"]:
+        raise DBOSInitializationError(f"dbos-config.yaml must specify a start command")
 
     # Return data as ConfigFile type
     return data  # type: ignore
