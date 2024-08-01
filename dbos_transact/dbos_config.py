@@ -8,7 +8,7 @@ import yaml
 from jsonschema import ValidationError, validate
 
 
-class AppCommands(TypedDict, total=False):
+class RuntimeConfig(TypedDict, total=False):
     start: List[str]
 
 
@@ -42,7 +42,7 @@ class TelemetryConfig(TypedDict, total=False):
 
 
 class ConfigFile(TypedDict):
-    appCommands: AppCommands
+    runtimeConfig: RuntimeConfig
     database: DatabaseConfig
     telemetry: Optional[TelemetryConfig]
     application: Dict[str, Any]

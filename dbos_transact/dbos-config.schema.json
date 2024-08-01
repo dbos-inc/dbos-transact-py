@@ -16,12 +16,6 @@
           "python"
         ]
       },
-      "appCommands": {
-        "start": {
-          "type": "array",
-          "description": "Specify commands to run to start your application (Python only)"
-        }
-      },
       "database": {
         "type": "object",
         "additionalProperties": false,
@@ -142,6 +136,10 @@
           },
           "port": {
             "type": "number"
+          },
+          "start": {
+            "type": "array",
+            "description": "Specify commands to run to start your application (Python only)"
           }
         }
       },

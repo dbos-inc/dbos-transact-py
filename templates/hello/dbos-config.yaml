@@ -5,7 +5,7 @@
 
 name: hello-python
 language: python
-appCommands:
+runtimeConfig:
   start:
     - "fastapi run"
 database:
