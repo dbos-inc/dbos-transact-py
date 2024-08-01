@@ -97,5 +97,8 @@ def load_config(configFilePath: str = "dbos-config.yaml") -> ConfigFile:
             f'dbos-config.yaml specifies invalid language { data["language"] }'
         )
 
+    if "runtimeConfig" not in data or "start" not in data["runtimeConfig"]:
+        raise DBOSInitializationError(f"dbos-config.yaml must specify a start command")
+
     # Return data as ConfigFile type
     return data  # type: ignore

@@ -27,6 +27,9 @@ def test_valid_config(mocker):
     mock_config = """
         name: "some app"
         language: "python"
+        runtimeConfig:
+            start:
+                - "python3 main.py"
         database:
           hostname: 'some host'
           port: 1234
@@ -161,3 +164,25 @@ def test_config_bad_language(mocker):
         dbos_transact.dbos_config.load_config(mock_filename)
 
     assert "invalid language" in str(exc_info.value)
+
+
+def test_config_no_start(mocker):
+    mock_config = """
+        name: "some app"
+        language: python
+        database:
+          hostname: 'some host'
+          port: 1234
+          username: 'some user'
+          password: abc123
+          app_db_name: 'some db'
+          connectionTimeoutMillis: 3000
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
+    )
+
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        dbos_transact.dbos_config.load_config(mock_filename)
+
+    assert "start command" in str(exc_info.value)
