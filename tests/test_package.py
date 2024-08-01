@@ -63,7 +63,7 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
     process = subprocess.Popen(["dbos", "start"], cwd=template_path, env=venv)
 
     try:
-        url = "http://0.0.0.0:8000/greeting/dbos"
+        url = "http://localhost:8000/greeting/dbos"
         max_retries = 10
         for attempt in range(max_retries):
             try:
