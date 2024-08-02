@@ -68,6 +68,7 @@ def dbos(
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}"))
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sys_db_name}"))
 
+    # Don't start the admin server for our tests
     dbos = DBOS(config)
     yield dbos
     dbos.destroy()
