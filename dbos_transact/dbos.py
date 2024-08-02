@@ -14,7 +14,7 @@ from dbos_transact.admin_sever import AdminServer
 from dbos_transact.communicator import CommunicatorContext
 from dbos_transact.error import DBOSRecoveryError, DBOSWorkflowConflictUUIDError
 from dbos_transact.transaction import TransactionContext
-from dbos_transact.workflows import WorkflowContext, WorkflowHandle
+from dbos_transact.workflow import WorkflowContext, WorkflowHandle
 
 from .application_database import ApplicationDatabase, TransactionResultInternal
 from .dbos_config import ConfigFile, load_config
@@ -74,7 +74,7 @@ class DBOS:
         self.app_db = ApplicationDatabase(config)
         self.workflow_info_map: dict[str, WorkflowProtocol[Any, Any]] = {}
         self.executor = ThreadPoolExecutor(max_workers=64)
-        self.admin_server = AdminServer()
+        self.admin_server = AdminServer(dbos=self)
 
     def destroy(self) -> None:
         self.sys_db.destroy()
