@@ -13,7 +13,7 @@ database:
   port: 5432
   username: postgres
   password: ${PGPASSWORD}
-  app_db_name: hello
+  app_db_name: hello_python
   migrate:
     - alembic upgrade head
 telemetry:
