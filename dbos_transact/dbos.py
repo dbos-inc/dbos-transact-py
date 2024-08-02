@@ -64,9 +64,7 @@ class WorkflowInputContext(TypedDict):
 
 
 class DBOS:
-    def __init__(
-        self, config: Optional[ConfigFile] = None, start_admin_server: bool = True
-    ) -> None:
+    def __init__(self, config: Optional[ConfigFile] = None) -> None:
         if config is None:
             config = load_config()
         config_logger(config)
@@ -76,17 +74,12 @@ class DBOS:
         self.app_db = ApplicationDatabase(config)
         self.workflow_info_map: dict[str, WorkflowProtocol[Any, Any]] = {}
         self.executor = ThreadPoolExecutor(max_workers=64)
-        self.admin_server: Optional[AdminServer]
-        if start_admin_server:
-            self.admin_server = AdminServer()
-        else:
-            self.admin_server = None
+        self.admin_server = AdminServer()
 
     def destroy(self) -> None:
         self.sys_db.destroy()
         self.app_db.destroy()
-        if self.admin_server:
-            self.admin_server.stop()
+        self.admin_server.stop()
 
     def workflow(self) -> Callable[[Workflow[P, R]], Workflow[P, R]]:
         def decorator(func: Workflow[P, R]) -> Workflow[P, R]:

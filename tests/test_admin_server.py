@@ -1,11 +1,9 @@
 import requests
 
-from dbos_transact import DBOS, ConfigFile
+from dbos_transact import DBOS
 
 
-def test_admin_server(config: ConfigFile) -> None:
-    dbos = DBOS(config)  # Start the admin server
-
+def test_admin_server(dbos: DBOS) -> None:
     # Test GET /dbos-healthz
     response = requests.get("http://localhost:3001/dbos-healthz", timeout=5)
     assert response.status_code == 200
@@ -26,5 +24,3 @@ def test_admin_server(config: ConfigFile) -> None:
     # Test POST not found
     response = requests.post("http://localhost:3001/stuff", timeout=5)
     assert response.status_code == 404
-
-    dbos.destroy()
