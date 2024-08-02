@@ -48,7 +48,8 @@ def test_simple_workflow(dbos: DBOS) -> None:
     assert comm_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid
-    dbos.execute_workflow_uuid(wfuuid)
+    handle = dbos.execute_workflow_uuid(wfuuid)
+    assert handle.get_result() == "alice1alice"
     assert wf_counter == 4
 
 
@@ -105,7 +106,9 @@ def test_exception_workflow(dbos: DBOS) -> None:
     assert comm_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid, shouldn't throw errors
-    dbos.execute_workflow_uuid(wfuuid)
+    handle = dbos.execute_workflow_uuid(wfuuid)
+    with pytest.raises(Exception) as exc_info:
+        handle.get_result()
     assert wf_counter == 4
 
 
@@ -138,11 +141,16 @@ def test_recovery_workflow(dbos: DBOS) -> None:
             "name": test_workflow.__qualname__,
             "output": None,
             "error": None,
+            "executor_id": None,
+            "app_id": None,
+            "app_version": None,
         }
     )
 
     # Recovery should execute the workflow again but skip the transaction
-    dbos.recover_pending_workflows()
+    workflow_handles = dbos.recover_pending_workflows()
+    assert len(workflow_handles) == 1
+    assert workflow_handles[0].get_result() == "bob1bob"
     assert wf_counter == 2
     assert txn_counter == 1
 
