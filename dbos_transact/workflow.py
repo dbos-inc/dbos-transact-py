@@ -1,17 +1,20 @@
+import os
 from concurrent.futures import Future
 from typing import Generic, TypeVar, cast
 
 from dbos_transact.communicator import CommunicatorContext
+from dbos_transact.context import DBOSContext
 from dbos_transact.transaction import TransactionContext
 
 R = TypeVar("R")
 
 
-class WorkflowContext:
+class WorkflowContext(DBOSContext):
 
     def __init__(self, workflow_uuid: str):
         self.workflow_uuid = workflow_uuid
         self.function_id = 0
+        super().__init__()
 
     def txn_ctx(self) -> TransactionContext:
         return cast(TransactionContext, self)

@@ -38,6 +38,9 @@ class WorkflowStatusInternal(TypedDict):
     name: str
     output: Optional[str]  # Base64-encoded pickle
     error: Optional[str]  # Base64-encoded pickle
+    executor_id: Optional[str]
+    app_version: Optional[str]
+    app_id: Optional[str]
 
 
 class RecordedResult(TypedDict):
@@ -119,6 +122,9 @@ class SystemDatabase:
                     name=status["name"],
                     output=status["output"],
                     error=status["error"],
+                    executor_id=status["executor_id"],
+                    application_version=status["app_version"],
+                    application_id=status["app_id"],
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid"],
@@ -148,6 +154,9 @@ class SystemDatabase:
                 "name": row[1],
                 "output": None,
                 "error": None,
+                "app_id": None,
+                "app_version": None,
+                "executor_id": None,
             }
             return status
 
@@ -174,12 +183,13 @@ class SystemDatabase:
             inputs: WorkflowInputs = utils.deserialize(row[0])
             return inputs
 
-    def get_pending_workflows(self) -> list[str]:
+    def get_pending_workflows(self, executor_id: str) -> list[str]:
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
                     SystemSchema.workflow_status.c.status
-                    == WorkflowStatusString.PENDING.value
+                    == WorkflowStatusString.PENDING.value,
+                    SystemSchema.workflow_status.c.executor_id == executor_id,
                 )
             ).fetchall()
             return [row[0] for row in rows]

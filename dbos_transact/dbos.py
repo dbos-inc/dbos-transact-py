@@ -1,8 +1,19 @@
+import os
 import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
-from typing import Any, Callable, Optional, Protocol, Tuple, TypedDict, TypeVar, cast
+from typing import (
+    Any,
+    Callable,
+    List,
+    Optional,
+    Protocol,
+    Tuple,
+    TypedDict,
+    TypeVar,
+    cast,
+)
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec, TypeAlias
@@ -14,7 +25,7 @@ from dbos_transact.admin_sever import AdminServer
 from dbos_transact.communicator import CommunicatorContext
 from dbos_transact.error import DBOSRecoveryError, DBOSWorkflowConflictUUIDError
 from dbos_transact.transaction import TransactionContext
-from dbos_transact.workflows import WorkflowContext, WorkflowHandle
+from dbos_transact.workflow import WorkflowContext, WorkflowHandle
 
 from .application_database import ApplicationDatabase, TransactionResultInternal
 from .dbos_config import ConfigFile, load_config
@@ -74,7 +85,7 @@ class DBOS:
         self.app_db = ApplicationDatabase(config)
         self.workflow_info_map: dict[str, WorkflowProtocol[Any, Any]] = {}
         self.executor = ThreadPoolExecutor(max_workers=64)
-        self.admin_server = AdminServer()
+        self.admin_server = AdminServer(dbos=self)
 
     def destroy(self) -> None:
         self.sys_db.destroy()
@@ -143,18 +154,21 @@ class DBOS:
         self, input_ctxt: WorkflowInputContext, inputs: WorkflowInputs, wf_name: str
     ) -> Tuple[WorkflowContext, WorkflowStatusInternal]:
         workflow_uuid = input_ctxt["workflow_uuid"]
+        ctx = WorkflowContext(workflow_uuid)
         status: WorkflowStatusInternal = {
             "workflow_uuid": workflow_uuid,
             "status": "PENDING",
             "name": wf_name,
             "output": None,
             "error": None,
+            "app_id": ctx.app_id,
+            "app_version": ctx.app_version,
+            "executor_id": ctx.executor_id,
         }
         self.sys_db.update_workflow_status(status)
 
         self.sys_db.update_workflow_inputs(workflow_uuid, utils.serialize(inputs))
 
-        ctx = WorkflowContext(workflow_uuid)
         return ctx, status
 
     def _execute_workflow(
@@ -286,7 +300,7 @@ class DBOS:
 
         return decorator
 
-    def execute_workflow_uuid(self, workflow_uuid: str) -> None:
+    def execute_workflow_uuid(self, workflow_uuid: str) -> WorkflowHandle[Any]:
         """
         This function is used to execute a workflow by a UUID for recovery.
         """
@@ -300,21 +314,31 @@ class DBOS:
         if not wf_func:
             raise DBOSRecoveryError(workflow_uuid, "Workflow function not found")
         ctx = self.wf_ctx(workflow_uuid)
-        try:
-            wf_func(ctx, *inputs["args"], **inputs["kwargs"])
-        except Exception as error:
-            # Don't raise the error because it's in recovery mode
-            dbos_logger.error(f"Error executing workflow by UUID: {error}")
+        return self.start_workflow(wf_func, ctx, *inputs["args"], **inputs["kwargs"])
 
-    def recover_pending_workflows(self) -> None:
+    def recover_pending_workflows(
+        self, executor_ids: List[str] = ["local"]
+    ) -> List[WorkflowHandle[Any]]:
         """
         Find all PENDING workflows and execute them.
         """
+        workflow_handles: List[WorkflowHandle[Any]] = []
+        for executor_id in executor_ids:
+            if executor_id == "local" and os.environ.get("DBOS__VMID"):
+                dbos_logger.debug(
+                    f"Skip local recovery because it's running in a VM: {os.environ.get('DBOS__VMID')}"
+                )
+            dbos_logger.debug(
+                f"Recovering pending workflows for executor: {executor_id}"
+            )
+            workflow_ids = self.sys_db.get_pending_workflows(executor_id)
+            dbos_logger.debug(f"Pending workflows: {workflow_ids}")
+
+            for workflowID in workflow_ids:
+                handle = self.execute_workflow_uuid(workflowID)
+                workflow_handles.append(handle)
         # TODO: need to run this in a background thread, after everything is initialized and all functions are properly decorated.
         # Therefore, cannot run in the constructor
-        workflowIDs = self.sys_db.get_pending_workflows()
-        dbos_logger.debug(f"Pending workflows: {workflowIDs}")
-        for workflowID in workflowIDs:
-            self.execute_workflow_uuid(workflowID)
 
         dbos_logger.info("Recovered pending workflows")
+        return workflow_handles

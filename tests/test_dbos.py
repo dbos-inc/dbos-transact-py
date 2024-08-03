@@ -6,7 +6,7 @@ import sqlalchemy as sa
 from dbos_transact.communicator import CommunicatorContext
 from dbos_transact.dbos import DBOS
 from dbos_transact.transaction import TransactionContext
-from dbos_transact.workflows import WorkflowContext
+from dbos_transact.workflow import WorkflowContext
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -20,6 +20,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
         wf_counter += 1
         res = test_transaction(ctx.txn_ctx(), var2)
         res2 = test_communicator(ctx.comm_ctx(), var)
+        ctx.logger.info("I'm test_workflow")
         return res + res2
 
     @dbos.transaction()
@@ -27,12 +28,14 @@ def test_simple_workflow(dbos: DBOS) -> None:
         rows = ctx.session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
+        ctx.logger.info("I'm test_transaction")
         return var2 + str(rows[0][0])
 
     @dbos.communicator()
     def test_communicator(ctx: CommunicatorContext, var: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
+        ctx.logger.info("I'm test_communicator")
         return var
 
     assert test_workflow(dbos.wf_ctx(), "bob", "bob") == "bob1bob"
@@ -45,7 +48,8 @@ def test_simple_workflow(dbos: DBOS) -> None:
     assert comm_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid
-    dbos.execute_workflow_uuid(wfuuid)
+    handle = dbos.execute_workflow_uuid(wfuuid)
+    assert handle.get_result() == "alice1alice"
     assert wf_counter == 4
 
 
@@ -102,7 +106,9 @@ def test_exception_workflow(dbos: DBOS) -> None:
     assert comm_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid, shouldn't throw errors
-    dbos.execute_workflow_uuid(wfuuid)
+    handle = dbos.execute_workflow_uuid(wfuuid)
+    with pytest.raises(Exception) as exc_info:
+        handle.get_result()
     assert wf_counter == 4
 
 
@@ -135,11 +141,16 @@ def test_recovery_workflow(dbos: DBOS) -> None:
             "name": test_workflow.__qualname__,
             "output": None,
             "error": None,
+            "executor_id": None,
+            "app_id": None,
+            "app_version": None,
         }
     )
 
     # Recovery should execute the workflow again but skip the transaction
-    dbos.recover_pending_workflows()
+    workflow_handles = dbos.recover_pending_workflows()
+    assert len(workflow_handles) == 1
+    assert workflow_handles[0].get_result() == "bob1bob"
     assert wf_counter == 2
     assert txn_counter == 1
 
