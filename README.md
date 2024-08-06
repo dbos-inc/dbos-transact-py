@@ -1,5 +1,7 @@
 # DBOS Transact Python
 
+**DBOS Python is under construction! 🚧🚧🚧 Check back regularly for updates, release coming in mid-September!**
+
 This package uses [`pdm`](https://pdm-project.org/en/latest/) for package and virtual environment management.
 To install `pdm`, run:
 
