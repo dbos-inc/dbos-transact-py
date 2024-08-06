@@ -7,6 +7,11 @@ To install `pdm`, run:
 curl -sSL https://pdm-project.org/install-pdm.py | python3 -
 ```
 
+On Ubuntu, it may be necessary to do the following:
+```
+apt install python3.10-venv
+```
+
 To install dependencies:
 
 ```

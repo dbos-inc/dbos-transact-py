@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:166c4e61c3e9663188c60d15aabff804a7deee31efbda4d5224a2b7ccb549ee2"
+content_hash = "sha256:ffb643ec1e852f2a3db93da1cc1f1f448d42f0962b6d1aed2ab92b2382ce46c0"
 
 [[metadata.targets]]
 requires_python = ">=3.9"
@@ -321,6 +321,20 @@ groups = ["dev"]
 files = [
     {file = "isort-5.13.2-py3-none-any.whl", hash = "sha256:8ca5e72a8d85860d5a3fa69b8745237f2939afe12dbf656afbcb47fe72d947a6"},
     {file = "isort-5.13.2.tar.gz", hash = "sha256:48fdfcb9face5d58a4f6dde2e72a1fb8dcaf8ab26f95ab49fab84c2ddefb0109"},
+]
+
+[[package]]
+name = "jsonpickle"
+version = "3.2.2"
+requires_python = ">=3.7"
+summary = "Python library for serializing arbitrary object graphs into JSON"
+groups = ["default"]
+dependencies = [
+    "importlib-metadata; python_version < \"3.8\"",
+]
+files = [
+    {file = "jsonpickle-3.2.2-py3-none-any.whl", hash = "sha256:87cd82d237fd72c5a34970e7222dddc0accc13fddf49af84111887ed9a9445aa"},
+    {file = "jsonpickle-3.2.2.tar.gz", hash = "sha256:d425fd2b8afe9f5d7d57205153403fbf897782204437882a477e8eed60930f8c"},
 ]
 
 [[package]]

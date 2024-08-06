@@ -1,13 +1,14 @@
-import base64
-import pickle
 from typing import Any
+
+import jsonpickle  # type: ignore
 
 
 def serialize(data: Any) -> str:
-    """Use pickle to serialize an object to a base64-encoded string"""
-    return base64.b64encode(pickle.dumps(data)).decode()
+    """Use jsonpickle to serialize an object to a JSON string"""
+    encoded_data: str = jsonpickle.encode(data)
+    return encoded_data
 
 
 def deserialize(serialized_data: str) -> Any:
-    """Deserialize a base64-encoded string back to a Python object using pickle"""
-    return pickle.loads(base64.b64decode(serialized_data))
+    """Deserialize a JSON string back to a Python object using jsonpickle"""
+    return jsonpickle.decode(serialized_data)
