@@ -36,23 +36,23 @@ class WorkflowStatusInternal(TypedDict):
     workflow_uuid: str
     status: WorkflowStatuses
     name: str
-    output: Optional[str]  # Base64-encoded pickle
-    error: Optional[str]  # Base64-encoded pickle
+    output: Optional[str]  # JSON (jsonpickle)
+    error: Optional[str]  # JSON (jsonpickle)
     executor_id: Optional[str]
     app_version: Optional[str]
     app_id: Optional[str]
 
 
 class RecordedResult(TypedDict):
-    output: Optional[str]  # Base64-encoded pickle
-    error: Optional[str]  # Base64-encoded pickle
+    output: Optional[str]  # JSON (jsonpickle)
+    error: Optional[str]  # JSON (jsonpickle)
 
 
 class OperationResultInternal(TypedDict):
     workflow_uuid: str
     function_id: int
-    output: Optional[str]  # Base64-encoded pickle
-    error: Optional[str]  # Base64-encoded pickle
+    output: Optional[str]  # JSON (jsonpickle)
+    error: Optional[str]  # JSON (jsonpickle)
 
 
 class SystemDatabase:

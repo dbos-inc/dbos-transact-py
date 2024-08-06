@@ -14,16 +14,16 @@ from .dbos_config import ConfigFile
 class TransactionResultInternal(TypedDict):
     workflow_uuid: str
     function_id: int
-    output: Optional[str]  # Base64-encoded pickle
-    error: Optional[str]  # Base64-encoded pickle
+    output: Optional[str]  # JSON (jsonpickle)
+    error: Optional[str]  # JSON (jsonpickle)
     txn_id: Optional[str]
     txn_snapshot: str
     executor_id: Optional[str]
 
 
 class RecordedResult(TypedDict):
-    output: Optional[str]  # Base64-encoded pickle
-    error: Optional[str]  # Base64-encoded pickle
+    output: Optional[str]  # JSON (jsonpickle)
+    error: Optional[str]  # JSON (jsonpickle)
 
 
 class ApplicationDatabase:
