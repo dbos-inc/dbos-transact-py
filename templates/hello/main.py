@@ -25,6 +25,6 @@ def example_transaction(ctx: TransactionContext, var: str) -> str:
 
 
 @app.get("/greeting/{name}")
-def hello_dbos(name: str):
+def hello_dbos(name: str) -> dict[str, str]:
     output = example_workflow(dbos.wf_ctx(), name)
     return {"name": output}
