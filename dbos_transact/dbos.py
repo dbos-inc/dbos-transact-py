@@ -44,9 +44,7 @@ R = TypeVar("R", covariant=True)
 class WorkflowProtocol(Protocol[P, R]):
     __qualname__: str
 
-    def __call__(
-        self, ctx: WorkflowContext, *args: P.args, **kwargs: P.kwargs
-    ) -> R: ...
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
 
 
 Workflow: TypeAlias = WorkflowProtocol[P, R]
@@ -55,7 +53,7 @@ Workflow: TypeAlias = WorkflowProtocol[P, R]
 class TransactionProtocol(Protocol):
     __qualname__: str
 
-    def __call__(self, ctx: TransactionContext, *args: Any, **kwargs: Any) -> Any: ...
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 Transaction = TypeVar("Transaction", bound=TransactionProtocol)
@@ -64,7 +62,7 @@ Transaction = TypeVar("Transaction", bound=TransactionProtocol)
 class CommunicatorProtocol(Protocol):
     __qualname__: str
 
-    def __call__(self, ctx: CommunicatorContext, *args: Any, **kwargs: Any) -> Any: ...
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 Communicator = TypeVar("Communicator", bound=CommunicatorProtocol)
@@ -180,7 +178,7 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> R:
         try:
-            output = func(ctx, *args, **kwargs)
+            output = func(*args, **kwargs)
         except DBOSWorkflowConflictUUIDError as wferror:
             # TODO: handle this properly by waiting/returning the output
             raise wferror

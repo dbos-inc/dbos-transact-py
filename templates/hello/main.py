@@ -5,7 +5,6 @@ from dbos_transact import DBOS, WorkflowContext
 from dbos_transact.transaction import TransactionContext
 
 dbos = DBOS()
-
 app = FastAPI()
 
 
