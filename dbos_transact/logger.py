@@ -1,5 +1,11 @@
 import logging
 
+from opentelemetry import _logs as logs
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk.resources import Resource
+
 from dbos_transact.dbos_config import ConfigFile
 
 dbos_logger = logging.getLogger("dbos")
@@ -19,3 +25,23 @@ def config_logger(config: ConfigFile) -> None:
         )
         console_handler.setFormatter(console_formatter)
         dbos_logger.addHandler(console_handler)
+
+    otlp_logs_endpoint = (
+        config.get("telemetry", {}).get("OTLPExporter", {}).get("logsEndpoint")
+    )
+    if otlp_logs_endpoint:
+        resource = Resource(attributes={"service.name": "dbos-application"})
+
+        log_provider = LoggerProvider(resource=resource)
+        logs.set_logger_provider(log_provider)
+
+        otlp_exporter = OTLPLogExporter(endpoint=otlp_logs_endpoint)
+        log_processor = BatchLogRecordProcessor(otlp_exporter)
+        log_provider.add_log_record_processor(log_processor)
+
+        # Add OpenTelemetry handler to the root logger
+        otlp_handler = LoggingHandler(
+            level=logging.NOTSET, logger_provider=log_provider
+        )
+        root_logger = logging.getLogger()
+        root_logger.addHandler(otlp_handler)

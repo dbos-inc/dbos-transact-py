@@ -11,6 +11,7 @@ app = FastAPI()
 
 @dbos.workflow()
 def example_workflow(ctx: WorkflowContext, var: str) -> str:
+    ctx.logger.info("Running workflow!")
     return example_transaction(ctx.txn_ctx(), var)
 
 
