@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
@@ -23,7 +24,11 @@ else:
 import dbos_transact.utils as utils
 from dbos_transact.admin_sever import AdminServer
 from dbos_transact.communicator import CommunicatorContext
-from dbos_transact.error import DBOSRecoveryError, DBOSWorkflowConflictUUIDError
+from dbos_transact.error import (
+    DBOSRecoveryError,
+    DBOSWorkflowConflictUUIDError,
+    DBOSWorkflowFunctionNotFoundError,
+)
 from dbos_transact.transaction import TransactionContext
 from dbos_transact.workflow import WorkflowContext, WorkflowHandle
 
@@ -86,11 +91,17 @@ class DBOS:
         self.workflow_info_map: dict[str, WorkflowProtocol[Any, Any]] = {}
         self.executor = ThreadPoolExecutor(max_workers=64)
         self.admin_server = AdminServer(dbos=self)
+        self._run_startup_recovery_thread = True
+        if not os.environ.get("DBOS__VMID"):
+            workflow_ids = self.sys_db.get_pending_workflows("local")
+            self.executor.submit(self._startup_recovery_thread, workflow_ids)
 
     def destroy(self) -> None:
+        self._run_startup_recovery_thread = False
         self.sys_db.destroy()
         self.app_db.destroy()
         self.admin_server.stop()
+        self.executor.shutdown()
 
     def workflow(self) -> Callable[[Workflow[P, R]], Workflow[P, R]]:
         def decorator(func: Workflow[P, R]) -> Workflow[P, R]:
@@ -310,9 +321,11 @@ class DBOS:
         inputs = self.sys_db.get_workflow_inputs(workflow_uuid)
         if not inputs:
             raise DBOSRecoveryError(workflow_uuid, "Workflow inputs not found")
-        wf_func = self.workflow_info_map[status["name"]]
+        wf_func = self.workflow_info_map.get(status["name"], None)
         if not wf_func:
-            raise DBOSRecoveryError(workflow_uuid, "Workflow function not found")
+            raise DBOSWorkflowFunctionNotFoundError(
+                workflow_uuid, "Workflow function not found"
+            )
         ctx = self.wf_ctx(workflow_uuid)
         return self.start_workflow(wf_func, ctx, *inputs["args"], **inputs["kwargs"])
 
@@ -337,8 +350,23 @@ class DBOS:
             for workflowID in workflow_ids:
                 handle = self.execute_workflow_uuid(workflowID)
                 workflow_handles.append(handle)
-        # TODO: need to run this in a background thread, after everything is initialized and all functions are properly decorated.
-        # Therefore, cannot run in the constructor
 
         dbos_logger.info("Recovered pending workflows")
         return workflow_handles
+
+    def _startup_recovery_thread(self, workflow_ids: List[str]) -> None:
+        """
+        A background thread that attempts to recover local pending workflows on startup.
+        """
+        while self._run_startup_recovery_thread and len(workflow_ids) > 0:
+            try:
+                for workflowID in list(workflow_ids):
+                    self.execute_workflow_uuid(workflowID)
+                    workflow_ids.remove(workflowID)
+            except DBOSWorkflowFunctionNotFoundError:
+                time.sleep(1)
+            except Exception as e:
+                dbos_logger.error(
+                    f"Exception encountered when recovering workflows: {repr(e)}"
+                )
+                raise e
