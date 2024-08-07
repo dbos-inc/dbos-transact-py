@@ -18,6 +18,7 @@ class DBOSErrorCode(Enum):
     ConflictingUUIDError = 1
     RecoveryError = 2
     InitializationError = 3
+    WorkflowFunctionNotFound = 4
 
 
 class DBOSWorkflowConflictUUIDError(DBOSException):
@@ -41,4 +42,12 @@ class DBOSInitializationError(DBOSException):
         super().__init__(
             f"Error initializing DBOS Transact: {message}",
             DBOSErrorCode.InitializationError.value,
+        )
+
+
+class DBOSWorkflowFunctionNotFoundError(DBOSException):
+    def __init__(self, workflow_uuid: str, message: Optional[str] = None):
+        super().__init__(
+            f"Workflow function not found for workflow UUID {workflow_uuid}: {message}",
+            dbos_error_code=DBOSErrorCode.WorkflowFunctionNotFound.value,
         )
