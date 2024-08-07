@@ -186,9 +186,9 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     )
 
     dbos.destroy()
-    dbos.__init__(config)
+    dbos.__init__(config)  # type: ignore
 
-    @dbos.workflow()
+    @dbos.workflow()  # type: ignore
     def test_workflow(ctx: WorkflowContext, var: str) -> str:
         nonlocal wf_counter
         if var == test_var:
