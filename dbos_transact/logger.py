@@ -16,8 +16,8 @@ dbos_logger = logging.getLogger("dbos")
 class DBOSLogTransformer(logging.Filter):
     def __init__(self) -> None:
         super().__init__()
-        self.application_id = os.environ.get("DBOS__APPID", "")
-        self.application_version = os.environ.get("DBOS__APPVERSION", "")
+        self.app_id = os.environ.get("DBOS__APPID", "")
+        self.app_version = os.environ.get("DBOS__APPVERSION", "")
         self.executor_id = os.environ.get("DBOS__VMID", "local")
 
     def filter(self, record: Any) -> bool:
