@@ -184,15 +184,16 @@ class EnterDBOSWorkflow:
     def __init__(self) -> None:
         self.createdCtx = False
 
-    def __enter__(self) -> EnterDBOSWorkflow:
+    def __enter__(self) -> DBOSContext:
         # Code to create a basic context
         ctx = getThreadLocalDBOSContext()
         if ctx is None:
             self.createdCtx = True
-            setThreadLocalDBOSContext(DBOSContext())
-        assert not assertCurrentDBOSContext().is_in_workflow()
-        assertCurrentDBOSContext().start_workflow(None)
-        return self
+            ctx = DBOSContext()
+            setThreadLocalDBOSContext(ctx)
+        assert not ctx.is_in_workflow()
+        ctx.start_workflow(None)  # Will get from the context's next wf uuid
+        return ctx
 
     def __exit__(
         self,
@@ -208,4 +209,50 @@ class EnterDBOSWorkflow:
         return False  # Did not handle
 
 
-# TODO Enter WF / Child WF / TX / Comm
+class EnterDBOSCommunicator:
+    def __init__(self) -> None:
+        pass
+
+    def __enter__(self) -> DBOSContext:
+        ctx = assertCurrentDBOSContext()
+        assert ctx.is_workflow()
+        ctx.function_id += 1
+        ctx.start_communicator(ctx.function_id)
+        return ctx
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        ctx = assertCurrentDBOSContext()
+        assert ctx.is_communicator()
+        ctx.end_communicator()
+        return False  # Did not handle
+
+
+class EnterDBOSTransaction:
+    def __init__(self, sqls: Session) -> None:
+        self.sqls = sqls
+
+    def __enter__(self) -> DBOSContext:
+        ctx = assertCurrentDBOSContext()
+        assert ctx.is_workflow()
+        ctx.function_id += 1
+        ctx.start_transaction(self.sqls, ctx.function_id)
+        return ctx
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        ctx = assertCurrentDBOSContext()
+        assert ctx.is_transaction()
+        ctx.end_transaction()
+        return False  # Did not handle
+
+
+# TODO Enter Child WF
