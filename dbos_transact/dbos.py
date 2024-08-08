@@ -1,6 +1,5 @@
 import os
 import sys
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from typing import (
@@ -22,10 +21,9 @@ else:
 
 import dbos_transact.utils as utils
 from dbos_transact.admin_sever import AdminServer
-from dbos_transact.communicator import CommunicatorContext
+from dbos_transact.context import DBOSContext, SetWorkflowUUID
 from dbos_transact.error import DBOSRecoveryError, DBOSWorkflowConflictUUIDError
-from dbos_transact.transaction import TransactionContext
-from dbos_transact.workflow import WorkflowContext, WorkflowHandle
+from dbos_transact.workflow import WorkflowHandle
 
 from .application_database import ApplicationDatabase, TransactionResultInternal
 from .dbos_config import ConfigFile, load_config
@@ -95,15 +93,12 @@ class DBOS:
             func.__orig_func = func  # type: ignore
 
             @wraps(func)
-            def wrapper(
-                input_ctxt: WorkflowContext, *args: P.args, **kwargs: P.kwargs
-            ) -> R:
+            def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
                 inputs: WorkflowInputs = {
                     "args": args,
                     "kwargs": kwargs,
                 }
                 ctx, status = self._init_workflow(
-                    input_ctxt=cast(WorkflowInputContext, input_ctxt),
                     inputs=inputs,
                     wf_name=func.__qualname__,
                 )
@@ -119,7 +114,6 @@ class DBOS:
     def start_workflow(
         self,
         func: Workflow[P, R],
-        input_ctxt: WorkflowContext,
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
@@ -128,8 +122,8 @@ class DBOS:
             "args": args,
             "kwargs": kwargs,
         }
+
         ctx, status = self._init_workflow(
-            input_ctxt=cast(WorkflowInputContext, input_ctxt),
             inputs=inputs,
             wf_name=func.__qualname__,
         )
@@ -143,18 +137,13 @@ class DBOS:
         )
         return WorkflowHandle(status["workflow_uuid"], future)
 
-    def wf_ctx(self, workflow_uuid: Optional[str] = None) -> WorkflowContext:
-        workflow_uuid = workflow_uuid if workflow_uuid else str(uuid.uuid4())
-        input_ctxt: WorkflowInputContext = {"workflow_uuid": workflow_uuid}
-        return cast(WorkflowContext, input_ctxt)
-
     def _init_workflow(
-        self, input_ctxt: WorkflowInputContext, inputs: WorkflowInputs, wf_name: str
-    ) -> Tuple[WorkflowContext, WorkflowStatusInternal]:
-        workflow_uuid = input_ctxt["workflow_uuid"]
-        ctx = WorkflowContext(workflow_uuid)
+        self, inputs: WorkflowInputs, wf_name: str
+    ) -> Tuple[DBOSContext, WorkflowStatusInternal]:
+        ctx = DBOSContext()
+        ctx.start_workflow(None)
         status: WorkflowStatusInternal = {
-            "workflow_uuid": workflow_uuid,
+            "workflow_uuid": ctx.workflow_uuid,
             "status": "PENDING",
             "name": wf_name,
             "output": None,
@@ -165,7 +154,7 @@ class DBOS:
         }
         self.sys_db.update_workflow_status(status)
 
-        self.sys_db.update_workflow_inputs(workflow_uuid, utils.serialize(inputs))
+        self.sys_db.update_workflow_inputs(ctx.workflow_uuid, utils.serialize(inputs))
 
         return ctx, status
 
@@ -173,7 +162,7 @@ class DBOS:
         self,
         status: WorkflowStatusInternal,
         func: Workflow[P, R],
-        ctx: WorkflowContext,
+        ctx: DBOSContext,
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> R:
@@ -196,8 +185,8 @@ class DBOS:
     def transaction(self) -> Callable[[Transaction], Transaction]:
         def decorator(func: Transaction) -> Transaction:
             @wraps(func)
-            def wrapper(_ctxt: TransactionContext, *args: Any, **kwargs: Any) -> Any:
-                input_ctxt = cast(WorkflowContext, _ctxt)
+            def wrapper(_ctxt: DBOSContext, *args: Any, **kwargs: Any) -> Any:
+                input_ctxt = _ctxt
                 input_ctxt.function_id += 1
                 with self.app_db.sessionmaker() as session:
                     txn_output: TransactionResultInternal = {
@@ -218,9 +207,9 @@ class DBOS:
                             session.connection(
                                 execution_options={"isolation_level": "REPEATABLE READ"}
                             )
-                            txn_ctxt = TransactionContext(
-                                session, input_ctxt.function_id
-                            )
+                            # TODO txn_ctxt = TransactionContext(session, input_ctxt.function_id)
+                            txn_ctxt = input_ctxt
+                            txn_ctxt.start_transaction(session, input_ctxt.function_id)
                             # Check recorded output for OAOO
                             recorded_output = (
                                 ApplicationDatabase.check_transaction_execution(
@@ -242,8 +231,9 @@ class DBOS:
                                     raise Exception("Output and error are both None")
                             output = func(txn_ctxt, *args, **kwargs)
                             txn_output["output"] = utils.serialize(output)
+                            assert txn_ctxt.sql_session is not None
                             ApplicationDatabase.record_transaction_output(
-                                txn_ctxt.session, txn_output
+                                txn_ctxt.sql_session, txn_output
                             )
 
                     except Exception as error:
@@ -261,16 +251,18 @@ class DBOS:
     def communicator(self) -> Callable[[Communicator], Communicator]:
         def decorator(func: Communicator) -> Communicator:
             @wraps(func)
-            def wrapper(_ctxt: CommunicatorContext, *args: Any, **kwargs: Any) -> Any:
-                input_ctxt = cast(WorkflowContext, _ctxt)
+            def wrapper(_ctxt: DBOSContext, *args: Any, **kwargs: Any) -> Any:
+                input_ctxt = _ctxt
                 input_ctxt.function_id += 1
+                # TODO comm_ctxt = CommunicatorContext(input_ctxt.function_id)
+                comm_ctxt = input_ctxt
+                comm_ctxt.start_communicator(input_ctxt.function_id)
                 comm_output: OperationResultInternal = {
                     "workflow_uuid": input_ctxt.workflow_uuid,
                     "function_id": input_ctxt.function_id,
                     "output": None,
                     "error": None,
                 }
-                comm_ctxt = CommunicatorContext(input_ctxt.function_id)
                 recorded_output = self.sys_db.check_operation_execution(
                     input_ctxt.workflow_uuid, comm_ctxt.function_id
                 )
@@ -311,8 +303,8 @@ class DBOS:
         wf_func = self.workflow_info_map[status["name"]]
         if not wf_func:
             raise DBOSRecoveryError(workflow_uuid, "Workflow function not found")
-        ctx = self.wf_ctx(workflow_uuid)
-        return self.start_workflow(wf_func, ctx, *inputs["args"], **inputs["kwargs"])
+        with SetWorkflowUUID(workflow_uuid):
+            return self.start_workflow(wf_func, *inputs["args"], **inputs["kwargs"])
 
     def recover_pending_workflows(
         self, executor_ids: List[str] = ["local"]

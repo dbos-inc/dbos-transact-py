@@ -3,10 +3,8 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from dbos_transact.communicator import CommunicatorContext
+from dbos_transact.context import SetWorkflowUUID
 from dbos_transact.dbos import DBOS
-from dbos_transact.transaction import TransactionContext
-from dbos_transact.workflow import WorkflowContext
 
 
 class DBOSTestClassInst:
@@ -125,8 +123,10 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     # Test OAOO
     wfuuid = str(uuid.uuid4())
-    assert test_workflow("alice", "alice") == "alice1alice"
-    assert test_workflow("alice", "alice") == "alice1alice"
+    with SetWorkflowUUID(wfuuid):
+        assert test_workflow("alice", "alice") == "alice1alice"
+    with SetWorkflowUUID(wfuuid):
+        assert test_workflow("alice", "alice") == "alice1alice"
     assert txn_counter == 2  # Only increment once
     assert comm_counter == 2  # Only increment once
 
@@ -179,11 +179,13 @@ def test_exception_workflow(dbos: DBOS) -> None:
     # Test OAOO
     wfuuid = str(uuid.uuid4())
     with pytest.raises(Exception) as exc_info:
-        exception_workflow()
+        with SetWorkflowUUID(wfuuid):
+            exception_workflow()
     assert "test error" in str(exc_info.value)
 
     with pytest.raises(Exception) as exc_info:
-        exception_workflow()
+        with SetWorkflowUUID(wfuuid):
+            exception_workflow()
     assert "test error" in str(exc_info.value)
     assert txn_counter == 2  # Only increment once
     assert comm_counter == 2  # Only increment once
@@ -215,7 +217,8 @@ def test_recovery_workflow(dbos: DBOS) -> None:
         return var2 + str(rows[0][0])
 
     wfuuid = str(uuid.uuid4())
-    assert test_workflow("bob", "bob") == "bob1bob"
+    with SetWorkflowUUID(wfuuid):
+        assert test_workflow("bob", "bob") == "bob1bob"
 
     # Change the workflow status to pending
     dbos.sys_db.update_workflow_status(
@@ -259,10 +262,13 @@ def test_start_workflow(dbos: DBOS) -> None:
         return var2 + str(rows[0][0])
 
     wfuuid = str(uuid.uuid4())
-    handle = dbos.start_workflow(test_workflow, dbos.wf_ctx(wfuuid), "bob", "bob")
-    assert handle.get_result() == "bob1bob"
-    handle = dbos.start_workflow(test_workflow, dbos.wf_ctx(wfuuid), "bob", "bob")
-    assert handle.get_result() == "bob1bob"
-    assert test_workflow("bob", "bob") == "bob1bob"
+    with SetWorkflowUUID(wfuuid):
+        handle = dbos.start_workflow(test_workflow, "bob", "bob")
+        assert handle.get_result() == "bob1bob"
+    with SetWorkflowUUID(wfuuid):
+        handle = dbos.start_workflow(test_workflow, "bob", "bob")
+        assert handle.get_result() == "bob1bob"
+    with SetWorkflowUUID(wfuuid):
+        assert test_workflow("bob", "bob") == "bob1bob"
     assert txn_counter == 1
     assert wf_counter == 3

@@ -5,9 +5,7 @@ import uuid
 import requests
 
 from dbos_transact import DBOS
-from dbos_transact.communicator import CommunicatorContext
-from dbos_transact.transaction import TransactionContext
-from dbos_transact.workflow import WorkflowContext
+from dbos_transact.context import SetWorkflowUUID
 
 
 def test_admin_endpoints(dbos: DBOS) -> None:
@@ -43,20 +41,21 @@ def test_admin_recovery(dbos: DBOS) -> None:
     wf_counter: int = 0
 
     @dbos.workflow()
-    def test_workflow(ctx: WorkflowContext, var: str, var2: str) -> str:
+    def test_workflow(var: str, var2: str) -> str:
         nonlocal wf_counter
         wf_counter += 1
-        res = test_communicator(ctx.comm_ctx(), var2)
+        res = test_communicator(var2)
         return res + var
 
     @dbos.communicator()
-    def test_communicator(ctx: CommunicatorContext, var2: str) -> str:
+    def test_communicator(var2: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
         return var2 + "1"
 
     wfuuid = str(uuid.uuid4())
-    assert test_workflow(dbos.wf_ctx(wfuuid), "bob", "bob") == "bob1bob"
+    with SetWorkflowUUID(wfuuid):
+        assert test_workflow("bob", "bob") == "bob1bob"
 
     # Change the workflow status to pending
     dbos.sys_db.update_workflow_status(
