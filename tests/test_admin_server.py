@@ -42,6 +42,7 @@ def test_admin_recovery(dbos: DBOS) -> None:
 
     @dbos.workflow()
     def test_workflow(var: str, var2: str) -> str:
+        DBOS.logger.info("WFID: " + DBOS.workflow_id)
         nonlocal wf_counter
         wf_counter += 1
         res = test_communicator(var2)
@@ -54,6 +55,7 @@ def test_admin_recovery(dbos: DBOS) -> None:
         return var2 + "1"
 
     wfuuid = str(uuid.uuid4())
+    DBOS.logger.info("Initiating: " + wfuuid)
     with SetWorkflowUUID(wfuuid):
         assert test_workflow("bob", "bob") == "bob1bob"
 

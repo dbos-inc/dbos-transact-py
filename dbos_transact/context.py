@@ -45,9 +45,11 @@ class DBOSContext:
         if wfid is None or len(wfid) == 0:
             wfid = self.assign_workflow_id()
         self.workflow_uuid = wfid
+        self.function_id = 0
 
     def end_workflow(self) -> None:
         self.workflow_uuid = ""
+        self.function_id = -1
 
     def is_in_workflow(self) -> bool:
         return len(self.workflow_uuid) > 0

@@ -154,15 +154,19 @@ class DBOS:
             "kwargs": kwargs,
         }
 
+        # TODO this is structured quite poorly
         cur_ctx = getThreadLocalDBOSContext()
         new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
-        new_wf_id = new_wf_ctx.assign_workflow_id()
+        new_wf_ctx.next_workflow_uuid = new_wf_ctx.assign_workflow_id()
 
+        new_wf_ctx.workflow_uuid = new_wf_ctx.next_workflow_uuid
         status = self._init_workflow(
             new_wf_ctx,
             inputs=inputs,
             wf_name=func.__qualname__,
         )
+        new_wf_ctx.workflow_uuid = ""
+
         future = self.executor.submit(
             cast(Callable[..., R], self._execute_workflow_wthread),
             status,
@@ -389,3 +393,9 @@ class DBOS:
         rv = ctx.sql_session
         assert rv
         return rv
+
+    @classproperty
+    def workflow_id(cls) -> str:
+        ctx = assertCurrentDBOSContext()
+        assert ctx.is_in_workflow()
+        return ctx.workflow_uuid
