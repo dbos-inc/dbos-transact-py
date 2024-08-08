@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Any
 
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
@@ -13,13 +14,13 @@ dbos_logger = logging.getLogger("dbos")
 
 
 class AttributeFilter(logging.Filter):
-    def __init__(self, app_id, app_version, executor_id):
+    def __init__(self, app_id: str, app_version: str, executor_id: str) -> None:
         super().__init__()
         self.app_id = app_id
         self.app_version = app_version
         self.executor_id = executor_id
 
-    def filter(self, record):
+    def filter(self, record: Any) -> bool:
         record.applicationID = self.app_id
         record.applicationVersion = self.app_version
         record.executorID = self.executor_id
@@ -43,7 +44,7 @@ def config_logger(config: ConfigFile) -> None:
         dbos_logger.addHandler(console_handler)
 
     otlp_logs_endpoint = (
-        config.get("telemetry", {}).get("OTLPExporter", {}).get("logsEndpoint")
+        config.get("telemetry", {}).get("OTLPExporter", {}).get("logsEndpoint")  # type: ignore
     )
     if otlp_logs_endpoint:
         # Configure the DBOS logger to also log to the OTel endpoint.
