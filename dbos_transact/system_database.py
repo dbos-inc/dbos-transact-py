@@ -1,6 +1,6 @@
 import os
 from enum import Enum
-from typing import Any, Literal, Optional, TypedDict
+from typing import Any, Literal, Optional, Sequence, TypedDict
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
@@ -8,7 +8,10 @@ from alembic import command
 from alembic.config import Config
 
 import dbos_transact.utils as utils
-from dbos_transact.error import DBOSWorkflowConflictUUIDError
+from dbos_transact.error import (
+    DBOSNonExistentWorkflowError,
+    DBOSWorkflowConflictUUIDError,
+)
 
 from .dbos_config import ConfigFile
 from .schemas.system_database import SystemSchema
@@ -229,7 +232,7 @@ class SystemDatabase:
         )
 
         # If in a transaction, use the provided connection
-        rows = []
+        rows: Sequence[Any]
         if conn is not None:
             rows = conn.execute(sql).all()
         else:
@@ -258,13 +261,18 @@ class SystemDatabase:
             if recorded_output is not None:
                 return  # Already sent before
 
-            c.execute(
-                pg.insert(SystemSchema.notifications).values(
-                    destination_uuid=destination_uuid,
-                    topic=topic,
-                    message=utils.serialize(message),
+            try:
+                c.execute(
+                    pg.insert(SystemSchema.notifications).values(
+                        destination_uuid=destination_uuid,
+                        topic=topic,
+                        message=utils.serialize(message),
+                    )
                 )
-            )
+            except sa.exc.IntegrityError:
+                raise DBOSNonExistentWorkflowError(destination_uuid)
+            except Exception as e:
+                raise e
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
