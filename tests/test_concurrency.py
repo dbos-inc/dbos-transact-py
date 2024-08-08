@@ -7,7 +7,7 @@ from typing import Tuple
 from dbos_transact import DBOS, SetWorkflowUUID
 
 
-def test_concurrent_workflows(dbos: DBOS):
+def test_concurrent_workflows(dbos: DBOS) -> None:
 
     @dbos.workflow()
     def test_workflow() -> str:

@@ -89,18 +89,9 @@ class ClassPropertyDescriptor:
             raise AttributeError("unreadable attribute")
         return self.fget(objtype)
 
-    def __set__(self, obj: Any, value: Any) -> None:
-        if not self.fset:
-            raise AttributeError("can't set attribute")
-        self.fset(type(obj), value)
-
 
 def classproperty(func: Any) -> ClassPropertyDescriptor:
     return ClassPropertyDescriptor(func)
-
-
-def classproperty_setter(func: Any) -> ClassPropertyDescriptor:
-    return ClassPropertyDescriptor(None, func)
 
 
 class DBOS:
