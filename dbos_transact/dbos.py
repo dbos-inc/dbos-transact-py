@@ -23,7 +23,7 @@ from dbos_transact.context import (
     EnterDBOSWorkflow,
     SetWorkflowUUID,
     assertCurrentDBOSContext,
-    getThreadLocalDBOSContext,
+    getLocalDBOSContext,
 )
 from dbos_transact.error import (
     DBOSRecoveryError,
@@ -166,7 +166,7 @@ class DBOS:
         }
 
         # TODO this is structured quite poorly
-        cur_ctx = getThreadLocalDBOSContext()
+        cur_ctx = getLocalDBOSContext()
         new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
         new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
 
