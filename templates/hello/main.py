@@ -9,6 +9,7 @@ app = FastAPI()
 
 @dbos.workflow()
 def example_workflow(var: str) -> str:
+    DBOS.logger.info("Running workflow!")
     return example_transaction(var)
 
 
@@ -23,6 +24,6 @@ def example_transaction(var: str) -> str:
 
 
 @app.get("/greeting/{name}")
-def hello_dbos(name: str):
+def hello_dbos(name: str) -> dict[str, str]:
     output = example_workflow(name)
     return {"name": output}
