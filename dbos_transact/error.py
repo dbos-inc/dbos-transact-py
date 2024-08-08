@@ -19,6 +19,7 @@ class DBOSErrorCode(Enum):
     RecoveryError = 2
     InitializationError = 3
     WorkflowFunctionNotFound = 4
+    NonExistentWorkflowError = 5
 
 
 class DBOSWorkflowConflictUUIDError(DBOSException):
@@ -50,4 +51,12 @@ class DBOSWorkflowFunctionNotFoundError(DBOSException):
         super().__init__(
             f"Workflow function not found for workflow UUID {workflow_uuid}: {message}",
             dbos_error_code=DBOSErrorCode.WorkflowFunctionNotFound.value,
+        )
+
+
+class DBOSNonExistentWorkflowError(DBOSException):
+    def __init__(self, destination_uuid: str):
+        super().__init__(
+            f"Sent to non-existent destination workflow UUID: {destination_uuid}",
+            dbos_error_code=DBOSErrorCode.NonExistentWorkflowError.value,
         )

@@ -328,3 +328,27 @@ def test_start_workflow(dbos: DBOS) -> None:
         assert test_workflow("bob", "bob") == "bob1bob"
     assert txn_counter == 1
     assert wf_counter == 3
+
+
+def test_send_recv(dbos: DBOS) -> None:
+    wf_counter: int = 0
+
+    @dbos.workflow()
+    def test_send_workflow(dest_uuid: str, topic: str) -> str:
+        DBOS.logger.info(
+            f"Running send workflow! src {DBOS.workflow_id}, dest {dest_uuid}"
+        )
+        dbos.send(dest_uuid, "testmessage1")
+        dbos.send(dest_uuid, "testmessage2", topic=topic)
+        wf_counter += 1
+        return dest_uuid
+
+    wfuuid = str(uuid.uuid4())
+    dest_uuid = str(uuid.uuid4())
+
+    # Send to non-existent uuid should fail
+    with pytest.raises(Exception) as exc_info:
+        test_send_workflow(dest_uuid, "testtopic")
+    assert f"Sent to non-existent destination workflow UUID: {dest_uuid}" in str(
+        exc_info.value
+    )
