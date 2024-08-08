@@ -1,3 +1,4 @@
+import time
 import uuid
 
 import pytest
@@ -5,6 +6,7 @@ import sqlalchemy as sa
 
 from dbos_transact.context import SetWorkflowUUID
 from dbos_transact.dbos import DBOS
+from dbos_transact.dbos_config import ConfigFile
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -156,6 +158,57 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     assert workflow_handles[0].get_result() == "bob1bob"
     assert wf_counter == 2
     assert txn_counter == 1
+
+
+def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
+    wf_counter: int = 0
+    test_var = "dbos"
+
+    @dbos.workflow()
+    def test_workflow(var: str) -> str:
+        nonlocal wf_counter
+        if var == test_var:
+            wf_counter += 1
+        return var
+
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowUUID(wfuuid):
+        assert test_workflow(test_var) == test_var
+
+    # Change the workflow status to pending
+    dbos.sys_db.update_workflow_status(
+        {
+            "workflow_uuid": wfuuid,
+            "status": "PENDING",
+            "name": test_workflow.__qualname__,
+            "output": None,
+            "error": None,
+            "executor_id": None,
+            "app_id": None,
+            "app_version": None,
+        }
+    )
+
+    dbos.destroy()
+    dbos.__init__(config)  # type: ignore
+
+    @dbos.workflow()  # type: ignore
+    def test_workflow(var: str) -> str:
+        nonlocal wf_counter
+        if var == test_var:
+            wf_counter += 1
+        return var
+
+    # Upon re-initialization, the background thread should recover the workflow safely.
+    max_retries = 5
+    success = False
+    for i in range(max_retries):
+        try:
+            assert wf_counter == 2
+            success = True
+        except AssertionError:
+            time.sleep(1)
+    assert success
 
 
 def test_start_workflow(dbos: DBOS) -> None:
