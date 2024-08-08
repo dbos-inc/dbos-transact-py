@@ -35,7 +35,7 @@ def config_logger(config: ConfigFile) -> None:
         application_version = os.environ.get("DBOS__APPVERSION", "")
         executor_id = os.environ.get("DBOS__VMID", "")
 
-        resource = Resource(
+        resource = Resource.create(
             attributes={
                 "service.name": "dbos-application",
                 "applicationID": application_id,
@@ -58,4 +58,4 @@ def config_logger(config: ConfigFile) -> None:
         root_logger = logging.getLogger()
         root_logger.addHandler(otlp_handler)
         dbos_logger.addHandler(otlp_handler)
-        dbos_logger.info("bob", extra={"applicationID": application_id})
+        dbos_logger.info("bob", extra={"bob": "bbbb"})
