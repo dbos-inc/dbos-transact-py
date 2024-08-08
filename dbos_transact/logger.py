@@ -1,6 +1,6 @@
 import logging
 
-from opentelemetry import _logs as logs
+from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
@@ -33,7 +33,7 @@ def config_logger(config: ConfigFile) -> None:
         resource = Resource(attributes={"service.name": "dbos-application"})
 
         log_provider = LoggerProvider(resource=resource)
-        logs.set_logger_provider(log_provider)
+        set_logger_provider(log_provider)
 
         otlp_exporter = OTLPLogExporter(endpoint=otlp_logs_endpoint)
         log_processor = BatchLogRecordProcessor(otlp_exporter)
