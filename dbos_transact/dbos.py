@@ -87,7 +87,7 @@ class WorkflowInputContext(TypedDict):
     workflow_uuid: str
 
 
-G = TypeVar("T")  # A generic type for ClassPropertyDescriptor getters
+G = TypeVar("G")  # A generic type for ClassPropertyDescriptor getters
 
 
 class ClassPropertyDescriptor(Generic[G]):
