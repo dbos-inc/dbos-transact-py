@@ -4,7 +4,17 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from logging import Logger
-from typing import Any, Callable, List, Optional, Protocol, TypedDict, TypeVar, cast
+from typing import (
+    Any,
+    Callable,
+    Generic,
+    List,
+    Optional,
+    Protocol,
+    TypedDict,
+    TypeVar,
+    cast,
+)
 
 from sqlalchemy.orm import Session
 
@@ -42,8 +52,8 @@ from .system_database import (
     WorkflowStatusInternal,
 )
 
-P = ParamSpec("P")
-R = TypeVar("R", covariant=True)
+P = ParamSpec("P")  # A generic type for workflow parameters
+R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 
 class WorkflowProtocol(Protocol[P, R]):
@@ -77,12 +87,14 @@ class WorkflowInputContext(TypedDict):
     workflow_uuid: str
 
 
-class ClassPropertyDescriptor:
-    def __init__(self, fget: Optional[Any], fset: Optional[Any] = None) -> None:
-        self.fget = fget
-        self.fset = fset
+G = TypeVar("T")  # A generic type for ClassPropertyDescriptor getters
 
-    def __get__(self, obj: Any, objtype: Optional[Any] = None) -> Any:
+
+class ClassPropertyDescriptor(Generic[G]):
+    def __init__(self, fget: Callable[..., G]) -> None:
+        self.fget = fget
+
+    def __get__(self, obj: Any, objtype: Optional[Any] = None) -> G:
         if objtype is None:
             objtype = type(obj)
         if self.fget is None:
@@ -90,7 +102,7 @@ class ClassPropertyDescriptor:
         return self.fget(objtype)
 
 
-def classproperty(func: Any) -> ClassPropertyDescriptor:
+def classproperty(func: Callable[..., G]) -> ClassPropertyDescriptor[G]:
     return ClassPropertyDescriptor(func)
 
 
