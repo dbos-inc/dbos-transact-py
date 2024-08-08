@@ -58,3 +58,4 @@ def config_logger(config: ConfigFile) -> None:
         root_logger = logging.getLogger()
         root_logger.addHandler(otlp_handler)
         dbos_logger.addHandler(otlp_handler)
+        dbos_logger.info("bob", extra={"applicationID": application_id})
