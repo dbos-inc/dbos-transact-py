@@ -168,9 +168,9 @@ class DBOS:
         # TODO this is structured quite poorly
         cur_ctx = getThreadLocalDBOSContext()
         new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
-        new_wf_ctx.next_workflow_uuid = new_wf_ctx.assign_workflow_id()
+        new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
 
-        new_wf_ctx.workflow_uuid = new_wf_ctx.next_workflow_uuid
+        new_wf_ctx.workflow_uuid = new_wf_ctx.id_assigned_for_next_workflow
         status = self._init_workflow(
             new_wf_ctx,
             inputs=inputs,
@@ -186,7 +186,7 @@ class DBOS:
             *args,
             **kwargs,
         )
-        return WorkflowHandle(new_wf_ctx.next_workflow_uuid, future)
+        return WorkflowHandle(new_wf_ctx.id_assigned_for_next_workflow, future)
 
     def _init_workflow(
         self, ctx: DBOSContext, inputs: WorkflowInputs, wf_name: str

@@ -19,10 +19,10 @@ class DBOSContext:
 
         self.logger = dbos_logger
 
-        self.function_id: int = -1
+        self.id_assigned_for_next_workflow: str = ""
 
-        self.next_workflow_uuid: str = ""
         self.workflow_uuid: str = ""
+        self.function_id: int = -1
 
         self.curr_comm_function_id: int = -1
         self.curr_tx_function_id: int = -1
@@ -31,12 +31,13 @@ class DBOSContext:
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()
         rv.logger = self.logger
-        rv.next_workflow_uuid = self.next_workflow_uuid
+        rv.id_assigned_for_next_workflow = self.id_assigned_for_next_workflow
+        self.id_assigned_for_next_workflow = ""
         return rv
 
     def assign_workflow_id(self) -> str:
-        if len(self.next_workflow_uuid) > 0:
-            wfid = self.next_workflow_uuid
+        if len(self.id_assigned_for_next_workflow) > 0:
+            wfid = self.id_assigned_for_next_workflow
         else:
             wfid = str(uuid.uuid4())
         return wfid
@@ -44,6 +45,7 @@ class DBOSContext:
     def start_workflow(self, wfid: Optional[str]) -> None:
         if wfid is None or len(wfid) == 0:
             wfid = self.assign_workflow_id()
+            self.id_assigned_for_next_workflow = ""
         self.workflow_uuid = wfid
         self.function_id = 0
 
@@ -167,7 +169,7 @@ class SetWorkflowUUID:
         if ctx is None:
             self.createdCtx = True
             setThreadLocalDBOSContext(DBOSContext())
-        assertCurrentDBOSContext().next_workflow_uuid = self.wfid
+        assertCurrentDBOSContext().id_assigned_for_next_workflow = self.wfid
         return self
 
     def __exit__(
