@@ -12,7 +12,25 @@ from dbos_transact.dbos_config import ConfigFile
 dbos_logger = logging.getLogger("dbos")
 
 
+class AttributeFilter(logging.Filter):
+    def __init__(self, app_id, app_version, executor_id):
+        super().__init__()
+        self.app_id = app_id
+        self.app_version = app_version
+        self.executor_id = executor_id
+
+    def filter(self, record):
+        record.applicationID = self.app_id
+        record.applicationVersion = self.app_version
+        record.executorID = self.executor_id
+        return True
+
+
 def config_logger(config: ConfigFile) -> None:
+    application_id = os.environ.get("DBOS__APPID", "")
+    application_version = os.environ.get("DBOS__APPVERSION", "")
+    executor_id = os.environ.get("DBOS__VMID", "")
+
     # Configure the DBOS logger. Log to the console by default.
     if not dbos_logger.handlers:
         dbos_logger.propagate = False
@@ -27,13 +45,15 @@ def config_logger(config: ConfigFile) -> None:
         console_handler.setFormatter(console_formatter)
         dbos_logger.addHandler(console_handler)
 
+        attribute_filter = AttributeFilter(
+            application_id, application_version, executor_id
+        )
+        dbos_logger.addFilter(attribute_filter)
+
     otlp_logs_endpoint = (
         config.get("telemetry", {}).get("OTLPExporter", {}).get("logsEndpoint")
     )
     if otlp_logs_endpoint:
-        application_id = os.environ.get("DBOS__APPID", "")
-        application_version = os.environ.get("DBOS__APPVERSION", "")
-        executor_id = os.environ.get("DBOS__VMID", "")
 
         resource = Resource.create(
             attributes={
@@ -55,7 +75,4 @@ def config_logger(config: ConfigFile) -> None:
         otlp_handler = LoggingHandler(
             level=logging.NOTSET, logger_provider=log_provider
         )
-        root_logger = logging.getLogger()
-        root_logger.addHandler(otlp_handler)
         dbos_logger.addHandler(otlp_handler)
-        dbos_logger.info("bob", extra={"bob": "bbbb"})
