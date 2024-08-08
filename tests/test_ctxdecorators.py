@@ -17,19 +17,19 @@ class DBOSTestClassInst:
         self.wf_counter += 1
         res = self.test_transaction(var2)
         res2 = self.test_communicator(var)
-        # ctx.logger.info("I'm test_workflow")
+        DBOS.logger.info("I'm test_workflow")
         return res + res2
 
     def test_transaction(self, var2: str) -> str:
         # rows = ctx.session.execute(sa.text("SELECT 1")).fetchall()
         rows = [[0]]
         self.txn_counter += 1
-        # ctx.logger.info("I'm test_transaction")
+        DBOS.logger.info("I'm test_transaction")
         return var2 + str(rows[0][0])
 
     def test_communicator(self, var: str) -> str:
         self.comm_counter += 1
-        # ctx.logger.info("I'm test_communicator")
+        DBOS.logger.info("I'm test_communicator")
         return var
 
 
@@ -43,7 +43,7 @@ class DBOSTestClassStatic:
         DBOSTestClassStatic.wf_counter += 1
         res = DBOSTestClassStatic.test_transaction(var2)
         res2 = DBOSTestClassStatic.test_communicator(var)
-        # ctx.logger.info("I'm test_workflow")
+        DBOS.logger.info("I'm test_workflow")
         return res + res2
 
     @staticmethod
@@ -51,13 +51,13 @@ class DBOSTestClassStatic:
         # rows = ctx.session.execute(sa.text("SELECT 1")).fetchall()
         rows = [[0]]
         DBOSTestClassStatic.txn_counter += 1
-        # ctx.logger.info("I'm test_transaction")
+        DBOS.logger.info("I'm test_transaction")
         return var2 + str(rows[0][0])
 
     @staticmethod
     def test_communicator(var: str) -> str:
         DBOSTestClassStatic.comm_counter += 1
-        # ctx.logger.info("I'm test_communicator")
+        DBOS.logger.info("I'm test_communicator")
         return var
 
 
@@ -71,7 +71,7 @@ class DBOSTestClassClass:
         cls.wf_counter += 1
         res = cls.test_transaction(var2)
         res2 = cls.test_communicator(var)
-        # ctx.logger.info("I'm test_workflow")
+        DBOS.logger.info("I'm test_workflow")
         return res + res2
 
     @classmethod
@@ -79,13 +79,13 @@ class DBOSTestClassClass:
         # rows = ctx.session.execute(sa.text("SELECT 1")).fetchall()
         rows = [[0]]
         cls.txn_counter += 1
-        # ctx.logger.info("I'm test_transaction")
+        DBOS.logger.info("I'm test_transaction")
         return var2 + str(rows[0][0])
 
     @classmethod
     def test_communicator(cls, var: str) -> str:
         cls.comm_counter += 1
-        # ctx.logger.info("I'm test_communicator")
+        DBOS.logger.info("I'm test_communicator")
         return var
 
 
@@ -100,7 +100,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
         wf_counter += 1
         res = test_transaction(var2)
         res2 = test_communicator(var)
-        # ctx.logger.info("I'm test_workflow")
+        DBOS.logger.info("I'm test_workflow")
         return res + res2
 
     @dbos.transaction()
@@ -109,14 +109,14 @@ def test_simple_workflow(dbos: DBOS) -> None:
         rows = [[0]]
         nonlocal txn_counter
         txn_counter += 1
-        # ctx.logger.info("I'm test_transaction")
+        DBOS.logger.info("I'm test_transaction")
         return var2 + str(rows[0][0])
 
     @dbos.communicator()
     def test_communicator(var: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
-        # ctx.logger.info("I'm test_communicator")
+        DBOS.logger.info("I'm test_communicator")
         return var
 
     assert test_workflow("bob", "bob") == "bob1bob"

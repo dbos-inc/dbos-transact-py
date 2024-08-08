@@ -18,7 +18,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
         wf_counter += 1
         res = test_transaction(var2)
         res2 = test_communicator(var)
-        # ctx.logger.info("I'm test_workflow")
+        DBOS.logger.info("I'm test_workflow")
         return res + res2
 
     @dbos.transaction()
@@ -27,14 +27,14 @@ def test_simple_workflow(dbos: DBOS) -> None:
         rows = [[0]]
         nonlocal txn_counter
         txn_counter += 1
-        # ctx.logger.info("I'm test_transaction")
+        DBOS.logger.info("I'm test_transaction")
         return var2 + str(rows[0][0])
 
     @dbos.communicator()
     def test_communicator(var: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
-        # ctx.logger.info("I'm test_communicator")
+        DBOS.logger.info("I'm test_communicator")
         return var
 
     assert test_workflow("bob", "bob") == "bob1bob"

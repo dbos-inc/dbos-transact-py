@@ -2,6 +2,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
+from logging import Logger
 from typing import (
     Any,
     Callable,
@@ -75,6 +76,32 @@ Communicator = TypeVar("Communicator", bound=CommunicatorProtocol)
 
 class WorkflowInputContext(TypedDict):
     workflow_uuid: str
+
+
+class ClassPropertyDescriptor:
+    def __init__(self, fget: Optional[Any], fset: Optional[Any] = None) -> None:
+        self.fget = fget
+        self.fset = fset
+
+    def __get__(self, obj: Any, objtype: Optional[Any] = None) -> Any:
+        if objtype is None:
+            objtype = type(obj)
+        if self.fget is None:
+            raise AttributeError("unreadable attribute")
+        return self.fget(objtype)
+
+    def __set__(self, obj: Any, value: Any) -> None:
+        if not self.fset:
+            raise AttributeError("can't set attribute")
+        self.fset(type(obj), value)
+
+
+def classproperty(func: Any) -> ClassPropertyDescriptor:
+    return ClassPropertyDescriptor(func)
+
+
+def classproperty_setter(func: Any) -> ClassPropertyDescriptor:
+    return ClassPropertyDescriptor(None, func)
 
 
 class DBOS:
@@ -356,3 +383,7 @@ class DBOS:
 
         dbos_logger.info("Recovered pending workflows")
         return workflow_handles
+
+    @classproperty
+    def logger(cls) -> Logger:
+        return dbos_logger  # TODO get from context if appropriate...
