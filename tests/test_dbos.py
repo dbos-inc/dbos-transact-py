@@ -23,8 +23,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     @dbos.transaction()
     def test_transaction(var2: str) -> str:
-        # rows = ctx.session.execute(sa.text("SELECT 1")).fetchall()
-        rows = [[0]]
+        rows = DBOS.sql_session.session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
         DBOS.logger.info("I'm test_transaction")
@@ -128,8 +127,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
 
     @dbos.transaction()
     def test_transaction(var2: str) -> str:
-        # rows = ctx.session.execute(sa.text("SELECT 1")).fetchall()
-        rows = [[0]]
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
         return var2 + str(rows[0][0])
@@ -173,8 +171,7 @@ def test_start_workflow(dbos: DBOS) -> None:
 
     @dbos.transaction()
     def test_transaction(var2: str) -> str:
-        # rows = ctx.session.execute(sa.text("SELECT 1")).fetchall()
-        rows = [[0]]
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
         return var2 + str(rows[0][0])

@@ -3,17 +3,9 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from logging import Logger
-from typing import (
-    Any,
-    Callable,
-    List,
-    Optional,
-    Protocol,
-    Tuple,
-    TypedDict,
-    TypeVar,
-    cast,
-)
+from typing import Any, Callable, List, Optional, Protocol, TypedDict, TypeVar, cast
+
+from sqlalchemy.orm import Session
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec, TypeAlias
@@ -389,3 +381,11 @@ class DBOS:
     @classproperty
     def logger(cls) -> Logger:
         return dbos_logger  # TODO get from context if appropriate...
+
+    @classproperty
+    def sql_session(cls) -> Session:
+        ctx = assertCurrentDBOSContext()
+        assert ctx.is_transaction()
+        rv = ctx.sql_session
+        assert rv
+        return rv
