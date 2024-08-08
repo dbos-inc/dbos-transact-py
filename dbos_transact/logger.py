@@ -46,24 +46,24 @@ def config_logger(config: ConfigFile) -> None:
         config.get("telemetry", {}).get("OTLPExporter", {}).get("logsEndpoint")
     )
     if otlp_logs_endpoint:
-        resource = Resource.create(
-            attributes={
-                "service.name": "dbos-application",
-            }
+        # Configure the DBOS logger to also log to the OTel endpoint.
+        log_provider = LoggerProvider(
+            Resource.create(
+                attributes={
+                    "service.name": "dbos-application",
+                }
+            )
         )
-        log_provider = LoggerProvider(resource=resource)
         set_logger_provider(log_provider)
-        otlp_exporter = OTLPLogExporter(endpoint=otlp_logs_endpoint)
-        log_processor = BatchLogRecordProcessor(otlp_exporter)
-        log_provider.add_log_record_processor(log_processor)
+        log_provider.add_log_record_processor(
+            BatchLogRecordProcessor(OTLPLogExporter(endpoint=otlp_logs_endpoint))
+        )
         otlp_handler = LoggingHandler(
             level=logging.NOTSET, logger_provider=log_provider
         )
-
-        root_logger = logging.getLogger()
         dbos_logger.addHandler(otlp_handler)
-        root_logger.addHandler(otlp_handler)
 
+        # Attach DBOS-specific attributes to all log entries.
         application_id = os.environ.get("DBOS__APPID", "")
         application_version = os.environ.get("DBOS__APPVERSION", "")
         executor_id = os.environ.get("DBOS__VMID", "")
@@ -71,4 +71,3 @@ def config_logger(config: ConfigFile) -> None:
             application_id, application_version, executor_id
         )
         dbos_logger.addFilter(attribute_filter)
-        root_logger.addFilter(attribute_filter)
