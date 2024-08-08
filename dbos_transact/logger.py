@@ -28,7 +28,6 @@ class DBOSLogTransformer(logging.Filter):
 
 
 def config_logger(config: ConfigFile) -> None:
-
     # Configure the DBOS logger. Log to the console by default.
     if not dbos_logger.handlers:
         dbos_logger.propagate = False
