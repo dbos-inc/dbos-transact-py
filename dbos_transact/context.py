@@ -1,13 +1,14 @@
-import os
-from types import TracebackType
-import uuid
-from typing import Literal, Optional, Type
+from __future__ import annotations
 
-from .logger import dbos_logger
+import os
+import threading
+import uuid
+from types import TracebackType
+from typing import Literal, Optional, Type
 
 from sqlalchemy.orm import Session
 
-from __future__ import annotations
+from .logger import dbos_logger
 
 
 class DBOSContext:
@@ -27,12 +28,22 @@ class DBOSContext:
         self.curr_tx_function_id: int = -1
         self.sql_session: Optional[Session] = None
 
+    def create_child(self) -> DBOSContext:
+        rv = DBOSContext()
+        rv.logger = self.logger
+        rv.next_workflow_uuid = self.next_workflow_uuid
+        return rv
+
+    def assign_workflow_id(self) -> str:
+        if len(self.next_workflow_uuid) > 0:
+            wfid = self.next_workflow_uuid
+        else:
+            wfid = str(uuid.uuid4())
+        return wfid
+
     def start_workflow(self, wfid: Optional[str]) -> None:
         if wfid is None or len(wfid) == 0:
-            if len(self.next_workflow_uuid) > 0:
-                wfid = self.next_workflow_uuid
-            else:
-                wfid = str(uuid.uuid4())
+            wfid = self.assign_workflow_id()
         self.workflow_uuid = wfid
 
     def end_workflow(self) -> None:
@@ -69,21 +80,32 @@ class DBOSContext:
         self.curr_tx_function_id = -1
 
 
-# TODO the tss / ContextVar code
+# The tss code (for synchronous programming model)
+class DBOSThreadLocal(threading.local):
+    def __init__(self) -> None:
+        self.dbos_ctx: Optional[DBOSContext] = None
 
 
-def getCurrentDBOSContext() -> Optional[DBOSContext]:
-    return None
+# Create a thread-local storage object
+dbos_thread_local_data = DBOSThreadLocal()
+
+
+def setThreadLocalDBOSContext(ctx: Optional[DBOSContext]) -> None:
+    dbos_thread_local_data.dbos_ctx = ctx
+
+
+def clearThreadLocalDBOSContext() -> None:
+    dbos_thread_local_data.dbos_ctx = None
+
+
+def getThreadLocalDBOSContext() -> Optional[DBOSContext]:
+    return dbos_thread_local_data.dbos_ctx
 
 
 def assertCurrentDBOSContext() -> DBOSContext:
-    rv = getCurrentDBOSContext()
+    rv = getThreadLocalDBOSContext()
     assert rv
     return rv
-
-
-def setCurrentDBOSContext(ctx: DBOSContext) -> None:
-    return
 
 
 class DBOSContextEnsure:
@@ -92,6 +114,10 @@ class DBOSContextEnsure:
 
     def __enter__(self) -> DBOSContextEnsure:
         # Code to create a basic context
+        ctx = getThreadLocalDBOSContext()
+        if ctx is None:
+            self.createdCtx = True
+            setThreadLocalDBOSContext(DBOSContext())
         return self
 
     def __exit__(
@@ -101,6 +127,29 @@ class DBOSContextEnsure:
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
         # Code to clean up the basic context if we created it
+        if self.createdCtx:
+            clearThreadLocalDBOSContext()
+        return False  # Did not handle
+
+
+class DBOSContextSwap:
+    def __init__(self, ctx: DBOSContext) -> None:
+        self.next_ctx = ctx
+        self.prev_ctx: Optional[DBOSContext] = None
+
+    def __enter__(self) -> DBOSContextSwap:
+        self.prev_ctx = getThreadLocalDBOSContext()
+        setThreadLocalDBOSContext(self.next_ctx)
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        assert getThreadLocalDBOSContext() == self.prev_ctx
+        setThreadLocalDBOSContext(self.prev_ctx)
         return False  # Did not handle
 
 
@@ -111,8 +160,12 @@ class SetWorkflowUUID:
         self.wfid = wfid
 
     def __enter__(self) -> SetWorkflowUUID:
-        # Code to create a basic context if there is not one
-        # Set the next wfid
+        # Code to create a basic context
+        ctx = getThreadLocalDBOSContext()
+        if ctx is None:
+            self.createdCtx = True
+            setThreadLocalDBOSContext(DBOSContext())
+        assertCurrentDBOSContext().next_workflow_uuid = self.wfid
         return self
 
     def __exit__(
@@ -122,7 +175,37 @@ class SetWorkflowUUID:
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
         # Code to clean up the basic context if we created it
+        if self.createdCtx:
+            clearThreadLocalDBOSContext()
         return False  # Did not handle
 
 
-# TODO Enter WF / TX / Comm
+class EnterDBOSWorkflow:
+    def __init__(self) -> None:
+        self.createdCtx = False
+
+    def __enter__(self) -> EnterDBOSWorkflow:
+        # Code to create a basic context
+        ctx = getThreadLocalDBOSContext()
+        if ctx is None:
+            self.createdCtx = True
+            setThreadLocalDBOSContext(DBOSContext())
+        assert not assertCurrentDBOSContext().is_in_workflow()
+        assertCurrentDBOSContext().start_workflow(None)
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        assert assertCurrentDBOSContext().is_in_workflow()
+        assertCurrentDBOSContext().end_workflow()
+        # Code to clean up the basic context if we created it
+        if self.createdCtx:
+            clearThreadLocalDBOSContext()
+        return False  # Did not handle
+
+
+# TODO Enter WF / Child WF / TX / Comm
