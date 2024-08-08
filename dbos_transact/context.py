@@ -148,7 +148,7 @@ class DBOSContextSwap:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        assert getThreadLocalDBOSContext() == self.prev_ctx
+        assert getThreadLocalDBOSContext() == self.next_ctx
         setThreadLocalDBOSContext(self.prev_ctx)
         return False  # Did not handle
 

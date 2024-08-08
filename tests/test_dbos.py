@@ -23,7 +23,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     @dbos.transaction()
     def test_transaction(var2: str) -> str:
-        rows = DBOS.sql_session.session.execute(sa.text("SELECT 1")).fetchall()
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
         DBOS.logger.info("I'm test_transaction")
