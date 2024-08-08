@@ -1,6 +1,5 @@
-import random
-import string
 import time
+import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Tuple
 
@@ -22,7 +21,7 @@ def test_concurrent_workflows(dbos: DBOS) -> None:
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
         futures: list[Tuple[str, Future[str]]] = []
         for _ in range(num_threads):
-            id = "".join(random.choices(string.ascii_letters + string.digits, k=10))
+            id = str(uuid.uuid4())
             futures.append((id, executor.submit(test_thread, id)))
         for id, future in futures:
             assert id == future.result()
