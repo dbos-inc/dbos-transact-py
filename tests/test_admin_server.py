@@ -4,8 +4,7 @@ import uuid
 
 import requests
 
-from dbos_transact import DBOS
-from dbos_transact.context import SetWorkflowUUID
+from dbos_transact import DBOS, SetWorkflowUUID
 
 
 def test_admin_endpoints(dbos: DBOS) -> None:

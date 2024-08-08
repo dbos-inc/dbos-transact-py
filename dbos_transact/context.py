@@ -85,7 +85,7 @@ class DBOSContext:
 
 
 ##############################################################
-##### Low-level context management (using ContextVars)
+##### Low-level context management (using contextvars)
 ##############################################################
 
 

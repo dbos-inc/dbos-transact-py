@@ -4,9 +4,7 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from dbos_transact.context import SetWorkflowUUID
-from dbos_transact.dbos import DBOS
-from dbos_transact.dbos_config import ConfigFile
+from dbos_transact import DBOS, ConfigFile, SetWorkflowUUID
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
