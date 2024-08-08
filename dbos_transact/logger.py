@@ -1,4 +1,5 @@
 import logging
+import os
 
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
@@ -30,7 +31,18 @@ def config_logger(config: ConfigFile) -> None:
         config.get("telemetry", {}).get("OTLPExporter", {}).get("logsEndpoint")
     )
     if otlp_logs_endpoint:
-        resource = Resource(attributes={"service.name": "dbos-application"})
+        application_id = os.environ.get("DBOS__APPID", "")
+        application_version = os.environ.get("DBOS__APPVERSION", "")
+        executor_id = os.environ.get("DBOS__VMID", "")
+
+        resource = Resource(
+            attributes={
+                "service.name": "dbos-application",
+                "applicationID": application_id,
+                "applicationVersion": application_version,
+                "executorID": executor_id,
+            }
+        )
 
         log_provider = LoggerProvider(resource=resource)
         set_logger_provider(log_provider)
@@ -45,5 +57,3 @@ def config_logger(config: ConfigFile) -> None:
         )
         root_logger = logging.getLogger()
         root_logger.addHandler(otlp_handler)
-        dbos_logger.addHandler(otlp_handler)
-        dbos_logger.info("bob")
