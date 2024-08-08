@@ -384,6 +384,18 @@ class DBOS:
 
         return decorator
 
+    def send(
+        self, destination_uuid: str, message: Any, topic: Optional[str] = None
+    ) -> None:
+        with EnterDBOSCommunicator() as ctx:
+            self.sys_db.send(
+                ctx.workflow_uuid,
+                ctx.curr_comm_function_id,
+                destination_uuid,
+                message,
+                topic,
+            )
+
     def execute_workflow_uuid(self, workflow_uuid: str) -> WorkflowHandle[Any]:
         """
         This function is used to execute a workflow by a UUID for recovery.

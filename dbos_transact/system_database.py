@@ -194,42 +194,81 @@ class SystemDatabase:
             ).fetchall()
             return [row[0] for row in rows]
 
-    def record_operation_result(self, result: OperationResultInternal) -> None:
+    def record_operation_result(
+        self, result: OperationResultInternal, conn: Optional[sa.Connection] = None
+    ) -> None:
         error = result["error"]
         output = result["output"]
         assert error is None or output is None, "Only one of error or output can be set"
-        with self.engine.begin() as c:
-            try:
-                c.execute(
-                    pg.insert(SystemSchema.operation_outputs).values(
-                        workflow_uuid=result["workflow_uuid"],
-                        function_id=result["function_id"],
-                        output=output,
-                        error=error,
-                    )
-                )
-            except sa.exc.IntegrityError:
-                raise DBOSWorkflowConflictUUIDError(result["workflow_uuid"])
-            except Exception as e:
-                raise e
+        sql = pg.insert(SystemSchema.operation_outputs).values(
+            workflow_uuid=result["workflow_uuid"],
+            function_id=result["function_id"],
+            output=output,
+            error=error,
+        )
+        try:
+            if conn is not None:
+                conn.execute(sql)
+            else:
+                with self.engine.begin() as c:
+                    c.execute(sql)
+        except sa.exc.IntegrityError:
+            raise DBOSWorkflowConflictUUIDError(result["workflow_uuid"])
+        except Exception as e:
+            raise e
 
     def check_operation_execution(
-        self, workflow_uuid: str, function_id: int
+        self, workflow_uuid: str, function_id: int, conn: Optional[sa.Connection] = None
     ) -> Optional[RecordedResult]:
+        sql = sa.select(
+            SystemSchema.operation_outputs.c.output,
+            SystemSchema.operation_outputs.c.error,
+        ).where(
+            SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
+            SystemSchema.operation_outputs.c.function_id == function_id,
+        )
+
+        # If in a transaction, use the provided connection
+        rows = []
+        if conn is not None:
+            rows = conn.execute(sql).all()
+        else:
+            with self.engine.begin() as c:
+                rows = c.execute(sql).all()
+        if len(rows) == 0:
+            return None
+        result: RecordedResult = {
+            "output": rows[0][0],
+            "error": rows[0][1],
+        }
+        return result
+
+    def send(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        destination_uuid: str,
+        message: Any,
+        topic: Optional[str] = None,
+    ) -> None:
         with self.engine.begin() as c:
-            rows = c.execute(
-                sa.select(
-                    SystemSchema.operation_outputs.c.output,
-                    SystemSchema.operation_outputs.c.error,
-                ).where(
-                    SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
-                    SystemSchema.operation_outputs.c.function_id == function_id,
+            recorded_output = self.check_operation_execution(
+                workflow_uuid, function_id, conn=c
+            )
+            if recorded_output is not None:
+                return  # Already sent before
+
+            c.execute(
+                pg.insert(SystemSchema.notifications).values(
+                    destination_uuid=destination_uuid,
+                    topic=topic,
+                    message=utils.serialize(message),
                 )
-            ).all()
-            if len(rows) == 0:
-                return None
-            result: RecordedResult = {
-                "output": rows[0][0],
-                "error": rows[0][1],
+            )
+            output: OperationResultInternal = {
+                "workflow_uuid": workflow_uuid,
+                "function_id": function_id,
+                "output": None,
+                "error": None,
             }
-            return result
+            self.record_operation_result(output, conn=c)
