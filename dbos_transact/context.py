@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import uuid
+from contextvars import ContextVar
 from types import TracebackType
 from typing import Literal, Optional, Type
 
@@ -91,19 +92,19 @@ class DBOSThreadLocal(threading.local):
 
 
 # Create a thread-local storage object
-dbos_thread_local_data = DBOSThreadLocal()
+dbos_thread_local_data = ContextVar("dbos_context", default=None)
 
 
 def setThreadLocalDBOSContext(ctx: Optional[DBOSContext]) -> None:
-    dbos_thread_local_data.dbos_ctx = ctx
+    dbos_thread_local_data.set(ctx)
 
 
 def clearThreadLocalDBOSContext() -> None:
-    dbos_thread_local_data.dbos_ctx = None
+    dbos_thread_local_data.set(None)
 
 
 def getThreadLocalDBOSContext() -> Optional[DBOSContext]:
-    return dbos_thread_local_data.dbos_ctx
+    return dbos_thread_local_data.get()
 
 
 def assertCurrentDBOSContext() -> DBOSContext:
