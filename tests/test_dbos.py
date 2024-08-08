@@ -4,11 +4,9 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from dbos_transact.communicator import CommunicatorContext
+from dbos_transact.context import SetWorkflowUUID
 from dbos_transact.dbos import DBOS
 from dbos_transact.dbos_config import ConfigFile
-from dbos_transact.transaction import TransactionContext
-from dbos_transact.workflow import WorkflowContext
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -17,35 +15,37 @@ def test_simple_workflow(dbos: DBOS) -> None:
     comm_counter: int = 0
 
     @dbos.workflow()
-    def test_workflow(ctx: WorkflowContext, var: str, var2: str) -> str:
+    def test_workflow(var: str, var2: str) -> str:
         nonlocal wf_counter
         wf_counter += 1
-        res = test_transaction(ctx.txn_ctx(), var2)
-        res2 = test_communicator(ctx.comm_ctx(), var)
-        ctx.logger.info("I'm test_workflow")
+        res = test_transaction(var2)
+        res2 = test_communicator(var)
+        DBOS.logger.info("I'm test_workflow")
         return res + res2
 
     @dbos.transaction()
-    def test_transaction(ctx: TransactionContext, var2: str) -> str:
-        rows = ctx.session.execute(sa.text("SELECT 1")).fetchall()
+    def test_transaction(var2: str) -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
-        ctx.logger.info("I'm test_transaction")
+        DBOS.logger.info("I'm test_transaction")
         return var2 + str(rows[0][0])
 
     @dbos.communicator()
-    def test_communicator(ctx: CommunicatorContext, var: str) -> str:
+    def test_communicator(var: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
-        ctx.logger.info("I'm test_communicator")
+        DBOS.logger.info("I'm test_communicator")
         return var
 
-    assert test_workflow(dbos.wf_ctx(), "bob", "bob") == "bob1bob"
+    assert test_workflow("bob", "bob") == "bob1bob"
 
     # Test OAOO
     wfuuid = str(uuid.uuid4())
-    assert test_workflow(dbos.wf_ctx(wfuuid), "alice", "alice") == "alice1alice"
-    assert test_workflow(dbos.wf_ctx(wfuuid), "alice", "alice") == "alice1alice"
+    with SetWorkflowUUID(wfuuid):
+        assert test_workflow("alice", "alice") == "alice1alice"
+    with SetWorkflowUUID(wfuuid):
+        assert test_workflow("alice", "alice") == "alice1alice"
     assert txn_counter == 2  # Only increment once
     assert comm_counter == 2  # Only increment once
 
@@ -61,48 +61,50 @@ def test_exception_workflow(dbos: DBOS) -> None:
     comm_counter: int = 0
 
     @dbos.transaction()
-    def exception_transaction(ctx: TransactionContext, var: str) -> str:
+    def exception_transaction(var: str) -> str:
         nonlocal txn_counter
         txn_counter += 1
         raise Exception(var)
 
     @dbos.communicator()
-    def exception_communicator(ctx: CommunicatorContext, var: str) -> str:
+    def exception_communicator(var: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
         raise Exception(var)
 
     @dbos.workflow()
-    def exception_workflow(ctx: WorkflowContext) -> None:
+    def exception_workflow() -> None:
         nonlocal wf_counter
         wf_counter += 1
         err1 = None
         err2 = None
         try:
-            exception_transaction(ctx.txn_ctx(), "test error")
+            exception_transaction("test error")
         except Exception as e:
             err1 = e
 
         try:
-            exception_communicator(ctx.comm_ctx(), "test error")
+            exception_communicator("test error")
         except Exception as e:
             err2 = e
         assert err1 == err2 and err1 is not None
         raise err1
 
     with pytest.raises(Exception) as exc_info:
-        exception_workflow(dbos.wf_ctx())
+        exception_workflow()
 
     assert "test error" in str(exc_info.value)
 
     # Test OAOO
     wfuuid = str(uuid.uuid4())
     with pytest.raises(Exception) as exc_info:
-        exception_workflow(dbos.wf_ctx(wfuuid))
+        with SetWorkflowUUID(wfuuid):
+            exception_workflow()
     assert "test error" in str(exc_info.value)
 
     with pytest.raises(Exception) as exc_info:
-        exception_workflow(dbos.wf_ctx(wfuuid))
+        with SetWorkflowUUID(wfuuid):
+            exception_workflow()
     assert "test error" in str(exc_info.value)
     assert txn_counter == 2  # Only increment once
     assert comm_counter == 2  # Only increment once
@@ -119,21 +121,22 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     wf_counter: int = 0
 
     @dbos.workflow()
-    def test_workflow(ctx: WorkflowContext, var: str, var2: str) -> str:
+    def test_workflow(var: str, var2: str) -> str:
         nonlocal wf_counter
         wf_counter += 1
-        res = test_transaction(ctx.txn_ctx(), var2)
+        res = test_transaction(var2)
         return res + var
 
     @dbos.transaction()
-    def test_transaction(ctx: TransactionContext, var2: str) -> str:
-        rows = ctx.session.execute(sa.text("SELECT 1")).fetchall()
+    def test_transaction(var2: str) -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
         return var2 + str(rows[0][0])
 
     wfuuid = str(uuid.uuid4())
-    assert test_workflow(dbos.wf_ctx(wfuuid), "bob", "bob") == "bob1bob"
+    with SetWorkflowUUID(wfuuid):
+        assert test_workflow("bob", "bob") == "bob1bob"
 
     # Change the workflow status to pending
     dbos.sys_db.update_workflow_status(
@@ -162,14 +165,15 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     test_var = "dbos"
 
     @dbos.workflow()
-    def test_workflow(ctx: WorkflowContext, var: str) -> str:
+    def test_workflow(var: str) -> str:
         nonlocal wf_counter
         if var == test_var:
             wf_counter += 1
         return var
 
     wfuuid = str(uuid.uuid4())
-    assert test_workflow(dbos.wf_ctx(wfuuid), test_var) == test_var
+    with SetWorkflowUUID(wfuuid):
+        assert test_workflow(test_var) == test_var
 
     # Change the workflow status to pending
     dbos.sys_db.update_workflow_status(
@@ -189,7 +193,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     dbos.__init__(config)  # type: ignore
 
     @dbos.workflow()  # type: ignore
-    def test_workflow(ctx: WorkflowContext, var: str) -> str:
+    def test_workflow(var: str) -> str:
         nonlocal wf_counter
         if var == test_var:
             wf_counter += 1
@@ -212,24 +216,27 @@ def test_start_workflow(dbos: DBOS) -> None:
     wf_counter: int = 0
 
     @dbos.workflow()
-    def test_workflow(ctx: WorkflowContext, var: str, var2: str) -> str:
+    def test_workflow(var: str, var2: str) -> str:
         nonlocal wf_counter
         wf_counter += 1
-        res = test_transaction(ctx.txn_ctx(), var2)
+        res = test_transaction(var2)
         return res + var
 
     @dbos.transaction()
-    def test_transaction(ctx: TransactionContext, var2: str) -> str:
-        rows = ctx.session.execute(sa.text("SELECT 1")).fetchall()
+    def test_transaction(var2: str) -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
         return var2 + str(rows[0][0])
 
     wfuuid = str(uuid.uuid4())
-    handle = dbos.start_workflow(test_workflow, dbos.wf_ctx(wfuuid), "bob", "bob")
-    assert handle.get_result() == "bob1bob"
-    handle = dbos.start_workflow(test_workflow, dbos.wf_ctx(wfuuid), "bob", "bob")
-    assert handle.get_result() == "bob1bob"
-    assert test_workflow(dbos.wf_ctx(wfuuid), "bob", "bob") == "bob1bob"
+    with SetWorkflowUUID(wfuuid):
+        handle = dbos.start_workflow(test_workflow, "bob", "bob")
+        assert handle.get_result() == "bob1bob"
+    with SetWorkflowUUID(wfuuid):
+        handle = dbos.start_workflow(test_workflow, "bob", "bob")
+        assert handle.get_result() == "bob1bob"
+    with SetWorkflowUUID(wfuuid):
+        assert test_workflow("bob", "bob") == "bob1bob"
     assert txn_counter == 1
     assert wf_counter == 3
