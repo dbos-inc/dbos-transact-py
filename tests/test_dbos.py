@@ -339,7 +339,7 @@ def test_start_workflow(dbos: DBOS) -> None:
 
 def test_without_fastapi(dbos: DBOS) -> None:
     """
-    Since DBOS does not depend on FastAPI directly, verify DBOS works in an environment with FastAPI.
+    Since DBOS does not depend on FastAPI directly, verify DBOS works in an environment without FastAPI.
     """
     # Unimport FastAPI
     for module_name in list(sys.modules.keys()):
