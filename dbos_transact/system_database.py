@@ -1,8 +1,11 @@
 import os
+import select
+import threading
 import time
 from enum import Enum
-from typing import Any, Literal, Optional, Sequence, TypedDict
+from typing import Any, Dict, Literal, Optional, Sequence, TypedDict
 
+import psycopg2
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 from alembic import command
@@ -15,6 +18,7 @@ from dbos_transact.error import (
 )
 
 from .dbos_config import ConfigFile
+from .logger import dbos_logger
 from .schemas.system_database import SystemSchema
 
 
@@ -57,6 +61,9 @@ class OperationResultInternal(TypedDict):
     function_id: int
     output: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
+
+
+dbos_null_topic = "__null__topic__"
 
 
 class SystemDatabase:
@@ -113,12 +120,21 @@ class SystemDatabase:
         command.upgrade(alembic_cfg, "head")
 
         # Start the notification listener
-        # self.notification_client = self.engine.connect()
-        # self.notification_client.execute(sa.text("LISTEN dbos_notifications_channel"))
+        self.notification_conn = psycopg2.connect(
+            system_db_url.render_as_string(hide_password=False)
+        )
+        self.notification_conn.set_isolation_level(
+            psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
+        )
+        self.notification_cursor = self.notification_conn.cursor()
+        self.notification_map: Dict[str, threading.Condition] = {}
+        self._run_notification_listener = True
 
     # Destroy the pool when finished
     def destroy(self) -> None:
-        # self.notification_client.close()
+        self._run_notification_listener = False
+        self.notification_cursor.close()
+        self.notification_conn.close()
         self.engine.dispose()
 
     def update_workflow_status(self, status: WorkflowStatusInternal) -> None:
@@ -260,6 +276,7 @@ class SystemDatabase:
         message: Any,
         topic: Optional[str] = None,
     ) -> None:
+        topic = topic if topic is not None else dbos_null_topic
         with self.engine.begin() as c:
             recorded_output = self.check_operation_execution(
                 workflow_uuid, function_id, conn=c
@@ -295,11 +312,112 @@ class SystemDatabase:
         topic: Optional[str],
         timeout_seconds: float = 60,
     ) -> Any:
-        self.sleep(workflow_uuid, timeout_function_id, timeout_seconds)
-        # Implement the receive operation
-        return "test"
+        topic = topic if topic is not None else dbos_null_topic
 
-    def sleep(self, workflow_uuid: str, function_id: int, seconds: float) -> None:
+        # First, check for previous executions.
+        recorded_output = self.check_operation_execution(workflow_uuid, function_id)
+        if recorded_output is not None:
+            if recorded_output["output"] is not None:
+                return utils.deserialize(recorded_output["output"])
+            else:
+                raise Exception("No output recorded in the last recv")
+
+        # Check if the key is already in teh database. If not, wait for the notification.
+        init_recv: Sequence[Any]
+        with self.engine.begin() as c:
+            init_recv = c.execute(
+                sa.select(
+                    SystemSchema.notifications.c.topic,
+                ).where(
+                    SystemSchema.notifications.c.destination_uuid == workflow_uuid,
+                    SystemSchema.notifications.c.topic == topic,
+                )
+            ).fetchall()
+
+        if len(init_recv) == 0:
+            # Wait for the notification
+            condition = threading.Condition()
+            self.notification_map[workflow_uuid] = condition
+            condition.acquire()
+            # Support OAOO sleep
+            actual_timeout = self.sleep(
+                workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
+            )
+            condition.wait(timeout=actual_timeout)
+            condition.release()
+
+        # Transactionally consume and return the message if it's in the database, otherwise return null.
+        with self.engine.begin() as c:
+            oldest_entry_cte = (
+                sa.select(
+                    SystemSchema.notifications.c.destination_uuid,
+                    SystemSchema.notifications.c.topic,
+                    SystemSchema.notifications.c.message,
+                    SystemSchema.notifications.c.created_at_epoch_ms,
+                )
+                .where(
+                    SystemSchema.notifications.c.destination_uuid == workflow_uuid,
+                    SystemSchema.notifications.c.topic == topic,
+                )
+                .order_by(SystemSchema.notifications.c.created_at_epoch_ms.asc())
+                .limit(1)
+                .cte("oldest_entry")
+            )
+            delete_stmt = (
+                sa.delete(SystemSchema.notifications)
+                .where(
+                    SystemSchema.notifications.c.destination_uuid
+                    == oldest_entry_cte.c.destination_uuid,
+                    SystemSchema.notifications.c.topic == oldest_entry_cte.c.topic,
+                    SystemSchema.notifications.c.created_at_epoch_ms
+                    == oldest_entry_cte.c.created_at_epoch_ms,
+                )
+                .returning(SystemSchema.notifications.c.message)
+            )
+            rows = c.execute(delete_stmt).fetchall()
+            message: Any = None
+            if len(rows) > 0:
+                message = utils.deserialize(rows[0][0])
+            self.record_operation_result(
+                {
+                    "workflow_uuid": workflow_uuid,
+                    "function_id": function_id,
+                    "output": rows[0][0],
+                    "error": None,
+                }
+            )
+        return message
+
+    def _notification_listener(self) -> None:
+        # Listen to notifications
+        dbos_logger.info("Listening to notifications")
+        self.notification_cursor.execute("LISTEN dbos_notifications_channel")
+        while self._run_notification_listener:
+            if select.select([self.notification_conn], [], [], 60) == ([], [], []):
+                continue
+            else:
+                self.notification_conn.poll()
+                while self.notification_conn.notifies:
+                    notify = self.notification_conn.notifies.pop(0)
+                    channel = notify.channel
+                    dbos_logger.info(f"Received notification on channel: {channel}")
+                    dbos_logger.info(f"Received notification: {notify.payload}")
+                    if channel == "dbos_notifications_channel":
+                        if notify.payload and notify.payload in self.notification_map:
+                            condition = self.notification_map[notify.payload]
+                            condition.acquire()
+                            condition.notify_all()
+                            condition.release()
+                    else:
+                        dbos_logger.error(f"Unknown channel: {channel}")
+
+    def sleep(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        seconds: float,
+        skip_sleep: bool = False,
+    ) -> float:
         recorded_output = self.check_operation_execution(workflow_uuid, function_id)
         end_time: float
         if recorded_output is not None:
@@ -318,4 +436,7 @@ class SystemDatabase:
                 )
             except DBOSWorkflowConflictUUIDError:
                 pass
-        time.sleep(max(0, end_time - time.time()))
+        duration = max(0, end_time - time.time())
+        if not skip_sleep:
+            time.sleep(duration)
+        return duration

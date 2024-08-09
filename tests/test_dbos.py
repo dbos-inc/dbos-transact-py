@@ -355,8 +355,9 @@ def test_send_recv(dbos: DBOS) -> None:
         DBOS.logger.info(
             f"Running send workflow! src {DBOS.workflow_id}, dest {dest_uuid}"
         )
-        dbos.send(dest_uuid, "testmessage1")
-        dbos.send(dest_uuid, "testmessage2", topic=topic)
+        dbos.send(dest_uuid, "test1")
+        dbos.send(dest_uuid, "test2", topic=topic)
+        dbos.send(dest_uuid, "test3")
         nonlocal wf_counter
         wf_counter += 1
         return dest_uuid
@@ -366,9 +367,11 @@ def test_send_recv(dbos: DBOS) -> None:
         DBOS.logger.info(
             f"Running recv workflow! src {DBOS.workflow_id}, topic {topic}"
         )
-        return str(dbos.recv(topic, 2))
+        msg1 = dbos.recv(topic, timeout_seconds=10)
+        msg2 = dbos.recv(timeout_seconds=10)
+        msg3 = dbos.recv(timeout_seconds=10)
+        return "-".join([str(msg1), str(msg2), str(msg3)])
 
-    wfuuid = str(uuid.uuid4())
     dest_uuid = str(uuid.uuid4())
 
     # Send to non-existent uuid should fail
@@ -378,6 +381,12 @@ def test_send_recv(dbos: DBOS) -> None:
         exc_info.value
     )
 
-    handle = dbos.start_workflow(test_recv_workflow, "testtopic")
-    test_send_workflow(handle.workflow_uuid, "testtopic")
-    assert handle.get_result() == "test"
+    with SetWorkflowUUID(dest_uuid):
+        handle = dbos.start_workflow(test_recv_workflow, "testtopic")
+        assert handle.get_workflow_uuid() == dest_uuid
+
+    recv_uuid = str(uuid.uuid4())
+    with SetWorkflowUUID(recv_uuid):
+        res = test_send_workflow(handle.get_workflow_uuid(), "testtopic")
+        assert res == dest_uuid
+    assert handle.get_result() == "test2-test1-test3"

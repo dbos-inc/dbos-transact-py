@@ -1,4 +1,5 @@
 import os
+import select
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -125,11 +126,7 @@ class DBOS:
             self.executor.submit(self._startup_recovery_thread, workflow_ids)
 
         # Listen to notifications
-        self.executor.submit(self._event_listener)
-
-    def _event_listener(self) -> None:
-        # Listen to notifications
-        dbos_logger.info("Listening to notifications")
+        self.executor.submit(self.sys_db._notification_listener)
 
     def destroy(self) -> None:
         self._run_startup_recovery_thread = False
@@ -207,6 +204,7 @@ class DBOS:
 
         new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
         new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
+        new_wf_uuid = new_wf_ctx.id_assigned_for_next_workflow
 
         status = self._init_workflow(
             new_wf_ctx,
@@ -222,7 +220,7 @@ class DBOS:
             *args,
             **kwargs,
         )
-        return WorkflowHandle(new_wf_ctx.id_assigned_for_next_workflow, future)
+        return WorkflowHandle(new_wf_uuid, future)
 
     def _init_workflow(
         self, ctx: DBOSContext, inputs: WorkflowInputs, wf_name: str
@@ -366,12 +364,12 @@ class DBOS:
                         ctx.workflow_uuid, ctx.function_id
                     )
                     if recorded_output:
-                        if recorded_output["error"]:
+                        if recorded_output["error"] is not None:
                             deserialized_error = utils.deserialize(
                                 recorded_output["error"]
                             )
                             raise deserialized_error
-                        elif recorded_output["output"]:
+                        elif recorded_output["output"] is not None:
                             return utils.deserialize(recorded_output["output"])
                         else:
                             raise Exception("Output and error are both None")
