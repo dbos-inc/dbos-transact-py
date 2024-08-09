@@ -12,6 +12,56 @@ def test_simple_workflow(dbos: DBOS) -> None:
     wf_counter: int = 0
     comm_counter: int = 0
 
+    @dbos.workflow()
+    def test_workflow(var: str, var2: str) -> str:
+        DBOS.logger.info("I'm test_workflow")
+        if len(DBOS.parent_workflow_id):
+            DBOS.logger.info("  This is a child test_workflow")
+            # Note this assertion is only true if child wasn't assigned an ID explicitly
+            assert DBOS.workflow_id.startswith(DBOS.parent_workflow_id)
+        nonlocal wf_counter
+        wf_counter += 1
+        res = test_transaction(var2)
+        res2 = test_communicator(var)
+        return res + res2
+
+    @dbos.transaction()
+    def test_transaction(var2: str) -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        nonlocal txn_counter
+        txn_counter += 1
+        DBOS.logger.info("I'm test_transaction")
+        return var2 + str(rows[0][0])
+
+    @dbos.communicator()
+    def test_communicator(var: str) -> str:
+        nonlocal comm_counter
+        comm_counter += 1
+        DBOS.logger.info("I'm test_communicator")
+        return var
+
+    assert test_workflow("bob", "bob") == "bob1bob"
+
+    # Test OAOO
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowUUID(wfuuid):
+        assert test_workflow("alice", "alice") == "alice1alice"
+    with SetWorkflowUUID(wfuuid):
+        assert test_workflow("alice", "alice") == "alice1alice"
+    assert txn_counter == 2  # Only increment once
+    assert comm_counter == 2  # Only increment once
+
+    # Test we can execute the workflow by uuid
+    handle = dbos.execute_workflow_uuid(wfuuid)
+    assert handle.get_result() == "alice1alice"
+    assert wf_counter == 4
+
+
+def test_child_workflow(dbos: DBOS) -> None:
+    txn_counter: int = 0
+    wf_counter: int = 0
+    comm_counter: int = 0
+
     @dbos.transaction()
     def test_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
@@ -85,22 +135,6 @@ def test_simple_workflow(dbos: DBOS) -> None:
             wfh = dbos.start_workflow(test_workflow_ac, "child1", "child1")
             res2 = wfh.get_result()
         return res1 + res2
-
-    assert test_workflow("bob", "bob") == "bob1bob"
-
-    # Test OAOO
-    wfuuid = str(uuid.uuid4())
-    with SetWorkflowUUID(wfuuid):
-        assert test_workflow("alice", "alice") == "alice1alice"
-    with SetWorkflowUUID(wfuuid):
-        assert test_workflow("alice", "alice") == "alice1alice"
-    assert txn_counter == 2  # Only increment once
-    assert comm_counter == 2  # Only increment once
-
-    # Test we can execute the workflow by uuid
-    handle = dbos.execute_workflow_uuid(wfuuid)
-    assert handle.get_result() == "alice1alice"
-    assert wf_counter == 4
 
     # Test child wf
     assert test_workflow_child() == "child11child1"
