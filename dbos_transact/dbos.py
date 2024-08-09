@@ -181,12 +181,18 @@ class DBOS:
             "kwargs": kwargs,
         }
 
-        # TODO this is structured quite poorly
+        # Sequence of events for starting a workflow:
+        #   First - is there a WF already running?
+        #      (and not in tx/comm as that is an error)
+        #   Assign an ID to the workflow
+        #   Make a (system) DB record for the workflow
+        #   Pass the new context to a worker thread that will run the wf function
         cur_ctx = get_local_dbos_context()
         new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
-        new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
+        new_wf_ctx.id_assigned_for_next_workflow = (
+            new_wf_ctx.assign_workflow_id()
+        )  # TODO needs work
 
-        new_wf_ctx.workflow_uuid = new_wf_ctx.id_assigned_for_next_workflow
         status = self._init_workflow(
             new_wf_ctx,
             inputs=inputs,
@@ -207,8 +213,13 @@ class DBOS:
     def _init_workflow(
         self, ctx: DBOSContext, inputs: WorkflowInputs, wf_name: str
     ) -> WorkflowStatusInternal:
+        wfid = (
+            ctx.workflow_uuid
+            if len(ctx.workflow_uuid) > 0
+            else ctx.id_assigned_for_next_workflow
+        )
         status: WorkflowStatusInternal = {
-            "workflow_uuid": ctx.workflow_uuid,
+            "workflow_uuid": wfid,
             "status": "PENDING",
             "name": wf_name,
             "output": None,
@@ -219,7 +230,7 @@ class DBOS:
         }
         self.sys_db.update_workflow_status(status)
 
-        self.sys_db.update_workflow_inputs(ctx.workflow_uuid, utils.serialize(inputs))
+        self.sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
 
         return status
 
