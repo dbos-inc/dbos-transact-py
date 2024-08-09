@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from logging import Logger
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Generic,
@@ -16,7 +17,9 @@ from typing import (
     cast,
 )
 
-from fastapi import FastAPI
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
 from sqlalchemy.orm import Session
 
 if sys.version_info < (3, 10):
@@ -109,7 +112,7 @@ def classproperty(func: Callable[..., G]) -> ClassPropertyDescriptor[G]:
 
 class DBOS:
     def __init__(
-        self, fastapi: Optional[FastAPI] = None, config: Optional[ConfigFile] = None
+        self, fastapi: Optional["FastAPI"] = None, config: Optional[ConfigFile] = None
     ) -> None:
         if config is None:
             config = load_config()
