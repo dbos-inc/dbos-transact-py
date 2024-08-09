@@ -19,7 +19,6 @@ from typing import (
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
-
 from sqlalchemy.orm import Session
 
 if sys.version_info < (3, 10):
