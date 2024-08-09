@@ -1,9 +1,11 @@
+import uuid
 from typing import Tuple
 
 import sqlalchemy as sa
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from dbos_transact.context import SetWorkflowUUID
 from dbos_transact.dbos import DBOS
 
 
@@ -31,3 +33,45 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     response = client.get("/bob/bob")
     assert response.status_code == 200
     assert response.text == '"bob1bob"'
+
+
+def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
+    dbos, app = dbos_fastapi
+    client = TestClient(app)
+
+    wfuuid = str(uuid.uuid4())
+
+    @dbos.workflow()
+    def test_workflow(var1: str, var2: str) -> str:
+        assert DBOS.request is not None
+        return var1 + var2
+
+    @app.get("/{var1}/{var2}")
+    def endpoint(var1: str, var2: str) -> str:
+        assert DBOS.request is not None
+        with SetWorkflowUUID(wfuuid):
+            return test_workflow(var1, var2)
+
+    response = client.get("/bob/bob")
+    assert response.status_code == 200
+    assert response.text == '"bobbob"'
+
+    # Change the workflow status to pending
+    dbos.sys_db.update_workflow_status(
+        {
+            "workflow_uuid": wfuuid,
+            "status": "PENDING",
+            "name": test_workflow.__qualname__,
+            "output": None,
+            "error": None,
+            "executor_id": None,
+            "app_id": None,
+            "app_version": None,
+            "request": None,
+        }
+    )
+
+    # Recovery should execute the workflow again but skip the transaction
+    workflow_handles = dbos.recover_pending_workflows()
+    assert len(workflow_handles) == 1
+    assert workflow_handles[0].get_result() == "bobbob"

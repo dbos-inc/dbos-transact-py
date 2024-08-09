@@ -7,7 +7,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Literal, Optional, Type
 
 if TYPE_CHECKING:
-    from fastapi import Request
+    from .fastapi import Request
 
 from sqlalchemy.orm import Session
 

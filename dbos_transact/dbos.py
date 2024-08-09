@@ -18,7 +18,7 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from fastapi import FastAPI, Request
+    from fastapi import FastAPI
 from sqlalchemy.orm import Session
 
 if sys.version_info < (3, 10):
@@ -56,6 +56,9 @@ from .system_database import (
     WorkflowInputs,
     WorkflowStatusInternal,
 )
+
+if TYPE_CHECKING:
+    from .fastapi import Request
 
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
