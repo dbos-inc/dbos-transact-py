@@ -184,21 +184,28 @@ class DBOS:
         # Sequence of events for starting a workflow:
         #   First - is there a WF already running?
         #      (and not in tx/comm as that is an error)
-        #   Assign an ID to the workflow
+        #   Assign an ID to the workflow, if it doesn't have an app-assigned one
+        #      If this is a root workflow, assign a new UUID
+        #      If this is a child workflow, assign parent wf id with call# suffix
         #   Make a (system) DB record for the workflow
         #   Pass the new context to a worker thread that will run the wf function
         cur_ctx = get_local_dbos_context()
+        if cur_ctx is not None and cur_ctx.is_within_workflow():
+            assert cur_ctx.is_workflow()  # Not in tx / comm
+            cur_ctx.function_id += 1
+            if len(cur_ctx.id_assigned_for_next_workflow) == 0:
+                cur_ctx.id_assigned_for_next_workflow = (
+                    cur_ctx.workflow_uuid + "-" + str(cur_ctx.function_id)
+                )
+
         new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
-        new_wf_ctx.id_assigned_for_next_workflow = (
-            new_wf_ctx.assign_workflow_id()
-        )  # TODO needs work
+        new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
 
         status = self._init_workflow(
             new_wf_ctx,
             inputs=inputs,
             wf_name=func.__qualname__,
         )
-        new_wf_ctx.workflow_uuid = ""
 
         future = self.executor.submit(
             cast(Callable[..., R], self._execute_workflow_wthread),
