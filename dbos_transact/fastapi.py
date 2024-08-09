@@ -8,6 +8,10 @@ from .logger import dbos_logger
 
 
 class Request:
+    """
+    A serializable subset of the FastAPI request object
+    """
+
     def __init__(self, req: FastAPIRequest):
         self.headers = req.headers
         self.path_params = req.path_params
