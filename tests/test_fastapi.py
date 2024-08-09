@@ -11,10 +11,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     dbos, app = dbos_fastapi
     client = TestClient(app)
 
-    @app.get("/{var}/{var2}")
-    def endpoint(var: str, var2: str) -> str:
-        return test_workflow(var, var2)
-
+    @app.get("/{var1}/{var2}")
     @dbos.workflow()
     def test_workflow(var1: str, var2: str) -> str:
         res1 = test_transaction(var1)
