@@ -380,3 +380,4 @@ def test_send_recv(dbos: DBOS) -> None:
 
     handle = dbos.start_workflow(test_recv_workflow, "testtopic")
     test_send_workflow(handle.workflow_uuid, "testtopic")
+    assert handle.get_result() == "test"

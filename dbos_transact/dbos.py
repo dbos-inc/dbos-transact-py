@@ -136,7 +136,7 @@ class DBOS:
         self.sys_db.destroy()
         self.app_db.destroy()
         self.admin_server.stop()
-        self.executor.shutdown()
+        self.executor.shutdown(cancel_futures=True)
 
     def workflow(self) -> Callable[[Workflow[P, R]], Workflow[P, R]]:
         def decorator(func: Workflow[P, R]) -> Workflow[P, R]:

@@ -113,16 +113,12 @@ class SystemDatabase:
         command.upgrade(alembic_cfg, "head")
 
         # Start the notification listener
-        self.notification_client = self.engine.connect()
-        self.notification_client.execute(sa.text("LISTEN dbos_notifications_channel"))
-
-    @staticmethod
-    def _pg_notify(**kw: Any) -> None:
-        print(kw)
+        # self.notification_client = self.engine.connect()
+        # self.notification_client.execute(sa.text("LISTEN dbos_notifications_channel"))
 
     # Destroy the pool when finished
     def destroy(self) -> None:
-        self.notification_client.close()
+        # self.notification_client.close()
         self.engine.dispose()
 
     def update_workflow_status(self, status: WorkflowStatusInternal) -> None:
