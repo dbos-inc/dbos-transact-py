@@ -16,6 +16,7 @@ from typing import (
     cast,
 )
 
+from fastapi import FastAPI
 from sqlalchemy.orm import Session
 
 if sys.version_info < (3, 10):
@@ -107,7 +108,9 @@ def classproperty(func: Callable[..., G]) -> ClassPropertyDescriptor[G]:
 
 
 class DBOS:
-    def __init__(self, config: Optional[ConfigFile] = None) -> None:
+    def __init__(
+        self, fastapi: Optional[FastAPI] = None, config: Optional[ConfigFile] = None
+    ) -> None:
         if config is None:
             config = load_config()
         config_logger(config)

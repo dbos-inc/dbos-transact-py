@@ -72,7 +72,7 @@ def dbos(
     os.environ.pop("DBOS__VMID") if "DBOS__VMID" in os.environ else None
     os.environ.pop("DBOS__APPVERSION") if "DBOS__APPVERSION" in os.environ else None
     os.environ.pop("DBOS__APPID") if "DBOS__APPID" in os.environ else None
-    dbos = DBOS(config)
+    dbos = DBOS(config=config)
     yield dbos
     dbos.destroy()
 

@@ -188,7 +188,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     )
 
     dbos.destroy()
-    dbos.__init__(config)  # type: ignore
+    dbos.__init__(config=config)  # type: ignore
 
     @dbos.workflow()  # type: ignore
     def test_workflow(var: str) -> str:
