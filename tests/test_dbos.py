@@ -12,15 +12,6 @@ def test_simple_workflow(dbos: DBOS) -> None:
     wf_counter: int = 0
     comm_counter: int = 0
 
-    @dbos.workflow()
-    def test_workflow(var: str, var2: str) -> str:
-        nonlocal wf_counter
-        wf_counter += 1
-        res = test_transaction(var2)
-        res2 = test_communicator(var)
-        DBOS.logger.info("I'm test_workflow")
-        return res + res2
-
     @dbos.transaction()
     def test_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
@@ -35,6 +26,26 @@ def test_simple_workflow(dbos: DBOS) -> None:
         comm_counter += 1
         DBOS.logger.info("I'm test_communicator")
         return var
+
+    @dbos.workflow()
+    def test_workflow(var: str, var2: str) -> str:
+        nonlocal wf_counter
+        wf_counter += 1
+        res = test_transaction(var2)
+        res2 = test_communicator(var)
+        DBOS.logger.info("I'm test_workflow")
+        return res + res2
+
+    @dbos.workflow()
+    def test_workflow_chilren() -> str:
+        nonlocal wf_counter
+        wf_counter += 1
+        res1 = test_workflow("child1", "child1")
+        wfh1 = dbos.start_workflow(test_workflow, "child2a", "child2a")
+        wfh2 = dbos.start_workflow(test_workflow, "child2b", "child2b")
+        res2 = wfh1.get_result()
+        res3 = wfh2.get_result()
+        return res1 + res2 + res3
 
     assert test_workflow("bob", "bob") == "bob1bob"
 
@@ -51,6 +62,9 @@ def test_simple_workflow(dbos: DBOS) -> None:
     handle = dbos.execute_workflow_uuid(wfuuid)
     assert handle.get_result() == "alice1alice"
     assert wf_counter == 4
+
+    # Test child wf
+    assert test_workflow_chilren() == "child11child1child2a1child2achild2b1child2b"
 
 
 def test_exception_workflow(dbos: DBOS) -> None:
