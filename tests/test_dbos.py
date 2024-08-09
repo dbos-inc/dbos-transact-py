@@ -246,10 +246,15 @@ def test_start_workflow(dbos: DBOS) -> None:
 
 
 def test_fastapi_imports(dbos: DBOS) -> None:
+    """
+    Since DBOS does not depend on FastAPI directly, verify DBOS works in an environment with FastAPI.
+    """
+    # Unimport FastAPI
     for module_name in list(sys.modules.keys()):
         if module_name == "fastapi" or module_name.startswith("fastapi."):
             del sys.modules[module_name]
 
+    # Throw an error if FastAPI is imported
     class FastAPIBlocker(MetaPathFinder):
         def find_spec(
             self, fullname: str, path: Any = None, target: Any = None
@@ -260,6 +265,8 @@ def test_fastapi_imports(dbos: DBOS) -> None:
 
     blocker = FastAPIBlocker()
     sys.meta_path.insert(0, blocker)
+
+    # Reload all DBOS modules, verifying none import FastAPI
     try:
         for module_name in dict(sys.modules.items()):
             module = sys.modules[module_name]
