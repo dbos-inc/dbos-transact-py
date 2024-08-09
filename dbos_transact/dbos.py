@@ -30,6 +30,7 @@ import dbos_transact.utils as utils
 from dbos_transact.admin_sever import AdminServer
 from dbos_transact.context import (
     DBOSContext,
+    DBOSContextEnsure,
     DBOSContextSwap,
     EnterDBOSChildWorkflow,
     EnterDBOSCommunicator,
@@ -243,6 +244,7 @@ class DBOS:
             "app_id": ctx.app_id,
             "app_version": ctx.app_version,
             "executor_id": ctx.executor_id,
+            "request": utils.serialize(ctx.request),
         }
         self.sys_db.update_workflow_status(status)
 
@@ -408,8 +410,13 @@ class DBOS:
             raise DBOSWorkflowFunctionNotFoundError(
                 workflow_uuid, "Workflow function not found"
             )
-        with SetWorkflowUUID(workflow_uuid):
-            return self.start_workflow(wf_func, *inputs["args"], **inputs["kwargs"])
+        with DBOSContextEnsure():
+            ctx = assert_current_dbos_context()
+            request = status["request"]
+            assert request is not None
+            ctx.request = utils.deserialize(request)
+            with SetWorkflowUUID(workflow_uuid):
+                return self.start_workflow(wf_func, *inputs["args"], **inputs["kwargs"])
 
     def recover_pending_workflows(
         self, executor_ids: List[str] = ["local"]

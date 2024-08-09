@@ -242,6 +242,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
             "executor_id": None,
             "app_id": None,
             "app_version": None,
+            "request": None,
         }
     )
 
@@ -279,6 +280,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
             "executor_id": None,
             "app_id": None,
             "app_version": None,
+            "request": None,
         }
     )
 
