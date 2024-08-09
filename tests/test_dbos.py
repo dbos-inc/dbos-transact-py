@@ -51,7 +51,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
     txn_ac_counter: int = 0
 
     @dbos.workflow()
-    def test_workflow_chilren() -> str:
+    def test_workflow_children() -> str:
         nonlocal wf_counter
         wf_counter += 1
         res1 = test_workflow("child1", "child1")
@@ -105,7 +105,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     # Test child wf
     assert test_workflow_child() == "child11child1"
-    assert test_workflow_chilren() == "child11child1child2a1child2achild2b1child2b"
+    assert test_workflow_children() == "child11child1child2a1child2achild2b1child2b"
 
     # Test child wf with assigned ID
     assert test_workflow_assignchild() == "child1child11child2child11"
