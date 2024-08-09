@@ -23,6 +23,8 @@ class DBOSContext:
 
         self.workflow_uuid: str = ""
         self.function_id: int = -1
+        self.parent_workflow_uuid: str = ""
+        self.parent_workflow_fid: int = -1
 
         self.curr_comm_function_id: int = -1
         self.curr_tx_function_id: int = -1
@@ -33,6 +35,8 @@ class DBOSContext:
         rv.logger = self.logger
         rv.id_assigned_for_next_workflow = self.id_assigned_for_next_workflow
         self.id_assigned_for_next_workflow = ""
+        rv.parent_workflow_uuid = self.workflow_uuid
+        rv.parent_workflow_fid = self.function_id
         return rv
 
     def assign_workflow_id(self) -> str:
@@ -53,7 +57,7 @@ class DBOSContext:
         self.workflow_uuid = ""
         self.function_id = -1
 
-    def is_in_workflow(self) -> bool:
+    def is_within_workflow(self) -> bool:
         return len(self.workflow_uuid) > 0
 
     def is_workflow(self) -> bool:
@@ -94,20 +98,20 @@ dbos_context_var: ContextVar[Optional[DBOSContext]] = ContextVar(
 )
 
 
-def setLocalDBOSContext(ctx: Optional[DBOSContext]) -> None:
+def set_local_dbos_context(ctx: Optional[DBOSContext]) -> None:
     dbos_context_var.set(ctx)
 
 
-def clearLocalDBOSContext() -> None:
+def clear_local_dbos_context() -> None:
     dbos_context_var.set(None)
 
 
-def getLocalDBOSContext() -> Optional[DBOSContext]:
+def get_local_dbos_context() -> Optional[DBOSContext]:
     return dbos_context_var.get()
 
 
-def assertCurrentDBOSContext() -> DBOSContext:
-    rv = getLocalDBOSContext()
+def assert_current_dbos_context() -> DBOSContext:
+    rv = get_local_dbos_context()
     assert rv
     return rv
 
@@ -119,14 +123,14 @@ def assertCurrentDBOSContext() -> DBOSContext:
 
 class DBOSContextEnsure:
     def __init__(self) -> None:
-        self.createdCtx = False
+        self.created_ctx = False
 
     def __enter__(self) -> DBOSContextEnsure:
         # Code to create a basic context
-        ctx = getLocalDBOSContext()
+        ctx = get_local_dbos_context()
         if ctx is None:
-            self.createdCtx = True
-            setLocalDBOSContext(DBOSContext())
+            self.created_ctx = True
+            set_local_dbos_context(DBOSContext())
         return self
 
     def __exit__(
@@ -136,8 +140,8 @@ class DBOSContextEnsure:
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
         # Code to clean up the basic context if we created it
-        if self.createdCtx:
-            clearLocalDBOSContext()
+        if self.created_ctx:
+            clear_local_dbos_context()
         return False  # Did not handle
 
 
@@ -147,8 +151,8 @@ class DBOSContextSwap:
         self.prev_ctx: Optional[DBOSContext] = None
 
     def __enter__(self) -> DBOSContextSwap:
-        self.prev_ctx = getLocalDBOSContext()
-        setLocalDBOSContext(self.next_ctx)
+        self.prev_ctx = get_local_dbos_context()
+        set_local_dbos_context(self.next_ctx)
         return self
 
     def __exit__(
@@ -157,24 +161,24 @@ class DBOSContextSwap:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        assert getLocalDBOSContext() == self.next_ctx
-        setLocalDBOSContext(self.prev_ctx)
+        assert get_local_dbos_context() == self.next_ctx
+        set_local_dbos_context(self.prev_ctx)
         return False  # Did not handle
 
 
 # Set next WFID
 class SetWorkflowUUID:
     def __init__(self, wfid: str) -> None:
-        self.createdCtx = False
+        self.created_ctx = False
         self.wfid = wfid
 
     def __enter__(self) -> SetWorkflowUUID:
         # Code to create a basic context
-        ctx = getLocalDBOSContext()
+        ctx = get_local_dbos_context()
         if ctx is None:
-            self.createdCtx = True
-            setLocalDBOSContext(DBOSContext())
-        assertCurrentDBOSContext().id_assigned_for_next_workflow = self.wfid
+            self.created_ctx = True
+            set_local_dbos_context(DBOSContext())
+        assert_current_dbos_context().id_assigned_for_next_workflow = self.wfid
         return self
 
     def __exit__(
@@ -184,23 +188,23 @@ class SetWorkflowUUID:
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
         # Code to clean up the basic context if we created it
-        if self.createdCtx:
-            clearLocalDBOSContext()
+        if self.created_ctx:
+            clear_local_dbos_context()
         return False  # Did not handle
 
 
 class EnterDBOSWorkflow:
     def __init__(self) -> None:
-        self.createdCtx = False
+        self.created_ctx = False
 
     def __enter__(self) -> DBOSContext:
         # Code to create a basic context
-        ctx = getLocalDBOSContext()
+        ctx = get_local_dbos_context()
         if ctx is None:
-            self.createdCtx = True
+            self.created_ctx = True
             ctx = DBOSContext()
-            setLocalDBOSContext(ctx)
-        assert not ctx.is_in_workflow()
+            set_local_dbos_context(ctx)
+        assert not ctx.is_within_workflow()
         ctx.start_workflow(None)  # Will get from the context's next wf uuid
         return ctx
 
@@ -210,11 +214,45 @@ class EnterDBOSWorkflow:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        assert assertCurrentDBOSContext().is_in_workflow()
-        assertCurrentDBOSContext().end_workflow()
+        assert assert_current_dbos_context().is_within_workflow()
+        assert_current_dbos_context().end_workflow()
         # Code to clean up the basic context if we created it
-        if self.createdCtx:
-            clearLocalDBOSContext()
+        if self.created_ctx:
+            clear_local_dbos_context()
+        return False  # Did not handle
+
+
+class EnterDBOSChildWorkflow:
+    def __init__(self) -> None:
+        self.parent_ctx: Optional[DBOSContext] = None
+        self.child_ctx: Optional[DBOSContext] = None
+
+    def __enter__(self) -> DBOSContext:
+        ctx = assert_current_dbos_context()
+        self.parent_ctx = ctx
+        assert ctx.is_workflow()  # Is in a workflow and not in tx/comm
+        ctx.function_id += 1
+        if len(ctx.id_assigned_for_next_workflow) == 0:
+            ctx.id_assigned_for_next_workflow = (
+                ctx.workflow_uuid + "-" + str(ctx.function_id)
+            )
+        self.child_ctx = ctx.create_child()
+        set_local_dbos_context(self.child_ctx)
+        self.child_ctx.start_workflow(None)
+        return self.child_ctx
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        ctx = assert_current_dbos_context()
+        assert ctx.is_within_workflow()
+        ctx.end_workflow()
+        # Return to parent ctx
+        assert self.parent_ctx
+        set_local_dbos_context(self.parent_ctx)
         return False  # Did not handle
 
 
@@ -223,7 +261,7 @@ class EnterDBOSCommunicator:
         pass
 
     def __enter__(self) -> DBOSContext:
-        ctx = assertCurrentDBOSContext()
+        ctx = assert_current_dbos_context()
         assert ctx.is_workflow()
         ctx.function_id += 1
         ctx.start_communicator(ctx.function_id)
@@ -235,7 +273,7 @@ class EnterDBOSCommunicator:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        ctx = assertCurrentDBOSContext()
+        ctx = assert_current_dbos_context()
         assert ctx.is_communicator()
         ctx.end_communicator()
         return False  # Did not handle
@@ -246,7 +284,7 @@ class EnterDBOSTransaction:
         self.sqls = sqls
 
     def __enter__(self) -> DBOSContext:
-        ctx = assertCurrentDBOSContext()
+        ctx = assert_current_dbos_context()
         assert ctx.is_workflow()
         ctx.function_id += 1
         ctx.start_transaction(self.sqls, ctx.function_id)
@@ -258,7 +296,7 @@ class EnterDBOSTransaction:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        ctx = assertCurrentDBOSContext()
+        ctx = assert_current_dbos_context()
         assert ctx.is_transaction()
         ctx.end_transaction()
         return False  # Did not handle

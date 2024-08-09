@@ -31,12 +31,13 @@ from dbos_transact.admin_sever import AdminServer
 from dbos_transact.context import (
     DBOSContext,
     DBOSContextSwap,
+    EnterDBOSChildWorkflow,
     EnterDBOSCommunicator,
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
     SetWorkflowUUID,
-    assertCurrentDBOSContext,
-    getLocalDBOSContext,
+    assert_current_dbos_context,
+    get_local_dbos_context,
 )
 from dbos_transact.error import (
     DBOSRecoveryError,
@@ -149,15 +150,27 @@ class DBOS:
                     "args": args,
                     "kwargs": kwargs,
                 }
-                with EnterDBOSWorkflow():
-                    ctx = assertCurrentDBOSContext()
-                    status = self._init_workflow(
-                        ctx,
-                        inputs=inputs,
-                        wf_name=func.__qualname__,
-                    )
+                ctx = get_local_dbos_context()
+                if ctx and ctx.is_workflow():
+                    with EnterDBOSChildWorkflow():
+                        ctx = assert_current_dbos_context()  # Now the child ctx
+                        status = self._init_workflow(
+                            ctx,
+                            inputs=inputs,
+                            wf_name=func.__qualname__,
+                        )
 
-                    return self._execute_workflow(status, func, *args, **kwargs)
+                        return self._execute_workflow(status, func, *args, **kwargs)
+                else:
+                    with EnterDBOSWorkflow():
+                        ctx = assert_current_dbos_context()
+                        status = self._init_workflow(
+                            ctx,
+                            inputs=inputs,
+                            wf_name=func.__qualname__,
+                        )
+
+                        return self._execute_workflow(status, func, *args, **kwargs)
 
             wrapped_func = cast(Workflow[P, R], wrapper)
             self.workflow_info_map[func.__qualname__] = wrapped_func
@@ -177,18 +190,31 @@ class DBOS:
             "kwargs": kwargs,
         }
 
-        # TODO this is structured quite poorly
-        cur_ctx = getLocalDBOSContext()
+        # Sequence of events for starting a workflow:
+        #   First - is there a WF already running?
+        #      (and not in tx/comm as that is an error)
+        #   Assign an ID to the workflow, if it doesn't have an app-assigned one
+        #      If this is a root workflow, assign a new UUID
+        #      If this is a child workflow, assign parent wf id with call# suffix
+        #   Make a (system) DB record for the workflow
+        #   Pass the new context to a worker thread that will run the wf function
+        cur_ctx = get_local_dbos_context()
+        if cur_ctx is not None and cur_ctx.is_within_workflow():
+            assert cur_ctx.is_workflow()  # Not in tx / comm
+            cur_ctx.function_id += 1
+            if len(cur_ctx.id_assigned_for_next_workflow) == 0:
+                cur_ctx.id_assigned_for_next_workflow = (
+                    cur_ctx.workflow_uuid + "-" + str(cur_ctx.function_id)
+                )
+
         new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
         new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
 
-        new_wf_ctx.workflow_uuid = new_wf_ctx.id_assigned_for_next_workflow
         status = self._init_workflow(
             new_wf_ctx,
             inputs=inputs,
             wf_name=func.__qualname__,
         )
-        new_wf_ctx.workflow_uuid = ""
 
         future = self.executor.submit(
             cast(Callable[..., R], self._execute_workflow_wthread),
@@ -203,8 +229,13 @@ class DBOS:
     def _init_workflow(
         self, ctx: DBOSContext, inputs: WorkflowInputs, wf_name: str
     ) -> WorkflowStatusInternal:
+        wfid = (
+            ctx.workflow_uuid
+            if len(ctx.workflow_uuid) > 0
+            else ctx.id_assigned_for_next_workflow
+        )
         status: WorkflowStatusInternal = {
-            "workflow_uuid": ctx.workflow_uuid,
+            "workflow_uuid": wfid,
             "status": "PENDING",
             "name": wf_name,
             "output": None,
@@ -215,7 +246,7 @@ class DBOS:
         }
         self.sys_db.update_workflow_status(status)
 
-        self.sys_db.update_workflow_inputs(ctx.workflow_uuid, utils.serialize(inputs))
+        self.sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
 
         return status
 
@@ -411,7 +442,7 @@ class DBOS:
 
     @classproperty
     def sql_session(cls) -> Session:
-        ctx = assertCurrentDBOSContext()
+        ctx = assert_current_dbos_context()
         assert ctx.is_transaction()
         rv = ctx.sql_session
         assert rv
@@ -419,9 +450,15 @@ class DBOS:
 
     @classproperty
     def workflow_id(cls) -> str:
-        ctx = assertCurrentDBOSContext()
-        assert ctx.is_in_workflow()
+        ctx = assert_current_dbos_context()
+        assert ctx.is_within_workflow()
         return ctx.workflow_uuid
+
+    @classproperty
+    def parent_workflow_id(cls) -> str:
+        ctx = assert_current_dbos_context()
+        assert ctx.is_within_workflow()
+        return ctx.parent_workflow_uuid
 
     def _startup_recovery_thread(self, workflow_ids: List[str]) -> None:
         """
