@@ -124,6 +124,10 @@ class DBOS:
         self.executor = ThreadPoolExecutor(max_workers=64)
         self.admin_server = AdminServer(dbos=self)
         self._run_startup_recovery_thread = True
+        if fastapi is not None:
+            from dbos_transact.fastapi import setup_fastapi_middleware
+
+            setup_fastapi_middleware(fastapi)
         if not os.environ.get("DBOS__VMID"):
             workflow_ids = self.sys_db.get_pending_workflows("local")
             self.executor.submit(self._startup_recovery_thread, workflow_ids)

@@ -3,8 +3,8 @@ from fastapi import FastAPI
 
 from dbos_transact import DBOS
 
-dbos = DBOS()
 app = FastAPI()
+dbos = DBOS(app)
 
 
 @dbos.workflow()
