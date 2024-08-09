@@ -23,7 +23,7 @@ def upgrade() -> None:
         """
       CREATE OR REPLACE FUNCTION dbos.notifications_function() RETURNS TRIGGER AS $$
       DECLARE
-          payload text := NEW.destination_uuid || '::' || COALESCE(NEW.topic, '');
+          payload text := NEW.destination_uuid || '::' || NEW.topic;
       BEGIN
           PERFORM pg_notify('dbos_notifications_channel', payload);
           RETURN NEW;
