@@ -445,6 +445,12 @@ class DBOS:
         assert ctx.is_within_workflow()
         return ctx.workflow_uuid
 
+    @classproperty
+    def parent_workflow_id(cls) -> str:
+        ctx = assert_current_dbos_context()
+        assert ctx.is_within_workflow()
+        return ctx.parent_workflow_uuid
+
     def _startup_recovery_thread(self, workflow_ids: List[str]) -> None:
         """
         A background thread that attempts to recover local pending workflows on startup.

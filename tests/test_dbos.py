@@ -29,11 +29,15 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     @dbos.workflow()
     def test_workflow(var: str, var2: str) -> str:
+        DBOS.logger.info("I'm test_workflow")
+        if len(DBOS.parent_workflow_id):
+            DBOS.logger.info("  This is a child test_workflow")
+            # Note this assertion is only true if child wasn't assigned an ID explicitly
+            assert DBOS.workflow_id.startswith(DBOS.parent_workflow_id)
         nonlocal wf_counter
         wf_counter += 1
         res = test_transaction(var2)
         res2 = test_communicator(var)
-        DBOS.logger.info("I'm test_workflow")
         return res + res2
 
     @dbos.workflow()
