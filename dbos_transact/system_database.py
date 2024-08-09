@@ -1,4 +1,5 @@
 import os
+import time
 from enum import Enum
 from typing import Any, Literal, Optional, Sequence, TypedDict
 
@@ -111,8 +112,17 @@ class SystemDatabase:
         )
         command.upgrade(alembic_cfg, "head")
 
+        # Start the notification listener
+        self.notification_client = self.engine.connect()
+        self.notification_client.execute(sa.text("LISTEN dbos_notifications_channel"))
+
+    @staticmethod
+    def _pg_notify(**kw: Any) -> None:
+        print(kw)
+
     # Destroy the pool when finished
     def destroy(self) -> None:
+        self.notification_client.close()
         self.engine.dispose()
 
     def update_workflow_status(self, status: WorkflowStatusInternal) -> None:
@@ -280,3 +290,36 @@ class SystemDatabase:
                 "error": None,
             }
             self.record_operation_result(output, conn=c)
+
+    def recv(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        timeout_function_id: int,
+        topic: Optional[str],
+        timeout_seconds: float = 60,
+    ) -> Any:
+        self.sleep(workflow_uuid, timeout_function_id, timeout_seconds)
+        # Implement the receive operation
+        return "test"
+
+    def sleep(self, workflow_uuid: str, function_id: int, seconds: float) -> None:
+        recorded_output = self.check_operation_execution(workflow_uuid, function_id)
+        end_time: float
+        if recorded_output is not None:
+            assert recorded_output["output"] is not None, "no recorded end time"
+            end_time = utils.deserialize(recorded_output["output"])
+        else:
+            end_time = time.time() + seconds
+            try:
+                self.record_operation_result(
+                    {
+                        "workflow_uuid": workflow_uuid,
+                        "function_id": function_id,
+                        "output": utils.serialize(end_time),
+                        "error": None,
+                    }
+                )
+            except DBOSWorkflowConflictUUIDError:
+                pass
+        time.sleep(max(0, end_time - time.time()))

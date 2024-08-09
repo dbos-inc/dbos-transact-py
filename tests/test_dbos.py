@@ -330,6 +330,23 @@ def test_start_workflow(dbos: DBOS) -> None:
     assert wf_counter == 3
 
 
+def test_sleep(dbos: DBOS) -> None:
+    @dbos.workflow()
+    def test_sleep_workfow(secs: float) -> str:
+        dbos.sleep(secs)
+        return DBOS.workflow_id
+
+    start_time = time.time()
+    sleep_uuid = test_sleep_workfow(1.5)
+    assert time.time() - start_time > 1.4
+
+    # Test sleep OAOO, skip sleep
+    start_time = time.time()
+    with SetWorkflowUUID(sleep_uuid):
+        assert test_sleep_workfow(1.5) == sleep_uuid
+        assert time.time() - start_time < 0.3
+
+
 def test_send_recv(dbos: DBOS) -> None:
     wf_counter: int = 0
 
@@ -340,8 +357,16 @@ def test_send_recv(dbos: DBOS) -> None:
         )
         dbos.send(dest_uuid, "testmessage1")
         dbos.send(dest_uuid, "testmessage2", topic=topic)
+        nonlocal wf_counter
         wf_counter += 1
         return dest_uuid
+
+    @dbos.workflow()
+    def test_recv_workflow(topic: str) -> str:
+        DBOS.logger.info(
+            f"Running recv workflow! src {DBOS.workflow_id}, topic {topic}"
+        )
+        return str(dbos.recv(topic, 2))
 
     wfuuid = str(uuid.uuid4())
     dest_uuid = str(uuid.uuid4())
@@ -352,3 +377,6 @@ def test_send_recv(dbos: DBOS) -> None:
     assert f"Sent to non-existent destination workflow UUID: {dest_uuid}" in str(
         exc_info.value
     )
+
+    handle = dbos.start_workflow(test_recv_workflow, "testtopic")
+    test_send_workflow(handle.workflow_uuid, "testtopic")

@@ -124,6 +124,13 @@ class DBOS:
             workflow_ids = self.sys_db.get_pending_workflows("local")
             self.executor.submit(self._startup_recovery_thread, workflow_ids)
 
+        # Listen to notifications
+        self.executor.submit(self._event_listener)
+
+    def _event_listener(self) -> None:
+        # Listen to notifications
+        dbos_logger.info("Listening to notifications")
+
     def destroy(self) -> None:
         self._run_startup_recovery_thread = False
         self.sys_db.destroy()
@@ -395,6 +402,24 @@ class DBOS:
                 message,
                 topic,
             )
+
+    def recv(self, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
+        with EnterDBOSCommunicator() as ctx:
+            ctx.function_id += 1  # Reserve for the sleep
+            timeout_function_id = ctx.function_id
+            return self.sys_db.recv(
+                ctx.workflow_uuid,
+                ctx.curr_comm_function_id,
+                timeout_function_id,
+                topic,
+                timeout_seconds,
+            )
+
+    def sleep(self, seconds: float) -> None:
+        if seconds <= 0:
+            return
+        with EnterDBOSCommunicator() as ctx:
+            self.sys_db.sleep(ctx.workflow_uuid, ctx.curr_comm_function_id, seconds)
 
     def execute_workflow_uuid(self, workflow_uuid: str) -> WorkflowHandle[Any]:
         """
