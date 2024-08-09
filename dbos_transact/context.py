@@ -4,7 +4,10 @@ import os
 import uuid
 from contextvars import ContextVar
 from types import TracebackType
-from typing import Literal, Optional, Type
+from typing import TYPE_CHECKING, Literal, Optional, Type
+
+if TYPE_CHECKING:
+    from fastapi import Request
 
 from sqlalchemy.orm import Session
 
@@ -18,6 +21,8 @@ class DBOSContext:
         self.app_id = os.environ.get("DBOS__APPID", "")
 
         self.logger = dbos_logger
+
+        self.request: Optional["Request"] = None
 
         self.id_assigned_for_next_workflow: str = ""
 

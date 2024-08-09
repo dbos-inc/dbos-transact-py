@@ -14,6 +14,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     @app.get("/{var1}/{var2}")
     @dbos.workflow()
     def test_workflow(var1: str, var2: str) -> str:
+        assert DBOS.request is not None
         res1 = test_transaction(var1)
         res2 = test_communicator(var2)
         return res1 + res2

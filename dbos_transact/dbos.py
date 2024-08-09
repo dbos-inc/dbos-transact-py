@@ -18,7 +18,7 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Request
 from sqlalchemy.orm import Session
 
 if sys.version_info < (3, 10):
@@ -459,6 +459,11 @@ class DBOS:
         ctx = assert_current_dbos_context()
         assert ctx.is_within_workflow()
         return ctx.parent_workflow_uuid
+
+    @classproperty
+    def request(cls) -> Optional["Request"]:
+        ctx = assert_current_dbos_context()
+        return ctx.request
 
     def _startup_recovery_thread(self, workflow_ids: List[str]) -> None:
         """
