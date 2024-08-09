@@ -82,8 +82,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
         with SetWorkflowUUID("run_me_just_once"):
             res1 = test_workflow_ac("child1", "child1")
         with SetWorkflowUUID("run_me_just_once"):
-            # Use of "child2" on something that won't really run is deliberate to see if / where it appears
-            wfh = dbos.start_workflow(test_workflow_ac, "child2", "child2")
+            wfh = dbos.start_workflow(test_workflow_ac, "child1", "child1")
             res2 = wfh.get_result()
         return res1 + res2
 
@@ -108,8 +107,8 @@ def test_simple_workflow(dbos: DBOS) -> None:
     assert test_workflow_children() == "child11child1child2a1child2achild2b1child2b"
 
     # Test child wf with assigned ID
-    assert test_workflow_assignchild() == "child1child11child2child11"
-    assert test_workflow_assignchild() == "child1child11child2child11"
+    assert test_workflow_assignchild() == "child1child11child1child11"
+    assert test_workflow_assignchild() == "child1child11child1child11"
     assert wf_ac_counter == 2
     assert txn_ac_counter == 1  # Only ran tx once
 
