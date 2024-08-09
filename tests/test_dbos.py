@@ -37,6 +37,13 @@ def test_simple_workflow(dbos: DBOS) -> None:
         return res + res2
 
     @dbos.workflow()
+    def test_workflow_child() -> str:
+        nonlocal wf_counter
+        wf_counter += 1
+        res1 = test_workflow("child1", "child1")
+        return res1
+
+    @dbos.workflow()
     def test_workflow_chilren() -> str:
         nonlocal wf_counter
         wf_counter += 1
@@ -64,6 +71,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
     assert wf_counter == 4
 
     # Test child wf
+    assert test_workflow_child() == "child11child1"
     assert test_workflow_chilren() == "child11child1child2a1child2achild2b1child2b"
 
 

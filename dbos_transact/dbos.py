@@ -28,12 +28,13 @@ from dbos_transact.admin_sever import AdminServer
 from dbos_transact.context import (
     DBOSContext,
     DBOSContextSwap,
+    EnterDBOSChildWorkflow,
     EnterDBOSCommunicator,
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
     SetWorkflowUUID,
-    assertCurrentDBOSContext,
-    getLocalDBOSContext,
+    assert_current_dbos_context,
+    get_local_dbos_context,
 )
 from dbos_transact.error import (
     DBOSRecoveryError,
@@ -140,15 +141,26 @@ class DBOS:
                     "args": args,
                     "kwargs": kwargs,
                 }
-                with EnterDBOSWorkflow():
-                    ctx = assertCurrentDBOSContext()
-                    status = self._init_workflow(
-                        ctx,
-                        inputs=inputs,
-                        wf_name=func.__qualname__,
-                    )
+                ctx = get_local_dbos_context()
+                if ctx and ctx.is_workflow():
+                    with EnterDBOSChildWorkflow():
+                        status = self._init_workflow(
+                            ctx,
+                            inputs=inputs,
+                            wf_name=func.__qualname__,
+                        )
 
-                    return self._execute_workflow(status, func, *args, **kwargs)
+                        return self._execute_workflow(status, func, *args, **kwargs)
+                else:
+                    with EnterDBOSWorkflow():
+                        ctx = assert_current_dbos_context()
+                        status = self._init_workflow(
+                            ctx,
+                            inputs=inputs,
+                            wf_name=func.__qualname__,
+                        )
+
+                        return self._execute_workflow(status, func, *args, **kwargs)
 
             wrapped_func = cast(Workflow[P, R], wrapper)
             self.workflow_info_map[func.__qualname__] = wrapped_func
@@ -169,7 +181,7 @@ class DBOS:
         }
 
         # TODO this is structured quite poorly
-        cur_ctx = getLocalDBOSContext()
+        cur_ctx = get_local_dbos_context()
         new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
         new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
 
@@ -402,7 +414,7 @@ class DBOS:
 
     @classproperty
     def sql_session(cls) -> Session:
-        ctx = assertCurrentDBOSContext()
+        ctx = assert_current_dbos_context()
         assert ctx.is_transaction()
         rv = ctx.sql_session
         assert rv
@@ -410,8 +422,8 @@ class DBOS:
 
     @classproperty
     def workflow_id(cls) -> str:
-        ctx = assertCurrentDBOSContext()
-        assert ctx.is_in_workflow()
+        ctx = assert_current_dbos_context()
+        assert ctx.is_within_workflow()
         return ctx.workflow_uuid
 
     def _startup_recovery_thread(self, workflow_ids: List[str]) -> None:
