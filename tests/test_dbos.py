@@ -47,6 +47,9 @@ def test_simple_workflow(dbos: DBOS) -> None:
         res1 = test_workflow("child1", "child1")
         return res1
 
+    wf_ac_counter: int = 0
+    txn_ac_counter: int = 0
+
     @dbos.workflow()
     def test_workflow_chilren() -> str:
         nonlocal wf_counter
@@ -57,6 +60,32 @@ def test_simple_workflow(dbos: DBOS) -> None:
         res2 = wfh1.get_result()
         res3 = wfh2.get_result()
         return res1 + res2 + res3
+
+    @dbos.transaction()
+    def test_transaction_ac(var2: str) -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        nonlocal txn_ac_counter
+        txn_ac_counter += 1
+        return var2 + str(rows[0][0])
+
+    @dbos.workflow()
+    def test_workflow_ac(var: str, var2: str) -> str:
+        DBOS.logger.info("I'm test_workflow assigned child id")
+        assert DBOS.workflow_id == "run_me_just_once"
+        res = test_transaction_ac(var2)
+        return var + res
+
+    @dbos.workflow()
+    def test_workflow_assignchild() -> str:
+        nonlocal wf_ac_counter
+        wf_ac_counter += 1
+        with SetWorkflowUUID("run_me_just_once"):
+            res1 = test_workflow_ac("child1", "child1")
+        with SetWorkflowUUID("run_me_just_once"):
+            # Use of "child2" on something that won't really run is deliberate to see if / where it appears
+            wfh = dbos.start_workflow(test_workflow_ac, "child2", "child2")
+            res2 = wfh.get_result()
+        return res1 + res2
 
     assert test_workflow("bob", "bob") == "bob1bob"
 
@@ -77,6 +106,12 @@ def test_simple_workflow(dbos: DBOS) -> None:
     # Test child wf
     assert test_workflow_child() == "child11child1"
     assert test_workflow_chilren() == "child11child1child2a1child2achild2b1child2b"
+
+    # Test child wf with assigned ID
+    assert test_workflow_assignchild() == "child1child11child2child11"
+    assert test_workflow_assignchild() == "child1child11child2child11"
+    assert wf_ac_counter == 2
+    assert txn_ac_counter == 1  # Only ran tx once
 
 
 def test_exception_workflow(dbos: DBOS) -> None:
