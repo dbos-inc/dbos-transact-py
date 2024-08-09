@@ -9,7 +9,7 @@ from .logger import dbos_logger
 
 class Request:
     """
-    A serializable subset of the FastAPI request object
+    A serializable subset of the FastAPI Request object
     """
 
     def __init__(self, req: FastAPIRequest):
