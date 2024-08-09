@@ -336,8 +336,9 @@ class SystemDatabase:
 
         if len(init_recv) == 0:
             # Wait for the notification
+            payload = f"{workflow_uuid}::{topic}"
             condition = threading.Condition()
-            self.notification_map[workflow_uuid] = condition
+            self.notification_map[payload] = condition
             condition.acquire()
             # Support OAOO sleep
             actual_timeout = self.sleep(
@@ -400,14 +401,18 @@ class SystemDatabase:
                 while self.notification_conn.notifies:
                     notify = self.notification_conn.notifies.pop(0)
                     channel = notify.channel
-                    dbos_logger.info(f"Received notification on channel: {channel}")
-                    dbos_logger.info(f"Received notification: {notify.payload}")
+                    dbos_logger.debug(
+                        f"Received notification on channel: {channel}, payload: {notify.payload}"
+                    )
                     if channel == "dbos_notifications_channel":
                         if notify.payload and notify.payload in self.notification_map:
                             condition = self.notification_map[notify.payload]
                             condition.acquire()
                             condition.notify_all()
                             condition.release()
+                            dbos_logger.debug(
+                                f"Signaled condition for {notify.payload}"
+                            )
                     else:
                         dbos_logger.error(f"Unknown channel: {channel}")
 

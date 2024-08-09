@@ -348,28 +348,25 @@ def test_sleep(dbos: DBOS) -> None:
 
 
 def test_send_recv(dbos: DBOS) -> None:
-    wf_counter: int = 0
+    send_counter: int = 0
+    recv_counter: int = 0
 
     @dbos.workflow()
     def test_send_workflow(dest_uuid: str, topic: str) -> str:
-        DBOS.logger.info(
-            f"Running send workflow! src {DBOS.workflow_id}, dest {dest_uuid}"
-        )
         dbos.send(dest_uuid, "test1")
         dbos.send(dest_uuid, "test2", topic=topic)
         dbos.send(dest_uuid, "test3")
-        nonlocal wf_counter
-        wf_counter += 1
+        nonlocal send_counter
+        send_counter += 1
         return dest_uuid
 
     @dbos.workflow()
     def test_recv_workflow(topic: str) -> str:
-        DBOS.logger.info(
-            f"Running recv workflow! src {DBOS.workflow_id}, topic {topic}"
-        )
         msg1 = dbos.recv(topic, timeout_seconds=10)
         msg2 = dbos.recv(timeout_seconds=10)
         msg3 = dbos.recv(timeout_seconds=10)
+        nonlocal recv_counter
+        recv_counter += 1
         return "-".join([str(msg1), str(msg2), str(msg3)])
 
     dest_uuid = str(uuid.uuid4())
@@ -385,8 +382,25 @@ def test_send_recv(dbos: DBOS) -> None:
         handle = dbos.start_workflow(test_recv_workflow, "testtopic")
         assert handle.get_workflow_uuid() == dest_uuid
 
-    recv_uuid = str(uuid.uuid4())
-    with SetWorkflowUUID(recv_uuid):
+    send_uuid = str(uuid.uuid4())
+    with SetWorkflowUUID(send_uuid):
         res = test_send_workflow(handle.get_workflow_uuid(), "testtopic")
         assert res == dest_uuid
+    begin_time = time.time()
     assert handle.get_result() == "test2-test1-test3"
+    duration = time.time() - begin_time
+    assert duration < 3.0  # Shouldn't take more than 3 seconds to run
+
+    # Test OAOO
+    with SetWorkflowUUID(send_uuid):
+        res = test_send_workflow(handle.get_workflow_uuid(), "testtopic")
+        assert res == dest_uuid
+        assert send_counter == 2
+
+    with SetWorkflowUUID(dest_uuid):
+        begin_time = time.time()
+        res = test_recv_workflow("testtopic")
+        duration = time.time() - begin_time
+        assert duration < 3.0
+        assert res == "test2-test1-test3"
+        assert recv_counter == 2
