@@ -144,6 +144,7 @@ class DBOS:
                 ctx = get_local_dbos_context()
                 if ctx and ctx.is_workflow():
                     with EnterDBOSChildWorkflow():
+                        ctx = assert_current_dbos_context()  # Now the child ctx
                         status = self._init_workflow(
                             ctx,
                             inputs=inputs,
