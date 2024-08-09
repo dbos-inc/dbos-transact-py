@@ -245,7 +245,7 @@ def test_start_workflow(dbos: DBOS) -> None:
     assert wf_counter == 3
 
 
-def test_fastapi_imports(dbos: DBOS) -> None:
+def test_without_fastapi(dbos: DBOS) -> None:
     """
     Since DBOS does not depend on FastAPI directly, verify DBOS works in an environment with FastAPI.
     """
