@@ -1,10 +1,11 @@
 import glob
 import os
 import subprocess
-from typing import Any, Generator
+from typing import Any, Generator, Tuple
 
 import pytest
 import sqlalchemy as sa
+from fastapi import FastAPI
 
 from dbos_transact import DBOS, ConfigFile
 
@@ -57,9 +58,7 @@ def postgres_db_engine() -> sa.Engine:
 
 
 @pytest.fixture()
-def dbos(
-    config: ConfigFile, postgres_db_engine: sa.Engine
-) -> Generator[DBOS, Any, None]:
+def cleanup_test_databases(config: ConfigFile, postgres_db_engine: sa.Engine) -> None:
     app_db_name = config["database"]["app_db_name"]
     sys_db_name = f"{app_db_name}_dbos_sys"
 
@@ -72,8 +71,24 @@ def dbos(
     os.environ.pop("DBOS__VMID") if "DBOS__VMID" in os.environ else None
     os.environ.pop("DBOS__APPVERSION") if "DBOS__APPVERSION" in os.environ else None
     os.environ.pop("DBOS__APPID") if "DBOS__APPID" in os.environ else None
-    dbos = DBOS(config)
+
+
+@pytest.fixture()
+def dbos(
+    config: ConfigFile, cleanup_test_databases: None
+) -> Generator[DBOS, Any, None]:
+    dbos = DBOS(config=config)
     yield dbos
+    dbos.destroy()
+
+
+@pytest.fixture()
+def dbos_fastapi(
+    config: ConfigFile, cleanup_test_databases: None
+) -> Generator[Tuple[DBOS, FastAPI], Any, None]:
+    app = FastAPI()
+    dbos = DBOS(fastapi=app, config=config)
+    yield dbos, app
     dbos.destroy()
 
 

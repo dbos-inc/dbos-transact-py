@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from logging import Logger
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Generic,
@@ -17,6 +18,8 @@ from typing import (
     cast,
 )
 
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 from sqlalchemy.orm import Session
 
 if sys.version_info < (3, 10):
@@ -28,6 +31,7 @@ import dbos_transact.utils as utils
 from dbos_transact.admin_sever import AdminServer
 from dbos_transact.context import (
     DBOSContext,
+    DBOSContextEnsure,
     DBOSContextSwap,
     EnterDBOSChildWorkflow,
     EnterDBOSCommunicator,
@@ -53,6 +57,9 @@ from .system_database import (
     WorkflowInputs,
     WorkflowStatusInternal,
 )
+
+if TYPE_CHECKING:
+    from .fastapi import Request
 
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
@@ -109,7 +116,9 @@ def classproperty(func: Callable[..., G]) -> ClassPropertyDescriptor[G]:
 
 
 class DBOS:
-    def __init__(self, config: Optional[ConfigFile] = None) -> None:
+    def __init__(
+        self, fastapi: Optional["FastAPI"] = None, config: Optional[ConfigFile] = None
+    ) -> None:
         if config is None:
             config = load_config()
         config_logger(config)
@@ -121,6 +130,10 @@ class DBOS:
         self.executor = ThreadPoolExecutor(max_workers=64)
         self.admin_server = AdminServer(dbos=self)
         self._run_startup_recovery_thread = True
+        if fastapi is not None:
+            from dbos_transact.fastapi import setup_fastapi_middleware
+
+            setup_fastapi_middleware(fastapi)
         if not os.environ.get("DBOS__VMID"):
             workflow_ids = self.sys_db.get_pending_workflows("local")
             self.executor.submit(self._startup_recovery_thread, workflow_ids)
@@ -202,7 +215,11 @@ class DBOS:
                     cur_ctx.workflow_uuid + "-" + str(cur_ctx.function_id)
                 )
 
-        new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
+        new_wf_ctx = (
+            DBOSContext()
+            if cur_ctx is None
+            else cur_ctx.create_child() if cur_ctx.is_within_workflow() else cur_ctx
+        )
         new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
         new_wf_uuid = new_wf_ctx.id_assigned_for_next_workflow
 
@@ -239,6 +256,9 @@ class DBOS:
             "app_id": ctx.app_id,
             "app_version": ctx.app_version,
             "executor_id": ctx.executor_id,
+            "request": (
+                utils.serialize(ctx.request) if ctx.request is not None else None
+            ),
         }
         self.sys_db.update_workflow_status(status)
 
@@ -434,8 +454,12 @@ class DBOS:
             raise DBOSWorkflowFunctionNotFoundError(
                 workflow_uuid, "Workflow function not found"
             )
-        with SetWorkflowUUID(workflow_uuid):
-            return self.start_workflow(wf_func, *inputs["args"], **inputs["kwargs"])
+        with DBOSContextEnsure():
+            ctx = assert_current_dbos_context()
+            request = status["request"]
+            ctx.request = utils.deserialize(request) if request is not None else None
+            with SetWorkflowUUID(workflow_uuid):
+                return self.start_workflow(wf_func, *inputs["args"], **inputs["kwargs"])
 
     def recover_pending_workflows(
         self, executor_ids: List[str] = ["local"]
@@ -485,6 +509,11 @@ class DBOS:
         ctx = assert_current_dbos_context()
         assert ctx.is_within_workflow()
         return ctx.parent_workflow_uuid
+
+    @classproperty
+    def request(cls) -> Optional["Request"]:
+        ctx = assert_current_dbos_context()
+        return ctx.request
 
     def _startup_recovery_thread(self, workflow_ids: List[str]) -> None:
         """

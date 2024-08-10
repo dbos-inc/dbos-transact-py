@@ -46,6 +46,7 @@ dev = [
     "requests>=2.32.3",
     "types-requests>=2.32.0.20240712",
     "fastapi>=0.112.0",
+    "httpx>=0.27.0",
     "types-psycopg2>=2.9.21.20240417",
 ]
 

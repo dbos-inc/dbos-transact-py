@@ -1,5 +1,10 @@
+import importlib
+import sys
 import time
 import uuid
+from importlib.abc import MetaPathFinder
+from importlib.machinery import ModuleSpec
+from typing import Any, Optional
 
 import pytest
 import sqlalchemy as sa
@@ -237,6 +242,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
             "executor_id": None,
             "app_id": None,
             "app_version": None,
+            "request": None,
         }
     )
 
@@ -274,11 +280,12 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
             "executor_id": None,
             "app_id": None,
             "app_version": None,
+            "request": None,
         }
     )
 
     dbos.destroy()
-    dbos.__init__(config)  # type: ignore
+    dbos.__init__(config=config)  # type: ignore
 
     @dbos.workflow()  # type: ignore
     def test_workflow(var: str) -> str:
@@ -328,6 +335,45 @@ def test_start_workflow(dbos: DBOS) -> None:
         assert test_workflow("bob", "bob") == "bob1bob"
     assert txn_counter == 1
     assert wf_counter == 3
+
+
+def test_without_fastapi(dbos: DBOS) -> None:
+    """
+    Since DBOS does not depend on FastAPI directly, verify DBOS works in an environment without FastAPI.
+    """
+    # Unimport FastAPI
+    for module_name in list(sys.modules.keys()):
+        if module_name == "fastapi" or module_name.startswith("fastapi."):
+            del sys.modules[module_name]
+
+    # Throw an error if FastAPI is imported
+    class FastAPIBlocker(MetaPathFinder):
+        def find_spec(
+            self, fullname: str, path: Any = None, target: Any = None
+        ) -> Optional[ModuleSpec]:
+            if fullname == "fastapi" or fullname.startswith("fastapi."):
+                raise ImportError(f"Illegal FastAPI import detected: {fullname}")
+            return None
+
+    blocker = FastAPIBlocker()
+    sys.meta_path.insert(0, blocker)
+
+    # Reload all DBOS modules, verifying none import FastAPI
+    try:
+        for module_name in dict(sys.modules.items()):
+            module = sys.modules[module_name]
+            if module_name == "dbos_transact" or module_name.startswith(
+                "dbos_transact."
+            ):
+                importlib.reload(module)
+    finally:
+        sys.meta_path.remove(blocker)
+
+    @dbos.workflow()
+    def test_workflow(var: str) -> str:
+        return var
+
+    assert test_workflow("bob") == "bob"
 
 
 def test_sleep(dbos: DBOS) -> None:

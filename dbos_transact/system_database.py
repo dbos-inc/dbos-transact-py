@@ -49,6 +49,7 @@ class WorkflowStatusInternal(TypedDict):
     executor_id: Optional[str]
     app_version: Optional[str]
     app_id: Optional[str]
+    request: Optional[str]  # JSON (jsonpickle)
 
 
 class RecordedResult(TypedDict):
@@ -150,6 +151,7 @@ class SystemDatabase:
                     executor_id=status["executor_id"],
                     application_version=status["app_version"],
                     application_id=status["app_id"],
+                    request=status["request"],
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid"],
@@ -169,6 +171,7 @@ class SystemDatabase:
                 sa.select(
                     SystemSchema.workflow_status.c.status,
                     SystemSchema.workflow_status.c.name,
+                    SystemSchema.workflow_status.c.request,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -182,6 +185,7 @@ class SystemDatabase:
                 "app_id": None,
                 "app_version": None,
                 "executor_id": None,
+                "request": row[2],
             }
             return status
 
