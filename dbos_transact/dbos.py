@@ -251,7 +251,9 @@ class DBOS:
             "app_id": ctx.app_id,
             "app_version": ctx.app_version,
             "executor_id": ctx.executor_id,
-            "request": utils.serialize(ctx.request),
+            "request": (
+                utils.serialize(ctx.request) if ctx.request is not None else None
+            ),
         }
         self.sys_db.update_workflow_status(status)
 
@@ -420,8 +422,7 @@ class DBOS:
         with DBOSContextEnsure():
             ctx = assert_current_dbos_context()
             request = status["request"]
-            assert request is not None
-            ctx.request = utils.deserialize(request)
+            ctx.request = utils.deserialize(request) if request is not None else None
             with SetWorkflowUUID(workflow_uuid):
                 return self.start_workflow(wf_func, *inputs["args"], **inputs["kwargs"])
 
