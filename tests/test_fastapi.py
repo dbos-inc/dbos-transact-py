@@ -39,16 +39,24 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     dbos, app = dbos_fastapi
     client = TestClient(app)
 
-    @app.get("/{var1}")
     @dbos.workflow()
     def test_workflow(var1: str) -> dict[str, str]:
         assert DBOS.request is not None
-        return {"output": var1 + DBOS.workflow_id}
+        return var1, DBOS.workflow_id
+
+    @app.get("/{var1}/{var2}")
+    def test_endpoint(var1: str, var2: str) -> dict[str, str]:
+        res1, id1 = test_workflow(var1)
+        res2, id2 = test_workflow(var2)
+        return {"res1": res1, "res2": res2, "id1": id1, "id2": id2}
 
     wfuuid = str(uuid.uuid4())
-    response = client.get("/bob", headers={"dbos-idempotency-key": wfuuid})
+    response = client.get("/a/b", headers={"dbos-idempotency-key": wfuuid})
     assert response.status_code == 200
-    assert response.json() == {"output": f"bob{wfuuid}"}
+    assert response.json().get("res1") == "a"
+    assert response.json().get("res2") == "b"
+    assert response.json().get("id1") == wfuuid
+    assert response.json().get("id2") != wfuuid
 
     # Change the workflow status to pending
     dbos.sys_db.update_workflow_status(
@@ -68,4 +76,4 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     # Recovery should execute the workflow again but skip the transaction
     workflow_handles = dbos.recover_pending_workflows()
     assert len(workflow_handles) == 1
-    assert workflow_handles[0].get_result() == {"output": f"bob{wfuuid}"}
+    assert workflow_handles[0].get_result() == ("a", wfuuid)
