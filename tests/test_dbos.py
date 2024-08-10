@@ -368,3 +368,9 @@ def test_without_fastapi(dbos: DBOS) -> None:
                 importlib.reload(module)
     finally:
         sys.meta_path.remove(blocker)
+
+    @dbos.workflow()
+    def test_workflow(var: str) -> str:
+        return var
+
+    assert test_workflow("bob") == "bob"
