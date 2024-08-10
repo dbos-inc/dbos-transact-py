@@ -48,7 +48,10 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     @app.get("/{var1}/{var2}")
     def test_endpoint(var1: str, var2: str) -> dict[str, str]:
-        assert DBOS.request.headers["dbos-idempotency-key"] == wfuuid
+        assert (
+            DBOS.request is not None
+            and DBOS.request.headers["dbos-idempotency-key"] == wfuuid
+        )
         res1, id1 = test_workflow(var1)
         res2, id2 = test_workflow(var2)
         return {"res1": res1, "res2": res2, "id1": id1, "id2": id2}
