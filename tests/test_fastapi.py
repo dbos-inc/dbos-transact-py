@@ -40,7 +40,7 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     client = TestClient(app)
 
     @dbos.workflow()
-    def test_workflow(var1: str) -> dict[str, str]:
+    def test_workflow(var1: str) -> tuple[str, str]:
         assert DBOS.request is not None
         return var1, DBOS.workflow_id
 
