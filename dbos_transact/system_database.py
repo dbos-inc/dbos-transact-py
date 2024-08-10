@@ -127,7 +127,7 @@ class SystemDatabase:
             psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
         )
         self.notification_cursor = self.notification_conn.cursor()
-        self.notification_map: Dict[str, threading.Condition] = {}
+        self.notifications_map: Dict[str, threading.Condition] = {}
         self._run_notification_listener = True
 
     # Destroy the pool when finished
@@ -338,7 +338,7 @@ class SystemDatabase:
             # Wait for the notification
             payload = f"{workflow_uuid}::{topic}"
             condition = threading.Condition()
-            self.notification_map[payload] = condition
+            self.notifications_map[payload] = condition
             condition.acquire()
             # Support OAOO sleep
             actual_timeout = self.sleep(
@@ -346,6 +346,7 @@ class SystemDatabase:
             )
             condition.wait(timeout=actual_timeout)
             condition.release()
+            self.notifications_map.pop(payload)
 
         # Transactionally consume and return the message if it's in the database, otherwise return null.
         with self.engine.begin() as c:
@@ -405,8 +406,8 @@ class SystemDatabase:
                         f"Received notification on channel: {channel}, payload: {notify.payload}"
                     )
                     if channel == "dbos_notifications_channel":
-                        if notify.payload and notify.payload in self.notification_map:
-                            condition = self.notification_map[notify.payload]
+                        if notify.payload and notify.payload in self.notifications_map:
+                            condition = self.notifications_map[notify.payload]
                             condition.acquire()
                             condition.notify_all()
                             condition.release()
