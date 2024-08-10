@@ -1,16 +1,24 @@
 import os
+import select
+import threading
+import time
 from enum import Enum
-from typing import Any, Literal, Optional, TypedDict
+from typing import Any, Dict, Literal, Optional, Sequence, TypedDict
 
+import psycopg2
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 from alembic import command
 from alembic.config import Config
 
 import dbos_transact.utils as utils
-from dbos_transact.error import DBOSWorkflowConflictUUIDError
+from dbos_transact.error import (
+    DBOSNonExistentWorkflowError,
+    DBOSWorkflowConflictUUIDError,
+)
 
 from .dbos_config import ConfigFile
+from .logger import dbos_logger
 from .schemas.system_database import SystemSchema
 
 
@@ -53,6 +61,9 @@ class OperationResultInternal(TypedDict):
     function_id: int
     output: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
+
+
+dbos_null_topic = "__null__topic__"
 
 
 class SystemDatabase:
@@ -108,8 +119,22 @@ class SystemDatabase:
         )
         command.upgrade(alembic_cfg, "head")
 
+        # Start the notification listener
+        self.notification_conn = psycopg2.connect(
+            system_db_url.render_as_string(hide_password=False)
+        )
+        self.notification_conn.set_isolation_level(
+            psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
+        )
+        self.notification_cursor = self.notification_conn.cursor()
+        self.notifications_map: Dict[str, threading.Condition] = {}
+        self._run_notification_listener = True
+
     # Destroy the pool when finished
     def destroy(self) -> None:
+        self._run_notification_listener = False
+        self.notification_cursor.close()
+        self.notification_conn.close()
         self.engine.dispose()
 
     def update_workflow_status(self, status: WorkflowStatusInternal) -> None:
@@ -194,42 +219,230 @@ class SystemDatabase:
             ).fetchall()
             return [row[0] for row in rows]
 
-    def record_operation_result(self, result: OperationResultInternal) -> None:
+    def record_operation_result(
+        self, result: OperationResultInternal, conn: Optional[sa.Connection] = None
+    ) -> None:
         error = result["error"]
         output = result["output"]
         assert error is None or output is None, "Only one of error or output can be set"
+        sql = pg.insert(SystemSchema.operation_outputs).values(
+            workflow_uuid=result["workflow_uuid"],
+            function_id=result["function_id"],
+            output=output,
+            error=error,
+        )
+        try:
+            if conn is not None:
+                conn.execute(sql)
+            else:
+                with self.engine.begin() as c:
+                    c.execute(sql)
+        except sa.exc.IntegrityError:
+            raise DBOSWorkflowConflictUUIDError(result["workflow_uuid"])
+        except Exception as e:
+            raise e
+
+    def check_operation_execution(
+        self, workflow_uuid: str, function_id: int, conn: Optional[sa.Connection] = None
+    ) -> Optional[RecordedResult]:
+        sql = sa.select(
+            SystemSchema.operation_outputs.c.output,
+            SystemSchema.operation_outputs.c.error,
+        ).where(
+            SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
+            SystemSchema.operation_outputs.c.function_id == function_id,
+        )
+
+        # If in a transaction, use the provided connection
+        rows: Sequence[Any]
+        if conn is not None:
+            rows = conn.execute(sql).all()
+        else:
+            with self.engine.begin() as c:
+                rows = c.execute(sql).all()
+        if len(rows) == 0:
+            return None
+        result: RecordedResult = {
+            "output": rows[0][0],
+            "error": rows[0][1],
+        }
+        return result
+
+    def send(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        destination_uuid: str,
+        message: Any,
+        topic: Optional[str] = None,
+    ) -> None:
+        topic = topic if topic is not None else dbos_null_topic
         with self.engine.begin() as c:
+            recorded_output = self.check_operation_execution(
+                workflow_uuid, function_id, conn=c
+            )
+            if recorded_output is not None:
+                return  # Already sent before
+
             try:
                 c.execute(
-                    pg.insert(SystemSchema.operation_outputs).values(
-                        workflow_uuid=result["workflow_uuid"],
-                        function_id=result["function_id"],
-                        output=output,
-                        error=error,
+                    pg.insert(SystemSchema.notifications).values(
+                        destination_uuid=destination_uuid,
+                        topic=topic,
+                        message=utils.serialize(message),
                     )
                 )
             except sa.exc.IntegrityError:
-                raise DBOSWorkflowConflictUUIDError(result["workflow_uuid"])
+                raise DBOSNonExistentWorkflowError(destination_uuid)
             except Exception as e:
                 raise e
-
-    def check_operation_execution(
-        self, workflow_uuid: str, function_id: int
-    ) -> Optional[RecordedResult]:
-        with self.engine.begin() as c:
-            rows = c.execute(
-                sa.select(
-                    SystemSchema.operation_outputs.c.output,
-                    SystemSchema.operation_outputs.c.error,
-                ).where(
-                    SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
-                    SystemSchema.operation_outputs.c.function_id == function_id,
-                )
-            ).all()
-            if len(rows) == 0:
-                return None
-            result: RecordedResult = {
-                "output": rows[0][0],
-                "error": rows[0][1],
+            output: OperationResultInternal = {
+                "workflow_uuid": workflow_uuid,
+                "function_id": function_id,
+                "output": None,
+                "error": None,
             }
-            return result
+            self.record_operation_result(output, conn=c)
+
+    def recv(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        timeout_function_id: int,
+        topic: Optional[str],
+        timeout_seconds: float = 60,
+    ) -> Any:
+        topic = topic if topic is not None else dbos_null_topic
+
+        # First, check for previous executions.
+        recorded_output = self.check_operation_execution(workflow_uuid, function_id)
+        if recorded_output is not None:
+            if recorded_output["output"] is not None:
+                return utils.deserialize(recorded_output["output"])
+            else:
+                raise Exception("No output recorded in the last recv")
+
+        # Check if the key is already in teh database. If not, wait for the notification.
+        init_recv: Sequence[Any]
+        with self.engine.begin() as c:
+            init_recv = c.execute(
+                sa.select(
+                    SystemSchema.notifications.c.topic,
+                ).where(
+                    SystemSchema.notifications.c.destination_uuid == workflow_uuid,
+                    SystemSchema.notifications.c.topic == topic,
+                )
+            ).fetchall()
+
+        if len(init_recv) == 0:
+            # Wait for the notification
+            payload = f"{workflow_uuid}::{topic}"
+            condition = threading.Condition()
+            self.notifications_map[payload] = condition
+            condition.acquire()
+            # Support OAOO sleep
+            actual_timeout = self.sleep(
+                workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
+            )
+            condition.wait(timeout=actual_timeout)
+            condition.release()
+            self.notifications_map.pop(payload)
+
+        # Transactionally consume and return the message if it's in the database, otherwise return null.
+        with self.engine.begin() as c:
+            oldest_entry_cte = (
+                sa.select(
+                    SystemSchema.notifications.c.destination_uuid,
+                    SystemSchema.notifications.c.topic,
+                    SystemSchema.notifications.c.message,
+                    SystemSchema.notifications.c.created_at_epoch_ms,
+                )
+                .where(
+                    SystemSchema.notifications.c.destination_uuid == workflow_uuid,
+                    SystemSchema.notifications.c.topic == topic,
+                )
+                .order_by(SystemSchema.notifications.c.created_at_epoch_ms.asc())
+                .limit(1)
+                .cte("oldest_entry")
+            )
+            delete_stmt = (
+                sa.delete(SystemSchema.notifications)
+                .where(
+                    SystemSchema.notifications.c.destination_uuid
+                    == oldest_entry_cte.c.destination_uuid,
+                    SystemSchema.notifications.c.topic == oldest_entry_cte.c.topic,
+                    SystemSchema.notifications.c.created_at_epoch_ms
+                    == oldest_entry_cte.c.created_at_epoch_ms,
+                )
+                .returning(SystemSchema.notifications.c.message)
+            )
+            rows = c.execute(delete_stmt).fetchall()
+            message: Any = None
+            if len(rows) > 0:
+                message = utils.deserialize(rows[0][0])
+            self.record_operation_result(
+                {
+                    "workflow_uuid": workflow_uuid,
+                    "function_id": function_id,
+                    "output": rows[0][0],
+                    "error": None,
+                }
+            )
+        return message
+
+    def _notification_listener(self) -> None:
+        # Listen to notifications
+        dbos_logger.info("Listening to notifications")
+        self.notification_cursor.execute("LISTEN dbos_notifications_channel")
+        while self._run_notification_listener:
+            if select.select([self.notification_conn], [], [], 60) == ([], [], []):
+                continue
+            else:
+                self.notification_conn.poll()
+                while self.notification_conn.notifies:
+                    notify = self.notification_conn.notifies.pop(0)
+                    channel = notify.channel
+                    dbos_logger.debug(
+                        f"Received notification on channel: {channel}, payload: {notify.payload}"
+                    )
+                    if channel == "dbos_notifications_channel":
+                        if notify.payload and notify.payload in self.notifications_map:
+                            condition = self.notifications_map[notify.payload]
+                            condition.acquire()
+                            condition.notify_all()
+                            condition.release()
+                            dbos_logger.debug(
+                                f"Signaled condition for {notify.payload}"
+                            )
+                    else:
+                        dbos_logger.error(f"Unknown channel: {channel}")
+
+    def sleep(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        seconds: float,
+        skip_sleep: bool = False,
+    ) -> float:
+        recorded_output = self.check_operation_execution(workflow_uuid, function_id)
+        end_time: float
+        if recorded_output is not None:
+            assert recorded_output["output"] is not None, "no recorded end time"
+            end_time = utils.deserialize(recorded_output["output"])
+        else:
+            end_time = time.time() + seconds
+            try:
+                self.record_operation_result(
+                    {
+                        "workflow_uuid": workflow_uuid,
+                        "function_id": function_id,
+                        "output": utils.serialize(end_time),
+                        "error": None,
+                    }
+                )
+            except DBOSWorkflowConflictUUIDError:
+                pass
+        duration = max(0, end_time - time.time())
+        if not skip_sleep:
+            time.sleep(duration)
+        return duration

@@ -328,3 +328,79 @@ def test_start_workflow(dbos: DBOS) -> None:
         assert test_workflow("bob", "bob") == "bob1bob"
     assert txn_counter == 1
     assert wf_counter == 3
+
+
+def test_sleep(dbos: DBOS) -> None:
+    @dbos.workflow()
+    def test_sleep_workfow(secs: float) -> str:
+        dbos.sleep(secs)
+        return DBOS.workflow_id
+
+    start_time = time.time()
+    sleep_uuid = test_sleep_workfow(1.5)
+    assert time.time() - start_time > 1.4
+
+    # Test sleep OAOO, skip sleep
+    start_time = time.time()
+    with SetWorkflowUUID(sleep_uuid):
+        assert test_sleep_workfow(1.5) == sleep_uuid
+        assert time.time() - start_time < 0.3
+
+
+def test_send_recv(dbos: DBOS) -> None:
+    send_counter: int = 0
+    recv_counter: int = 0
+
+    @dbos.workflow()
+    def test_send_workflow(dest_uuid: str, topic: str) -> str:
+        dbos.send(dest_uuid, "test1")
+        dbos.send(dest_uuid, "test2", topic=topic)
+        dbos.send(dest_uuid, "test3")
+        nonlocal send_counter
+        send_counter += 1
+        return dest_uuid
+
+    @dbos.workflow()
+    def test_recv_workflow(topic: str) -> str:
+        msg1 = dbos.recv(topic, timeout_seconds=10)
+        msg2 = dbos.recv(timeout_seconds=10)
+        msg3 = dbos.recv(timeout_seconds=10)
+        nonlocal recv_counter
+        recv_counter += 1
+        return "-".join([str(msg1), str(msg2), str(msg3)])
+
+    dest_uuid = str(uuid.uuid4())
+
+    # Send to non-existent uuid should fail
+    with pytest.raises(Exception) as exc_info:
+        test_send_workflow(dest_uuid, "testtopic")
+    assert f"Sent to non-existent destination workflow UUID: {dest_uuid}" in str(
+        exc_info.value
+    )
+
+    with SetWorkflowUUID(dest_uuid):
+        handle = dbos.start_workflow(test_recv_workflow, "testtopic")
+        assert handle.get_workflow_uuid() == dest_uuid
+
+    send_uuid = str(uuid.uuid4())
+    with SetWorkflowUUID(send_uuid):
+        res = test_send_workflow(handle.get_workflow_uuid(), "testtopic")
+        assert res == dest_uuid
+    begin_time = time.time()
+    assert handle.get_result() == "test2-test1-test3"
+    duration = time.time() - begin_time
+    assert duration < 3.0  # Shouldn't take more than 3 seconds to run
+
+    # Test OAOO
+    with SetWorkflowUUID(send_uuid):
+        res = test_send_workflow(handle.get_workflow_uuid(), "testtopic")
+        assert res == dest_uuid
+        assert send_counter == 2
+
+    with SetWorkflowUUID(dest_uuid):
+        begin_time = time.time()
+        res = test_recv_workflow("testtopic")
+        duration = time.time() - begin_time
+        assert duration < 3.0
+        assert res == "test2-test1-test3"
+        assert recv_counter == 2

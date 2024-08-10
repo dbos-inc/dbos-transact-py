@@ -1,4 +1,5 @@
 import os
+import select
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -124,12 +125,15 @@ class DBOS:
             workflow_ids = self.sys_db.get_pending_workflows("local")
             self.executor.submit(self._startup_recovery_thread, workflow_ids)
 
+        # Listen to notifications
+        self.executor.submit(self.sys_db._notification_listener)
+
     def destroy(self) -> None:
         self._run_startup_recovery_thread = False
         self.sys_db.destroy()
         self.app_db.destroy()
         self.admin_server.stop()
-        self.executor.shutdown()
+        self.executor.shutdown(cancel_futures=True)
 
     def workflow(self) -> Callable[[Workflow[P, R]], Workflow[P, R]]:
         def decorator(func: Workflow[P, R]) -> Workflow[P, R]:
@@ -200,6 +204,7 @@ class DBOS:
 
         new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
         new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
+        new_wf_uuid = new_wf_ctx.id_assigned_for_next_workflow
 
         status = self._init_workflow(
             new_wf_ctx,
@@ -215,7 +220,7 @@ class DBOS:
             *args,
             **kwargs,
         )
-        return WorkflowHandle(new_wf_ctx.id_assigned_for_next_workflow, future)
+        return WorkflowHandle(new_wf_uuid, future)
 
     def _init_workflow(
         self, ctx: DBOSContext, inputs: WorkflowInputs, wf_name: str
@@ -359,12 +364,12 @@ class DBOS:
                         ctx.workflow_uuid, ctx.function_id
                     )
                     if recorded_output:
-                        if recorded_output["error"]:
+                        if recorded_output["error"] is not None:
                             deserialized_error = utils.deserialize(
                                 recorded_output["error"]
                             )
                             raise deserialized_error
-                        elif recorded_output["output"]:
+                        elif recorded_output["output"] is not None:
                             return utils.deserialize(recorded_output["output"])
                         else:
                             raise Exception("Output and error are both None")
@@ -383,6 +388,36 @@ class DBOS:
             return cast(Communicator, wrapper)
 
         return decorator
+
+    def send(
+        self, destination_uuid: str, message: Any, topic: Optional[str] = None
+    ) -> None:
+        with EnterDBOSCommunicator() as ctx:
+            self.sys_db.send(
+                ctx.workflow_uuid,
+                ctx.curr_comm_function_id,
+                destination_uuid,
+                message,
+                topic,
+            )
+
+    def recv(self, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
+        with EnterDBOSCommunicator() as ctx:
+            ctx.function_id += 1  # Reserve for the sleep
+            timeout_function_id = ctx.function_id
+            return self.sys_db.recv(
+                ctx.workflow_uuid,
+                ctx.curr_comm_function_id,
+                timeout_function_id,
+                topic,
+                timeout_seconds,
+            )
+
+    def sleep(self, seconds: float) -> None:
+        if seconds <= 0:
+            return
+        with EnterDBOSCommunicator() as ctx:
+            self.sys_db.sleep(ctx.workflow_uuid, ctx.curr_comm_function_id, seconds)
 
     def execute_workflow_uuid(self, workflow_uuid: str) -> WorkflowHandle[Any]:
         """
