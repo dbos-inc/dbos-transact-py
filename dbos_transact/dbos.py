@@ -1,5 +1,4 @@
 import os
-import select
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor

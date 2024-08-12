@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 from sqlalchemy.orm import Session
 
 from .logger import dbos_logger
+from .tracer import dbos_tracer
 
 
 class DBOSContext:
@@ -34,6 +35,11 @@ class DBOSContext:
         self.curr_comm_function_id: int = -1
         self.curr_tx_function_id: int = -1
         self.sql_session: Optional[Session] = None
+
+        self.span = dbos_tracer.start_span()
+
+    def close(self) -> None:
+        dbos_tracer.end_span(self.span)
 
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()
@@ -108,6 +114,9 @@ def set_local_dbos_context(ctx: Optional[DBOSContext]) -> None:
 
 
 def clear_local_dbos_context() -> None:
+    ctx = dbos_context_var.get()
+    if ctx is not None:
+        ctx.close()
     dbos_context_var.set(None)
 
 
