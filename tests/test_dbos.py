@@ -417,6 +417,11 @@ def test_send_recv(dbos: DBOS) -> None:
         recv_counter += 1
         return "-".join([str(msg1), str(msg2), str(msg3)])
 
+    @dbos.workflow()
+    def test_recv_timeout(timeout_seconds: float) -> Optional[str]:
+        msg = dbos.recv(timeout_seconds=timeout_seconds)
+        return str(msg) if msg is not None else None
+
     dest_uuid = str(uuid.uuid4())
 
     # Send to non-existent uuid should fail
@@ -439,6 +444,14 @@ def test_send_recv(dbos: DBOS) -> None:
     duration = time.time() - begin_time
     assert duration < 3.0  # Shouldn't take more than 3 seconds to run
 
+    timeout_uuid = str(uuid.uuid4())
+    with SetWorkflowUUID(timeout_uuid):
+        begin_time = time.time()
+        timeoutres = test_recv_timeout(1.0)
+        duration = time.time() - begin_time
+        assert duration > 0.7
+        assert timeoutres is None
+
     # Test OAOO
     with SetWorkflowUUID(send_uuid):
         res = test_send_workflow(handle.get_workflow_uuid(), "testtopic")
@@ -453,24 +466,26 @@ def test_send_recv(dbos: DBOS) -> None:
         assert res == "test2-test1-test3"
         assert recv_counter == 2
 
+    with SetWorkflowUUID(timeout_uuid):
+        begin_time = time.time()
+        timeoutres = test_recv_timeout(1.0)
+        duration = time.time() - begin_time
+        assert duration < 0.3
+        assert timeoutres is None
+
 
 def test_set_get_events(dbos: DBOS) -> None:
-    set_counter: int = 0
-    get_counter: int = 0
-
     @dbos.workflow()
     def test_setevent_workflow() -> None:
         dbos.set_event("key1", "value1")
         dbos.set_event("key2", "value2")
-        nonlocal set_counter
-        set_counter += 1
 
     @dbos.workflow()
-    def test_getevent_workflow(target_uuid: str, key: str) -> str:
-        msg = str(dbos.get_event(target_uuid, key, timeout_seconds=10))
-        nonlocal get_counter
-        get_counter += 1
-        return msg
+    def test_getevent_workflow(
+        target_uuid: str, key: str, timeout_seconds: float = 10
+    ) -> Optional[str]:
+        msg = dbos.get_event(target_uuid, key, timeout_seconds)
+        return str(msg) if msg is not None else None
 
     wfuuid = str(uuid.uuid4())
     with SetWorkflowUUID(wfuuid):
@@ -483,3 +498,39 @@ def test_set_get_events(dbos: DBOS) -> None:
 
     value2 = test_getevent_workflow(wfuuid, "key2")
     assert value2 == "value2"
+
+    # Run getEvent outside of a workflow
+    value1 = dbos.get_event(wfuuid, "key1")
+    assert value1 == "value1"
+
+    value2 = dbos.get_event(wfuuid, "key2")
+    assert value2 == "value2"
+
+    # Test OAOO
+    timeout_uuid = str(uuid.uuid4())
+    with SetWorkflowUUID(timeout_uuid):
+        begin_time = time.time()
+        res = test_getevent_workflow("non-existent-uuid", "key1", 1.0)
+        duration = time.time() - begin_time
+        assert duration > 0.7
+        assert res is None
+
+    with SetWorkflowUUID(timeout_uuid):
+        begin_time = time.time()
+        res = test_getevent_workflow("non-existent-uuid", "key1", 1.0)
+        duration = time.time() - begin_time
+        assert duration < 0.3
+        assert res is None
+
+    # No OAOO for getEvent outside of a workflow
+    begin_time = time.time()
+    res = dbos.get_event("non-existent-uuid", "key1", 1.0)
+    duration = time.time() - begin_time
+    assert duration > 0.7
+    assert res is None
+
+    begin_time = time.time()
+    res = dbos.get_event("non-existent-uuid", "key1", 1.0)
+    duration = time.time() - begin_time
+    assert duration > 0.7
+    assert res is None
