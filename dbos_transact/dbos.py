@@ -143,11 +143,13 @@ class DBOS:
         self.executor.submit(self.sys_db._notification_listener)
 
         # Register send_stub as a workflow
-        @self.workflow()
         def send_temp_workflow(
             destination_uuid: str, message: Any, topic: Optional[str]
         ) -> None:
             self.send(destination_uuid, message, topic)
+
+        temp_send_wf = self.workflow_wrapper(send_temp_workflow)
+        self.register_wf_function("temp_send_workflow", temp_send_wf)
 
     def destroy(self) -> None:
         self._run_startup_recovery_thread = False
@@ -156,7 +158,7 @@ class DBOS:
         self.admin_server.stop()
         self.executor.shutdown(cancel_futures=True)
 
-    def workflow_decorator(self, func: Workflow[P, R]) -> Workflow[P, R]:
+    def workflow_wrapper(self, func: Workflow[P, R]) -> Workflow[P, R]:
         func.__orig_func = func  # type: ignore
 
         @wraps(func)
@@ -188,7 +190,14 @@ class DBOS:
                     return self._execute_workflow(status, func, *args, **kwargs)
 
         wrapped_func = cast(Workflow[P, R], wrapper)
-        self.workflow_info_map[func.__qualname__] = wrapped_func
+        return wrapped_func
+
+    def register_wf_function(self, name: str, wrapped_func: Workflow[P, R]) -> None:
+        self.workflow_info_map[name] = wrapped_func
+
+    def workflow_decorator(self, func: Workflow[P, R]) -> Workflow[P, R]:
+        wrapped_func = self.workflow_wrapper(func)
+        self.register_wf_function(func.__qualname__, wrapped_func)
         return wrapped_func
 
     def workflow(self) -> Callable[[Workflow[P, R]], Workflow[P, R]]:
@@ -490,9 +499,7 @@ class DBOS:
             assert ctx.is_workflow()
             return do_send(destination_uuid, message, topic)
         else:
-            wffn = self.workflow_info_map.get(
-                "DBOS.__init__.<locals>.send_temp_workflow"
-            )
+            wffn = self.workflow_info_map.get("temp_send_workflow")
             assert wffn
             wffn(destination_uuid, message, topic)
 
