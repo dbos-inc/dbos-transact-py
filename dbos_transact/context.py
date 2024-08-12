@@ -7,7 +7,7 @@ from enum import Enum
 from types import TracebackType
 from typing import TYPE_CHECKING, Literal, Optional, Type, TypedDict
 
-from opentelemetry.trace import Span
+from opentelemetry.trace import Span, Status, StatusCode
 
 if TYPE_CHECKING:
     from .fastapi import Request
@@ -80,10 +80,10 @@ class DBOSContext:
         self.function_id = 0
         self._start_span(attributes)
 
-    def end_workflow(self) -> None:
+    def end_workflow(self, exc_value: Optional[BaseException]) -> None:
         self.workflow_uuid = ""
         self.function_id = -1
-        self._end_span()
+        self._end_span(exc_value)
 
     def is_within_workflow(self) -> bool:
         return len(self.workflow_uuid) > 0
@@ -105,9 +105,9 @@ class DBOSContext:
         self.curr_comm_function_id = fid
         self._start_span(attributes)
 
-    def end_communicator(self) -> None:
+    def end_communicator(self, exc_value: Optional[BaseException]) -> None:
         self.curr_comm_function_id = -1
-        self._end_span()
+        self._end_span(exc_value)
 
     def start_transaction(
         self, ses: Session, fid: int, attributes: TracedAttributes
@@ -116,10 +116,10 @@ class DBOSContext:
         self.curr_tx_function_id = fid
         self._start_span(attributes)
 
-    def end_transaction(self) -> None:
+    def end_transaction(self, exc_value: Optional[BaseException]) -> None:
         self.sql_session = None
         self.curr_tx_function_id = -1
-        self._end_span()
+        self._end_span(exc_value)
 
     def _start_span(self, attributes: TracedAttributes) -> None:
         attributes["operationUUID"] = (
@@ -130,7 +130,13 @@ class DBOSContext:
         )
         self.spans.append(span)
 
-    def _end_span(self) -> None:
+    def _end_span(self, exc_value: Optional[BaseException]) -> None:
+        if exc_value is None:
+            self.spans[-1].set_status(Status(StatusCode.OK))
+        else:
+            self.spans[-1].set_status(
+                Status(StatusCode.ERROR, description=str(exc_value))
+            )
         dbos_tracer.end_span(self.spans.pop())
 
 
@@ -264,7 +270,7 @@ class EnterDBOSWorkflow:
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
         assert assert_current_dbos_context().is_within_workflow()
-        assert_current_dbos_context().end_workflow()
+        assert_current_dbos_context().end_workflow(exc_value)
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             clear_local_dbos_context()
@@ -299,7 +305,7 @@ class EnterDBOSChildWorkflow:
     ) -> Literal[False]:
         ctx = assert_current_dbos_context()
         assert ctx.is_within_workflow()
-        ctx.end_workflow()
+        ctx.end_workflow(exc_value)
         # Return to parent ctx
         assert self.parent_ctx
         set_local_dbos_context(self.parent_ctx)
@@ -325,7 +331,7 @@ class EnterDBOSCommunicator:
     ) -> Literal[False]:
         ctx = assert_current_dbos_context()
         assert ctx.is_communicator()
-        ctx.end_communicator()
+        ctx.end_communicator(exc_value)
         return False  # Did not handle
 
 
@@ -349,5 +355,5 @@ class EnterDBOSTransaction:
     ) -> Literal[False]:
         ctx = assert_current_dbos_context()
         assert ctx.is_transaction()
-        ctx.end_transaction()
+        ctx.end_transaction(exc_value)
         return False  # Did not handle
