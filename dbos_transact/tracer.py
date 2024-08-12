@@ -24,7 +24,7 @@ class DBOSTracer:
         context = trace.set_span_in_context(parent) if parent else None
         span: Span = tracer.start_span(name=attributes["name"], context=context)
         for k, v in attributes.items():
-            if v is not None and isinstance(v, (str, bool, int, float)):
+            if k != "name" and v is not None and isinstance(v, (str, bool, int, float)):
                 span.set_attribute(k, v)
         return span
 

@@ -32,6 +32,10 @@ class TracedAttributes(TypedDict, total=False):
     name: str
     operationUUID: Optional[str]
     operationType: Optional[str]
+    requestID: Optional[str]
+    requestIP: Optional[str]
+    requestURL: Optional[str]
+    requestMethod: Optional[str]
 
 
 class DBOSContext:
@@ -119,6 +123,12 @@ class DBOSContext:
     def end_transaction(self, exc_value: Optional[BaseException]) -> None:
         self.sql_session = None
         self.curr_tx_function_id = -1
+        self._end_span(exc_value)
+
+    def start_handler(self, attributes: TracedAttributes) -> None:
+        self._start_span(attributes)
+
+    def end_handler(self, exc_value: Optional[BaseException]) -> None:
         self._end_span(exc_value)
 
     def _start_span(self, attributes: TracedAttributes) -> None:
@@ -356,4 +366,33 @@ class EnterDBOSTransaction:
         ctx = assert_current_dbos_context()
         assert ctx.is_transaction()
         ctx.end_transaction(exc_value)
+        return False  # Did not handle
+
+
+class EnterDBOSHandler:
+    def __init__(self, attributes: TracedAttributes) -> None:
+        self.created_ctx = False
+        self.attributes = attributes
+
+    def __enter__(self) -> EnterDBOSHandler:
+        # Code to create a basic context
+        ctx = get_local_dbos_context()
+        if ctx is None:
+            self.created_ctx = True
+            set_local_dbos_context(DBOSContext())
+        ctx = assert_current_dbos_context()
+        ctx.start_handler(self.attributes)
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        ctx = assert_current_dbos_context()
+        ctx.end_handler(exc_value)
+        # Code to clean up the basic context if we created it
+        if self.created_ctx:
+            clear_local_dbos_context()
         return False  # Did not handle
