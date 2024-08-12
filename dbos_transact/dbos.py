@@ -17,6 +17,8 @@ from typing import (
     cast,
 )
 
+from .tracer import dbos_tracer
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
@@ -127,6 +129,7 @@ class DBOS:
         if config is None:
             config = load_config()
         config_logger(config)
+        dbos_tracer.config(config)
         dbos_logger.info("Initializing DBOS!")
         self.config = config
         self.sys_db = SystemDatabase(config)

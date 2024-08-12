@@ -1,3 +1,4 @@
+import os
 from typing import TYPE_CHECKING, Literal, Optional, Type, TypedDict
 
 from opentelemetry import trace
@@ -5,16 +6,19 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from opentelemetry.trace import Span
 
+from dbos_transact.dbos_config import ConfigFile
+
 if TYPE_CHECKING:
     from .context import TracedAttributes
 
 
 class DBOSTracer:
 
-    def __init__(self) -> None:
+    def config(self, config: ConfigFile) -> None:
         provider = TracerProvider()
-        processor = BatchSpanProcessor(ConsoleSpanExporter())
-        provider.add_span_processor(processor)
+        if os.environ.get("DBOS__CONSOLE_TRACES", None) is not None:
+            processor = BatchSpanProcessor(ConsoleSpanExporter())
+            provider.add_span_processor(processor)
         trace.set_tracer_provider(provider)
 
     def start_span(
