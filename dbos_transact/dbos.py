@@ -467,14 +467,43 @@ class DBOS:
     def send(
         self, destination_uuid: str, message: Any, topic: Optional[str] = None
     ) -> None:
-        with EnterDBOSCommunicator() as ctx:
-            self.sys_db.send(
-                ctx.workflow_uuid,
-                ctx.curr_comm_function_id,
-                destination_uuid,
-                message,
-                topic,
-            )
+        def do_send(destination_uuid: str, message: Any, topic: Optional[str]) -> None:
+            with EnterDBOSCommunicator() as ctx:
+                dbos_logger.info(
+                    f"Doing send: {destination_uuid}: {str(message)} / {topic}"
+                )
+                self.sys_db.send(
+                    ctx.workflow_uuid,
+                    ctx.curr_comm_function_id,
+                    destination_uuid,
+                    message,
+                    topic,
+                )
+
+        ctx = get_local_dbos_context()
+        if ctx and ctx.is_within_workflow():
+            assert ctx.is_workflow()
+            return do_send(destination_uuid, message, topic)
+        else:
+            with EnterDBOSTempWorkflow("send") as ctx:
+
+                def wf_stub(*args: Any, **kwargs: Any) -> Any:
+                    return do_send(*args, **kwargs)
+
+                inputs: WorkflowInputs = {
+                    "args": [destination_uuid, message, topic],
+                    "kwargs": {},
+                }
+
+                status = self._init_workflow(
+                    ctx,
+                    inputs=inputs,
+                    wf_name="send",
+                )
+
+                self._execute_workflow(
+                    status, wf_stub, destination_uuid, message, topic
+                )
 
     def recv(self, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
         with EnterDBOSCommunicator() as ctx:

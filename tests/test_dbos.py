@@ -476,3 +476,25 @@ def test_send_recv(dbos: DBOS) -> None:
         assert duration < 3.0
         assert res == "test2-test1-test3"
         assert recv_counter == 2
+
+
+def test_send_recv_temp_wf(dbos: DBOS) -> None:
+    recv_counter: int = 0
+
+    @dbos.workflow()
+    def test_send_recv_workflow(topic: str) -> str:
+        msg1 = dbos.recv(topic, timeout_seconds=10)
+        nonlocal recv_counter
+        recv_counter += 1
+        # TODO Set event back
+        return "-".join([str(msg1)])
+
+    dest_uuid = str(uuid.uuid4())
+
+    with SetWorkflowUUID(dest_uuid):
+        handle = dbos.start_workflow(test_send_recv_workflow, "testtopic")
+        assert handle.get_workflow_uuid() == dest_uuid
+
+    dbos.send(dest_uuid, "testsend1", "testtopic")
+    assert handle.get_result() == "testsend1"
+    assert recv_counter == 1
