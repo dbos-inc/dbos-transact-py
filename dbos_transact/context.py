@@ -36,6 +36,9 @@ class TracedAttributes(TypedDict, total=False):
     requestIP: Optional[str]
     requestURL: Optional[str]
     requestMethod: Optional[str]
+    applicationID: Optional[str]
+    applicationVersion: Optional[str]
+    executorID: Optional[str]
 
 
 class DBOSContext:
