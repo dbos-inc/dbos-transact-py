@@ -19,6 +19,7 @@ from typing import (
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+
 from sqlalchemy.orm import Session
 
 if sys.version_info < (3, 10):
@@ -36,7 +37,9 @@ from dbos_transact.context import (
     EnterDBOSCommunicator,
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
+    OperationType,
     SetWorkflowUUID,
+    TracedAttributes,
     assert_current_dbos_context,
     get_local_dbos_context,
 )
@@ -65,6 +68,7 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 
 class WorkflowProtocol(Protocol[P, R]):
+    __name__: str
     __qualname__: str
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
@@ -74,6 +78,7 @@ Workflow: TypeAlias = WorkflowProtocol[P, R]
 
 
 class TransactionProtocol(Protocol):
+    __name__: str
     __qualname__: str
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -83,6 +88,7 @@ Transaction = TypeVar("Transaction", bound=TransactionProtocol)
 
 
 class CommunicatorProtocol(Protocol):
+    __name__: str
     __qualname__: str
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -153,13 +159,17 @@ class DBOS:
 
             @wraps(func)
             def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+                attributes: TracedAttributes = {
+                    "name": func.__name__,
+                    "operationType": OperationType.WORKFLOW.value,
+                }
                 inputs: WorkflowInputs = {
                     "args": args,
                     "kwargs": kwargs,
                 }
                 ctx = get_local_dbos_context()
                 if ctx and ctx.is_workflow():
-                    with EnterDBOSChildWorkflow():
+                    with EnterDBOSChildWorkflow(attributes):
                         ctx = assert_current_dbos_context()  # Now the child ctx
                         status = self._init_workflow(
                             ctx,
@@ -169,7 +179,7 @@ class DBOS:
 
                         return self._execute_workflow(status, func, *args, **kwargs)
                 else:
-                    with EnterDBOSWorkflow():
+                    with EnterDBOSWorkflow(attributes):
                         ctx = assert_current_dbos_context()
                         status = self._init_workflow(
                             ctx,
@@ -273,8 +283,12 @@ class DBOS:
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> R:
+        attributes: TracedAttributes = {
+            "name": func.__name__,
+            "operationType": OperationType.WORKFLOW.value,
+        }
         with DBOSContextSwap(ctx):
-            with EnterDBOSWorkflow():
+            with EnterDBOSWorkflow(attributes):
                 return self._execute_workflow(status, func, *args, **kwargs)
 
     def _execute_workflow(
