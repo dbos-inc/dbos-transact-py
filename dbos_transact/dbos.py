@@ -142,6 +142,13 @@ class DBOS:
         # Listen to notifications
         self.executor.submit(self.sys_db._notification_listener)
 
+        # Register send_stub as a workflow
+        @self.workflow()
+        def send_temp_workflow(
+            destination_uuid: str, message: Any, topic: Optional[str]
+        ) -> None:
+            self.send(destination_uuid, message, topic)
+
     def destroy(self) -> None:
         self._run_startup_recovery_thread = False
         self.sys_db.destroy()
@@ -149,43 +156,44 @@ class DBOS:
         self.admin_server.stop()
         self.executor.shutdown(cancel_futures=True)
 
+    def workflow_decorator(self, func: Workflow[P, R]) -> Workflow[P, R]:
+        func.__orig_func = func  # type: ignore
+
+        @wraps(func)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            inputs: WorkflowInputs = {
+                "args": args,
+                "kwargs": kwargs,
+            }
+            ctx = get_local_dbos_context()
+            if ctx and ctx.is_workflow():
+                with EnterDBOSChildWorkflow():
+                    ctx = assert_current_dbos_context()  # Now the child ctx
+                    status = self._init_workflow(
+                        ctx,
+                        inputs=inputs,
+                        wf_name=func.__qualname__,
+                    )
+
+                    return self._execute_workflow(status, func, *args, **kwargs)
+            else:
+                with EnterDBOSWorkflow():
+                    ctx = assert_current_dbos_context()
+                    status = self._init_workflow(
+                        ctx,
+                        inputs=inputs,
+                        wf_name=func.__qualname__,
+                    )
+
+                    return self._execute_workflow(status, func, *args, **kwargs)
+
+        wrapped_func = cast(Workflow[P, R], wrapper)
+        self.workflow_info_map[func.__qualname__] = wrapped_func
+        return wrapped_func
+
     def workflow(self) -> Callable[[Workflow[P, R]], Workflow[P, R]]:
-        def decorator(func: Workflow[P, R]) -> Workflow[P, R]:
-            func.__orig_func = func  # type: ignore
 
-            @wraps(func)
-            def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-                inputs: WorkflowInputs = {
-                    "args": args,
-                    "kwargs": kwargs,
-                }
-                ctx = get_local_dbos_context()
-                if ctx and ctx.is_workflow():
-                    with EnterDBOSChildWorkflow():
-                        ctx = assert_current_dbos_context()  # Now the child ctx
-                        status = self._init_workflow(
-                            ctx,
-                            inputs=inputs,
-                            wf_name=func.__qualname__,
-                        )
-
-                        return self._execute_workflow(status, func, *args, **kwargs)
-                else:
-                    with EnterDBOSWorkflow():
-                        ctx = assert_current_dbos_context()
-                        status = self._init_workflow(
-                            ctx,
-                            inputs=inputs,
-                            wf_name=func.__qualname__,
-                        )
-
-                        return self._execute_workflow(status, func, *args, **kwargs)
-
-            wrapped_func = cast(Workflow[P, R], wrapper)
-            self.workflow_info_map[func.__qualname__] = wrapped_func
-            return wrapped_func
-
-        return decorator
+        return self.workflow_decorator
 
     def start_workflow(
         self,
@@ -469,9 +477,6 @@ class DBOS:
     ) -> None:
         def do_send(destination_uuid: str, message: Any, topic: Optional[str]) -> None:
             with EnterDBOSCommunicator() as ctx:
-                dbos_logger.info(
-                    f"Doing send: {destination_uuid}: {str(message)} / {topic}"
-                )
                 self.sys_db.send(
                     ctx.workflow_uuid,
                     ctx.curr_comm_function_id,
@@ -485,25 +490,11 @@ class DBOS:
             assert ctx.is_workflow()
             return do_send(destination_uuid, message, topic)
         else:
-            with EnterDBOSTempWorkflow("send") as ctx:
-
-                def wf_stub(*args: Any, **kwargs: Any) -> Any:
-                    return do_send(*args, **kwargs)
-
-                inputs: WorkflowInputs = {
-                    "args": [destination_uuid, message, topic],
-                    "kwargs": {},
-                }
-
-                status = self._init_workflow(
-                    ctx,
-                    inputs=inputs,
-                    wf_name="send",
-                )
-
-                self._execute_workflow(
-                    status, wf_stub, destination_uuid, message, topic
-                )
+            wffn = self.workflow_info_map.get(
+                "DBOS.__init__.<locals>.send_temp_workflow"
+            )
+            assert wffn
+            wffn(destination_uuid, message, topic)
 
     def recv(self, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
         with EnterDBOSCommunicator() as ctx:
