@@ -35,6 +35,7 @@ from dbos_transact.context import (
     DBOSContextSwap,
     EnterDBOSChildWorkflow,
     EnterDBOSCommunicator,
+    EnterDBOSTempWorkflow,
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
     SetWorkflowUUID,
@@ -303,8 +304,7 @@ class DBOS:
 
     def transaction(self) -> Callable[[Transaction], Transaction]:
         def decorator(func: Transaction) -> Transaction:
-            @wraps(func)
-            def wrapper(*args: Any, **kwargs: Any) -> Any:
+            def invoke_tx(*args: Any, **kwargs: Any) -> Any:
                 with self.app_db.sessionmaker() as session:
                     with EnterDBOSTransaction(session) as ctx:
                         txn_output: TransactionResultInternal = {
@@ -365,14 +365,26 @@ class DBOS:
                             raise error
                 return output
 
+            @wraps(func)
+            def wrapper(*args: Any, **kwargs: Any) -> Any:
+                # Entering transaction is allowed:
+                #  In a workflow (that is not in a transaction / comm already)
+                #  Not in a workflow (we will need a temp workflow)
+                ctx = get_local_dbos_context()
+                if ctx and ctx.is_within_workflow():
+                    assert ctx.is_workflow()
+                    return invoke_tx(*args, **kwargs)
+                else:
+                    with EnterDBOSTempWorkflow("transaction"):
+                        return invoke_tx(*args, **kwargs)
+
             return cast(Transaction, wrapper)
 
         return decorator
 
     def communicator(self) -> Callable[[Communicator], Communicator]:
         def decorator(func: Communicator) -> Communicator:
-            @wraps(func)
-            def wrapper(*args: Any, **kwargs: Any) -> Any:
+            def invoke_comm(*args: Any, **kwargs: Any) -> Any:
                 with EnterDBOSCommunicator() as ctx:
                     comm_output: OperationResultInternal = {
                         "workflow_uuid": ctx.workflow_uuid,
@@ -404,6 +416,19 @@ class DBOS:
                     finally:
                         self.sys_db.record_operation_result(comm_output)
                     return output
+
+            @wraps(func)
+            def wrapper(*args: Any, **kwargs: Any) -> Any:
+                # Entering communicator is allowed:
+                #  In a workflow (that is not in a transaction / comm already)
+                #  Not in a workflow (we will need a temp workflow)
+                ctx = get_local_dbos_context()
+                if ctx and ctx.is_within_workflow():
+                    assert ctx.is_workflow()
+                    return invoke_comm(*args, **kwargs)
+                else:
+                    with EnterDBOSTempWorkflow("external"):
+                        return invoke_comm(*args, **kwargs)
 
             return cast(Communicator, wrapper)
 
