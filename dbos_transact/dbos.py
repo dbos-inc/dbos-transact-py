@@ -375,8 +375,23 @@ class DBOS:
                     assert ctx.is_workflow()
                     return invoke_tx(*args, **kwargs)
                 else:
-                    with EnterDBOSTempWorkflow("transaction"):
-                        return invoke_tx(*args, **kwargs)
+                    with EnterDBOSTempWorkflow("transaction") as ctx:
+
+                        def wf_stub(*args: Any, **kwargs: Any) -> Any:
+                            return invoke_tx(*args, **kwargs)
+
+                        inputs: WorkflowInputs = {
+                            "args": args,
+                            "kwargs": kwargs,
+                        }
+
+                        status = self._init_workflow(
+                            ctx,
+                            inputs=inputs,
+                            wf_name=func.__qualname__,
+                        )
+
+                        return self._execute_workflow(status, wf_stub, *args, **kwargs)
 
             return cast(Transaction, wrapper)
 
@@ -427,8 +442,23 @@ class DBOS:
                     assert ctx.is_workflow()
                     return invoke_comm(*args, **kwargs)
                 else:
-                    with EnterDBOSTempWorkflow("external"):
-                        return invoke_comm(*args, **kwargs)
+                    with EnterDBOSTempWorkflow("external") as ctx:
+
+                        def wf_stub(*args: Any, **kwargs: Any) -> Any:
+                            return invoke_comm(*args, **kwargs)
+
+                        inputs: WorkflowInputs = {
+                            "args": args,
+                            "kwargs": kwargs,
+                        }
+
+                        status = self._init_workflow(
+                            ctx,
+                            inputs=inputs,
+                            wf_name=func.__qualname__,
+                        )
+
+                        return self._execute_workflow(status, wf_stub, *args, **kwargs)
 
             return cast(Communicator, wrapper)
 

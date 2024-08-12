@@ -10,6 +10,7 @@ import pytest
 import sqlalchemy as sa
 
 from dbos_transact import DBOS, ConfigFile, SetWorkflowUUID
+from dbos_transact.context import get_local_dbos_context
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -226,10 +227,12 @@ def test_temp_workflow(dbos: DBOS) -> None:
         comm_counter += 1
         return var
 
+    assert get_local_dbos_context() is None
     test_transaction("var2")
-    # test_communicator("var")
+    assert get_local_dbos_context() is None
+    test_communicator("var")
     assert txn_counter == 1
-    # assert comm_counter == 1
+    assert comm_counter == 1
 
 
 def test_recovery_workflow(dbos: DBOS) -> None:
