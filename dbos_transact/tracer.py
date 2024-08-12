@@ -1,7 +1,8 @@
 import os
-from typing import TYPE_CHECKING, Literal, Optional, Type, TypedDict
+from typing import TYPE_CHECKING, Optional
 
 from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from opentelemetry.trace import Span
@@ -18,6 +19,14 @@ class DBOSTracer:
         provider = TracerProvider()
         if os.environ.get("DBOS__CONSOLE_TRACES", None) is not None:
             processor = BatchSpanProcessor(ConsoleSpanExporter())
+            provider.add_span_processor(processor)
+        otlp_traces_endpoint = (
+            config.get("telemetry", {}).get("OTLPExporter", {}).get("tracesEndpoint")  # type: ignore
+        )
+        if otlp_traces_endpoint:
+            processor = BatchSpanProcessor(
+                OTLPSpanExporter(endpoint=otlp_traces_endpoint)
+            )
             provider.add_span_processor(processor)
         trace.set_tracer_provider(provider)
 
