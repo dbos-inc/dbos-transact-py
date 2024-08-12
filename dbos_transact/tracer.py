@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 class DBOSTracer:
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.app_id = os.environ.get("DBOS__APPID", None)
         self.app_version = os.environ.get("DBOS__APPVERSION", None)
         self.executor_id = os.environ.get("DBOS__VMID", "local")
