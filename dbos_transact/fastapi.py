@@ -6,6 +6,7 @@ from fastapi import Request as FastAPIRequest
 
 from .context import (
     EnterDBOSHandler,
+    OperationType,
     SetWorkflowUUID,
     TracedAttributes,
     assert_current_dbos_context,
@@ -50,6 +51,7 @@ def setup_fastapi_middleware(app: FastAPI) -> None:
             "requestIP": request.client.host if request.client is not None else None,
             "requestURL": str(request.url),
             "requestMethod": request.method,
+            "operationType": OperationType.HANDLER.value,
         }
         with EnterDBOSHandler(attributes):
             ctx = assert_current_dbos_context()
