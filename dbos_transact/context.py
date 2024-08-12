@@ -6,8 +6,6 @@ from contextvars import ContextVar
 from types import TracebackType
 from typing import TYPE_CHECKING, Literal, Optional, Type
 
-from dbos_transact.workflow import TempWorkflowTypeLiteral
-
 if TYPE_CHECKING:
     from .fastapi import Request
 
@@ -32,8 +30,6 @@ class DBOSContext:
         self.parent_workflow_fid: int = -1
         self.workflow_uuid: str = ""
         self.function_id: int = -1
-        self.is_temp_workflow: bool = False
-        self.temp_wf_type: str = ""
 
         self.curr_comm_function_id: int = -1
         self.curr_tx_function_id: int = -1
@@ -65,8 +61,6 @@ class DBOSContext:
     def end_workflow(self) -> None:
         self.workflow_uuid = ""
         self.function_id = -1
-        self.is_temp_workflow = False
-        self.temp_wf_type = ""
 
     def is_within_workflow(self) -> bool:
         return len(self.workflow_uuid) > 0
@@ -217,39 +211,6 @@ class EnterDBOSWorkflow:
             set_local_dbos_context(ctx)
         assert not ctx.is_within_workflow()
         ctx.start_workflow(None)  # Will get from the context's next wf uuid
-        return ctx
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> Literal[False]:
-        ctx = assert_current_dbos_context()
-        assert ctx.is_within_workflow()
-        ctx.end_workflow()
-        # Code to clean up the basic context if we created it
-        if self.created_ctx:
-            clear_local_dbos_context()
-        return False  # Did not handle
-
-
-class EnterDBOSTempWorkflow:
-    def __init__(self, temp_wf_type: TempWorkflowTypeLiteral) -> None:
-        self.created_ctx = False
-        self.temp_wf_type = temp_wf_type
-
-    def __enter__(self) -> DBOSContext:
-        # Code to create a basic context
-        ctx = get_local_dbos_context()
-        if ctx is None:
-            self.created_ctx = True
-            ctx = DBOSContext()
-            set_local_dbos_context(ctx)
-        assert not ctx.is_within_workflow()
-        ctx.start_workflow(None)  # Will get from the context's next wf uuid
-        ctx.is_temp_workflow = True
-        ctx.temp_wf_type = self.temp_wf_type
         return ctx
 
     def __exit__(

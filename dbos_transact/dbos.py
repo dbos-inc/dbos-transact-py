@@ -35,7 +35,6 @@ from dbos_transact.context import (
     DBOSContextSwap,
     EnterDBOSChildWorkflow,
     EnterDBOSCommunicator,
-    EnterDBOSTempWorkflow,
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
     SetWorkflowUUID,
@@ -64,6 +63,8 @@ if TYPE_CHECKING:
 
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
+
+_temp_send_wf = "<temp>.temp_send_workflow"
 
 
 class WorkflowProtocol(Protocol[P, R]):
@@ -149,7 +150,7 @@ class DBOS:
             self.send(destination_uuid, message, topic)
 
         temp_send_wf = self.workflow_wrapper(send_temp_workflow)
-        self.register_wf_function("temp_send_workflow", temp_send_wf)
+        self.register_wf_function(_temp_send_wf, temp_send_wf)
 
     def destroy(self) -> None:
         self._run_startup_recovery_thread = False
@@ -392,23 +393,15 @@ class DBOS:
                     assert ctx.is_workflow()
                     return invoke_tx(*args, **kwargs)
                 else:
-                    with EnterDBOSTempWorkflow("transaction") as ctx:
+                    tempwf = self.workflow_info_map.get("<temp>." + func.__qualname__)
+                    assert tempwf
+                    tempwf(*args, **kwargs)
 
-                        def wf_stub(*args: Any, **kwargs: Any) -> Any:
-                            return invoke_tx(*args, **kwargs)
+            def temp_wf(*args: Any, **kwargs: Any) -> Any:
+                return wrapper(*args, **kwargs)
 
-                        inputs: WorkflowInputs = {
-                            "args": args,
-                            "kwargs": kwargs,
-                        }
-
-                        status = self._init_workflow(
-                            ctx,
-                            inputs=inputs,
-                            wf_name=func.__qualname__,
-                        )
-
-                        return self._execute_workflow(status, wf_stub, *args, **kwargs)
+            wrapped_wf = self.workflow_wrapper(temp_wf)
+            self.register_wf_function("<temp>." + func.__qualname__, wrapped_wf)
 
             return cast(Transaction, wrapper)
 
@@ -459,23 +452,15 @@ class DBOS:
                     assert ctx.is_workflow()
                     return invoke_comm(*args, **kwargs)
                 else:
-                    with EnterDBOSTempWorkflow("external") as ctx:
+                    tempwf = self.workflow_info_map.get("<temp>." + func.__qualname__)
+                    assert tempwf
+                    tempwf(*args, **kwargs)
 
-                        def wf_stub(*args: Any, **kwargs: Any) -> Any:
-                            return invoke_comm(*args, **kwargs)
+            def temp_wf(*args: Any, **kwargs: Any) -> Any:
+                return wrapper(*args, **kwargs)
 
-                        inputs: WorkflowInputs = {
-                            "args": args,
-                            "kwargs": kwargs,
-                        }
-
-                        status = self._init_workflow(
-                            ctx,
-                            inputs=inputs,
-                            wf_name=func.__qualname__,
-                        )
-
-                        return self._execute_workflow(status, wf_stub, *args, **kwargs)
+            wrapped_wf = self.workflow_wrapper(temp_wf)
+            self.register_wf_function("<temp>." + func.__qualname__, wrapped_wf)
 
             return cast(Communicator, wrapper)
 
@@ -499,7 +484,7 @@ class DBOS:
             assert ctx.is_workflow()
             return do_send(destination_uuid, message, topic)
         else:
-            wffn = self.workflow_info_map.get("temp_send_workflow")
+            wffn = self.workflow_info_map.get(_temp_send_wf)
             assert wffn
             wffn(destination_uuid, message, topic)
 

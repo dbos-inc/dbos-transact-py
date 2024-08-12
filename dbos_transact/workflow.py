@@ -1,20 +1,6 @@
 from concurrent.futures import Future
 from enum import Enum
-from typing import Generic, Literal, TypeVar
-
-
-class WorkflowNames:
-    temp_workflow_name = "temp_workflow"
-
-
-class TempWorkflowType(Enum):
-    TRANSACTION = "transaction"
-    PROCEDURE = "procedure"
-    EXTERNAL = "external"
-    SEND = "send"
-
-
-TempWorkflowTypeLiteral = Literal["transaction", "procedure", "external", "send"]
+from typing import Generic, TypeVar
 
 R = TypeVar("R")
 
