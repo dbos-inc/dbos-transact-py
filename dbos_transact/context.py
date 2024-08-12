@@ -78,16 +78,12 @@ class DBOSContext:
             self.id_assigned_for_next_workflow = ""
         self.workflow_uuid = wfid
         self.function_id = 0
-        attributes["operationUUID"] = self.workflow_uuid
-        span = dbos_tracer.start_span(
-            attributes, parent=self.spans[-1] if len(self.spans) > 0 else None
-        )
-        self.spans.append(span)
+        self._start_span(attributes)
 
     def end_workflow(self) -> None:
         self.workflow_uuid = ""
         self.function_id = -1
-        dbos_tracer.end_span(self.spans.pop())
+        self._end_span()
 
     def is_within_workflow(self) -> bool:
         return len(self.workflow_uuid) > 0
@@ -105,26 +101,36 @@ class DBOSContext:
     def is_communicator(self) -> bool:
         return self.curr_comm_function_id >= 0
 
-    def start_communicator(self, fid: int) -> None:
+    def start_communicator(self, fid: int, attributes: TracedAttributes) -> None:
         self.curr_comm_function_id = fid
+        self._start_span(attributes)
 
     def end_communicator(self) -> None:
         self.curr_comm_function_id = -1
+        self._end_span()
 
     def start_transaction(
         self, ses: Session, fid: int, attributes: TracedAttributes
     ) -> None:
         self.sql_session = ses
         self.curr_tx_function_id = fid
-        attributes["operationUUID"] = self.workflow_uuid
+        self._start_span(attributes)
+
+    def end_transaction(self) -> None:
+        self.sql_session = None
+        self.curr_tx_function_id = -1
+        self._end_span()
+
+    def _start_span(self, attributes: TracedAttributes) -> None:
+        attributes["operationUUID"] = (
+            self.workflow_uuid if len(self.workflow_uuid) > 0 else None
+        )
         span = dbos_tracer.start_span(
             attributes, parent=self.spans[-1] if len(self.spans) > 0 else None
         )
         self.spans.append(span)
 
-    def end_transaction(self) -> None:
-        self.sql_session = None
-        self.curr_tx_function_id = -1
+    def _end_span(self) -> None:
         dbos_tracer.end_span(self.spans.pop())
 
 
@@ -282,7 +288,7 @@ class EnterDBOSChildWorkflow:
             )
         self.child_ctx = ctx.create_child()
         set_local_dbos_context(self.child_ctx)
-        self.child_ctx.start_workflow(None, self.attributes)
+        self.child_ctx.start_workflow(None, attributes=self.attributes)
         return self.child_ctx
 
     def __exit__(
@@ -301,14 +307,14 @@ class EnterDBOSChildWorkflow:
 
 
 class EnterDBOSCommunicator:
-    def __init__(self) -> None:
-        pass
+    def __init__(self, attributes: TracedAttributes) -> None:
+        self.attributes = attributes
 
     def __enter__(self) -> DBOSContext:
         ctx = assert_current_dbos_context()
         assert ctx.is_workflow()
         ctx.function_id += 1
-        ctx.start_communicator(ctx.function_id)
+        ctx.start_communicator(ctx.function_id, attributes=self.attributes)
         return ctx
 
     def __exit__(

@@ -390,7 +390,11 @@ class DBOS:
         def decorator(func: Communicator) -> Communicator:
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                with EnterDBOSCommunicator() as ctx:
+                attributes: TracedAttributes = {
+                    "name": func.__name__,
+                    "operationType": OperationType.COMMUNICATOR.value,
+                }
+                with EnterDBOSCommunicator(attributes) as ctx:
                     comm_output: OperationResultInternal = {
                         "workflow_uuid": ctx.workflow_uuid,
                         "function_id": ctx.function_id,
@@ -429,7 +433,10 @@ class DBOS:
     def send(
         self, destination_uuid: str, message: Any, topic: Optional[str] = None
     ) -> None:
-        with EnterDBOSCommunicator() as ctx:
+        attributes: TracedAttributes = {
+            "name": "send",
+        }
+        with EnterDBOSCommunicator(attributes) as ctx:
             self.sys_db.send(
                 ctx.workflow_uuid,
                 ctx.curr_comm_function_id,
@@ -439,7 +446,10 @@ class DBOS:
             )
 
     def recv(self, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
-        with EnterDBOSCommunicator() as ctx:
+        attributes: TracedAttributes = {
+            "name": "recv",
+        }
+        with EnterDBOSCommunicator(attributes) as ctx:
             ctx.function_id += 1  # Reserve for the sleep
             timeout_function_id = ctx.function_id
             return self.sys_db.recv(
@@ -451,9 +461,12 @@ class DBOS:
             )
 
     def sleep(self, seconds: float) -> None:
+        attributes: TracedAttributes = {
+            "name": "sleep",
+        }
         if seconds <= 0:
             return
-        with EnterDBOSCommunicator() as ctx:
+        with EnterDBOSCommunicator(attributes) as ctx:
             self.sys_db.sleep(ctx.workflow_uuid, ctx.curr_comm_function_id, seconds)
 
     def execute_workflow_uuid(self, workflow_uuid: str) -> WorkflowHandle[Any]:
