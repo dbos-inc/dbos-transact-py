@@ -58,6 +58,7 @@ from .application_database import ApplicationDatabase, TransactionResultInternal
 from .dbos_config import ConfigFile, load_config
 from .logger import config_logger, dbos_logger
 from .system_database import (
+    GetEventWorkflowContext,
     OperationResultInternal,
     SystemDatabase,
     WorkflowInputs,
@@ -473,6 +474,34 @@ class DBOS:
             return
         with EnterDBOSCommunicator(attributes) as ctx:
             self.sys_db.sleep(ctx.workflow_uuid, ctx.curr_comm_function_id, seconds)
+
+    def set_event(self, key: str, value: Any) -> None:
+        with EnterDBOSCommunicator() as ctx:
+            self.sys_db.set_event(
+                ctx.workflow_uuid, ctx.curr_comm_function_id, key, value
+            )
+
+    def get_event(
+        self, workflow_uuid: str, key: str, timeout_seconds: float = 60
+    ) -> Any:
+        cur_ctx = get_local_dbos_context()
+        if cur_ctx is not None:
+            # Call it within a workflow
+            assert cur_ctx.is_workflow()
+            with EnterDBOSCommunicator() as ctx:
+                ctx.function_id += 1
+                timeout_function_id = ctx.function_id
+                caller_ctx: GetEventWorkflowContext = {
+                    "workflow_uuid": ctx.workflow_uuid,
+                    "function_id": ctx.curr_comm_function_id,
+                    "timeout_function_id": timeout_function_id,
+                }
+                return self.sys_db.get_event(
+                    workflow_uuid, key, timeout_seconds, caller_ctx
+                )
+        else:
+            # Directly call it outside of a workflow
+            return self.sys_db.get_event(workflow_uuid, key, timeout_seconds)
 
     def execute_workflow_uuid(self, workflow_uuid: str) -> WorkflowHandle[Any]:
         """

@@ -452,3 +452,34 @@ def test_send_recv(dbos: DBOS) -> None:
         assert duration < 3.0
         assert res == "test2-test1-test3"
         assert recv_counter == 2
+
+
+def test_set_get_events(dbos: DBOS) -> None:
+    set_counter: int = 0
+    get_counter: int = 0
+
+    @dbos.workflow()
+    def test_setevent_workflow() -> None:
+        dbos.set_event("key1", "value1")
+        dbos.set_event("key2", "value2")
+        nonlocal set_counter
+        set_counter += 1
+
+    @dbos.workflow()
+    def test_getevent_workflow(target_uuid: str, key: str) -> str:
+        msg = str(dbos.get_event(target_uuid, key, timeout_seconds=10))
+        nonlocal get_counter
+        get_counter += 1
+        return msg
+
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowUUID(wfuuid):
+        test_setevent_workflow()
+    with SetWorkflowUUID(wfuuid):
+        test_setevent_workflow()
+
+    value1 = test_getevent_workflow(wfuuid, "key1")
+    assert value1 == "value1"
+
+    value2 = test_getevent_workflow(wfuuid, "key2")
+    assert value2 == "value2"
