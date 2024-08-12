@@ -180,7 +180,8 @@ def test_exception_workflow(dbos: DBOS) -> None:
             exception_communicator("test error")
         except Exception as e:
             err2 = e
-        assert err1 == err2 and err1 is not None
+        assert err1 is not None and err2 is not None
+        assert str(err1) == str(err2)
         raise err1
 
     with pytest.raises(Exception) as exc_info:
@@ -193,12 +194,12 @@ def test_exception_workflow(dbos: DBOS) -> None:
     with pytest.raises(Exception) as exc_info:
         with SetWorkflowUUID(wfuuid):
             exception_workflow()
-    assert "test error" in str(exc_info.value)
+    assert "test error" == str(exc_info.value)
 
     with pytest.raises(Exception) as exc_info:
         with SetWorkflowUUID(wfuuid):
             exception_workflow()
-    assert "test error" in str(exc_info.value)
+    assert "test error" == str(exc_info.value)
     assert txn_counter == 2  # Only increment once
     assert comm_counter == 2  # Only increment once
 
@@ -206,6 +207,7 @@ def test_exception_workflow(dbos: DBOS) -> None:
     handle = dbos.execute_workflow_uuid(wfuuid)
     with pytest.raises(Exception) as exc_info:
         handle.get_result()
+    assert "test error" == str(exc_info.value)
     assert wf_counter == 4
 
 
