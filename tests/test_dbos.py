@@ -209,6 +209,29 @@ def test_exception_workflow(dbos: DBOS) -> None:
     assert wf_counter == 4
 
 
+def test_temp_workflow(dbos: DBOS) -> None:
+    txn_counter: int = 0
+    comm_counter: int = 0
+
+    @dbos.transaction()
+    def test_transaction(var2: str) -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        nonlocal txn_counter
+        txn_counter += 1
+        return var2 + str(rows[0][0])
+
+    @dbos.communicator()
+    def test_communicator(var: str) -> str:
+        nonlocal comm_counter
+        comm_counter += 1
+        return var
+
+    test_transaction("var2")
+    test_communicator("var")
+    assert txn_counter == 1
+    assert comm_counter == 1
+
+
 def test_recovery_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
