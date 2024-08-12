@@ -7,6 +7,8 @@ from enum import Enum
 from types import TracebackType
 from typing import TYPE_CHECKING, Literal, Optional, Type, TypedDict
 
+from opentelemetry.trace import Span
+
 if TYPE_CHECKING:
     from .fastapi import Request
 
@@ -52,6 +54,7 @@ class DBOSContext:
         self.curr_comm_function_id: int = -1
         self.curr_tx_function_id: int = -1
         self.sql_session: Optional[Session] = None
+        self.spans: list[Span] = []
 
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()
@@ -76,12 +79,15 @@ class DBOSContext:
         self.workflow_uuid = wfid
         self.function_id = 0
         attributes["operationUUID"] = self.workflow_uuid
-        self.span = dbos_tracer.start_span(attributes)
+        span = dbos_tracer.start_span(
+            attributes, parent=self.spans[-1] if len(self.spans) > 0 else None
+        )
+        self.spans.append(span)
 
     def end_workflow(self) -> None:
         self.workflow_uuid = ""
         self.function_id = -1
-        dbos_tracer.end_span(self.span)
+        dbos_tracer.end_span(self.spans.pop())
 
     def is_within_workflow(self) -> bool:
         return len(self.workflow_uuid) > 0
@@ -105,13 +111,21 @@ class DBOSContext:
     def end_communicator(self) -> None:
         self.curr_comm_function_id = -1
 
-    def start_transaction(self, ses: Session, fid: int) -> None:
+    def start_transaction(
+        self, ses: Session, fid: int, attributes: TracedAttributes
+    ) -> None:
         self.sql_session = ses
         self.curr_tx_function_id = fid
+        attributes["operationUUID"] = self.workflow_uuid
+        span = dbos_tracer.start_span(
+            attributes, parent=self.spans[-1] if len(self.spans) > 0 else None
+        )
+        self.spans.append(span)
 
     def end_transaction(self) -> None:
         self.sql_session = None
         self.curr_tx_function_id = -1
+        dbos_tracer.end_span(self.spans.pop())
 
 
 ##############################################################
@@ -310,14 +324,15 @@ class EnterDBOSCommunicator:
 
 
 class EnterDBOSTransaction:
-    def __init__(self, sqls: Session) -> None:
+    def __init__(self, sqls: Session, attributes: TracedAttributes) -> None:
         self.sqls = sqls
+        self.attributes = attributes
 
     def __enter__(self) -> DBOSContext:
         ctx = assert_current_dbos_context()
         assert ctx.is_workflow()
         ctx.function_id += 1
-        ctx.start_transaction(self.sqls, ctx.function_id)
+        ctx.start_transaction(self.sqls, ctx.function_id, attributes=self.attributes)
         return ctx
 
     def __exit__(

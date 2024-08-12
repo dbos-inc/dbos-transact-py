@@ -319,7 +319,11 @@ class DBOS:
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
                 with self.app_db.sessionmaker() as session:
-                    with EnterDBOSTransaction(session) as ctx:
+                    attributes: TracedAttributes = {
+                        "name": func.__name__,
+                        "operationType": OperationType.TRANSACTION.value,
+                    }
+                    with EnterDBOSTransaction(session, attributes=attributes) as ctx:
                         txn_output: TransactionResultInternal = {
                             "workflow_uuid": ctx.workflow_uuid,
                             "function_id": ctx.function_id,
