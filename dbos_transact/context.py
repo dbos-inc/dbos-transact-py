@@ -27,11 +27,16 @@ class OperationType(Enum):
     PROCEDURE = "procedure"
 
 
+OperationTypes = Literal[
+    "handler", "workflow", "transaction", "communicator", "procedure"
+]
+
+
 # Keys must be the same as in TypeScript Transact
 class TracedAttributes(TypedDict, total=False):
     name: str
     operationUUID: Optional[str]
-    operationType: Optional[str]
+    operationType: Optional[OperationTypes]
     requestID: Optional[str]
     requestIP: Optional[str]
     requestURL: Optional[str]
@@ -134,7 +139,7 @@ class DBOSContext:
     def end_handler(self, exc_value: Optional[BaseException]) -> None:
         self._end_span(exc_value)
 
-    def get_current_span(self):
+    def get_current_span(self) -> Span:
         return self.spans[-1]
 
     def _start_span(self, attributes: TracedAttributes) -> None:
