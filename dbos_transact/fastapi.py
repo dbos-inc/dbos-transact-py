@@ -1,10 +1,27 @@
+import uuid
 from typing import Any, Callable
 
 from fastapi import FastAPI
 from fastapi import Request as FastAPIRequest
 
-from .context import DBOSContextEnsure, SetWorkflowUUID, assert_current_dbos_context
+from .context import (
+    EnterDBOSHandler,
+    OperationType,
+    SetWorkflowUUID,
+    TracedAttributes,
+    assert_current_dbos_context,
+)
 from .logger import dbos_logger
+
+request_id_header = "x-request-id"
+
+
+def get_or_generate_request_id(request: FastAPIRequest) -> str:
+    request_id = request.headers.get(request_id_header, None)
+    if request_id is not None:
+        return request_id
+    else:
+        return str(uuid.uuid4())
 
 
 class Request:
@@ -20,6 +37,7 @@ class Request:
         self.base_url = req.base_url
         self.client = req.client
         self.cookies = req.cookies
+        self.method = req.method
 
 
 def setup_fastapi_middleware(app: FastAPI) -> None:
@@ -27,7 +45,15 @@ def setup_fastapi_middleware(app: FastAPI) -> None:
     async def dbos_fastapi_middleware(
         request: FastAPIRequest, call_next: Callable[..., Any]
     ) -> Any:
-        with DBOSContextEnsure():
+        attributes: TracedAttributes = {
+            "name": str(request.url.path),
+            "requestID": get_or_generate_request_id(request),
+            "requestIP": request.client.host if request.client is not None else None,
+            "requestURL": str(request.url),
+            "requestMethod": request.method,
+            "operationType": OperationType.HANDLER.value,
+        }
+        with EnterDBOSHandler(attributes):
             ctx = assert_current_dbos_context()
             ctx.request = Request(request)
             workflow_id = request.headers.get("dbos-idempotency-key", "")

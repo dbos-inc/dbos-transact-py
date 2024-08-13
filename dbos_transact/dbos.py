@@ -1,5 +1,4 @@
 import os
-import select
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -18,8 +17,13 @@ from typing import (
     cast,
 )
 
+from opentelemetry.trace import Span
+
+from .tracer import dbos_tracer
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
+
 from sqlalchemy.orm import Session
 
 if sys.version_info < (3, 10):
@@ -37,7 +41,9 @@ from dbos_transact.context import (
     EnterDBOSCommunicator,
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
+    OperationType,
     SetWorkflowUUID,
+    TracedAttributes,
     assert_current_dbos_context,
     get_local_dbos_context,
 )
@@ -66,6 +72,7 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 
 class WorkflowProtocol(Protocol[P, R]):
+    __name__: str
     __qualname__: str
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
@@ -75,6 +82,7 @@ Workflow: TypeAlias = WorkflowProtocol[P, R]
 
 
 class TransactionProtocol(Protocol):
+    __name__: str
     __qualname__: str
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -84,6 +92,7 @@ Transaction = TypeVar("Transaction", bound=TransactionProtocol)
 
 
 class CommunicatorProtocol(Protocol):
+    __name__: str
     __qualname__: str
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -122,6 +131,7 @@ class DBOS:
         if config is None:
             config = load_config()
         config_logger(config)
+        dbos_tracer.config(config)
         dbos_logger.info("Initializing DBOS!")
         self.config = config
         self.sys_db = SystemDatabase(config)
@@ -154,13 +164,17 @@ class DBOS:
 
             @wraps(func)
             def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+                attributes: TracedAttributes = {
+                    "name": func.__name__,
+                    "operationType": OperationType.WORKFLOW.value,
+                }
                 inputs: WorkflowInputs = {
                     "args": args,
                     "kwargs": kwargs,
                 }
                 ctx = get_local_dbos_context()
                 if ctx and ctx.is_workflow():
-                    with EnterDBOSChildWorkflow():
+                    with EnterDBOSChildWorkflow(attributes):
                         ctx = assert_current_dbos_context()  # Now the child ctx
                         status = self._init_workflow(
                             ctx,
@@ -170,7 +184,7 @@ class DBOS:
 
                         return self._execute_workflow(status, func, *args, **kwargs)
                 else:
-                    with EnterDBOSWorkflow():
+                    with EnterDBOSWorkflow(attributes):
                         ctx = assert_current_dbos_context()
                         status = self._init_workflow(
                             ctx,
@@ -274,8 +288,12 @@ class DBOS:
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> R:
+        attributes: TracedAttributes = {
+            "name": func.__name__,
+            "operationType": OperationType.WORKFLOW.value,
+        }
         with DBOSContextSwap(ctx):
-            with EnterDBOSWorkflow():
+            with EnterDBOSWorkflow(attributes):
                 return self._execute_workflow(status, func, *args, **kwargs)
 
     def _execute_workflow(
@@ -306,7 +324,11 @@ class DBOS:
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
                 with self.app_db.sessionmaker() as session:
-                    with EnterDBOSTransaction(session) as ctx:
+                    attributes: TracedAttributes = {
+                        "name": func.__name__,
+                        "operationType": OperationType.TRANSACTION.value,
+                    }
+                    with EnterDBOSTransaction(session, attributes=attributes) as ctx:
                         txn_output: TransactionResultInternal = {
                             "workflow_uuid": ctx.workflow_uuid,
                             "function_id": ctx.function_id,
@@ -373,7 +395,11 @@ class DBOS:
         def decorator(func: Communicator) -> Communicator:
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                with EnterDBOSCommunicator() as ctx:
+                attributes: TracedAttributes = {
+                    "name": func.__name__,
+                    "operationType": OperationType.COMMUNICATOR.value,
+                }
+                with EnterDBOSCommunicator(attributes) as ctx:
                     comm_output: OperationResultInternal = {
                         "workflow_uuid": ctx.workflow_uuid,
                         "function_id": ctx.function_id,
@@ -412,7 +438,10 @@ class DBOS:
     def send(
         self, destination_uuid: str, message: Any, topic: Optional[str] = None
     ) -> None:
-        with EnterDBOSCommunicator() as ctx:
+        attributes: TracedAttributes = {
+            "name": "send",
+        }
+        with EnterDBOSCommunicator(attributes) as ctx:
             self.sys_db.send(
                 ctx.workflow_uuid,
                 ctx.curr_comm_function_id,
@@ -422,7 +451,10 @@ class DBOS:
             )
 
     def recv(self, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
-        with EnterDBOSCommunicator() as ctx:
+        attributes: TracedAttributes = {
+            "name": "recv",
+        }
+        with EnterDBOSCommunicator(attributes) as ctx:
             ctx.function_id += 1  # Reserve for the sleep
             timeout_function_id = ctx.function_id
             return self.sys_db.recv(
@@ -434,9 +466,12 @@ class DBOS:
             )
 
     def sleep(self, seconds: float) -> None:
+        attributes: TracedAttributes = {
+            "name": "sleep",
+        }
         if seconds <= 0:
             return
-        with EnterDBOSCommunicator() as ctx:
+        with EnterDBOSCommunicator(attributes) as ctx:
             self.sys_db.sleep(ctx.workflow_uuid, ctx.curr_comm_function_id, seconds)
 
     def execute_workflow_uuid(self, workflow_uuid: str) -> WorkflowHandle[Any]:
@@ -509,6 +544,11 @@ class DBOS:
         ctx = assert_current_dbos_context()
         assert ctx.is_within_workflow()
         return ctx.parent_workflow_uuid
+
+    @classproperty
+    def span(cls) -> Span:
+        ctx = assert_current_dbos_context()
+        return ctx.get_current_span()
 
     @classproperty
     def request(cls) -> Optional["Request"]:
