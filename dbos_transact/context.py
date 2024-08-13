@@ -3,8 +3,11 @@ from __future__ import annotations
 import os
 import uuid
 from contextvars import ContextVar
+from enum import Enum
 from types import TracebackType
-from typing import TYPE_CHECKING, Literal, Optional, Type
+from typing import TYPE_CHECKING, Literal, Optional, Type, TypedDict
+
+from opentelemetry.trace import Span, Status, StatusCode
 
 if TYPE_CHECKING:
     from .fastapi import Request
@@ -12,6 +15,35 @@ if TYPE_CHECKING:
 from sqlalchemy.orm import Session
 
 from .logger import dbos_logger
+from .tracer import dbos_tracer
+
+
+# Values must be the same as in TypeScript Transact
+class OperationType(Enum):
+    HANDLER = "handler"
+    WORKFLOW = "workflow"
+    TRANSACTION = "transaction"
+    COMMUNICATOR = "communicator"
+    PROCEDURE = "procedure"
+
+
+OperationTypes = Literal[
+    "handler", "workflow", "transaction", "communicator", "procedure"
+]
+
+
+# Keys must be the same as in TypeScript Transact
+class TracedAttributes(TypedDict, total=False):
+    name: str
+    operationUUID: Optional[str]
+    operationType: Optional[OperationTypes]
+    requestID: Optional[str]
+    requestIP: Optional[str]
+    requestURL: Optional[str]
+    requestMethod: Optional[str]
+    applicationID: Optional[str]
+    applicationVersion: Optional[str]
+    executorID: Optional[str]
 
 
 class DBOSContext:
@@ -34,6 +66,7 @@ class DBOSContext:
         self.curr_comm_function_id: int = -1
         self.curr_tx_function_id: int = -1
         self.sql_session: Optional[Session] = None
+        self.spans: list[Span] = []
 
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()
@@ -51,16 +84,18 @@ class DBOSContext:
             wfid = str(uuid.uuid4())
         return wfid
 
-    def start_workflow(self, wfid: Optional[str]) -> None:
+    def start_workflow(self, wfid: Optional[str], attributes: TracedAttributes) -> None:
         if wfid is None or len(wfid) == 0:
             wfid = self.assign_workflow_id()
             self.id_assigned_for_next_workflow = ""
         self.workflow_uuid = wfid
         self.function_id = 0
+        self._start_span(attributes)
 
-    def end_workflow(self) -> None:
+    def end_workflow(self, exc_value: Optional[BaseException]) -> None:
         self.workflow_uuid = ""
         self.function_id = -1
+        self._end_span(exc_value)
 
     def is_within_workflow(self) -> bool:
         return len(self.workflow_uuid) > 0
@@ -78,19 +113,52 @@ class DBOSContext:
     def is_communicator(self) -> bool:
         return self.curr_comm_function_id >= 0
 
-    def start_communicator(self, fid: int) -> None:
+    def start_communicator(self, fid: int, attributes: TracedAttributes) -> None:
         self.curr_comm_function_id = fid
+        self._start_span(attributes)
 
-    def end_communicator(self) -> None:
+    def end_communicator(self, exc_value: Optional[BaseException]) -> None:
         self.curr_comm_function_id = -1
+        self._end_span(exc_value)
 
-    def start_transaction(self, ses: Session, fid: int) -> None:
+    def start_transaction(
+        self, ses: Session, fid: int, attributes: TracedAttributes
+    ) -> None:
         self.sql_session = ses
         self.curr_tx_function_id = fid
+        self._start_span(attributes)
 
-    def end_transaction(self) -> None:
+    def end_transaction(self, exc_value: Optional[BaseException]) -> None:
         self.sql_session = None
         self.curr_tx_function_id = -1
+        self._end_span(exc_value)
+
+    def start_handler(self, attributes: TracedAttributes) -> None:
+        self._start_span(attributes)
+
+    def end_handler(self, exc_value: Optional[BaseException]) -> None:
+        self._end_span(exc_value)
+
+    def get_current_span(self) -> Span:
+        return self.spans[-1]
+
+    def _start_span(self, attributes: TracedAttributes) -> None:
+        attributes["operationUUID"] = (
+            self.workflow_uuid if len(self.workflow_uuid) > 0 else None
+        )
+        span = dbos_tracer.start_span(
+            attributes, parent=self.spans[-1] if len(self.spans) > 0 else None
+        )
+        self.spans.append(span)
+
+    def _end_span(self, exc_value: Optional[BaseException]) -> None:
+        if exc_value is None:
+            self.spans[-1].set_status(Status(StatusCode.OK))
+        else:
+            self.spans[-1].set_status(
+                Status(StatusCode.ERROR, description=str(exc_value))
+            )
+        dbos_tracer.end_span(self.spans.pop())
 
 
 ##############################################################
@@ -199,8 +267,9 @@ class SetWorkflowUUID:
 
 
 class EnterDBOSWorkflow:
-    def __init__(self) -> None:
+    def __init__(self, attributes: TracedAttributes) -> None:
         self.created_ctx = False
+        self.attributes = attributes
 
     def __enter__(self) -> DBOSContext:
         # Code to create a basic context
@@ -210,7 +279,9 @@ class EnterDBOSWorkflow:
             ctx = DBOSContext()
             set_local_dbos_context(ctx)
         assert not ctx.is_within_workflow()
-        ctx.start_workflow(None)  # Will get from the context's next wf uuid
+        ctx.start_workflow(
+            None, self.attributes
+        )  # Will get from the context's next wf uuid
         return ctx
 
     def __exit__(
@@ -221,7 +292,7 @@ class EnterDBOSWorkflow:
     ) -> Literal[False]:
         ctx = assert_current_dbos_context()
         assert ctx.is_within_workflow()
-        ctx.end_workflow()
+        # ctx.end_workflow() # Why not?!
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             clear_local_dbos_context()
@@ -229,9 +300,10 @@ class EnterDBOSWorkflow:
 
 
 class EnterDBOSChildWorkflow:
-    def __init__(self) -> None:
+    def __init__(self, attributes: TracedAttributes) -> None:
         self.parent_ctx: Optional[DBOSContext] = None
         self.child_ctx: Optional[DBOSContext] = None
+        self.attributes = attributes
 
     def __enter__(self) -> DBOSContext:
         ctx = assert_current_dbos_context()
@@ -244,7 +316,7 @@ class EnterDBOSChildWorkflow:
             )
         self.child_ctx = ctx.create_child()
         set_local_dbos_context(self.child_ctx)
-        self.child_ctx.start_workflow(None)
+        self.child_ctx.start_workflow(None, attributes=self.attributes)
         return self.child_ctx
 
     def __exit__(
@@ -255,7 +327,7 @@ class EnterDBOSChildWorkflow:
     ) -> Literal[False]:
         ctx = assert_current_dbos_context()
         assert ctx.is_within_workflow()
-        ctx.end_workflow()
+        ctx.end_workflow(exc_value)
         # Return to parent ctx
         assert self.parent_ctx
         set_local_dbos_context(self.parent_ctx)
@@ -263,14 +335,14 @@ class EnterDBOSChildWorkflow:
 
 
 class EnterDBOSCommunicator:
-    def __init__(self) -> None:
-        pass
+    def __init__(self, attributes: TracedAttributes) -> None:
+        self.attributes = attributes
 
     def __enter__(self) -> DBOSContext:
         ctx = assert_current_dbos_context()
         assert ctx.is_workflow()
         ctx.function_id += 1
-        ctx.start_communicator(ctx.function_id)
+        ctx.start_communicator(ctx.function_id, attributes=self.attributes)
         return ctx
 
     def __exit__(
@@ -281,19 +353,20 @@ class EnterDBOSCommunicator:
     ) -> Literal[False]:
         ctx = assert_current_dbos_context()
         assert ctx.is_communicator()
-        ctx.end_communicator()
+        ctx.end_communicator(exc_value)
         return False  # Did not handle
 
 
 class EnterDBOSTransaction:
-    def __init__(self, sqls: Session) -> None:
+    def __init__(self, sqls: Session, attributes: TracedAttributes) -> None:
         self.sqls = sqls
+        self.attributes = attributes
 
     def __enter__(self) -> DBOSContext:
         ctx = assert_current_dbos_context()
         assert ctx.is_workflow()
         ctx.function_id += 1
-        ctx.start_transaction(self.sqls, ctx.function_id)
+        ctx.start_transaction(self.sqls, ctx.function_id, attributes=self.attributes)
         return ctx
 
     def __exit__(
@@ -304,5 +377,34 @@ class EnterDBOSTransaction:
     ) -> Literal[False]:
         ctx = assert_current_dbos_context()
         assert ctx.is_transaction()
-        ctx.end_transaction()
+        ctx.end_transaction(exc_value)
+        return False  # Did not handle
+
+
+class EnterDBOSHandler:
+    def __init__(self, attributes: TracedAttributes) -> None:
+        self.created_ctx = False
+        self.attributes = attributes
+
+    def __enter__(self) -> EnterDBOSHandler:
+        # Code to create a basic context
+        ctx = get_local_dbos_context()
+        if ctx is None:
+            self.created_ctx = True
+            set_local_dbos_context(DBOSContext())
+        ctx = assert_current_dbos_context()
+        ctx.start_handler(self.attributes)
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        ctx = assert_current_dbos_context()
+        ctx.end_handler(exc_value)
+        # Code to clean up the basic context if we created it
+        if self.created_ctx:
+            clear_local_dbos_context()
         return False  # Did not handle

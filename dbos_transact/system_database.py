@@ -13,6 +13,7 @@ from alembic.config import Config
 
 import dbos_transact.utils as utils
 from dbos_transact.error import (
+    DBOSDuplicateWorkflowEventError,
     DBOSNonExistentWorkflowError,
     DBOSWorkflowConflictUUIDError,
 )
@@ -62,6 +63,12 @@ class OperationResultInternal(TypedDict):
     function_id: int
     output: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
+
+
+class GetEventWorkflowContext(TypedDict):
+    workflow_uuid: str
+    function_id: int
+    timeout_function_id: int
 
 
 dbos_null_topic = "__null__topic__"
@@ -129,6 +136,7 @@ class SystemDatabase:
         )
         self.notification_cursor = self.notification_conn.cursor()
         self.notifications_map: Dict[str, threading.Condition] = {}
+        self.workflow_events_map: Dict[str, threading.Condition] = {}
         self._run_notification_listener = True
 
     # Destroy the pool when finished
@@ -326,7 +334,7 @@ class SystemDatabase:
             else:
                 raise Exception("No output recorded in the last recv")
 
-        # Check if the key is already in teh database. If not, wait for the notification.
+        # Check if the key is already in the database. If not, wait for the notification.
         init_recv: Sequence[Any]
         with self.engine.begin() as c:
             init_recv = c.execute(
@@ -388,9 +396,12 @@ class SystemDatabase:
                 {
                     "workflow_uuid": workflow_uuid,
                     "function_id": function_id,
-                    "output": rows[0][0],
+                    "output": utils.serialize(
+                        message
+                    ),  # None will be serialized to 'null'
                     "error": None,
-                }
+                },
+                conn=c,
             )
         return message
 
@@ -398,6 +409,7 @@ class SystemDatabase:
         # Listen to notifications
         dbos_logger.info("Listening to notifications")
         self.notification_cursor.execute("LISTEN dbos_notifications_channel")
+        self.notification_cursor.execute("LISTEN dbos_workflow_events_channel")
         while self._run_notification_listener:
             if select.select([self.notification_conn], [], [], 60) == ([], [], []):
                 continue
@@ -416,7 +428,19 @@ class SystemDatabase:
                             condition.notify_all()
                             condition.release()
                             dbos_logger.debug(
-                                f"Signaled condition for {notify.payload}"
+                                f"Signaled notifications condition for {notify.payload}"
+                            )
+                    elif channel == "dbos_workflow_events_channel":
+                        if (
+                            notify.payload
+                            and notify.payload in self.workflow_events_map
+                        ):
+                            condition = self.workflow_events_map[notify.payload]
+                            condition.acquire()
+                            condition.notify_all()
+                            condition.release()
+                            dbos_logger.debug(
+                                f"Signaled workflow_events condition for {notify.payload}"
                             )
                     else:
                         dbos_logger.error(f"Unknown channel: {channel}")
@@ -450,3 +474,108 @@ class SystemDatabase:
         if not skip_sleep:
             time.sleep(duration)
         return duration
+
+    def set_event(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        key: str,
+        message: Any,
+    ) -> None:
+        with self.engine.begin() as c:
+            recorded_output = self.check_operation_execution(
+                workflow_uuid, function_id, conn=c
+            )
+            if recorded_output is not None:
+                return  # Already sent before
+
+            try:
+                c.execute(
+                    pg.insert(SystemSchema.workflow_events).values(
+                        workflow_uuid=workflow_uuid,
+                        key=key,
+                        value=utils.serialize(message),
+                    )
+                )
+            except sa.exc.IntegrityError:
+                raise DBOSDuplicateWorkflowEventError(workflow_uuid, key)
+            except Exception as e:
+                raise e
+            output: OperationResultInternal = {
+                "workflow_uuid": workflow_uuid,
+                "function_id": function_id,
+                "output": None,
+                "error": None,
+            }
+            self.record_operation_result(output, conn=c)
+
+    def get_event(
+        self,
+        target_uuid: str,
+        key: str,
+        timeout_seconds: float = 60,
+        caller_ctx: Optional[GetEventWorkflowContext] = None,
+    ) -> Any:
+        get_sql = sa.select(
+            SystemSchema.workflow_events.c.value,
+        ).where(
+            SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
+            SystemSchema.workflow_events.c.key == key,
+        )
+        # Check for previous executions only if it's in a workflow
+        if caller_ctx is not None:
+            recorded_output = self.check_operation_execution(
+                caller_ctx["workflow_uuid"], caller_ctx["function_id"]
+            )
+            if recorded_output is not None:
+                if recorded_output["output"] is not None:
+                    return utils.deserialize(recorded_output["output"])
+                else:
+                    raise Exception("No output recorded in the last get_event")
+
+        # Check if the key is already in the database. If not, wait for the notification.
+        init_recv: Sequence[Any]
+        with self.engine.begin() as c:
+            init_recv = c.execute(get_sql).fetchall()
+
+        value: Any = None
+        if len(init_recv) > 0:
+            value = utils.deserialize(init_recv[0][0])
+        else:
+            # Wait for the notification
+            payload = f"{target_uuid}::{key}"
+            condition = threading.Condition()
+            self.workflow_events_map[payload] = condition
+            condition.acquire()
+            actual_timeout = timeout_seconds
+            if caller_ctx is not None:
+                # Support OAOO sleep for workflows
+                actual_timeout = self.sleep(
+                    caller_ctx["workflow_uuid"],
+                    caller_ctx["timeout_function_id"],
+                    timeout_seconds,
+                    skip_sleep=True,
+                )
+            condition.wait(timeout=actual_timeout)
+            condition.release()
+            self.workflow_events_map.pop(payload)
+
+            # Read the value from the database
+            with self.engine.begin() as c:
+                final_recv = c.execute(get_sql).fetchall()
+                if len(final_recv) > 0:
+                    value = utils.deserialize(final_recv[0][0])
+
+        # Record the output if it's in a workflow
+        if caller_ctx is not None:
+            self.record_operation_result(
+                {
+                    "workflow_uuid": caller_ctx["workflow_uuid"],
+                    "function_id": caller_ctx["function_id"],
+                    "output": utils.serialize(
+                        value
+                    ),  # None will be serialized to 'null'
+                    "error": None,
+                }
+            )
+        return value
