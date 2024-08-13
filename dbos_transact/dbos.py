@@ -424,7 +424,7 @@ class DBOS:
             def wrapper(*args: Any, **kwargs: Any) -> Any:
                 # Entering transaction is allowed:
                 #  In a workflow (that is not in a transaction / comm already)
-                #  Not in a workflow (we will need a temp workflow)
+                #  Not in a workflow (we will start the single op workflow)
                 ctx = get_local_dbos_context()
                 if ctx and ctx.is_within_workflow():
                     assert ctx.is_workflow()
@@ -489,7 +489,7 @@ class DBOS:
             def wrapper(*args: Any, **kwargs: Any) -> Any:
                 # Entering communicator is allowed:
                 #  In a workflow (that is not in a transaction / comm already)
-                #  Not in a workflow (we will need a temp workflow)
+                #  Not in a workflow (we will start the single op workflow)
                 ctx = get_local_dbos_context()
                 if ctx and ctx.is_within_workflow():
                     assert ctx.is_workflow()
