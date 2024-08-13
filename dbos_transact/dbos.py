@@ -72,7 +72,7 @@ if TYPE_CHECKING:
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
-_temp_send_wf = "<temp>.temp_send_workflow"
+TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
 
 class WorkflowProtocol(Protocol[P, R]):
@@ -174,8 +174,8 @@ class DBOS:
             self.send(destination_uuid, message, topic)
 
         temp_send_wf = self.workflow_wrapper(send_temp_workflow)
-        set_dbos_func_name(send_temp_workflow, _temp_send_wf)
-        self.register_wf_function(_temp_send_wf, temp_send_wf)
+        set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
+        self.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
 
     def destroy(self) -> None:
         self._run_startup_recovery_thread = False
@@ -531,7 +531,7 @@ class DBOS:
             assert ctx.is_workflow()
             return do_send(destination_uuid, message, topic)
         else:
-            wffn = self.workflow_info_map.get(_temp_send_wf)
+            wffn = self.workflow_info_map.get(TEMP_SEND_WF_NAME)
             assert wffn
             wffn(destination_uuid, message, topic)
 
