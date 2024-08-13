@@ -419,9 +419,13 @@ def test_send_recv(dbos: DBOS) -> None:
         return "-".join([str(msg1), str(msg2), str(msg3)])
 
     @dbos.workflow()
-    def test_recv_timeout(timeout_seconds: float) -> Optional[str]:
+    def test_recv_timeout(timeout_seconds: float) -> None:
         msg = dbos.recv(timeout_seconds=timeout_seconds)
-        return str(msg) if msg is not None else None
+        assert msg is None
+
+    @dbos.workflow()
+    def test_send_none(dest_uuid: str) -> None:
+        dbos.send(dest_uuid, None)
 
     dest_uuid = str(uuid.uuid4())
 
@@ -444,6 +448,17 @@ def test_send_recv(dbos: DBOS) -> None:
     assert handle.get_result() == "test2-test1-test3"
     duration = time.time() - begin_time
     assert duration < 3.0  # Shouldn't take more than 3 seconds to run
+
+    # Test send 'None'
+    none_uuid = str(uuid.uuid4())
+    none_handle = None
+    with SetWorkflowUUID(none_uuid):
+        none_handle = dbos.start_workflow(test_recv_timeout, 10.0)
+    test_send_none(none_uuid)
+    begin_time = time.time()
+    assert none_handle.get_result() is None
+    duration = time.time() - begin_time
+    assert duration < 1.0  # None is from the received message, not from the timeout.
 
     timeout_uuid = str(uuid.uuid4())
     with SetWorkflowUUID(timeout_uuid):
@@ -485,6 +500,7 @@ def test_set_get_events(dbos: DBOS) -> None:
     def test_setevent_workflow() -> None:
         dbos.set_event("key1", "value1")
         dbos.set_event("key2", "value2")
+        dbos.set_event("key3", None)
 
     @dbos.workflow()
     def test_getevent_workflow(
@@ -511,6 +527,12 @@ def test_set_get_events(dbos: DBOS) -> None:
 
     value2 = dbos.get_event(wfuuid, "key2")
     assert value2 == "value2"
+
+    begin_time = time.time()
+    value3 = test_getevent_workflow(wfuuid, "key3")
+    assert value3 is None
+    duration = time.time() - begin_time
+    assert duration < 1  # None is from the event not from the timeout
 
     # Test OAOO
     timeout_uuid = str(uuid.uuid4())
