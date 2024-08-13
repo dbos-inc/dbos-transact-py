@@ -219,6 +219,10 @@ def test_temp_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
     comm_counter: int = 0
 
+    cur_time: str = datetime.datetime.now().isoformat()
+    gwi: GetWorkflowsInput = GetWorkflowsInput()
+    gwi.start_time = cur_time
+
     @dbos.transaction()
     def test_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
@@ -236,6 +240,18 @@ def test_temp_workflow(dbos: DBOS) -> None:
     test_transaction("var2")
     assert get_local_dbos_context() is None
     test_communicator("var")
+
+    wfs = dbos.sys_db.get_workflows(gwi)
+    assert len(wfs.workflow_uuids) == 2
+
+    wfi1 = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    assert wfi1
+    assert wfi1["name"].startswith("<temp>")
+
+    wfi2 = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[1], False)
+    assert wfi2
+    assert wfi2["name"].startswith("<temp>")
+
     assert txn_counter == 1
     assert comm_counter == 1
 
