@@ -10,6 +10,7 @@ import pytest
 import sqlalchemy as sa
 
 from dbos_transact import DBOS, ConfigFile, SetWorkflowUUID
+from dbos_transact.error import DBOSException
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -473,6 +474,11 @@ def test_send_recv(dbos: DBOS) -> None:
         assert duration < 0.3
         assert timeoutres is None
 
+    # Test recv outside of a workflow
+    with pytest.raises(Exception) as exc_info:
+        dbos.recv("test1")
+    assert "recv() must be called within a workflow" in str(exc_info.value)
+
 
 def test_set_get_events(dbos: DBOS) -> None:
     @dbos.workflow()
@@ -534,3 +540,8 @@ def test_set_get_events(dbos: DBOS) -> None:
     duration = time.time() - begin_time
     assert duration > 0.7
     assert res is None
+
+    # Test setEvent outside of a workflow
+    with pytest.raises(Exception) as exc_info:
+        dbos.set_event("key1", "value1")
+    assert "set_event() must be called within a workflow" in str(exc_info.value)

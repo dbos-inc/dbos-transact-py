@@ -48,6 +48,7 @@ from dbos_transact.context import (
     get_local_dbos_context,
 )
 from dbos_transact.error import (
+    DBOSException,
     DBOSRecoveryError,
     DBOSWorkflowConflictUUIDError,
     DBOSWorkflowFunctionNotFoundError,
@@ -452,19 +453,26 @@ class DBOS:
             )
 
     def recv(self, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
-        attributes: TracedAttributes = {
-            "name": "recv",
-        }
-        with EnterDBOSCommunicator(attributes) as ctx:
-            ctx.function_id += 1  # Reserve for the sleep
-            timeout_function_id = ctx.function_id
-            return self.sys_db.recv(
-                ctx.workflow_uuid,
-                ctx.curr_comm_function_id,
-                timeout_function_id,
-                topic,
-                timeout_seconds,
-            )
+        cur_ctx = get_local_dbos_context()
+        if cur_ctx is not None:
+            # Must call it within a workflow
+            assert cur_ctx.is_workflow()
+            attributes: TracedAttributes = {
+                "name": "recv",
+            }
+            with EnterDBOSCommunicator(attributes) as ctx:
+                ctx.function_id += 1  # Reserve for the sleep
+                timeout_function_id = ctx.function_id
+                return self.sys_db.recv(
+                    ctx.workflow_uuid,
+                    ctx.curr_comm_function_id,
+                    timeout_function_id,
+                    topic,
+                    timeout_seconds,
+                )
+        else:
+            # Cannot call it from outside of a workflow
+            raise DBOSException("recv() must be called within a workflow")
 
     def sleep(self, seconds: float) -> None:
         attributes: TracedAttributes = {
@@ -476,10 +484,17 @@ class DBOS:
             self.sys_db.sleep(ctx.workflow_uuid, ctx.curr_comm_function_id, seconds)
 
     def set_event(self, key: str, value: Any) -> None:
-        with EnterDBOSCommunicator() as ctx:
-            self.sys_db.set_event(
-                ctx.workflow_uuid, ctx.curr_comm_function_id, key, value
-            )
+        cur_ctx = get_local_dbos_context()
+        if cur_ctx is not None:
+            # Must call it within a workflow
+            assert cur_ctx.is_workflow()
+            with EnterDBOSCommunicator() as ctx:
+                self.sys_db.set_event(
+                    ctx.workflow_uuid, ctx.curr_comm_function_id, key, value
+                )
+        else:
+            # Cannot call it from outside of a workflow
+            raise DBOSException("set_event() must be called within a workflow")
 
     def get_event(
         self, workflow_uuid: str, key: str, timeout_seconds: float = 60
