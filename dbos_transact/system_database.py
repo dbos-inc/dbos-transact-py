@@ -1,3 +1,4 @@
+import datetime
 import os
 import select
 import threading
@@ -72,6 +73,15 @@ class GetEventWorkflowContext(TypedDict):
 
 
 class GetWorkflowsInput:
+    def __init__(self) -> None:
+        self.name = None
+        self.authenticated_user = None
+        self.start_time = None
+        self.end_time = None
+        self.status = None
+        self.application_version = None
+        self.limit = None
+
     name: Optional[str]  # The name of the workflow function
     authenticated_user: Optional[str]  # The user who ran the workflow.
     start_time: Optional[str]  # Timestamp in ISO 8601 format
@@ -87,7 +97,7 @@ class GetWorkflowsInput:
 
 class GetWorkflowsOutput:
     def __init__(self, workflow_uuids: List[str]):
-        self.worfkflow_uuids = workflow_uuids
+        self.workflow_uuids = workflow_uuids
 
     workflow_uuids: List[str]
 
@@ -357,7 +367,7 @@ class SystemDatabase:
             inputs: WorkflowInputs = utils.deserialize(row[0])
             return inputs
 
-    async def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
+    def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
         query = sa.select(SystemSchema.workflow_status.c.workflow_uuid).order_by(
             SystemSchema.workflow_status.c.created_at.desc()
         )
@@ -372,12 +382,12 @@ class SystemDatabase:
         if input.start_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                >= sa.func.from_unixtime(input.start_time) / 1000
+                >= datetime.datetime.fromisoformat(input.start_time).timestamp()
             )
         if input.end_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                <= sa.func.from_unixtime(input.end_time) / 1000
+                <= datetime.datetime.fromisoformat(input.end_time).timestamp()
             )
         if input.status:
             query = query.where(SystemSchema.workflow_status.c.status == input.status)

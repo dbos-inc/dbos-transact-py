@@ -1,3 +1,4 @@
+import datetime
 import importlib
 import sys
 import time
@@ -12,6 +13,7 @@ import sqlalchemy as sa
 from dbos_transact import DBOS, ConfigFile, SetWorkflowUUID
 from dbos_transact.context import get_local_dbos_context
 from dbos_transact.error import DBOSException
+from dbos_transact.system_database import GetWorkflowsInput
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -523,6 +525,9 @@ def test_send_recv(dbos: DBOS) -> None:
 
 def test_send_recv_temp_wf(dbos: DBOS) -> None:
     recv_counter: int = 0
+    cur_time: str = datetime.datetime.now().isoformat()
+    gwi: GetWorkflowsInput = GetWorkflowsInput()
+    gwi.start_time = cur_time
 
     @dbos.workflow()
     def test_send_recv_workflow(topic: str) -> str:
@@ -540,6 +545,16 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
 
     dbos.send(dest_uuid, "testsend1", "testtopic")
     assert handle.get_result() == "testsend1"
+
+    wfs = dbos.sys_db.get_workflows(gwi)
+    assert len(wfs.workflow_uuids) == 2
+    assert wfs.workflow_uuids[1] == dest_uuid
+    assert wfs.workflow_uuids[0] != dest_uuid
+
+    wfi = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    assert wfi
+    assert wfi["name"] == "<temp>.temp_send_workflow"
+
     assert recv_counter == 1
 
 
