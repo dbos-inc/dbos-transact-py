@@ -533,7 +533,7 @@ class DBOS:
         else:
             wffn = self.workflow_info_map.get(_temp_send_wf)
             assert wffn
-            return wffn(destination_uuid, message, topic)
+            wffn(destination_uuid, message, topic)
 
     def recv(self, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
         cur_ctx = get_local_dbos_context()
