@@ -105,6 +105,18 @@ class CommunicatorProtocol(Protocol):
 Communicator = TypeVar("Communicator", bound=CommunicatorProtocol)
 
 
+def get_dbos_func_name(f: Any) -> str:
+    if hasattr(f, "dbos_function_name"):
+        return str(getattr(f, "dbos_function_name"))
+    if hasattr(f, "__qualname__"):
+        return str(getattr(f, "__qualname__"))
+    return "<unknown>"
+
+
+def set_dbos_func_name(f: Any, name: str) -> None:
+    setattr(f, "dbos_function_name", name)
+
+
 class WorkflowInputContext(TypedDict):
     workflow_uuid: str
 
@@ -162,6 +174,7 @@ class DBOS:
             self.send(destination_uuid, message, topic)
 
         temp_send_wf = self.workflow_wrapper(send_temp_workflow)
+        set_dbos_func_name(send_temp_workflow, _temp_send_wf)
         self.register_wf_function(_temp_send_wf, temp_send_wf)
 
     def destroy(self) -> None:
@@ -191,7 +204,7 @@ class DBOS:
                     status = self._init_workflow(
                         ctx,
                         inputs=inputs,
-                        wf_name=func.__qualname__,
+                        wf_name=get_dbos_func_name(func),
                     )
 
                     return self._execute_workflow(status, func, *args, **kwargs)
@@ -201,7 +214,7 @@ class DBOS:
                     status = self._init_workflow(
                         ctx,
                         inputs=inputs,
-                        wf_name=func.__qualname__,
+                        wf_name=get_dbos_func_name(func),
                     )
 
                     return self._execute_workflow(status, func, *args, **kwargs)
@@ -261,7 +274,7 @@ class DBOS:
         status = self._init_workflow(
             new_wf_ctx,
             inputs=inputs,
-            wf_name=func.__qualname__,
+            wf_name=get_dbos_func_name(func),
         )
 
         future = self.executor.submit(
@@ -425,7 +438,8 @@ class DBOS:
                 return wrapper(*args, **kwargs)
 
             wrapped_wf = self.workflow_wrapper(temp_wf)
-            self.register_wf_function("<temp>." + func.__qualname__, wrapped_wf)
+            set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
+            self.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
             return cast(Transaction, wrapper)
 
@@ -489,7 +503,8 @@ class DBOS:
                 return wrapper(*args, **kwargs)
 
             wrapped_wf = self.workflow_wrapper(temp_wf)
-            self.register_wf_function("<temp>." + func.__qualname__, wrapped_wf)
+            set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
+            self.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
             return cast(Communicator, wrapper)
 
