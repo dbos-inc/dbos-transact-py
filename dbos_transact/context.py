@@ -134,6 +134,9 @@ class DBOSContext:
     def end_handler(self, exc_value: Optional[BaseException]) -> None:
         self._end_span(exc_value)
 
+    def get_current_span(self):
+        return self.spans[-1]
+
     def _start_span(self, attributes: TracedAttributes) -> None:
         attributes["operationUUID"] = (
             self.workflow_uuid if len(self.workflow_uuid) > 0 else None

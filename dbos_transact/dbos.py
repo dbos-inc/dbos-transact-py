@@ -17,6 +17,8 @@ from typing import (
     cast,
 )
 
+from opentelemetry.trace import Span
+
 from .tracer import dbos_tracer
 
 if TYPE_CHECKING:
@@ -542,6 +544,11 @@ class DBOS:
         ctx = assert_current_dbos_context()
         assert ctx.is_within_workflow()
         return ctx.parent_workflow_uuid
+
+    @classproperty
+    def span(cls) -> Span:
+        ctx = assert_current_dbos_context()
+        return ctx.get_current_span()
 
     @classproperty
     def request(cls) -> Optional["Request"]:
