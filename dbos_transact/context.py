@@ -58,10 +58,10 @@ class DBOSContext:
 
         self.id_assigned_for_next_workflow: str = ""
 
-        self.workflow_uuid: str = ""
-        self.function_id: int = -1
         self.parent_workflow_uuid: str = ""
         self.parent_workflow_fid: int = -1
+        self.workflow_uuid: str = ""
+        self.function_id: int = -1
 
         self.curr_comm_function_id: int = -1
         self.curr_tx_function_id: int = -1
@@ -290,8 +290,9 @@ class EnterDBOSWorkflow:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        assert assert_current_dbos_context().is_within_workflow()
-        assert_current_dbos_context().end_workflow(exc_value)
+        ctx = assert_current_dbos_context()
+        assert ctx.is_within_workflow()
+        ctx.end_workflow(exc_value)
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             clear_local_dbos_context()

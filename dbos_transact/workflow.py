@@ -1,5 +1,5 @@
 from concurrent.futures import Future
-from typing import Generic, TypeVar, cast
+from typing import Generic, TypeVar
 
 R = TypeVar("R")
 

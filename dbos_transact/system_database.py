@@ -1,9 +1,10 @@
+import datetime
 import os
 import select
 import threading
 import time
 from enum import Enum
-from typing import Any, Dict, Literal, Optional, Sequence, TypedDict
+from typing import Any, Dict, List, Literal, Optional, Sequence, TypedDict, cast
 
 import psycopg2
 import sqlalchemy as sa
@@ -69,6 +70,55 @@ class GetEventWorkflowContext(TypedDict):
     workflow_uuid: str
     function_id: int
     timeout_function_id: int
+
+
+class GetWorkflowsInput:
+    def __init__(self) -> None:
+        self.name = None
+        self.authenticated_user = None
+        self.start_time = None
+        self.end_time = None
+        self.status = None
+        self.application_version = None
+        self.limit = None
+
+    name: Optional[str]  # The name of the workflow function
+    authenticated_user: Optional[str]  # The user who ran the workflow.
+    start_time: Optional[str]  # Timestamp in ISO 8601 format
+    end_time: Optional[str]  # Timestamp in ISO 8601 format
+    status: Optional[WorkflowStatuses]
+    application_version: Optional[
+        str
+    ]  # The application version that ran this workflow.
+    limit: Optional[
+        int
+    ]  # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
+
+
+class GetWorkflowsOutput:
+    def __init__(self, workflow_uuids: List[str]):
+        self.workflow_uuids = workflow_uuids
+
+    workflow_uuids: List[str]
+
+
+class WorkflowInformation(TypedDict, total=False):
+    workflow_uuid: str
+    status: WorkflowStatuses  # The status of the workflow.
+    name: str  # The name of the workflow function.
+    workflow_class_name: str  # The class name holding the workflow function.
+    workflow_config_name: (
+        str  # The name of the configuration, if the class needs configuration
+    )
+    authenticated_user: str  # The user who ran the workflow. Empty string if not set.
+    assumed_role: str
+    # The role used to run this workflow.  Empty string if authorization is not required.
+    authenticatedRoles: List[str]
+    # All roles the authenticated user has, if any.
+    input: Optional[WorkflowInputs]
+    output: Optional[str]
+    error: Optional[str]
+    request: Optional[str]
 
 
 dbos_null_topic = "__null__topic__"
@@ -171,6 +221,33 @@ class SystemDatabase:
                 )
             )
 
+    def set_workflow_status(
+        self,
+        workflow_uuid: str,
+        status: WorkflowStatusString,
+        reset_recovery_attempts: bool,
+    ) -> None:
+        with self.engine.begin() as c:
+            stmt = (
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid)
+                .values(
+                    status=status,
+                )
+            )
+            c.execute(stmt)
+
+        if reset_recovery_attempts:
+            with self.engine.begin() as c:
+                stmt = (
+                    sa.update(SystemSchema.workflow_status)
+                    .where(
+                        SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid
+                    )
+                    .values(recovery_attempts=reset_recovery_attempts)
+                )
+                c.execute(stmt)
+
     def get_workflow_status(
         self, workflow_uuid: str
     ) -> Optional[WorkflowStatusInternal]:
@@ -197,6 +274,76 @@ class SystemDatabase:
             }
             return status
 
+    def get_workflow_status_w_outputs(
+        self, workflow_uuid: str
+    ) -> Optional[WorkflowStatusInternal]:
+        with self.engine.begin() as c:
+            row = c.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.status,
+                    SystemSchema.workflow_status.c.name,
+                    SystemSchema.workflow_status.c.request,
+                    SystemSchema.workflow_status.c.output,
+                    SystemSchema.workflow_status.c.error,
+                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
+            ).fetchone()
+            if row is None:
+                return None
+            status: WorkflowStatusInternal = {
+                "workflow_uuid": workflow_uuid,
+                "status": row[0],
+                "name": row[1],
+                "output": row[3],
+                "error": row[4],
+                "app_id": None,
+                "app_version": None,
+                "executor_id": None,
+                "request": row[2],
+            }
+            return status
+
+    def await_workflow_result_internal(
+        self, workflow_uuid: str
+    ) -> Optional[dict[str, Any]]:
+        polling_interval_secs: float = 1.000
+
+        while True:
+            with self.engine.begin() as c:
+                row = c.execute(
+                    sa.select(
+                        SystemSchema.workflow_status.c.status,
+                        SystemSchema.workflow_status.c.output,
+                        SystemSchema.workflow_status.c.error,
+                    ).where(
+                        SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
+                    )
+                ).fetchone()
+                if row is None:
+                    return None
+                status = row[0]
+                if status == str(WorkflowStatusString.SUCCESS):
+                    return {"output": row[1], "workflow_uuid": workflow_uuid}
+
+                elif status == str(WorkflowStatusString.ERROR):
+                    return {"error": row[1], "workflow_uuid": workflow_uuid}
+
+            time.sleep(polling_interval_secs)
+
+    def get_workflow_info(
+        self, workflow_uuid: str, get_request: bool
+    ) -> Optional[WorkflowInformation]:
+        stat = self.get_workflow_status_w_outputs(workflow_uuid)
+        if stat is None:
+            return None
+        info = cast(WorkflowInformation, stat)
+        input = self.get_workflow_inputs(workflow_uuid)
+        if input is not None:
+            info["input"] = input
+        if not get_request:
+            info.pop("request", None)
+
+        return info
+
     def update_workflow_inputs(self, workflow_uuid: str, inputs: str) -> None:
         with self.engine.begin() as c:
             c.execute(
@@ -219,6 +366,44 @@ class SystemDatabase:
                 return None
             inputs: WorkflowInputs = utils.deserialize(row[0])
             return inputs
+
+    def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
+        query = sa.select(SystemSchema.workflow_status.c.workflow_uuid).order_by(
+            SystemSchema.workflow_status.c.created_at.desc()
+        )
+
+        if input.name:
+            query = query.where(SystemSchema.workflow_status.c.name == input.name)
+        if input.authenticated_user:
+            query = query.where(
+                SystemSchema.workflow_status.c.authenticated_user
+                == input.authenticated_user
+            )
+        if input.start_time:
+            query = query.where(
+                SystemSchema.workflow_status.c.created_at
+                >= datetime.datetime.fromisoformat(input.start_time).timestamp()
+            )
+        if input.end_time:
+            query = query.where(
+                SystemSchema.workflow_status.c.created_at
+                <= datetime.datetime.fromisoformat(input.end_time).timestamp()
+            )
+        if input.status:
+            query = query.where(SystemSchema.workflow_status.c.status == input.status)
+        if input.application_version:
+            query = query.where(
+                SystemSchema.workflow_status.c.application_version
+                == input.application_version
+            )
+        if input.limit:
+            query = query.limit(input.limit)
+
+        with self.engine.begin() as c:
+            rows = c.execute(query)
+        workflow_uuids = [row[0] for row in rows]
+
+        return GetWorkflowsOutput(workflow_uuids)
 
     def get_pending_workflows(self, executor_id: str) -> list[str]:
         with self.engine.begin() as c:
