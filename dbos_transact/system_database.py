@@ -3,7 +3,7 @@ import select
 import threading
 import time
 from enum import Enum
-from typing import Any, Dict, Literal, Optional, Sequence, TypedDict
+from typing import Any, Dict, Literal, Optional, Sequence, TypedDict, cast
 
 import psycopg2
 import sqlalchemy as sa
@@ -16,6 +16,11 @@ from dbos_transact.error import (
     DBOSDuplicateWorkflowEventError,
     DBOSNonExistentWorkflowError,
     DBOSWorkflowConflictUUIDError,
+)
+from dbos_transact.workflow import (
+    GetWorkflowsInput,
+    GetWorkflowsOutput,
+    WorkflowInformation,
 )
 
 from .dbos_config import ConfigFile
@@ -81,29 +86,6 @@ export async function listWorkflows(config: DBOSConfig, input: GetWorkflowsInput
   const workflowInfos = await Promise.all(workflowUUIDs.map(async (i) => await getWorkflowInfo(systemDatabase, i, getRequest)))
   await systemDatabase.destroy();
   return workflowInfos;
-}
-
-async function getWorkflowInfo(systemDatabase: SystemDatabase, workflowUUID: string, getRequest: boolean) {
-  const info = await systemDatabase.getWorkflowStatus(workflowUUID) as WorkflowInformation;
-  info.workflowUUID = workflowUUID;
-  if (info === null) {
-    return {};
-  }
-  const input = await systemDatabase.getWorkflowInputs(workflowUUID);
-  if (input !== null) {
-    info.input = input;
-  }
-  if (info.status === StatusString.SUCCESS) {
-    const result = await systemDatabase.getWorkflowResult(workflowUUID);
-    info.output = result;
-  } else if (info.status === StatusString.ERROR) {
-    const result = await systemDatabase.getWorkflowResult(workflowUUID);
-    info.error = result;
-  }
-  if (!getRequest) {
-    delete info.request;
-  }
-  return info;
 }
 
 export async function getWorkflow(config: DBOSConfig, workflowUUID: string, getRequest: boolean) {
@@ -287,6 +269,76 @@ class SystemDatabase:
             }
             return status
 
+    def get_workflow_status_w_outputs(
+        self, workflow_uuid: str
+    ) -> Optional[WorkflowStatusInternal]:
+        with self.engine.begin() as c:
+            row = c.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.status,
+                    SystemSchema.workflow_status.c.name,
+                    SystemSchema.workflow_status.c.request,
+                    SystemSchema.workflow_status.c.output,
+                    SystemSchema.workflow_status.c.error,
+                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
+            ).fetchone()
+            if row is None:
+                return None
+            status: WorkflowStatusInternal = {
+                "workflow_uuid": workflow_uuid,
+                "status": row[0],
+                "name": row[1],
+                "output": row[3],
+                "error": row[4],
+                "app_id": None,
+                "app_version": None,
+                "executor_id": None,
+                "request": row[2],
+            }
+            return status
+
+    def await_workflow_result_internal(
+        self, workflow_uuid: str
+    ) -> Optional[dict[str, Any]]:
+        polling_interval_ms: int = 1000
+
+        while True:
+            with self.engine.begin() as c:
+                row = c.execute(
+                    sa.select(
+                        SystemSchema.workflow_status.c.status,
+                        SystemSchema.workflow_status.c.output,
+                        SystemSchema.workflow_status.c.error,
+                    ).where(
+                        SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
+                    )
+                ).fetchone()
+                if row is None:
+                    return None
+                status = row[0]
+                if status == str(WorkflowStatusString.SUCCESS):
+                    return {"output": row[1], "workflow_uuid": workflow_uuid}
+
+                elif status == str(WorkflowStatusString.ERROR):
+                    return {"error": row[1], "workflow_uuid": workflow_uuid}
+
+            time.sleep(polling_interval_ms)
+
+    def get_workflow_info(
+        self, workflow_uuid: str, get_request: bool
+    ) -> Optional[WorkflowInformation]:
+        stat = self.get_workflow_status_w_outputs(workflow_uuid)
+        if stat is None:
+            return None
+        info = cast(WorkflowInformation, stat)
+        input = self.get_workflow_inputs(workflow_uuid)
+        if input is not None:
+            info["input"] = input
+        if not get_request:
+            info.pop("request", None)
+
+        return info
+
     def update_workflow_inputs(self, workflow_uuid: str, inputs: str) -> None:
         with self.engine.begin() as c:
             c.execute(
@@ -309,6 +361,44 @@ class SystemDatabase:
                 return None
             inputs: WorkflowInputs = utils.deserialize(row[0])
             return inputs
+
+    async def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
+        query = sa.select(SystemSchema.workflow_status.c.workflow_uuid).order_by(
+            SystemSchema.workflow_status.c.created_at.desc()
+        )
+
+        if input.name:
+            query = query.where(SystemSchema.workflow_status.c.name == input.name)
+        if input.authenticated_user:
+            query = query.where(
+                SystemSchema.workflow_status.c.authenticated_user
+                == input.authenticated_user
+            )
+        if input.start_time:
+            query = query.where(
+                SystemSchema.workflow_status.c.created_at
+                >= sa.func.from_unixtime(input.start_time) / 1000
+            )
+        if input.end_time:
+            query = query.where(
+                SystemSchema.workflow_status.c.created_at
+                <= sa.func.from_unixtime(input.end_time) / 1000
+            )
+        if input.status:
+            query = query.where(SystemSchema.workflow_status.c.status == input.status)
+        if input.application_version:
+            query = query.where(
+                SystemSchema.workflow_status.c.application_version
+                == input.application_version
+            )
+        if input.limit:
+            query = query.limit(input.limit)
+
+        with self.engine.begin() as c:
+            rows = c.execute(query)
+        workflow_uuids = [row[0] for row in rows]
+
+        return GetWorkflowsOutput(workflow_uuids)
 
     def get_pending_workflows(self, executor_id: str) -> list[str]:
         with self.engine.begin() as c:

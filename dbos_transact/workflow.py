@@ -6,7 +6,7 @@ from dbos_transact.system_database import WorkflowInputs, WorkflowStatuses
 R = TypeVar("R")
 
 
-class WorkflowInformation(TypedDict):
+class WorkflowInformation(TypedDict, total=False):
     workflow_uuid: str
     status: WorkflowStatuses  # The status of the workflow.
     name: str  # The name of the workflow function.
@@ -42,7 +42,7 @@ class GetWorkflowsInput:
     name: Optional[str]  # The name of the workflow function
     authenticated_user: Optional[str]  # The user who ran the workflow.
     start_time: Optional[str]  # Timestamp in ISO 8601 format
-    endTime: Optional[str]  # Timestamp in ISO 8601 format
+    end_time: Optional[str]  # Timestamp in ISO 8601 format
     status: Optional[WorkflowStatuses]
     application_version: Optional[
         str
@@ -53,4 +53,7 @@ class GetWorkflowsInput:
 
 
 class GetWorkflowsOutput:
+    def __init__(self, workflow_uuids: List[str]):
+        self.worfkflow_uuids = workflow_uuids
+
     workflow_uuids: List[str]
