@@ -234,6 +234,33 @@ class SystemDatabase:
                 )
             )
 
+    def set_workflow_status(
+        self,
+        workflow_uuid: str,
+        status: WorkflowStatusString,
+        reset_recovery_attempts: bool,
+    ) -> None:
+        with self.engine.begin() as c:
+            stmt = (
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid)
+                .values(
+                    status=status,
+                )
+            )
+            c.execute(stmt)
+
+        if reset_recovery_attempts:
+            with self.engine.begin() as c:
+                stmt = (
+                    sa.update(SystemSchema.workflow_status)
+                    .where(
+                        SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid
+                    )
+                    .values(recovery_attempts=reset_recovery_attempts)
+                )
+                c.execute(stmt)
+
     def get_workflow_status(
         self, workflow_uuid: str
     ) -> Optional[WorkflowStatusInternal]:
