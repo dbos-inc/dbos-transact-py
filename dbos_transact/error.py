@@ -20,6 +20,7 @@ class DBOSErrorCode(Enum):
     InitializationError = 3
     WorkflowFunctionNotFound = 4
     NonExistentWorkflowError = 5
+    DuplicateWorkflowEventError = 6
 
 
 class DBOSWorkflowConflictUUIDError(DBOSException):
@@ -59,4 +60,12 @@ class DBOSNonExistentWorkflowError(DBOSException):
         super().__init__(
             f"Sent to non-existent destination workflow UUID: {destination_uuid}",
             dbos_error_code=DBOSErrorCode.NonExistentWorkflowError.value,
+        )
+
+
+class DBOSDuplicateWorkflowEventError(DBOSException):
+    def __init__(self, workflow_uuid: str, key: str):
+        super().__init__(
+            f"Workflow {workflow_uuid} has already emitted an event with key {key}",
+            dbos_error_code=DBOSErrorCode.DuplicateWorkflowEventError.value,
         )

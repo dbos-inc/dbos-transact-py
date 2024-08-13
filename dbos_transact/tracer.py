@@ -21,19 +21,20 @@ class DBOSTracer:
         self.executor_id = os.environ.get("DBOS__VMID", "local")
 
     def config(self, config: ConfigFile) -> None:
-        provider = TracerProvider()
-        if os.environ.get("DBOS__CONSOLE_TRACES", None) is not None:
-            processor = BatchSpanProcessor(ConsoleSpanExporter())
-            provider.add_span_processor(processor)
-        otlp_traces_endpoint = (
-            config.get("telemetry", {}).get("OTLPExporter", {}).get("tracesEndpoint")  # type: ignore
-        )
-        if otlp_traces_endpoint:
-            processor = BatchSpanProcessor(
-                OTLPSpanExporter(endpoint=otlp_traces_endpoint)
+        if not isinstance(trace.get_tracer_provider(), TracerProvider):
+            provider = TracerProvider()
+            if os.environ.get("DBOS__CONSOLE_TRACES", None) is not None:
+                processor = BatchSpanProcessor(ConsoleSpanExporter())
+                provider.add_span_processor(processor)
+            otlp_traces_endpoint = (
+                config.get("telemetry", {}).get("OTLPExporter", {}).get("tracesEndpoint")  # type: ignore
             )
-            provider.add_span_processor(processor)
-        trace.set_tracer_provider(provider)
+            if otlp_traces_endpoint:
+                processor = BatchSpanProcessor(
+                    OTLPSpanExporter(endpoint=otlp_traces_endpoint)
+                )
+                provider.add_span_processor(processor)
+            trace.set_tracer_provider(provider)
 
     def start_span(
         self, attributes: "TracedAttributes", parent: Optional[Span] = None
