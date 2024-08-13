@@ -305,7 +305,7 @@ class SystemDatabase:
     def await_workflow_result_internal(
         self, workflow_uuid: str
     ) -> Optional[dict[str, Any]]:
-        polling_interval_ms: int = 1000
+        polling_interval_secs: float = 1.000
 
         while True:
             with self.engine.begin() as c:
@@ -327,7 +327,7 @@ class SystemDatabase:
                 elif status == str(WorkflowStatusString.ERROR):
                     return {"error": row[1], "workflow_uuid": workflow_uuid}
 
-            time.sleep(polling_interval_ms)
+            time.sleep(polling_interval_secs)
 
     def get_workflow_info(
         self, workflow_uuid: str, get_request: bool
