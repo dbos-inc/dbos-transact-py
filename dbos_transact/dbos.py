@@ -488,7 +488,10 @@ class DBOS:
         if cur_ctx is not None:
             # Must call it within a workflow
             assert cur_ctx.is_workflow()
-            with EnterDBOSCommunicator() as ctx:
+            attributes: TracedAttributes = {
+                "name": "set_event",
+            }
+            with EnterDBOSCommunicator(attributes) as ctx:
                 self.sys_db.set_event(
                     ctx.workflow_uuid, ctx.curr_comm_function_id, key, value
                 )
@@ -503,7 +506,10 @@ class DBOS:
         if cur_ctx is not None:
             # Call it within a workflow
             assert cur_ctx.is_workflow()
-            with EnterDBOSCommunicator() as ctx:
+            attributes: TracedAttributes = {
+                "name": "get_event",
+            }
+            with EnterDBOSCommunicator(attributes) as ctx:
                 ctx.function_id += 1
                 timeout_function_id = ctx.function_id
                 caller_ctx: GetEventWorkflowContext = {
