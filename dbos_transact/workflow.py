@@ -1,5 +1,4 @@
 from concurrent.futures import Future
-from enum import Enum
 from typing import Generic, TypeVar
 
 R = TypeVar("R")

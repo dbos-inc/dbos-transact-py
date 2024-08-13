@@ -292,7 +292,7 @@ class EnterDBOSWorkflow:
     ) -> Literal[False]:
         ctx = assert_current_dbos_context()
         assert ctx.is_within_workflow()
-        # ctx.end_workflow() # Why not?!
+        ctx.end_workflow(exc_value)
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             clear_local_dbos_context()
