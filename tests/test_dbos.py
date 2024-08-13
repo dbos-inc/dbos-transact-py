@@ -237,9 +237,11 @@ def test_temp_workflow(dbos: DBOS) -> None:
         return var
 
     assert get_local_dbos_context() is None
-    test_transaction("var2")
+    res = test_transaction("var2")
+    assert res == "var21"
     assert get_local_dbos_context() is None
-    test_communicator("var")
+    res = test_communicator("var")
+    assert res == "var"
 
     wfs = dbos.sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 2
@@ -298,6 +300,65 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == "bob1bob"
     assert wf_counter == 2
+    assert txn_counter == 1
+
+
+def test_recovery_temp_workflow(dbos: DBOS) -> None:
+    txn_counter: int = 0
+
+    @dbos.transaction()
+    def test_transaction(var2: str) -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        nonlocal txn_counter
+        txn_counter += 1
+        return var2 + str(rows[0][0])
+
+    cur_time: str = datetime.datetime.now().isoformat()
+    gwi: GetWorkflowsInput = GetWorkflowsInput()
+    gwi.start_time = cur_time
+
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowUUID(wfuuid):
+        res = test_transaction("bob")
+        assert res == "bob1"
+
+    wfs = dbos.sys_db.get_workflows(gwi)
+    assert len(wfs.workflow_uuids) == 1
+    assert wfs.workflow_uuids[0] == wfuuid
+
+    wfi = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    assert wfi
+    assert wfi["name"].startswith("<temp>")
+
+    # Change the workflow status to pending
+    dbos.sys_db.update_workflow_status(
+        {
+            "workflow_uuid": wfuuid,
+            "status": "PENDING",
+            "name": wfi["name"],
+            "output": None,
+            "error": None,
+            "executor_id": None,
+            "app_id": None,
+            "app_version": None,
+            "request": None,
+        }
+    )
+
+    # Recovery should execute the workflow again but skip the transaction
+    workflow_handles = dbos.recover_pending_workflows()
+    assert len(workflow_handles) == 1
+    assert workflow_handles[0].get_result() == "bob1"
+
+    wfs = dbos.sys_db.get_workflows(gwi)
+    assert len(wfs.workflow_uuids) == 1
+    assert wfs.workflow_uuids[0] == wfuuid
+
+    wfi = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    assert wfi
+    assert wfi["name"].startswith("<temp>")
+    assert wfi["status"] == "SUCCESS"
+
     assert txn_counter == 1
 
 

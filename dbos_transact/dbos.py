@@ -432,7 +432,7 @@ class DBOS:
                 else:
                     tempwf = self.workflow_info_map.get("<temp>." + func.__qualname__)
                     assert tempwf
-                    tempwf(*args, **kwargs)
+                    return tempwf(*args, **kwargs)
 
             def temp_wf(*args: Any, **kwargs: Any) -> Any:
                 return wrapper(*args, **kwargs)
@@ -497,7 +497,7 @@ class DBOS:
                 else:
                     tempwf = self.workflow_info_map.get("<temp>." + func.__qualname__)
                     assert tempwf
-                    tempwf(*args, **kwargs)
+                    return tempwf(*args, **kwargs)
 
             def temp_wf(*args: Any, **kwargs: Any) -> Any:
                 return wrapper(*args, **kwargs)
@@ -533,7 +533,7 @@ class DBOS:
         else:
             wffn = self.workflow_info_map.get(_temp_send_wf)
             assert wffn
-            wffn(destination_uuid, message, topic)
+            return wffn(destination_uuid, message, topic)
 
     def recv(self, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
         cur_ctx = get_local_dbos_context()
