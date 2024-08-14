@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from functools import wraps
 from logging import Logger
 from typing import (
@@ -138,6 +140,35 @@ class ClassPropertyDescriptor(Generic[G]):
 
 def classproperty(func: Callable[..., G]) -> ClassPropertyDescriptor[G]:
     return ClassPropertyDescriptor(func)
+
+
+class WorkflowHandleFuture(WorkflowHandle[R]):
+
+    def __init__(self, workflow_uuid: str, future: Future[R]):
+        super().__init__(workflow_uuid)
+        self.future = future
+
+    def get_result(self) -> R:
+        return self.future.result()
+
+
+class PollingWorkflowHandle(WorkflowHandle[R]):
+    calling_wf_id: Optional[str]
+    calling_wf_funcnum: Optional[int]
+
+    def __init__(self, workflow_uuid: str, dbos: DBOS):
+        super().__init__(workflow_uuid)
+        self.dbos = dbos
+        self.calling_wf_id = None
+        self.calling_wf_funcnum = None
+
+    def set_caller(self, calling_wf_id: str, calling_wf_funcnum: int) -> None:
+        self.calling_wf_id = calling_wf_id
+        self.calling_wf_funcnum = calling_wf_funcnum
+
+    def get_result(self) -> R:
+        res: R = self.dbos.sys_db.await_workflow_result(self.workflow_uuid)
+        return res
 
 
 class DBOS:
@@ -288,7 +319,7 @@ class DBOS:
             *args,
             **kwargs,
         )
-        return WorkflowHandle(new_wf_uuid, future)
+        return WorkflowHandleFuture(new_wf_uuid, future)
 
     def _init_workflow(
         self, ctx: DBOSContext, inputs: WorkflowInputs, wf_name: str

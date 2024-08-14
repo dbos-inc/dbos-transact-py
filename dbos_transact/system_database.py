@@ -322,9 +322,7 @@ class SystemDatabase:
             }
             return status
 
-    def await_workflow_result_internal(
-        self, workflow_uuid: str
-    ) -> Optional[dict[str, Any]]:
+    def await_workflow_result_internal(self, workflow_uuid: str) -> dict[str, Any]:
         polling_interval_secs: float = 1.000
 
         while True:
@@ -338,16 +336,29 @@ class SystemDatabase:
                         SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
                     )
                 ).fetchone()
-                if row is None:
-                    return None
-                status = row[0]
-                if status == str(WorkflowStatusString.SUCCESS):
-                    return {"output": row[1], "workflow_uuid": workflow_uuid}
+                if row is not None:
+                    status = row[0]
+                    if status == str(WorkflowStatusString.SUCCESS):
+                        return {"output": row[1], "workflow_uuid": workflow_uuid}
 
-                elif status == str(WorkflowStatusString.ERROR):
-                    return {"error": row[1], "workflow_uuid": workflow_uuid}
+                    elif status == str(WorkflowStatusString.ERROR):
+                        return {"error": row[1], "workflow_uuid": workflow_uuid}
+
+                else:
+                    pass  # CB: I guess we're assuming the WF will show up eventually.
 
             time.sleep(polling_interval_secs)
+
+    def await_workflow_result(self, workflow_uuid: str) -> Any:
+        stat = self.await_workflow_result_internal(workflow_uuid)
+        if not stat:
+            return None
+        status: str = stat["status"]
+        if status == str(WorkflowStatusString.SUCCESS):
+            return utils.deserialize(stat["output"])
+        elif status == str(WorkflowStatusString.ERROR):
+            raise utils.deserialize(stat["error"])
+        return None
 
     def get_workflow_info(
         self, workflow_uuid: str, get_request: bool

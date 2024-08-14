@@ -1,17 +1,19 @@
-from concurrent.futures import Future
+from abc import ABC, abstractmethod
 from typing import Generic, TypeVar
 
-R = TypeVar("R")
+R = TypeVar("R", covariant=True)
 
 
-class WorkflowHandle(Generic[R]):
-
-    def __init__(self, workflow_uuid: str, future: Future[R]):
+class WorkflowHandle(Generic[R], ABC):
+    def __init__(self, workflow_uuid: str):
         self.workflow_uuid = workflow_uuid
-        self.future = future
 
     def get_workflow_uuid(self) -> str:
         return self.workflow_uuid
 
+    @abstractmethod
     def get_result(self) -> R:
-        return self.future.result()
+        """Should be handled in the subclasses"""
+        raise Exception()
+
+    # TODO get status
