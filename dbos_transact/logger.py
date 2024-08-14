@@ -56,7 +56,10 @@ def config_logger(config: ConfigFile) -> None:
             )
             set_logger_provider(log_provider)
             log_provider.add_log_record_processor(
-                BatchLogRecordProcessor(OTLPLogExporter(endpoint=otlp_logs_endpoint))
+                BatchLogRecordProcessor(
+                    OTLPLogExporter(endpoint=otlp_logs_endpoint),
+                    export_timeout_millis=5000,
+                )
             )
             otlp_handler = LoggingHandler(logger_provider=log_provider)
             dbos_logger.addHandler(otlp_handler)
