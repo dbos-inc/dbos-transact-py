@@ -46,10 +46,6 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         self._end_headers()
 
     def do_GET(self) -> None:
-        dbos_logger.debug(
-            "GET request,\nPath: %s\nHeaders:\n%s\n", str(self.path), str(self.headers)
-        )
-
         if self.path == health_check_path:
             self.send_response(200)
             self._end_headers()
@@ -63,12 +59,6 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.headers["Content-Length"]
         )  # <--- Gets the size of data
         post_data = self.rfile.read(content_length)  # <--- Gets the data itself
-        dbos_logger.debug(
-            "POST request,\nPath: %s\nHeaders:\n%s\n\nBody:\n%s\n",
-            str(self.path),
-            str(self.headers),
-            post_data.decode("utf-8"),
-        )
 
         if self.path == workflow_recovery_path:
             executor_ids: List[str] = json.loads(post_data.decode("utf-8"))
@@ -81,3 +71,6 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self._end_headers()
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return  # Disable admin server request logging

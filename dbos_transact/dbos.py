@@ -148,7 +148,7 @@ class DBOS:
             config = load_config()
         config_logger(config)
         dbos_tracer.config(config)
-        dbos_logger.info("Initializing DBOS!")
+        dbos_logger.info("Initializing DBOS")
         self.config = config
         self.sys_db = SystemDatabase(config)
         self.app_db = ApplicationDatabase(config)
@@ -176,6 +176,9 @@ class DBOS:
         temp_send_wf = self.workflow_wrapper(send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
         self.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
+        dbos_logger.info("DBOS initialized")
+        for handler in dbos_logger.handlers:
+            handler.flush()
 
     def destroy(self) -> None:
         self._run_startup_recovery_thread = False
