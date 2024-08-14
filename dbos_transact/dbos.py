@@ -176,7 +176,7 @@ class DBOS:
         temp_send_wf = self.workflow_wrapper(send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
         self.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
-        dbos_logger.info("DBOS successfully initialized")
+        dbos_logger.info("DBOS initialized")
 
     def destroy(self) -> None:
         self._run_startup_recovery_thread = False
