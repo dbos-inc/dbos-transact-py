@@ -333,18 +333,24 @@ class DBOS:
     def retrieve_workflow(
         self, workflow_uuid: str, existing_workflow: bool = True
     ) -> WorkflowHandle[R]:
-        # TODO OAOO
         if existing_workflow:
-            stat = self.sys_db.get_workflow_status(workflow_uuid)
+            stat = self.get_workflow_status(workflow_uuid)
             if stat is None:
                 raise DBOSNonExistentWorkflowError(workflow_uuid)
         return PollingWorkflowHandle(workflow_uuid, self)
 
     def get_workflow_status(self, workflow_uuid: str) -> Optional[WorkflowStatus]:
-        # TODO OAOO
-        stat = self.sys_db.get_workflow_status(workflow_uuid)
+        ctx = get_local_dbos_context()
+        if ctx and ctx.is_within_workflow():
+            ctx.function_id += 1
+            stat = self.sys_db.get_workflow_status_within_wf(
+                workflow_uuid, ctx.workflow_uuid, ctx.function_id
+            )
+        else:
+            stat = self.sys_db.get_workflow_status(workflow_uuid)
         if stat is None:
             return None
+
         return WorkflowStatus(
             workflow_uuid=workflow_uuid,
             status=stat["status"],
@@ -377,7 +383,7 @@ class DBOS:
                 utils.serialize(ctx.request) if ctx.request is not None else None
             ),
         }
-        self.sys_db.update_workflow_status(status)
+        self.sys_db.update_workflow_status(status, False)
 
         self.sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
 

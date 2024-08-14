@@ -534,6 +534,46 @@ def test_retrieve_workflow(dbos: DBOS) -> None:
     assert istat.status == str(WorkflowStatusString.ERROR.value)
 
 
+def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
+    @dbos.workflow()
+    def test_sleep_workflow(secs: float) -> str:
+        dbos.sleep(secs)
+        return DBOS.workflow_id
+
+    @dbos.workflow()
+    def test_workflow_status_a() -> str:
+        with SetWorkflowUUID("run_this_once_a"):
+            dbos.start_workflow(test_sleep_workflow, 1.5)
+
+        fstat1 = dbos.get_workflow_status("run_this_once_a")
+        assert fstat1
+        fres: str = dbos.retrieve_workflow("run_this_once_a").get_result()
+        fstat2 = dbos.get_workflow_status("run_this_once_a")
+        assert fstat2
+        return fstat1.status + fres + fstat2.status
+
+    def test_workflow_status_b() -> str:
+        with SetWorkflowUUID("run_this_once_b"):
+            wfh = dbos.start_workflow(test_sleep_workflow, 1.5)
+
+        fstat1 = wfh.get_status()
+        assert fstat1
+        fres = wfh.get_result()
+        fstat2 = wfh.get_status()
+        assert fstat2
+        return fstat1.status + fres + fstat2.status
+
+    with SetWorkflowUUID("parent_a"):
+        assert test_workflow_status_a() == "PENDINGrun_this_once_aSUCCESS"
+    with SetWorkflowUUID("parent_a"):
+        assert test_workflow_status_a() == "PENDINGrun_this_once_aSUCCESS"
+
+    with SetWorkflowUUID("parent_b"):
+        assert test_workflow_status_b() == "PENDINGrun_this_once_bSUCCESS"
+    with SetWorkflowUUID("parent_b"):
+        assert test_workflow_status_b() == "PENDINGrun_this_once_bSUCCESS"
+
+
 def test_without_fastapi(dbos: DBOS) -> None:
     """
     Since DBOS does not depend on FastAPI directly, verify DBOS works in an environment without FastAPI.

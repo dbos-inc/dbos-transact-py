@@ -196,30 +196,34 @@ class SystemDatabase:
         self.notification_conn.close()
         self.engine.dispose()
 
-    def update_workflow_status(self, status: WorkflowStatusInternal) -> None:
-        with self.engine.begin() as c:
-            c.execute(
-                pg.insert(SystemSchema.workflow_status)
-                .values(
-                    workflow_uuid=status["workflow_uuid"],
+    def update_workflow_status(
+        self, status: WorkflowStatusInternal, replace: bool = True
+    ) -> None:
+        cmd = pg.insert(SystemSchema.workflow_status).values(
+            workflow_uuid=status["workflow_uuid"],
+            status=status["status"],
+            name=status["name"],
+            output=status["output"],
+            error=status["error"],
+            executor_id=status["executor_id"],
+            application_version=status["app_version"],
+            application_id=status["app_id"],
+            request=status["request"],
+        )
+        if replace:
+            cmd = cmd.on_conflict_do_update(
+                index_elements=["workflow_uuid"],
+                set_=dict(
                     status=status["status"],
-                    name=status["name"],
                     output=status["output"],
                     error=status["error"],
-                    executor_id=status["executor_id"],
-                    application_version=status["app_version"],
-                    application_id=status["app_id"],
-                    request=status["request"],
-                )
-                .on_conflict_do_update(
-                    index_elements=["workflow_uuid"],
-                    set_=dict(
-                        status=status["status"],
-                        output=status["output"],
-                        error=status["error"],
-                    ),
-                )
+                ),
             )
+        else:
+            cmd = cmd.on_conflict_do_nothing()
+
+        with self.engine.begin() as c:
+            c.execute(cmd)
 
     def set_workflow_status(
         self,
