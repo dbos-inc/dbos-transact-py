@@ -53,7 +53,7 @@ def config_logger(config: ConfigFile) -> None:
             config.get("telemetry", {}).get("OTLPExporter", {}).get("logsEndpoint")  # type: ignore
         )
         if otlp_logs_endpoint:
-            # Configure the DBOS logger to also log to the OTel endpoint.
+            # Also log to the OTLP endpoint if provided
             log_provider = PatchedOTLPLoggerProvider(
                 Resource.create(
                     attributes={
@@ -75,7 +75,7 @@ def config_logger(config: ConfigFile) -> None:
             log_transformer = DBOSLogTransformer()
             dbos_logger.addFilter(log_transformer)
 
-            # Attach the OTel logger and transformer to the root logger
+            # Attach the OTLP logger and transformer to the root logger
             root_logger = logging.getLogger()
             root_logger.addHandler(otlp_handler)
             root_logger.addFilter(log_transformer)
