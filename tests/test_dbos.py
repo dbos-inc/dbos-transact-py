@@ -12,7 +12,6 @@ import sqlalchemy as sa
 
 from dbos_transact import DBOS, ConfigFile, SetWorkflowUUID
 from dbos_transact.context import get_local_dbos_context
-from dbos_transact.error import DBOSException
 from dbos_transact.system_database import GetWorkflowsInput
 
 
