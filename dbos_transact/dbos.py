@@ -51,11 +51,12 @@ from dbos_transact.context import (
 )
 from dbos_transact.error import (
     DBOSException,
+    DBOSNonExistentWorkflowError,
     DBOSRecoveryError,
     DBOSWorkflowConflictUUIDError,
     DBOSWorkflowFunctionNotFoundError,
 )
-from dbos_transact.workflow import WorkflowHandle
+from dbos_transact.workflow import WorkflowHandle, WorkflowStatus
 
 from .application_database import ApplicationDatabase, TransactionResultInternal
 from .dbos_config import ConfigFile, load_config
@@ -144,31 +145,30 @@ def classproperty(func: Callable[..., G]) -> ClassPropertyDescriptor[G]:
 
 class WorkflowHandleFuture(WorkflowHandle[R]):
 
-    def __init__(self, workflow_uuid: str, future: Future[R]):
+    def __init__(self, workflow_uuid: str, future: Future[R], dbos: DBOS):
         super().__init__(workflow_uuid)
         self.future = future
+        self.dbos = dbos
 
     def get_result(self) -> R:
         return self.future.result()
 
+    def get_status(self) -> Optional[WorkflowStatus]:
+        return self.dbos.get_workflow_status(self.workflow_uuid)
+
 
 class PollingWorkflowHandle(WorkflowHandle[R]):
-    calling_wf_id: Optional[str]
-    calling_wf_funcnum: Optional[int]
 
     def __init__(self, workflow_uuid: str, dbos: DBOS):
         super().__init__(workflow_uuid)
         self.dbos = dbos
-        self.calling_wf_id = None
-        self.calling_wf_funcnum = None
-
-    def set_caller(self, calling_wf_id: str, calling_wf_funcnum: int) -> None:
-        self.calling_wf_id = calling_wf_id
-        self.calling_wf_funcnum = calling_wf_funcnum
 
     def get_result(self) -> R:
         res: R = self.dbos.sys_db.await_workflow_result(self.workflow_uuid)
         return res
+
+    def get_status(self) -> Optional[WorkflowStatus]:
+        return self.dbos.get_workflow_status(self.workflow_uuid)
 
 
 class DBOS:
@@ -319,7 +319,33 @@ class DBOS:
             *args,
             **kwargs,
         )
-        return WorkflowHandleFuture(new_wf_uuid, future)
+        return WorkflowHandleFuture(new_wf_uuid, future, self)
+
+    def retrieve_workflow(
+        self, workflow_uuid: str, existing_workflow: bool = True
+    ) -> WorkflowHandle[R]:
+        # TODO OAOO
+        if existing_workflow:
+            stat = self.sys_db.get_workflow_status(workflow_uuid)
+            if stat is None:
+                raise DBOSNonExistentWorkflowError(workflow_uuid)
+        return PollingWorkflowHandle(workflow_uuid, self)
+
+    def get_workflow_status(self, workflow_uuid: str) -> Optional[WorkflowStatus]:
+        # TODO OAOO
+        stat = self.sys_db.get_workflow_status(workflow_uuid)
+        if stat is None:
+            return None
+        return WorkflowStatus(
+            workflow_uuid=workflow_uuid,
+            status=stat["status"],
+            name=stat["name"],
+            class_name=None,
+            config_name=None,
+            authenticated_user=None,
+            assumed_role=None,
+            authenticatedRoles=None,
+        )
 
     def _init_workflow(
         self, ctx: DBOSContext, inputs: WorkflowInputs, wf_name: str
