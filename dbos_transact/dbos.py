@@ -388,8 +388,6 @@ class DBOS:
                         while True:
                             has_recorded_error = False
                             try:
-                                # TODO: support multiple isolation levels
-                                # TODO: handle serialization errors properly
                                 with session.begin():
                                     # This must be the first statement in the transaction!
                                     session.connection(
