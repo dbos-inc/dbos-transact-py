@@ -274,6 +274,26 @@ class SystemDatabase:
             }
             return status
 
+    def get_workflow_status_within_wf(
+        self, workflow_uuid: str, calling_wf: str, calling_wf_fn: int
+    ) -> Optional[WorkflowStatusInternal]:
+        res = self.check_operation_execution(calling_wf, calling_wf_fn)
+        if res is not None:
+            if res["output"]:
+                resstat: WorkflowStatusInternal = utils.deserialize(res["output"])
+                return resstat
+            return None
+        stat = self.get_workflow_status(workflow_uuid)
+        self.record_operation_result(
+            {
+                "workflow_uuid": calling_wf,
+                "function_id": calling_wf_fn,
+                "output": utils.serialize(stat),
+                "error": None,
+            }
+        )
+        return stat
+
     def get_workflow_status_w_outputs(
         self, workflow_uuid: str
     ) -> Optional[WorkflowStatusInternal]:
