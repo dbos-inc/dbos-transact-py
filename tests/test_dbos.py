@@ -258,6 +258,38 @@ def test_temp_workflow(dbos: DBOS) -> None:
     assert comm_counter == 1
 
 
+def test_temp_workflow_errors(dbos: DBOS) -> None:
+    txn_counter: int = 0
+    comm_counter: int = 0
+
+    cur_time: str = datetime.datetime.now().isoformat()
+    gwi: GetWorkflowsInput = GetWorkflowsInput()
+    gwi.start_time = cur_time
+
+    @dbos.transaction()
+    def test_transaction(var2: str) -> str:
+        nonlocal txn_counter
+        txn_counter += 1
+        raise Exception(var2)
+
+    @dbos.communicator()
+    def test_communicator(var: str) -> str:
+        nonlocal comm_counter
+        comm_counter += 1
+        raise Exception(var)
+
+    with pytest.raises(Exception) as exc_info:
+        test_transaction("tval")
+    assert "tval" == str(exc_info.value)
+
+    with pytest.raises(Exception) as exc_info:
+        test_communicator("cval")
+    assert "cval" == str(exc_info.value)
+
+    assert txn_counter == 1
+    assert comm_counter == 1
+
+
 def test_recovery_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
