@@ -71,3 +71,6 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self._end_headers()
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return  # Disable admin server request logging

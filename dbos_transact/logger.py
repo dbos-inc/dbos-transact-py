@@ -27,6 +27,13 @@ class DBOSLogTransformer(logging.Filter):
         return True
 
 
+# Mitigation for https://github.com/open-telemetry/opentelemetry-python/issues/3193
+# Reduce the force flush timeout
+class PatchedOTLPLoggerProvider(LoggerProvider):
+    def force_flush(self, timeout_millis: int = 5000) -> bool:
+        return super().force_flush(timeout_millis)
+
+
 def config_logger(config: ConfigFile) -> None:
     # Configure the DBOS logger. Log to the console by default.
     if not dbos_logger.handlers:
@@ -47,7 +54,7 @@ def config_logger(config: ConfigFile) -> None:
         )
         if otlp_logs_endpoint:
             # Configure the DBOS logger to also log to the OTel endpoint.
-            log_provider = LoggerProvider(
+            log_provider = PatchedOTLPLoggerProvider(
                 Resource.create(
                     attributes={
                         "service.name": "dbos-application",
@@ -67,3 +74,6 @@ def config_logger(config: ConfigFile) -> None:
             # Attach DBOS-specific attributes to all log entries.
             log_transformer = DBOSLogTransformer()
             dbos_logger.addFilter(log_transformer)
+
+            logger_names = list(logging.root.manager.loggerDict.keys())
+            print(logger_names)
