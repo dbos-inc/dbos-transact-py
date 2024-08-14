@@ -74,6 +74,3 @@ def config_logger(config: ConfigFile) -> None:
             # Attach DBOS-specific attributes to all log entries.
             log_transformer = DBOSLogTransformer()
             dbos_logger.addFilter(log_transformer)
-
-            logger_names = list(logging.root.manager.loggerDict.keys())
-            print(logger_names)
