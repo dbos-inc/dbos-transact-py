@@ -12,6 +12,7 @@ from typing import (
     Callable,
     Generic,
     List,
+    Literal,
     Optional,
     Protocol,
     TypedDict,
@@ -26,6 +27,7 @@ from .tracer import dbos_tracer
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 if sys.version_info < (3, 10):
@@ -169,6 +171,13 @@ class PollingWorkflowHandle(WorkflowHandle[R]):
 
     def get_status(self) -> Optional[WorkflowStatus]:
         return self.dbos.get_workflow_status(self.workflow_uuid)
+
+
+IsolationLevel = Literal[
+    "SERIALIZABLE",
+    "REPEATABLE READ",
+    "READ COMMITTED",
+]
 
 
 class DBOS:
@@ -413,7 +422,9 @@ class DBOS:
         self.sys_db.update_workflow_status(status)
         return output
 
-    def transaction(self) -> Callable[[Transaction], Transaction]:
+    def transaction(
+        self, isolation_level: IsolationLevel = "SERIALIZABLE"
+    ) -> Callable[[Transaction], Transaction]:
         def decorator(func: Transaction) -> Transaction:
             def invoke_tx(*args: Any, **kwargs: Any) -> Any:
                 with self.app_db.sessionmaker() as session:
@@ -431,53 +442,69 @@ class DBOS:
                             "executor_id": None,
                             "txn_id": None,
                         }
-                        has_recorded_error = False
-                        try:
-                            # TODO: support multiple isolation levels
-                            # TODO: handle serialization errors properly
-                            with session.begin():
-                                # This must be the first statement in the transaction!
-                                session.connection(
-                                    execution_options={
-                                        "isolation_level": "REPEATABLE READ"
-                                    }
-                                )
-                                # Check recorded output for OAOO
-                                recorded_output = (
-                                    ApplicationDatabase.check_transaction_execution(
-                                        session,
-                                        ctx.workflow_uuid,
-                                        ctx.function_id,
+                        retry_wait_seconds = 0.001
+                        backoff_factor = 1.5
+                        max_retry_wait_seconds = 2.0
+                        while True:
+                            has_recorded_error = False
+                            try:
+                                with session.begin():
+                                    # This must be the first statement in the transaction!
+                                    session.connection(
+                                        execution_options={
+                                            "isolation_level": isolation_level
+                                        }
                                     )
-                                )
-                                if recorded_output:
-                                    if recorded_output["error"]:
-                                        deserialized_error = utils.deserialize(
-                                            recorded_output["error"]
+                                    # Check recorded output for OAOO
+                                    recorded_output = (
+                                        ApplicationDatabase.check_transaction_execution(
+                                            session,
+                                            ctx.workflow_uuid,
+                                            ctx.function_id,
                                         )
-                                        has_recorded_error = True
-                                        raise deserialized_error
-                                    elif recorded_output["output"]:
-                                        return utils.deserialize(
-                                            recorded_output["output"]
-                                        )
-                                    else:
-                                        raise Exception(
-                                            "Output and error are both None"
-                                        )
-                                output = func(*args, **kwargs)
-                                txn_output["output"] = utils.serialize(output)
-                                assert ctx.sql_session is not None
-                                ApplicationDatabase.record_transaction_output(
-                                    ctx.sql_session, txn_output
-                                )
-
-                        except Exception as error:
-                            # Don't record the error if it was already recorded
-                            if not has_recorded_error:
-                                txn_output["error"] = utils.serialize(error)
-                                self.app_db.record_transaction_error(txn_output)
-                            raise error
+                                    )
+                                    if recorded_output:
+                                        if recorded_output["error"]:
+                                            deserialized_error = utils.deserialize(
+                                                recorded_output["error"]
+                                            )
+                                            has_recorded_error = True
+                                            raise deserialized_error
+                                        elif recorded_output["output"]:
+                                            return utils.deserialize(
+                                                recorded_output["output"]
+                                            )
+                                        else:
+                                            raise Exception(
+                                                "Output and error are both None"
+                                            )
+                                    output = func(*args, **kwargs)
+                                    txn_output["output"] = utils.serialize(output)
+                                    assert ctx.sql_session is not None
+                                    ApplicationDatabase.record_transaction_output(
+                                        ctx.sql_session, txn_output
+                                    )
+                                    break
+                            except DBAPIError as dbapi_error:
+                                if dbapi_error.orig.pgcode == "40001":  # type: ignore
+                                    # Retry on serialization failure
+                                    DBOS.span.add_event(
+                                        "Transaction Serialization Failure",
+                                        {"retry_wait_seconds": retry_wait_seconds},
+                                    )
+                                    time.sleep(retry_wait_seconds)
+                                    retry_wait_seconds = min(
+                                        retry_wait_seconds * backoff_factor,
+                                        max_retry_wait_seconds,
+                                    )
+                                    continue
+                                raise dbapi_error
+                            except Exception as error:
+                                # Don't record the error if it was already recorded
+                                if not has_recorded_error:
+                                    txn_output["error"] = utils.serialize(error)
+                                    self.app_db.record_transaction_error(txn_output)
+                                raise error
                 return output
 
             @wraps(func)
