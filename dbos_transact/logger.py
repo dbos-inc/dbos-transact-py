@@ -74,3 +74,8 @@ def config_logger(config: ConfigFile) -> None:
             # Attach DBOS-specific attributes to all log entries.
             log_transformer = DBOSLogTransformer()
             dbos_logger.addFilter(log_transformer)
+
+            # Attach the OTel logger and transformer to the root logger
+            root_logger = logging.getLogger()
+            root_logger.addHandler(otlp_handler)
+            root_logger.addFilter(log_transformer)
