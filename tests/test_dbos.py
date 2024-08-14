@@ -1,3 +1,4 @@
+import datetime
 import importlib
 import sys
 import time
@@ -10,7 +11,9 @@ import pytest
 import sqlalchemy as sa
 
 from dbos_transact import DBOS, ConfigFile, SetWorkflowUUID
+from dbos_transact.context import get_local_dbos_context
 from dbos_transact.error import DBOSException
+from dbos_transact.system_database import GetWorkflowsInput
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -212,6 +215,49 @@ def test_exception_workflow(dbos: DBOS) -> None:
     assert wf_counter == 4
 
 
+def test_temp_workflow(dbos: DBOS) -> None:
+    txn_counter: int = 0
+    comm_counter: int = 0
+
+    cur_time: str = datetime.datetime.now().isoformat()
+    gwi: GetWorkflowsInput = GetWorkflowsInput()
+    gwi.start_time = cur_time
+
+    @dbos.transaction()
+    def test_transaction(var2: str) -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        nonlocal txn_counter
+        txn_counter += 1
+        return var2 + str(rows[0][0])
+
+    @dbos.communicator()
+    def test_communicator(var: str) -> str:
+        nonlocal comm_counter
+        comm_counter += 1
+        return var
+
+    assert get_local_dbos_context() is None
+    res = test_transaction("var2")
+    assert res == "var21"
+    assert get_local_dbos_context() is None
+    res = test_communicator("var")
+    assert res == "var"
+
+    wfs = dbos.sys_db.get_workflows(gwi)
+    assert len(wfs.workflow_uuids) == 2
+
+    wfi1 = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    assert wfi1
+    assert wfi1["name"].startswith("<temp>")
+
+    wfi2 = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[1], False)
+    assert wfi2
+    assert wfi2["name"].startswith("<temp>")
+
+    assert txn_counter == 1
+    assert comm_counter == 1
+
+
 def test_recovery_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
@@ -254,6 +300,65 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == "bob1bob"
     assert wf_counter == 2
+    assert txn_counter == 1
+
+
+def test_recovery_temp_workflow(dbos: DBOS) -> None:
+    txn_counter: int = 0
+
+    @dbos.transaction()
+    def test_transaction(var2: str) -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        nonlocal txn_counter
+        txn_counter += 1
+        return var2 + str(rows[0][0])
+
+    cur_time: str = datetime.datetime.now().isoformat()
+    gwi: GetWorkflowsInput = GetWorkflowsInput()
+    gwi.start_time = cur_time
+
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowUUID(wfuuid):
+        res = test_transaction("bob")
+        assert res == "bob1"
+
+    wfs = dbos.sys_db.get_workflows(gwi)
+    assert len(wfs.workflow_uuids) == 1
+    assert wfs.workflow_uuids[0] == wfuuid
+
+    wfi = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    assert wfi
+    assert wfi["name"].startswith("<temp>")
+
+    # Change the workflow status to pending
+    dbos.sys_db.update_workflow_status(
+        {
+            "workflow_uuid": wfuuid,
+            "status": "PENDING",
+            "name": wfi["name"],
+            "output": None,
+            "error": None,
+            "executor_id": None,
+            "app_id": None,
+            "app_version": None,
+            "request": None,
+        }
+    )
+
+    # Recovery should execute the workflow again but skip the transaction
+    workflow_handles = dbos.recover_pending_workflows()
+    assert len(workflow_handles) == 1
+    assert workflow_handles[0].get_result() == "bob1"
+
+    wfs = dbos.sys_db.get_workflows(gwi)
+    assert len(wfs.workflow_uuids) == 1
+    assert wfs.workflow_uuids[0] == wfuuid
+
+    wfi = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    assert wfi
+    assert wfi["name"].startswith("<temp>")
+    assert wfi["status"] == "SUCCESS"
+
     assert txn_counter == 1
 
 
@@ -493,6 +598,41 @@ def test_send_recv(dbos: DBOS) -> None:
     with pytest.raises(Exception) as exc_info:
         dbos.recv("test1")
     assert "recv() must be called within a workflow" in str(exc_info.value)
+
+
+def test_send_recv_temp_wf(dbos: DBOS) -> None:
+    recv_counter: int = 0
+    cur_time: str = datetime.datetime.now().isoformat()
+    gwi: GetWorkflowsInput = GetWorkflowsInput()
+    gwi.start_time = cur_time
+
+    @dbos.workflow()
+    def test_send_recv_workflow(topic: str) -> str:
+        msg1 = dbos.recv(topic, timeout_seconds=10)
+        nonlocal recv_counter
+        recv_counter += 1
+        # TODO Set event back
+        return "-".join([str(msg1)])
+
+    dest_uuid = str(uuid.uuid4())
+
+    with SetWorkflowUUID(dest_uuid):
+        handle = dbos.start_workflow(test_send_recv_workflow, "testtopic")
+        assert handle.get_workflow_uuid() == dest_uuid
+
+    dbos.send(dest_uuid, "testsend1", "testtopic")
+    assert handle.get_result() == "testsend1"
+
+    wfs = dbos.sys_db.get_workflows(gwi)
+    assert len(wfs.workflow_uuids) == 2
+    assert wfs.workflow_uuids[1] == dest_uuid
+    assert wfs.workflow_uuids[0] != dest_uuid
+
+    wfi = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    assert wfi
+    assert wfi["name"] == "<temp>.temp_send_workflow"
+
+    assert recv_counter == 1
 
 
 def test_set_get_events(dbos: DBOS) -> None:

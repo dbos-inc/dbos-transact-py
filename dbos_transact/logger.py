@@ -27,6 +27,13 @@ class DBOSLogTransformer(logging.Filter):
         return True
 
 
+# Mitigation for https://github.com/open-telemetry/opentelemetry-python/issues/3193
+# Reduce the force flush timeout
+class PatchedOTLPLoggerProvider(LoggerProvider):
+    def force_flush(self, timeout_millis: int = 5000) -> bool:
+        return super().force_flush(timeout_millis)
+
+
 def config_logger(config: ConfigFile) -> None:
     # Configure the DBOS logger. Log to the console by default.
     if not dbos_logger.handlers:
@@ -46,8 +53,8 @@ def config_logger(config: ConfigFile) -> None:
             config.get("telemetry", {}).get("OTLPExporter", {}).get("logsEndpoint")  # type: ignore
         )
         if otlp_logs_endpoint:
-            # Configure the DBOS logger to also log to the OTel endpoint.
-            log_provider = LoggerProvider(
+            # Also log to the OTLP endpoint if provided
+            log_provider = PatchedOTLPLoggerProvider(
                 Resource.create(
                     attributes={
                         "service.name": "dbos-application",
@@ -56,7 +63,10 @@ def config_logger(config: ConfigFile) -> None:
             )
             set_logger_provider(log_provider)
             log_provider.add_log_record_processor(
-                BatchLogRecordProcessor(OTLPLogExporter(endpoint=otlp_logs_endpoint))
+                BatchLogRecordProcessor(
+                    OTLPLogExporter(endpoint=otlp_logs_endpoint),
+                    export_timeout_millis=5000,
+                )
             )
             otlp_handler = LoggingHandler(logger_provider=log_provider)
             dbos_logger.addHandler(otlp_handler)
@@ -64,3 +74,8 @@ def config_logger(config: ConfigFile) -> None:
             # Attach DBOS-specific attributes to all log entries.
             log_transformer = DBOSLogTransformer()
             dbos_logger.addFilter(log_transformer)
+
+            # Attach the OTLP logger and transformer to the root logger
+            root_logger = logging.getLogger()
+            root_logger.addHandler(otlp_handler)
+            root_logger.addFilter(log_transformer)

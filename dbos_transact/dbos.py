@@ -72,6 +72,8 @@ if TYPE_CHECKING:
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
+TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
+
 
 class WorkflowProtocol(Protocol[P, R]):
     __name__: str
@@ -101,6 +103,18 @@ class CommunicatorProtocol(Protocol):
 
 
 Communicator = TypeVar("Communicator", bound=CommunicatorProtocol)
+
+
+def get_dbos_func_name(f: Any) -> str:
+    if hasattr(f, "dbos_function_name"):
+        return str(getattr(f, "dbos_function_name"))
+    if hasattr(f, "__qualname__"):
+        return str(getattr(f, "__qualname__"))
+    return "<unknown>"
+
+
+def set_dbos_func_name(f: Any, name: str) -> None:
+    setattr(f, "dbos_function_name", name)
 
 
 class WorkflowInputContext(TypedDict):
@@ -134,7 +148,7 @@ class DBOS:
             config = load_config()
         config_logger(config)
         dbos_tracer.config(config)
-        dbos_logger.info("Initializing DBOS!")
+        dbos_logger.info("Initializing DBOS")
         self.config = config
         self.sys_db = SystemDatabase(config)
         self.app_db = ApplicationDatabase(config)
@@ -153,6 +167,19 @@ class DBOS:
         # Listen to notifications
         self.executor.submit(self.sys_db._notification_listener)
 
+        # Register send_stub as a workflow
+        def send_temp_workflow(
+            destination_uuid: str, message: Any, topic: Optional[str]
+        ) -> None:
+            self.send(destination_uuid, message, topic)
+
+        temp_send_wf = self.workflow_wrapper(send_temp_workflow)
+        set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
+        self.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
+        dbos_logger.info("DBOS initialized")
+        for handler in dbos_logger.handlers:
+            handler.flush()
+
     def destroy(self) -> None:
         self._run_startup_recovery_thread = False
         self.sys_db.destroy()
@@ -160,47 +187,55 @@ class DBOS:
         self.admin_server.stop()
         self.executor.shutdown(cancel_futures=True)
 
+    def workflow_wrapper(self, func: Workflow[P, R]) -> Workflow[P, R]:
+        func.__orig_func = func  # type: ignore
+
+        @wraps(func)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            attributes: TracedAttributes = {
+                "name": func.__name__,
+                "operationType": OperationType.WORKFLOW.value,
+            }
+            inputs: WorkflowInputs = {
+                "args": args,
+                "kwargs": kwargs,
+            }
+            ctx = get_local_dbos_context()
+            if ctx and ctx.is_workflow():
+                with EnterDBOSChildWorkflow(attributes):
+                    ctx = assert_current_dbos_context()  # Now the child ctx
+                    status = self._init_workflow(
+                        ctx,
+                        inputs=inputs,
+                        wf_name=get_dbos_func_name(func),
+                    )
+
+                    return self._execute_workflow(status, func, *args, **kwargs)
+            else:
+                with EnterDBOSWorkflow(attributes):
+                    ctx = assert_current_dbos_context()
+                    status = self._init_workflow(
+                        ctx,
+                        inputs=inputs,
+                        wf_name=get_dbos_func_name(func),
+                    )
+
+                    return self._execute_workflow(status, func, *args, **kwargs)
+
+        wrapped_func = cast(Workflow[P, R], wrapper)
+        return wrapped_func
+
+    def register_wf_function(self, name: str, wrapped_func: Workflow[P, R]) -> None:
+        self.workflow_info_map[name] = wrapped_func
+
+    def workflow_decorator(self, func: Workflow[P, R]) -> Workflow[P, R]:
+        wrapped_func = self.workflow_wrapper(func)
+        self.register_wf_function(func.__qualname__, wrapped_func)
+        return wrapped_func
+
     def workflow(self) -> Callable[[Workflow[P, R]], Workflow[P, R]]:
-        def decorator(func: Workflow[P, R]) -> Workflow[P, R]:
-            func.__orig_func = func  # type: ignore
 
-            @wraps(func)
-            def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-                attributes: TracedAttributes = {
-                    "name": func.__name__,
-                    "operationType": OperationType.WORKFLOW.value,
-                }
-                inputs: WorkflowInputs = {
-                    "args": args,
-                    "kwargs": kwargs,
-                }
-                ctx = get_local_dbos_context()
-                if ctx and ctx.is_workflow():
-                    with EnterDBOSChildWorkflow(attributes):
-                        ctx = assert_current_dbos_context()  # Now the child ctx
-                        status = self._init_workflow(
-                            ctx,
-                            inputs=inputs,
-                            wf_name=func.__qualname__,
-                        )
-
-                        return self._execute_workflow(status, func, *args, **kwargs)
-                else:
-                    with EnterDBOSWorkflow(attributes):
-                        ctx = assert_current_dbos_context()
-                        status = self._init_workflow(
-                            ctx,
-                            inputs=inputs,
-                            wf_name=func.__qualname__,
-                        )
-
-                        return self._execute_workflow(status, func, *args, **kwargs)
-
-            wrapped_func = cast(Workflow[P, R], wrapper)
-            self.workflow_info_map[func.__qualname__] = wrapped_func
-            return wrapped_func
-
-        return decorator
+        return self.workflow_decorator
 
     def start_workflow(
         self,
@@ -242,7 +277,7 @@ class DBOS:
         status = self._init_workflow(
             new_wf_ctx,
             inputs=inputs,
-            wf_name=func.__qualname__,
+            wf_name=get_dbos_func_name(func),
         )
 
         future = self.executor.submit(
@@ -323,8 +358,7 @@ class DBOS:
 
     def transaction(self) -> Callable[[Transaction], Transaction]:
         def decorator(func: Transaction) -> Transaction:
-            @wraps(func)
-            def wrapper(*args: Any, **kwargs: Any) -> Any:
+            def invoke_tx(*args: Any, **kwargs: Any) -> Any:
                 with self.app_db.sessionmaker() as session:
                     attributes: TracedAttributes = {
                         "name": func.__name__,
@@ -389,14 +423,35 @@ class DBOS:
                             raise error
                 return output
 
+            @wraps(func)
+            def wrapper(*args: Any, **kwargs: Any) -> Any:
+                # Entering transaction is allowed:
+                #  In a workflow (that is not in a transaction / comm already)
+                #  Not in a workflow (we will start the single op workflow)
+                ctx = get_local_dbos_context()
+                if ctx and ctx.is_within_workflow():
+                    assert ctx.is_workflow()
+                    return invoke_tx(*args, **kwargs)
+                else:
+                    tempwf = self.workflow_info_map.get("<temp>." + func.__qualname__)
+                    assert tempwf
+                    return tempwf(*args, **kwargs)
+
+            def temp_wf(*args: Any, **kwargs: Any) -> Any:
+                return wrapper(*args, **kwargs)
+
+            wrapped_wf = self.workflow_wrapper(temp_wf)
+            set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
+            self.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+
             return cast(Transaction, wrapper)
 
         return decorator
 
     def communicator(self) -> Callable[[Communicator], Communicator]:
         def decorator(func: Communicator) -> Communicator:
-            @wraps(func)
-            def wrapper(*args: Any, **kwargs: Any) -> Any:
+
+            def invoke_comm(*args: Any, **kwargs: Any) -> Any:
                 attributes: TracedAttributes = {
                     "name": func.__name__,
                     "operationType": OperationType.COMMUNICATOR.value,
@@ -433,6 +488,27 @@ class DBOS:
                         self.sys_db.record_operation_result(comm_output)
                     return output
 
+            @wraps(func)
+            def wrapper(*args: Any, **kwargs: Any) -> Any:
+                # Entering communicator is allowed:
+                #  In a workflow (that is not in a transaction / comm already)
+                #  Not in a workflow (we will start the single op workflow)
+                ctx = get_local_dbos_context()
+                if ctx and ctx.is_within_workflow():
+                    assert ctx.is_workflow()
+                    return invoke_comm(*args, **kwargs)
+                else:
+                    tempwf = self.workflow_info_map.get("<temp>." + func.__qualname__)
+                    assert tempwf
+                    return tempwf(*args, **kwargs)
+
+            def temp_wf(*args: Any, **kwargs: Any) -> Any:
+                return wrapper(*args, **kwargs)
+
+            wrapped_wf = self.workflow_wrapper(temp_wf)
+            set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
+            self.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+
             return cast(Communicator, wrapper)
 
         return decorator
@@ -440,17 +516,27 @@ class DBOS:
     def send(
         self, destination_uuid: str, message: Any, topic: Optional[str] = None
     ) -> None:
-        attributes: TracedAttributes = {
-            "name": "send",
-        }
-        with EnterDBOSCommunicator(attributes) as ctx:
-            self.sys_db.send(
-                ctx.workflow_uuid,
-                ctx.curr_comm_function_id,
-                destination_uuid,
-                message,
-                topic,
-            )
+        def do_send(destination_uuid: str, message: Any, topic: Optional[str]) -> None:
+            attributes: TracedAttributes = {
+                "name": "send",
+            }
+            with EnterDBOSCommunicator(attributes) as ctx:
+                self.sys_db.send(
+                    ctx.workflow_uuid,
+                    ctx.curr_comm_function_id,
+                    destination_uuid,
+                    message,
+                    topic,
+                )
+
+        ctx = get_local_dbos_context()
+        if ctx and ctx.is_within_workflow():
+            assert ctx.is_workflow()
+            return do_send(destination_uuid, message, topic)
+        else:
+            wffn = self.workflow_info_map.get(TEMP_SEND_WF_NAME)
+            assert wffn
+            wffn(destination_uuid, message, topic)
 
     def recv(self, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
         cur_ctx = get_local_dbos_context()
