@@ -552,9 +552,12 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
         assert fstat2
         return fstat1.status + fres + fstat2.status
 
+    @dbos.workflow()
     def test_workflow_status_b() -> str:
+        assert DBOS.workflow_id == "parent_b"
         with SetWorkflowUUID("run_this_once_b"):
             wfh = dbos.start_workflow(test_sleep_workflow, 1.5)
+        assert DBOS.workflow_id == "parent_b"
 
         fstat1 = wfh.get_status()
         assert fstat1
