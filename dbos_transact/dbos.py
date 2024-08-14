@@ -10,6 +10,7 @@ from typing import (
     Callable,
     Generic,
     List,
+    Literal,
     Optional,
     Protocol,
     TypedDict,
@@ -139,6 +140,13 @@ class ClassPropertyDescriptor(Generic[G]):
 
 def classproperty(func: Callable[..., G]) -> ClassPropertyDescriptor[G]:
     return ClassPropertyDescriptor(func)
+
+
+IsolationLevel = Literal[
+    "SERIALIZABLE",
+    "REPEATABLE READ",
+    "READ COMMITTED",
+]
 
 
 class DBOS:
@@ -354,7 +362,9 @@ class DBOS:
         self.sys_db.update_workflow_status(status)
         return output
 
-    def transaction(self) -> Callable[[Transaction], Transaction]:
+    def transaction(
+        self, isolation_level: IsolationLevel = "SERIALIZABLE"
+    ) -> Callable[[Transaction], Transaction]:
         def decorator(func: Transaction) -> Transaction:
             def invoke_tx(*args: Any, **kwargs: Any) -> Any:
                 with self.app_db.sessionmaker() as session:
@@ -384,7 +394,7 @@ class DBOS:
                                     # This must be the first statement in the transaction!
                                     session.connection(
                                         execution_options={
-                                            "isolation_level": "REPEATABLE READ"
+                                            "isolation_level": isolation_level
                                         }
                                     )
                                     # Check recorded output for OAOO
