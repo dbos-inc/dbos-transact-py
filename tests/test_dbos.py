@@ -13,7 +13,8 @@ import sqlalchemy as sa
 from dbos_transact import DBOS, ConfigFile, SetWorkflowUUID
 from dbos_transact.context import get_local_dbos_context
 from dbos_transact.error import DBOSException
-from dbos_transact.system_database import GetWorkflowsInput
+from dbos_transact.system_database import GetWorkflowsInput, WorkflowStatusString
+from dbos_transact.workflow import WorkflowHandle
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -477,6 +478,62 @@ def test_start_workflow(dbos: DBOS) -> None:
     assert wf_counter == 3
 
 
+def test_retrieve_workflow(dbos: DBOS) -> None:
+    @dbos.workflow()
+    def test_sleep_workflow(secs: float) -> str:
+        dbos.sleep(secs)
+        return DBOS.workflow_id
+
+    @dbos.workflow()
+    def test_sleep_workthrow(secs: float) -> str:
+        dbos.sleep(secs)
+        raise Exception("Wake Up!")
+
+    with pytest.raises(Exception) as exc_info:
+        dbos.retrieve_workflow("aaaa")
+
+    # These return
+    sleep_wfh = dbos.start_workflow(test_sleep_workflow, 1.5)
+    istat = sleep_wfh.get_status()
+    assert istat
+    assert istat.status == str(WorkflowStatusString.PENDING.value)
+
+    sleep_pwfh: WorkflowHandle[str] = dbos.retrieve_workflow(sleep_wfh.workflow_uuid)
+    assert sleep_wfh.workflow_uuid == sleep_pwfh.workflow_uuid
+    dbos.logger.info(f"UUID: {sleep_pwfh.get_workflow_uuid()}")
+    hres = sleep_pwfh.get_result()
+    assert hres == sleep_pwfh.get_workflow_uuid()
+    dbos.logger.info(f"RES: {hres}")
+    istat = sleep_pwfh.get_status()
+    assert istat
+    assert istat.status == str(WorkflowStatusString.SUCCESS.value)
+
+    assert sleep_wfh.get_result() == sleep_wfh.get_workflow_uuid()
+    istat = sleep_wfh.get_status()
+    assert istat
+    assert istat.status == str(WorkflowStatusString.SUCCESS.value)
+
+    # These throw
+    sleep_wfh = dbos.start_workflow(test_sleep_workthrow, 1.5)
+    istat = sleep_wfh.get_status()
+    assert istat
+    assert istat.status == str(WorkflowStatusString.PENDING.value)
+    sleep_pwfh = dbos.retrieve_workflow(sleep_wfh.workflow_uuid)
+    assert sleep_wfh.workflow_uuid == sleep_pwfh.workflow_uuid
+
+    with pytest.raises(Exception) as exc_info:
+        sleep_pwfh.get_result()
+    istat = sleep_pwfh.get_status()
+    assert istat
+    assert istat.status == str(WorkflowStatusString.ERROR.value)
+
+    with pytest.raises(Exception) as exc_info:
+        sleep_wfh.get_result()
+    istat = sleep_wfh.get_status()
+    assert istat
+    assert istat.status == str(WorkflowStatusString.ERROR.value)
+
+
 def test_without_fastapi(dbos: DBOS) -> None:
     """
     Since DBOS does not depend on FastAPI directly, verify DBOS works in an environment without FastAPI.
@@ -518,18 +575,18 @@ def test_without_fastapi(dbos: DBOS) -> None:
 
 def test_sleep(dbos: DBOS) -> None:
     @dbos.workflow()
-    def test_sleep_workfow(secs: float) -> str:
+    def test_sleep_workflow(secs: float) -> str:
         dbos.sleep(secs)
         return DBOS.workflow_id
 
     start_time = time.time()
-    sleep_uuid = test_sleep_workfow(1.5)
+    sleep_uuid = test_sleep_workflow(1.5)
     assert time.time() - start_time > 1.4
 
     # Test sleep OAOO, skip sleep
     start_time = time.time()
     with SetWorkflowUUID(sleep_uuid):
-        assert test_sleep_workfow(1.5) == sleep_uuid
+        assert test_sleep_workflow(1.5) == sleep_uuid
         assert time.time() - start_time < 0.3
 
 

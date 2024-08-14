@@ -338,11 +338,19 @@ class SystemDatabase:
                 ).fetchone()
                 if row is not None:
                     status = row[0]
-                    if status == str(WorkflowStatusString.SUCCESS):
-                        return {"output": row[1], "workflow_uuid": workflow_uuid}
+                    if status == str(WorkflowStatusString.SUCCESS.value):
+                        return {
+                            "status": status,
+                            "output": row[1],
+                            "workflow_uuid": workflow_uuid,
+                        }
 
-                    elif status == str(WorkflowStatusString.ERROR):
-                        return {"error": row[1], "workflow_uuid": workflow_uuid}
+                    elif status == str(WorkflowStatusString.ERROR.value):
+                        return {
+                            "status": status,
+                            "error": row[1],
+                            "workflow_uuid": workflow_uuid,
+                        }
 
                 else:
                     pass  # CB: I guess we're assuming the WF will show up eventually.
@@ -354,9 +362,9 @@ class SystemDatabase:
         if not stat:
             return None
         status: str = stat["status"]
-        if status == str(WorkflowStatusString.SUCCESS):
+        if status == str(WorkflowStatusString.SUCCESS.value):
             return utils.deserialize(stat["output"])
-        elif status == str(WorkflowStatusString.ERROR):
+        elif status == str(WorkflowStatusString.ERROR.value):
             raise utils.deserialize(stat["error"])
         return None
 
