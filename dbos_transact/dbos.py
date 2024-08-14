@@ -438,6 +438,7 @@ class DBOS:
                                         max_retry_wait_seconds,
                                     )
                                     continue
+                                raise dbapi_error
                             except Exception as error:
                                 # Don't record the error if it was already recorded
                                 if not has_recorded_error:

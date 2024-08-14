@@ -1,3 +1,5 @@
+import pytest
+import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 
 from dbos_transact import DBOS
@@ -17,6 +19,17 @@ def test_transaction_errors(dbos: DBOS) -> None:
             raise err
         return max_retry
 
+    @dbos.transaction()
+    def test_noretry_transaction() -> None:
+        nonlocal retry_counter
+        retry_counter += 1
+        DBOS.sql_session.execute(sa.text("selct abc from c;")).fetchall()
+
     res = test_retry_transaction(10)
     assert res == 10
     assert retry_counter == 10
+
+    with pytest.raises(Exception) as exc_info:
+        test_noretry_transaction()
+    assert exc_info.value.orig.pgcode == "42601"  # type: ignore
+    assert retry_counter == 11
