@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from functools import wraps
 from logging import Logger
 from typing import (
@@ -44,6 +46,7 @@ from dbos_transact.context import (
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
     OperationType,
+    SetWorkflowRecovery,
     SetWorkflowUUID,
     TracedAttributes,
     assert_current_dbos_context,
@@ -51,11 +54,12 @@ from dbos_transact.context import (
 )
 from dbos_transact.error import (
     DBOSException,
+    DBOSNonExistentWorkflowError,
     DBOSRecoveryError,
     DBOSWorkflowConflictUUIDError,
     DBOSWorkflowFunctionNotFoundError,
 )
-from dbos_transact.workflow import WorkflowHandle
+from dbos_transact.workflow import WorkflowHandle, WorkflowStatus
 
 from .application_database import ApplicationDatabase, TransactionResultInternal
 from .dbos_config import ConfigFile, load_config
@@ -140,6 +144,40 @@ class ClassPropertyDescriptor(Generic[G]):
 
 def classproperty(func: Callable[..., G]) -> ClassPropertyDescriptor[G]:
     return ClassPropertyDescriptor(func)
+
+
+class WorkflowHandleFuture(WorkflowHandle[R]):
+
+    def __init__(self, workflow_uuid: str, future: Future[R], dbos: DBOS):
+        super().__init__(workflow_uuid)
+        self.future = future
+        self.dbos = dbos
+
+    def get_result(self) -> R:
+        return self.future.result()
+
+    def get_status(self) -> WorkflowStatus:
+        stat = self.dbos.get_workflow_status(self.workflow_uuid)
+        if stat is None:
+            raise DBOSNonExistentWorkflowError(self.workflow_uuid)
+        return stat
+
+
+class PollingWorkflowHandle(WorkflowHandle[R]):
+
+    def __init__(self, workflow_uuid: str, dbos: DBOS):
+        super().__init__(workflow_uuid)
+        self.dbos = dbos
+
+    def get_result(self) -> R:
+        res: R = self.dbos.sys_db.await_workflow_result(self.workflow_uuid)
+        return res
+
+    def get_status(self) -> WorkflowStatus:
+        stat = self.dbos.get_workflow_status(self.workflow_uuid)
+        if stat is None:
+            raise DBOSNonExistentWorkflowError(self.workflow_uuid)
+        return stat
 
 
 IsolationLevel = Literal[
@@ -297,7 +335,39 @@ class DBOS:
             *args,
             **kwargs,
         )
-        return WorkflowHandle(new_wf_uuid, future)
+        return WorkflowHandleFuture(new_wf_uuid, future, self)
+
+    def retrieve_workflow(
+        self, workflow_uuid: str, existing_workflow: bool = True
+    ) -> WorkflowHandle[R]:
+        if existing_workflow:
+            stat = self.get_workflow_status(workflow_uuid)
+            if stat is None:
+                raise DBOSNonExistentWorkflowError(workflow_uuid)
+        return PollingWorkflowHandle(workflow_uuid, self)
+
+    def get_workflow_status(self, workflow_uuid: str) -> Optional[WorkflowStatus]:
+        ctx = get_local_dbos_context()
+        if ctx and ctx.is_within_workflow():
+            ctx.function_id += 1
+            stat = self.sys_db.get_workflow_status_within_wf(
+                workflow_uuid, ctx.workflow_uuid, ctx.function_id
+            )
+        else:
+            stat = self.sys_db.get_workflow_status(workflow_uuid)
+        if stat is None:
+            return None
+
+        return WorkflowStatus(
+            workflow_uuid=workflow_uuid,
+            status=stat["status"],
+            name=stat["name"],
+            class_name=None,
+            config_name=None,
+            authenticated_user=None,
+            assumed_role=None,
+            authenticatedRoles=None,
+        )
 
     def _init_workflow(
         self, ctx: DBOSContext, inputs: WorkflowInputs, wf_name: str
@@ -319,8 +389,9 @@ class DBOS:
             "request": (
                 utils.serialize(ctx.request) if ctx.request is not None else None
             ),
+            "recovery_attempts": None,
         }
-        self.sys_db.update_workflow_status(status)
+        self.sys_db.update_workflow_status(status, False, ctx.in_recovery)
 
         self.sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
 
@@ -678,7 +749,8 @@ class DBOS:
             dbos_logger.debug(f"Pending workflows: {workflow_ids}")
 
             for workflowID in workflow_ids:
-                handle = self.execute_workflow_uuid(workflowID)
+                with SetWorkflowRecovery():
+                    handle = self.execute_workflow_uuid(workflowID)
                 workflow_handles.append(handle)
 
         dbos_logger.info("Recovered pending workflows")
@@ -725,7 +797,8 @@ class DBOS:
         while self._run_startup_recovery_thread and len(workflow_ids) > 0:
             try:
                 for workflowID in list(workflow_ids):
-                    self.execute_workflow_uuid(workflowID)
+                    with SetWorkflowRecovery():
+                        self.execute_workflow_uuid(workflowID)
                     workflow_ids.remove(workflowID)
             except DBOSWorkflowFunctionNotFoundError:
                 time.sleep(1)
