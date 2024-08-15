@@ -62,6 +62,7 @@ class DBOSContext:
         self.parent_workflow_fid: int = -1
         self.workflow_uuid: str = ""
         self.function_id: int = -1
+        self.in_recovery: bool = False
 
         self.curr_comm_function_id: int = -1
         self.curr_tx_function_id: int = -1
@@ -75,6 +76,7 @@ class DBOSContext:
         self.id_assigned_for_next_workflow = ""
         rv.parent_workflow_uuid = self.workflow_uuid
         rv.parent_workflow_fid = self.function_id
+        rv.in_recovery = self.in_recovery
         return rv
 
     def assign_workflow_id(self) -> str:
@@ -260,6 +262,34 @@ class SetWorkflowUUID:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
+        # Code to clean up the basic context if we created it
+        if self.created_ctx:
+            clear_local_dbos_context()
+        return False  # Did not handle
+
+
+class SetWorkflowRecovery:
+    def __init__(self) -> None:
+        self.created_ctx = False
+
+    def __enter__(self) -> SetWorkflowRecovery:
+        # Code to create a basic context
+        ctx = get_local_dbos_context()
+        if ctx is None:
+            self.created_ctx = True
+            set_local_dbos_context(DBOSContext())
+        assert_current_dbos_context().in_recovery = True
+
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        assert assert_current_dbos_context().in_recovery == True
+        assert_current_dbos_context().in_recovery = False
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             clear_local_dbos_context()

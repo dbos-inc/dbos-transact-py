@@ -52,6 +52,7 @@ class WorkflowStatusInternal(TypedDict):
     app_version: Optional[str]
     app_id: Optional[str]
     request: Optional[str]  # JSON (jsonpickle)
+    recovery_attempts: Optional[int]
 
 
 class RecordedResult(TypedDict):
@@ -74,32 +75,22 @@ class GetEventWorkflowContext(TypedDict):
 
 class GetWorkflowsInput:
     def __init__(self) -> None:
-        self.name = None
-        self.authenticated_user = None
-        self.start_time = None
-        self.end_time = None
-        self.status = None
-        self.application_version = None
-        self.limit = None
-
-    name: Optional[str]  # The name of the workflow function
-    authenticated_user: Optional[str]  # The user who ran the workflow.
-    start_time: Optional[str]  # Timestamp in ISO 8601 format
-    end_time: Optional[str]  # Timestamp in ISO 8601 format
-    status: Optional[WorkflowStatuses]
-    application_version: Optional[
-        str
-    ]  # The application version that ran this workflow.
-    limit: Optional[
-        int
-    ]  # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
+        self.name: Optional[str] = None  # The name of the workflow function
+        self.authenticated_user: Optional[str] = None  # The user who ran the workflow.
+        self.start_time: Optional[str] = None  # Timestamp in ISO 8601 format
+        self.end_time: Optional[str] = None  # Timestamp in ISO 8601 format
+        self.status: Optional[WorkflowStatuses] = None
+        self.application_version: Optional[str] = (
+            None  # The application version that ran this workflow. = None
+        )
+        self.limit: Optional[int] = (
+            None  # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
+        )
 
 
 class GetWorkflowsOutput:
     def __init__(self, workflow_uuids: List[str]):
         self.workflow_uuids = workflow_uuids
-
-    workflow_uuids: List[str]
 
 
 class WorkflowInformation(TypedDict, total=False):
@@ -196,30 +187,45 @@ class SystemDatabase:
         self.notification_conn.close()
         self.engine.dispose()
 
-    def update_workflow_status(self, status: WorkflowStatusInternal) -> None:
-        with self.engine.begin() as c:
-            c.execute(
-                pg.insert(SystemSchema.workflow_status)
-                .values(
-                    workflow_uuid=status["workflow_uuid"],
+    def update_workflow_status(
+        self,
+        status: WorkflowStatusInternal,
+        replace: bool = True,
+        in_recovery: bool = False,
+    ) -> None:
+        cmd = pg.insert(SystemSchema.workflow_status).values(
+            workflow_uuid=status["workflow_uuid"],
+            status=status["status"],
+            name=status["name"],
+            output=status["output"],
+            error=status["error"],
+            executor_id=status["executor_id"],
+            application_version=status["app_version"],
+            application_id=status["app_id"],
+            request=status["request"],
+        )
+        if replace:
+            cmd = cmd.on_conflict_do_update(
+                index_elements=["workflow_uuid"],
+                set_=dict(
                     status=status["status"],
-                    name=status["name"],
                     output=status["output"],
                     error=status["error"],
-                    executor_id=status["executor_id"],
-                    application_version=status["app_version"],
-                    application_id=status["app_id"],
-                    request=status["request"],
-                )
-                .on_conflict_do_update(
-                    index_elements=["workflow_uuid"],
-                    set_=dict(
-                        status=status["status"],
-                        output=status["output"],
-                        error=status["error"],
-                    ),
-                )
+                ),
             )
+        elif in_recovery:
+            cmd = cmd.on_conflict_do_update(
+                index_elements=["workflow_uuid"],
+                set_=dict(
+                    recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
+                    + 1,
+                ),
+            )
+        else:
+            cmd = cmd.on_conflict_do_nothing()
+
+        with self.engine.begin() as c:
+            c.execute(cmd)
 
     def set_workflow_status(
         self,
@@ -257,6 +263,7 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.status,
                     SystemSchema.workflow_status.c.name,
                     SystemSchema.workflow_status.c.request,
+                    SystemSchema.workflow_status.c.recovery_attempts,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -271,8 +278,29 @@ class SystemDatabase:
                 "app_version": None,
                 "executor_id": None,
                 "request": row[2],
+                "recovery_attempts": row[3],
             }
             return status
+
+    def get_workflow_status_within_wf(
+        self, workflow_uuid: str, calling_wf: str, calling_wf_fn: int
+    ) -> Optional[WorkflowStatusInternal]:
+        res = self.check_operation_execution(calling_wf, calling_wf_fn)
+        if res is not None:
+            if res["output"]:
+                resstat: WorkflowStatusInternal = utils.deserialize(res["output"])
+                return resstat
+            return None
+        stat = self.get_workflow_status(workflow_uuid)
+        self.record_operation_result(
+            {
+                "workflow_uuid": calling_wf,
+                "function_id": calling_wf_fn,
+                "output": utils.serialize(stat),
+                "error": None,
+            }
+        )
+        return stat
 
     def get_workflow_status_w_outputs(
         self, workflow_uuid: str
@@ -299,12 +327,11 @@ class SystemDatabase:
                 "app_version": None,
                 "executor_id": None,
                 "request": row[2],
+                "recovery_attempts": None,
             }
             return status
 
-    def await_workflow_result_internal(
-        self, workflow_uuid: str
-    ) -> Optional[dict[str, Any]]:
+    def await_workflow_result_internal(self, workflow_uuid: str) -> dict[str, Any]:
         polling_interval_secs: float = 1.000
 
         while True:
@@ -318,16 +345,37 @@ class SystemDatabase:
                         SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
                     )
                 ).fetchone()
-                if row is None:
-                    return None
-                status = row[0]
-                if status == str(WorkflowStatusString.SUCCESS):
-                    return {"output": row[1], "workflow_uuid": workflow_uuid}
+                if row is not None:
+                    status = row[0]
+                    if status == str(WorkflowStatusString.SUCCESS.value):
+                        return {
+                            "status": status,
+                            "output": row[1],
+                            "workflow_uuid": workflow_uuid,
+                        }
 
-                elif status == str(WorkflowStatusString.ERROR):
-                    return {"error": row[1], "workflow_uuid": workflow_uuid}
+                    elif status == str(WorkflowStatusString.ERROR.value):
+                        return {
+                            "status": status,
+                            "error": row[2],
+                            "workflow_uuid": workflow_uuid,
+                        }
+
+                else:
+                    pass  # CB: I guess we're assuming the WF will show up eventually.
 
             time.sleep(polling_interval_secs)
+
+    def await_workflow_result(self, workflow_uuid: str) -> Any:
+        stat = self.await_workflow_result_internal(workflow_uuid)
+        if not stat:
+            return None
+        status: str = stat["status"]
+        if status == str(WorkflowStatusString.SUCCESS.value):
+            return utils.deserialize(stat["output"])
+        elif status == str(WorkflowStatusString.ERROR.value):
+            raise utils.deserialize(stat["error"])
+        return None
 
     def get_workflow_info(
         self, workflow_uuid: str, get_request: bool
