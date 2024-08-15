@@ -1,5 +1,5 @@
 [project]
-name = "dbos_transact"
+name = "dbos"
 version = "0.1.0"
 description = "A Python framework for backends that scale"
 authors = [
