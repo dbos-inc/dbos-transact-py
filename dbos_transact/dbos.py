@@ -20,6 +20,8 @@ from typing import (
 
 from opentelemetry.trace import Span
 
+from dbos_transact.scheduler import ScheduledWorkflow
+
 from .tracer import dbos_tracer
 
 if TYPE_CHECKING:
@@ -243,7 +245,6 @@ class DBOS:
         return wrapped_func
 
     def workflow(self) -> Callable[[Workflow[P, R]], Workflow[P, R]]:
-
         return self.workflow_decorator
 
     def start_workflow(
@@ -636,6 +637,14 @@ class DBOS:
         else:
             # Directly call it outside of a workflow
             return self.sys_db.get_event(workflow_uuid, key, timeout_seconds)
+
+    def scheduled(
+        self, interval: int
+    ) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
+        def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
+            return func
+
+        return decorator
 
     def execute_workflow_uuid(self, workflow_uuid: str) -> WorkflowHandle[Any]:
         """
