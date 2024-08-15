@@ -73,8 +73,9 @@ def load_config(configFilePath: str = "dbos-config.yaml") -> ConfigFile:
         data = yaml.safe_load(substituted_content)
 
     # Load the JSON schema relative to the package root
-    with resources.open_text("dbos_transact", "dbos-config.schema.json") as schema_file:
-        schema = json.load(schema_file)
+    schema_file = resources.files("dbos_transact").joinpath("dbos-config.schema.json")
+    with schema_file.open("r") as f:
+        schema = json.load(f)
 
     # Validate the data against the schema
     try:

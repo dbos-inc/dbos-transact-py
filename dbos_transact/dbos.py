@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import wraps
@@ -21,6 +22,8 @@ from typing import (
 )
 
 from opentelemetry.trace import Span
+
+from dbos_transact.scheduler.scheduler import ScheduledWorkflow, scheduler_loop
 
 from .tracer import dbos_tracer
 
@@ -202,7 +205,7 @@ class DBOS:
         self.workflow_info_map: dict[str, WorkflowProtocol[Any, Any]] = {}
         self.executor = ThreadPoolExecutor(max_workers=64)
         self.admin_server = AdminServer(dbos=self)
-        self._run_startup_recovery_thread = True
+        self.stop_events: List[threading.Event] = []
         if fastapi is not None:
             from dbos_transact.fastapi import setup_fastapi_middleware
 
@@ -228,7 +231,8 @@ class DBOS:
             handler.flush()
 
     def destroy(self) -> None:
-        self._run_startup_recovery_thread = False
+        for event in self.stop_events:
+            event.set()
         self.sys_db.destroy()
         self.app_db.destroy()
         self.admin_server.stop()
@@ -281,7 +285,6 @@ class DBOS:
         return wrapped_func
 
     def workflow(self) -> Callable[[Workflow[P, R]], Workflow[P, R]]:
-
         return self.workflow_decorator
 
     def start_workflow(
@@ -708,6 +711,15 @@ class DBOS:
             # Directly call it outside of a workflow
             return self.sys_db.get_event(workflow_uuid, key, timeout_seconds)
 
+    def scheduled(self, cron: str) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
+        def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
+            stop_event = threading.Event()
+            self.stop_events.append(stop_event)
+            self.executor.submit(scheduler_loop, func, cron, stop_event)
+            return func
+
+        return decorator
+
     def execute_workflow_uuid(self, workflow_uuid: str) -> WorkflowHandle[Any]:
         """
         This function is used to execute a workflow by a UUID for recovery.
@@ -794,7 +806,9 @@ class DBOS:
         """
         A background thread that attempts to recover local pending workflows on startup.
         """
-        while self._run_startup_recovery_thread and len(workflow_ids) > 0:
+        stop_event = threading.Event()
+        self.stop_events.append(stop_event)
+        while not stop_event.is_set() and len(workflow_ids) > 0:
             try:
                 for workflowID in list(workflow_ids):
                     with SetWorkflowRecovery():
