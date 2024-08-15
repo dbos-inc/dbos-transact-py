@@ -21,7 +21,7 @@ from typing import (
 
 from opentelemetry.trace import Span
 
-from dbos_transact.scheduler import ScheduledWorkflow, scheduler_loop
+from dbos_transact.scheduler.scheduler import ScheduledWorkflow, scheduler_loop
 
 from .tracer import dbos_tracer
 

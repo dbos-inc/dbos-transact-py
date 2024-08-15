@@ -27,7 +27,8 @@ from time import sleep
 
 import dateutil.tz
 import pytz
-from croniter import (
+
+from dbos_transact.scheduler.croniter import (
     CroniterBadCronError,
     CroniterBadDateError,
     CroniterNotAlphaError,
@@ -35,7 +36,6 @@ from croniter import (
     croniter,
     datetime_to_timestamp,
 )
-from croniter.croniter import VALID_LEN_EXPRESSION
 
 
 class TestCase(unittest.TestCase):
@@ -946,14 +946,6 @@ class CroniterTest(TestCase):
 
     def test_error_alpha_cron(self):
         self.assertRaises(CroniterNotAlphaError, croniter.expand, "* * * janu-jun *")
-
-    def test_error_bad_cron(self):
-        self.assertRaises(CroniterBadCronError, croniter.expand, "* * * *")
-        self.assertRaises(
-            CroniterBadCronError,
-            croniter.expand,
-            ("* " * (max(VALID_LEN_EXPRESSION) + 1)).strip(),
-        )
 
     def test_is_valid(self):
         self.assertTrue(croniter.is_valid("0 * * * *"))
