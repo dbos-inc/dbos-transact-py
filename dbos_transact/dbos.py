@@ -233,7 +233,6 @@ class DBOS:
     def destroy(self) -> None:
         for event in self.stop_events:
             event.set()
-        self._run_startup_recovery_thread = False
         self.sys_db.destroy()
         self.app_db.destroy()
         self.admin_server.stop()
