@@ -75,32 +75,22 @@ class GetEventWorkflowContext(TypedDict):
 
 class GetWorkflowsInput:
     def __init__(self) -> None:
-        self.name = None
-        self.authenticated_user = None
-        self.start_time = None
-        self.end_time = None
-        self.status = None
-        self.application_version = None
-        self.limit = None
-
-    name: Optional[str]  # The name of the workflow function
-    authenticated_user: Optional[str]  # The user who ran the workflow.
-    start_time: Optional[str]  # Timestamp in ISO 8601 format
-    end_time: Optional[str]  # Timestamp in ISO 8601 format
-    status: Optional[WorkflowStatuses]
-    application_version: Optional[
-        str
-    ]  # The application version that ran this workflow.
-    limit: Optional[
-        int
-    ]  # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
+        self.name: Optional[str] = None  # The name of the workflow function
+        self.authenticated_user: Optional[str] = None  # The user who ran the workflow.
+        self.start_time: Optional[str] = None  # Timestamp in ISO 8601 format
+        self.end_time: Optional[str] = None  # Timestamp in ISO 8601 format
+        self.status: Optional[WorkflowStatuses] = None
+        self.application_version: Optional[str] = (
+            None  # The application version that ran this workflow. = None
+        )
+        self.limit: Optional[int] = (
+            None  # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
+        )
 
 
 class GetWorkflowsOutput:
     def __init__(self, workflow_uuids: List[str]):
         self.workflow_uuids = workflow_uuids
-
-    workflow_uuids: List[str]
 
 
 class WorkflowInformation(TypedDict, total=False):
