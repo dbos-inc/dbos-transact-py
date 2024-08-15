@@ -156,8 +156,11 @@ class WorkflowHandleFuture(WorkflowHandle[R]):
     def get_result(self) -> R:
         return self.future.result()
 
-    def get_status(self) -> Optional[WorkflowStatus]:
-        return self.dbos.get_workflow_status(self.workflow_uuid)
+    def get_status(self) -> WorkflowStatus:
+        stat = self.dbos.get_workflow_status(self.workflow_uuid)
+        if stat is None:
+            raise DBOSNonExistentWorkflowError(self.workflow_uuid)
+        return stat
 
 
 class PollingWorkflowHandle(WorkflowHandle[R]):
@@ -170,8 +173,11 @@ class PollingWorkflowHandle(WorkflowHandle[R]):
         res: R = self.dbos.sys_db.await_workflow_result(self.workflow_uuid)
         return res
 
-    def get_status(self) -> Optional[WorkflowStatus]:
-        return self.dbos.get_workflow_status(self.workflow_uuid)
+    def get_status(self) -> WorkflowStatus:
+        stat = self.dbos.get_workflow_status(self.workflow_uuid)
+        if stat is None:
+            raise DBOSNonExistentWorkflowError(self.workflow_uuid)
+        return stat
 
 
 IsolationLevel = Literal[

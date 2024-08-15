@@ -30,6 +30,6 @@ class WorkflowHandle(Generic[R], ABC):
         raise Exception()
 
     @abstractmethod
-    def get_status(self) -> Optional[WorkflowStatus]:
+    def get_status(self) -> WorkflowStatus:
         """Should be handled in the subclasses"""
         raise Exception()
