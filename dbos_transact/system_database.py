@@ -52,6 +52,7 @@ class WorkflowStatusInternal(TypedDict):
     app_version: Optional[str]
     app_id: Optional[str]
     request: Optional[str]  # JSON (jsonpickle)
+    recovery_attempts: Optional[int]
 
 
 class RecordedResult(TypedDict):
@@ -197,7 +198,10 @@ class SystemDatabase:
         self.engine.dispose()
 
     def update_workflow_status(
-        self, status: WorkflowStatusInternal, replace: bool = True
+        self,
+        status: WorkflowStatusInternal,
+        replace: bool = True,
+        in_recovery: bool = False,
     ) -> None:
         cmd = pg.insert(SystemSchema.workflow_status).values(
             workflow_uuid=status["workflow_uuid"],
@@ -217,6 +221,14 @@ class SystemDatabase:
                     status=status["status"],
                     output=status["output"],
                     error=status["error"],
+                ),
+            )
+        elif in_recovery:
+            cmd = cmd.on_conflict_do_update(
+                index_elements=["workflow_uuid"],
+                set_=dict(
+                    recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
+                    + 1,
                 ),
             )
         else:
@@ -261,6 +273,7 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.status,
                     SystemSchema.workflow_status.c.name,
                     SystemSchema.workflow_status.c.request,
+                    SystemSchema.workflow_status.c.recovery_attempts,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -275,6 +288,7 @@ class SystemDatabase:
                 "app_version": None,
                 "executor_id": None,
                 "request": row[2],
+                "recovery_attempts": row[3],
             }
             return status
 
@@ -323,6 +337,7 @@ class SystemDatabase:
                 "app_version": None,
                 "executor_id": None,
                 "request": row[2],
+                "recovery_attempts": None,
             }
             return status
 

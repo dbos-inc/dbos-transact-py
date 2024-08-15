@@ -46,6 +46,7 @@ from dbos_transact.context import (
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
     OperationType,
+    SetWorkflowRecovery,
     SetWorkflowUUID,
     TracedAttributes,
     assert_current_dbos_context,
@@ -382,8 +383,9 @@ class DBOS:
             "request": (
                 utils.serialize(ctx.request) if ctx.request is not None else None
             ),
+            "recovery_attempts": None,
         }
-        self.sys_db.update_workflow_status(status, False)
+        self.sys_db.update_workflow_status(status, False, ctx.in_recovery)
 
         self.sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
 
@@ -741,7 +743,8 @@ class DBOS:
             dbos_logger.debug(f"Pending workflows: {workflow_ids}")
 
             for workflowID in workflow_ids:
-                handle = self.execute_workflow_uuid(workflowID)
+                with SetWorkflowRecovery():
+                    handle = self.execute_workflow_uuid(workflowID)
                 workflow_handles.append(handle)
 
         dbos_logger.info("Recovered pending workflows")
@@ -788,7 +791,8 @@ class DBOS:
         while self._run_startup_recovery_thread and len(workflow_ids) > 0:
             try:
                 for workflowID in list(workflow_ids):
-                    self.execute_workflow_uuid(workflowID)
+                    with SetWorkflowRecovery():
+                        self.execute_workflow_uuid(workflowID)
                     workflow_ids.remove(workflowID)
             except DBOSWorkflowFunctionNotFoundError:
                 time.sleep(1)

@@ -70,6 +70,7 @@ def test_admin_recovery(dbos: DBOS) -> None:
             "app_id": None,
             "app_version": None,
             "request": None,
+            "recovery_attempts": None,
         }
     )
     status = dbos.sys_db.get_workflow_status(wfuuid)
