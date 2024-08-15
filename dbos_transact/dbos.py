@@ -201,25 +201,32 @@ def dbos_example_class_decorator(cls: Type[Any]) -> Type[Any]:
 def dbos_example_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        if inspect.ismethod(func):
+        clsinfo: str = "<None>"
+        if len(args) > 0:
             first_arg = args[0]
-            # Class method (first argument is a class)
-            clsinfo: str = "<None>"
             if isinstance(first_arg, type):
                 if hasattr(first_arg, "dbos_decorator_info"):
                     clsinfo = getattr(first_arg, "dbos_decorator_info")
                 print(f"Class method decorator accessing: {clsinfo}")
             else:
-                if hasattr(first_arg, "instance_name"):
-                    print(f"Instance name is {getattr(first_arg, 'instance_name')}")
+                # Check if the function signature has "self" as the first parameter name
+                #   This is not 100% reliable but it is better than nothing for detecting footguns
+                sig = inspect.signature(func)
+                parameters = list(sig.parameters.values())
+                if parameters and parameters[0].name == "self":
+                    if hasattr(first_arg, "instance_name"):
+                        print(f"Instance name is {getattr(first_arg, 'instance_name')}")
+                    else:
+                        print(f"ERROR - Call on instance that is NOT NAMED")
+                    if hasattr(first_arg, "dbos_decorator_info"):
+                        clsinfo = getattr(first_arg, "dbos_decorator_info")
+                    print(f"Instance method decorator accessing: {clsinfo}")
                 else:
-                    print(f"ERROR - Call on instance that is NOT NAMED")
-                if hasattr(first_arg, "dbos_decorator_info"):
-                    clsinfo = getattr(first_arg, "dbos_decorator_info")
-                print(f"Instance method decorator accessing: {clsinfo}")
+                    # Bare function
+                    print(f"Bare function call (with args)")
         else:
             # Bare function
-            print(f"Bare function call")
+            print(f"Bare function call (no-arg)")
 
         # Common logic to be shared
         print("Wrapper logic before the function call")

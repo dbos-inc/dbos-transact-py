@@ -11,14 +11,87 @@ from dbos_transact.dbos import (
 )
 
 
-@dbos_example_class_decorator
+class DBOSTestClassInstNN:
+    @dbos_example_decorator
+    def test_func(self, var: str) -> str:
+        return var
+
+
 class DBOSTestClassInst:
+    def __init__(self) -> None:
+        self.instance_name = "myname"
+
+    @dbos_example_decorator
+    def test_func(self, var: str) -> str:
+        return var
+
+
+@dbos_example_class_decorator
+class DBOSTestClassInstCD:
+    def __init__(self) -> None:
+        self.instance_name = "myname"
+
+    @dbos_example_decorator
+    def test_func(self, var: str) -> str:
+        return var
+
+
+class DBOSTestClassStatic:
+    @dbos_example_decorator
+    @staticmethod
+    def test_func(var: str) -> str:
+        return var
+
+
+@dbos_example_class_decorator
+class DBOSTestClassStaticCD:
+    @dbos_example_decorator
+    @staticmethod
+    def test_func(var: str) -> str:
+        return var
+
+
+class DBOSTestClassClass:
+    @classmethod
+    @dbos_example_decorator
+    def test_func(cls, var: str) -> str:
+        return var
+
+
+@dbos_example_class_decorator
+class DBOSTestClassClassCD:
+    @classmethod
+    @dbos_example_decorator
+    def test_func(cls, var: str) -> str:
+        return var
+
+
+@dbos_example_decorator
+def tfunc(var: str) -> str:
+    return var
+
+
+print("BARE:")
+tfunc("a")
+print("STATIC:")
+DBOSTestClassStatic.test_func("a")
+DBOSTestClassStaticCD.test_func("a")
+print("CLASS:")
+DBOSTestClassClass.test_func("a")
+DBOSTestClassClassCD.test_func("a")
+print("INST:")
+DBOSTestClassInst().test_func("a")
+DBOSTestClassInstCD().test_func("a")
+print("INST ERROR:")
+DBOSTestClassInstNN().test_func("a")
+
+
+class DBOSTestClassInstW:
     def __init__(self) -> None:
         self.txn_counter: int = 0
         self.wf_counter: int = 0
         self.comm_counter: int = 0
 
-    @dbos_example_decorator
     def test_workflow(self, var: str, var2: str) -> str:
         self.wf_counter += 1
         res = self.test_transaction(var2)
@@ -38,7 +111,7 @@ class DBOSTestClassInst:
         return var
 
 
-class DBOSTestClassClass:
+class DBOSTestClassClassW:
     txn_counter: int = 0
     wf_counter: int = 0
     comm_counter: int = 0
@@ -71,8 +144,8 @@ def test_simple_workflow(dbos: DBOS) -> None:
         wf_counter: int = 0
         comm_counter: int = 0
 
-        @dbos.workflow()
         @staticmethod
+        @dbos.workflow()
         def test_workflow(var: str, var2: str) -> str:
             DBOSTestClassStatic.wf_counter += 1
             res = DBOSTestClassStatic.test_transaction(var2)
@@ -81,6 +154,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
             return res + res2
 
         @staticmethod
+        @dbos.transaction()
         def test_transaction(var2: str) -> str:
             rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
             DBOSTestClassStatic.txn_counter += 1
@@ -88,6 +162,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
             return var2 + str(rows[0][0])
 
         @staticmethod
+        @dbos.communicator()
         def test_communicator(var: str) -> str:
             DBOSTestClassStatic.comm_counter += 1
             DBOS.logger.info("I'm test_communicator")
