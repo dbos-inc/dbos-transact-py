@@ -352,7 +352,7 @@ class SystemDatabase:
                     elif status == str(WorkflowStatusString.ERROR.value):
                         return {
                             "status": status,
-                            "error": row[1],
+                            "error": row[2],
                             "workflow_uuid": workflow_uuid,
                         }
 

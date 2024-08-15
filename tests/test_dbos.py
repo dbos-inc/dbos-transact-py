@@ -489,8 +489,11 @@ def test_retrieve_workflow(dbos: DBOS) -> None:
         dbos.sleep(secs)
         raise Exception("Wake Up!")
 
+    dest_uuid = "aaaa"
     with pytest.raises(Exception) as exc_info:
-        dbos.retrieve_workflow("aaaa")
+        dbos.retrieve_workflow(dest_uuid)
+    pattern = f"Sent to non-existent destination workflow UUID: {dest_uuid}"
+    assert pattern in str(exc_info.value)
 
     # These return
     sleep_wfh = dbos.start_workflow(test_sleep_workflow, 1.5)
@@ -523,12 +526,14 @@ def test_retrieve_workflow(dbos: DBOS) -> None:
 
     with pytest.raises(Exception) as exc_info:
         sleep_pwfh.get_result()
+    assert str(exc_info.value) == "Wake Up!"
     istat = sleep_pwfh.get_status()
     assert istat
     assert istat.status == str(WorkflowStatusString.ERROR.value)
 
     with pytest.raises(Exception) as exc_info:
         sleep_wfh.get_result()
+    assert str(exc_info.value) == "Wake Up!"
     istat = sleep_wfh.get_status()
     assert istat
     assert istat.status == str(WorkflowStatusString.ERROR.value)
