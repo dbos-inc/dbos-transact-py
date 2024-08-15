@@ -60,3 +60,14 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
     assert workflow_handles[0].get_result() == None
 
     assert txn_counter + 1 == wf_counter
+
+
+def test_long_workflow(dbos: DBOS) -> None:
+    """
+    This runs every hour and does nothing. Goal is to verify that it shuts down properly.
+    """
+
+    @dbos.scheduled("0 * * * * *")
+    @dbos.workflow()
+    def test_workflow(scheduled: datetime, actual: datetime) -> None:
+        pass
