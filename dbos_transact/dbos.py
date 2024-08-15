@@ -642,13 +642,11 @@ class DBOS:
             # Directly call it outside of a workflow
             return self.sys_db.get_event(workflow_uuid, key, timeout_seconds)
 
-    def scheduled(
-        self, interval: int
-    ) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
+    def scheduled(self, cron: str) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
         def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
             stop_event = threading.Event()
             self.stop_events.append(stop_event)
-            self.executor.submit(scheduler_loop, func, interval, stop_event)
+            self.executor.submit(scheduler_loop, func, cron, stop_event)
             return func
 
         return decorator
