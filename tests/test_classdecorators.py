@@ -4,16 +4,21 @@ import pytest
 import sqlalchemy as sa
 
 from dbos_transact.context import SetWorkflowUUID
-from dbos_transact.dbos import DBOS
+from dbos_transact.dbos import (
+    DBOS,
+    dbos_example_class_decorator,
+    dbos_example_decorator,
+)
 
 
+@dbos_example_class_decorator
 class DBOSTestClassInst:
     def __init__(self) -> None:
         self.txn_counter: int = 0
         self.wf_counter: int = 0
         self.comm_counter: int = 0
 
-    # Not yet.... @DBOS.workflow
+    @dbos_example_decorator
     def test_workflow(self, var: str, var2: str) -> str:
         self.wf_counter += 1
         res = self.test_transaction(var2)
@@ -29,33 +34,6 @@ class DBOSTestClassInst:
 
     def test_communicator(self, var: str) -> str:
         self.comm_counter += 1
-        DBOS.logger.info("I'm test_communicator")
-        return var
-
-
-class DBOSTestClassStatic:
-    txn_counter: int = 0
-    wf_counter: int = 0
-    comm_counter: int = 0
-
-    @staticmethod
-    def test_workflow(var: str, var2: str) -> str:
-        DBOSTestClassStatic.wf_counter += 1
-        res = DBOSTestClassStatic.test_transaction(var2)
-        res2 = DBOSTestClassStatic.test_communicator(var)
-        DBOS.logger.info("I'm test_workflow")
-        return res + res2
-
-    @staticmethod
-    def test_transaction(var2: str) -> str:
-        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
-        DBOSTestClassStatic.txn_counter += 1
-        DBOS.logger.info("I'm test_transaction")
-        return var2 + str(rows[0][0])
-
-    @staticmethod
-    def test_communicator(var: str) -> str:
-        DBOSTestClassStatic.comm_counter += 1
         DBOS.logger.info("I'm test_communicator")
         return var
 
@@ -87,21 +65,32 @@ class DBOSTestClassClass:
         return var
 
 
-""""
-def test_simple_workflow(dbos: DBOS) -> None:    
-    assert test_workflow("bob", "bob") == "bob1bob"
+def test_simple_workflow(dbos: DBOS) -> None:
+    class DBOSTestClassStatic:
+        txn_counter: int = 0
+        wf_counter: int = 0
+        comm_counter: int = 0
 
-    # Test OAOO
-    wfuuid = str(uuid.uuid4())
-    with SetWorkflowUUID(wfuuid):
-        assert test_workflow("alice", "alice") == "alice1alice"
-    with SetWorkflowUUID(wfuuid):
-        assert test_workflow("alice", "alice") == "alice1alice"
-    assert txn_counter == 2  # Only increment once
-    assert comm_counter == 2  # Only increment once
+        @dbos.workflow()
+        @staticmethod
+        def test_workflow(var: str, var2: str) -> str:
+            DBOSTestClassStatic.wf_counter += 1
+            res = DBOSTestClassStatic.test_transaction(var2)
+            res2 = DBOSTestClassStatic.test_communicator(var)
+            DBOS.logger.info("I'm test_workflow")
+            return res + res2
 
-    # Test we can execute the workflow by uuid
-    handle = dbos.execute_workflow_uuid(wfuuid)
-    assert handle.get_result() == "alice1alice"
-    assert wf_counter == 4
-"""
+        @staticmethod
+        def test_transaction(var2: str) -> str:
+            rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+            DBOSTestClassStatic.txn_counter += 1
+            DBOS.logger.info("I'm test_transaction")
+            return var2 + str(rows[0][0])
+
+        @staticmethod
+        def test_communicator(var: str) -> str:
+            DBOSTestClassStatic.comm_counter += 1
+            DBOS.logger.info("I'm test_communicator")
+            return var
+
+    assert DBOSTestClassStatic.test_workflow("bob", "bob") == "bob1bob"

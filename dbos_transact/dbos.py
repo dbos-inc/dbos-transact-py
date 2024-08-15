@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 import time
@@ -13,11 +14,14 @@ from typing import (
     Generic,
     List,
     Literal,
+    NoReturn,
     Optional,
     Protocol,
+    Type,
     TypedDict,
     TypeVar,
     cast,
+    overload,
 )
 
 from opentelemetry.trace import Span
@@ -185,6 +189,50 @@ IsolationLevel = Literal[
     "REPEATABLE READ",
     "READ COMMITTED",
 ]
+
+
+# Decorator for the class itself to store some information
+def dbos_example_class_decorator(cls: Type[Any]) -> Type[Any]:
+    cls.dbos_decorator_info = "Some class-specific information"
+    return cls
+
+
+# The unified decorator that can be used for any method or function
+def dbos_example_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+    @wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        if inspect.ismethod(func):
+            first_arg = args[0]
+            # Class method (first argument is a class)
+            clsinfo: str = "<None>"
+            if isinstance(first_arg, type):
+                if hasattr(first_arg, "dbos_decorator_info"):
+                    clsinfo = getattr(first_arg, "dbos_decorator_info")
+                print(f"Class method decorator accessing: {clsinfo}")
+            else:
+                if hasattr(first_arg, "instance_name"):
+                    print(f"Instance name is {getattr(first_arg, 'instance_name')}")
+                else:
+                    print(f"ERROR - Call on instance that is NOT NAMED")
+                if hasattr(first_arg, "dbos_decorator_info"):
+                    clsinfo = getattr(first_arg, "dbos_decorator_info")
+                print(f"Instance method decorator accessing: {clsinfo}")
+        else:
+            # Bare function
+            print(f"Bare function call")
+
+        # Common logic to be shared
+        print("Wrapper logic before the function call")
+
+        # Call the original function
+        result = func(*args, **kwargs)
+
+        # Common logic after the function call
+        print("Wrapper logic after the function call")
+
+        return result
+
+    return wrapper
 
 
 class DBOS:
