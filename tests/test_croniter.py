@@ -1,5 +1,4 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+# type: ignore
 
 import unittest
 from datetime import datetime, timedelta

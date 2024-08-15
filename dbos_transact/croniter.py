@@ -1,3 +1,4 @@
+# type: ignore
 # This code was based on code from croniter: https://pypi.org/project/croniter/
 """
 Copyright (C) 2010-2012 Matsumoto Taichi

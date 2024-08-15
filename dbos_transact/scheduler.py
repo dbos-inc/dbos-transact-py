@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from .context import SetWorkflowUUID
-from .croniter import croniter
+from .croniter import croniter  # type: ignore
 
 ScheduledWorkflow = Callable[[datetime, datetime], None]
 
