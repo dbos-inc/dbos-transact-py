@@ -205,7 +205,6 @@ class DBOS:
         self.workflow_info_map: dict[str, WorkflowProtocol[Any, Any]] = {}
         self.executor = ThreadPoolExecutor(max_workers=64)
         self.admin_server = AdminServer(dbos=self)
-        self._run_startup_recovery_thread = True
         self.stop_events: List[threading.Event] = []
         if fastapi is not None:
             from dbos_transact.fastapi import setup_fastapi_middleware
@@ -808,7 +807,9 @@ class DBOS:
         """
         A background thread that attempts to recover local pending workflows on startup.
         """
-        while self._run_startup_recovery_thread and len(workflow_ids) > 0:
+        stop_event = threading.Event()
+        self.stop_events.append(stop_event)
+        while not stop_event.is_set() and len(workflow_ids) > 0:
             try:
                 for workflowID in list(workflow_ids):
                     with SetWorkflowRecovery():
