@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
@@ -20,7 +21,7 @@ from typing import (
 
 from opentelemetry.trace import Span
 
-from dbos_transact.scheduler import ScheduledWorkflow
+from dbos_transact.scheduler import ScheduledWorkflow, scheduler_loop
 
 from .tracer import dbos_tracer
 
@@ -167,6 +168,7 @@ class DBOS:
         self.executor = ThreadPoolExecutor(max_workers=64)
         self.admin_server = AdminServer(dbos=self)
         self._run_startup_recovery_thread = True
+        self.stop_events: List[threading.Event] = []
         if fastapi is not None:
             from dbos_transact.fastapi import setup_fastapi_middleware
 
@@ -192,6 +194,8 @@ class DBOS:
             handler.flush()
 
     def destroy(self) -> None:
+        for event in self.stop_events:
+            event.set()
         self._run_startup_recovery_thread = False
         self.sys_db.destroy()
         self.app_db.destroy()
@@ -642,6 +646,9 @@ class DBOS:
         self, interval: int
     ) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
         def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
+            stop_event = threading.Event()
+            self.stop_events.append(stop_event)
+            self.executor.submit(scheduler_loop, func, interval, stop_event)
             return func
 
         return decorator
