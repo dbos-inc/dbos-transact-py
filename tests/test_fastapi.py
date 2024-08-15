@@ -76,6 +76,7 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
             "app_id": None,
             "app_version": None,
             "request": None,
+            "recovery_attempts": None,
         }
     )
 

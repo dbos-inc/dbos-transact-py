@@ -12,7 +12,9 @@ import sqlalchemy as sa
 
 from dbos_transact import DBOS, ConfigFile, SetWorkflowUUID
 from dbos_transact.context import get_local_dbos_context
-from dbos_transact.system_database import GetWorkflowsInput
+from dbos_transact.error import DBOSException
+from dbos_transact.system_database import GetWorkflowsInput, WorkflowStatusString
+from dbos_transact.workflow import WorkflowHandle
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -257,6 +259,38 @@ def test_temp_workflow(dbos: DBOS) -> None:
     assert comm_counter == 1
 
 
+def test_temp_workflow_errors(dbos: DBOS) -> None:
+    txn_counter: int = 0
+    comm_counter: int = 0
+
+    cur_time: str = datetime.datetime.now().isoformat()
+    gwi: GetWorkflowsInput = GetWorkflowsInput()
+    gwi.start_time = cur_time
+
+    @dbos.transaction()
+    def test_transaction(var2: str) -> str:
+        nonlocal txn_counter
+        txn_counter += 1
+        raise Exception(var2)
+
+    @dbos.communicator()
+    def test_communicator(var: str) -> str:
+        nonlocal comm_counter
+        comm_counter += 1
+        raise Exception(var)
+
+    with pytest.raises(Exception) as exc_info:
+        test_transaction("tval")
+    assert "tval" == str(exc_info.value)
+
+    with pytest.raises(Exception) as exc_info:
+        test_communicator("cval")
+    assert "cval" == str(exc_info.value)
+
+    assert txn_counter == 1
+    assert comm_counter == 1
+
+
 def test_recovery_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
@@ -291,6 +325,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
             "app_id": None,
             "app_version": None,
             "request": None,
+            "recovery_attempts": None,
         }
     )
 
@@ -300,6 +335,11 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     assert workflow_handles[0].get_result() == "bob1bob"
     assert wf_counter == 2
     assert txn_counter == 1
+
+    # Test that there was a recovery attempt of this
+    stat = dbos.sys_db.get_workflow_status(workflow_handles[0].get_workflow_uuid())
+    assert stat
+    assert stat["recovery_attempts"] == 1
 
 
 def test_recovery_temp_workflow(dbos: DBOS) -> None:
@@ -341,6 +381,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
             "app_id": None,
             "app_version": None,
             "request": None,
+            "recovery_attempts": None,
         }
     )
 
@@ -388,6 +429,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
             "app_id": None,
             "app_version": None,
             "request": None,
+            "recovery_attempts": None,
         }
     )
 
@@ -444,6 +486,124 @@ def test_start_workflow(dbos: DBOS) -> None:
     assert wf_counter == 3
 
 
+def test_retrieve_workflow(dbos: DBOS) -> None:
+    @dbos.workflow()
+    def test_sleep_workflow(secs: float) -> str:
+        dbos.sleep(secs)
+        return DBOS.workflow_id
+
+    @dbos.workflow()
+    def test_sleep_workthrow(secs: float) -> str:
+        dbos.sleep(secs)
+        raise Exception("Wake Up!")
+
+    dest_uuid = "aaaa"
+    with pytest.raises(Exception) as exc_info:
+        dbos.retrieve_workflow(dest_uuid)
+    pattern = f"Sent to non-existent destination workflow UUID: {dest_uuid}"
+    assert pattern in str(exc_info.value)
+
+    # These return
+    sleep_wfh = dbos.start_workflow(test_sleep_workflow, 1.5)
+    istat = sleep_wfh.get_status()
+    assert istat
+    assert istat.status == str(WorkflowStatusString.PENDING.value)
+
+    sleep_pwfh: WorkflowHandle[str] = dbos.retrieve_workflow(sleep_wfh.workflow_uuid)
+    assert sleep_wfh.workflow_uuid == sleep_pwfh.workflow_uuid
+    dbos.logger.info(f"UUID: {sleep_pwfh.get_workflow_uuid()}")
+    hres = sleep_pwfh.get_result()
+    assert hres == sleep_pwfh.get_workflow_uuid()
+    dbos.logger.info(f"RES: {hres}")
+    istat = sleep_pwfh.get_status()
+    assert istat
+    assert istat.status == str(WorkflowStatusString.SUCCESS.value)
+
+    assert sleep_wfh.get_result() == sleep_wfh.get_workflow_uuid()
+    istat = sleep_wfh.get_status()
+    assert istat
+    assert istat.status == str(WorkflowStatusString.SUCCESS.value)
+
+    # These throw
+    sleep_wfh = dbos.start_workflow(test_sleep_workthrow, 1.5)
+    istat = sleep_wfh.get_status()
+    assert istat
+    assert istat.status == str(WorkflowStatusString.PENDING.value)
+    sleep_pwfh = dbos.retrieve_workflow(sleep_wfh.workflow_uuid)
+    assert sleep_wfh.workflow_uuid == sleep_pwfh.workflow_uuid
+
+    with pytest.raises(Exception) as exc_info:
+        sleep_pwfh.get_result()
+    assert str(exc_info.value) == "Wake Up!"
+    istat = sleep_pwfh.get_status()
+    assert istat
+    assert istat.status == str(WorkflowStatusString.ERROR.value)
+
+    with pytest.raises(Exception) as exc_info:
+        sleep_wfh.get_result()
+    assert str(exc_info.value) == "Wake Up!"
+    istat = sleep_wfh.get_status()
+    assert istat
+    assert istat.status == str(WorkflowStatusString.ERROR.value)
+
+
+def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
+    @dbos.workflow()
+    def test_sleep_workflow(secs: float) -> str:
+        dbos.sleep(secs)
+        return DBOS.workflow_id
+
+    @dbos.workflow()
+    def test_workflow_status_a() -> str:
+        with SetWorkflowUUID("run_this_once_a"):
+            dbos.start_workflow(test_sleep_workflow, 1.5)
+
+        fstat1 = dbos.get_workflow_status("run_this_once_a")
+        assert fstat1
+        fres: str = dbos.retrieve_workflow("run_this_once_a").get_result()
+        fstat2 = dbos.get_workflow_status("run_this_once_a")
+        assert fstat2
+        return fstat1.status + fres + fstat2.status
+
+    @dbos.workflow()
+    def test_workflow_status_b() -> str:
+        assert DBOS.workflow_id == "parent_b"
+        with SetWorkflowUUID("run_this_once_b"):
+            wfh = dbos.start_workflow(test_sleep_workflow, 1.5)
+        assert DBOS.workflow_id == "parent_b"
+
+        fstat1 = wfh.get_status()
+        assert fstat1
+        fres = wfh.get_result()
+        fstat2 = wfh.get_status()
+        assert fstat2
+        return fstat1.status + fres + fstat2.status
+
+    with SetWorkflowUUID("parent_a"):
+        assert test_workflow_status_a() == "PENDINGrun_this_once_aSUCCESS"
+    with SetWorkflowUUID("parent_a"):
+        assert test_workflow_status_a() == "PENDINGrun_this_once_aSUCCESS"
+
+    with SetWorkflowUUID("parent_b"):
+        assert test_workflow_status_b() == "PENDINGrun_this_once_bSUCCESS"
+    with SetWorkflowUUID("parent_b"):
+        assert test_workflow_status_b() == "PENDINGrun_this_once_bSUCCESS"
+
+    # Test that there were no recovery attempts of this
+    stat = dbos.sys_db.get_workflow_status("parent_a")
+    assert stat
+    assert stat["recovery_attempts"] == 0
+    stat = dbos.sys_db.get_workflow_status("parent_b")
+    assert stat
+    assert stat["recovery_attempts"] == 0
+    stat = dbos.sys_db.get_workflow_status("run_this_once_a")
+    assert stat
+    assert stat["recovery_attempts"] == 0
+    stat = dbos.sys_db.get_workflow_status("run_this_once_b")
+    assert stat
+    assert stat["recovery_attempts"] == 0
+
+
 def test_without_fastapi(dbos: DBOS) -> None:
     """
     Since DBOS does not depend on FastAPI directly, verify DBOS works in an environment without FastAPI.
@@ -485,18 +645,18 @@ def test_without_fastapi(dbos: DBOS) -> None:
 
 def test_sleep(dbos: DBOS) -> None:
     @dbos.workflow()
-    def test_sleep_workfow(secs: float) -> str:
+    def test_sleep_workflow(secs: float) -> str:
         dbos.sleep(secs)
         return DBOS.workflow_id
 
     start_time = time.time()
-    sleep_uuid = test_sleep_workfow(1.5)
+    sleep_uuid = test_sleep_workflow(1.5)
     assert time.time() - start_time > 1.4
 
     # Test sleep OAOO, skip sleep
     start_time = time.time()
     with SetWorkflowUUID(sleep_uuid):
-        assert test_sleep_workfow(1.5) == sleep_uuid
+        assert test_sleep_workflow(1.5) == sleep_uuid
         assert time.time() - start_time < 0.3
 
 
