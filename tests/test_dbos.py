@@ -12,7 +12,6 @@ import sqlalchemy as sa
 
 from dbos_transact import DBOS, ConfigFile, SetWorkflowUUID
 from dbos_transact.context import get_local_dbos_context
-from dbos_transact.error import DBOSException
 from dbos_transact.system_database import GetWorkflowsInput
 
 
@@ -30,7 +29,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
         DBOS.logger.info("I'm test_workflow")
         return res + res2
 
-    @dbos.transaction()
+    @dbos.transaction(isolation_level="REPEATABLE READ")
     def test_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
@@ -223,7 +222,7 @@ def test_temp_workflow(dbos: DBOS) -> None:
     gwi: GetWorkflowsInput = GetWorkflowsInput()
     gwi.start_time = cur_time
 
-    @dbos.transaction()
+    @dbos.transaction(isolation_level="READ COMMITTED")
     def test_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
