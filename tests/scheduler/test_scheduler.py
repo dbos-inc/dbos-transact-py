@@ -67,7 +67,7 @@ def test_long_workflow(dbos: DBOS) -> None:
     This runs every hour and does nothing. Goal is to verify that it shuts down properly.
     """
 
-    @dbos.scheduled("0 * * * * *")
+    @dbos.scheduled("0 * * * *")
     @dbos.workflow()
     def test_workflow(scheduled: datetime, actual: datetime) -> None:
         pass
