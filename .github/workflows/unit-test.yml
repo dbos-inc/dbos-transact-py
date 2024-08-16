@@ -19,7 +19,9 @@ on:
 jobs:
   integration:
     runs-on: ubuntu-latest
-
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
     services:
       # Postgres service container
       postgres:
@@ -46,15 +48,8 @@ jobs:
     - name: Setup PDM
       uses: pdm-project/setup-pdm@v4
       with:
-        python-version: '3.12.x'
+        python-version: ${{ matrix.python-version }}
         architecture: 'x64'
-
-    - name: Configure PDM to use installed Python versions
-      run: |
-        pdm use 3.9
-        pdm use 3.10
-        pdm use 3.11
-        pdm use 3.12
 
     - name: Install Dependencies
       run: pdm install
@@ -65,7 +60,7 @@ jobs:
       working-directory: ./
 
     - name: Run Unit Tests
-      run: pdm run tox
+      run: pdm run pytest
       working-directory: ./
       env:
         PGPASSWORD: dbos
