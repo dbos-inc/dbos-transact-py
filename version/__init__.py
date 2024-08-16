@@ -1,7 +1,4 @@
-from datetime import datetime, timezone
-
 from pdm.backend.hooks.version import SCMVersion
-from pdm.backend.hooks.version.scm import guess_next_version
 
 
 def format_version(git_version: SCMVersion) -> str:
@@ -16,24 +13,31 @@ def format_version(git_version: SCMVersion) -> str:
     is_release = "release" in git_version.branch
     is_preview = git_version.branch == "main"
 
+    next_version = guess_next_version(str(git_version.version))
+
     if git_version.distance is None:
         if is_release:
             version = str(git_version.version)
         elif is_preview:
-            version = f"{git_version.version}a0"
+            version = f"{next_version}a0"
         else:
             raise Exception(
                 "Tagged releases may not be published from feature branches"
             )
     else:
-        guessed = guess_next_version(git_version.version)
         if is_release:
             raise Exception(
                 f"Release branches may only publish tagged releases. Distance: {git_version.distance}"
             )
         elif is_preview:
-            version = f"{guessed}a{git_version.distance}"
+            version = f"{next_version}a{git_version.distance}"
         else:
-            version = f"{guessed}a{git_version.distance}+{git_version.node}"
+            version = f"{next_version}a{git_version.distance}+{git_version.node}"
 
     return version
+
+
+def guess_next_version(version_number: str):
+    major, minor, patch = map(int, version_number.split("."))
+    minor += 1
+    return f"{major}.{minor}.{patch}"
