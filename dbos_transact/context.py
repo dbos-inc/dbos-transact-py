@@ -5,7 +5,7 @@ import uuid
 from contextvars import ContextVar
 from enum import Enum
 from types import TracebackType
-from typing import TYPE_CHECKING, Literal, Optional, Type, TypedDict
+from typing import TYPE_CHECKING, List, Literal, Optional, Type, TypedDict
 
 from opentelemetry.trace import Span, Status, StatusCode
 
@@ -69,6 +69,10 @@ class DBOSContext:
         self.sql_session: Optional[Session] = None
         self.spans: list[Span] = []
 
+        self.authenticated_user: Optional[str] = None
+        self.authenticated_roles: Optional[List[str]] = None
+        self.assumed_role: Optional[str] = None
+
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()
         rv.logger = self.logger
@@ -77,6 +81,13 @@ class DBOSContext:
         rv.parent_workflow_uuid = self.workflow_uuid
         rv.parent_workflow_fid = self.function_id
         rv.in_recovery = self.in_recovery
+        rv.authenticated_user = self.authenticated_user
+        rv.authenticated_roles = (
+            self.authenticated_roles[:]
+            if self.authenticated_roles is not None
+            else None
+        )
+        rv.assumed_role = self.assumed_role
         return rv
 
     def assign_workflow_id(self) -> str:
@@ -161,6 +172,12 @@ class DBOSContext:
                 Status(StatusCode.ERROR, description=str(exc_value))
             )
         dbos_tracer.end_span(self.spans.pop())
+
+    def set_authentication(
+        self, user: Optional[str], roles: Optional[List[str]]
+    ) -> None:
+        self.authenticated_user = user
+        self.authenticated_roles = roles
 
 
 ##############################################################
@@ -437,4 +454,27 @@ class EnterDBOSHandler:
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             clear_local_dbos_context()
+        return False  # Did not handle
+
+
+class DBOSAssumeRole:
+    def __init__(self, assume_role: Optional[str]) -> None:
+        self.prior_role: Optional[str] = None
+        self.assume_role = assume_role
+
+    def __enter__(self, role: str) -> DBOSAssumeRole:
+        ctx = assert_current_dbos_context()
+        self.prior_role = ctx.assumed_role
+        ctx.assumed_role = self.assume_role
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        ctx = assert_current_dbos_context()
+        assert ctx.assumed_role == self.assume_role
+        ctx.assumed_role = self.prior_role
         return False  # Did not handle
