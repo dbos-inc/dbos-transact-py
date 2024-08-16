@@ -4,11 +4,7 @@ import pytest
 import sqlalchemy as sa
 
 from dbos_transact.context import SetWorkflowUUID
-from dbos_transact.dbos import (
-    DBOS,
-    dbos_example_class_decorator,
-    dbos_example_decorator,
-)
+from dbos_transact.dbos import DBOS, dbos_example_decorator
 
 
 class DBOSTestClassInstNN:
@@ -26,7 +22,7 @@ class DBOSTestClassInst:
         return var
 
 
-@dbos_example_class_decorator
+@DBOS.default_required_roles(["user"])
 class DBOSTestClassInstCD:
     def __init__(self) -> None:
         self.instance_name = "myname"
@@ -43,7 +39,7 @@ class DBOSTestClassStatic:
         return var
 
 
-@dbos_example_class_decorator
+@DBOS.default_required_roles(["user"])
 class DBOSTestClassStaticCD:
     @dbos_example_decorator
     @staticmethod
@@ -58,7 +54,7 @@ class DBOSTestClassClass:
         return var
 
 
-@dbos_example_class_decorator
+@DBOS.default_required_roles(["user"])
 class DBOSTestClassClassCD:
     @classmethod
     @dbos_example_decorator

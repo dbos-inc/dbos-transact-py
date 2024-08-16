@@ -194,23 +194,37 @@ IsolationLevel = Literal[
 ]
 
 
-# Decorator for the class itself to store some information
-def dbos_example_class_decorator(cls: Type[Any]) -> Type[Any]:
-    cls.dbos_decorator_info = "Some class-specific information"
-    return cls
+class DBOSClassInfo:
+    def __init__(self) -> None:
+        self.required_roles: List[str] = []
+
+
+def get_or_create_class_info(cls: Type[Any]) -> DBOSClassInfo:
+    if hasattr(cls, "dbos_class_decorator_info"):
+        ci: DBOSClassInfo = getattr(cls, "dbos_class_decorator_info")
+        return ci
+    ci = DBOSClassInfo()
+    setattr(cls, "dbos_class_decorator_info", ci)
+    return ci
+
+
+def get_class_info(cls: Type[Any]) -> Optional[DBOSClassInfo]:
+    if hasattr(cls, "dbos_class_decorator_info"):
+        ci: DBOSClassInfo = getattr(cls, "dbos_class_decorator_info")
+        return ci
+    return None
 
 
 # The unified decorator that can be used for any method or function
 def dbos_example_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        clsinfo: str = "<None>"
         if len(args) > 0:
             first_arg = args[0]
             if isinstance(first_arg, type):
-                if hasattr(first_arg, "dbos_decorator_info"):
-                    clsinfo = getattr(first_arg, "dbos_decorator_info")
-                print(f"Class method decorator accessing: {clsinfo}")
+                ci = get_class_info(first_arg)
+                if ci is not None:
+                    print(f"There are : {len(ci.required_roles)} required roles")
             else:
                 # Check if the function signature has "self" as the first parameter name
                 #   This is not 100% reliable but it is better than nothing for detecting footguns
@@ -222,9 +236,9 @@ def dbos_example_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
                         print(f"Instance name is {getattr(first_arg, 'instance_name')}")
                     else:
                         print(f"ERROR - Call on instance that is NOT NAMED")
-                    if hasattr(first_arg.__class__, "dbos_decorator_info"):
-                        clsinfo = getattr(first_arg.__class__, "dbos_decorator_info")
-                    print(f"Instance method decorator accessing: {clsinfo}")
+                    ci = get_class_info(first_arg.__class__)
+                    if ci is not None:
+                        print(f"There are : {len(ci.required_roles)} required roles")
                 else:
                     # Bare function
                     print(f"Bare function call (with args)")
@@ -669,6 +683,15 @@ class DBOS:
             return cast(Communicator, wrapper)
 
         return decorator
+
+    @staticmethod
+    def default_required_roles(roles: List[str]) -> Callable[[Type[Any]], Type[Any]]:
+        def set_roles(cls: Type[Any]) -> Type[Any]:
+            ci = get_or_create_class_info(cls)
+            ci.required_roles = roles
+            return cls
+
+        return set_roles
 
     def send(
         self, destination_uuid: str, message: Any, topic: Optional[str] = None
