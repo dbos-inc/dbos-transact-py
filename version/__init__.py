@@ -4,16 +4,18 @@ from pdm.backend.hooks.version import SCMVersion
 from pdm.backend.hooks.version.scm import guess_next_version
 
 
-def format_version(version: SCMVersion) -> str:
-    if version.distance is None:
-        main_version = str(version.version)
+def format_version(git_version: SCMVersion) -> str:
+    if git_version.distance is None:
+        version = str(git_version.version)
     else:
-        guessed = guess_next_version(version.version)
-        main_version = f"{guessed}.dev{version.distance}"
+        guessed = guess_next_version(git_version.version)
+        version = f"{guessed}a{git_version.distance}"
 
-    if version.distance is None or version.node is None:
-        fmt = ""
-    else:
-        fmt = "+{node}"
-    local_version = fmt.format(node=version.node, time=datetime.now(tz=timezone.utc))
-    return main_version + local_version
+    if (
+        git_version.branch is not None
+        and git_version.branch is not "main"
+        and "release" not in git_version.branch
+    ):
+        version += f"+{git_version.node}"
+
+    return version
