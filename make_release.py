@@ -14,7 +14,7 @@ def make_release(version_number: Optional[str] = None) -> None:
         raise Exception("Local git repository is not clean")
     if repo.active_branch.name != "main":
         raise Exception("Can only make a release from main")    
-    remote_branch = repo.refs[f'origin/{repo.active_branch.name}']
+    remote_branch = repo.references[f'origin/{repo.active_branch.name}']
     local_commit = repo.active_branch.commit
     remote_commit = remote_branch.commit
     if local_commit != remote_commit:
