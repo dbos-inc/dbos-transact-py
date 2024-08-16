@@ -15,7 +15,6 @@ from typing import (
     Generic,
     List,
     Literal,
-    NoReturn,
     Optional,
     Protocol,
     Tuple,
@@ -23,7 +22,6 @@ from typing import (
     TypedDict,
     TypeVar,
     cast,
-    overload,
 )
 
 from opentelemetry.trace import Span
@@ -279,51 +277,6 @@ def get_instance_name(func: Callable[..., Any], args: Tuple[Any]) -> Optional[st
 
     # Bare function or function on something else
     return None
-
-
-# The unified decorator that can be used for any method or function
-def dbos_example_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-    @wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        if len(args) > 0:
-            first_arg = args[0]
-            if isinstance(first_arg, type):
-                ci = get_class_info(first_arg)
-                if ci is not None:
-                    print(f"There are : {len(ci.required_roles)} required roles")
-            else:
-                # Check if the function signature has "self" as the first parameter name
-                #   This is not 100% reliable but it is better than nothing for detecting footguns
-                #   (pylint will do the rest)
-                sig = inspect.signature(func)
-                parameters = list(sig.parameters.values())
-                if parameters and parameters[0].name == "self":
-                    if hasattr(first_arg, "instance_name"):
-                        print(f"Instance name is {getattr(first_arg, 'instance_name')}")
-                    else:
-                        print(f"ERROR - Call on instance that is NOT NAMED")
-                    ci = get_class_info(first_arg.__class__)
-                    if ci is not None:
-                        print(f"There are : {len(ci.required_roles)} required roles")
-                else:
-                    # Bare function
-                    print(f"Bare function call (with args)")
-        else:
-            # Bare function
-            print(f"Bare function call (no-arg)")
-
-        # Common logic to be shared
-        print("Wrapper logic before the function call")
-
-        # Call the original function
-        result = func(*args, **kwargs)
-
-        # Common logic after the function call
-        print("Wrapper logic after the function call")
-
-        return result
-
-    return wrapper
 
 
 class DBOS:

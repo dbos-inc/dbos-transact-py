@@ -4,11 +4,11 @@ import pytest
 import sqlalchemy as sa
 
 from dbos_transact.context import SetWorkflowUUID
-from dbos_transact.dbos import DBOS, dbos_example_decorator
+from dbos_transact.dbos import DBOS
 
 
 class DBOSTestClassInstNN:
-    @dbos_example_decorator
+    @DBOS.required_roles(["user"])
     def test_func(self, var: str) -> str:
         return var
 
@@ -17,71 +17,65 @@ class DBOSTestClassInst:
     def __init__(self) -> None:
         self.instance_name = "myname"
 
-    @dbos_example_decorator
+    @DBOS.required_roles(["user"])
     def test_func(self, var: str) -> str:
         return var
 
 
+"""
+# This cannot work yet - no DBOS decorator available
 @DBOS.default_required_roles(["user"])
 class DBOSTestClassInstCD:
     def __init__(self) -> None:
         self.instance_name = "myname"
 
-    @dbos_example_decorator
+    @dbos.workflow
     def test_func(self, var: str) -> str:
         return var
+"""
 
 
 class DBOSTestClassStatic:
-    @dbos_example_decorator
     @staticmethod
+    @DBOS.required_roles(["user"])
     def test_func(var: str) -> str:
         return var
 
 
+"""
+# This cannot work yet - no DBOS decorator available
 @DBOS.default_required_roles(["user"])
 class DBOSTestClassStaticCD:
-    @dbos_example_decorator
     @staticmethod
     def test_func(var: str) -> str:
         return var
+"""
 
 
 class DBOSTestClassClass:
     @classmethod
-    @dbos_example_decorator
+    @DBOS.required_roles(["user"])
     def test_func(cls, var: str) -> str:
         return var
 
 
+"""
+# This cannot work yet - no DBOS decorator available
 @DBOS.default_required_roles(["user"])
 class DBOSTestClassClassCD:
     @classmethod
-    @dbos_example_decorator
     def test_func(cls, var: str) -> str:
         return var
+"""
 
 
-@dbos_example_decorator
+@DBOS.required_roles(["user"])
 def tfunc(var: str) -> str:
     return var
 
 
-print("BARE:")
-tfunc("a")
-print("STATIC:")
-DBOSTestClassStatic.test_func("a")
-DBOSTestClassStaticCD.test_func("a")
-print("CLASS:")
-DBOSTestClassClass.test_func("a")
-DBOSTestClassClassCD.test_func("a")
-print("INST:")
-DBOSTestClassInst().test_func("a")
-DBOSTestClassInstCD().test_func("a")
-print("INST ERROR:")
-DBOSTestClassInstNN().test_func("a")
-
-
+"""
+# This cannot work yet - no DBOS decorator available
 class DBOSTestClassInstW:
     def __init__(self) -> None:
         self.txn_counter: int = 0
@@ -132,8 +126,10 @@ class DBOSTestClassClassW:
         cls.comm_counter += 1
         DBOS.logger.info("I'm test_communicator")
         return var
+"""
 
 
+# We can put classes in functions to test decorators for now...
 def test_simple_workflow(dbos: DBOS) -> None:
     class DBOSTestClassStatic:
         txn_counter: int = 0
