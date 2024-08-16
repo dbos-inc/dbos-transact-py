@@ -28,7 +28,9 @@ def format_version(git_version: SCMVersion) -> str:
     else:
         guessed = guess_next_version(git_version.version)
         if is_release:
-            raise Exception("Release branches may only publish tagged releases")
+            raise Exception(
+                f"Release branches may only publish tagged releases. Distance: {git_version.distance}"
+            )
         elif is_preview:
             version = f"{guessed}a{git_version.distance}"
         else:
