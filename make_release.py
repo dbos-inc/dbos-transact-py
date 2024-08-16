@@ -26,7 +26,6 @@ def make_release(version_number: str) -> None:
 def create_and_push_release_tag(repo: Repo, version_number: str):
     release_tag = repo.create_tag(version_number)
     push_info = repo.remote("origin").push(release_tag)
-    assert len(push_info) == 0
     if push_info[0].flags & push_info[0].ERROR:
         raise Exception(f"Failed to push tags: {push_info[0].summary}")
     print(f"Release tag pushed: {version_number}")
@@ -37,7 +36,6 @@ def create_and_push_release_branch(repo: Repo, version_number: str):
     new_branch = repo.create_head(branch_name, repo.heads["main"])
     new_branch.checkout()
     push_info = repo.remote("origin").push(new_branch)
-    assert len(push_info) == 0
     if push_info[0].flags & push_info[0].ERROR:
         raise Exception(f"Failed to push branch: {push_info[0].summary}")
     print(f"Release branch pushed: {branch_name}")
