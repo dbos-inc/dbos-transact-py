@@ -54,7 +54,7 @@ jobs:
       working-directory: ./
 
     - name: Run Unit Tests
-      run: pdm run pytest
+      run: pdm run tox
       working-directory: ./
       env:
         PGPASSWORD: dbos
