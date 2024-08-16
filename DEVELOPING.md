@@ -9,7 +9,6 @@ python3 make_release.py <version-number>
 Version numbers must follow [semver](https://semver.org/).
 This command tags the latest commit with the supplied version number and creates a release branch for it.
 
-
 ### Patching a release 
 
 To patch a release, push the patch as a commit to the appropriate release branch.
@@ -20,7 +19,6 @@ git tag <version-number>
 ```
 
 This version must follow semver: It should increment by one the patch number of the release branch.
-
 
 ### Preview Versions
 
@@ -35,5 +33,6 @@ Test versions are published from feature branches.
 Their version number is `<next-release-version>a<number-of-git-commits-since-release>+<git-hash>`.
 You can install a specific test version with `pip install dbos==<version-number>`
 
-# Publishing
+### Publishing
+
 TODO: Add a GHA to publish from a branch.
