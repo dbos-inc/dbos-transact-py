@@ -15,7 +15,7 @@ def format_version(git_version: SCMVersion) -> str:
     """
     assert git_version.branch is not None
     is_release = "release" in git_version.branch
-    is_preview = git_version.branch is "main"
+    is_preview = git_version.branch == "main"
 
     if git_version.distance is None:
         if is_release:
