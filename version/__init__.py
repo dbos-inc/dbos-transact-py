@@ -5,17 +5,26 @@ from pdm.backend.hooks.version.scm import guess_next_version
 
 
 def format_version(git_version: SCMVersion) -> str:
+    assert git_version.branch is not None
+    is_release = "release" in git_version.branch
+    is_preview = git_version.branch is "main"
+
     if git_version.distance is None:
-        version = str(git_version.version)
+        if is_release:
+            version = git_version.version
+        elif is_preview:
+            version = f"{git_version.version}a0"
+        else:
+            raise Exception(
+                "Tagged releases may not be published from feature branches"
+            )
     else:
         guessed = guess_next_version(git_version.version)
-        version = f"{guessed}a{git_version.distance}"
-
-    if (
-        git_version.branch is not None
-        and git_version.branch is not "main"
-        and "release" not in git_version.branch
-    ):
-        version += f"+{git_version.node}"
+        if is_release:
+            raise Exception("Release branches may only publish tagged releases")
+        elif is_preview:
+            version = f"{guessed}a{git_version.distance}"
+        else:
+            version = f"{guessed}a{git_version.distance}+{git_version.node}"
 
     return version
