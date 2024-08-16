@@ -89,14 +89,14 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
 
-class WorkflowProtocol(Protocol[P, R]):
+class WorkflowProtocol(Protocol[R]):
     __name__: str
     __qualname__: str
 
-    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+    def __call__(self, *args: Any, **kwargs: Any) -> R: ...
 
 
-Workflow: TypeAlias = WorkflowProtocol[P, R]
+Workflow: TypeAlias = WorkflowProtocol[R]
 
 
 class TransactionProtocol(Protocol):
@@ -291,7 +291,7 @@ class DBOS:
         self.config = config
         self.sys_db = SystemDatabase(config)
         self.app_db = ApplicationDatabase(config)
-        self.workflow_info_map: dict[str, WorkflowProtocol[Any, Any]] = {}
+        self.workflow_info_map: dict[str, Workflow[Any]] = {}
         self.executor = ThreadPoolExecutor(max_workers=64)
         self.admin_server = AdminServer(dbos=self)
         self.stop_events: List[threading.Event] = []
@@ -327,11 +327,11 @@ class DBOS:
         self.admin_server.stop()
         self.executor.shutdown(cancel_futures=True)
 
-    def workflow_wrapper(self, func: Workflow[P, R]) -> Workflow[P, R]:
+    def workflow_wrapper(self, func: Workflow[R]) -> Workflow[R]:
         func.__orig_func = func  # type: ignore
 
         @wraps(func)
-        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        def wrapper(*args: Any, **kwargs: Any) -> R:
             attributes: TracedAttributes = {
                 "name": func.__name__,
                 "operationType": OperationType.WORKFLOW.value,
@@ -362,27 +362,27 @@ class DBOS:
 
                     return self._execute_workflow(status, func, *args, **kwargs)
 
-        wrapped_func = cast(Workflow[P, R], wrapper)
+        wrapped_func = cast(Workflow[R], wrapper)
         return wrapped_func
 
-    def register_wf_function(self, name: str, wrapped_func: Workflow[P, R]) -> None:
+    def register_wf_function(self, name: str, wrapped_func: Workflow[R]) -> None:
         self.workflow_info_map[name] = wrapped_func
 
-    def workflow_decorator(self, func: Workflow[P, R]) -> Workflow[P, R]:
+    def workflow_decorator(self, func: Workflow[R]) -> Workflow[R]:
         wrapped_func = self.workflow_wrapper(func)
         self.register_wf_function(func.__qualname__, wrapped_func)
         return wrapped_func
 
-    def workflow(self) -> Callable[[Workflow[P, R]], Workflow[P, R]]:
+    def workflow(self) -> Callable[[Workflow[R]], Workflow[R]]:
         return self.workflow_decorator
 
     def start_workflow(
         self,
-        func: Workflow[P, R],
-        *args: P.args,
-        **kwargs: P.kwargs,
+        func: Workflow[R],
+        *args: Any,
+        **kwargs: Any,
     ) -> WorkflowHandle[R]:
-        func = cast(Workflow[P, R], func.__orig_func)  # type: ignore
+        func = cast(Workflow[R], func.__orig_func)  # type: ignore
         inputs: WorkflowInputs = {
             "args": args,
             "kwargs": kwargs,
@@ -492,10 +492,10 @@ class DBOS:
     def _execute_workflow_wthread(
         self,
         status: WorkflowStatusInternal,
-        func: Workflow[P, R],
+        func: Workflow[R],
         ctx: DBOSContext,
-        *args: P.args,
-        **kwargs: P.kwargs,
+        *args: Any,
+        **kwargs: Any,
     ) -> R:
         attributes: TracedAttributes = {
             "name": func.__name__,
@@ -508,9 +508,9 @@ class DBOS:
     def _execute_workflow(
         self,
         status: WorkflowStatusInternal,
-        func: Workflow[P, R],
-        *args: P.args,
-        **kwargs: P.kwargs,
+        func: Workflow[R],
+        *args: Any,
+        **kwargs: Any,
     ) -> R:
         try:
             output = func(*args, **kwargs)
