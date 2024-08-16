@@ -3,7 +3,11 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from dbos_transact.context import SetWorkflowUUID
+from dbos_transact.context import (
+    DBOSContextEnsure,
+    SetWorkflowUUID,
+    assert_current_dbos_context,
+)
 from dbos_transact.dbos import DBOS
 
 
@@ -69,11 +73,6 @@ class DBOSTestClassClassCD:
 """
 
 
-@DBOS.required_roles(["user"])
-def tfunc(var: str) -> str:
-    return var
-
-
 """
 # This cannot work yet - no DBOS decorator available
 class DBOSTestClassInstW:
@@ -127,6 +126,42 @@ class DBOSTestClassClassW:
         DBOS.logger.info("I'm test_communicator")
         return var
 """
+
+
+@DBOS.required_roles(["user"])
+def tfunc(var: str) -> str:
+    assert assert_current_dbos_context().assumed_role == "user"
+    return var
+
+
+def test_required_roles() -> None:
+    with pytest.raises(Exception) as exc_info:
+        tfunc("bare-ctx")
+    assert (
+        str(exc_info.value)
+        == "DBOS Error 7: Function tfunc requires a role, but was called in a context without authentication information"
+    )
+
+    with DBOSContextEnsure():
+        with pytest.raises(Exception) as exc_info:
+            tfunc("bare-ctx")
+        assert (
+            str(exc_info.value)
+            == "DBOS Error 7: Function tfunc requires a role, but was called in a context without authentication information"
+        )
+
+        ctx = assert_current_dbos_context()
+        ctx.authenticated_roles = ["a", "b", "c"]
+
+        with pytest.raises(Exception) as exc_info:
+            tfunc("bare-ctx")
+        assert (
+            str(exc_info.value)
+            == "DBOS Error 7: Function tfunc has required roles, but user is not authenticated for any of them"
+        )
+
+        ctx.authenticated_roles = ["a", "b", "c", "user"]
+        tfunc("bare-ctx")
 
 
 # We can put classes in functions to test decorators for now...
