@@ -10,8 +10,7 @@ def format_version(git_version: SCMVersion) -> str:
     2. Preview versions are published from main. They are PEP440 alpha releases whose version is the
     next release version number followed by "a" followed by the number of commits since the last release.
     If the last release was 1.2.3 and there have been ten commits since, the preview version is 1.2.3a10
-    3. Test versions are published from feature branches. They are the same as preview versions, but are
-    further tagged with a git hash to distinguish them.
+    3. Test versions are published from feature branches. They are PEP440 local versions tagged with a git hash.
     """
     assert git_version.branch is not None
     is_release = "release" in git_version.branch
