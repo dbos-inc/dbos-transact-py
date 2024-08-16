@@ -3,7 +3,7 @@
 To cut a new release, run:
 
 ```shell
-python3 make_release.py [version-number]
+python3 make_release.py [--version_number <version>]
 ```
 
 Version numbers follow [semver](https://semver.org/).
