@@ -211,6 +211,7 @@ def dbos_example_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
             else:
                 # Check if the function signature has "self" as the first parameter name
                 #   This is not 100% reliable but it is better than nothing for detecting footguns
+                #   (pylint will do the rest)
                 sig = inspect.signature(func)
                 parameters = list(sig.parameters.values())
                 if parameters and parameters[0].name == "self":
