@@ -32,7 +32,7 @@ def guess_next_version(repo: Repo) -> str:
     tags = sorted(repo.tags, key=lambda t: t.commit.committed_datetime, reverse=True)
     for tag in tags:
         if repo.is_ancestor(tag.commit, repo.heads.main.commit):
-            last_tag = tag
+            last_tag = tag.name
             break
     if last_tag is None:
         raise Exception("No previous tags found")
