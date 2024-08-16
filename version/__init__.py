@@ -5,6 +5,14 @@ from pdm.backend.hooks.version.scm import guess_next_version
 
 
 def format_version(git_version: SCMVersion) -> str:
+    """
+    1. Release versions may only be published from release branches. Their version is a git tag.
+    2. Preview versions are published from main. They are PEP440 alpha releases whose version is the
+    next release version number followed by "a" followed by the number of commits since the last release.
+    If the last release was 1.2.3 and there have been ten commits since, the preview version is 1.2.3a10
+    3. Test versions are published from feature branches. They are the same as preview versions, but are
+    further tagged with a git hash to distinguish them.
+    """
     assert git_version.branch is not None
     is_release = "release" in git_version.branch
     is_preview = git_version.branch is "main"
