@@ -6,8 +6,10 @@ import sys
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from enum import Enum
 from functools import wraps
 from logging import Logger
+from types import FunctionType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -179,12 +181,22 @@ IsolationLevel = Literal[
 
 class DBOSClassInfo:
     def __init__(self) -> None:
-        self.required_roles: List[str] = []
+        self.def_required_roles: Optional[List[str]] = None
+
+
+class DBOSFuncType(Enum):
+    Unknown = 0
+    Bare = 1
+    Static = 2
+    Class = 3
+    Instance = 4
 
 
 class DBOSFuncInfo:
     def __init__(self) -> None:
-        self.required_roles: List[str] = []
+        self.class_info: Optional[DBOSClassInfo] = None
+        self.func_type: DBOSFuncType = DBOSFuncType.Bare
+        self.required_roles: Optional[List[str]] = None
 
 
 def get_or_create_class_info(cls: Type[Any]) -> DBOSClassInfo:
@@ -193,6 +205,32 @@ def get_or_create_class_info(cls: Type[Any]) -> DBOSClassInfo:
         return ci
     ci = DBOSClassInfo()
     setattr(cls, "dbos_class_decorator_info", ci)
+
+    # Tell all DBOS functions about this
+    for name, attribute in cls.__dict__.items():
+        # Check if the attribute is a function or method
+        if isinstance(attribute, (FunctionType, staticmethod, classmethod)):
+            dbft = DBOSFuncType.Unknown
+            if isinstance(attribute, staticmethod):
+                dbft = DBOSFuncType.Static
+            elif isinstance(attribute, classmethod):
+                dbft = DBOSFuncType.Class
+            elif isinstance(attribute, FunctionType):
+                dbft = DBOSFuncType.Instance
+
+            # Walk down the __wrapped__ chain
+            wrapped = attribute
+            while True:
+                # Annotate based on the type
+                if hasattr(wrapped, "dbos_func_decorator_info"):
+                    fi: DBOSFuncInfo = getattr(wrapped, "dbos_func_decorator_info")
+                    fi.class_info = ci
+                    fi.func_type = dbft
+
+                if not hasattr(wrapped, "__wrapped__"):
+                    break
+                wrapped = wrapped.__wrapped__
+
     return ci
 
 
@@ -688,7 +726,7 @@ class DBOS:
     def default_required_roles(roles: List[str]) -> Callable[[Type[Any]], Type[Any]]:
         def set_roles(cls: Type[Any]) -> Type[Any]:
             ci = get_or_create_class_info(cls)
-            ci.required_roles = roles
+            ci.def_required_roles = roles
             return cls
 
         return set_roles
@@ -702,7 +740,7 @@ class DBOS:
         # First, we need to know if this has class info and func info
         ci = get_class_info_for_func(func, args)
         if ci is not None:
-            required_roles = ci.required_roles
+            required_roles = ci.def_required_roles
         if fi and fi.required_roles is not None:
             required_roles = fi.required_roles
 
