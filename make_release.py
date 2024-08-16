@@ -21,9 +21,6 @@ def make_release(version_number: Optional[str] = None) -> None:
     if not re.match(version_pattern, version_number):
         raise Exception(f"Invalid version number: {version_number}")
 
-    print(version_number)
-    return
-
     create_and_push_release_tag(repo=repo, version_number=version_number)
     create_and_push_release_branch(repo=repo, version_number=version_number)
 
