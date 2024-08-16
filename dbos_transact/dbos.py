@@ -218,12 +218,12 @@ def dbos_example_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
                 sig = inspect.signature(func)
                 parameters = list(sig.parameters.values())
                 if parameters and parameters[0].name == "self":
-                    if hasattr(first_arg, "instance_name"):
+                    if hasattr(first_arg.__class__, "instance_name"):
                         print(f"Instance name is {getattr(first_arg, 'instance_name')}")
                     else:
                         print(f"ERROR - Call on instance that is NOT NAMED")
-                    if hasattr(first_arg, "dbos_decorator_info"):
-                        clsinfo = getattr(first_arg, "dbos_decorator_info")
+                    if hasattr(first_arg.__class__, "dbos_decorator_info"):
+                        clsinfo = getattr(first_arg.__class__, "dbos_decorator_info")
                     print(f"Instance method decorator accessing: {clsinfo}")
                 else:
                     # Bare function
