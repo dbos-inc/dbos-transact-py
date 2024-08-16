@@ -89,34 +89,16 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
 
-class WorkflowProtocol(Protocol[R]):
+class DBOSCallProtocol(Protocol[R]):
     __name__: str
     __qualname__: str
 
     def __call__(self, *args: Any, **kwargs: Any) -> R: ...
 
 
-Workflow: TypeAlias = WorkflowProtocol[R]
-
-
-class TransactionProtocol(Protocol):
-    __name__: str
-    __qualname__: str
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
-
-
-Transaction = TypeVar("Transaction", bound=TransactionProtocol)
-
-
-class CommunicatorProtocol(Protocol):
-    __name__: str
-    __qualname__: str
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
-
-
-Communicator = TypeVar("Communicator", bound=CommunicatorProtocol)
+Workflow: TypeAlias = DBOSCallProtocol[R]
+Transaction: TypeAlias = DBOSCallProtocol[R]
+Communicator: TypeAlias = DBOSCallProtocol[R]
 
 
 def get_dbos_func_name(f: Any) -> str:
@@ -530,8 +512,8 @@ class DBOS:
 
     def transaction(
         self, isolation_level: IsolationLevel = "SERIALIZABLE"
-    ) -> Callable[[Transaction], Transaction]:
-        def decorator(func: Transaction) -> Transaction:
+    ) -> Callable[[Transaction[R]], Transaction[R]]:
+        def decorator(func: Transaction[R]) -> Transaction[R]:
             def invoke_tx(*args: Any, **kwargs: Any) -> Any:
                 with self.app_db.sessionmaker() as session:
                     attributes: TracedAttributes = {
@@ -634,13 +616,12 @@ class DBOS:
             set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
             self.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
-            return cast(Transaction, wrapper)
+            return cast(Transaction[R], wrapper)
 
         return decorator
 
-    def communicator(self) -> Callable[[Communicator], Communicator]:
-        def decorator(func: Communicator) -> Communicator:
-
+    def communicator(self) -> Callable[[Communicator[R]], Communicator[R]]:
+        def decorator(func: Communicator[R]) -> Communicator[R]:
             def invoke_comm(*args: Any, **kwargs: Any) -> Any:
                 attributes: TracedAttributes = {
                     "name": func.__name__,
@@ -699,7 +680,7 @@ class DBOS:
             set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
             self.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
-            return cast(Communicator, wrapper)
+            return cast(Communicator[R], wrapper)
 
         return decorator
 
