@@ -64,7 +64,19 @@ def cleanup_test_databases(config: ConfigFile, postgres_db_engine: sa.Engine) ->
 
     with postgres_db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(sa.text(f"""
+            SELECT pg_terminate_backend(pg_stat_activity.pid)
+            FROM pg_stat_activity
+            WHERE pg_stat_activity.datname = '{app_db_name}'
+            AND pid <> pg_backend_pid()
+        """))
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}"))
+        connection.execute(sa.text(f"""
+            SELECT pg_terminate_backend(pg_stat_activity.pid)
+            FROM pg_stat_activity
+            WHERE pg_stat_activity.datname = '{sys_db_name}'
+            AND pid <> pg_backend_pid()
+        """))
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sys_db_name}"))
 
     # Clean up environment variables
