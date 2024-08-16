@@ -2,25 +2,44 @@ import os
 import re
 
 import typer
-from git import Repo
+from git import Optional, Repo
 
 app = typer.Typer()
 
 
 @app.command()
-def make_release(version_number: str) -> None:
-    version_pattern = r"^\d+\.\d+\.\d+$"
-    if not re.match(version_pattern, version_number):
-        raise Exception(f"Invalid version number: {version_number}")
-
+def make_release(version_number: Optional[str] = None) -> None:
     repo = Repo(os.getcwd())
     if repo.is_dirty():
         raise Exception("Local git repository is not clean")
     if repo.active_branch.name != "main":
         raise Exception("Can only make a release from main")
 
+    if version_number is None:
+        version_number = guess_next_version(repo)
+    version_pattern = r"^\d+\.\d+\.\d+$"
+    if not re.match(version_pattern, version_number):
+        raise Exception(f"Invalid version number: {version_number}")
+
+    print(version_number)
+    return
+
     create_and_push_release_tag(repo=repo, version_number=version_number)
     create_and_push_release_branch(repo=repo, version_number=version_number)
+
+
+def guess_next_version(repo: Repo) -> str:
+    tags = sorted(repo.tags, key=lambda t: t.commit.committed_datetime, reverse=True)
+    for tag in tags:
+        if repo.is_ancestor(tag.commit, repo.heads.main.commit):
+            last_tag = tag
+            break
+    if last_tag is None:
+        raise Exception("No previous tags found")
+
+    major, minor, patch = map(int, last_tag.split("."))
+    minor += 1
+    return f"{major}.{minor}.{patch}"
 
 
 def create_and_push_release_tag(repo: Repo, version_number: str) -> None:
