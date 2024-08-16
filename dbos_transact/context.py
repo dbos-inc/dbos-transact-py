@@ -465,7 +465,8 @@ class DBOSAssumeRole:
     def __enter__(self) -> DBOSAssumeRole:
         ctx = assert_current_dbos_context()
         self.prior_role = ctx.assumed_role
-        ctx.assumed_role = self.assume_role
+        if self.assume_role is not None:
+            ctx.assumed_role = self.assume_role
         return self
 
     def __exit__(
@@ -475,6 +476,7 @@ class DBOSAssumeRole:
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
         ctx = assert_current_dbos_context()
-        assert ctx.assumed_role == self.assume_role
+        if self.assume_role is not None:
+            assert ctx.assumed_role == self.assume_role
         ctx.assumed_role = self.prior_role
         return False  # Did not handle

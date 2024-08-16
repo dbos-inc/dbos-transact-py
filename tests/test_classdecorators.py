@@ -172,52 +172,62 @@ def test_required_roles_class(dbos: DBOS) -> None:
 
         @dbos.workflow()
         def test_func_user(self, var: str) -> str:
+            assert assert_current_dbos_context().assumed_role == "user"
             return var
 
         @dbos.workflow()
         @dbos.required_roles(["admin"])
         def test_func_admin(self, var: str) -> str:
+            assert assert_current_dbos_context().assumed_role == "admin"
             return var
 
         @dbos.required_roles(["admin"])
         @dbos.workflow()
         def test_func_admin_r(self, var: str) -> str:
+            assert assert_current_dbos_context().assumed_role == "admin"
             return var
 
         @classmethod
         @dbos.workflow()
         def test_func_user_c(cls, var: str) -> str:
+            assert assert_current_dbos_context().assumed_role == "user"
             return var
 
         @classmethod
         @dbos.workflow()
         @dbos.required_roles(["admin"])
         def test_func_admin_c(cls, var: str) -> str:
+            assert assert_current_dbos_context().assumed_role == "admin"
             return var
 
         @classmethod
         @dbos.required_roles(["admin"])
         @dbos.workflow()
         def test_func_admin_r_c(cls, var: str) -> str:
+            assert assert_current_dbos_context().assumed_role == "admin"
             return var
 
         @staticmethod
         @dbos.workflow()
         def test_func_user_s(var: str) -> str:
+            assert assert_current_dbos_context().assumed_role == "user"
             return var
 
         @staticmethod
         @dbos.workflow()
         @dbos.required_roles(["admin"])
         def test_func_admin_s(var: str) -> str:
+            assert assert_current_dbos_context().assumed_role == "admin"
             return var
 
         @staticmethod
         @dbos.required_roles(["admin"])
         @dbos.workflow()
         def test_func_admin_r_s(var: str) -> str:
+            assert assert_current_dbos_context().assumed_role == "admin"
             return var
 
+    # This checks that the interception occurs in all methods
     inst = DBOSTestClassRR()
     with pytest.raises(Exception) as exc_info:
         inst.test_func_user("inst-no-ctx")
@@ -250,25 +260,48 @@ def test_required_roles_class(dbos: DBOS) -> None:
     assert "DBOS Error 7" in str(exc_info.value)
 
     with DBOSContextEnsure():
-        with pytest.raises(Exception) as exc_info:
-            tfunc("bare-ctx")
-        assert (
-            str(exc_info.value)
-            == "DBOS Error 7: Function tfunc requires a role, but was called in a context without authentication information"
-        )
-
         ctx = assert_current_dbos_context()
-        ctx.authenticated_roles = ["a", "b", "c"]
+        # Admin is allowed all
+        ctx.authenticated_roles = ["user", "admin"]
 
+        inst.test_func_user("inst-no-ctx")
+        inst.test_func_admin("inst-no-ctx")
+        inst.test_func_admin_r("inst-no-ctx")
+
+        DBOSTestClassRR.test_func_user_c("class-no-ctx")
+        DBOSTestClassRR.test_func_admin_c("inst-no-ctx")
+        DBOSTestClassRR.test_func_admin_r_c("inst-no-ctx")
+
+        DBOSTestClassRR.test_func_user_s("class-no-ctx")
+        DBOSTestClassRR.test_func_admin_s("inst-no-ctx")
+        DBOSTestClassRR.test_func_admin_r_s("inst-no-ctx")
+
+        # User is allowed some
+        ctx.authenticated_roles = ["user"]
+
+        inst.test_func_user("inst-no-ctx")
+        DBOSTestClassRR.test_func_user_c("class-no-ctx")
+        DBOSTestClassRR.test_func_user_s("class-no-ctx")
+
+        # But not all...
         with pytest.raises(Exception) as exc_info:
-            tfunc("bare-ctx")
-        assert (
-            str(exc_info.value)
-            == "DBOS Error 7: Function tfunc has required roles, but user is not authenticated for any of them"
-        )
-
-        ctx.authenticated_roles = ["a", "b", "c", "user"]
-        tfunc("bare-ctx")
+            inst.test_func_admin("inst-no-ctx")
+        assert "DBOS Error 7" in str(exc_info.value)
+        with pytest.raises(Exception) as exc_info:
+            inst.test_func_admin_r("inst-no-ctx")
+        assert "DBOS Error 7" in str(exc_info.value)
+        with pytest.raises(Exception) as exc_info:
+            DBOSTestClassRR.test_func_admin_c("inst-no-ctx")
+        assert "DBOS Error 7" in str(exc_info.value)
+        with pytest.raises(Exception) as exc_info:
+            DBOSTestClassRR.test_func_admin_r_c("inst-no-ctx")
+        assert "DBOS Error 7" in str(exc_info.value)
+        with pytest.raises(Exception) as exc_info:
+            DBOSTestClassRR.test_func_admin_s("inst-no-ctx")
+        assert "DBOS Error 7" in str(exc_info.value)
+        with pytest.raises(Exception) as exc_info:
+            DBOSTestClassRR.test_func_admin_r_s("inst-no-ctx")
+        assert "DBOS Error 7" in str(exc_info.value)
 
 
 # We can put classes in functions to test decorators for now...

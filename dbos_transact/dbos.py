@@ -371,7 +371,7 @@ class DBOS:
 
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> R:
-            DBOS.check_required_roles(func, args, fi)
+            rr: Optional[str] = DBOS.check_required_roles(func, args, fi)
             attributes: TracedAttributes = {
                 "name": func.__name__,
                 "operationType": OperationType.WORKFLOW.value,
@@ -382,7 +382,7 @@ class DBOS:
             }
             ctx = get_local_dbos_context()
             if ctx and ctx.is_workflow():
-                with EnterDBOSChildWorkflow(attributes):
+                with EnterDBOSChildWorkflow(attributes), DBOSAssumeRole(rr):
                     ctx = assert_current_dbos_context()  # Now the child ctx
                     status = self._init_workflow(
                         ctx,
@@ -392,7 +392,7 @@ class DBOS:
 
                     return self._execute_workflow(status, func, *args, **kwargs)
             else:
-                with EnterDBOSWorkflow(attributes):
+                with EnterDBOSWorkflow(attributes), DBOSAssumeRole(rr):
                     ctx = assert_current_dbos_context()
                     status = self._init_workflow(
                         ctx,
@@ -657,14 +657,15 @@ class DBOS:
 
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                DBOS.check_required_roles(func, args, fi)
+                rr: Optional[str] = DBOS.check_required_roles(func, args, fi)
                 # Entering transaction is allowed:
                 #  In a workflow (that is not in a transaction / comm already)
                 #  Not in a workflow (we will start the single op workflow)
                 ctx = get_local_dbos_context()
                 if ctx and ctx.is_within_workflow():
                     assert ctx.is_workflow()
-                    return invoke_tx(*args, **kwargs)
+                    with DBOSAssumeRole(rr):
+                        return invoke_tx(*args, **kwargs)
                 else:
                     tempwf = self.workflow_info_map.get("<temp>." + func.__qualname__)
                     assert tempwf
@@ -726,14 +727,15 @@ class DBOS:
 
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                DBOS.check_required_roles(func, args, fi)
+                rr: Optional[str] = DBOS.check_required_roles(func, args, fi)
                 # Entering communicator is allowed:
                 #  In a workflow (that is not in a transaction / comm already)
                 #  Not in a workflow (we will start the single op workflow)
                 ctx = get_local_dbos_context()
                 if ctx and ctx.is_within_workflow():
                     assert ctx.is_workflow()
-                    return invoke_comm(*args, **kwargs)
+                    with DBOSAssumeRole(rr):
+                        return invoke_comm(*args, **kwargs)
                 else:
                     tempwf = self.workflow_info_map.get("<temp>." + func.__qualname__)
                     assert tempwf
@@ -800,10 +802,7 @@ class DBOS:
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
                 rr: Optional[str] = DBOS.check_required_roles(func, args, fi)
-                if rr:
-                    with DBOSAssumeRole(rr):
-                        return func(*args, **kwargs)
-                else:
+                with DBOSAssumeRole(rr):
                     return func(*args, **kwargs)
 
             return wrapper
