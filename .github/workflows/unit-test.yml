@@ -46,8 +46,15 @@ jobs:
     - name: Setup PDM
       uses: pdm-project/setup-pdm@v4
       with:
-        python-version: '3.9.x'
+        python-version: '3.12.x'
         architecture: 'x64'
+
+    - name: Configure PDM to use installed Python versions
+      run: |
+        pdm use 3.9
+        pdm use 3.10
+        pdm use 3.11
+        pdm use 3.12
 
     - name: Install Dependencies
       run: pdm install
