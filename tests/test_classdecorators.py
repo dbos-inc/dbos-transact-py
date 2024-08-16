@@ -219,9 +219,9 @@ def test_required_roles_class(dbos: DBOS) -> None:
             return var
 
     inst = DBOSTestClassRR()
-    # with pytest.raises(Exception) as exc_info:
-    #    inst.test_func_user("inst-no-ctx")
-    # assert "DBOS Error 7" in str(exc_info.value)
+    with pytest.raises(Exception) as exc_info:
+        inst.test_func_user("inst-no-ctx")
+    assert "DBOS Error 7" in str(exc_info.value)
     with pytest.raises(Exception) as exc_info:
         inst.test_func_admin("inst-no-ctx")
     assert "DBOS Error 7" in str(exc_info.value)
@@ -229,9 +229,9 @@ def test_required_roles_class(dbos: DBOS) -> None:
         inst.test_func_admin_r("inst-no-ctx")
     assert "DBOS Error 7" in str(exc_info.value)
 
-    # with pytest.raises(Exception) as exc_info:
-    #    DBOSTestClassRR.test_func_user_c("class-no-ctx")
-    # assert "DBOS Error 7" in str(exc_info.value)
+    with pytest.raises(Exception) as exc_info:
+        DBOSTestClassRR.test_func_user_c("class-no-ctx")
+    assert "DBOS Error 7" in str(exc_info.value)
     with pytest.raises(Exception) as exc_info:
         DBOSTestClassRR.test_func_admin_c("inst-no-ctx")
     assert "DBOS Error 7" in str(exc_info.value)
@@ -239,9 +239,9 @@ def test_required_roles_class(dbos: DBOS) -> None:
         DBOSTestClassRR.test_func_admin_r_c("inst-no-ctx")
     assert "DBOS Error 7" in str(exc_info.value)
 
-    # with pytest.raises(Exception) as exc_info:
-    #    DBOSTestClassRR.test_func_user_s("class-no-ctx")
-    # assert "DBOS Error 7" in str(exc_info.value)
+    with pytest.raises(Exception) as exc_info:
+        DBOSTestClassRR.test_func_user_s("class-no-ctx")
+    assert "DBOS Error 7" in str(exc_info.value)
     with pytest.raises(Exception) as exc_info:
         DBOSTestClassRR.test_func_admin_s("inst-no-ctx")
     assert "DBOS Error 7" in str(exc_info.value)

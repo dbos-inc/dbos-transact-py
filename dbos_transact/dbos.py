@@ -195,7 +195,7 @@ class DBOSFuncType(Enum):
 class DBOSFuncInfo:
     def __init__(self) -> None:
         self.class_info: Optional[DBOSClassInfo] = None
-        self.func_type: DBOSFuncType = DBOSFuncType.Bare
+        self.func_type: DBOSFuncType = DBOSFuncType.Unknown
         self.required_roles: Optional[List[str]] = None
 
 
@@ -256,8 +256,11 @@ def get_class_info(cls: Type[Any]) -> Optional[DBOSClassInfo]:
 
 
 def get_class_info_for_func(
-    func: Callable[..., Any], args: Tuple[Any]
+    fi: Optional[DBOSFuncInfo], func: Callable[..., Any], args: Tuple[Any]
 ) -> Optional[DBOSClassInfo]:
+    if fi and fi.class_info:
+        return fi.class_info
+
     if len(args) > 0:
         first_arg = args[0]
         if isinstance(first_arg, type):
@@ -275,7 +278,21 @@ def get_class_info_for_func(
     return None
 
 
-def get_instance_name(func: Callable[..., Any], args: Tuple[Any]) -> Optional[str]:
+def get_instance_name(
+    fi: Optional[DBOSFuncInfo], func: Callable[..., Any], args: Tuple[Any]
+) -> Optional[str]:
+    if fi and fi.func_type != DBOSFuncType.Unknown and len(args) > 0:
+        if fi.func_type == DBOSFuncType.Instance:
+            first_arg = args[0]
+            if hasattr(first_arg, "instance_name"):
+                iname: str = getattr(first_arg, "instance_name")
+                return str(iname)
+            else:
+                raise Exception(
+                    "Function target appears to be a class instance, but does not have `instance_name` set"
+                )
+        return None
+
     if len(args) > 0:
         first_arg = args[0]
         if isinstance(first_arg, type):
@@ -288,7 +305,7 @@ def get_instance_name(func: Callable[..., Any], args: Tuple[Any]) -> Optional[st
             parameters = list(sig.parameters.values())
             if parameters and parameters[0].name == "self":
                 if hasattr(first_arg, "instance_name"):
-                    iname: str = getattr(first_arg, "instance_name")
+                    iname = getattr(first_arg, "instance_name")
                     return str(iname)
                 else:
                     raise Exception(
@@ -350,8 +367,11 @@ class DBOS:
     def workflow_wrapper(self, func: Workflow[R]) -> Workflow[R]:
         func.__orig_func = func  # type: ignore
 
+        fi = get_or_create_func_info(func)
+
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> R:
+            DBOS.check_required_roles(func, args, fi)
             attributes: TracedAttributes = {
                 "name": func.__name__,
                 "operationType": OperationType.WORKFLOW.value,
@@ -633,8 +653,11 @@ class DBOS:
                                 raise error
                 return output
 
+            fi = get_or_create_func_info(func)
+
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
+                DBOS.check_required_roles(func, args, fi)
                 # Entering transaction is allowed:
                 #  In a workflow (that is not in a transaction / comm already)
                 #  Not in a workflow (we will start the single op workflow)
@@ -660,7 +683,9 @@ class DBOS:
 
     def communicator(self) -> Callable[[Communicator[R]], Communicator[R]]:
         def decorator(func: Communicator[R]) -> Communicator[R]:
+
             def invoke_comm(*args: Any, **kwargs: Any) -> Any:
+
                 attributes: TracedAttributes = {
                     "name": func.__name__,
                     "operationType": OperationType.COMMUNICATOR.value,
@@ -697,8 +722,11 @@ class DBOS:
                         self.sys_db.record_operation_result(comm_output)
                     return output
 
+            fi = get_or_create_func_info(func)
+
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
+                DBOS.check_required_roles(func, args, fi)
                 # Entering communicator is allowed:
                 #  In a workflow (that is not in a transaction / comm already)
                 #  Not in a workflow (we will start the single op workflow)
@@ -738,7 +766,7 @@ class DBOS:
         # Check required roles
         required_roles: Optional[List[str]] = None
         # First, we need to know if this has class info and func info
-        ci = get_class_info_for_func(func, args)
+        ci = get_class_info_for_func(fi, func, args)
         if ci is not None:
             required_roles = ci.def_required_roles
         if fi and fi.required_roles is not None:
