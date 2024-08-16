@@ -29,9 +29,8 @@ You can install the latest preview version with `pip install --pre dbos`.
 
 ### Test Versions
 
-Test versions are published from feature branches.
+Test versions are built from feature branches.
 Their version number is `<next-release-version>a<number-of-git-commits-since-release>+<git-hash>`.
-You can install a specific test version with `pip install dbos==<version-number>`
 
 ### Publishing
 
