@@ -23,7 +23,7 @@ def make_release(version_number: str) -> None:
     create_and_push_release_branch(repo=repo, version_number=version_number)
 
 
-def create_and_push_release_tag(repo: Repo, version_number: str):
+def create_and_push_release_tag(repo: Repo, version_number: str) -> None:
     release_tag = repo.create_tag(version_number)
     push_info = repo.remote("origin").push(release_tag)
     if push_info[0].flags & push_info[0].ERROR:
@@ -31,7 +31,7 @@ def create_and_push_release_tag(repo: Repo, version_number: str):
     print(f"Release tag pushed: {version_number}")
 
 
-def create_and_push_release_branch(repo: Repo, version_number: str):
+def create_and_push_release_branch(repo: Repo, version_number: str) -> None:
     branch_name = f"release/v{version_number}"
     new_branch = repo.create_head(branch_name, repo.heads["main"])
     new_branch.checkout()
