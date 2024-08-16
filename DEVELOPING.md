@@ -3,11 +3,12 @@
 To cut a new release, run:
 
 ```shell
-python3 make_release.py <version-number>
+python3 make_release.py [version-number]
 ```
 
-Version numbers must follow [semver](https://semver.org/).
-This command tags the latest commit with the supplied version number and creates a release branch for it.
+Version numbers follow [semver](https://semver.org/).
+This command tags the latest commit with the version number and creates a release branch for it.
+If a version number is not supplied, it automatically generated a version number by incrementing the last released minor version.
 
 ### Patching a release 
 
@@ -16,6 +17,7 @@ Then, tag it with a version number:
 
 ```shell
 git tag <version-number>
+git push --tags
 ```
 
 This version must follow semver: It should increment by one the patch number of the release branch.
