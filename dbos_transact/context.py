@@ -462,7 +462,7 @@ class DBOSAssumeRole:
         self.prior_role: Optional[str] = None
         self.assume_role = assume_role
 
-    def __enter__(self, role: str) -> DBOSAssumeRole:
+    def __enter__(self) -> DBOSAssumeRole:
         ctx = assert_current_dbos_context()
         self.prior_role = ctx.assumed_role
         ctx.assumed_role = self.assume_role

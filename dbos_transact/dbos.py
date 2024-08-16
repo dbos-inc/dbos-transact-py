@@ -18,6 +18,7 @@ from typing import (
     NoReturn,
     Optional,
     Protocol,
+    Tuple,
     Type,
     TypedDict,
     TypeVar,
@@ -45,6 +46,7 @@ else:
 import dbos_transact.utils as utils
 from dbos_transact.admin_sever import AdminServer
 from dbos_transact.context import (
+    DBOSAssumeRole,
     DBOSContext,
     DBOSContextEnsure,
     DBOSContextSwap,
@@ -62,6 +64,7 @@ from dbos_transact.context import (
 from dbos_transact.error import (
     DBOSException,
     DBOSNonExistentWorkflowError,
+    DBOSNotAuthorizedError,
     DBOSRecoveryError,
     DBOSWorkflowConflictUUIDError,
     DBOSWorkflowFunctionNotFoundError,
@@ -199,6 +202,11 @@ class DBOSClassInfo:
         self.required_roles: List[str] = []
 
 
+class DBOSFuncInfo:
+    def __init__(self) -> None:
+        self.required_roles: List[str] = []
+
+
 def get_or_create_class_info(cls: Type[Any]) -> DBOSClassInfo:
     if hasattr(cls, "dbos_class_decorator_info"):
         ci: DBOSClassInfo = getattr(cls, "dbos_class_decorator_info")
@@ -208,10 +216,68 @@ def get_or_create_class_info(cls: Type[Any]) -> DBOSClassInfo:
     return ci
 
 
+def get_or_create_func_info(func: Callable[..., Any]) -> DBOSFuncInfo:
+    while True:
+        if hasattr(func, "dbos_func_decorator_info"):
+            fi: DBOSFuncInfo = getattr(func, "dbos_func_decorator_info")
+            return fi
+        if not hasattr(func, "__wrapped__"):
+            break
+        func = func.__wrapped__
+
+    fi = DBOSFuncInfo()
+    setattr(func, "dbos_func_decorator_info", fi)
+    return fi
+
+
 def get_class_info(cls: Type[Any]) -> Optional[DBOSClassInfo]:
     if hasattr(cls, "dbos_class_decorator_info"):
         ci: DBOSClassInfo = getattr(cls, "dbos_class_decorator_info")
         return ci
+    return None
+
+
+def get_class_info_for_func(
+    func: Callable[..., Any], args: Tuple[Any]
+) -> Optional[DBOSClassInfo]:
+    if len(args) > 0:
+        first_arg = args[0]
+        if isinstance(first_arg, type):
+            return get_class_info(first_arg)
+        else:
+            # Check if the function signature has "self" as the first parameter name
+            #   This is not 100% reliable but it is better than nothing for detecting footguns
+            #   (pylint will do the rest)
+            sig = inspect.signature(func)
+            parameters = list(sig.parameters.values())
+            if parameters and parameters[0].name == "self":
+                return get_class_info(first_arg.__class__)
+
+    # Bare function or function on something else
+    return None
+
+
+def get_instance_name(func: Callable[..., Any], args: Tuple[Any]) -> Optional[str]:
+    if len(args) > 0:
+        first_arg = args[0]
+        if isinstance(first_arg, type):
+            return None
+        else:
+            # Check if the function signature has "self" as the first parameter name
+            #   This is not 100% reliable but it is better than nothing for detecting footguns
+            #   (pylint will do the rest)
+            sig = inspect.signature(func)
+            parameters = list(sig.parameters.values())
+            if parameters and parameters[0].name == "self":
+                if hasattr(first_arg, "instance_name"):
+                    iname: str = getattr(first_arg, "instance_name")
+                    return str(iname)
+                else:
+                    raise Exception(
+                        "Function target appears to be a class instance, but does not have `instance_name` set"
+                    )
+
+    # Bare function or function on something else
     return None
 
 
@@ -232,7 +298,7 @@ def dbos_example_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
                 sig = inspect.signature(func)
                 parameters = list(sig.parameters.values())
                 if parameters and parameters[0].name == "self":
-                    if hasattr(first_arg.__class__, "instance_name"):
+                    if hasattr(first_arg, "instance_name"):
                         print(f"Instance name is {getattr(first_arg, 'instance_name')}")
                     else:
                         print(f"ERROR - Call on instance that is NOT NAMED")
@@ -690,6 +756,57 @@ class DBOS:
             ci = get_or_create_class_info(cls)
             ci.required_roles = roles
             return cls
+
+        return set_roles
+
+    @staticmethod
+    def check_required_roles(
+        func: Callable[..., Any], args: Tuple[Any], fi: Optional[DBOSFuncInfo]
+    ) -> Optional[str]:
+        # Check required roles
+        required_roles: Optional[List[str]] = None
+        # First, we need to know if this has class info and func info
+        ci = get_class_info_for_func(func, args)
+        if ci is not None:
+            required_roles = ci.required_roles
+        if fi and fi.required_roles is not None:
+            required_roles = fi.required_roles
+
+        if required_roles is None or len(required_roles) == 0:
+            return None  # Nothing to check
+
+        ctx = get_local_dbos_context()
+        if ctx is None or ctx.authenticated_roles is None:
+            raise DBOSNotAuthorizedError(
+                f"Function {func.__name__} requires a role, but was called in a context without authentication information"
+            )
+
+        for r in required_roles:
+            if r in ctx.authenticated_roles:
+                return r
+
+        raise DBOSNotAuthorizedError(
+            f"Function {func.__name__} has required roles, but user is not authenticated for any of them"
+        )
+
+    @staticmethod
+    def required_roles(
+        roles: List[str],
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        def set_roles(func: Callable[..., Any]) -> Callable[..., Any]:
+            fi = get_or_create_func_info(func)
+            fi.required_roles = roles
+
+            @wraps(func)
+            def wrapper(*args: Any, **kwargs: Any) -> Any:
+                rr: Optional[str] = DBOS.check_required_roles(func, args, fi)
+                if rr:
+                    with DBOSAssumeRole(rr):
+                        return func(*args, **kwargs)
+                else:
+                    return func(*args, **kwargs)
+
+            return wrapper
 
         return set_roles
 
