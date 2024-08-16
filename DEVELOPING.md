@@ -26,13 +26,13 @@ This version must follow semver: It should increment by one the patch number of 
 
 Preview versions are [PEP440](https://peps.python.org/pep-0440/)-compliant alpha versions.
 They can be published from `main`.
-Their version number is <next-release-version>a<number-of-git-commits-since-release>.
+Their version number is `<next-release-version>a<number-of-git-commits-since-release>`.
 You can install the latest preview version with `pip install --pre dbos`.
 
 ### Test Versions
 
 Test versions are published from feature branches.
-Their version number is <next-release-version>a<number-of-git-commits-since-release>+<git-hash>.
+Their version number is `<next-release-version>a<number-of-git-commits-since-release>+<git-hash>`.
 You can install a specific test version with `pip install dbos==<version-number>`
 
 # Publishing
