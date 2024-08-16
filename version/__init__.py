@@ -37,7 +37,7 @@ def format_version(git_version: SCMVersion) -> str:
     return version
 
 
-def guess_next_version(version_number: str):
+def guess_next_version(version_number: str) -> str:
     major, minor, patch = map(int, version_number.split("."))
     minor += 1
     return f"{major}.{minor}.{patch}"
