@@ -19,7 +19,7 @@ def format_version(git_version: SCMVersion) -> str:
 
     if git_version.distance is None:
         if is_release:
-            version = git_version.version
+            version = str(git_version.version)
         elif is_preview:
             version = f"{git_version.version}a0"
         else:
