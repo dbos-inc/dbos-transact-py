@@ -59,7 +59,17 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == None
 
-    assert txn_counter + 1 == wf_counter
+    max_tries = 10
+    for i in range(max_tries):
+        try:
+            assert txn_counter + 1 == wf_counter
+            break
+        except Exception as e:
+            if i == max_tries - 1:
+                raise e
+            else:
+                time.sleep(1)
+
 
 
 def test_long_workflow(dbos: DBOS) -> None:

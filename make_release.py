@@ -13,7 +13,12 @@ def make_release(version_number: Optional[str] = None) -> None:
     if repo.is_dirty():
         raise Exception("Local git repository is not clean")
     if repo.active_branch.name != "main":
-        raise Exception("Can only make a release from main")
+        raise Exception("Can only make a release from main")    
+    remote_branch = repo.references[f'origin/{repo.active_branch.name}']
+    local_commit = repo.active_branch.commit
+    remote_commit = remote_branch.commit
+    if local_commit != remote_commit:
+        raise Exception(f"Your local branch {repo.active_branch.name} is not up to date with origin.")
 
     if version_number is None:
         version_number = guess_next_version(repo)
