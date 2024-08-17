@@ -8,7 +8,7 @@ from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 
-from dbos_transact.dbos_config import ConfigFile
+from dbos.dbos_config import ConfigFile
 
 dbos_logger = logging.getLogger("dbos")
 

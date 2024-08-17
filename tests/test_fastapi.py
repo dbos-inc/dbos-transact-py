@@ -5,8 +5,8 @@ import sqlalchemy as sa
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from dbos_transact.context import SetWorkflowUUID
-from dbos_transact.dbos import DBOS
+from dbos.context import SetWorkflowUUID
+from dbos.dbos import DBOS
 
 
 def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:

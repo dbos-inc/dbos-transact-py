@@ -1,7 +1,7 @@
 import sqlalchemy as sa
 from fastapi import FastAPI
 
-from dbos_transact import DBOS
+from dbos import DBOS
 
 app = FastAPI()
 dbos = DBOS(app)

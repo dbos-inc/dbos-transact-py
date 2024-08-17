@@ -10,11 +10,11 @@ from typing import Any, Optional
 import pytest
 import sqlalchemy as sa
 
-from dbos_transact import DBOS, ConfigFile, SetWorkflowUUID
-from dbos_transact.context import get_local_dbos_context
-from dbos_transact.error import DBOSException
-from dbos_transact.system_database import GetWorkflowsInput, WorkflowStatusString
-from dbos_transact.workflow import WorkflowHandle
+from dbos import DBOS, ConfigFile, SetWorkflowUUID
+from dbos.context import get_local_dbos_context
+from dbos.error import DBOSException
+from dbos.system_database import GetWorkflowsInput, WorkflowStatusString
+from dbos.workflow import WorkflowHandle
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -629,8 +629,8 @@ def test_without_fastapi(dbos: DBOS) -> None:
     try:
         for module_name in dict(sys.modules.items()):
             module = sys.modules[module_name]
-            if module_name == "dbos_transact" or module_name.startswith(
-                "dbos_transact."
+            if module_name == "dbos" or module_name.startswith(
+                "dbos."
             ):
                 importlib.reload(module)
     finally:

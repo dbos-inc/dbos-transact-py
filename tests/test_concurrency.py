@@ -3,7 +3,7 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Tuple
 
-from dbos_transact import DBOS, SetWorkflowUUID
+from dbos import DBOS, SetWorkflowUUID
 
 
 def test_concurrent_workflows(dbos: DBOS) -> None:
