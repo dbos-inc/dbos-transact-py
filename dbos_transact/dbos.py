@@ -212,6 +212,7 @@ def get_or_create_class_info(cls: Type[Any]) -> DBOSClassInfo:
         if isinstance(attribute, (FunctionType, staticmethod, classmethod)):
             dbft = DBOSFuncType.Unknown
             if isinstance(attribute, staticmethod):
+                attribute = attribute.__func__
                 dbft = DBOSFuncType.Static
             elif isinstance(attribute, classmethod):
                 dbft = DBOSFuncType.Class
