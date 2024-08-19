@@ -3,12 +3,8 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from dbos_transact.context import (
-    DBOSContextEnsure,
-    SetWorkflowUUID,
-    assert_current_dbos_context,
-)
-from dbos_transact.dbos import DBOS
+from dbos.context import DBOSContextEnsure, SetWorkflowUUID, assert_current_dbos_context
+from dbos.dbos import DBOS
 
 
 class DBOSTestClassInstNN:
