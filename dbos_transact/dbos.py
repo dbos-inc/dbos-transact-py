@@ -394,7 +394,7 @@ class DBOS:
 
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            rr: Optional[str] = DBOS.check_required_roles(func, args, fi)
+            rr: Optional[str] = DBOS._check_required_roles(func, args, fi)
             attributes: TracedAttributes = {
                 "name": func.__name__,
                 "operationType": OperationType.WORKFLOW.value,
@@ -699,7 +699,7 @@ class DBOS:
 
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                rr: Optional[str] = DBOS.check_required_roles(func, args, fi)
+                rr: Optional[str] = DBOS._check_required_roles(func, args, fi)
                 # Entering transaction is allowed:
                 #  In a workflow (that is not in a transaction / comm already)
                 #  Not in a workflow (we will start the single op workflow)
@@ -769,7 +769,7 @@ class DBOS:
 
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                rr: Optional[str] = DBOS.check_required_roles(func, args, fi)
+                rr: Optional[str] = DBOS._check_required_roles(func, args, fi)
                 # Entering communicator is allowed:
                 #  In a workflow (that is not in a transaction / comm already)
                 #  Not in a workflow (we will start the single op workflow)
@@ -804,7 +804,7 @@ class DBOS:
         return set_roles
 
     @staticmethod
-    def check_required_roles(
+    def _check_required_roles(
         func: Callable[..., Any], args: Tuple[Any], fi: Optional[DBOSFuncInfo]
     ) -> Optional[str]:
         # Check required roles
@@ -843,7 +843,7 @@ class DBOS:
 
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                rr: Optional[str] = DBOS.check_required_roles(func, args, fi)
+                rr: Optional[str] = DBOS._check_required_roles(func, args, fi)
                 with DBOSAssumeRole(rr):
                     return func(*args, **kwargs)
 
