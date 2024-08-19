@@ -21,6 +21,7 @@ class DBOSErrorCode(Enum):
     WorkflowFunctionNotFound = 4
     NonExistentWorkflowError = 5
     DuplicateWorkflowEventError = 6
+    CommunicatorMaxRetried = 7
 
 
 class DBOSWorkflowConflictUUIDError(DBOSException):
@@ -68,4 +69,12 @@ class DBOSDuplicateWorkflowEventError(DBOSException):
         super().__init__(
             f"Workflow {workflow_uuid} has already emitted an event with key {key}",
             dbos_error_code=DBOSErrorCode.DuplicateWorkflowEventError.value,
+        )
+
+
+class DBOSCommunicatorMaxRetriedError(DBOSException):
+    def __init__(self) -> None:
+        super().__init__(
+            "Communicator reached maximum retries.",
+            dbos_error_code=DBOSErrorCode.CommunicatorMaxRetried.value,
         )

@@ -5,7 +5,6 @@ import sys
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
 from functools import wraps
 from logging import Logger
 from typing import (
@@ -42,6 +41,7 @@ else:
 import dbos.utils as utils
 from dbos.admin_sever import AdminServer
 from dbos.context import (
+    CommunicatorConfig,
     DBOSContext,
     DBOSContextEnsure,
     DBOSContextSwap,
@@ -57,6 +57,7 @@ from dbos.context import (
     get_local_dbos_context,
 )
 from dbos.error import (
+    DBOSCommunicatorMaxRetriedError,
     DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSRecoveryError,
@@ -78,6 +79,8 @@ from .system_database import (
 
 if TYPE_CHECKING:
     from .fastapi import Request
+
+import traceback
 
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
@@ -113,15 +116,6 @@ class CommunicatorProtocol(Protocol):
 
 
 Communicator = TypeVar("Communicator", bound=CommunicatorProtocol)
-
-
-# Mirror the CommunicatorConfig from TS.
-@dataclass
-class CommunicatorConfig:
-    retries_allowed: bool = True
-    interval_seconds: float = 1.0
-    max_attempts: int = 3
-    backoff_factor: float = 2.0
 
 
 def get_dbos_func_name(f: Any) -> str:
@@ -572,7 +566,7 @@ class DBOS:
                     "name": func.__name__,
                     "operationType": OperationType.COMMUNICATOR.value,
                 }
-                with EnterDBOSCommunicator(attributes) as ctx:
+                with EnterDBOSCommunicator(attributes, comm_config=config) as ctx:
                     comm_output: OperationResultInternal = {
                         "workflow_uuid": ctx.workflow_uuid,
                         "function_id": ctx.function_id,
@@ -593,15 +587,46 @@ class DBOS:
                         else:
                             raise Exception("Output and error are both None")
                     output = None
-                    try:
-                        # TODO: support configurable retries
-                        output = func(*args, **kwargs)
-                        comm_output["output"] = utils.serialize(output)
-                    except Exception as error:
-                        comm_output["error"] = utils.serialize(error)
+                    error = None
+                    max_attempts: int = (
+                        config.max_attempts if config.retries_allowed else 1
+                    )
+                    interval_seconds: float = config.interval_seconds
+                    max_retry_interval_seconds: float = 3600  # 1 Hour
+                    for attempt in range(1, max_attempts + 1):
+                        try:
+                            output = func(*args, **kwargs)
+                            comm_output["output"] = utils.serialize(output)
+                            error = None
+                            break
+                        except Exception as err:
+                            error = err
+                            if config.retries_allowed:
+                                dbos_logger.warning(
+                                    f"Communicator being automatically retried. (attempt {attempt} of {max_attempts}). {traceback.format_exc()}"
+                                )
+                                DBOS.span.add_event(
+                                    f"Communicator attempt {attempt} failed",
+                                    {
+                                        "error": str(error),
+                                        "retryIntervalSeconds": interval_seconds,
+                                    },
+                                )
+                                if attempt == max_attempts:
+                                    error = DBOSCommunicatorMaxRetriedError()
+                                else:
+                                    time.sleep(interval_seconds)
+                                    interval_seconds = min(
+                                        interval_seconds * config.backoff_rate,
+                                        max_retry_interval_seconds,
+                                    )
+
+                    comm_output["error"] = (
+                        utils.serialize(error) if error is not None else None
+                    )
+                    self.sys_db.record_operation_result(comm_output)
+                    if error is not None:
                         raise error
-                    finally:
-                        self.sys_db.record_operation_result(comm_output)
                     return output
 
             @wraps(func)

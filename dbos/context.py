@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import uuid
 from contextvars import ContextVar
+from dataclasses import dataclass
 from enum import Enum
 from types import TracebackType
 from typing import TYPE_CHECKING, Literal, Optional, Type, TypedDict
@@ -46,6 +47,16 @@ class TracedAttributes(TypedDict, total=False):
     executorID: Optional[str]
 
 
+# Mirror the CommunicatorConfig from TS.
+# However, we disable retries by default.
+@dataclass
+class CommunicatorConfig:
+    retries_allowed: bool = False
+    interval_seconds: float = 1.0
+    max_attempts: int = 3
+    backoff_rate: float = 2.0
+
+
 class DBOSContext:
     def __init__(self) -> None:
         self.executor_id = os.environ.get("DBOS__VMID", "local")
@@ -68,6 +79,7 @@ class DBOSContext:
         self.curr_tx_function_id: int = -1
         self.sql_session: Optional[Session] = None
         self.spans: list[Span] = []
+        self.curr_comm_config: Optional[CommunicatorConfig] = None
 
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()
@@ -115,13 +127,20 @@ class DBOSContext:
     def is_communicator(self) -> bool:
         return self.curr_comm_function_id >= 0
 
-    def start_communicator(self, fid: int, attributes: TracedAttributes) -> None:
+    def start_communicator(
+        self,
+        fid: int,
+        attributes: TracedAttributes,
+        comm_config: Optional[CommunicatorConfig],
+    ) -> None:
         self.curr_comm_function_id = fid
         self._start_span(attributes)
+        self.curr_comm_config = comm_config
 
     def end_communicator(self, exc_value: Optional[BaseException]) -> None:
         self.curr_comm_function_id = -1
         self._end_span(exc_value)
+        self.curr_comm_config = None
 
     def start_transaction(
         self, ses: Session, fid: int, attributes: TracedAttributes
@@ -365,14 +384,21 @@ class EnterDBOSChildWorkflow:
 
 
 class EnterDBOSCommunicator:
-    def __init__(self, attributes: TracedAttributes) -> None:
+    def __init__(
+        self,
+        attributes: TracedAttributes,
+        comm_config: Optional[CommunicatorConfig] = None,
+    ) -> None:
         self.attributes = attributes
+        self.comm_config = comm_config
 
     def __enter__(self) -> DBOSContext:
         ctx = assert_current_dbos_context()
         assert ctx.is_workflow()
         ctx.function_id += 1
-        ctx.start_communicator(ctx.function_id, attributes=self.attributes)
+        ctx.start_communicator(
+            ctx.function_id, attributes=self.attributes, comm_config=self.comm_config
+        )
         return ctx
 
     def __exit__(
