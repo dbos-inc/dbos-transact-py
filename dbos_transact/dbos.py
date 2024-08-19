@@ -424,8 +424,8 @@ class DBOS:
     def start_workflow(
         self,
         func: Workflow[P, R],
-        *args: Any,
-        **kwargs: Any,
+        *args: P.args,
+        **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         func = cast(Workflow[P, R], func.__orig_func)  # type: ignore
         inputs: WorkflowInputs = {
