@@ -85,10 +85,13 @@ from .system_database import (
 if TYPE_CHECKING:
     from .fastapi import Request
 
+# Most DBOS functions are just any callable F, so decorators / wrappers work on F
+# There are cases where the parameters P and return value R should be separate
+#   Such as for start_workflow, which will return WorkflowHandle[R]
+#   In those cases, use something like Workflow[P,R]
+F = TypeVar("F", bound=Callable[..., Any])
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
-
-TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
 
 class DBOSCallProtocol(Protocol[P, R]):
@@ -99,9 +102,9 @@ class DBOSCallProtocol(Protocol[P, R]):
 
 
 Workflow: TypeAlias = DBOSCallProtocol[P, R]
-Transaction: TypeAlias = DBOSCallProtocol[P, R]
-Communicator: TypeAlias = DBOSCallProtocol[P, R]
-F = TypeVar("F", bound=Callable[..., Any])
+
+
+TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
 
 def get_dbos_func_name(f: Any) -> str:
@@ -407,7 +410,7 @@ class DBOS:
         wrapped_func = cast(F, wrapper)
         return wrapped_func
 
-    def register_wf_function(self, name: str, wrapped_func: Workflow[P, R]) -> None:
+    def register_wf_function(self, name: str, wrapped_func: F) -> None:
         self.workflow_info_map[name] = wrapped_func
 
     def workflow_decorator(self, func: F) -> F:
@@ -572,8 +575,8 @@ class DBOS:
 
     def transaction(
         self, isolation_level: IsolationLevel = "SERIALIZABLE"
-    ) -> Callable[[Transaction[P, R]], Transaction[P, R]]:
-        def decorator(func: Transaction[P, R]) -> Transaction[P, R]:
+    ) -> Callable[[F], F]:
+        def decorator(func: F) -> F:
             def invoke_tx(*args: Any, **kwargs: Any) -> Any:
                 with self.app_db.sessionmaker() as session:
                     attributes: TracedAttributes = {
@@ -680,12 +683,12 @@ class DBOS:
             set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
             self.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
-            return cast(Transaction[P, R], wrapper)
+            return cast(F, wrapper)
 
         return decorator
 
-    def communicator(self) -> Callable[[Communicator[P, R]], Communicator[P, R]]:
-        def decorator(func: Communicator[P, R]) -> Communicator[P, R]:
+    def communicator(self) -> Callable[[F], F]:
+        def decorator(func: F) -> F:
 
             def invoke_comm(*args: Any, **kwargs: Any) -> Any:
 
@@ -750,7 +753,7 @@ class DBOS:
             set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
             self.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
-            return cast(Communicator[P, R], wrapper)
+            return cast(F, wrapper)
 
         return decorator
 
