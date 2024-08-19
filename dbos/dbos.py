@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from functools import wraps
 from logging import Logger
 from typing import (
@@ -112,6 +113,15 @@ class CommunicatorProtocol(Protocol):
 
 
 Communicator = TypeVar("Communicator", bound=CommunicatorProtocol)
+
+
+# Mirror the CommunicatorConfig from TS.
+@dataclass
+class CommunicatorConfig:
+    retries_allowed: bool = True
+    interval_seconds: float = 1.0
+    max_attempts: int = 3
+    backoff_factor: float = 2.0
 
 
 def get_dbos_func_name(f: Any) -> str:
@@ -552,7 +562,9 @@ class DBOS:
 
         return decorator
 
-    def communicator(self) -> Callable[[Communicator], Communicator]:
+    def communicator(
+        self, config: CommunicatorConfig = CommunicatorConfig()
+    ) -> Callable[[Communicator], Communicator]:
         def decorator(func: Communicator) -> Communicator:
 
             def invoke_comm(*args: Any, **kwargs: Any) -> Any:
