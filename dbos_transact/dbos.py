@@ -372,9 +372,9 @@ class DBOS:
         ) -> None:
             self.send(destination_uuid, message, topic)
 
-        temp_send_wf = self.workflow_wrapper(send_temp_workflow)
+        temp_send_wf = self._workflow_wrapper(send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
-        self.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
+        self._register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
         dbos_logger.info("DBOS initialized")
         for handler in dbos_logger.handlers:
             handler.flush()
@@ -387,7 +387,7 @@ class DBOS:
         self.admin_server.stop()
         self.executor.shutdown(cancel_futures=True)
 
-    def workflow_wrapper(self, func: F) -> F:
+    def _workflow_wrapper(self, func: F) -> F:
         func.__orig_func = func  # type: ignore
 
         fi = get_or_create_func_info(func)
@@ -428,16 +428,16 @@ class DBOS:
         wrapped_func = cast(F, wrapper)
         return wrapped_func
 
-    def register_wf_function(self, name: str, wrapped_func: F) -> None:
+    def _register_wf_function(self, name: str, wrapped_func: F) -> None:
         self.workflow_info_map[name] = wrapped_func
 
-    def workflow_decorator(self, func: F) -> F:
-        wrapped_func = self.workflow_wrapper(func)
-        self.register_wf_function(func.__qualname__, wrapped_func)
+    def _workflow_decorator(self, func: F) -> F:
+        wrapped_func = self._workflow_wrapper(func)
+        self._register_wf_function(func.__qualname__, wrapped_func)
         return wrapped_func
 
     def workflow(self) -> Callable[[F], F]:
-        return self.workflow_decorator
+        return self._workflow_decorator
 
     # There seems to be a bug / limitation in mypy regarding class / instance arguments
     #   Not allowing anything besides Workflow[P,R] leads to false errors in mypy
@@ -716,9 +716,9 @@ class DBOS:
             def temp_wf(*args: Any, **kwargs: Any) -> Any:
                 return wrapper(*args, **kwargs)
 
-            wrapped_wf = self.workflow_wrapper(temp_wf)
+            wrapped_wf = self._workflow_wrapper(temp_wf)
             set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
-            self.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+            self._register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
             return cast(F, wrapper)
 
@@ -786,9 +786,9 @@ class DBOS:
             def temp_wf(*args: Any, **kwargs: Any) -> Any:
                 return wrapper(*args, **kwargs)
 
-            wrapped_wf = self.workflow_wrapper(temp_wf)
+            wrapped_wf = self._workflow_wrapper(temp_wf)
             set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
-            self.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+            self._register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
             return cast(F, wrapper)
 
