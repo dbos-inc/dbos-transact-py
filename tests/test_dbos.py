@@ -337,9 +337,9 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     assert txn_counter == 1
 
     # Test that there was a recovery attempt of this
-    stat = dbos.sys_db.get_workflow_status(workflow_handles[0].get_workflow_uuid())
+    stat = workflow_handles[0].get_status()
     assert stat
-    assert stat["recovery_attempts"] == 1
+    assert stat.recovery_attempts == 1
 
 
 def test_recovery_temp_workflow(dbos: DBOS) -> None:
@@ -590,18 +590,18 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
         assert test_workflow_status_b() == "PENDINGrun_this_once_bSUCCESS"
 
     # Test that there were no recovery attempts of this
-    stat = dbos.sys_db.get_workflow_status("parent_a")
+    stat = dbos.get_workflow_status("parent_a")
     assert stat
-    assert stat["recovery_attempts"] == 0
-    stat = dbos.sys_db.get_workflow_status("parent_b")
+    assert stat.recovery_attempts == 0
+    stat = dbos.get_workflow_status("parent_b")
     assert stat
-    assert stat["recovery_attempts"] == 0
-    stat = dbos.sys_db.get_workflow_status("run_this_once_a")
+    assert stat.recovery_attempts == 0
+    stat = dbos.get_workflow_status("run_this_once_a")
     assert stat
-    assert stat["recovery_attempts"] == 0
-    stat = dbos.sys_db.get_workflow_status("run_this_once_b")
+    assert stat.recovery_attempts == 0
+    stat = dbos.get_workflow_status("run_this_once_b")
     assert stat
-    assert stat["recovery_attempts"] == 0
+    assert stat.recovery_attempts == 0
 
 
 def test_without_fastapi(dbos: DBOS) -> None:

@@ -365,6 +365,7 @@ class DBOS:
             workflow_uuid=workflow_uuid,
             status=stat["status"],
             name=stat["name"],
+            recovery_attempts=stat["recovery_attempts"],
             class_name=None,
             config_name=None,
             authenticated_user=None,

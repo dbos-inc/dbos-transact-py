@@ -73,9 +73,9 @@ def test_admin_recovery(dbos: DBOS) -> None:
             "recovery_attempts": None,
         }
     )
-    status = dbos.sys_db.get_workflow_status(wfuuid)
+    status = dbos.get_workflow_status(wfuuid)
     assert (
-        status is not None and status["status"] == "PENDING"
+        status is not None and status.status == "PENDING"
     ), "Workflow status not updated"
 
     # Test POST /dbos-workflow-recovery
@@ -90,8 +90,8 @@ def test_admin_recovery(dbos: DBOS) -> None:
     max_retries = 10
     succeeded = False
     for attempt in range(max_retries):
-        status = dbos.sys_db.get_workflow_status(wfuuid)
-        if status is not None and status["status"] == "SUCCESS":
+        status = dbos.get_workflow_status(wfuuid)
+        if status is not None and status.status == "SUCCESS":
             succeeded = True
             break
         else:
