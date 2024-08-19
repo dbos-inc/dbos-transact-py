@@ -5,8 +5,8 @@ import sqlalchemy.dialects.postgresql as pg
 import sqlalchemy.exc as sa_exc
 from sqlalchemy.orm import Session, sessionmaker
 
-from dbos_transact.error import DBOSWorkflowConflictUUIDError
-from dbos_transact.schemas.application_database import ApplicationSchema
+from dbos.error import DBOSWorkflowConflictUUIDError
+from dbos.schemas.application_database import ApplicationSchema
 
 from .dbos_config import ConfigFile
 

@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 import yaml
 from jsonschema import ValidationError, validate
 
-from dbos_transact.error import DBOSInitializationError
+from dbos.error import DBOSInitializationError
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -73,7 +73,7 @@ def load_config(configFilePath: str = "dbos-config.yaml") -> ConfigFile:
         data = yaml.safe_load(substituted_content)
 
     # Load the JSON schema relative to the package root
-    schema_file = resources.files("dbos_transact").joinpath("dbos-config.schema.json")
+    schema_file = resources.files("dbos").joinpath("dbos-config.schema.json")
     with schema_file.open("r") as f:
         schema = json.load(f)
 

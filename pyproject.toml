@@ -23,7 +23,7 @@ readme = "README.md"
 license = {text = "MIT"}
 
 [project.scripts]
-dbos = "dbos_transact.cli.cli:app"
+dbos = "dbos.cli.cli:app"
 
 [build-system]
 requires = ["pdm-backend"]
