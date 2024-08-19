@@ -2,7 +2,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 
-from dbos_transact import DBOS
+from dbos import DBOS
 
 
 def test_transaction_errors(dbos: DBOS) -> None:

@@ -39,5 +39,5 @@ To generate a new migration, run:
 pdm run alembic revision -m "<new migration name>"
 ```
 
-This command will add a new file under the `dbos_transact/migrations/versions/` folder.
+This command will add a new file under the `dbos/migrations/versions/` folder.
 For more information, read [alembic tutorial](https://alembic.sqlalchemy.org/en/latest/tutorial.html).

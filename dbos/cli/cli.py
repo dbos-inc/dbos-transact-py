@@ -2,9 +2,9 @@ import subprocess
 
 import typer
 
-from dbos_transact.application_database import ApplicationDatabase
-from dbos_transact.dbos_config import load_config
-from dbos_transact.system_database import SystemDatabase
+from dbos.application_database import ApplicationDatabase
+from dbos.dbos_config import load_config
+from dbos.system_database import SystemDatabase
 
 app = typer.Typer()
 

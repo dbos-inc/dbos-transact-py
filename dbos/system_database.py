@@ -12,8 +12,8 @@ import sqlalchemy.dialects.postgresql as pg
 from alembic import command
 from alembic.config import Config
 
-import dbos_transact.utils as utils
-from dbos_transact.error import (
+import dbos.utils as utils
+from dbos.error import (
     DBOSDuplicateWorkflowEventError,
     DBOSNonExistentWorkflowError,
     DBOSWorkflowConflictUUIDError,

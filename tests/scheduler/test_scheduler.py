@@ -1,7 +1,7 @@
 import time
 from datetime import datetime
 
-from dbos_transact import DBOS
+from dbos import DBOS
 
 
 def test_scheduled_workflow(dbos: DBOS) -> None:

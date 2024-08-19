@@ -9,7 +9,7 @@ import urllib.request
 import psutil
 import sqlalchemy as sa
 
-from dbos_transact.dbos_config import load_config
+from dbos.dbos_config import load_config
 
 
 def terminate_process_tree(pid: int) -> None:
@@ -53,7 +53,7 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
     requirements_path = os.path.join(template_path, "requirements.txt")
     subprocess.check_call(["pip", "install", "-r", requirements_path], env=venv)
 
-    # Install the dbos_transact package into the virtual environment
+    # Install the dbos package into the virtual environment
     subprocess.check_call(["pip", "install", build_wheel], env=venv)
 
     # Run schema migration
