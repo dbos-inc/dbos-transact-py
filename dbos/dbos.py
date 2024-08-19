@@ -29,7 +29,7 @@ from typing import (
 
 from opentelemetry.trace import Span
 
-from dbos_transact.scheduler.scheduler import ScheduledWorkflow, scheduler_loop
+from dbos.scheduler.scheduler import ScheduledWorkflow, scheduler_loop
 
 from .tracer import dbos_tracer
 
@@ -44,9 +44,9 @@ if sys.version_info < (3, 10):
 else:
     from typing import ParamSpec, TypeAlias
 
-import dbos_transact.utils as utils
-from dbos_transact.admin_sever import AdminServer
-from dbos_transact.context import (
+import dbos.utils as utils
+from dbos.admin_sever import AdminServer
+from dbos.context import (
     DBOSAssumeRole,
     DBOSContext,
     DBOSContextEnsure,
@@ -62,7 +62,7 @@ from dbos_transact.context import (
     assert_current_dbos_context,
     get_local_dbos_context,
 )
-from dbos_transact.error import (
+from dbos.error import (
     DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSNotAuthorizedError,
@@ -70,7 +70,7 @@ from dbos_transact.error import (
     DBOSWorkflowConflictUUIDError,
     DBOSWorkflowFunctionNotFoundError,
 )
-from dbos_transact.workflow import WorkflowHandle, WorkflowStatus
+from dbos.workflow import WorkflowHandle, WorkflowStatus
 
 from .application_database import ApplicationDatabase, TransactionResultInternal
 from .dbos_config import ConfigFile, load_config
@@ -356,7 +356,7 @@ class DBOS:
         self.admin_server = AdminServer(dbos=self)
         self.stop_events: List[threading.Event] = []
         if fastapi is not None:
-            from dbos_transact.fastapi import setup_fastapi_middleware
+            from dbos.fastapi import setup_fastapi_middleware
 
             setup_fastapi_middleware(fastapi)
         if not os.environ.get("DBOS__VMID"):

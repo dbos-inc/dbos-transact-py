@@ -5,8 +5,8 @@ from unittest.mock import mock_open
 
 import pytest
 
-import dbos_transact.dbos_config
-from dbos_transact.error import DBOSInitializationError
+import dbos.dbos_config
+from dbos.error import DBOSInitializationError
 
 mock_filename = "test.yaml"
 original_open = __builtins__["open"]
@@ -45,7 +45,7 @@ def test_valid_config(mocker):
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
     )
 
-    configFile = dbos_transact.dbos_config.load_config(mock_filename)
+    configFile = dbos.dbos_config.load_config(mock_filename)
     assert configFile["name"] == "some app"
     assert configFile["language"] == "python"
     assert configFile["database"]["hostname"] == "some host"
@@ -72,7 +72,7 @@ def test_config_missing_params(mocker):
     )
 
     with pytest.raises(DBOSInitializationError) as exc_info:
-        dbos_transact.dbos_config.load_config(mock_filename)
+        dbos.dbos_config.load_config(mock_filename)
 
     assert "'app_db_name' is a required property" in str(exc_info.value)
 
@@ -94,7 +94,7 @@ def test_config_extra_params(mocker):
     )
 
     with pytest.raises(DBOSInitializationError) as exc_info:
-        dbos_transact.dbos_config.load_config(mock_filename)
+        dbos.dbos_config.load_config(mock_filename)
 
     assert (
         "Validation error: Additional properties are not allowed ('bob' was unexpected)"
@@ -118,7 +118,7 @@ def test_config_missing_name(mocker):
     )
 
     with pytest.raises(DBOSInitializationError) as exc_info:
-        dbos_transact.dbos_config.load_config(mock_filename)
+        dbos.dbos_config.load_config(mock_filename)
 
     assert "must specify an application name" in str(exc_info.value)
 
@@ -139,7 +139,7 @@ def test_config_missing_language(mocker):
     )
 
     with pytest.raises(DBOSInitializationError) as exc_info:
-        dbos_transact.dbos_config.load_config(mock_filename)
+        dbos.dbos_config.load_config(mock_filename)
 
     assert "must specify the application language" in str(exc_info.value)
 
@@ -161,7 +161,7 @@ def test_config_bad_language(mocker):
     )
 
     with pytest.raises(DBOSInitializationError) as exc_info:
-        dbos_transact.dbos_config.load_config(mock_filename)
+        dbos.dbos_config.load_config(mock_filename)
 
     assert "invalid language" in str(exc_info.value)
 
@@ -183,6 +183,6 @@ def test_config_no_start(mocker):
     )
 
     with pytest.raises(DBOSInitializationError) as exc_info:
-        dbos_transact.dbos_config.load_config(mock_filename)
+        dbos.dbos_config.load_config(mock_filename)
 
     assert "start command" in str(exc_info.value)

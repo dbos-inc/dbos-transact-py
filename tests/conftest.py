@@ -7,7 +7,7 @@ import pytest
 import sqlalchemy as sa
 from fastapi import FastAPI
 
-from dbos_transact import DBOS, ConfigFile
+from dbos import DBOS, ConfigFile
 
 
 @pytest.fixture(scope="session")

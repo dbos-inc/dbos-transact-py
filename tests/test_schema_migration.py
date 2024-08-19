@@ -5,8 +5,8 @@ import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
 
-from dbos_transact import DBOS, ConfigFile
-from dbos_transact.schemas.system_database import SystemSchema
+from dbos import DBOS, ConfigFile
+from dbos.schemas.system_database import SystemSchema
 
 
 def test_systemdb_migration(dbos: DBOS) -> None:
@@ -84,7 +84,7 @@ def test_custom_sysdb_name_migration(
 def rollback_system_db(sysdb_url: str) -> None:
     migration_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
-        "dbos_transact",
+        "dbos",
         "migrations",
     )
     alembic_cfg = Config()
