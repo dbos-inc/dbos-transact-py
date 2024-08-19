@@ -91,16 +91,17 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
 
-class DBOSCallProtocol(Protocol[R]):
+class DBOSCallProtocol(Protocol[P, R]):
     __name__: str
     __qualname__: str
 
-    def __call__(self, *args: Any, **kwargs: Any) -> R: ...
+    def __call__(*args: P.args, **kwargs: P.kwargs) -> R: ...
 
 
-Workflow: TypeAlias = DBOSCallProtocol[R]
-Transaction: TypeAlias = DBOSCallProtocol[R]
-Communicator: TypeAlias = DBOSCallProtocol[R]
+Workflow: TypeAlias = DBOSCallProtocol[P, R]
+Transaction: TypeAlias = DBOSCallProtocol[P, R]
+Communicator: TypeAlias = DBOSCallProtocol[P, R]
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 def get_dbos_func_name(f: Any) -> str:
@@ -329,7 +330,7 @@ class DBOS:
         self.config = config
         self.sys_db = SystemDatabase(config)
         self.app_db = ApplicationDatabase(config)
-        self.workflow_info_map: dict[str, Workflow[Any]] = {}
+        self.workflow_info_map: dict[str, Workflow[..., Any]] = {}
         self.executor = ThreadPoolExecutor(max_workers=64)
         self.admin_server = AdminServer(dbos=self)
         self.stop_events: List[threading.Event] = []
@@ -365,13 +366,13 @@ class DBOS:
         self.admin_server.stop()
         self.executor.shutdown(cancel_futures=True)
 
-    def workflow_wrapper(self, func: Workflow[R]) -> Workflow[R]:
+    def workflow_wrapper(self, func: F) -> F:
         func.__orig_func = func  # type: ignore
 
         fi = get_or_create_func_info(func)
 
         @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> R:
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             rr: Optional[str] = DBOS.check_required_roles(func, args, fi)
             attributes: TracedAttributes = {
                 "name": func.__name__,
@@ -403,27 +404,27 @@ class DBOS:
 
                     return self._execute_workflow(status, func, *args, **kwargs)
 
-        wrapped_func = cast(Workflow[R], wrapper)
+        wrapped_func = cast(F, wrapper)
         return wrapped_func
 
-    def register_wf_function(self, name: str, wrapped_func: Workflow[R]) -> None:
+    def register_wf_function(self, name: str, wrapped_func: Workflow[P, R]) -> None:
         self.workflow_info_map[name] = wrapped_func
 
-    def workflow_decorator(self, func: Workflow[R]) -> Workflow[R]:
+    def workflow_decorator(self, func: F) -> F:
         wrapped_func = self.workflow_wrapper(func)
         self.register_wf_function(func.__qualname__, wrapped_func)
         return wrapped_func
 
-    def workflow(self) -> Callable[[Workflow[R]], Workflow[R]]:
+    def workflow(self) -> Callable[[F], F]:
         return self.workflow_decorator
 
     def start_workflow(
         self,
-        func: Workflow[R],
+        func: Workflow[P, R],
         *args: Any,
         **kwargs: Any,
     ) -> WorkflowHandle[R]:
-        func = cast(Workflow[R], func.__orig_func)  # type: ignore
+        func = cast(Workflow[P, R], func.__orig_func)  # type: ignore
         inputs: WorkflowInputs = {
             "args": args,
             "kwargs": kwargs,
@@ -533,7 +534,7 @@ class DBOS:
     def _execute_workflow_wthread(
         self,
         status: WorkflowStatusInternal,
-        func: Workflow[R],
+        func: Workflow[P, R],
         ctx: DBOSContext,
         *args: Any,
         **kwargs: Any,
@@ -549,7 +550,7 @@ class DBOS:
     def _execute_workflow(
         self,
         status: WorkflowStatusInternal,
-        func: Workflow[R],
+        func: Workflow[P, R],
         *args: Any,
         **kwargs: Any,
     ) -> R:
@@ -571,8 +572,8 @@ class DBOS:
 
     def transaction(
         self, isolation_level: IsolationLevel = "SERIALIZABLE"
-    ) -> Callable[[Transaction[R]], Transaction[R]]:
-        def decorator(func: Transaction[R]) -> Transaction[R]:
+    ) -> Callable[[Transaction[P, R]], Transaction[P, R]]:
+        def decorator(func: Transaction[P, R]) -> Transaction[P, R]:
             def invoke_tx(*args: Any, **kwargs: Any) -> Any:
                 with self.app_db.sessionmaker() as session:
                     attributes: TracedAttributes = {
@@ -679,12 +680,12 @@ class DBOS:
             set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
             self.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
-            return cast(Transaction[R], wrapper)
+            return cast(Transaction[P, R], wrapper)
 
         return decorator
 
-    def communicator(self) -> Callable[[Communicator[R]], Communicator[R]]:
-        def decorator(func: Communicator[R]) -> Communicator[R]:
+    def communicator(self) -> Callable[[Communicator[P, R]], Communicator[P, R]]:
+        def decorator(func: Communicator[P, R]) -> Communicator[P, R]:
 
             def invoke_comm(*args: Any, **kwargs: Any) -> Any:
 
@@ -749,7 +750,7 @@ class DBOS:
             set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
             self.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
-            return cast(Communicator[R], wrapper)
+            return cast(Communicator[P, R], wrapper)
 
         return decorator
 
@@ -795,8 +796,8 @@ class DBOS:
     @staticmethod
     def required_roles(
         roles: List[str],
-    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        def set_roles(func: Callable[..., Any]) -> Callable[..., Any]:
+    ) -> Callable[[F], F]:
+        def set_roles(func: F) -> F:
             fi = get_or_create_func_info(func)
             fi.required_roles = roles
 
@@ -806,7 +807,7 @@ class DBOS:
                 with DBOSAssumeRole(rr):
                     return func(*args, **kwargs)
 
-            return wrapper
+            return cast(F, wrapper)
 
         return set_roles
 
