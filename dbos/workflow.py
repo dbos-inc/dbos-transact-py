@@ -15,6 +15,7 @@ class WorkflowStatus:
     authenticated_user: Optional[str]
     assumed_role: Optional[str]
     authenticatedRoles: Optional[List[str]]
+    recovery_attempts: Optional[int]
 
 
 class WorkflowHandle(Generic[R], ABC):
