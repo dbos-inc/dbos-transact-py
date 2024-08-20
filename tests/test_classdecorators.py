@@ -7,35 +7,6 @@ from dbos.context import DBOSContextEnsure, SetWorkflowUUID, assert_current_dbos
 from dbos.dbos import DBOS
 
 
-class DBOSTestClassInstNN:
-    @DBOS.required_roles(["user"])
-    def test_func(self, var: str) -> str:
-        return var
-
-
-class DBOSTestClassInst:
-    def __init__(self) -> None:
-        self.instance_name = "myname"
-
-    @DBOS.required_roles(["user"])
-    def test_func(self, var: str) -> str:
-        return var
-
-
-class DBOSTestClassStatic:
-    @staticmethod
-    @DBOS.required_roles(["user"])
-    def test_func(var: str) -> str:
-        return var
-
-
-class DBOSTestClassClass:
-    @classmethod
-    @DBOS.required_roles(["user"])
-    def test_func(cls, var: str) -> str:
-        return var
-
-
 @DBOS.required_roles(["user"])
 def tfunc(var: str) -> str:
     assert assert_current_dbos_context().assumed_role == "user"
