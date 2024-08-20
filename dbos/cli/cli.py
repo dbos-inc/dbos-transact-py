@@ -1,4 +1,5 @@
 import os
+import platform
 import signal
 import subprocess
 import time
@@ -12,13 +13,22 @@ from dbos.system_database import SystemDatabase
 app = typer.Typer()
 
 
+def on_windows():
+    return platform.system == "Windows"
+
+
 @app.command()
 def start() -> None:
     config = load_config()
     start_commands = config["runtimeConfig"]["start"]
     for command in start_commands:
         typer.echo(f"Executing: {command}")
-        process = subprocess.Popen(command, shell=True, text=True, preexec_fn=os.setsid)
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            text=True,
+            preexec_fn=os.setsid if not on_windows() else None,
+        )
 
         def signal_handler(signum, frame):
             # Send the signal to the entire process group
@@ -38,8 +48,9 @@ def start() -> None:
             # Exit immediately
             os._exit(process.returncode if process.returncode is not None else 1)
 
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
+        if not on_windows():
+            signal.signal(signal.SIGINT, signal_handler)
+            signal.signal(signal.SIGTERM, signal_handler)
         process.wait()
 
 
