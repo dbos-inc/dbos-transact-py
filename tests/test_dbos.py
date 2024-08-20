@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 from dbos import DBOS, ConfigFile, SetWorkflowUUID
 from dbos.context import get_local_dbos_context
-from dbos.error import DBOSCommunicatorMaxRetriedError
+from dbos.error import DBOSCommunicatorMaxRetriesExceededError
 from dbos.system_database import GetWorkflowsInput, WorkflowStatusString
 from dbos.workflow import WorkflowHandle
 
@@ -294,7 +294,7 @@ def test_temp_workflow_errors(dbos: DBOS) -> None:
         test_communicator("cval")
     assert "cval" == str(exc_info.value)
 
-    with pytest.raises(DBOSCommunicatorMaxRetriedError) as exc_info:
+    with pytest.raises(DBOSCommunicatorMaxRetriesExceededError) as exc_info:
         test_retried_communicator("rval")
 
     assert txn_counter == 1

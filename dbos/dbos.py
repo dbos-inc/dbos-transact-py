@@ -56,7 +56,7 @@ from dbos.context import (
     get_local_dbos_context,
 )
 from dbos.error import (
-    DBOSCommunicatorMaxRetriedError,
+    DBOSCommunicatorMaxRetriesExceededError,
     DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSRecoveryError,
@@ -616,7 +616,7 @@ class DBOS:
                                     },
                                 )
                                 if attempt == local_max_attempts:
-                                    error = DBOSCommunicatorMaxRetriedError()
+                                    error = DBOSCommunicatorMaxRetriesExceededError()
                                 else:
                                     time.sleep(local_interval_seconds)
                                     local_interval_seconds = min(
