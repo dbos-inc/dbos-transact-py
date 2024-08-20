@@ -1,29 +1,15 @@
 import json
 import os
 import shutil
+import signal
 import subprocess
 import time
 import urllib.error
 import urllib.request
 
-import psutil
 import sqlalchemy as sa
 
 from dbos.dbos_config import load_config
-
-
-def terminate_process_tree(pid: int) -> None:
-    try:
-        parent = psutil.Process(pid)
-        children = parent.children(recursive=True)
-        for child in children:
-            child.terminate()
-        parent.terminate()
-        _, alive = psutil.wait_procs(children + [parent], timeout=5)
-        for p in alive:
-            p.kill()
-    except psutil.NoSuchProcess:
-        pass
 
 
 def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
@@ -82,4 +68,5 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
                     print(f"All {max_retries} attempts failed. Last error: {e}")
                     raise
     finally:
-        terminate_process_tree(process.pid)
+        os.kill(process.pid, signal.SIGINT)
+        process.wait()
