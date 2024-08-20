@@ -4,6 +4,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import wraps
 from logging import Logger
@@ -79,7 +80,6 @@ from .system_database import (
 if TYPE_CHECKING:
     from .fastapi import Request
 
-import traceback
 
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
