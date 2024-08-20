@@ -426,7 +426,7 @@ class DBOS:
     ) -> R:
         try:
             output = func(*args, **kwargs)
-        except DBOSWorkflowConflictUUIDError as wferror:
+        except DBOSWorkflowConflictUUIDError:
             # Retrieve the workflow handle and wait for the result.
             wf_handle: WorkflowHandle[R] = self.retrieve_workflow(DBOS.workflow_id)
             output = wf_handle.get_result()
