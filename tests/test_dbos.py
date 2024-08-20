@@ -10,7 +10,7 @@ from typing import Any, Optional
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, CommunicatorConfig, ConfigFile, SetWorkflowUUID
+from dbos import DBOS, ConfigFile, SetWorkflowUUID
 from dbos.context import get_local_dbos_context
 from dbos.error import DBOSCommunicatorMaxRetriedError
 from dbos.system_database import GetWorkflowsInput, WorkflowStatusString
@@ -280,7 +280,7 @@ def test_temp_workflow_errors(dbos: DBOS) -> None:
         comm_counter += 1
         raise Exception(var)
 
-    @dbos.communicator(CommunicatorConfig(retries_allowed=True))
+    @dbos.communicator(retries_allowed=True)
     def test_retried_communicator(var: str) -> str:
         nonlocal retried_comm_counter
         retried_comm_counter += 1

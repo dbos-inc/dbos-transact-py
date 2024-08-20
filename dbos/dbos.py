@@ -41,7 +41,6 @@ else:
 import dbos.utils as utils
 from dbos.admin_sever import AdminServer
 from dbos.context import (
-    CommunicatorConfig,
     DBOSContext,
     DBOSContextEnsure,
     DBOSContextSwap,
@@ -556,8 +555,14 @@ class DBOS:
 
         return decorator
 
+    # Mirror the CommunicatorConfig from TS. However, we disable retries by default.
     def communicator(
-        self, config: CommunicatorConfig = CommunicatorConfig()
+        self,
+        *,
+        retries_allowed: bool = False,
+        interval_seconds: float = 1.0,
+        max_attempts: int = 3,
+        backoff_rate: float = 2.0,
     ) -> Callable[[Communicator], Communicator]:
         def decorator(func: Communicator) -> Communicator:
 
@@ -566,7 +571,7 @@ class DBOS:
                     "name": func.__name__,
                     "operationType": OperationType.COMMUNICATOR.value,
                 }
-                with EnterDBOSCommunicator(attributes, comm_config=config) as ctx:
+                with EnterDBOSCommunicator(attributes) as ctx:
                     comm_output: OperationResultInternal = {
                         "workflow_uuid": ctx.workflow_uuid,
                         "function_id": ctx.function_id,
@@ -588,12 +593,10 @@ class DBOS:
                             raise Exception("Output and error are both None")
                     output = None
                     error = None
-                    max_attempts: int = (
-                        config.max_attempts if config.retries_allowed else 1
-                    )
-                    interval_seconds: float = config.interval_seconds
+                    local_max_attempts = max_attempts if retries_allowed else 1
                     max_retry_interval_seconds: float = 3600  # 1 Hour
-                    for attempt in range(1, max_attempts + 1):
+                    local_interval_seconds = interval_seconds
+                    for attempt in range(1, local_max_attempts + 1):
                         try:
                             output = func(*args, **kwargs)
                             comm_output["output"] = utils.serialize(output)
@@ -601,23 +604,23 @@ class DBOS:
                             break
                         except Exception as err:
                             error = err
-                            if config.retries_allowed:
+                            if retries_allowed:
                                 dbos_logger.warning(
-                                    f"Communicator being automatically retried. (attempt {attempt} of {max_attempts}). {traceback.format_exc()}"
+                                    f"Communicator being automatically retried. (attempt {attempt} of {local_max_attempts}). {traceback.format_exc()}"
                                 )
                                 DBOS.span.add_event(
                                     f"Communicator attempt {attempt} failed",
                                     {
                                         "error": str(error),
-                                        "retryIntervalSeconds": interval_seconds,
+                                        "retryIntervalSeconds": local_interval_seconds,
                                     },
                                 )
-                                if attempt == max_attempts:
+                                if attempt == local_max_attempts:
                                     error = DBOSCommunicatorMaxRetriedError()
                                 else:
-                                    time.sleep(interval_seconds)
-                                    interval_seconds = min(
-                                        interval_seconds * config.backoff_rate,
+                                    time.sleep(local_interval_seconds)
+                                    local_interval_seconds = min(
+                                        local_interval_seconds * backoff_rate,
                                         max_retry_interval_seconds,
                                     )
 
