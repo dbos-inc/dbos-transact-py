@@ -36,4 +36,4 @@ Their version number is `<next-release-version>a<number-of-git-commits-since-rel
 
 ### Publishing
 
-TODO: Add a GHA to publish from a branch.
+Run the [`Publish to PyPI`](./.github/workflows/publish.yml) GitHub action on the target branch.

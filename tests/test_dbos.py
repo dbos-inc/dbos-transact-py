@@ -629,9 +629,7 @@ def test_without_fastapi(dbos: DBOS) -> None:
     try:
         for module_name in dict(sys.modules.items()):
             module = sys.modules[module_name]
-            if module_name == "dbos" or module_name.startswith(
-                "dbos."
-            ):
+            if module_name == "dbos" or module_name.startswith("dbos."):
                 importlib.reload(module)
     finally:
         sys.meta_path.remove(blocker)

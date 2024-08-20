@@ -71,7 +71,6 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
                 time.sleep(1)
 
 
-
 def test_long_workflow(dbos: DBOS) -> None:
     """
     This runs every hour and does nothing. Goal is to verify that it shuts down properly.
