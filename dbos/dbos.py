@@ -4,6 +4,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import wraps
 from logging import Logger
@@ -56,6 +57,7 @@ from dbos.context import (
     get_local_dbos_context,
 )
 from dbos.error import (
+    DBOSCommunicatorMaxRetriesExceededError,
     DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSRecoveryError,
@@ -77,6 +79,7 @@ from .system_database import (
 
 if TYPE_CHECKING:
     from .fastapi import Request
+
 
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
@@ -552,7 +555,15 @@ class DBOS:
 
         return decorator
 
-    def communicator(self) -> Callable[[Communicator], Communicator]:
+    # Mirror the CommunicatorConfig from TS. However, we disable retries by default.
+    def communicator(
+        self,
+        *,
+        retries_allowed: bool = False,
+        interval_seconds: float = 1.0,
+        max_attempts: int = 3,
+        backoff_rate: float = 2.0,
+    ) -> Callable[[Communicator], Communicator]:
         def decorator(func: Communicator) -> Communicator:
 
             def invoke_comm(*args: Any, **kwargs: Any) -> Any:
@@ -581,15 +592,44 @@ class DBOS:
                         else:
                             raise Exception("Output and error are both None")
                     output = None
-                    try:
-                        # TODO: support configurable retries
-                        output = func(*args, **kwargs)
-                        comm_output["output"] = utils.serialize(output)
-                    except Exception as error:
-                        comm_output["error"] = utils.serialize(error)
+                    error = None
+                    local_max_attempts = max_attempts if retries_allowed else 1
+                    max_retry_interval_seconds: float = 3600  # 1 Hour
+                    local_interval_seconds = interval_seconds
+                    for attempt in range(1, local_max_attempts + 1):
+                        try:
+                            output = func(*args, **kwargs)
+                            comm_output["output"] = utils.serialize(output)
+                            error = None
+                            break
+                        except Exception as err:
+                            error = err
+                            if retries_allowed:
+                                dbos_logger.warning(
+                                    f"Communicator being automatically retried. (attempt {attempt} of {local_max_attempts}). {traceback.format_exc()}"
+                                )
+                                DBOS.span.add_event(
+                                    f"Communicator attempt {attempt} failed",
+                                    {
+                                        "error": str(error),
+                                        "retryIntervalSeconds": local_interval_seconds,
+                                    },
+                                )
+                                if attempt == local_max_attempts:
+                                    error = DBOSCommunicatorMaxRetriesExceededError()
+                                else:
+                                    time.sleep(local_interval_seconds)
+                                    local_interval_seconds = min(
+                                        local_interval_seconds * backoff_rate,
+                                        max_retry_interval_seconds,
+                                    )
+
+                    comm_output["error"] = (
+                        utils.serialize(error) if error is not None else None
+                    )
+                    self.sys_db.record_operation_result(comm_output)
+                    if error is not None:
                         raise error
-                    finally:
-                        self.sys_db.record_operation_result(comm_output)
                     return output
 
             @wraps(func)

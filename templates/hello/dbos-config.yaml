@@ -1,7 +1,7 @@
 # To enable auto-completion and validation for this file in VSCode, install the RedHat YAML extension
 # https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml
 
-# yaml-language-server: $schema=https://raw.githubusercontent.com/dbos-inc/dbos-transact/main/dbos-config.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dbos-inc/dbos-transact-py/main/dbos/dbos-config.schema.json
 
 name: hello-python
 language: python

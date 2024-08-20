@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 from dbos import DBOS, ConfigFile, SetWorkflowUUID
 from dbos.context import get_local_dbos_context
-from dbos.error import DBOSException
+from dbos.error import DBOSCommunicatorMaxRetriesExceededError
 from dbos.system_database import GetWorkflowsInput, WorkflowStatusString
 from dbos.workflow import WorkflowHandle
 
@@ -262,6 +262,7 @@ def test_temp_workflow(dbos: DBOS) -> None:
 def test_temp_workflow_errors(dbos: DBOS) -> None:
     txn_counter: int = 0
     comm_counter: int = 0
+    retried_comm_counter: int = 0
 
     cur_time: str = datetime.datetime.now().isoformat()
     gwi: GetWorkflowsInput = GetWorkflowsInput()
@@ -279,6 +280,12 @@ def test_temp_workflow_errors(dbos: DBOS) -> None:
         comm_counter += 1
         raise Exception(var)
 
+    @dbos.communicator(retries_allowed=True)
+    def test_retried_communicator(var: str) -> str:
+        nonlocal retried_comm_counter
+        retried_comm_counter += 1
+        raise Exception(var)
+
     with pytest.raises(Exception) as exc_info:
         test_transaction("tval")
     assert "tval" == str(exc_info.value)
@@ -287,8 +294,12 @@ def test_temp_workflow_errors(dbos: DBOS) -> None:
         test_communicator("cval")
     assert "cval" == str(exc_info.value)
 
+    with pytest.raises(DBOSCommunicatorMaxRetriesExceededError) as exc_info:
+        test_retried_communicator("rval")
+
     assert txn_counter == 1
     assert comm_counter == 1
+    assert retried_comm_counter == 3
 
 
 def test_recovery_workflow(dbos: DBOS) -> None:
