@@ -3,6 +3,7 @@ import platform
 import signal
 import subprocess
 import time
+from typing import Any
 
 import typer
 
@@ -13,8 +14,8 @@ from dbos.system_database import SystemDatabase
 app = typer.Typer()
 
 
-def on_windows():
-    return platform.system == "Windows"
+def on_windows() -> bool:
+    return platform.system() == "Windows"
 
 
 @app.command()
@@ -33,7 +34,7 @@ def start() -> None:
             preexec_fn=os.setsid if not on_windows() else None,
         )
 
-        def signal_handler(signum, frame):
+        def signal_handler(signum: int, frame: Any) -> None:
             """
             When we receive a signal, send it to the entire process group of the child.
             If that doesn't work, SIGKILL them then exit.
