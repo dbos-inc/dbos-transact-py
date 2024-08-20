@@ -22,19 +22,6 @@ class DBOSTestClassInst:
         return var
 
 
-"""
-# This cannot work yet - no DBOS decorator available
-@DBOS.default_required_roles(["user"])
-class DBOSTestClassInstCD:
-    def __init__(self) -> None:
-        self.instance_name = "myname"
-
-    @dbos.workflow
-    def test_func(self, var: str) -> str:
-        return var
-"""
-
-
 class DBOSTestClassStatic:
     @staticmethod
     @DBOS.required_roles(["user"])
@@ -42,86 +29,11 @@ class DBOSTestClassStatic:
         return var
 
 
-"""
-# This cannot work yet - no DBOS decorator available
-@DBOS.default_required_roles(["user"])
-class DBOSTestClassStaticCD:
-    @staticmethod
-    def test_func(var: str) -> str:
-        return var
-"""
-
-
 class DBOSTestClassClass:
     @classmethod
     @DBOS.required_roles(["user"])
     def test_func(cls, var: str) -> str:
         return var
-
-
-"""
-# This cannot work yet - no DBOS decorator available
-@DBOS.default_required_roles(["user"])
-class DBOSTestClassClassCD:
-    @classmethod
-    def test_func(cls, var: str) -> str:
-        return var
-"""
-
-
-"""
-# This cannot work yet - no DBOS decorator available
-class DBOSTestClassInstW:
-    def __init__(self) -> None:
-        self.txn_counter: int = 0
-        self.wf_counter: int = 0
-        self.comm_counter: int = 0
-
-    def test_workflow(self, var: str, var2: str) -> str:
-        self.wf_counter += 1
-        res = self.test_transaction(var2)
-        res2 = self.test_communicator(var)
-        DBOS.logger.info("I'm test_workflow")
-        return res + res2
-
-    def test_transaction(self, var2: str) -> str:
-        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
-        self.txn_counter += 1
-        DBOS.logger.info("I'm test_transaction")
-        return var2 + str(rows[0][0])
-
-    def test_communicator(self, var: str) -> str:
-        self.comm_counter += 1
-        DBOS.logger.info("I'm test_communicator")
-        return var
-
-
-class DBOSTestClassClassW:
-    txn_counter: int = 0
-    wf_counter: int = 0
-    comm_counter: int = 0
-
-    @classmethod
-    def test_workflow(cls, var: str, var2: str) -> str:
-        cls.wf_counter += 1
-        res = cls.test_transaction(var2)
-        res2 = cls.test_communicator(var)
-        DBOS.logger.info("I'm test_workflow")
-        return res + res2
-
-    @classmethod
-    def test_transaction(cls, var2: str) -> str:
-        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
-        cls.txn_counter += 1
-        DBOS.logger.info("I'm test_transaction")
-        return var2 + str(rows[0][0])
-
-    @classmethod
-    def test_communicator(cls, var: str) -> str:
-        cls.comm_counter += 1
-        DBOS.logger.info("I'm test_communicator")
-        return var
-"""
 
 
 @DBOS.required_roles(["user"])
@@ -334,6 +246,9 @@ def test_simple_workflow_static(dbos: DBOS) -> None:
     assert DBOSTestClassStatic.test_workflow("bob", "bob") == "bob1bob"
     wfh = dbos.start_workflow(DBOSTestClassStatic.test_workflow, "bob", "bob")
     assert wfh.get_result() == "bob1bob"
+    assert DBOSTestClassStatic.txn_counter == 2
+    assert DBOSTestClassStatic.wf_counter == 2
+    assert DBOSTestClassStatic.comm_counter == 2
 
 
 def test_simple_workflow_class(dbos: DBOS) -> None:
@@ -369,6 +284,9 @@ def test_simple_workflow_class(dbos: DBOS) -> None:
     assert DBOSTestClassClass.test_workflow("bob", "bob") == "bob1bob"
     wfh = dbos.start_workflow(DBOSTestClassClass.test_workflow, "bob", "bob")
     assert wfh.get_result() == "bob1bob"
+    assert DBOSTestClassClass.txn_counter == 2
+    assert DBOSTestClassClass.wf_counter == 2
+    assert DBOSTestClassClass.comm_counter == 2
 
 
 def test_simple_workflow_inst(dbos: DBOS) -> None:
@@ -403,3 +321,6 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
     assert inst.test_workflow("bob", "bob") == "bob1bob"
     wfh = dbos.start_workflow(inst.test_workflow, "bob", "bob")
     assert wfh.get_result() == "bob1bob"
+    assert inst.txn_counter == 2
+    assert inst.wf_counter == 2
+    assert inst.comm_counter == 2
