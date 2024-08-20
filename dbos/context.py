@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import uuid
 from contextvars import ContextVar
+from dataclasses import dataclass
 from enum import Enum
 from types import TracebackType
 from typing import TYPE_CHECKING, List, Literal, Optional, Type, TypedDict
@@ -126,7 +127,11 @@ class DBOSContext:
     def is_communicator(self) -> bool:
         return self.curr_comm_function_id >= 0
 
-    def start_communicator(self, fid: int, attributes: TracedAttributes) -> None:
+    def start_communicator(
+        self,
+        fid: int,
+        attributes: TracedAttributes,
+    ) -> None:
         self.curr_comm_function_id = fid
         self._start_span(attributes)
 
@@ -382,7 +387,10 @@ class EnterDBOSChildWorkflow:
 
 
 class EnterDBOSCommunicator:
-    def __init__(self, attributes: TracedAttributes) -> None:
+    def __init__(
+        self,
+        attributes: TracedAttributes,
+    ) -> None:
         self.attributes = attributes
 
     def __enter__(self) -> DBOSContext:
