@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import traceback
+import types
 from concurrent.futures import Future, ThreadPoolExecutor
 from enum import Enum
 from functools import wraps
@@ -105,25 +106,7 @@ class DBOSCallProtocol(Protocol[P, R]):
     def __call__(*args: P.args, **kwargs: P.kwargs) -> R: ...
 
 
-class DBOSCallProtocolCls(Protocol[P, R]):
-    __name__: str
-    __qualname__: str
-
-    @classmethod
-    def __call__(cls, *args: P.args, **kwargs: P.kwargs) -> R: ...
-
-
-class DBOSCallProtocolInst(Protocol[P, R]):
-    __name__: str
-    __qualname__: str
-
-    def __call__(self: object, *args: P.args, **kwargs: P.kwargs) -> R: ...
-
-
 Workflow: TypeAlias = DBOSCallProtocol[P, R]
-WorkflowC: TypeAlias = DBOSCallProtocolCls[P, R]
-WorkflowI: TypeAlias = DBOSCallProtocolInst[P, R]
-
 
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
@@ -442,32 +425,18 @@ class DBOS:
     def workflow(self) -> Callable[[F], F]:
         return self._workflow_decorator
 
-    # There seems to be a bug / limitation in mypy regarding class / instance arguments
-    #   Not allowing anything besides Workflow[P,R] leads to false errors in mypy
-    #   Providing these overloads allows too much in mypy, though most errors are still caught
-    #   The pytest / runtime error is clear.
-    @overload
-    def start_workflow(
-        self, func: WorkflowC[P, R], cls: type, *args: P.args, **kwargs: P.kwargs
-    ) -> WorkflowHandle[R]: ...
-
-    @overload
-    def start_workflow(
-        self, func: WorkflowI[P, R], inst: object, *args: P.args, **kwargs: P.kwargs
-    ) -> WorkflowHandle[R]: ...
-
-    @overload
-    def start_workflow(
-        self, func: Workflow[P, R], *args: P.args, **kwargs: P.kwargs
-    ) -> WorkflowHandle[R]: ...
-
     def start_workflow(
         self,
-        func: Callable[..., R],
-        *args: Any,
-        **kwargs: Any,
-    ) -> WorkflowHandle[Any]:
+        func: Workflow[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> WorkflowHandle[R]:
+        fself: Optional[object] = None
+        if hasattr(func, "__self__"):
+            fself = func.__self__
+
         func = cast(Workflow[P, R], func.__orig_func)  # type: ignore
+
         inputs: WorkflowInputs = {
             "args": args,
             "kwargs": kwargs,
@@ -504,14 +473,25 @@ class DBOS:
             wf_name=get_dbos_func_name(func),
         )
 
-        future = self.executor.submit(
-            cast(Callable[..., R], self._execute_workflow_wthread),
-            status,
-            func,
-            new_wf_ctx,
-            *args,
-            **kwargs,
-        )
+        if fself is not None:
+            future = self.executor.submit(
+                cast(Callable[..., R], self._execute_workflow_wthread),
+                status,
+                func,
+                new_wf_ctx,
+                fself,
+                *args,
+                **kwargs,
+            )
+        else:
+            future = self.executor.submit(
+                cast(Callable[..., R], self._execute_workflow_wthread),
+                status,
+                func,
+                new_wf_ctx,
+                *args,
+                **kwargs,
+            )
         return WorkflowHandleFuture(new_wf_uuid, future, self)
 
     def retrieve_workflow(

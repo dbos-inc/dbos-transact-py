@@ -367,9 +367,7 @@ def test_simple_workflow_class(dbos: DBOS) -> None:
             return var
 
     assert DBOSTestClassClass.test_workflow("bob", "bob") == "bob1bob"
-    wfh = dbos.start_workflow(
-        DBOSTestClassClass.test_workflow, DBOSTestClassClass, "bob", "bob"
-    )
+    wfh = dbos.start_workflow(DBOSTestClassClass.test_workflow, "bob", "bob")
     assert wfh.get_result() == "bob1bob"
 
 
@@ -403,5 +401,5 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
 
     inst = DBOSTestClassInst()
     assert inst.test_workflow("bob", "bob") == "bob1bob"
-    wfh = dbos.start_workflow(inst.test_workflow, inst, "bob", "bob")
+    wfh = dbos.start_workflow(inst.test_workflow, "bob", "bob")
     assert wfh.get_result() == "bob1bob"
