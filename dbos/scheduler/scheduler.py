@@ -25,4 +25,4 @@ def scheduler_loop(
                 dbos_logger.error(
                     f"Exception encountered in scheduled workflow: {repr(e)}"
                 )
-                raise e
+                pass  # Let the thread keep running
