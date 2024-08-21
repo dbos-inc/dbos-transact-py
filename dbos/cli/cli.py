@@ -1,4 +1,9 @@
+import os
+import platform
+import signal
 import subprocess
+import time
+from typing import Any
 
 import typer
 
@@ -9,17 +14,54 @@ from dbos.system_database import SystemDatabase
 app = typer.Typer()
 
 
+def on_windows() -> bool:
+    return platform.system() == "Windows"
+
+
 @app.command()
 def start() -> None:
     config = load_config()
     start_commands = config["runtimeConfig"]["start"]
     for command in start_commands:
         typer.echo(f"Executing: {command}")
-        result = subprocess.run(command, shell=True, text=True)
-        if result.returncode != 0:
-            typer.echo(f"Command failed: {command}")
-            typer.echo(result.stderr)
-            raise typer.Exit(code=1)
+
+        # Run the command in the child process.
+        # On Unix-like systems, set its process group
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            text=True,
+            preexec_fn=os.setsid if not on_windows() else None,
+        )
+
+        def signal_handler(signum: int, frame: Any) -> None:
+            """
+            When we receive a signal, send it to the entire process group of the child.
+            If that doesn't work, SIGKILL them then exit.
+            """
+            # Send the signal to the child's entire process group
+            if process.poll() is None:
+                os.killpg(os.getpgid(process.pid), signum)
+
+            # Give some time for the child to terminate
+            for _ in range(10):  # Wait up to 1 second
+                if process.poll() is not None:
+                    break
+                time.sleep(0.1)
+
+            # If the child is still running, force kill it
+            if process.poll() is None:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+
+            # Exit immediately
+            os._exit(process.returncode if process.returncode is not None else 1)
+
+        # Configure the single handler only on Unix-like systems.
+        # TODO: Also kill the children on Windows.
+        if not on_windows():
+            signal.signal(signal.SIGINT, signal_handler)
+            signal.signal(signal.SIGTERM, signal_handler)
+        process.wait()
 
 
 @app.command()
