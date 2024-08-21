@@ -24,6 +24,7 @@ class SystemSchema:
         Column("workflow_uuid", Text, primary_key=True),
         Column("status", Text, nullable=True),
         Column("name", Text, nullable=True),
+        Column("inst_name", Text, nullable=True),
         Column("authenticated_user", Text, nullable=True),
         Column("assumed_role", Text, nullable=True),
         Column("authenticated_roles", Text, nullable=True),
