@@ -362,6 +362,8 @@ class DBOS:
         self.sys_db = SystemDatabase(config)
         self.app_db = ApplicationDatabase(config)
         self.workflow_info_map: dict[str, Workflow[..., Any]] = {}
+        self.class_info_map: dict[str, type] = {}
+        self.instance_info_map: dict[str, object] = {}
         self.executor = ThreadPoolExecutor(max_workers=64)
         self.admin_server = AdminServer(dbos=self)
         self.stop_events: List[threading.Event] = []
@@ -868,23 +870,40 @@ class DBOS:
         return decorator
 
     def register_instance(self, inst: object) -> None:
-        inst_name = getattr(inst, "config_name")
+        config_name = getattr(inst, "config_name")
         class_name = inst.__class__.__name__
-        pass
+        fn = f"{class_name}/{config_name}"
+        if fn in self.instance_info_map:
+            if self.instance_info_map[fn] is not inst:
+                raise Exception(
+                    f"Duplicate instance registration for class '{class_name}' instance '{config_name}'"
+                )
+        else:
+            self.instance_info_map[fn] = inst
 
-    @staticmethod
-    def default_required_roles(roles: List[str]) -> Callable[[Type[Any]], Type[Any]]:
+    def register_class(self, cls: type, ci: DBOSClassInfo) -> None:
+        class_name = cls.__name__
+        if class_name in self.class_info_map:
+            if self.class_info_map[class_name] is not cls:
+                raise Exception(f"Duplicate type registration for class '{class_name}'")
+        else:
+            self.class_info_map[class_name] = cls
+
+    def default_required_roles(
+        self, roles: List[str]
+    ) -> Callable[[Type[Any]], Type[Any]]:
         def set_roles(cls: Type[Any]) -> Type[Any]:
             ci = get_or_create_class_info(cls)
+            self.register_class(cls, ci)
             ci.def_required_roles = roles
             return cls
 
         return set_roles
 
-    @staticmethod
-    def dbos_class() -> Callable[[Type[Any]], Type[Any]]:
+    def dbos_class(self) -> Callable[[Type[Any]], Type[Any]]:
         def create_class_info(cls: Type[Any]) -> Type[Any]:
-            get_or_create_class_info(cls)
+            ci = get_or_create_class_info(cls)
+            self.register_class(cls, ci)
             return cls
 
         return create_class_info

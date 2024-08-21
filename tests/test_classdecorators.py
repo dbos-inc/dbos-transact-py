@@ -354,3 +354,32 @@ def test_forgotten_decorator(dbos: DBOS) -> None:
         "Function target appears to be a class, but is not properly registered"
         in str(exc_info.value)
     )
+
+
+def test_duplicate_reg(dbos: DBOS) -> None:
+    @dbos.dbos_class()
+    class DBOSTestRegDup(DBOSConfiguredInstance):
+        def __init__(self) -> None:
+            super().__init__("bob", dbos)
+
+    # Duplicate class registration
+    with pytest.raises(Exception) as exc_info:
+
+        @dbos.dbos_class()
+        class DBOSTestRegDup(DBOSConfiguredInstance):  # type: ignore
+            def __init__(self) -> None:
+                super().__init__("bob", dbos)
+
+    assert "Duplicate type registration for class 'DBOSTestRegDup'" == str(
+        exc_info.value
+    )
+
+    # Dupliocate instance registration
+    inst = DBOSTestRegDup()
+    with pytest.raises(Exception) as exc_info:
+        inst = DBOSTestRegDup()
+
+    assert (
+        "Duplicate instance registration for class 'DBOSTestRegDup' instance 'bob'"
+        == str(exc_info.value)
+    )
