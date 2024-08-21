@@ -332,6 +332,35 @@ def get_config_name(
     return None
 
 
+def get_dbos_class_name(
+    fi: Optional[DBOSFuncInfo], func: Callable[..., Any], args: Tuple[Any, ...]
+) -> Optional[str]:
+    if fi and fi.func_type != DBOSFuncType.Unknown and len(args) > 0:
+        if fi.func_type == DBOSFuncType.Instance:
+            first_arg = args[0]
+            return str(first_arg.__class__.__name__)
+        if fi.func_type == DBOSFuncType.Class:
+            first_arg = args[0]
+            return str(first_arg.__name__)
+        return None
+
+    if len(args) > 0:
+        first_arg = args[0]
+        if isinstance(first_arg, type):
+            return str(first_arg.__name__)
+        else:
+            # Check if the function signature has "self" as the first parameter name
+            #   This is not 100% reliable but it is better than nothing for detecting footguns
+            #   (pylint will do the rest)
+            sig = inspect.signature(func)
+            parameters = list(sig.parameters.values())
+            if parameters and parameters[0].name == "self":
+                return str(first_arg.__class__.__name__)
+
+    # Bare function or function on something else
+    return None
+
+
 class DBOS:
     def __init__(
         self, fastapi: Optional["FastAPI"] = None, config: Optional[ConfigFile] = None
@@ -404,6 +433,7 @@ class DBOS:
                         ctx,
                         inputs=inputs,
                         wf_name=get_dbos_func_name(func),
+                        class_name=get_dbos_class_name(fi, func, args),
                         config_name=get_config_name(fi, func, args),
                     )
 
@@ -415,6 +445,7 @@ class DBOS:
                         ctx,
                         inputs=inputs,
                         wf_name=get_dbos_func_name(func),
+                        class_name=get_dbos_class_name(fi, func, args),
                         config_name=get_config_name(fi, func, args),
                     )
 
@@ -490,6 +521,7 @@ class DBOS:
             new_wf_ctx,
             inputs=inputs,
             wf_name=get_dbos_func_name(func),
+            class_name=get_dbos_class_name(fi, func, gin_args),
             config_name=get_config_name(fi, func, gin_args),
         )
 
@@ -540,7 +572,7 @@ class DBOS:
             status=stat["status"],
             name=stat["name"],
             recovery_attempts=stat["recovery_attempts"],
-            class_name=None,
+            class_name=stat["class_name"],
             config_name=stat["config_name"],
             authenticated_user=None,
             assumed_role=None,
@@ -552,6 +584,7 @@ class DBOS:
         ctx: DBOSContext,
         inputs: WorkflowInputs,
         wf_name: str,
+        class_name: Optional[str],
         config_name: Optional[str],
     ) -> WorkflowStatusInternal:
         wfid = (
@@ -563,6 +596,7 @@ class DBOS:
             "workflow_uuid": wfid,
             "status": "PENDING",
             "name": wf_name,
+            "class_name": class_name,
             "config_name": config_name,
             "output": None,
             "error": None,
@@ -845,6 +879,11 @@ class DBOS:
 
         return decorator
 
+    def register_instance(self, inst: object) -> None:
+        inst_name = getattr(inst, "config_name")
+        class_name = inst.__class__.__name__
+        pass
+
     @staticmethod
     def default_required_roles(roles: List[str]) -> Callable[[Type[Any]], Type[Any]]:
         def set_roles(cls: Type[Any]) -> Type[Any]:
@@ -1109,3 +1148,10 @@ class DBOS:
                     f"Exception encountered when recovering workflows: {repr(e)}"
                 )
                 raise e
+
+
+class DBOSConfiguredInstance:
+    def __init__(self, config_name: str, dbos: Optional[DBOS]) -> None:
+        self.config_name = config_name
+        if dbos is not None:
+            dbos.register_instance(self)

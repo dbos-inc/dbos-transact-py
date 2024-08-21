@@ -4,7 +4,7 @@ import pytest
 import sqlalchemy as sa
 
 from dbos.context import DBOSContextEnsure, SetWorkflowUUID, assert_current_dbos_context
-from dbos.dbos import DBOS
+from dbos.dbos import DBOS, DBOSConfiguredInstance
 
 
 @DBOS.required_roles(["user"])
@@ -45,9 +45,9 @@ def test_required_roles() -> None:
 
 def test_required_roles_class(dbos: DBOS) -> None:
     @DBOS.default_required_roles(["user"])
-    class DBOSTestClassRR:
+    class DBOSTestClassRR(DBOSConfiguredInstance):
         def __init__(self) -> None:
-            self.config_name = "myname"
+            super().__init__("myconfig", dbos)
 
         @dbos.workflow()
         def test_func_user(self, var: str) -> str:
@@ -273,12 +273,12 @@ def test_no_instname(dbos: DBOS) -> None:
 
 
 def test_simple_workflow_inst(dbos: DBOS) -> None:
-    class DBOSTestClassInst:
+    class DBOSTestClassInst(DBOSConfiguredInstance):
         def __init__(self) -> None:
+            super().__init__("bob", dbos)
             self.txn_counter: int = 0
             self.wf_counter: int = 0
             self.comm_counter: int = 0
-            self.config_name: str = "bob"
 
         @dbos.workflow()
         def test_workflow(self, var: str, var2: str) -> str:
@@ -308,9 +308,11 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
     stati = dbos.sys_db.get_workflow_status(wfh.get_workflow_uuid())
     assert stati
     assert stati["config_name"] == "bob"
+    assert stati["class_name"] == "DBOSTestClassInst"
     stat = wfh.get_status()
     assert stat
     assert stat.config_name == "bob"
+    assert stat.class_name == "DBOSTestClassInst"
 
     assert wfh.get_result() == "bob1bob"
     assert inst.txn_counter == 2
