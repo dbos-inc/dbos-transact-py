@@ -44,7 +44,7 @@ def test_required_roles() -> None:
 
 
 def test_required_roles_class(dbos: DBOS) -> None:
-    @DBOS.default_required_roles(["user"])
+    @dbos.default_required_roles(["user"])
     class DBOSTestClassRR(DBOSConfiguredInstance):
         def __init__(self) -> None:
             super().__init__("myconfig", dbos)
@@ -223,6 +223,7 @@ def test_simple_workflow_static(dbos: DBOS) -> None:
 
 
 def test_simple_workflow_class(dbos: DBOS) -> None:
+    @dbos.dbos_class()
     class DBOSTestClassClass:
         txn_counter: int = 0
         wf_counter: int = 0
@@ -261,8 +262,8 @@ def test_simple_workflow_class(dbos: DBOS) -> None:
 
 
 def test_no_instname(dbos: DBOS) -> None:
+    @dbos.dbos_class()
     class DBOSTestClassInst:
-
         @dbos.workflow()
         def test_workflow(self) -> str:
             return "Nope"
@@ -273,6 +274,7 @@ def test_no_instname(dbos: DBOS) -> None:
 
 
 def test_simple_workflow_inst(dbos: DBOS) -> None:
+    @dbos.dbos_class()
     class DBOSTestClassInst(DBOSConfiguredInstance):
         def __init__(self) -> None:
             super().__init__("bob", dbos)

@@ -894,6 +894,14 @@ class DBOS:
         return set_roles
 
     @staticmethod
+    def dbos_class() -> Callable[[Type[Any]], Type[Any]]:
+        def create_class_info(cls: Type[Any]) -> Type[Any]:
+            get_or_create_class_info(cls)
+            return cls
+
+        return create_class_info
+
+    @staticmethod
     def _check_required_roles(
         func: Callable[..., Any], args: Tuple[Any, ...], fi: Optional[DBOSFuncInfo]
     ) -> Optional[str]:
