@@ -271,24 +271,9 @@ def get_class_info(cls: Type[Any]) -> Optional[DBOSClassInfo]:
     return None
 
 
-def get_class_info_for_func(
-    fi: Optional[DBOSFuncInfo], func: Callable[..., Any], args: Tuple[Any, ...]
-) -> Optional[DBOSClassInfo]:
+def get_class_info_for_func(fi: Optional[DBOSFuncInfo]) -> Optional[DBOSClassInfo]:
     if fi and fi.class_info:
         return fi.class_info
-
-    if len(args) > 0:
-        first_arg = args[0]
-        if isinstance(first_arg, type):
-            return get_class_info(first_arg)
-        else:
-            # Check if the function signature has "self" as the first parameter name
-            #   This is not 100% reliable but it is better than nothing for detecting footguns
-            #   (pylint will do the rest)
-            sig = inspect.signature(func)
-            parameters = list(sig.parameters.values())
-            if parameters and parameters[0].name == "self":
-                return get_class_info(first_arg.__class__)
 
     # Bare function or function on something else
     return None
@@ -908,7 +893,7 @@ class DBOS:
         # Check required roles
         required_roles: Optional[List[str]] = None
         # First, we need to know if this has class info and func info
-        ci = get_class_info_for_func(fi, func, args)
+        ci = get_class_info_for_func(fi)
         if ci is not None:
             required_roles = ci.def_required_roles
         if fi and fi.required_roles is not None:
