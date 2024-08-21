@@ -243,7 +243,7 @@ def get_or_create_class_info(cls: Type[Any]) -> DBOSClassInfo:
     return ci
 
 
-def get_or_create_func_info(func: Callable[..., Any]) -> DBOSFuncInfo:
+def get_func_info(func: Callable[..., Any]) -> Optional[DBOSFuncInfo]:
     while True:
         if hasattr(func, "dbos_func_decorator_info"):
             fi: DBOSFuncInfo = getattr(func, "dbos_func_decorator_info")
@@ -251,6 +251,13 @@ def get_or_create_func_info(func: Callable[..., Any]) -> DBOSFuncInfo:
         if not hasattr(func, "__wrapped__"):
             break
         func = func.__wrapped__
+    return None
+
+
+def get_or_create_func_info(func: Callable[..., Any]) -> DBOSFuncInfo:
+    fi = get_func_info(func)
+    if fi is not None:
+        return fi
 
     fi = DBOSFuncInfo()
     setattr(func, "dbos_func_decorator_info", fi)
@@ -265,7 +272,7 @@ def get_class_info(cls: Type[Any]) -> Optional[DBOSClassInfo]:
 
 
 def get_class_info_for_func(
-    fi: Optional[DBOSFuncInfo], func: Callable[..., Any], args: Tuple[Any]
+    fi: Optional[DBOSFuncInfo], func: Callable[..., Any], args: Tuple[Any, ...]
 ) -> Optional[DBOSClassInfo]:
     if fi and fi.class_info:
         return fi.class_info
@@ -288,7 +295,7 @@ def get_class_info_for_func(
 
 
 def get_instance_name(
-    fi: Optional[DBOSFuncInfo], func: Callable[..., Any], args: Tuple[Any]
+    fi: Optional[DBOSFuncInfo], func: Callable[..., Any], args: Tuple[Any, ...]
 ) -> Optional[str]:
     if fi and fi.func_type != DBOSFuncType.Unknown and len(args) > 0:
         if fi.func_type == DBOSFuncType.Instance:
@@ -397,6 +404,7 @@ class DBOS:
                         ctx,
                         inputs=inputs,
                         wf_name=get_dbos_func_name(func),
+                        inst_name=get_instance_name(fi, func, args),
                     )
 
                     return self._execute_workflow(status, func, *args, **kwargs)
@@ -407,6 +415,7 @@ class DBOS:
                         ctx,
                         inputs=inputs,
                         wf_name=get_dbos_func_name(func),
+                        inst_name=get_instance_name(fi, func, args),
                     )
 
                     return self._execute_workflow(status, func, *args, **kwargs)
@@ -434,6 +443,12 @@ class DBOS:
         fself: Optional[object] = None
         if hasattr(func, "__self__"):
             fself = func.__self__
+
+        fi = get_func_info(func)
+        if fi is None:
+            raise DBOSWorkflowFunctionNotFoundError(
+                "<NONE>", f"start_workflow: function {func.__name__} is not registered"
+            )
 
         func = cast(Workflow[P, R], func.__orig_func)  # type: ignore
 
@@ -467,10 +482,15 @@ class DBOS:
         new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
         new_wf_uuid = new_wf_ctx.id_assigned_for_next_workflow
 
+        gin_args: Tuple[Any, ...] = args
+        if fself is not None:
+            gin_args = (fself,)
+
         status = self._init_workflow(
             new_wf_ctx,
             inputs=inputs,
             wf_name=get_dbos_func_name(func),
+            inst_name=get_instance_name(fi, func, gin_args),
         )
 
         if fself is not None:
@@ -528,7 +548,11 @@ class DBOS:
         )
 
     def _init_workflow(
-        self, ctx: DBOSContext, inputs: WorkflowInputs, wf_name: str
+        self,
+        ctx: DBOSContext,
+        inputs: WorkflowInputs,
+        wf_name: str,
+        inst_name: Optional[str],
     ) -> WorkflowStatusInternal:
         wfid = (
             ctx.workflow_uuid
@@ -539,6 +563,7 @@ class DBOS:
             "workflow_uuid": wfid,
             "status": "PENDING",
             "name": wf_name,
+            "inst_name": inst_name,
             "output": None,
             "error": None,
             "app_id": ctx.app_id,
@@ -551,6 +576,9 @@ class DBOS:
         }
         self.sys_db.update_workflow_status(status, False, ctx.in_recovery)
 
+        # If we have an instance name, the first arg is the instance and do not serialize
+        if inst_name is not None:
+            inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
         self.sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
 
         return status
@@ -828,7 +856,7 @@ class DBOS:
 
     @staticmethod
     def _check_required_roles(
-        func: Callable[..., Any], args: Tuple[Any], fi: Optional[DBOSFuncInfo]
+        func: Callable[..., Any], args: Tuple[Any, ...], fi: Optional[DBOSFuncInfo]
     ) -> Optional[str]:
         # Check required roles
         required_roles: Optional[List[str]] = None

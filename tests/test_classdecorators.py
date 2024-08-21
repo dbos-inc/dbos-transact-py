@@ -260,12 +260,25 @@ def test_simple_workflow_class(dbos: DBOS) -> None:
     assert DBOSTestClassClass.comm_counter == 2
 
 
+def test_no_instname(dbos: DBOS) -> None:
+    class DBOSTestClassInst:
+
+        @dbos.workflow()
+        def test_workflow(self) -> str:
+            return "Nope"
+
+    with pytest.raises(Exception) as exc_info:
+        DBOSTestClassInst().test_workflow()
+    assert "Function target appears to be a class instance, but does not have `instance_name` set"
+
+
 def test_simple_workflow_inst(dbos: DBOS) -> None:
     class DBOSTestClassInst:
         def __init__(self) -> None:
             self.txn_counter: int = 0
             self.wf_counter: int = 0
             self.comm_counter: int = 0
+            self.instance_name: str = "bob"
 
         @dbos.workflow()
         def test_workflow(self, var: str, var2: str) -> str:
