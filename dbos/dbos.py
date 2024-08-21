@@ -294,18 +294,18 @@ def get_class_info_for_func(
     return None
 
 
-def get_instance_name(
+def get_config_name(
     fi: Optional[DBOSFuncInfo], func: Callable[..., Any], args: Tuple[Any, ...]
 ) -> Optional[str]:
     if fi and fi.func_type != DBOSFuncType.Unknown and len(args) > 0:
         if fi.func_type == DBOSFuncType.Instance:
             first_arg = args[0]
-            if hasattr(first_arg, "instance_name"):
-                iname: str = getattr(first_arg, "instance_name")
+            if hasattr(first_arg, "config_name"):
+                iname: str = getattr(first_arg, "config_name")
                 return str(iname)
             else:
                 raise Exception(
-                    "Function target appears to be a class instance, but does not have `instance_name` set"
+                    "Function target appears to be a class instance, but does not have `config_name` set"
                 )
         return None
 
@@ -320,12 +320,12 @@ def get_instance_name(
             sig = inspect.signature(func)
             parameters = list(sig.parameters.values())
             if parameters and parameters[0].name == "self":
-                if hasattr(first_arg, "instance_name"):
-                    iname = getattr(first_arg, "instance_name")
+                if hasattr(first_arg, "config_name"):
+                    iname = getattr(first_arg, "config_name")
                     return str(iname)
                 else:
                     raise Exception(
-                        "Function target appears to be a class instance, but does not have `instance_name` set"
+                        "Function target appears to be a class instance, but does not have `config_name` set"
                     )
 
     # Bare function or function on something else
@@ -404,7 +404,7 @@ class DBOS:
                         ctx,
                         inputs=inputs,
                         wf_name=get_dbos_func_name(func),
-                        inst_name=get_instance_name(fi, func, args),
+                        config_name=get_config_name(fi, func, args),
                     )
 
                     return self._execute_workflow(status, func, *args, **kwargs)
@@ -415,7 +415,7 @@ class DBOS:
                         ctx,
                         inputs=inputs,
                         wf_name=get_dbos_func_name(func),
-                        inst_name=get_instance_name(fi, func, args),
+                        config_name=get_config_name(fi, func, args),
                     )
 
                     return self._execute_workflow(status, func, *args, **kwargs)
@@ -490,7 +490,7 @@ class DBOS:
             new_wf_ctx,
             inputs=inputs,
             wf_name=get_dbos_func_name(func),
-            inst_name=get_instance_name(fi, func, gin_args),
+            config_name=get_config_name(fi, func, gin_args),
         )
 
         if fself is not None:
@@ -541,7 +541,7 @@ class DBOS:
             name=stat["name"],
             recovery_attempts=stat["recovery_attempts"],
             class_name=None,
-            config_name=None,
+            config_name=stat["config_name"],
             authenticated_user=None,
             assumed_role=None,
             authenticatedRoles=None,
@@ -552,7 +552,7 @@ class DBOS:
         ctx: DBOSContext,
         inputs: WorkflowInputs,
         wf_name: str,
-        inst_name: Optional[str],
+        config_name: Optional[str],
     ) -> WorkflowStatusInternal:
         wfid = (
             ctx.workflow_uuid
@@ -563,7 +563,7 @@ class DBOS:
             "workflow_uuid": wfid,
             "status": "PENDING",
             "name": wf_name,
-            "inst_name": inst_name,
+            "config_name": config_name,
             "output": None,
             "error": None,
             "app_id": ctx.app_id,
@@ -577,7 +577,7 @@ class DBOS:
         self.sys_db.update_workflow_status(status, False, ctx.in_recovery)
 
         # If we have an instance name, the first arg is the instance and do not serialize
-        if inst_name is not None:
+        if config_name is not None:
             inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
         self.sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
 

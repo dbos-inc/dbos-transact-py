@@ -70,7 +70,7 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
             "workflow_uuid": wfuuid,
             "status": "PENDING",
             "name": test_workflow.__qualname__,
-            "inst_name": None,
+            "config_name": None,
             "output": None,
             "error": None,
             "executor_id": None,

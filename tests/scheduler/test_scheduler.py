@@ -45,7 +45,7 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
             "workflow_uuid": workflow_id,
             "status": "PENDING",
             "name": test_workflow.__qualname__,
-            "inst_name": None,
+            "config_name": None,
             "output": None,
             "error": None,
             "executor_id": None,
