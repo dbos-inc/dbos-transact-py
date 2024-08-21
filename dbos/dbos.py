@@ -294,24 +294,22 @@ def get_config_name(
                 )
         return None
 
+    # Check for improperly-registered functions
     if len(args) > 0:
         first_arg = args[0]
         if isinstance(first_arg, type):
-            return None
+            raise Exception(
+                "Function target appears to be a class instance, but does not have `config_name` set"
+            )
         else:
             # Check if the function signature has "self" as the first parameter name
             #   This is not 100% reliable but it is better than nothing for detecting footguns
-            #   (pylint will do the rest)
             sig = inspect.signature(func)
             parameters = list(sig.parameters.values())
             if parameters and parameters[0].name == "self":
-                if hasattr(first_arg, "config_name"):
-                    iname = getattr(first_arg, "config_name")
-                    return str(iname)
-                else:
-                    raise Exception(
-                        "Function target appears to be a class instance, but does not have `config_name` set"
-                    )
+                raise Exception(
+                    "Function target appears to be a class instance, but is not properly registered"
+                )
 
     # Bare function or function on something else
     return None
@@ -329,18 +327,22 @@ def get_dbos_class_name(
             return str(first_arg.__name__)
         return None
 
+    # Check for improperly-registered functions
     if len(args) > 0:
         first_arg = args[0]
         if isinstance(first_arg, type):
-            return str(first_arg.__name__)
+            raise Exception(
+                "Function target appears to be a class instance, but does not have `config_name` set"
+            )
         else:
             # Check if the function signature has "self" as the first parameter name
             #   This is not 100% reliable but it is better than nothing for detecting footguns
-            #   (pylint will do the rest)
             sig = inspect.signature(func)
             parameters = list(sig.parameters.values())
             if parameters and parameters[0].name == "self":
-                return str(first_arg.__class__.__name__)
+                raise Exception(
+                    "Function target appears to be a class instance, but is not properly registered"
+                )
 
     # Bare function or function on something else
     return None
