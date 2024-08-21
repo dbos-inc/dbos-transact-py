@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from ..context import SetWorkflowUUID
+from ..logger import dbos_logger
 from .croniter import croniter  # type: ignore
 
 ScheduledWorkflow = Callable[[datetime, datetime], None]
@@ -18,4 +19,10 @@ def scheduler_loop(
         if stop_event.wait(timeout=sleepTime.total_seconds()):
             return
         with SetWorkflowUUID(f"sched-{func.__qualname__}-{nextExecTime.isoformat()}"):
-            func(nextExecTime, datetime.now(timezone.utc))
+            try:
+                func(nextExecTime, datetime.now(timezone.utc))
+            except Exception as e:
+                dbos_logger.error(
+                    f"Exception encountered in scheduled workflow: {repr(e)}"
+                )
+                raise e
