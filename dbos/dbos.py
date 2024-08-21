@@ -601,7 +601,7 @@ class DBOS:
         self.sys_db.update_workflow_status(status, False, ctx.in_recovery)
 
         # If we have an instance name, the first arg is the instance and do not serialize
-        if config_name is not None:
+        if class_name is not None:
             inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
         self.sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
 
@@ -1081,8 +1081,41 @@ class DBOS:
             ctx = assert_current_dbos_context()
             request = status["request"]
             ctx.request = utils.deserialize(request) if request is not None else None
-            with SetWorkflowUUID(workflow_uuid):
-                return self.start_workflow(wf_func, *inputs["args"], **inputs["kwargs"])
+            if status["config_name"] is not None:
+                config_name = status["config_name"]
+                class_name = status["class_name"]
+                iname = f"{class_name}/{config_name}"
+                if iname not in self.instance_info_map:
+                    raise DBOSWorkflowFunctionNotFoundError(
+                        workflow_uuid,
+                        f"Cannot execute workflow because instance '{iname}' is not registered",
+                    )
+                with SetWorkflowUUID(workflow_uuid):
+                    return self.start_workflow(
+                        wf_func,
+                        self.instance_info_map[iname],
+                        *inputs["args"],
+                        **inputs["kwargs"],
+                    )
+            elif status["class_name"] is not None:
+                class_name = status["class_name"]
+                if class_name not in self.class_info_map:
+                    raise DBOSWorkflowFunctionNotFoundError(
+                        workflow_uuid,
+                        f"Cannot execute workflow because class '{class_name}' is not registered",
+                    )
+                with SetWorkflowUUID(workflow_uuid):
+                    return self.start_workflow(
+                        wf_func,
+                        self.class_info_map[class_name],
+                        *inputs["args"],
+                        **inputs["kwargs"],
+                    )
+            else:
+                with SetWorkflowUUID(workflow_uuid):
+                    return self.start_workflow(
+                        wf_func, *inputs["args"], **inputs["kwargs"]
+                    )
 
     def recover_pending_workflows(
         self, executor_ids: List[str] = ["local"]

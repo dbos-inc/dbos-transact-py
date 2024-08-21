@@ -405,6 +405,11 @@ def test_class_recovery(dbos: DBOS) -> None:
 
     assert exc_cnt == 1
 
+    # Test we can execute the workflow by uuid as recovery would do
+    handle = dbos.execute_workflow_uuid("run1")
+    assert handle.get_result() == "ran"
+    assert exc_cnt == 2
+
 
 def test_inst_recovery(dbos: DBOS) -> None:
     exc_cnt: int = 0
@@ -422,11 +427,18 @@ def test_inst_recovery(dbos: DBOS) -> None:
             exc_cnt += 1
             assert arg1 == "arg1"
             last_inst = self
-            return "ran"
+            return "ran2"
 
     inst = DBOSTestInstRec()
-    with SetWorkflowUUID("run1"):
-        assert "ran" == inst.check_inst("arg1")
+    with SetWorkflowUUID("run2"):
+        assert "ran2" == inst.check_inst("arg1")
 
     assert exc_cnt == 1
+    assert last_inst is inst
+
+    # Test we can execute the workflow by uuid as recovery would do
+    last_inst = None
+    handle = dbos.execute_workflow_uuid("run2")
+    assert handle.get_result() == "ran2"
+    assert exc_cnt == 2
     assert last_inst is inst
