@@ -223,6 +223,7 @@ def get_or_create_class_info(cls: Type[Any]) -> DBOSClassInfo:
                 attribute = attribute.__func__
                 dbft = DBOSFuncType.Static
             elif isinstance(attribute, classmethod):
+                attribute = attribute.__func__
                 dbft = DBOSFuncType.Class
             elif isinstance(attribute, FunctionType):
                 dbft = DBOSFuncType.Instance
