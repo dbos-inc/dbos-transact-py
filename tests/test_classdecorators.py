@@ -320,3 +320,37 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
     assert inst.txn_counter == 2
     assert inst.wf_counter == 2
     assert inst.comm_counter == 2
+
+
+def test_forgotten_decorator(dbos: DBOS) -> None:
+    class DBOSTestRegErr(DBOSConfiguredInstance):
+        def __init__(self) -> None:
+            super().__init__("bob", dbos)
+            self.txn_counter: int = 0
+            self.wf_counter: int = 0
+            self.comm_counter: int = 0
+
+        @dbos.workflow()
+        def test_workflow1(self) -> str:
+            return "Forgot class decorator!"
+
+        @classmethod
+        @dbos.workflow()
+        def test_workflow2(cls) -> str:
+            return "Forgot class decorator!"
+
+    inst = DBOSTestRegErr()
+    with pytest.raises(Exception) as exc_info:
+        inst.test_workflow1()
+    assert (
+        "Function target appears to be a class instance, but is not properly registered"
+        in str(exc_info.value)
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        DBOSTestRegErr.test_workflow2()
+
+    assert (
+        "Function target appears to be a class, but is not properly registered"
+        in str(exc_info.value)
+    )

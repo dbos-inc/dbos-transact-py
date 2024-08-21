@@ -299,7 +299,7 @@ def get_config_name(
         first_arg = args[0]
         if isinstance(first_arg, type):
             raise Exception(
-                "Function target appears to be a class instance, but does not have `config_name` set"
+                "Function target appears to be a class, but is not properly registered"
             )
         else:
             # Check if the function signature has "self" as the first parameter name
@@ -332,7 +332,7 @@ def get_dbos_class_name(
         first_arg = args[0]
         if isinstance(first_arg, type):
             raise Exception(
-                "Function target appears to be a class instance, but does not have `config_name` set"
+                "Function target appears to be a class, but is not properly registered"
             )
         else:
             # Check if the function signature has "self" as the first parameter name
