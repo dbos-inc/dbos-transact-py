@@ -1,4 +1,5 @@
 import uuid
+from typing import Optional
 
 import pytest
 import sqlalchemy as sa
@@ -383,3 +384,49 @@ def test_duplicate_reg(dbos: DBOS) -> None:
         "Duplicate instance registration for class 'DBOSTestRegDup' instance 'bob'"
         == str(exc_info.value)
     )
+
+
+def test_class_recovery(dbos: DBOS) -> None:
+    exc_cnt: int = 0
+
+    @dbos.dbos_class()
+    class DBOSTestClassRec:
+        @classmethod
+        @dbos.workflow()
+        def check_cls(cls, arg1: str) -> str:
+            nonlocal exc_cnt
+            exc_cnt += 1
+            assert arg1 == "arg1"
+            assert cls == DBOSTestClassRec
+            return "ran"
+
+    with SetWorkflowUUID("run1"):
+        assert "ran" == DBOSTestClassRec.check_cls("arg1")
+
+    assert exc_cnt == 1
+
+
+def test_inst_recovery(dbos: DBOS) -> None:
+    exc_cnt: int = 0
+    last_inst: Optional[DBOSTestInstRec] = None
+
+    @dbos.dbos_class()
+    class DBOSTestInstRec(DBOSConfiguredInstance):
+        def __init__(self) -> None:
+            super().__init__("bob", dbos)
+
+        @dbos.workflow()
+        def check_inst(self, arg1: str) -> str:
+            nonlocal exc_cnt
+            nonlocal last_inst
+            exc_cnt += 1
+            assert arg1 == "arg1"
+            last_inst = self
+            return "ran"
+
+    inst = DBOSTestInstRec()
+    with SetWorkflowUUID("run1"):
+        assert "ran" == inst.check_inst("arg1")
+
+    assert exc_cnt == 1
+    assert last_inst is inst
