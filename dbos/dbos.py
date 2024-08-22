@@ -938,8 +938,8 @@ class DBOS:
             f"Function {func.__name__} has required roles, but user is not authenticated for any of them"
         )
 
-    @staticmethod
     def required_roles(
+        self,
         roles: List[str],
     ) -> Callable[[F], F]:
         def set_roles(func: F) -> F:
