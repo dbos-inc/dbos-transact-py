@@ -22,6 +22,7 @@ class DBOSErrorCode(Enum):
     NonExistentWorkflowError = 5
     DuplicateWorkflowEventError = 6
     CommunicatorMaxRetriesExceeded = 7
+    NotAuthorized = 8
 
 
 class DBOSWorkflowConflictUUIDError(DBOSException):
@@ -69,6 +70,14 @@ class DBOSDuplicateWorkflowEventError(DBOSException):
         super().__init__(
             f"Workflow {workflow_uuid} has already emitted an event with key {key}",
             dbos_error_code=DBOSErrorCode.DuplicateWorkflowEventError.value,
+        )
+
+
+class DBOSNotAuthorizedError(DBOSException):
+    def __init__(self, msg: str):
+        super().__init__(
+            msg,
+            dbos_error_code=DBOSErrorCode.NotAuthorized.value,
         )
 
 

@@ -46,6 +46,8 @@ class WorkflowStatusInternal(TypedDict):
     workflow_uuid: str
     status: WorkflowStatuses
     name: str
+    class_name: Optional[str]
+    config_name: Optional[str]
     output: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
     executor_id: Optional[str]
@@ -197,6 +199,8 @@ class SystemDatabase:
             workflow_uuid=status["workflow_uuid"],
             status=status["status"],
             name=status["name"],
+            class_name=status["class_name"],
+            config_name=status["config_name"],
             output=status["output"],
             error=status["error"],
             executor_id=status["executor_id"],
@@ -264,6 +268,8 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.name,
                     SystemSchema.workflow_status.c.request,
                     SystemSchema.workflow_status.c.recovery_attempts,
+                    SystemSchema.workflow_status.c.config_name,
+                    SystemSchema.workflow_status.c.class_name,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -272,6 +278,8 @@ class SystemDatabase:
                 "workflow_uuid": workflow_uuid,
                 "status": row[0],
                 "name": row[1],
+                "class_name": row[5],
+                "config_name": row[4],
                 "output": None,
                 "error": None,
                 "app_id": None,
@@ -313,6 +321,8 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.request,
                     SystemSchema.workflow_status.c.output,
                     SystemSchema.workflow_status.c.error,
+                    SystemSchema.workflow_status.c.config_name,
+                    SystemSchema.workflow_status.c.class_name,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -321,6 +331,8 @@ class SystemDatabase:
                 "workflow_uuid": workflow_uuid,
                 "status": row[0],
                 "name": row[1],
+                "config_name": row[5],
+                "class_name": row[6],
                 "output": row[3],
                 "error": row[4],
                 "app_id": None,
