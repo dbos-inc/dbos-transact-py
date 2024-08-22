@@ -1032,7 +1032,7 @@ class DBOS:
         self, workflow_uuid: str, key: str, timeout_seconds: float = 60
     ) -> Any:
         cur_ctx = get_local_dbos_context()
-        if cur_ctx is not None:
+        if cur_ctx is not None and cur_ctx.is_within_workflow():
             # Call it within a workflow
             assert cur_ctx.is_workflow()
             attributes: TracedAttributes = {
