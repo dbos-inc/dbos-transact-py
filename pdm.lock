@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:1d9b11810c444404e9daf9b7adc88dfd6e1c98ba3284bb3a877534c9091ceaac"
+content_hash = "sha256:ad7e1c813ffa5ff561f1339f4d2f1d9475f2a458b65dfdff261596a1ddfadad3"
 
 [[metadata.targets]]
 requires_python = ">=3.9"
@@ -33,7 +33,7 @@ name = "annotated-types"
 version = "0.7.0"
 requires_python = ">=3.8"
 summary = "Reusable constraint types to use with typing.Annotated"
-groups = ["dev"]
+groups = ["default"]
 dependencies = [
     "typing-extensions>=4.0.0; python_version < \"3.9\"",
 ]
@@ -47,7 +47,7 @@ name = "anyio"
 version = "4.4.0"
 requires_python = ">=3.8"
 summary = "High level compatibility layer for multiple asynchronous event loop implementations"
-groups = ["dev"]
+groups = ["default", "dev"]
 dependencies = [
     "exceptiongroup>=1.0.2; python_version < \"3.11\"",
     "idna>=2.8",
@@ -283,7 +283,7 @@ name = "dnspython"
 version = "2.6.1"
 requires_python = ">=3.8"
 summary = "DNS toolkit"
-groups = ["dev"]
+groups = ["default"]
 files = [
     {file = "dnspython-2.6.1-py3-none-any.whl", hash = "sha256:5ef3b9680161f6fa89daf8ad451b5f1a33b18ae8a1c6778cdf4b43f08c0a6e50"},
     {file = "dnspython-2.6.1.tar.gz", hash = "sha256:e8f0f9c23a7b7cb99ded64e6c3a6f3e701d78f50c55e002b839dea7225cff7cc"},
@@ -294,7 +294,7 @@ name = "email-validator"
 version = "2.2.0"
 requires_python = ">=3.8"
 summary = "A robust email address syntax and deliverability validation library."
-groups = ["dev"]
+groups = ["default"]
 dependencies = [
     "dnspython>=2.0.0",
     "idna>=2.0.0",
@@ -309,7 +309,7 @@ name = "exceptiongroup"
 version = "1.2.2"
 requires_python = ">=3.7"
 summary = "Backport of PEP 654 (exception groups)"
-groups = ["dev"]
+groups = ["default", "dev"]
 marker = "python_version < \"3.11\""
 files = [
     {file = "exceptiongroup-1.2.2-py3-none-any.whl", hash = "sha256:3111b9d131c238bec2f8f516e123e14ba243563fb135d3fe885990585aa7795b"},
@@ -321,7 +321,7 @@ name = "fastapi"
 version = "0.112.1"
 requires_python = ">=3.8"
 summary = "FastAPI framework, high performance, easy to learn, fast to code, ready for production"
-groups = ["dev"]
+groups = ["default"]
 dependencies = [
     "pydantic!=1.8,!=1.8.1,!=2.0.0,!=2.0.1,!=2.1.0,<3.0.0,>=1.7.4",
     "starlette<0.39.0,>=0.37.2",
@@ -337,7 +337,7 @@ name = "fastapi-cli"
 version = "0.0.5"
 requires_python = ">=3.8"
 summary = "Run and manage FastAPI apps from the command line with FastAPI CLI. 🚀"
-groups = ["dev"]
+groups = ["default"]
 dependencies = [
     "typer>=0.12.3",
     "uvicorn[standard]>=0.15.0",
@@ -353,7 +353,7 @@ version = "0.0.5"
 extras = ["standard"]
 requires_python = ">=3.8"
 summary = "Run and manage FastAPI apps from the command line with FastAPI CLI. 🚀"
-groups = ["dev"]
+groups = ["default"]
 dependencies = [
     "fastapi-cli==0.0.5",
     "uvicorn[standard]>=0.15.0",
@@ -369,7 +369,7 @@ version = "0.112.1"
 extras = ["standard"]
 requires_python = ">=3.8"
 summary = "FastAPI framework, high performance, easy to learn, fast to code, ready for production"
-groups = ["dev"]
+groups = ["default"]
 dependencies = [
     "email-validator>=2.0.0",
     "fastapi-cli[standard]>=0.0.5",
@@ -505,7 +505,7 @@ name = "h11"
 version = "0.14.0"
 requires_python = ">=3.7"
 summary = "A pure-Python, bring-your-own-I/O implementation of HTTP/1.1"
-groups = ["dev"]
+groups = ["default", "dev"]
 dependencies = [
     "typing-extensions; python_version < \"3.8\"",
 ]
@@ -534,7 +534,7 @@ name = "httpcore"
 version = "1.0.5"
 requires_python = ">=3.8"
 summary = "A minimal low-level HTTP client."
-groups = ["dev"]
+groups = ["default", "dev"]
 dependencies = [
     "certifi",
     "h11<0.15,>=0.13",
@@ -549,7 +549,7 @@ name = "httptools"
 version = "0.6.1"
 requires_python = ">=3.8.0"
 summary = "A collection of framework independent HTTP protocol utils."
-groups = ["dev"]
+groups = ["default"]
 files = [
     {file = "httptools-0.6.1-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:d2f6c3c4cb1948d912538217838f6e9960bc4a521d7f9b323b3da579cd14532f"},
     {file = "httptools-0.6.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:00d5d4b68a717765b1fabfd9ca755bd12bf44105eeb806c03d1962acd9b8e563"},
@@ -587,7 +587,7 @@ name = "httpx"
 version = "0.27.0"
 requires_python = ">=3.8"
 summary = "The next generation HTTP client."
-groups = ["dev"]
+groups = ["default", "dev"]
 dependencies = [
     "anyio",
     "certifi",
@@ -691,7 +691,7 @@ name = "jinja2"
 version = "3.1.4"
 requires_python = ">=3.7"
 summary = "A very fast and expressive template engine."
-groups = ["dev"]
+groups = ["default"]
 dependencies = [
     "MarkupSafe>=2.0",
 ]
@@ -781,7 +781,7 @@ name = "markupsafe"
 version = "2.1.5"
 requires_python = ">=3.7"
 summary = "Safely add untrusted strings to HTML/XML markup."
-groups = ["default", "dev"]
+groups = ["default"]
 files = [
     {file = "MarkupSafe-2.1.5-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:a17a92de5231666cfbe003f0e4b9b3a7ae3afb1ec2845aadc2bacc93ff85febc"},
     {file = "MarkupSafe-2.1.5-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:72b6be590cc35924b02c78ef34b467da4ba07e4e0f0454a2c5907f473fc50ce5"},
@@ -1264,7 +1264,7 @@ name = "pydantic"
 version = "2.8.2"
 requires_python = ">=3.8"
 summary = "Data validation using Python type hints"
-groups = ["dev"]
+groups = ["default"]
 dependencies = [
     "annotated-types>=0.4.0",
     "pydantic-core==2.20.1",
@@ -1281,7 +1281,7 @@ name = "pydantic-core"
 version = "2.20.1"
 requires_python = ">=3.8"
 summary = "Core functionality for Pydantic validation and serialization"
-groups = ["dev"]
+groups = ["default"]
 dependencies = [
     "typing-extensions!=4.7.0,>=4.6.0",
 ]
@@ -1439,7 +1439,7 @@ name = "python-dotenv"
 version = "1.0.1"
 requires_python = ">=3.8"
 summary = "Read key-value pairs from a .env file and set them as environment variables"
-groups = ["dev"]
+groups = ["default", "dev"]
 files = [
     {file = "python-dotenv-1.0.1.tar.gz", hash = "sha256:e324ee90a023d808f1959c46bcbc04446a10ced277783dc6ee09987c37ec10ca"},
     {file = "python_dotenv-1.0.1-py3-none-any.whl", hash = "sha256:f7b63ef50f1b690dddf550d03497b66d609393b40b564ed0d674909a68ebf16a"},
@@ -1450,7 +1450,7 @@ name = "python-multipart"
 version = "0.0.9"
 requires_python = ">=3.8"
 summary = "A streaming multipart parser for Python"
-groups = ["dev"]
+groups = ["default"]
 files = [
     {file = "python_multipart-0.0.9-py3-none-any.whl", hash = "sha256:97ca7b8ea7b05f977dc3849c3ba99d51689822fab725c3703af7c866a0c2b215"},
     {file = "python_multipart-0.0.9.tar.gz", hash = "sha256:03f54688c663f1b7977105f021043b0793151e4cb1c1a9d4a11fc13d622c4026"},
@@ -1716,7 +1716,7 @@ name = "sniffio"
 version = "1.3.1"
 requires_python = ">=3.7"
 summary = "Sniff out which async library your code is running under"
-groups = ["dev"]
+groups = ["default", "dev"]
 files = [
     {file = "sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2"},
     {file = "sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc"},
@@ -1786,7 +1786,7 @@ name = "starlette"
 version = "0.38.2"
 requires_python = ">=3.8"
 summary = "The little ASGI library that shines."
-groups = ["dev"]
+groups = ["default"]
 dependencies = [
     "anyio<5,>=3.4.0",
     "typing-extensions>=3.10.0; python_version < \"3.10\"",
@@ -1836,7 +1836,7 @@ name = "typer"
 version = "0.12.3"
 requires_python = ">=3.7"
 summary = "Typer, build great CLIs. Easy to code. Based on Python type hints."
-groups = ["default", "dev"]
+groups = ["default"]
 dependencies = [
     "click>=8.0.0",
     "rich>=10.11.0",
@@ -1951,7 +1951,7 @@ name = "uvicorn"
 version = "0.30.6"
 requires_python = ">=3.8"
 summary = "The lightning-fast ASGI server."
-groups = ["dev"]
+groups = ["default"]
 dependencies = [
     "click>=7.0",
     "h11>=0.8",
@@ -1968,7 +1968,7 @@ version = "0.30.6"
 extras = ["standard"]
 requires_python = ">=3.8"
 summary = "The lightning-fast ASGI server."
-groups = ["dev"]
+groups = ["default"]
 dependencies = [
     "colorama>=0.4; sys_platform == \"win32\"",
     "httptools>=0.5.0",
@@ -1989,7 +1989,7 @@ name = "uvloop"
 version = "0.20.0"
 requires_python = ">=3.8.0"
 summary = "Fast implementation of asyncio event loop on top of libuv"
-groups = ["dev"]
+groups = ["default"]
 marker = "(sys_platform != \"cygwin\" and sys_platform != \"win32\") and platform_python_implementation != \"PyPy\""
 files = [
     {file = "uvloop-0.20.0-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:9ebafa0b96c62881d5cafa02d9da2e44c23f9f0cd829f3a32a6aff771449c996"},
@@ -2041,7 +2041,7 @@ name = "watchfiles"
 version = "0.23.0"
 requires_python = ">=3.8"
 summary = "Simple, modern and high performance file watching and code reload in python."
-groups = ["dev"]
+groups = ["default"]
 dependencies = [
     "anyio>=3.0.0",
 ]
@@ -2124,7 +2124,7 @@ name = "websockets"
 version = "13.0"
 requires_python = ">=3.8"
 summary = "An implementation of the WebSocket Protocol (RFC 6455 & 7692)"
-groups = ["dev"]
+groups = ["default"]
 files = [
     {file = "websockets-13.0-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:ad4fa707ff9e2ffee019e946257b5300a45137a58f41fbd9a4db8e684ab61528"},
     {file = "websockets-13.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:6fd757f313c13c34dae9f126d3ba4cf97175859c719e57c6a614b781c86b617e"},
