@@ -12,7 +12,6 @@ from opentelemetry.trace import Span, Status, StatusCode
 
 if TYPE_CHECKING:
     from .fastapi import Request
-    from .dbos import DBOS
 
 from sqlalchemy.orm import Session
 
@@ -74,8 +73,6 @@ class DBOSContext:
         self.authenticated_user: Optional[str] = None
         self.authenticated_roles: Optional[List[str]] = None
         self.assumed_role: Optional[str] = None
-
-        self.dbos: Optional["DBOS"] = None
 
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()
