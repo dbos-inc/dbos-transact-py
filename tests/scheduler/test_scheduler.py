@@ -17,6 +17,20 @@ def test_scheduled_workflow(dbos: DBOS) -> None:
     assert wf_counter >= 1 and wf_counter <= 3
 
 
+def test_scheduled_workflow_exception(dbos: DBOS) -> None:
+    wf_counter: int = 0
+
+    @dbos.scheduled("* * * * * *")
+    @dbos.workflow()
+    def test_failing_workflow(scheduled: datetime, actual: datetime) -> None:
+        nonlocal wf_counter
+        wf_counter += 1
+        raise Exception("error")
+
+    time.sleep(2)
+    assert wf_counter >= 1 and wf_counter <= 3
+
+
 def test_scheduler_oaoo(dbos: DBOS) -> None:
     wf_counter: int = 0
     txn_counter: int = 0
