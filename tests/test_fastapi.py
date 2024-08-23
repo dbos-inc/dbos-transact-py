@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from dbos import DBOS, SetWorkflowUUID
+from dbos import DBOS
 from dbos.context import assert_current_dbos_context
 
 

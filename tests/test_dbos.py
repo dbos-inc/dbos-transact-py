@@ -11,11 +11,7 @@ import pytest
 import sqlalchemy as sa
 
 from dbos import DBOS, ConfigFile, SetWorkflowUUID
-from dbos.context import (
-    DBOSContextEnsure,
-    assert_current_dbos_context,
-    get_local_dbos_context,
-)
+from dbos.context import assert_current_dbos_context, get_local_dbos_context
 from dbos.error import DBOSCommunicatorMaxRetriesExceededError
 from dbos.system_database import GetWorkflowsInput, WorkflowStatusString
 from dbos.workflow import WorkflowHandle
