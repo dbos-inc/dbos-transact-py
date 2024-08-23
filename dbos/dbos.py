@@ -16,7 +16,6 @@ from typing import (
     Literal,
     Optional,
     Protocol,
-    Tuple,
     Type,
     TypeVar,
     cast,
@@ -24,15 +23,17 @@ from typing import (
 
 from opentelemetry.trace import Span
 
-from dbos.core import _WorkflowHandleFuture, _WorkflowHandlePolling
+from dbos.core import (
+    _execute_workflow_uuid,
+    _start_workflow,
+    _workflow_wrapper,
+    _WorkflowHandlePolling,
+)
 from dbos.decorators import classproperty
-from dbos.recovery import startup_recovery_thread
+from dbos.recovery import recover_pending_workflows, startup_recovery_thread
 from dbos.registrations import (
     DBOSClassInfo,
-    get_config_name,
-    get_dbos_class_name,
     get_dbos_func_name,
-    get_func_info,
     get_or_create_class_info,
     get_or_create_func_info,
     set_dbos_func_name,
@@ -58,16 +59,9 @@ import dbos.utils as utils
 from dbos.admin_sever import AdminServer
 from dbos.context import (
     DBOSAssumeRole,
-    DBOSContext,
-    DBOSContextEnsure,
-    DBOSContextSwap,
-    EnterDBOSChildWorkflow,
     EnterDBOSCommunicator,
     EnterDBOSTransaction,
-    EnterDBOSWorkflow,
     OperationType,
-    SetWorkflowRecovery,
-    SetWorkflowUUID,
     TracedAttributes,
     assert_current_dbos_context,
     get_local_dbos_context,
@@ -76,9 +70,6 @@ from dbos.error import (
     DBOSCommunicatorMaxRetriesExceededError,
     DBOSException,
     DBOSNonExistentWorkflowError,
-    DBOSRecoveryError,
-    DBOSWorkflowConflictUUIDError,
-    DBOSWorkflowFunctionNotFoundError,
 )
 from dbos.workflow import WorkflowHandle, WorkflowStatus
 
@@ -89,8 +80,6 @@ from .system_database import (
     GetEventWorkflowContext,
     OperationResultInternal,
     SystemDatabase,
-    WorkflowInputs,
-    WorkflowStatusInternal,
 )
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
@@ -157,7 +146,7 @@ class DBOS:
         ) -> None:
             self.send(destination_uuid, message, topic)
 
-        temp_send_wf = self._workflow_wrapper(send_temp_workflow)
+        temp_send_wf = _workflow_wrapper(self, send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
         self._register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
         dbos_logger.info("DBOS initialized")
@@ -172,56 +161,11 @@ class DBOS:
         self.admin_server.stop()
         self.executor.shutdown(cancel_futures=True)
 
-    def _workflow_wrapper(self, func: F) -> F:
-        func.__orig_func = func  # type: ignore
-
-        fi = get_or_create_func_info(func)
-
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            rr: Optional[str] = check_required_roles(func, fi)
-            attributes: TracedAttributes = {
-                "name": func.__name__,
-                "operationType": OperationType.WORKFLOW.value,
-            }
-            inputs: WorkflowInputs = {
-                "args": args,
-                "kwargs": kwargs,
-            }
-            ctx = get_local_dbos_context()
-            if ctx and ctx.is_workflow():
-                with EnterDBOSChildWorkflow(attributes), DBOSAssumeRole(rr):
-                    ctx = assert_current_dbos_context()  # Now the child ctx
-                    status = self._init_workflow(
-                        ctx,
-                        inputs=inputs,
-                        wf_name=get_dbos_func_name(func),
-                        class_name=get_dbos_class_name(fi, func, args),
-                        config_name=get_config_name(fi, func, args),
-                    )
-
-                    return self._execute_workflow(status, func, *args, **kwargs)
-            else:
-                with EnterDBOSWorkflow(attributes), DBOSAssumeRole(rr):
-                    ctx = assert_current_dbos_context()
-                    status = self._init_workflow(
-                        ctx,
-                        inputs=inputs,
-                        wf_name=get_dbos_func_name(func),
-                        class_name=get_dbos_class_name(fi, func, args),
-                        config_name=get_config_name(fi, func, args),
-                    )
-
-                    return self._execute_workflow(status, func, *args, **kwargs)
-
-        wrapped_func = cast(F, wrapper)
-        return wrapped_func
-
     def _register_wf_function(self, name: str, wrapped_func: F) -> None:
         self.workflow_info_map[name] = wrapped_func
 
     def _workflow_decorator(self, func: F) -> F:
-        wrapped_func = self._workflow_wrapper(func)
+        wrapped_func = _workflow_wrapper(self, func)
         self._register_wf_function(func.__qualname__, wrapped_func)
         return wrapped_func
 
@@ -234,76 +178,7 @@ class DBOS:
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
-        fself: Optional[object] = None
-        if hasattr(func, "__self__"):
-            fself = func.__self__
-
-        fi = get_func_info(func)
-        if fi is None:
-            raise DBOSWorkflowFunctionNotFoundError(
-                "<NONE>", f"start_workflow: function {func.__name__} is not registered"
-            )
-
-        func = cast(Workflow[P, R], func.__orig_func)  # type: ignore
-
-        inputs: WorkflowInputs = {
-            "args": args,
-            "kwargs": kwargs,
-        }
-
-        # Sequence of events for starting a workflow:
-        #   First - is there a WF already running?
-        #      (and not in tx/comm as that is an error)
-        #   Assign an ID to the workflow, if it doesn't have an app-assigned one
-        #      If this is a root workflow, assign a new UUID
-        #      If this is a child workflow, assign parent wf id with call# suffix
-        #   Make a (system) DB record for the workflow
-        #   Pass the new context to a worker thread that will run the wf function
-        cur_ctx = get_local_dbos_context()
-        if cur_ctx is not None and cur_ctx.is_within_workflow():
-            assert cur_ctx.is_workflow()  # Not in tx / comm
-            cur_ctx.function_id += 1
-            if len(cur_ctx.id_assigned_for_next_workflow) == 0:
-                cur_ctx.id_assigned_for_next_workflow = (
-                    cur_ctx.workflow_uuid + "-" + str(cur_ctx.function_id)
-                )
-
-        new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
-        new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
-        new_wf_uuid = new_wf_ctx.id_assigned_for_next_workflow
-
-        gin_args: Tuple[Any, ...] = args
-        if fself is not None:
-            gin_args = (fself,)
-
-        status = self._init_workflow(
-            new_wf_ctx,
-            inputs=inputs,
-            wf_name=get_dbos_func_name(func),
-            class_name=get_dbos_class_name(fi, func, gin_args),
-            config_name=get_config_name(fi, func, gin_args),
-        )
-
-        if fself is not None:
-            future = self.executor.submit(
-                cast(Callable[..., R], self._execute_workflow_wthread),
-                status,
-                func,
-                new_wf_ctx,
-                fself,
-                *args,
-                **kwargs,
-            )
-        else:
-            future = self.executor.submit(
-                cast(Callable[..., R], self._execute_workflow_wthread),
-                status,
-                func,
-                new_wf_ctx,
-                *args,
-                **kwargs,
-            )
-        return _WorkflowHandleFuture(new_wf_uuid, future, self)
+        return _start_workflow(self, func, *args, **kwargs)
 
     def retrieve_workflow(
         self, workflow_uuid: str, existing_workflow: bool = True
@@ -337,91 +212,6 @@ class DBOS:
             assumed_role=None,
             authenticatedRoles=None,
         )
-
-    def _init_workflow(
-        self,
-        ctx: DBOSContext,
-        inputs: WorkflowInputs,
-        wf_name: str,
-        class_name: Optional[str],
-        config_name: Optional[str],
-    ) -> WorkflowStatusInternal:
-        wfid = (
-            ctx.workflow_uuid
-            if len(ctx.workflow_uuid) > 0
-            else ctx.id_assigned_for_next_workflow
-        )
-        status: WorkflowStatusInternal = {
-            "workflow_uuid": wfid,
-            "status": "PENDING",
-            "name": wf_name,
-            "class_name": class_name,
-            "config_name": config_name,
-            "output": None,
-            "error": None,
-            "app_id": ctx.app_id,
-            "app_version": ctx.app_version,
-            "executor_id": ctx.executor_id,
-            "request": (
-                utils.serialize(ctx.request) if ctx.request is not None else None
-            ),
-            "recovery_attempts": None,
-        }
-        self.sys_db.update_workflow_status(status, False, ctx.in_recovery)
-
-        # If we have an instance name, the first arg is the instance and do not serialize
-        if class_name is not None:
-            inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
-        self.sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
-
-        return status
-
-    def _execute_workflow_wthread(
-        self,
-        status: WorkflowStatusInternal,
-        func: Workflow[P, R],
-        ctx: DBOSContext,
-        *args: Any,
-        **kwargs: Any,
-    ) -> R:
-        attributes: TracedAttributes = {
-            "name": func.__name__,
-            "operationType": OperationType.WORKFLOW.value,
-        }
-        with DBOSContextSwap(ctx):
-            with EnterDBOSWorkflow(attributes):
-                try:
-                    return self._execute_workflow(status, func, *args, **kwargs)
-                except Exception as e:
-                    DBOS.logger.error(
-                        f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
-                    )
-                    raise e
-
-    def _execute_workflow(
-        self,
-        status: WorkflowStatusInternal,
-        func: Workflow[P, R],
-        *args: Any,
-        **kwargs: Any,
-    ) -> R:
-        try:
-            output = func(*args, **kwargs)
-        except DBOSWorkflowConflictUUIDError:
-            # Retrieve the workflow handle and wait for the result.
-            wf_handle: WorkflowHandle[R] = self.retrieve_workflow(DBOS.workflow_id)
-            output = wf_handle.get_result()
-            return output
-        except Exception as error:
-            status["status"] = "ERROR"
-            status["error"] = utils.serialize(error)
-            self.sys_db.update_workflow_status(status)
-            raise error
-
-        status["status"] = "SUCCESS"
-        status["output"] = utils.serialize(output)
-        self.sys_db.update_workflow_status(status)
-        return output
 
     def transaction(
         self, isolation_level: IsolationLevel = "SERIALIZABLE"
@@ -533,7 +323,7 @@ class DBOS:
             def temp_wf(*args: Any, **kwargs: Any) -> Any:
                 return wrapper(*args, **kwargs)
 
-            wrapped_wf = self._workflow_wrapper(temp_wf)
+            wrapped_wf = _workflow_wrapper(self, temp_wf)
             set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
             self._register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
@@ -646,7 +436,7 @@ class DBOS:
             def temp_wf(*args: Any, **kwargs: Any) -> Any:
                 return wrapper(*args, **kwargs)
 
-            wrapped_wf = self._workflow_wrapper(temp_wf)
+            wrapped_wf = _workflow_wrapper(self, temp_wf)
             set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
             self._register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
@@ -798,56 +588,7 @@ class DBOS:
         """
         This function is used to execute a workflow by a UUID for recovery.
         """
-        status = self.sys_db.get_workflow_status(workflow_uuid)
-        if not status:
-            raise DBOSRecoveryError(workflow_uuid, "Workflow status not found")
-        inputs = self.sys_db.get_workflow_inputs(workflow_uuid)
-        if not inputs:
-            raise DBOSRecoveryError(workflow_uuid, "Workflow inputs not found")
-        wf_func = self.workflow_info_map.get(status["name"], None)
-        if not wf_func:
-            raise DBOSWorkflowFunctionNotFoundError(
-                workflow_uuid, "Workflow function not found"
-            )
-        with DBOSContextEnsure():
-            ctx = assert_current_dbos_context()
-            request = status["request"]
-            ctx.request = utils.deserialize(request) if request is not None else None
-            if status["config_name"] is not None:
-                config_name = status["config_name"]
-                class_name = status["class_name"]
-                iname = f"{class_name}/{config_name}"
-                if iname not in self.instance_info_map:
-                    raise DBOSWorkflowFunctionNotFoundError(
-                        workflow_uuid,
-                        f"Cannot execute workflow because instance '{iname}' is not registered",
-                    )
-                with SetWorkflowUUID(workflow_uuid):
-                    return self.start_workflow(
-                        wf_func,
-                        self.instance_info_map[iname],
-                        *inputs["args"],
-                        **inputs["kwargs"],
-                    )
-            elif status["class_name"] is not None:
-                class_name = status["class_name"]
-                if class_name not in self.class_info_map:
-                    raise DBOSWorkflowFunctionNotFoundError(
-                        workflow_uuid,
-                        f"Cannot execute workflow because class '{class_name}' is not registered",
-                    )
-                with SetWorkflowUUID(workflow_uuid):
-                    return self.start_workflow(
-                        wf_func,
-                        self.class_info_map[class_name],
-                        *inputs["args"],
-                        **inputs["kwargs"],
-                    )
-            else:
-                with SetWorkflowUUID(workflow_uuid):
-                    return self.start_workflow(
-                        wf_func, *inputs["args"], **inputs["kwargs"]
-                    )
+        return _execute_workflow_uuid(self, workflow_uuid)
 
     def recover_pending_workflows(
         self, executor_ids: List[str] = ["local"]
@@ -855,25 +596,7 @@ class DBOS:
         """
         Find all PENDING workflows and execute them.
         """
-        workflow_handles: List[WorkflowHandle[Any]] = []
-        for executor_id in executor_ids:
-            if executor_id == "local" and os.environ.get("DBOS__VMID"):
-                dbos_logger.debug(
-                    f"Skip local recovery because it's running in a VM: {os.environ.get('DBOS__VMID')}"
-                )
-            dbos_logger.debug(
-                f"Recovering pending workflows for executor: {executor_id}"
-            )
-            workflow_ids = self.sys_db.get_pending_workflows(executor_id)
-            dbos_logger.debug(f"Pending workflows: {workflow_ids}")
-
-            for workflowID in workflow_ids:
-                with SetWorkflowRecovery():
-                    handle = self.execute_workflow_uuid(workflowID)
-                workflow_handles.append(handle)
-
-        dbos_logger.info("Recovered pending workflows")
-        return workflow_handles
+        return recover_pending_workflows(self, executor_ids)
 
     @classproperty
     def logger(cls) -> Logger:
