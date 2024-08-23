@@ -530,7 +530,6 @@ class DBOS:
                 *args,
                 **kwargs,
             )
-
         return WorkflowHandleFuture(new_wf_uuid, future, self)
 
     def retrieve_workflow(
