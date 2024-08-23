@@ -146,7 +146,7 @@ def classproperty(func: Callable[..., G]) -> ClassPropertyDescriptor[G]:
     return ClassPropertyDescriptor(func)
 
 
-class WorkflowHandleFuture(WorkflowHandle[R]):
+class _WorkflowHandleFuture(WorkflowHandle[R]):
 
     def __init__(self, workflow_uuid: str, future: Future[R], dbos: DBOS):
         super().__init__(workflow_uuid)
@@ -163,7 +163,7 @@ class WorkflowHandleFuture(WorkflowHandle[R]):
         return stat
 
 
-class PollingWorkflowHandle(WorkflowHandle[R]):
+class _WorkflowHandlePolling(WorkflowHandle[R]):
 
     def __init__(self, workflow_uuid: str, dbos: DBOS):
         super().__init__(workflow_uuid)
@@ -530,7 +530,7 @@ class DBOS:
                 *args,
                 **kwargs,
             )
-        return WorkflowHandleFuture(new_wf_uuid, future, self)
+        return _WorkflowHandleFuture(new_wf_uuid, future, self)
 
     def retrieve_workflow(
         self, workflow_uuid: str, existing_workflow: bool = True
@@ -539,7 +539,7 @@ class DBOS:
             stat = self.get_workflow_status(workflow_uuid)
             if stat is None:
                 raise DBOSNonExistentWorkflowError(workflow_uuid)
-        return PollingWorkflowHandle(workflow_uuid, self)
+        return _WorkflowHandlePolling(workflow_uuid, self)
 
     def get_workflow_status(self, workflow_uuid: str) -> Optional[WorkflowStatus]:
         ctx = get_local_dbos_context()
