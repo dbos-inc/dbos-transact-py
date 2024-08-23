@@ -171,7 +171,7 @@ def _execute_workflow_wthread(
                 raise e
 
 
-def execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> WorkflowHandle[Any]:
+def _execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> WorkflowHandle[Any]:
     status = dbos.sys_db.get_workflow_status(workflow_uuid)
     if not status:
         raise DBOSRecoveryError(workflow_uuid, "Workflow status not found")

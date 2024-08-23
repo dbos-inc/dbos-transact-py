@@ -26,13 +26,13 @@ from opentelemetry.trace import Span
 
 from dbos.core import (
     _execute_workflow,
+    _execute_workflow_uuid,
     _execute_workflow_wthread,
     _init_workflow,
     _start_workflow,
     _workflow_wrapper,
     _WorkflowHandleFuture,
     _WorkflowHandlePolling,
-    execute_workflow_uuid,
 )
 from dbos.decorators import classproperty
 from dbos.recovery import recover_pending_workflows, startup_recovery_thread
@@ -601,7 +601,7 @@ class DBOS:
         """
         This function is used to execute a workflow by a UUID for recovery.
         """
-        return execute_workflow_uuid(self, workflow_uuid)
+        return _execute_workflow_uuid(self, workflow_uuid)
 
     def recover_pending_workflows(
         self, executor_ids: List[str] = ["local"]
