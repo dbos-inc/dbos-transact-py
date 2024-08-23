@@ -394,7 +394,7 @@ class DBOS:
                     return self._execute_workflow(status, func, *args, **kwargs)
                 except Exception as e:
                     DBOS.logger.error(
-                        f"Exception encountered in asynchronous workflow: {repr(e)}"
+                        f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
                     )
                     raise e
 
@@ -481,7 +481,9 @@ class DBOS:
                                             )
                                     output = func(*args, **kwargs)
                                     txn_output["output"] = utils.serialize(output)
-                                    assert ctx.sql_session is not None
+                                    assert (
+                                        ctx.sql_session is not None
+                                    ), "Cannot find a database connection"
                                     ApplicationDatabase.record_transaction_output(
                                         ctx.sql_session, txn_output
                                     )
@@ -518,7 +520,9 @@ class DBOS:
                 #  Not in a workflow (we will start the single op workflow)
                 ctx = get_local_dbos_context()
                 if ctx and ctx.is_within_workflow():
-                    assert ctx.is_workflow()
+                    assert (
+                        ctx.is_workflow()
+                    ), "Transactions must be called from within workflows"
                     with DBOSAssumeRole(rr):
                         return invoke_tx(*args, **kwargs)
                 else:
@@ -621,11 +625,17 @@ class DBOS:
             def wrapper(*args: Any, **kwargs: Any) -> Any:
                 rr: Optional[str] = check_required_roles(func, fi)
                 # Entering communicator is allowed:
+                #  In a communicator already, just call the original function directly.
                 #  In a workflow (that is not in a transaction / comm already)
                 #  Not in a workflow (we will start the single op workflow)
                 ctx = get_local_dbos_context()
+                if ctx and ctx.is_communicator():
+                    # Call the original function directly
+                    return func(*args, **kwargs)
                 if ctx and ctx.is_within_workflow():
-                    assert ctx.is_workflow()
+                    assert (
+                        ctx.is_workflow()
+                    ), "Communicators must be called from within workflows"
                     with DBOSAssumeRole(rr):
                         return invoke_comm(*args, **kwargs)
                 else:
@@ -701,7 +711,7 @@ class DBOS:
 
         ctx = get_local_dbos_context()
         if ctx and ctx.is_within_workflow():
-            assert ctx.is_workflow()
+            assert ctx.is_workflow(), "send() must be called from within a workflow"
             return do_send(destination_uuid, message, topic)
         else:
             wffn = self.workflow_info_map.get(TEMP_SEND_WF_NAME)
@@ -712,7 +722,7 @@ class DBOS:
         cur_ctx = get_local_dbos_context()
         if cur_ctx is not None:
             # Must call it within a workflow
-            assert cur_ctx.is_workflow()
+            assert cur_ctx.is_workflow(), "recv() must be called from within a workflow"
             attributes: TracedAttributes = {
                 "name": "recv",
             }
@@ -728,7 +738,7 @@ class DBOS:
                 )
         else:
             # Cannot call it from outside of a workflow
-            raise DBOSException("recv() must be called within a workflow")
+            raise DBOSException("recv() must be called from within a workflow")
 
     def sleep(self, seconds: float) -> None:
         attributes: TracedAttributes = {
@@ -743,7 +753,9 @@ class DBOS:
         cur_ctx = get_local_dbos_context()
         if cur_ctx is not None:
             # Must call it within a workflow
-            assert cur_ctx.is_workflow()
+            assert (
+                cur_ctx.is_workflow()
+            ), "set_event() must be called from within a workflow"
             attributes: TracedAttributes = {
                 "name": "set_event",
             }
@@ -753,7 +765,7 @@ class DBOS:
                 )
         else:
             # Cannot call it from outside of a workflow
-            raise DBOSException("set_event() must be called within a workflow")
+            raise DBOSException("set_event() must be called from within a workflow")
 
     def get_event(
         self, workflow_uuid: str, key: str, timeout_seconds: float = 60
@@ -761,7 +773,9 @@ class DBOS:
         cur_ctx = get_local_dbos_context()
         if cur_ctx is not None and cur_ctx.is_within_workflow():
             # Call it within a workflow
-            assert cur_ctx.is_workflow()
+            assert (
+                cur_ctx.is_workflow()
+            ), "get_event() must be called from within a workflow"
             attributes: TracedAttributes = {
                 "name": "get_event",
             }
@@ -868,7 +882,9 @@ class DBOS:
     @classproperty
     def sql_session(cls) -> Session:
         ctx = assert_current_dbos_context()
-        assert ctx.is_transaction()
+        assert (
+            ctx.is_transaction()
+        ), "sql_session is only available within a transaction."
         rv = ctx.sql_session
         assert rv
         return rv
@@ -876,13 +892,17 @@ class DBOS:
     @classproperty
     def workflow_id(cls) -> str:
         ctx = assert_current_dbos_context()
-        assert ctx.is_within_workflow()
+        assert (
+            ctx.is_within_workflow()
+        ), "workflow_id is only available within a workflow, transaction, or communicator."
         return ctx.workflow_uuid
 
     @classproperty
     def parent_workflow_id(cls) -> str:
         ctx = assert_current_dbos_context()
-        assert ctx.is_within_workflow()
+        assert (
+            ctx.is_within_workflow()
+        ), "parent_workflow_id is only available within a workflow."
         return ctx.parent_workflow_uuid
 
     @classproperty
