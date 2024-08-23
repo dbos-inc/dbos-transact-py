@@ -11,7 +11,6 @@ from .context import (
     TracedAttributes,
     assert_current_dbos_context,
 )
-from .logger import dbos_logger
 
 request_id_header = "x-request-id"
 

@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 import traceback
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from logging import Logger
 from typing import (

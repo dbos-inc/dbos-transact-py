@@ -7,8 +7,8 @@ from typing import Any
 
 import typer
 
+from dbos import load_config
 from dbos.application_database import ApplicationDatabase
-from dbos.dbos_config import load_config
 from dbos.system_database import SystemDatabase
 
 app = typer.Typer()

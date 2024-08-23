@@ -9,8 +9,11 @@ import urllib.request
 
 import sqlalchemy as sa
 
-# Private API because this is a test
-from dbos.dbos_config import load_config
+# Public API
+from dbos import load_config
+
+# Private API because this is a unit test
+pass
 
 
 def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:

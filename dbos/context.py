@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import uuid
 from contextvars import ContextVar
-from dataclasses import dataclass
 from enum import Enum
 from types import TracebackType
 from typing import TYPE_CHECKING, List, Literal, Optional, Type, TypedDict
