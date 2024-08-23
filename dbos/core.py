@@ -5,9 +5,9 @@ from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
 
 if sys.version_info < (3, 10):
-    from typing_extensions import ParamSpec, TypeAlias
+    from typing_extensions import ParamSpec
 else:
-    from typing import ParamSpec, TypeAlias
+    from typing import ParamSpec
 
 from dbos import utils
 from dbos.context import (
