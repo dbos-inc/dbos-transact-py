@@ -42,11 +42,11 @@ def config_logger(config: ConfigFile) -> None:
         if log_level is not None:
             dbos_logger.setLevel(log_level)
         console_handler = logging.StreamHandler()
-        console_formatter = logging.Formatter(
+        dbos_formatter = logging.Formatter(
             "%(asctime)s [%(levelname)8s] (%(name)s:%(filename)s:%(lineno)s) %(message)s",
             datefmt="%H:%M:%S",
         )
-        console_handler.setFormatter(console_formatter)
+        console_handler.setFormatter(dbos_formatter)
         dbos_logger.addHandler(console_handler)
 
         otlp_logs_endpoint = (
@@ -69,6 +69,7 @@ def config_logger(config: ConfigFile) -> None:
                 )
             )
             otlp_handler = LoggingHandler(logger_provider=log_provider)
+            otlp_handler.setFormatter(dbos_formatter)
             dbos_logger.addHandler(otlp_handler)
 
             # Attach DBOS-specific attributes to all log entries.
