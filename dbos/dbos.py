@@ -5,13 +5,16 @@ import sys
 import threading
 import time
 import traceback
+from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from functools import wraps
 from logging import Logger
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Generic,
     List,
     Literal,
     Optional,
@@ -71,7 +74,6 @@ from dbos.error import (
     DBOSException,
     DBOSNonExistentWorkflowError,
 )
-from dbos.workflow import WorkflowHandle, WorkflowStatus
 
 from .application_database import ApplicationDatabase, TransactionResultInternal
 from .dbos_config import ConfigFile, load_config
@@ -637,6 +639,29 @@ class DBOS:
     def request(cls) -> Optional["Request"]:
         ctx = assert_current_dbos_context()
         return ctx.request
+
+
+@dataclass
+class WorkflowStatus:
+    workflow_uuid: str
+    status: str
+    name: str
+    class_name: Optional[str]
+    config_name: Optional[str]
+    authenticated_user: Optional[str]
+    assumed_role: Optional[str]
+    authenticatedRoles: Optional[List[str]]
+    recovery_attempts: Optional[int]
+
+
+class WorkflowHandle(Generic[R], Protocol):
+    def __init__(self, workflow_uuid: str) -> None: ...
+
+    workflow_uuid: str
+
+    def get_workflow_uuid(self) -> str: ...
+    def get_result(self) -> R: ...
+    def get_status(self) -> WorkflowStatus: ...
 
 
 class DBOSConfiguredInstance:

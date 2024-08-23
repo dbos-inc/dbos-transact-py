@@ -6,10 +6,9 @@ from typing import TYPE_CHECKING, Any, List
 
 from dbos.context import SetWorkflowRecovery
 from dbos.error import DBOSWorkflowFunctionNotFoundError
-from dbos.workflow import WorkflowHandle
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS
+    from dbos.dbos import DBOS, WorkflowHandle
 
 
 def startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
@@ -35,8 +34,8 @@ def startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
 
 def recover_pending_workflows(
     dbos: "DBOS", executor_ids: List[str] = ["local"]
-) -> List[WorkflowHandle[Any]]:
-    workflow_handles: List[WorkflowHandle[Any]] = []
+) -> List["WorkflowHandle[Any]"]:
+    workflow_handles: List["WorkflowHandle[Any]"] = []
     for executor_id in executor_ids:
         if executor_id == "local" and os.environ.get("DBOS__VMID"):
             dbos.logger.debug(

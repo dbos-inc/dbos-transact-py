@@ -2,7 +2,7 @@ import sys
 import traceback
 from concurrent.futures import Future
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec, TypeAlias
@@ -38,44 +38,49 @@ from dbos.registrations import (
 )
 from dbos.roles import check_required_roles
 from dbos.system_database import WorkflowInputs, WorkflowStatusInternal
-from dbos.workflow import WorkflowHandle, WorkflowStatus
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS, Workflow
+    from dbos.dbos import DBOS, Workflow, WorkflowHandle, WorkflowStatus
 
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-class _WorkflowHandleFuture(WorkflowHandle[R]):
+class _WorkflowHandleFuture(Generic[R]):
 
     def __init__(self, workflow_uuid: str, future: Future[R], dbos: "DBOS"):
-        super().__init__(workflow_uuid)
+        self.workflow_uuid = workflow_uuid
         self.future = future
         self.dbos = dbos
+
+    def get_workflow_uuid(self) -> str:
+        return self.workflow_uuid
 
     def get_result(self) -> R:
         return self.future.result()
 
-    def get_status(self) -> WorkflowStatus:
+    def get_status(self) -> "WorkflowStatus":
         stat = self.dbos.get_workflow_status(self.workflow_uuid)
         if stat is None:
             raise DBOSNonExistentWorkflowError(self.workflow_uuid)
         return stat
 
 
-class _WorkflowHandlePolling(WorkflowHandle[R]):
+class _WorkflowHandlePolling(Generic[R]):
 
     def __init__(self, workflow_uuid: str, dbos: "DBOS"):
-        super().__init__(workflow_uuid)
+        self.workflow_uuid = workflow_uuid
         self.dbos = dbos
+
+    def get_workflow_uuid(self) -> str:
+        return self.workflow_uuid
 
     def get_result(self) -> R:
         res: R = self.dbos.sys_db.await_workflow_result(self.workflow_uuid)
         return res
 
-    def get_status(self) -> WorkflowStatus:
+    def get_status(self) -> "WorkflowStatus":
         stat = self.dbos.get_workflow_status(self.workflow_uuid)
         if stat is None:
             raise DBOSNonExistentWorkflowError(self.workflow_uuid)
@@ -130,7 +135,7 @@ def _execute_workflow(
         output = func(*args, **kwargs)
     except DBOSWorkflowConflictUUIDError:
         # Retrieve the workflow handle and wait for the result.
-        wf_handle: WorkflowHandle[R] = dbos.retrieve_workflow(status["workflow_uuid"])
+        wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(status["workflow_uuid"])
         output = wf_handle.get_result()
         return output
     except Exception as error:
@@ -168,7 +173,7 @@ def _execute_workflow_wthread(
                 raise e
 
 
-def _execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> WorkflowHandle[Any]:
+def _execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> "WorkflowHandle[Any]":
     status = dbos.sys_db.get_workflow_status(workflow_uuid)
     if not status:
         raise DBOSRecoveryError(workflow_uuid, "Workflow status not found")
@@ -276,7 +281,7 @@ def _start_workflow(
     func: "Workflow[P, R]",
     *args: P.args,
     **kwargs: P.kwargs,
-) -> WorkflowHandle[R]:
+) -> "WorkflowHandle[R]":
     fself: Optional[object] = None
     if hasattr(func, "__self__"):
         fself = func.__self__
