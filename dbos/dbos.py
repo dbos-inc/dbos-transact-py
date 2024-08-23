@@ -24,6 +24,7 @@ from typing import (
 
 from opentelemetry.trace import Span
 
+from dbos.helpers.core import _WorkflowHandleFuture, _WorkflowHandlePolling
 from dbos.helpers.decorators import classproperty
 from dbos.helpers.recovery import startup_recovery_thread
 from dbos.helpers.registrations import (
@@ -116,40 +117,6 @@ class DBOSCallProtocol(Protocol[P, R]):
 Workflow: TypeAlias = DBOSCallProtocol[P, R]
 
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
-
-
-class _WorkflowHandleFuture(WorkflowHandle[R]):
-
-    def __init__(self, workflow_uuid: str, future: Future[R], dbos: DBOS):
-        super().__init__(workflow_uuid)
-        self.future = future
-        self.dbos = dbos
-
-    def get_result(self) -> R:
-        return self.future.result()
-
-    def get_status(self) -> WorkflowStatus:
-        stat = self.dbos.get_workflow_status(self.workflow_uuid)
-        if stat is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_uuid)
-        return stat
-
-
-class _WorkflowHandlePolling(WorkflowHandle[R]):
-
-    def __init__(self, workflow_uuid: str, dbos: DBOS):
-        super().__init__(workflow_uuid)
-        self.dbos = dbos
-
-    def get_result(self) -> R:
-        res: R = self.dbos.sys_db.await_workflow_result(self.workflow_uuid)
-        return res
-
-    def get_status(self) -> WorkflowStatus:
-        stat = self.dbos.get_workflow_status(self.workflow_uuid)
-        if stat is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_uuid)
-        return stat
 
 
 IsolationLevel = Literal[
