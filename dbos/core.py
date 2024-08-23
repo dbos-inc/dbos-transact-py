@@ -1,17 +1,30 @@
 import traceback
 from concurrent.futures import Future
-from typing import TYPE_CHECKING, Any, Optional, ParamSpec, TypeVar
+from functools import wraps
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Optional,
+    ParamSpec,
+    Tuple,
+    TypeVar,
+    cast,
+)
 
 from dbos import utils
 from dbos.context import (
+    DBOSAssumeRole,
     DBOSContext,
     DBOSContextEnsure,
     DBOSContextSwap,
+    EnterDBOSChildWorkflow,
     EnterDBOSWorkflow,
     OperationType,
     SetWorkflowUUID,
     TracedAttributes,
     assert_current_dbos_context,
+    get_local_dbos_context,
 )
 from dbos.error import (
     DBOSNonExistentWorkflowError,
@@ -19,6 +32,14 @@ from dbos.error import (
     DBOSWorkflowConflictUUIDError,
     DBOSWorkflowFunctionNotFoundError,
 )
+from dbos.registrations import (
+    get_config_name,
+    get_dbos_class_name,
+    get_dbos_func_name,
+    get_func_info,
+    get_or_create_func_info,
+)
+from dbos.roles import check_required_roles
 from dbos.system_database import WorkflowInputs, WorkflowStatusInternal
 from dbos.workflow import WorkflowHandle, WorkflowStatus
 
@@ -27,6 +48,7 @@ if TYPE_CHECKING:
 
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 class _WorkflowHandleFuture(WorkflowHandle[R]):
@@ -175,7 +197,8 @@ def execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> WorkflowHandle[An
                     f"Cannot execute workflow because instance '{iname}' is not registered",
                 )
             with SetWorkflowUUID(workflow_uuid):
-                return dbos.start_workflow(
+                return _start_workflow(
+                    dbos,
                     wf_func,
                     dbos.instance_info_map[iname],
                     *inputs["args"],
@@ -189,7 +212,8 @@ def execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> WorkflowHandle[An
                     f"Cannot execute workflow because class '{class_name}' is not registered",
                 )
             with SetWorkflowUUID(workflow_uuid):
-                return dbos.start_workflow(
+                return _start_workflow(
+                    dbos,
                     wf_func,
                     dbos.class_info_map[class_name],
                     *inputs["args"],
@@ -197,4 +221,135 @@ def execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> WorkflowHandle[An
                 )
         else:
             with SetWorkflowUUID(workflow_uuid):
-                return dbos.start_workflow(wf_func, *inputs["args"], **inputs["kwargs"])
+                return _start_workflow(
+                    dbos, wf_func, *inputs["args"], **inputs["kwargs"]
+                )
+
+
+def _workflow_wrapper(dbos: "DBOS", func: F) -> F:
+    func.__orig_func = func  # type: ignore
+
+    fi = get_or_create_func_info(func)
+
+    @wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        rr: Optional[str] = check_required_roles(func, fi)
+        attributes: TracedAttributes = {
+            "name": func.__name__,
+            "operationType": OperationType.WORKFLOW.value,
+        }
+        inputs: WorkflowInputs = {
+            "args": args,
+            "kwargs": kwargs,
+        }
+        ctx = get_local_dbos_context()
+        if ctx and ctx.is_workflow():
+            with EnterDBOSChildWorkflow(attributes), DBOSAssumeRole(rr):
+                ctx = assert_current_dbos_context()  # Now the child ctx
+                status = _init_workflow(
+                    dbos,
+                    ctx,
+                    inputs=inputs,
+                    wf_name=get_dbos_func_name(func),
+                    class_name=get_dbos_class_name(fi, func, args),
+                    config_name=get_config_name(fi, func, args),
+                )
+
+                return _execute_workflow(dbos, status, func, *args, **kwargs)
+        else:
+            with EnterDBOSWorkflow(attributes), DBOSAssumeRole(rr):
+                ctx = assert_current_dbos_context()
+                status = _init_workflow(
+                    dbos,
+                    ctx,
+                    inputs=inputs,
+                    wf_name=get_dbos_func_name(func),
+                    class_name=get_dbos_class_name(fi, func, args),
+                    config_name=get_config_name(fi, func, args),
+                )
+
+                return _execute_workflow(dbos, status, func, *args, **kwargs)
+
+    wrapped_func = cast(F, wrapper)
+    return wrapped_func
+
+
+def _start_workflow(
+    dbos: "DBOS",
+    func: "Workflow[P, R]",
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> WorkflowHandle[R]:
+    fself: Optional[object] = None
+    if hasattr(func, "__self__"):
+        fself = func.__self__
+
+    fi = get_func_info(func)
+    if fi is None:
+        raise DBOSWorkflowFunctionNotFoundError(
+            "<NONE>", f"start_workflow: function {func.__name__} is not registered"
+        )
+
+    func = cast("Workflow[P, R]", func.__orig_func)  # type: ignore
+
+    inputs: WorkflowInputs = {
+        "args": args,
+        "kwargs": kwargs,
+    }
+
+    # Sequence of events for starting a workflow:
+    #   First - is there a WF already running?
+    #      (and not in tx/comm as that is an error)
+    #   Assign an ID to the workflow, if it doesn't have an app-assigned one
+    #      If this is a root workflow, assign a new UUID
+    #      If this is a child workflow, assign parent wf id with call# suffix
+    #   Make a (system) DB record for the workflow
+    #   Pass the new context to a worker thread that will run the wf function
+    cur_ctx = get_local_dbos_context()
+    if cur_ctx is not None and cur_ctx.is_within_workflow():
+        assert cur_ctx.is_workflow()  # Not in tx / comm
+        cur_ctx.function_id += 1
+        if len(cur_ctx.id_assigned_for_next_workflow) == 0:
+            cur_ctx.id_assigned_for_next_workflow = (
+                cur_ctx.workflow_uuid + "-" + str(cur_ctx.function_id)
+            )
+
+    new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
+    new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
+    new_wf_uuid = new_wf_ctx.id_assigned_for_next_workflow
+
+    gin_args: Tuple[Any, ...] = args
+    if fself is not None:
+        gin_args = (fself,)
+
+    status = _init_workflow(
+        dbos,
+        new_wf_ctx,
+        inputs=inputs,
+        wf_name=get_dbos_func_name(func),
+        class_name=get_dbos_class_name(fi, func, gin_args),
+        config_name=get_config_name(fi, func, gin_args),
+    )
+
+    if fself is not None:
+        future = dbos.executor.submit(
+            cast(Callable[..., R], _execute_workflow_wthread),
+            dbos,
+            status,
+            func,
+            new_wf_ctx,
+            fself,
+            *args,
+            **kwargs,
+        )
+    else:
+        future = dbos.executor.submit(
+            cast(Callable[..., R], _execute_workflow_wthread),
+            dbos,
+            status,
+            func,
+            new_wf_ctx,
+            *args,
+            **kwargs,
+        )
+    return _WorkflowHandleFuture(new_wf_uuid, future, dbos)
