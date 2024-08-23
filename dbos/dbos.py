@@ -16,7 +16,6 @@ from typing import (
     Literal,
     Optional,
     Protocol,
-    Tuple,
     Type,
     TypeVar,
     cast,
@@ -25,23 +24,16 @@ from typing import (
 from opentelemetry.trace import Span
 
 from dbos.core import (
-    _execute_workflow,
     _execute_workflow_uuid,
-    _execute_workflow_wthread,
-    _init_workflow,
     _start_workflow,
     _workflow_wrapper,
-    _WorkflowHandleFuture,
     _WorkflowHandlePolling,
 )
 from dbos.decorators import classproperty
 from dbos.recovery import recover_pending_workflows, startup_recovery_thread
 from dbos.registrations import (
     DBOSClassInfo,
-    get_config_name,
-    get_dbos_class_name,
     get_dbos_func_name,
-    get_func_info,
     get_or_create_class_info,
     get_or_create_func_info,
     set_dbos_func_name,
@@ -67,11 +59,8 @@ import dbos.utils as utils
 from dbos.admin_sever import AdminServer
 from dbos.context import (
     DBOSAssumeRole,
-    DBOSContext,
-    EnterDBOSChildWorkflow,
     EnterDBOSCommunicator,
     EnterDBOSTransaction,
-    EnterDBOSWorkflow,
     OperationType,
     TracedAttributes,
     assert_current_dbos_context,
@@ -81,7 +70,6 @@ from dbos.error import (
     DBOSCommunicatorMaxRetriesExceededError,
     DBOSException,
     DBOSNonExistentWorkflowError,
-    DBOSWorkflowFunctionNotFoundError,
 )
 from dbos.workflow import WorkflowHandle, WorkflowStatus
 
@@ -92,7 +80,6 @@ from .system_database import (
     GetEventWorkflowContext,
     OperationResultInternal,
     SystemDatabase,
-    WorkflowInputs,
 )
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
