@@ -28,8 +28,6 @@ from dbos.helpers.decorators import classproperty
 from dbos.helpers.recovery import startup_recovery_thread
 from dbos.helpers.registrations import (
     DBOSClassInfo,
-    DBOSFuncInfo,
-    get_class_info_for_func,
     get_config_name,
     get_dbos_class_name,
     get_dbos_func_name,
@@ -43,7 +41,7 @@ from dbos.helpers.roles import (
     default_required_roles,
     required_roles,
 )
-from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled, scheduler_loop
+from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled
 
 from .tracer import dbos_tracer
 
@@ -81,7 +79,6 @@ from dbos.error import (
     DBOSCommunicatorMaxRetriesExceededError,
     DBOSException,
     DBOSNonExistentWorkflowError,
-    DBOSNotAuthorizedError,
     DBOSRecoveryError,
     DBOSWorkflowConflictUUIDError,
     DBOSWorkflowFunctionNotFoundError,
