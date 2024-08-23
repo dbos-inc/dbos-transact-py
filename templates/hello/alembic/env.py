@@ -4,7 +4,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import URL, engine_from_config, pool
 
-from dbos.dbos_config import load_config
+from dbos import load_config
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

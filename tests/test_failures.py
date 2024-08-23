@@ -2,6 +2,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 
+# Public API
 from dbos import DBOS
 
 

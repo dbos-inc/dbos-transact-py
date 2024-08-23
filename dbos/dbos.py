@@ -1,42 +1,50 @@
 from __future__ import annotations
 
-import inspect
 import os
 import sys
 import threading
 import time
 import traceback
-import types
-from concurrent.futures import Future, ThreadPoolExecutor
-from enum import Enum
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from logging import Logger
-from types import FunctionType
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    Generic,
     List,
     Literal,
     Optional,
     Protocol,
     Tuple,
     Type,
-    TypedDict,
     TypeVar,
     cast,
-    overload,
 )
 
 from opentelemetry.trace import Span
 
-from dbos.scheduler.scheduler import ScheduledWorkflow, scheduler_loop
+from dbos.core import _WorkflowHandleFuture, _WorkflowHandlePolling
+from dbos.decorators import classproperty
+from dbos.recovery import startup_recovery_thread
+from dbos.registrations import (
+    DBOSClassInfo,
+    get_config_name,
+    get_dbos_class_name,
+    get_dbos_func_name,
+    get_func_info,
+    get_or_create_class_info,
+    get_or_create_func_info,
+    set_dbos_func_name,
+)
+from dbos.roles import check_required_roles, default_required_roles, required_roles
+from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled
 
 from .tracer import dbos_tracer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+    from .fastapi import Request
 
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
@@ -68,7 +76,6 @@ from dbos.error import (
     DBOSCommunicatorMaxRetriesExceededError,
     DBOSException,
     DBOSNonExistentWorkflowError,
-    DBOSNotAuthorizedError,
     DBOSRecoveryError,
     DBOSWorkflowConflictUUIDError,
     DBOSWorkflowFunctionNotFoundError,
@@ -85,9 +92,6 @@ from .system_database import (
     WorkflowInputs,
     WorkflowStatusInternal,
 )
-
-if TYPE_CHECKING:
-    from .fastapi import Request
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
@@ -111,242 +115,11 @@ Workflow: TypeAlias = DBOSCallProtocol[P, R]
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
 
-def get_dbos_func_name(f: Any) -> str:
-    if hasattr(f, "dbos_function_name"):
-        return str(getattr(f, "dbos_function_name"))
-    if hasattr(f, "__qualname__"):
-        return str(getattr(f, "__qualname__"))
-    return "<unknown>"
-
-
-def set_dbos_func_name(f: Any, name: str) -> None:
-    setattr(f, "dbos_function_name", name)
-
-
-class WorkflowInputContext(TypedDict):
-    workflow_uuid: str
-
-
-G = TypeVar("G")  # A generic type for ClassPropertyDescriptor getters
-
-
-class ClassPropertyDescriptor(Generic[G]):
-    def __init__(self, fget: Callable[..., G]) -> None:
-        self.fget = fget
-
-    def __get__(self, obj: Any, objtype: Optional[Any] = None) -> G:
-        if objtype is None:
-            objtype = type(obj)
-        if self.fget is None:
-            raise AttributeError("unreadable attribute")
-        return self.fget(objtype)
-
-
-def classproperty(func: Callable[..., G]) -> ClassPropertyDescriptor[G]:
-    return ClassPropertyDescriptor(func)
-
-
-class WorkflowHandleFuture(WorkflowHandle[R]):
-
-    def __init__(self, workflow_uuid: str, future: Future[R], dbos: DBOS):
-        super().__init__(workflow_uuid)
-        self.future = future
-        self.dbos = dbos
-
-    def get_result(self) -> R:
-        return self.future.result()
-
-    def get_status(self) -> WorkflowStatus:
-        stat = self.dbos.get_workflow_status(self.workflow_uuid)
-        if stat is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_uuid)
-        return stat
-
-
-class PollingWorkflowHandle(WorkflowHandle[R]):
-
-    def __init__(self, workflow_uuid: str, dbos: DBOS):
-        super().__init__(workflow_uuid)
-        self.dbos = dbos
-
-    def get_result(self) -> R:
-        res: R = self.dbos.sys_db.await_workflow_result(self.workflow_uuid)
-        return res
-
-    def get_status(self) -> WorkflowStatus:
-        stat = self.dbos.get_workflow_status(self.workflow_uuid)
-        if stat is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_uuid)
-        return stat
-
-
 IsolationLevel = Literal[
     "SERIALIZABLE",
     "REPEATABLE READ",
     "READ COMMITTED",
 ]
-
-
-class DBOSClassInfo:
-    def __init__(self) -> None:
-        self.def_required_roles: Optional[List[str]] = None
-
-
-class DBOSFuncType(Enum):
-    Unknown = 0
-    Bare = 1
-    Static = 2
-    Class = 3
-    Instance = 4
-
-
-class DBOSFuncInfo:
-    def __init__(self) -> None:
-        self.class_info: Optional[DBOSClassInfo] = None
-        self.func_type: DBOSFuncType = DBOSFuncType.Unknown
-        self.required_roles: Optional[List[str]] = None
-
-
-def get_or_create_class_info(cls: Type[Any]) -> DBOSClassInfo:
-    if hasattr(cls, "dbos_class_decorator_info"):
-        ci: DBOSClassInfo = getattr(cls, "dbos_class_decorator_info")
-        return ci
-    ci = DBOSClassInfo()
-    setattr(cls, "dbos_class_decorator_info", ci)
-
-    # Tell all DBOS functions about this
-    for name, attribute in cls.__dict__.items():
-        # Check if the attribute is a function or method
-        if isinstance(attribute, (FunctionType, staticmethod, classmethod)):
-            dbft = DBOSFuncType.Unknown
-            if isinstance(attribute, staticmethod):
-                attribute = attribute.__func__
-                dbft = DBOSFuncType.Static
-            elif isinstance(attribute, classmethod):
-                attribute = attribute.__func__
-                dbft = DBOSFuncType.Class
-            elif isinstance(attribute, FunctionType):
-                dbft = DBOSFuncType.Instance
-
-            # Walk down the __wrapped__ chain
-            wrapped = attribute
-            while True:
-                # Annotate based on the type
-                if hasattr(wrapped, "dbos_func_decorator_info"):
-                    fi: DBOSFuncInfo = getattr(wrapped, "dbos_func_decorator_info")
-                    fi.class_info = ci
-                    fi.func_type = dbft
-
-                if not hasattr(wrapped, "__wrapped__"):
-                    break
-                wrapped = wrapped.__wrapped__
-
-    return ci
-
-
-def get_func_info(func: Callable[..., Any]) -> Optional[DBOSFuncInfo]:
-    while True:
-        if hasattr(func, "dbos_func_decorator_info"):
-            fi: DBOSFuncInfo = getattr(func, "dbos_func_decorator_info")
-            return fi
-        if not hasattr(func, "__wrapped__"):
-            break
-        func = func.__wrapped__
-    return None
-
-
-def get_or_create_func_info(func: Callable[..., Any]) -> DBOSFuncInfo:
-    fi = get_func_info(func)
-    if fi is not None:
-        return fi
-
-    fi = DBOSFuncInfo()
-    setattr(func, "dbos_func_decorator_info", fi)
-    return fi
-
-
-def get_class_info(cls: Type[Any]) -> Optional[DBOSClassInfo]:
-    if hasattr(cls, "dbos_class_decorator_info"):
-        ci: DBOSClassInfo = getattr(cls, "dbos_class_decorator_info")
-        return ci
-    return None
-
-
-def get_class_info_for_func(fi: Optional[DBOSFuncInfo]) -> Optional[DBOSClassInfo]:
-    if fi and fi.class_info:
-        return fi.class_info
-
-    # Bare function or function on something else
-    return None
-
-
-def get_config_name(
-    fi: Optional[DBOSFuncInfo], func: Callable[..., Any], args: Tuple[Any, ...]
-) -> Optional[str]:
-    if fi and fi.func_type != DBOSFuncType.Unknown and len(args) > 0:
-        if fi.func_type == DBOSFuncType.Instance:
-            first_arg = args[0]
-            if hasattr(first_arg, "config_name"):
-                iname: str = getattr(first_arg, "config_name")
-                return str(iname)
-            else:
-                raise Exception(
-                    "Function target appears to be a class instance, but does not have `config_name` set"
-                )
-        return None
-
-    # Check for improperly-registered functions
-    if len(args) > 0:
-        first_arg = args[0]
-        if isinstance(first_arg, type):
-            raise Exception(
-                "Function target appears to be a class, but is not properly registered"
-            )
-        else:
-            # Check if the function signature has "self" as the first parameter name
-            #   This is not 100% reliable but it is better than nothing for detecting footguns
-            sig = inspect.signature(func)
-            parameters = list(sig.parameters.values())
-            if parameters and parameters[0].name == "self":
-                raise Exception(
-                    "Function target appears to be a class instance, but is not properly registered"
-                )
-
-    # Bare function or function on something else
-    return None
-
-
-def get_dbos_class_name(
-    fi: Optional[DBOSFuncInfo], func: Callable[..., Any], args: Tuple[Any, ...]
-) -> Optional[str]:
-    if fi and fi.func_type != DBOSFuncType.Unknown and len(args) > 0:
-        if fi.func_type == DBOSFuncType.Instance:
-            first_arg = args[0]
-            return str(first_arg.__class__.__name__)
-        if fi.func_type == DBOSFuncType.Class:
-            first_arg = args[0]
-            return str(first_arg.__name__)
-        return None
-
-    # Check for improperly-registered functions
-    if len(args) > 0:
-        first_arg = args[0]
-        if isinstance(first_arg, type):
-            raise Exception(
-                "Function target appears to be a class, but is not properly registered"
-            )
-        else:
-            # Check if the function signature has "self" as the first parameter name
-            #   This is not 100% reliable but it is better than nothing for detecting footguns
-            sig = inspect.signature(func)
-            parameters = list(sig.parameters.values())
-            if parameters and parameters[0].name == "self":
-                raise Exception(
-                    "Function target appears to be a class instance, but is not properly registered"
-                )
-
-    # Bare function or function on something else
-    return None
 
 
 class DBOS:
@@ -373,7 +146,7 @@ class DBOS:
             setup_fastapi_middleware(fastapi)
         if not os.environ.get("DBOS__VMID"):
             workflow_ids = self.sys_db.get_pending_workflows("local")
-            self.executor.submit(self._startup_recovery_thread, workflow_ids)
+            self.executor.submit(startup_recovery_thread, self, workflow_ids)
 
         # Listen to notifications
         self.executor.submit(self.sys_db._notification_listener)
@@ -406,7 +179,7 @@ class DBOS:
 
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            rr: Optional[str] = DBOS._check_required_roles(func, args, fi)
+            rr: Optional[str] = check_required_roles(func, fi)
             attributes: TracedAttributes = {
                 "name": func.__name__,
                 "operationType": OperationType.WORKFLOW.value,
@@ -530,7 +303,7 @@ class DBOS:
                 *args,
                 **kwargs,
             )
-        return WorkflowHandleFuture(new_wf_uuid, future, self)
+        return _WorkflowHandleFuture(new_wf_uuid, future, self)
 
     def retrieve_workflow(
         self, workflow_uuid: str, existing_workflow: bool = True
@@ -539,7 +312,7 @@ class DBOS:
             stat = self.get_workflow_status(workflow_uuid)
             if stat is None:
                 raise DBOSNonExistentWorkflowError(workflow_uuid)
-        return PollingWorkflowHandle(workflow_uuid, self)
+        return _WorkflowHandlePolling(workflow_uuid, self)
 
     def get_workflow_status(self, workflow_uuid: str) -> Optional[WorkflowStatus]:
         ctx = get_local_dbos_context()
@@ -739,7 +512,7 @@ class DBOS:
 
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                rr: Optional[str] = DBOS._check_required_roles(func, args, fi)
+                rr: Optional[str] = check_required_roles(func, fi)
                 # Entering transaction is allowed:
                 #  In a workflow (that is not in a transaction / comm already)
                 #  Not in a workflow (we will start the single op workflow)
@@ -846,7 +619,7 @@ class DBOS:
 
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                rr: Optional[str] = DBOS._check_required_roles(func, args, fi)
+                rr: Optional[str] = check_required_roles(func, fi)
                 # Entering communicator is allowed:
                 #  In a workflow (that is not in a transaction / comm already)
                 #  Not in a workflow (we will start the single op workflow)
@@ -891,17 +664,6 @@ class DBOS:
         else:
             self.class_info_map[class_name] = cls
 
-    def default_required_roles(
-        self, roles: List[str]
-    ) -> Callable[[Type[Any]], Type[Any]]:
-        def set_roles(cls: Type[Any]) -> Type[Any]:
-            ci = get_or_create_class_info(cls)
-            self.register_class(cls, ci)
-            ci.def_required_roles = roles
-            return cls
-
-        return set_roles
-
     def dbos_class(self) -> Callable[[Type[Any]], Type[Any]]:
         def create_class_info(cls: Type[Any]) -> Type[Any]:
             ci = get_or_create_class_info(cls)
@@ -910,53 +672,16 @@ class DBOS:
 
         return create_class_info
 
-    @staticmethod
-    def _check_required_roles(
-        func: Callable[..., Any], args: Tuple[Any, ...], fi: Optional[DBOSFuncInfo]
-    ) -> Optional[str]:
-        # Check required roles
-        required_roles: Optional[List[str]] = None
-        # First, we need to know if this has class info and func info
-        ci = get_class_info_for_func(fi)
-        if ci is not None:
-            required_roles = ci.def_required_roles
-        if fi and fi.required_roles is not None:
-            required_roles = fi.required_roles
+    def default_required_roles(
+        self, roles: List[str]
+    ) -> Callable[[Type[Any]], Type[Any]]:
+        return default_required_roles(self, roles)
 
-        if required_roles is None or len(required_roles) == 0:
-            return None  # Nothing to check
+    def required_roles(self, roles: List[str]) -> Callable[[F], F]:
+        return required_roles(roles)
 
-        ctx = get_local_dbos_context()
-        if ctx is None or ctx.authenticated_roles is None:
-            raise DBOSNotAuthorizedError(
-                f"Function {func.__name__} requires a role, but was called in a context without authentication information"
-            )
-
-        for r in required_roles:
-            if r in ctx.authenticated_roles:
-                return r
-
-        raise DBOSNotAuthorizedError(
-            f"Function {func.__name__} has required roles, but user is not authenticated for any of them"
-        )
-
-    def required_roles(
-        self,
-        roles: List[str],
-    ) -> Callable[[F], F]:
-        def set_roles(func: F) -> F:
-            fi = get_or_create_func_info(func)
-            fi.required_roles = roles
-
-            @wraps(func)
-            def wrapper(*args: Any, **kwargs: Any) -> Any:
-                rr: Optional[str] = DBOS._check_required_roles(func, args, fi)
-                with DBOSAssumeRole(rr):
-                    return func(*args, **kwargs)
-
-            return cast(F, wrapper)
-
-        return set_roles
+    def scheduled(self, cron: str) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
+        return scheduled(self, cron)
 
     def send(
         self, destination_uuid: str, message: Any, topic: Optional[str] = None
@@ -1054,15 +779,6 @@ class DBOS:
         else:
             # Directly call it outside of a workflow
             return self.sys_db.get_event(workflow_uuid, key, timeout_seconds)
-
-    def scheduled(self, cron: str) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
-        def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
-            stop_event = threading.Event()
-            self.stop_events.append(stop_event)
-            self.executor.submit(scheduler_loop, func, cron, stop_event)
-            return func
-
-        return decorator
 
     def execute_workflow_uuid(self, workflow_uuid: str) -> WorkflowHandle[Any]:
         """
@@ -1178,26 +894,6 @@ class DBOS:
     def request(cls) -> Optional["Request"]:
         ctx = assert_current_dbos_context()
         return ctx.request
-
-    def _startup_recovery_thread(self, workflow_ids: List[str]) -> None:
-        """
-        A background thread that attempts to recover local pending workflows on startup.
-        """
-        stop_event = threading.Event()
-        self.stop_events.append(stop_event)
-        while not stop_event.is_set() and len(workflow_ids) > 0:
-            try:
-                for workflowID in list(workflow_ids):
-                    with SetWorkflowRecovery():
-                        self.execute_workflow_uuid(workflowID)
-                    workflow_ids.remove(workflowID)
-            except DBOSWorkflowFunctionNotFoundError:
-                time.sleep(1)
-            except Exception as e:
-                dbos_logger.error(
-                    f"Exception encountered when recovering workflows: {repr(e)}"
-                )
-                raise e
 
 
 class DBOSConfiguredInstance:
