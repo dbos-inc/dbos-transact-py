@@ -24,10 +24,10 @@ from typing import (
 
 from opentelemetry.trace import Span
 
-from dbos.helpers.core import _WorkflowHandleFuture, _WorkflowHandlePolling
-from dbos.helpers.decorators import classproperty
-from dbos.helpers.recovery import startup_recovery_thread
-from dbos.helpers.registrations import (
+from dbos.core import _WorkflowHandleFuture, _WorkflowHandlePolling
+from dbos.decorators import classproperty
+from dbos.recovery import startup_recovery_thread
+from dbos.registrations import (
     DBOSClassInfo,
     get_config_name,
     get_dbos_class_name,
@@ -37,11 +37,7 @@ from dbos.helpers.registrations import (
     get_or_create_func_info,
     set_dbos_func_name,
 )
-from dbos.helpers.roles import (
-    check_required_roles,
-    default_required_roles,
-    required_roles,
-)
+from dbos.roles import check_required_roles, default_required_roles, required_roles
 from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled
 
 from .tracer import dbos_tracer

@@ -16,7 +16,7 @@ from dbos.error import DBOSNotAuthorizedError
 if TYPE_CHECKING:
     from dbos.dbos import DBOS
 from dbos.context import DBOSAssumeRole, get_local_dbos_context
-from dbos.helpers.registrations import (
+from dbos.registrations import (
     DBOSFuncInfo,
     get_class_info_for_func,
     get_or_create_class_info,
