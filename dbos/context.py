@@ -88,6 +88,7 @@ class DBOSContext:
             if self.authenticated_roles is not None
             else None
         )
+        rv.request = self.request
         rv.assumed_role = self.assumed_role
         return rv
 

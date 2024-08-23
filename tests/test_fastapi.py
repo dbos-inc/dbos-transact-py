@@ -14,7 +14,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     client = TestClient(app)
 
     @app.get("/endpoint/{var1}/{var2}")
-    def test_endpoint(var1: str, var2: str):
+    def test_endpoint(var1: str, var2: str) -> str:
         result = test_workflow(var1, var2)
         ctx = assert_current_dbos_context()
         assert not ctx.is_within_workflow()
@@ -52,7 +52,7 @@ def test_start_workflow(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     client = TestClient(app)
 
     @app.get("/{var1}/{var2}")
-    def test_endpoint(var1: str, var2: str):
+    def test_endpoint(var1: str, var2: str) -> str:
         handle = dbos.start_workflow(test_workflow, var1, var2)
         context = assert_current_dbos_context()
         assert not context.is_within_workflow()

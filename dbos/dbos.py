@@ -495,11 +495,7 @@ class DBOS:
                     cur_ctx.workflow_uuid + "-" + str(cur_ctx.function_id)
                 )
 
-        new_wf_ctx = (
-            DBOSContext()
-            if cur_ctx is None
-            else cur_ctx.create_child() if cur_ctx.is_within_workflow() else cur_ctx
-        )
+        new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
         new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
         new_wf_uuid = new_wf_ctx.id_assigned_for_next_workflow
 
@@ -534,6 +530,7 @@ class DBOS:
                 *args,
                 **kwargs,
             )
+
         return WorkflowHandleFuture(new_wf_uuid, future, self)
 
     def retrieve_workflow(
