@@ -15,7 +15,7 @@ __all__ = [
     "SetWorkflowUUID",
     "WorkflowHandle",
     "WorkflowStatus",
-    "WorkflowString",
+    "WorkflowStatusString",
     "load_config",
     "error",
 ]

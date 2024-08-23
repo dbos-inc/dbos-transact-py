@@ -1,5 +1,6 @@
 import threading
 import time
+import traceback
 from typing import TYPE_CHECKING, List
 
 from dbos.context import SetWorkflowRecovery
@@ -25,6 +26,6 @@ def startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
             time.sleep(1)
         except Exception as e:
             dbos.logger.error(
-                f"Exception encountered when recovering workflows: {repr(e)}"
+                f"Exception encountered when recovering workflows: {traceback.format_exc()}"
             )
             raise e

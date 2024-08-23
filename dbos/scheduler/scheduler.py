@@ -1,4 +1,5 @@
 import threading
+import traceback
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable
 
@@ -26,7 +27,7 @@ def scheduler_loop(
                 func(nextExecTime, datetime.now(timezone.utc))
             except Exception as e:
                 dbos_logger.error(
-                    f"Exception encountered in scheduled workflow: {repr(e)}"
+                    f"Exception encountered in scheduled workflow: {traceback.format_exc()}"
                 )
                 pass  # Let the thread keep running
 
