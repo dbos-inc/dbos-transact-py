@@ -119,10 +119,6 @@ def set_dbos_func_name(f: Any, name: str) -> None:
     setattr(f, "dbos_function_name", name)
 
 
-class WorkflowInputContext(TypedDict):
-    workflow_uuid: str
-
-
 class _WorkflowHandleFuture(WorkflowHandle[R]):
 
     def __init__(self, workflow_uuid: str, future: Future[R], dbos: DBOS):
