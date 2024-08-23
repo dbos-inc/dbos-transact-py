@@ -1,3 +1,4 @@
+from . import error as error
 from .context import SetWorkflowUUID as SetWorkflowUUID
 from .dbos import DBOS as DBOS
 from .dbos import DBOSConfiguredInstance as DBOSConfiguredInstance
@@ -16,4 +17,5 @@ __all__ = [
     "WorkflowStatus",
     "WorkflowString",
     "load_config",
+    "error",
 ]
