@@ -6,7 +6,6 @@ import sys
 import threading
 import time
 import traceback
-import types
 from concurrent.futures import Future, ThreadPoolExecutor
 from enum import Enum
 from functools import wraps
@@ -16,7 +15,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    Generic,
     List,
     Literal,
     Optional,
@@ -26,17 +24,18 @@ from typing import (
     TypedDict,
     TypeVar,
     cast,
-    overload,
 )
 
 from opentelemetry.trace import Span
 
+from dbos.helpers.decorators import classproperty
 from dbos.scheduler.scheduler import ScheduledWorkflow, scheduler_loop
 
 from .tracer import dbos_tracer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+    from .fastapi import Request
 
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
@@ -86,9 +85,6 @@ from .system_database import (
     WorkflowStatusInternal,
 )
 
-if TYPE_CHECKING:
-    from .fastapi import Request
-
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
 #   Such as for start_workflow, which will return WorkflowHandle[R]
@@ -125,25 +121,6 @@ def set_dbos_func_name(f: Any, name: str) -> None:
 
 class WorkflowInputContext(TypedDict):
     workflow_uuid: str
-
-
-G = TypeVar("G")  # A generic type for ClassPropertyDescriptor getters
-
-
-class ClassPropertyDescriptor(Generic[G]):
-    def __init__(self, fget: Callable[..., G]) -> None:
-        self.fget = fget
-
-    def __get__(self, obj: Any, objtype: Optional[Any] = None) -> G:
-        if objtype is None:
-            objtype = type(obj)
-        if self.fget is None:
-            raise AttributeError("unreadable attribute")
-        return self.fget(objtype)
-
-
-def classproperty(func: Callable[..., G]) -> ClassPropertyDescriptor[G]:
-    return ClassPropertyDescriptor(func)
 
 
 class _WorkflowHandleFuture(WorkflowHandle[R]):
