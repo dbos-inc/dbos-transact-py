@@ -5,15 +5,59 @@ import sqlalchemy as sa
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from dbos.context import SetWorkflowUUID
-from dbos.dbos import DBOS
+from dbos import DBOS
+from dbos.context import assert_current_dbos_context
 
 
 def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     dbos, app = dbos_fastapi
     client = TestClient(app)
 
+    @app.get("/endpoint/{var1}/{var2}")
+    def test_endpoint(var1: str, var2: str) -> str:
+        result = test_workflow(var1, var2)
+        ctx = assert_current_dbos_context()
+        assert not ctx.is_within_workflow()
+        return result
+
+    @app.get("/workflow/{var1}/{var2}")
+    @dbos.workflow()
+    def test_workflow(var1: str, var2: str) -> str:
+        DBOS.span.set_attribute("test_key", "test_value")
+        assert DBOS.request is not None
+        res1 = test_transaction(var1)
+        res2 = test_communicator(var2)
+        return res1 + res2
+
+    @dbos.transaction()
+    def test_transaction(var: str) -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        return var + str(rows[0][0])
+
+    @dbos.communicator()
+    def test_communicator(var: str) -> str:
+        return var
+
+    response = client.get("/workflow/bob/bob")
+    assert response.status_code == 200
+    assert response.text == '"bob1bob"'
+
+    response = client.get("/endpoint/bob/bob")
+    assert response.status_code == 200
+    assert response.text == '"bob1bob"'
+
+
+def test_start_workflow(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
+    dbos, app = dbos_fastapi
+    client = TestClient(app)
+
     @app.get("/{var1}/{var2}")
+    def test_endpoint(var1: str, var2: str) -> str:
+        handle = dbos.start_workflow(test_workflow, var1, var2)
+        context = assert_current_dbos_context()
+        assert not context.is_within_workflow()
+        return handle.get_result()
+
     @dbos.workflow()
     def test_workflow(var1: str, var2: str) -> str:
         DBOS.span.set_attribute("test_key", "test_value")

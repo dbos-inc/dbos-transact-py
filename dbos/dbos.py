@@ -495,11 +495,7 @@ class DBOS:
                     cur_ctx.workflow_uuid + "-" + str(cur_ctx.function_id)
                 )
 
-        new_wf_ctx = (
-            DBOSContext()
-            if cur_ctx is None
-            else cur_ctx.create_child() if cur_ctx.is_within_workflow() else cur_ctx
-        )
+        new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
         new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
         new_wf_uuid = new_wf_ctx.id_assigned_for_next_workflow
 
@@ -621,7 +617,13 @@ class DBOS:
         }
         with DBOSContextSwap(ctx):
             with EnterDBOSWorkflow(attributes):
-                return self._execute_workflow(status, func, *args, **kwargs)
+                try:
+                    return self._execute_workflow(status, func, *args, **kwargs)
+                except Exception as e:
+                    DBOS.logger.error(
+                        f"Exception encountered in asynchronous workflow: {repr(e)}"
+                    )
+                    raise e
 
     def _execute_workflow(
         self,
