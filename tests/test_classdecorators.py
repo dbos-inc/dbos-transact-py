@@ -8,13 +8,12 @@ from dbos.context import DBOSContextEnsure, SetWorkflowUUID, assert_current_dbos
 from dbos.dbos import DBOS, DBOSConfiguredInstance
 
 
-@DBOS.required_roles(["user"])
-def tfunc(var: str) -> str:
-    assert assert_current_dbos_context().assumed_role == "user"
-    return var
+def test_required_roles(dbos: DBOS) -> None:
+    @dbos.required_roles(["user"])
+    def tfunc(var: str) -> str:
+        assert assert_current_dbos_context().assumed_role == "user"
+        return var
 
-
-def test_required_roles() -> None:
     with pytest.raises(Exception) as exc_info:
         tfunc("bare-ctx")
     assert (
