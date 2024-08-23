@@ -25,6 +25,7 @@ from typing import (
 from opentelemetry.trace import Span
 
 from dbos.helpers.decorators import classproperty
+from dbos.helpers.recovery import startup_recovery_thread
 from dbos.helpers.registrations import (
     DBOSClassInfo,
     DBOSFuncInfo,
@@ -180,7 +181,7 @@ class DBOS:
             setup_fastapi_middleware(fastapi)
         if not os.environ.get("DBOS__VMID"):
             workflow_ids = self.sys_db.get_pending_workflows("local")
-            self.executor.submit(self._startup_recovery_thread, workflow_ids)
+            self.executor.submit(startup_recovery_thread, self, workflow_ids)
 
         # Listen to notifications
         self.executor.submit(self.sys_db._notification_listener)
@@ -985,26 +986,6 @@ class DBOS:
     def request(cls) -> Optional["Request"]:
         ctx = assert_current_dbos_context()
         return ctx.request
-
-    def _startup_recovery_thread(self, workflow_ids: List[str]) -> None:
-        """
-        A background thread that attempts to recover local pending workflows on startup.
-        """
-        stop_event = threading.Event()
-        self.stop_events.append(stop_event)
-        while not stop_event.is_set() and len(workflow_ids) > 0:
-            try:
-                for workflowID in list(workflow_ids):
-                    with SetWorkflowRecovery():
-                        self.execute_workflow_uuid(workflowID)
-                    workflow_ids.remove(workflowID)
-            except DBOSWorkflowFunctionNotFoundError:
-                time.sleep(1)
-            except Exception as e:
-                dbos_logger.error(
-                    f"Exception encountered when recovering workflows: {repr(e)}"
-                )
-                raise e
 
 
 class DBOSConfiguredInstance:
