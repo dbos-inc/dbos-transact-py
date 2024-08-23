@@ -11,7 +11,11 @@ import pytest
 import sqlalchemy as sa
 
 from dbos import DBOS, ConfigFile, SetWorkflowUUID
-from dbos.context import get_local_dbos_context
+from dbos.context import (
+    DBOSContextEnsure,
+    assert_current_dbos_context,
+    get_local_dbos_context,
+)
 from dbos.error import DBOSCommunicatorMaxRetriesExceededError
 from dbos.system_database import GetWorkflowsInput, WorkflowStatusString
 from dbos.workflow import WorkflowHandle
@@ -493,12 +497,18 @@ def test_start_workflow(dbos: DBOS) -> None:
     wfuuid = str(uuid.uuid4())
     with SetWorkflowUUID(wfuuid):
         handle = dbos.start_workflow(test_workflow, "bob", "bob")
+        context = assert_current_dbos_context()
+        assert not context.is_within_workflow()
         assert handle.get_result() == "bob1bob"
     with SetWorkflowUUID(wfuuid):
         handle = dbos.start_workflow(test_workflow, "bob", "bob")
+        context = assert_current_dbos_context()
+        assert not context.is_within_workflow()
         assert handle.get_result() == "bob1bob"
     with SetWorkflowUUID(wfuuid):
         assert test_workflow("bob", "bob") == "bob1bob"
+        context = assert_current_dbos_context()
+        assert not context.is_within_workflow()
     assert txn_counter == 1
     assert wf_counter == 3
 
