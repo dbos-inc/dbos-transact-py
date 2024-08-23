@@ -522,7 +522,7 @@ class DBOS:
                 if ctx and ctx.is_within_workflow():
                     assert (
                         ctx.is_workflow()
-                    ), "Transaction must be called within a workflow."
+                    ), "Transactions must be called from within workflows"
                     with DBOSAssumeRole(rr):
                         return invoke_tx(*args, **kwargs)
                 else:
