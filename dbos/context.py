@@ -209,7 +209,7 @@ def get_local_dbos_context() -> Optional[DBOSContext]:
 
 def assert_current_dbos_context() -> DBOSContext:
     rv = get_local_dbos_context()
-    assert rv
+    assert rv, "No DBOS context found"
     return rv
 
 

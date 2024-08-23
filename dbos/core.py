@@ -1,3 +1,4 @@
+import traceback
 from concurrent.futures import Future
 from typing import TYPE_CHECKING, Any, Optional, ParamSpec, TypeVar
 
@@ -143,7 +144,7 @@ def _execute_workflow_wthread(
                 return _execute_workflow(dbos, status, func, *args, **kwargs)
             except Exception as e:
                 dbos.logger.error(
-                    f"Exception encountered in asynchronous workflow: {repr(e)}"
+                    f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
                 )
                 raise e
 
