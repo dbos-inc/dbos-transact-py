@@ -1,16 +1,13 @@
+import sys
 import traceback
 from concurrent.futures import Future
 from functools import wraps
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Optional,
-    ParamSpec,
-    Tuple,
-    TypeVar,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple, TypeVar, cast
+
+if sys.version_info < (3, 10):
+    from typing_extensions import ParamSpec, TypeAlias
+else:
+    from typing import ParamSpec, TypeAlias
 
 from dbos import utils
 from dbos.context import (
