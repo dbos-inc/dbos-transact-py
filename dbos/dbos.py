@@ -24,9 +24,15 @@ from typing import (
 
 from opentelemetry.trace import Span
 
-from dbos.core import _execute_workflow, _WorkflowHandleFuture, _WorkflowHandlePolling
+from dbos.core import (
+    _execute_workflow,
+    _execute_workflow_wthread,
+    _WorkflowHandleFuture,
+    _WorkflowHandlePolling,
+    execute_workflow_uuid,
+)
 from dbos.decorators import classproperty
-from dbos.recovery import startup_recovery_thread
+from dbos.recovery import recover_pending_workflows, startup_recovery_thread
 from dbos.registrations import (
     DBOSClassInfo,
     get_config_name,
@@ -286,7 +292,8 @@ class DBOS:
 
         if fself is not None:
             future = self.executor.submit(
-                cast(Callable[..., R], self._execute_workflow_wthread),
+                cast(Callable[..., R], _execute_workflow_wthread),
+                self,
                 status,
                 func,
                 new_wf_ctx,
@@ -296,7 +303,8 @@ class DBOS:
             )
         else:
             future = self.executor.submit(
-                cast(Callable[..., R], self._execute_workflow_wthread),
+                cast(Callable[..., R], _execute_workflow_wthread),
+                self,
                 status,
                 func,
                 new_wf_ctx,
@@ -375,28 +383,6 @@ class DBOS:
         self.sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
 
         return status
-
-    def _execute_workflow_wthread(
-        self,
-        status: WorkflowStatusInternal,
-        func: Workflow[P, R],
-        ctx: DBOSContext,
-        *args: Any,
-        **kwargs: Any,
-    ) -> R:
-        attributes: TracedAttributes = {
-            "name": func.__name__,
-            "operationType": OperationType.WORKFLOW.value,
-        }
-        with DBOSContextSwap(ctx):
-            with EnterDBOSWorkflow(attributes):
-                try:
-                    return _execute_workflow(self, status, func, *args, **kwargs)
-                except Exception as e:
-                    DBOS.logger.error(
-                        f"Exception encountered in asynchronous workflow: {repr(e)}"
-                    )
-                    raise e
 
     def transaction(
         self, isolation_level: IsolationLevel = "SERIALIZABLE"
@@ -759,56 +745,7 @@ class DBOS:
         """
         This function is used to execute a workflow by a UUID for recovery.
         """
-        status = self.sys_db.get_workflow_status(workflow_uuid)
-        if not status:
-            raise DBOSRecoveryError(workflow_uuid, "Workflow status not found")
-        inputs = self.sys_db.get_workflow_inputs(workflow_uuid)
-        if not inputs:
-            raise DBOSRecoveryError(workflow_uuid, "Workflow inputs not found")
-        wf_func = self.workflow_info_map.get(status["name"], None)
-        if not wf_func:
-            raise DBOSWorkflowFunctionNotFoundError(
-                workflow_uuid, "Workflow function not found"
-            )
-        with DBOSContextEnsure():
-            ctx = assert_current_dbos_context()
-            request = status["request"]
-            ctx.request = utils.deserialize(request) if request is not None else None
-            if status["config_name"] is not None:
-                config_name = status["config_name"]
-                class_name = status["class_name"]
-                iname = f"{class_name}/{config_name}"
-                if iname not in self.instance_info_map:
-                    raise DBOSWorkflowFunctionNotFoundError(
-                        workflow_uuid,
-                        f"Cannot execute workflow because instance '{iname}' is not registered",
-                    )
-                with SetWorkflowUUID(workflow_uuid):
-                    return self.start_workflow(
-                        wf_func,
-                        self.instance_info_map[iname],
-                        *inputs["args"],
-                        **inputs["kwargs"],
-                    )
-            elif status["class_name"] is not None:
-                class_name = status["class_name"]
-                if class_name not in self.class_info_map:
-                    raise DBOSWorkflowFunctionNotFoundError(
-                        workflow_uuid,
-                        f"Cannot execute workflow because class '{class_name}' is not registered",
-                    )
-                with SetWorkflowUUID(workflow_uuid):
-                    return self.start_workflow(
-                        wf_func,
-                        self.class_info_map[class_name],
-                        *inputs["args"],
-                        **inputs["kwargs"],
-                    )
-            else:
-                with SetWorkflowUUID(workflow_uuid):
-                    return self.start_workflow(
-                        wf_func, *inputs["args"], **inputs["kwargs"]
-                    )
+        return execute_workflow_uuid(self, workflow_uuid)
 
     def recover_pending_workflows(
         self, executor_ids: List[str] = ["local"]
@@ -816,25 +753,7 @@ class DBOS:
         """
         Find all PENDING workflows and execute them.
         """
-        workflow_handles: List[WorkflowHandle[Any]] = []
-        for executor_id in executor_ids:
-            if executor_id == "local" and os.environ.get("DBOS__VMID"):
-                dbos_logger.debug(
-                    f"Skip local recovery because it's running in a VM: {os.environ.get('DBOS__VMID')}"
-                )
-            dbos_logger.debug(
-                f"Recovering pending workflows for executor: {executor_id}"
-            )
-            workflow_ids = self.sys_db.get_pending_workflows(executor_id)
-            dbos_logger.debug(f"Pending workflows: {workflow_ids}")
-
-            for workflowID in workflow_ids:
-                with SetWorkflowRecovery():
-                    handle = self.execute_workflow_uuid(workflowID)
-                workflow_handles.append(handle)
-
-        dbos_logger.info("Recovered pending workflows")
-        return workflow_handles
+        return recover_pending_workflows(self, executor_ids)
 
     @classproperty
     def logger(cls) -> Logger:
