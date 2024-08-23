@@ -787,7 +787,7 @@ def test_send_recv(dbos: DBOS) -> None:
     # Test recv outside of a workflow
     with pytest.raises(Exception) as exc_info:
         dbos.recv("test1")
-    assert "recv() must be called within a workflow" in str(exc_info.value)
+    assert "recv() must be called from within a workflow" in str(exc_info.value)
 
 
 def test_send_recv_temp_wf(dbos: DBOS) -> None:
@@ -896,4 +896,4 @@ def test_set_get_events(dbos: DBOS) -> None:
     # Test setEvent outside of a workflow
     with pytest.raises(Exception) as exc_info:
         dbos.set_event("key1", "value1")
-    assert "set_event() must be called within a workflow" in str(exc_info.value)
+    assert "set_event() must be called from within a workflow" in str(exc_info.value)

@@ -711,7 +711,7 @@ class DBOS:
 
         ctx = get_local_dbos_context()
         if ctx and ctx.is_within_workflow():
-            assert ctx.is_workflow(), "send() must be called within a workflow"
+            assert ctx.is_workflow(), "send() must be called from within a workflow"
             return do_send(destination_uuid, message, topic)
         else:
             wffn = self.workflow_info_map.get(TEMP_SEND_WF_NAME)
@@ -722,7 +722,7 @@ class DBOS:
         cur_ctx = get_local_dbos_context()
         if cur_ctx is not None:
             # Must call it within a workflow
-            assert cur_ctx.is_workflow(), "recv() must be called within a workflow"
+            assert cur_ctx.is_workflow(), "recv() must be called from within a workflow"
             attributes: TracedAttributes = {
                 "name": "recv",
             }
@@ -738,7 +738,7 @@ class DBOS:
                 )
         else:
             # Cannot call it from outside of a workflow
-            raise DBOSException("recv() must be called within a workflow")
+            raise DBOSException("recv() must be called from within a workflow")
 
     def sleep(self, seconds: float) -> None:
         attributes: TracedAttributes = {
@@ -753,7 +753,9 @@ class DBOS:
         cur_ctx = get_local_dbos_context()
         if cur_ctx is not None:
             # Must call it within a workflow
-            assert cur_ctx.is_workflow(), "set_event() must be called within a workflow"
+            assert (
+                cur_ctx.is_workflow()
+            ), "set_event() must be called from within a workflow"
             attributes: TracedAttributes = {
                 "name": "set_event",
             }
@@ -763,7 +765,7 @@ class DBOS:
                 )
         else:
             # Cannot call it from outside of a workflow
-            raise DBOSException("set_event() must be called within a workflow")
+            raise DBOSException("set_event() must be called from within a workflow")
 
     def get_event(
         self, workflow_uuid: str, key: str, timeout_seconds: float = 60
@@ -771,7 +773,9 @@ class DBOS:
         cur_ctx = get_local_dbos_context()
         if cur_ctx is not None and cur_ctx.is_within_workflow():
             # Call it within a workflow
-            assert cur_ctx.is_workflow(), "get_event() must be called within a workflow"
+            assert (
+                cur_ctx.is_workflow()
+            ), "get_event() must be called from within a workflow"
             attributes: TracedAttributes = {
                 "name": "get_event",
             }
