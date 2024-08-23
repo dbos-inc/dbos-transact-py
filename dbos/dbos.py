@@ -24,7 +24,7 @@ from typing import (
 
 from opentelemetry.trace import Span
 
-from dbos.core import _WorkflowHandleFuture, _WorkflowHandlePolling
+from dbos.core import _execute_workflow, _WorkflowHandleFuture, _WorkflowHandlePolling
 from dbos.decorators import classproperty
 from dbos.recovery import startup_recovery_thread
 from dbos.registrations import (
@@ -200,7 +200,7 @@ class DBOS:
                         config_name=get_config_name(fi, func, args),
                     )
 
-                    return self._execute_workflow(status, func, *args, **kwargs)
+                    return _execute_workflow(self, status, func, *args, **kwargs)
             else:
                 with EnterDBOSWorkflow(attributes), DBOSAssumeRole(rr):
                     ctx = assert_current_dbos_context()
@@ -212,7 +212,7 @@ class DBOS:
                         config_name=get_config_name(fi, func, args),
                     )
 
-                    return self._execute_workflow(status, func, *args, **kwargs)
+                    return _execute_workflow(self, status, func, *args, **kwargs)
 
         wrapped_func = cast(F, wrapper)
         return wrapped_func
@@ -391,37 +391,12 @@ class DBOS:
         with DBOSContextSwap(ctx):
             with EnterDBOSWorkflow(attributes):
                 try:
-                    return self._execute_workflow(status, func, *args, **kwargs)
+                    return _execute_workflow(self, status, func, *args, **kwargs)
                 except Exception as e:
                     DBOS.logger.error(
                         f"Exception encountered in asynchronous workflow: {repr(e)}"
                     )
                     raise e
-
-    def _execute_workflow(
-        self,
-        status: WorkflowStatusInternal,
-        func: Workflow[P, R],
-        *args: Any,
-        **kwargs: Any,
-    ) -> R:
-        try:
-            output = func(*args, **kwargs)
-        except DBOSWorkflowConflictUUIDError:
-            # Retrieve the workflow handle and wait for the result.
-            wf_handle: WorkflowHandle[R] = self.retrieve_workflow(DBOS.workflow_id)
-            output = wf_handle.get_result()
-            return output
-        except Exception as error:
-            status["status"] = "ERROR"
-            status["error"] = utils.serialize(error)
-            self.sys_db.update_workflow_status(status)
-            raise error
-
-        status["status"] = "SUCCESS"
-        status["output"] = utils.serialize(output)
-        self.sys_db.update_workflow_status(status)
-        return output
 
     def transaction(
         self, isolation_level: IsolationLevel = "SERIALIZABLE"
