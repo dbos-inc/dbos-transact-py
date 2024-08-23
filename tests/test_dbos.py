@@ -239,6 +239,10 @@ def test_temp_workflow(dbos: DBOS) -> None:
         comm_counter += 1
         return var
 
+    @dbos.communicator()
+    def call_communicator(var: str) -> str:
+        return test_communicator(var)
+
     assert get_local_dbos_context() is None
     res = test_transaction("var2")
     assert res == "var21"
@@ -259,6 +263,10 @@ def test_temp_workflow(dbos: DBOS) -> None:
 
     assert txn_counter == 1
     assert comm_counter == 1
+
+    res = call_communicator("var2")
+    assert res == "var2"
+    assert comm_counter == 2
 
 
 def test_temp_workflow_errors(dbos: DBOS) -> None:
