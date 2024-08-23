@@ -5,7 +5,10 @@ from unittest.mock import mock_open
 
 import pytest
 
+# Private API for unit test
 import dbos.dbos_config
+
+# Public API
 from dbos.error import DBOSInitializationError
 
 mock_filename = "test.yaml"

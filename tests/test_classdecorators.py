@@ -1,11 +1,13 @@
-import uuid
 from typing import Optional
 
 import pytest
 import sqlalchemy as sa
 
-from dbos.context import DBOSContextEnsure, SetWorkflowUUID, assert_current_dbos_context
-from dbos.dbos import DBOS, DBOSConfiguredInstance
+# Public API
+from dbos import DBOS, DBOSConfiguredInstance, SetWorkflowUUID
+
+# Private API used because this is a test
+from dbos.context import DBOSContextEnsure, assert_current_dbos_context
 
 
 def test_required_roles(dbos: DBOS) -> None:

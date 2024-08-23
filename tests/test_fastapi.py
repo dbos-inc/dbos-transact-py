@@ -5,7 +5,10 @@ import sqlalchemy as sa
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+# Public API
 from dbos import DBOS
+
+# Private API because this is a unit test
 from dbos.context import assert_current_dbos_context
 
 

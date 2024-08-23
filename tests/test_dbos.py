@@ -10,11 +10,13 @@ from typing import Any, Optional
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, ConfigFile, SetWorkflowUUID
+# Public API
+from dbos import DBOS, ConfigFile, SetWorkflowUUID, WorkflowHandle, WorkflowStatusString
+
+# Private API because this is a test
 from dbos.context import assert_current_dbos_context, get_local_dbos_context
 from dbos.error import DBOSCommunicatorMaxRetriesExceededError
-from dbos.system_database import GetWorkflowsInput, WorkflowStatusString
-from dbos.workflow import WorkflowHandle
+from dbos.system_database import GetWorkflowsInput
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
