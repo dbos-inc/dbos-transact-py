@@ -38,7 +38,12 @@ from dbos.helpers.registrations import (
     get_or_create_func_info,
     set_dbos_func_name,
 )
-from dbos.scheduler.scheduler import ScheduledWorkflow, scheduler_loop
+from dbos.helpers.roles import (
+    check_required_roles,
+    default_required_roles,
+    required_roles,
+)
+from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled, scheduler_loop
 
 from .tracer import dbos_tracer
 
@@ -214,7 +219,7 @@ class DBOS:
 
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            rr: Optional[str] = DBOS._check_required_roles(func, args, fi)
+            rr: Optional[str] = check_required_roles(func, fi)
             attributes: TracedAttributes = {
                 "name": func.__name__,
                 "operationType": OperationType.WORKFLOW.value,
@@ -547,7 +552,7 @@ class DBOS:
 
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                rr: Optional[str] = DBOS._check_required_roles(func, args, fi)
+                rr: Optional[str] = check_required_roles(func, fi)
                 # Entering transaction is allowed:
                 #  In a workflow (that is not in a transaction / comm already)
                 #  Not in a workflow (we will start the single op workflow)
@@ -654,7 +659,7 @@ class DBOS:
 
             @wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                rr: Optional[str] = DBOS._check_required_roles(func, args, fi)
+                rr: Optional[str] = check_required_roles(func, fi)
                 # Entering communicator is allowed:
                 #  In a workflow (that is not in a transaction / comm already)
                 #  Not in a workflow (we will start the single op workflow)
@@ -699,17 +704,6 @@ class DBOS:
         else:
             self.class_info_map[class_name] = cls
 
-    def default_required_roles(
-        self, roles: List[str]
-    ) -> Callable[[Type[Any]], Type[Any]]:
-        def set_roles(cls: Type[Any]) -> Type[Any]:
-            ci = get_or_create_class_info(cls)
-            self.register_class(cls, ci)
-            ci.def_required_roles = roles
-            return cls
-
-        return set_roles
-
     def dbos_class(self) -> Callable[[Type[Any]], Type[Any]]:
         def create_class_info(cls: Type[Any]) -> Type[Any]:
             ci = get_or_create_class_info(cls)
@@ -718,53 +712,16 @@ class DBOS:
 
         return create_class_info
 
-    @staticmethod
-    def _check_required_roles(
-        func: Callable[..., Any], args: Tuple[Any, ...], fi: Optional[DBOSFuncInfo]
-    ) -> Optional[str]:
-        # Check required roles
-        required_roles: Optional[List[str]] = None
-        # First, we need to know if this has class info and func info
-        ci = get_class_info_for_func(fi)
-        if ci is not None:
-            required_roles = ci.def_required_roles
-        if fi and fi.required_roles is not None:
-            required_roles = fi.required_roles
+    def default_required_roles(
+        self, roles: List[str]
+    ) -> Callable[[Type[Any]], Type[Any]]:
+        return default_required_roles(self, roles)
 
-        if required_roles is None or len(required_roles) == 0:
-            return None  # Nothing to check
+    def required_roles(self, roles: List[str]) -> Callable[[F], F]:
+        return required_roles(roles)
 
-        ctx = get_local_dbos_context()
-        if ctx is None or ctx.authenticated_roles is None:
-            raise DBOSNotAuthorizedError(
-                f"Function {func.__name__} requires a role, but was called in a context without authentication information"
-            )
-
-        for r in required_roles:
-            if r in ctx.authenticated_roles:
-                return r
-
-        raise DBOSNotAuthorizedError(
-            f"Function {func.__name__} has required roles, but user is not authenticated for any of them"
-        )
-
-    def required_roles(
-        self,
-        roles: List[str],
-    ) -> Callable[[F], F]:
-        def set_roles(func: F) -> F:
-            fi = get_or_create_func_info(func)
-            fi.required_roles = roles
-
-            @wraps(func)
-            def wrapper(*args: Any, **kwargs: Any) -> Any:
-                rr: Optional[str] = DBOS._check_required_roles(func, args, fi)
-                with DBOSAssumeRole(rr):
-                    return func(*args, **kwargs)
-
-            return cast(F, wrapper)
-
-        return set_roles
+    def scheduled(self, cron: str) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
+        return scheduled(self, cron)
 
     def send(
         self, destination_uuid: str, message: Any, topic: Optional[str] = None
@@ -862,15 +819,6 @@ class DBOS:
         else:
             # Directly call it outside of a workflow
             return self.sys_db.get_event(workflow_uuid, key, timeout_seconds)
-
-    def scheduled(self, cron: str) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
-        def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
-            stop_event = threading.Event()
-            self.stop_events.append(stop_event)
-            self.executor.submit(scheduler_loop, func, cron, stop_event)
-            return func
-
-        return decorator
 
     def execute_workflow_uuid(self, workflow_uuid: str) -> WorkflowHandle[Any]:
         """

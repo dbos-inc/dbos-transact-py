@@ -1,6 +1,9 @@
 import threading
 from datetime import datetime, timezone
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from dbos.dbos import DBOS
 
 from ..context import SetWorkflowUUID
 from ..logger import dbos_logger
@@ -26,3 +29,15 @@ def scheduler_loop(
                     f"Exception encountered in scheduled workflow: {repr(e)}"
                 )
                 pass  # Let the thread keep running
+
+
+def scheduled(
+    dbos: "DBOS", cron: str
+) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
+    def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
+        stop_event = threading.Event()
+        dbos.stop_events.append(stop_event)
+        dbos.executor.submit(scheduler_loop, func, cron, stop_event)
+        return func
+
+    return decorator
