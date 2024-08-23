@@ -618,7 +618,13 @@ class DBOS:
         }
         with DBOSContextSwap(ctx):
             with EnterDBOSWorkflow(attributes):
-                return self._execute_workflow(status, func, *args, **kwargs)
+                try:
+                    return self._execute_workflow(status, func, *args, **kwargs)
+                except Exception as e:
+                    DBOS.logger.error(
+                        f"Exception encountered in asynchronous workflow: {repr(e)}"
+                    )
+                    raise e
 
     def _execute_workflow(
         self,
