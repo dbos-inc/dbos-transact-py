@@ -63,6 +63,8 @@ def test_valid_config(mocker):
 
     set_env_vars(configFile)
     assert os.environ["bazbaz"] == "BAZBAZ"
+    assert os.environ["foo"] == "FOOFOO"
+    assert "bob" not in os.environ
 
 
 def test_config_missing_params(mocker):
