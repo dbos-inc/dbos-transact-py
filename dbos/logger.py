@@ -52,6 +52,7 @@ def config_logger(config: ConfigFile) -> None:
         otlp_logs_endpoint = (
             config.get("telemetry", {}).get("OTLPExporter", {}).get("logsEndpoint")  # type: ignore
         )
+        add_otlp_to_all_loggers(console_handler, DBOSLogTransformer())
         if otlp_logs_endpoint:
             # Also log to the OTLP endpoint if provided
             log_provider = PatchedOTLPLoggerProvider(
@@ -69,33 +70,22 @@ def config_logger(config: ConfigFile) -> None:
                 )
             )
             otlp_handler = LoggingHandler(logger_provider=log_provider)
-            if log_level is not None:
-                otlp_handler.setLevel(log_level)
-            dbos_logger.addHandler(otlp_handler)
 
             # Attach DBOS-specific attributes to all log entries.
             otlp_transformer = DBOSLogTransformer()
+
+            # Direct all logs to OTLP
             add_otlp_to_all_loggers(otlp_handler, otlp_transformer)
 
 
 def add_otlp_to_all_loggers(otlp_handler, otlp_transformer):
-    # Get the root logger
     root = logging.root
 
-    # Define a recursive function to traverse the logger hierarchy
-    def traverse_loggers(logger: logging.Logger):
-        # Add the handler to the current logger
-        if otlp_handler not in logger.handlers:
+    root.addHandler(otlp_handler)
+    root.addFilter(otlp_transformer)
+
+    for logger_name in root.manager.loggerDict:
+        logger = logging.getLogger(logger_name)
+        if not logger.propagate:
             logger.addHandler(otlp_handler)
-            logger.addFilter(otlp_transformer)
-
-        # Traverse child loggers
-        for name in logger.manager.loggerDict:
-            child_logger = logging.getLogger(name)
-            if child_logger.propagate:
-                # Skip loggers that propagate, as they will inherit the handler
-                continue
-            traverse_loggers(child_logger)
-
-    # Start the traversal from the root logger
-    traverse_loggers(root)
+        logger.addFilter(otlp_transformer)
