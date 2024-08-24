@@ -1,13 +1,16 @@
 import sys
+import time
 import traceback
 from concurrent.futures import Future
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
+
+from dbos.application_database import ApplicationDatabase, TransactionResultInternal
 
 if sys.version_info < (3, 10):
-    from typing_extensions import ParamSpec, TypeAlias
+    from typing_extensions import ParamSpec
 else:
-    from typing import ParamSpec, TypeAlias
+    from typing import ParamSpec
 
 from dbos import utils
 from dbos.context import (
@@ -16,6 +19,8 @@ from dbos.context import (
     DBOSContextEnsure,
     DBOSContextSwap,
     EnterDBOSChildWorkflow,
+    EnterDBOSCommunicator,
+    EnterDBOSTransaction,
     EnterDBOSWorkflow,
     OperationType,
     SetWorkflowUUID,
@@ -24,6 +29,7 @@ from dbos.context import (
     get_local_dbos_context,
 )
 from dbos.error import (
+    DBOSCommunicatorMaxRetriesExceededError,
     DBOSNonExistentWorkflowError,
     DBOSRecoveryError,
     DBOSWorkflowConflictUUIDError,
@@ -35,47 +41,61 @@ from dbos.registrations import (
     get_dbos_func_name,
     get_func_info,
     get_or_create_func_info,
+    set_dbos_func_name,
 )
 from dbos.roles import check_required_roles
-from dbos.system_database import WorkflowInputs, WorkflowStatusInternal
-from dbos.workflow import WorkflowHandle, WorkflowStatus
+from dbos.system_database import (
+    OperationResultInternal,
+    WorkflowInputs,
+    WorkflowStatusInternal,
+)
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS, Workflow
+    from dbos.dbos import DBOS, Workflow, WorkflowHandle, WorkflowStatus
+    from dbos.dbos import IsolationLevel
+
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import Session
 
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-class _WorkflowHandleFuture(WorkflowHandle[R]):
+class _WorkflowHandleFuture(Generic[R]):
 
     def __init__(self, workflow_uuid: str, future: Future[R], dbos: "DBOS"):
-        super().__init__(workflow_uuid)
+        self.workflow_uuid = workflow_uuid
         self.future = future
         self.dbos = dbos
+
+    def get_workflow_uuid(self) -> str:
+        return self.workflow_uuid
 
     def get_result(self) -> R:
         return self.future.result()
 
-    def get_status(self) -> WorkflowStatus:
+    def get_status(self) -> "WorkflowStatus":
         stat = self.dbos.get_workflow_status(self.workflow_uuid)
         if stat is None:
             raise DBOSNonExistentWorkflowError(self.workflow_uuid)
         return stat
 
 
-class _WorkflowHandlePolling(WorkflowHandle[R]):
+class _WorkflowHandlePolling(Generic[R]):
 
     def __init__(self, workflow_uuid: str, dbos: "DBOS"):
-        super().__init__(workflow_uuid)
+        self.workflow_uuid = workflow_uuid
         self.dbos = dbos
+
+    def get_workflow_uuid(self) -> str:
+        return self.workflow_uuid
 
     def get_result(self) -> R:
         res: R = self.dbos.sys_db.await_workflow_result(self.workflow_uuid)
         return res
 
-    def get_status(self) -> WorkflowStatus:
+    def get_status(self) -> "WorkflowStatus":
         stat = self.dbos.get_workflow_status(self.workflow_uuid)
         if stat is None:
             raise DBOSNonExistentWorkflowError(self.workflow_uuid)
@@ -130,7 +150,7 @@ def _execute_workflow(
         output = func(*args, **kwargs)
     except DBOSWorkflowConflictUUIDError:
         # Retrieve the workflow handle and wait for the result.
-        wf_handle: WorkflowHandle[R] = dbos.retrieve_workflow(status["workflow_uuid"])
+        wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(status["workflow_uuid"])
         output = wf_handle.get_result()
         return output
     except Exception as error:
@@ -168,7 +188,7 @@ def _execute_workflow_wthread(
                 raise e
 
 
-def _execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> WorkflowHandle[Any]:
+def _execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> "WorkflowHandle[Any]":
     status = dbos.sys_db.get_workflow_status(workflow_uuid)
     if not status:
         raise DBOSRecoveryError(workflow_uuid, "Workflow status not found")
@@ -276,7 +296,7 @@ def _start_workflow(
     func: "Workflow[P, R]",
     *args: P.args,
     **kwargs: P.kwargs,
-) -> WorkflowHandle[R]:
+) -> "WorkflowHandle[R]":
     fself: Optional[object] = None
     if hasattr(func, "__self__"):
         fself = func.__self__
@@ -350,3 +370,233 @@ def _start_workflow(
             **kwargs,
         )
     return _WorkflowHandleFuture(new_wf_uuid, future, dbos)
+
+
+def _transaction(
+    dbos: "DBOS", isolation_level: "IsolationLevel" = "SERIALIZABLE"
+) -> Callable[[F], F]:
+    def decorator(func: F) -> F:
+        def invoke_tx(*args: Any, **kwargs: Any) -> Any:
+            with dbos.app_db.sessionmaker() as session:
+                attributes: TracedAttributes = {
+                    "name": func.__name__,
+                    "operationType": OperationType.TRANSACTION.value,
+                }
+                with EnterDBOSTransaction(session, attributes=attributes) as ctx:
+                    txn_output: TransactionResultInternal = {
+                        "workflow_uuid": ctx.workflow_uuid,
+                        "function_id": ctx.function_id,
+                        "output": None,
+                        "error": None,
+                        "txn_snapshot": "",  # TODO: add actual snapshot
+                        "executor_id": None,
+                        "txn_id": None,
+                    }
+                    retry_wait_seconds = 0.001
+                    backoff_factor = 1.5
+                    max_retry_wait_seconds = 2.0
+                    while True:
+                        has_recorded_error = False
+                        try:
+                            with session.begin():
+                                # This must be the first statement in the transaction!
+                                session.connection(
+                                    execution_options={
+                                        "isolation_level": isolation_level
+                                    }
+                                )
+                                # Check recorded output for OAOO
+                                recorded_output = (
+                                    ApplicationDatabase.check_transaction_execution(
+                                        session,
+                                        ctx.workflow_uuid,
+                                        ctx.function_id,
+                                    )
+                                )
+                                if recorded_output:
+                                    if recorded_output["error"]:
+                                        deserialized_error = utils.deserialize(
+                                            recorded_output["error"]
+                                        )
+                                        has_recorded_error = True
+                                        raise deserialized_error
+                                    elif recorded_output["output"]:
+                                        return utils.deserialize(
+                                            recorded_output["output"]
+                                        )
+                                    else:
+                                        raise Exception(
+                                            "Output and error are both None"
+                                        )
+                                output = func(*args, **kwargs)
+                                txn_output["output"] = utils.serialize(output)
+                                assert (
+                                    ctx.sql_session is not None
+                                ), "Cannot find a database connection"
+                                ApplicationDatabase.record_transaction_output(
+                                    ctx.sql_session, txn_output
+                                )
+                                break
+                        except DBAPIError as dbapi_error:
+                            if dbapi_error.orig.pgcode == "40001":  # type: ignore
+                                # Retry on serialization failure
+                                ctx.get_current_span().add_event(
+                                    "Transaction Serialization Failure",
+                                    {"retry_wait_seconds": retry_wait_seconds},
+                                )
+                                time.sleep(retry_wait_seconds)
+                                retry_wait_seconds = min(
+                                    retry_wait_seconds * backoff_factor,
+                                    max_retry_wait_seconds,
+                                )
+                                continue
+                            raise dbapi_error
+                        except Exception as error:
+                            # Don't record the error if it was already recorded
+                            if not has_recorded_error:
+                                txn_output["error"] = utils.serialize(error)
+                                dbos.app_db.record_transaction_error(txn_output)
+                            raise error
+            return output
+
+        fi = get_or_create_func_info(func)
+
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            rr: Optional[str] = check_required_roles(func, fi)
+            # Entering transaction is allowed:
+            #  In a workflow (that is not in a transaction / comm already)
+            #  Not in a workflow (we will start the single op workflow)
+            ctx = get_local_dbos_context()
+            if ctx and ctx.is_within_workflow():
+                assert (
+                    ctx.is_workflow()
+                ), "Transactions must be called from within workflows"
+                with DBOSAssumeRole(rr):
+                    return invoke_tx(*args, **kwargs)
+            else:
+                tempwf = dbos.workflow_info_map.get("<temp>." + func.__qualname__)
+                assert tempwf
+                return tempwf(*args, **kwargs)
+
+        def temp_wf(*args: Any, **kwargs: Any) -> Any:
+            return wrapper(*args, **kwargs)
+
+        wrapped_wf = _workflow_wrapper(dbos, temp_wf)
+        set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
+        dbos._register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+
+        return cast(F, wrapper)
+
+    return decorator
+
+
+def _communicator(
+    dbos: "DBOS",
+    *,
+    retries_allowed: bool = False,
+    interval_seconds: float = 1.0,
+    max_attempts: int = 3,
+    backoff_rate: float = 2.0,
+) -> Callable[[F], F]:
+    def decorator(func: F) -> F:
+
+        def invoke_comm(*args: Any, **kwargs: Any) -> Any:
+
+            attributes: TracedAttributes = {
+                "name": func.__name__,
+                "operationType": OperationType.COMMUNICATOR.value,
+            }
+            with EnterDBOSCommunicator(attributes) as ctx:
+                comm_output: OperationResultInternal = {
+                    "workflow_uuid": ctx.workflow_uuid,
+                    "function_id": ctx.function_id,
+                    "output": None,
+                    "error": None,
+                }
+                recorded_output = dbos.sys_db.check_operation_execution(
+                    ctx.workflow_uuid, ctx.function_id
+                )
+                if recorded_output:
+                    if recorded_output["error"] is not None:
+                        deserialized_error = utils.deserialize(recorded_output["error"])
+                        raise deserialized_error
+                    elif recorded_output["output"] is not None:
+                        return utils.deserialize(recorded_output["output"])
+                    else:
+                        raise Exception("Output and error are both None")
+                output = None
+                error = None
+                local_max_attempts = max_attempts if retries_allowed else 1
+                max_retry_interval_seconds: float = 3600  # 1 Hour
+                local_interval_seconds = interval_seconds
+                for attempt in range(1, local_max_attempts + 1):
+                    try:
+                        output = func(*args, **kwargs)
+                        comm_output["output"] = utils.serialize(output)
+                        error = None
+                        break
+                    except Exception as err:
+                        error = err
+                        if retries_allowed:
+                            dbos.logger.warning(
+                                f"Communicator being automatically retried. (attempt {attempt} of {local_max_attempts}). {traceback.format_exc()}"
+                            )
+                            ctx.get_current_span().add_event(
+                                f"Communicator attempt {attempt} failed",
+                                {
+                                    "error": str(error),
+                                    "retryIntervalSeconds": local_interval_seconds,
+                                },
+                            )
+                            if attempt == local_max_attempts:
+                                error = DBOSCommunicatorMaxRetriesExceededError()
+                            else:
+                                time.sleep(local_interval_seconds)
+                                local_interval_seconds = min(
+                                    local_interval_seconds * backoff_rate,
+                                    max_retry_interval_seconds,
+                                )
+
+                comm_output["error"] = (
+                    utils.serialize(error) if error is not None else None
+                )
+                dbos.sys_db.record_operation_result(comm_output)
+                if error is not None:
+                    raise error
+                return output
+
+        fi = get_or_create_func_info(func)
+
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            rr: Optional[str] = check_required_roles(func, fi)
+            # Entering communicator is allowed:
+            #  In a communicator already, just call the original function directly.
+            #  In a workflow (that is not in a transaction / comm already)
+            #  Not in a workflow (we will start the single op workflow)
+            ctx = get_local_dbos_context()
+            if ctx and ctx.is_communicator():
+                # Call the original function directly
+                return func(*args, **kwargs)
+            if ctx and ctx.is_within_workflow():
+                assert (
+                    ctx.is_workflow()
+                ), "Communicators must be called from within workflows"
+                with DBOSAssumeRole(rr):
+                    return invoke_comm(*args, **kwargs)
+            else:
+                tempwf = dbos.workflow_info_map.get("<temp>." + func.__qualname__)
+                assert tempwf
+                return tempwf(*args, **kwargs)
+
+        def temp_wf(*args: Any, **kwargs: Any) -> Any:
+            return wrapper(*args, **kwargs)
+
+        wrapped_wf = _workflow_wrapper(dbos, temp_wf)
+        set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
+        dbos._register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+
+        return cast(F, wrapper)
+
+    return decorator
