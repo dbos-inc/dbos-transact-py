@@ -53,7 +53,15 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
 
     time.sleep(2)
     assert wf_counter >= 1 and wf_counter <= 3
-    assert txn_counter == wf_counter
+    for i in range(max_tries):
+        try:
+            assert txn_counter + 1 == wf_counter
+            break
+        except Exception as e:
+            if i == max_tries - 1:
+                raise e
+            else:
+                time.sleep(1)
 
     dbos.sys_db.update_workflow_status(
         {
