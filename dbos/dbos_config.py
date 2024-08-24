@@ -8,6 +8,7 @@ import yaml
 from jsonschema import ValidationError, validate
 
 from dbos.error import DBOSInitializationError
+from dbos.logger import dbos_logger
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -43,13 +44,12 @@ class TelemetryConfig(TypedDict, total=False):
     OTLPExporter: Optional[OTLPExporterConfig]
 
 
-class ConfigFile(TypedDict):
+class ConfigFile(TypedDict, total=False):
     name: str
     language: str
     runtimeConfig: RuntimeConfig
     database: DatabaseConfig
     telemetry: Optional[TelemetryConfig]
-    application: Dict[str, Any]
     env: Dict[str, str]
 
 
@@ -58,9 +58,14 @@ def substitute_env_vars(content: str) -> str:
 
     def replace_func(match: re.Match[str]) -> str:
         var_name = match.group(1)
-        return os.environ.get(
-            var_name, '""'
+        value = os.environ.get(
+            var_name, ""
         )  # If the env variable is not set, return an empty string
+        if value == "":
+            dbos_logger.warning(
+                f"Variable {var_name} would be substituted from the process environment into dbos-config.yaml, but is not defined"
+            )
+        return value
 
     return re.sub(regex, replace_func, content)
 
@@ -103,3 +108,9 @@ def load_config(configFilePath: str = "dbos-config.yaml") -> ConfigFile:
 
     # Return data as ConfigFile type
     return data  # type: ignore
+
+
+def set_env_vars(config: ConfigFile) -> None:
+    for env, value in config.get("env", {}).items():
+        if value is not None:
+            os.environ[env] = value

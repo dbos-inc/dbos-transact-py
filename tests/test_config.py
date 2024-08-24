@@ -7,6 +7,7 @@ import pytest
 
 # Public API
 from dbos import load_config
+from dbos.dbos_config import set_env_vars
 from dbos.error import DBOSInitializationError
 
 mock_filename = "test.yaml"
@@ -40,6 +41,8 @@ def test_valid_config(mocker):
           connectionTimeoutMillis: 3000
         env:
             foo: ${BARBAR}
+            bazbaz: BAZBAZ
+            bob: ${BOBBOB}
     """
     os.environ["BARBAR"] = "FOOFOO"
     mocker.patch(
@@ -56,6 +59,10 @@ def test_valid_config(mocker):
     assert configFile["database"]["app_db_name"] == "some db"
     assert configFile["database"]["connectionTimeoutMillis"] == 3000
     assert configFile["env"]["foo"] == "FOOFOO"
+    assert configFile["env"]["bob"] is None  # Unset environment variable
+
+    set_env_vars(configFile)
+    assert os.environ["bazbaz"] == "BAZBAZ"
 
 
 def test_config_missing_params(mocker):

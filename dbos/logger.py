@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
@@ -8,7 +8,8 @@ from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 
-from dbos.dbos_config import ConfigFile
+if TYPE_CHECKING:
+    from dbos.dbos_config import ConfigFile
 
 dbos_logger = logging.getLogger("dbos")
 
@@ -34,13 +35,10 @@ class PatchedOTLPLoggerProvider(LoggerProvider):
         return super().force_flush(timeout_millis)
 
 
-def config_logger(config: ConfigFile) -> None:
-    # Configure the DBOS logger. Log to the console by default.
+def init_logger() -> None:
+    # By default, log to the console
     if not dbos_logger.handlers:
         dbos_logger.propagate = False
-        log_level = config.get("telemetry", {}).get("logs", {}).get("logLevel")  # type: ignore
-        if log_level is not None:
-            dbos_logger.setLevel(log_level)
         console_handler = logging.StreamHandler()
         console_formatter = logging.Formatter(
             "%(asctime)s [%(levelname)8s] (%(name)s:%(filename)s:%(lineno)s) %(message)s",
@@ -49,36 +47,44 @@ def config_logger(config: ConfigFile) -> None:
         console_handler.setFormatter(console_formatter)
         dbos_logger.addHandler(console_handler)
 
-        otlp_logs_endpoint = (
-            config.get("telemetry", {}).get("OTLPExporter", {}).get("logsEndpoint")  # type: ignore
+
+def config_logger(config: "ConfigFile") -> None:
+    # Configure the log level
+    log_level = config.get("telemetry", {}).get("logs", {}).get("logLevel")  # type: ignore
+    if log_level is not None:
+        dbos_logger.setLevel(log_level)
+
+    # Log to the OTLP endpoint if provided
+    otlp_logs_endpoint = (
+        config.get("telemetry", {}).get("OTLPExporter", {}).get("logsEndpoint")  # type: ignore
+    )
+    if otlp_logs_endpoint:
+        log_provider = PatchedOTLPLoggerProvider(
+            Resource.create(
+                attributes={
+                    "service.name": "dbos-application",
+                }
+            )
         )
-        add_otlp_to_all_loggers(console_handler, DBOSLogTransformer())
-        if otlp_logs_endpoint:
-            # Also log to the OTLP endpoint if provided
-            log_provider = PatchedOTLPLoggerProvider(
-                Resource.create(
-                    attributes={
-                        "service.name": "dbos-application",
-                    }
-                )
+        set_logger_provider(log_provider)
+        log_provider.add_log_record_processor(
+            BatchLogRecordProcessor(
+                OTLPLogExporter(endpoint=otlp_logs_endpoint),
+                export_timeout_millis=5000,
             )
-            set_logger_provider(log_provider)
-            log_provider.add_log_record_processor(
-                BatchLogRecordProcessor(
-                    OTLPLogExporter(endpoint=otlp_logs_endpoint),
-                    export_timeout_millis=5000,
-                )
-            )
-            otlp_handler = LoggingHandler(logger_provider=log_provider)
+        )
+        otlp_handler = LoggingHandler(logger_provider=log_provider)
 
-            # Attach DBOS-specific attributes to all log entries.
-            otlp_transformer = DBOSLogTransformer()
+        # Attach DBOS-specific attributes to all log entries.
+        otlp_transformer = DBOSLogTransformer()
 
-            # Direct all logs to OTLP
-            add_otlp_to_all_loggers(otlp_handler, otlp_transformer)
+        # Direct all logs to OTLP
+        add_otlp_to_all_loggers(otlp_handler, otlp_transformer)
 
 
-def add_otlp_to_all_loggers(otlp_handler, otlp_transformer):
+def add_otlp_to_all_loggers(
+    otlp_handler: LoggingHandler, otlp_transformer: DBOSLogTransformer
+) -> None:
     root = logging.root
 
     root.addHandler(otlp_handler)

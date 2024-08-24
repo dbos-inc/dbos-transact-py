@@ -33,7 +33,6 @@ def default_config() -> ConfigFile:
             "start": ["python3 main.py"],
         },
         "telemetry": {},
-        "application": {},
         "env": {},
     }
 

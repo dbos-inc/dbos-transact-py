@@ -74,8 +74,8 @@ from dbos.error import (
 from dbos.workflow import WorkflowHandle, WorkflowStatus
 
 from .application_database import ApplicationDatabase, TransactionResultInternal
-from .dbos_config import ConfigFile, load_config
-from .logger import config_logger, dbos_logger
+from .dbos_config import ConfigFile, load_config, set_env_vars
+from .logger import config_logger, dbos_logger, init_logger
 from .system_database import (
     GetEventWorkflowContext,
     OperationResultInternal,
@@ -115,9 +115,11 @@ class DBOS:
     def __init__(
         self, fastapi: Optional["FastAPI"] = None, config: Optional[ConfigFile] = None
     ) -> None:
+        init_logger()
         if config is None:
             config = load_config()
         config_logger(config)
+        set_env_vars(config)
         dbos_tracer.config(config)
         dbos_logger.info("Initializing DBOS")
         self.config = config
