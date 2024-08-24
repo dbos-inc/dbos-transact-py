@@ -26,6 +26,7 @@ from typing import (
 from opentelemetry.trace import Span
 
 from dbos.core import (
+    _communicator,
     _execute_workflow_uuid,
     _start_workflow,
     _transaction,
@@ -229,109 +230,13 @@ class DBOS:
         max_attempts: int = 3,
         backoff_rate: float = 2.0,
     ) -> Callable[[F], F]:
-        def decorator(func: F) -> F:
-
-            def invoke_comm(*args: Any, **kwargs: Any) -> Any:
-
-                attributes: TracedAttributes = {
-                    "name": func.__name__,
-                    "operationType": OperationType.COMMUNICATOR.value,
-                }
-                with EnterDBOSCommunicator(attributes) as ctx:
-                    comm_output: OperationResultInternal = {
-                        "workflow_uuid": ctx.workflow_uuid,
-                        "function_id": ctx.function_id,
-                        "output": None,
-                        "error": None,
-                    }
-                    recorded_output = self.sys_db.check_operation_execution(
-                        ctx.workflow_uuid, ctx.function_id
-                    )
-                    if recorded_output:
-                        if recorded_output["error"] is not None:
-                            deserialized_error = utils.deserialize(
-                                recorded_output["error"]
-                            )
-                            raise deserialized_error
-                        elif recorded_output["output"] is not None:
-                            return utils.deserialize(recorded_output["output"])
-                        else:
-                            raise Exception("Output and error are both None")
-                    output = None
-                    error = None
-                    local_max_attempts = max_attempts if retries_allowed else 1
-                    max_retry_interval_seconds: float = 3600  # 1 Hour
-                    local_interval_seconds = interval_seconds
-                    for attempt in range(1, local_max_attempts + 1):
-                        try:
-                            output = func(*args, **kwargs)
-                            comm_output["output"] = utils.serialize(output)
-                            error = None
-                            break
-                        except Exception as err:
-                            error = err
-                            if retries_allowed:
-                                dbos_logger.warning(
-                                    f"Communicator being automatically retried. (attempt {attempt} of {local_max_attempts}). {traceback.format_exc()}"
-                                )
-                                DBOS.span.add_event(
-                                    f"Communicator attempt {attempt} failed",
-                                    {
-                                        "error": str(error),
-                                        "retryIntervalSeconds": local_interval_seconds,
-                                    },
-                                )
-                                if attempt == local_max_attempts:
-                                    error = DBOSCommunicatorMaxRetriesExceededError()
-                                else:
-                                    time.sleep(local_interval_seconds)
-                                    local_interval_seconds = min(
-                                        local_interval_seconds * backoff_rate,
-                                        max_retry_interval_seconds,
-                                    )
-
-                    comm_output["error"] = (
-                        utils.serialize(error) if error is not None else None
-                    )
-                    self.sys_db.record_operation_result(comm_output)
-                    if error is not None:
-                        raise error
-                    return output
-
-            fi = get_or_create_func_info(func)
-
-            @wraps(func)
-            def wrapper(*args: Any, **kwargs: Any) -> Any:
-                rr: Optional[str] = check_required_roles(func, fi)
-                # Entering communicator is allowed:
-                #  In a communicator already, just call the original function directly.
-                #  In a workflow (that is not in a transaction / comm already)
-                #  Not in a workflow (we will start the single op workflow)
-                ctx = get_local_dbos_context()
-                if ctx and ctx.is_communicator():
-                    # Call the original function directly
-                    return func(*args, **kwargs)
-                if ctx and ctx.is_within_workflow():
-                    assert (
-                        ctx.is_workflow()
-                    ), "Communicators must be called from within workflows"
-                    with DBOSAssumeRole(rr):
-                        return invoke_comm(*args, **kwargs)
-                else:
-                    tempwf = self.workflow_info_map.get("<temp>." + func.__qualname__)
-                    assert tempwf
-                    return tempwf(*args, **kwargs)
-
-            def temp_wf(*args: Any, **kwargs: Any) -> Any:
-                return wrapper(*args, **kwargs)
-
-            wrapped_wf = _workflow_wrapper(self, temp_wf)
-            set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
-            self._register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
-
-            return cast(F, wrapper)
-
-        return decorator
+        return _communicator(
+            self,
+            retries_allowed=retries_allowed,
+            interval_seconds=interval_seconds,
+            max_attempts=max_attempts,
+            backoff_rate=backoff_rate,
+        )
 
     def register_instance(self, inst: object) -> None:
         config_name = getattr(inst, "config_name")
