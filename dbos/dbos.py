@@ -3,11 +3,8 @@ from __future__ import annotations
 import os
 import sys
 import threading
-import time
-import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from functools import wraps
 from logging import Logger
 from typing import (
     TYPE_CHECKING,
@@ -20,7 +17,6 @@ from typing import (
     Protocol,
     Type,
     TypeVar,
-    cast,
 )
 
 from opentelemetry.trace import Span
@@ -37,12 +33,10 @@ from dbos.decorators import classproperty
 from dbos.recovery import recover_pending_workflows, startup_recovery_thread
 from dbos.registrations import (
     DBOSClassInfo,
-    get_dbos_func_name,
     get_or_create_class_info,
-    get_or_create_func_info,
     set_dbos_func_name,
 )
-from dbos.roles import check_required_roles, default_required_roles, required_roles
+from dbos.roles import default_required_roles, required_roles
 from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled
 
 from .tracer import dbos_tracer
@@ -51,7 +45,6 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
     from .fastapi import Request
 
-from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 if sys.version_info < (3, 10):
@@ -59,31 +52,19 @@ if sys.version_info < (3, 10):
 else:
     from typing import ParamSpec, TypeAlias
 
-import dbos.utils as utils
 from dbos.admin_sever import AdminServer
 from dbos.context import (
-    DBOSAssumeRole,
     EnterDBOSCommunicator,
-    EnterDBOSTransaction,
-    OperationType,
     TracedAttributes,
     assert_current_dbos_context,
     get_local_dbos_context,
 )
-from dbos.error import (
-    DBOSCommunicatorMaxRetriesExceededError,
-    DBOSException,
-    DBOSNonExistentWorkflowError,
-)
+from dbos.error import DBOSException, DBOSNonExistentWorkflowError
 
-from .application_database import ApplicationDatabase, TransactionResultInternal
+from .application_database import ApplicationDatabase
 from .dbos_config import ConfigFile, load_config
 from .logger import config_logger, dbos_logger
-from .system_database import (
-    GetEventWorkflowContext,
-    OperationResultInternal,
-    SystemDatabase,
-)
+from .system_database import GetEventWorkflowContext, SystemDatabase
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
