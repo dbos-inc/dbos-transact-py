@@ -42,11 +42,11 @@ def config_logger(config: ConfigFile) -> None:
         if log_level is not None:
             dbos_logger.setLevel(log_level)
         console_handler = logging.StreamHandler()
-        dbos_formatter = logging.Formatter(
+        console_formatter = logging.Formatter(
             "%(asctime)s [%(levelname)8s] (%(name)s:%(filename)s:%(lineno)s) %(message)s",
             datefmt="%H:%M:%S",
         )
-        console_handler.setFormatter(dbos_formatter)
+        console_handler.setFormatter(console_formatter)
         dbos_logger.addHandler(console_handler)
 
         otlp_logs_endpoint = (
@@ -69,14 +69,33 @@ def config_logger(config: ConfigFile) -> None:
                 )
             )
             otlp_handler = LoggingHandler(logger_provider=log_provider)
-            otlp_handler.setFormatter(dbos_formatter)
+            if log_level is not None:
+                otlp_handler.setLevel(log_level)
             dbos_logger.addHandler(otlp_handler)
 
             # Attach DBOS-specific attributes to all log entries.
-            log_transformer = DBOSLogTransformer()
-            dbos_logger.addFilter(log_transformer)
+            otlp_transformer = DBOSLogTransformer()
+            add_otlp_to_all_loggers(otlp_handler, otlp_transformer)
 
-            # Attach the OTLP logger and transformer to the root logger
-            root_logger = logging.getLogger()
-            root_logger.addHandler(otlp_handler)
-            root_logger.addFilter(log_transformer)
+
+def add_otlp_to_all_loggers(otlp_handler, otlp_transformer):
+    # Get the root logger
+    root = logging.root
+
+    # Define a recursive function to traverse the logger hierarchy
+    def traverse_loggers(logger: logging.Logger):
+        # Add the handler to the current logger
+        if otlp_handler not in logger.handlers:
+            logger.addHandler(otlp_handler)
+            logger.addFilter(otlp_transformer)
+
+        # Traverse child loggers
+        for name in logger.manager.loggerDict:
+            child_logger = logging.getLogger(name)
+            if child_logger.propagate:
+                # Skip loggers that propagate, as they will inherit the handler
+                continue
+            traverse_loggers(child_logger)
+
+    # Start the traversal from the root logger
+    traverse_loggers(root)
