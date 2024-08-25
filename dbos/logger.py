@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry._logs import set_logger_provider
@@ -33,10 +34,13 @@ class DBOSLogTransformer(logging.Filter):
 class PatchedOTLPLoggerProvider(LoggerProvider):
     def force_flush(self, timeout_millis: int = 5000) -> bool:
         max_tries = 5
+        wait_time = 1
         for _ in range(max_tries):
             ret = super().force_flush(timeout_millis)
             if ret:
                 return True
+            time.sleep(wait_time)
+            wait_time *= 2
         return False
 
 
