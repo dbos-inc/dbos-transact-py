@@ -29,10 +29,15 @@ class DBOSLogTransformer(logging.Filter):
 
 
 # Mitigation for https://github.com/open-telemetry/opentelemetry-python/issues/3193
-# Reduce the force flush timeout
+# Reduce the force flush timeout and auto-retry.
 class PatchedOTLPLoggerProvider(LoggerProvider):
     def force_flush(self, timeout_millis: int = 5000) -> bool:
-        return super().force_flush(timeout_millis)
+        max_tries = 5
+        for _ in range(max_tries):
+            ret = super().force_flush(timeout_millis)
+            if ret:
+                return True
+        return False
 
 
 def init_logger() -> None:
