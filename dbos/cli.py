@@ -66,7 +66,7 @@ def start() -> None:
 
 @app.command()
 def create() -> None:
-    pass
+    typer.echo(f"dbos create coming soon")
 
 
 @app.command()
