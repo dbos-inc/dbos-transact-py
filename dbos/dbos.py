@@ -191,6 +191,11 @@ class DBOS:
         self.executor.shutdown(cancel_futures=True)
         self._initialized = False
 
+    @classmethod
+    def _get_dbos(cls) -> DBOS:
+        # Could check context
+        return DBOS()
+
     def _register_wf_function(self, name: str, wrapped_func: F) -> None:
         self.workflow_info_map[name] = wrapped_func
 
