@@ -189,6 +189,7 @@ class DBOS:
         self.app_db.destroy()
         self.admin_server.stop()
         self.executor.shutdown(cancel_futures=True)
+        self._initialized = False
 
     def _register_wf_function(self, name: str, wrapped_func: F) -> None:
         self.workflow_info_map[name] = wrapped_func
