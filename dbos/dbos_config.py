@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 import yaml
 from jsonschema import ValidationError, validate
+from sqlalchemy import URL
 
 from dbos.error import DBOSInitializationError
 from dbos.logger import dbos_logger
@@ -70,9 +71,22 @@ def substitute_env_vars(content: str) -> str:
     return re.sub(regex, replace_func, content)
 
 
-def load_config(configFilePath: str = "dbos-config.yaml") -> ConfigFile:
+def get_dbos_database_url(config_file_path: str = "dbos-config.yaml") -> str:
+    dbos_config = load_config(config_file_path)
+    db_url = URL.create(
+        "postgresql",
+        username=dbos_config["database"]["username"],
+        password=dbos_config["database"]["password"],
+        host=dbos_config["database"]["hostname"],
+        port=dbos_config["database"]["port"],
+        database=dbos_config["database"]["app_db_name"],
+    )
+    return db_url.render_as_string(hide_password=False)
+
+
+def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
     # Load the YAML file
-    with open(configFilePath, "r") as file:
+    with open(config_file_path, "r") as file:
         content = file.read()
         substituted_content = substitute_env_vars(content)
         data = yaml.safe_load(substituted_content)
