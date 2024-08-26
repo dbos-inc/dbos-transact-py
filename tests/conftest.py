@@ -96,7 +96,7 @@ def cleanup_test_databases(config: ConfigFile, postgres_db_engine: sa.Engine) ->
 def dbos(
     config: ConfigFile, cleanup_test_databases: None
 ) -> Generator[DBOS, Any, None]:
-    dbos = DBOS(config=config)
+    dbos = DBOS.create_instance(config=config)
     yield dbos
     dbos.destroy()
 
@@ -106,7 +106,7 @@ def dbos_fastapi(
     config: ConfigFile, cleanup_test_databases: None
 ) -> Generator[Tuple[DBOS, FastAPI], Any, None]:
     app = FastAPI()
-    dbos = DBOS(fastapi=app, config=config)
+    dbos = DBOS.create_instance(fastapi=app, config=config)
     yield dbos, app
     dbos.destroy()
 

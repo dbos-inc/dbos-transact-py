@@ -64,12 +64,12 @@ from dbos.context import (
     assert_current_dbos_context,
     get_local_dbos_context,
 )
-from dbos.error import DBOSException, DBOSNonExistentWorkflowError
+from dbos.error import DBOSNonExistentWorkflowError
 
 from .application_database import ApplicationDatabase
 from .dbos_config import ConfigFile, load_config, set_env_vars
 from .logger import config_logger, dbos_logger, init_logger
-from .system_database import GetEventWorkflowContext, SystemDatabase
+from .system_database import SystemDatabase
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
@@ -99,9 +99,49 @@ IsolationLevel = Literal[
 
 
 class DBOS:
+    # TODO: Put comment where it really belongs
+    ### Lifecycles ###
+    # We provide the following:
+    #  A singleton, created / accessed as `DBOS(args)`
+    #  A factory method `create_instance(args)` to create a non-singleton instance
+    #  Access to the context's DBOS (or the singleton in the absence) decorators / methods via `DBOS.<thing>`
+    #
+    # If an application wants to control lifecycle of DBOS via singleton:
+    #  Create DBOS with `DBOS()`
+    #   Use DBOS or the instance returned from DBOS()
+    # If an application (or test) wants more than one:
+    #  Create DBOS with `create_instance` and remember which it is
+    #  Use that instance
+
+    _instance: Optional[DBOS] = None
+
+    def __new__(
+        cls: Type[DBOS],
+        fastapi: Optional["FastAPI"] = None,
+        config: Optional[ConfigFile] = None,
+    ) -> DBOS:
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance.__init__(fastapi=fastapi, config=config)  # type: ignore
+        return cls._instance
+
+    @classmethod
+    def create_instance(
+        cls: Type[DBOS],
+        fastapi: Optional["FastAPI"] = None,
+        config: Optional[ConfigFile] = None,
+    ) -> DBOS:
+        inst: DBOS = super().__new__(cls)
+        inst.__init__(fastapi=fastapi, config=config)  # type: ignore
+        return inst
+
     def __init__(
         self, fastapi: Optional["FastAPI"] = None, config: Optional[ConfigFile] = None
     ) -> None:
+        if hasattr(self, "_initialized") and self._initialized:
+            return
+
+        self._initialized: bool = True
         init_logger()
         if config is None:
             config = load_config()
@@ -109,14 +149,14 @@ class DBOS:
         set_env_vars(config)
         dbos_tracer.config(config)
         dbos_logger.info("Initializing DBOS")
-        self.config = config
-        self.sys_db = SystemDatabase(config)
-        self.app_db = ApplicationDatabase(config)
+        self.config: Optional[ConfigFile] = config
+        self.sys_db: SystemDatabase = SystemDatabase(config)
+        self.app_db: ApplicationDatabase = ApplicationDatabase(config)
         self.workflow_info_map: dict[str, Workflow[..., Any]] = {}
         self.class_info_map: dict[str, type] = {}
         self.instance_info_map: dict[str, object] = {}
-        self.executor = ThreadPoolExecutor(max_workers=64)
-        self.admin_server = AdminServer(dbos=self)
+        self.executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=64)
+        self.admin_server: AdminServer = AdminServer(dbos=self)
         self.stop_events: List[threading.Event] = []
         if fastapi is not None:
             from dbos.fastapi import setup_fastapi_middleware
