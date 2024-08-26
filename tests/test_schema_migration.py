@@ -63,6 +63,7 @@ def test_custom_sysdb_name_migration(
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sysdb_name}"))
 
     # Test migrating up
+    DBOS.clear()  # In case of other tests leaving it
     dbos = DBOS(config=config)
 
     # Make sure all tables exist

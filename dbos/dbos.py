@@ -135,6 +135,10 @@ class DBOS:
         inst.__init__(fastapi=fastapi, config=config)  # type: ignore
         return inst
 
+    @classmethod
+    def clear(cls) -> None:
+        cls._instance = None
+
     def __init__(
         self, fastapi: Optional["FastAPI"] = None, config: Optional[ConfigFile] = None
     ) -> None:

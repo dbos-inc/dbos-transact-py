@@ -11,6 +11,7 @@ from dbos.context import DBOSContextEnsure, assert_current_dbos_context
 from tests.conftest import default_config
 
 # Initialize singleton
+DBOS.clear()  # In case of other tests leaving it
 dbos: DBOS = DBOS(config=default_config())
 
 
@@ -36,25 +37,25 @@ class DBOSTestClass:
 
     @classmethod
     @DBOS().transaction()
-    def test_transaction_cls(self, var2: str) -> str:
+    def test_transaction_cls(cls, var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
-        self.txn_counter += 1
+        cls.txn_counter_c += 1
         DBOS.logger.info("I'm test_transaction")
         return var2 + str(rows[0][0])
 
     @classmethod
     @DBOS().communicator()
-    def test_communicator_cls(self, var: str) -> str:
-        self.comm_counter += 1
+    def test_communicator_cls(cls, var: str) -> str:
+        cls.comm_counter_c += 1
         DBOS.logger.info("I'm test_communicator")
         return var
 
 
-"""
-def test_dbos_singleton(postgres_db_engine: None, cleanup_test_databases: None) -> None:
+def test_dbos_singleton() -> None:
     res = DBOSTestClass.test_workflow_cls("a", "b")
-    assert res == "a1b"
-"""
+    assert res == "b1a"
+    dbos.destroy()
+
 
 """
 def test_required_roles(dbos: DBOS) -> None:
@@ -492,5 +493,3 @@ def test_inst_recovery(dbos: DBOS) -> None:
     assert last_inst is inst
 
 """
-
-dbos.destroy()
