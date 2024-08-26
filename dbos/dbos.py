@@ -25,6 +25,7 @@ from dbos.core import (
     TEMP_SEND_WF_NAME,
     _communicator,
     _execute_workflow_uuid,
+    _recv,
     _send,
     _start_workflow,
     _transaction,
@@ -266,26 +267,7 @@ class DBOS:
         return _send(self, destination_uuid, message, topic)
 
     def recv(self, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
-        cur_ctx = get_local_dbos_context()
-        if cur_ctx is not None:
-            # Must call it within a workflow
-            assert cur_ctx.is_workflow(), "recv() must be called from within a workflow"
-            attributes: TracedAttributes = {
-                "name": "recv",
-            }
-            with EnterDBOSCommunicator(attributes) as ctx:
-                ctx.function_id += 1  # Reserve for the sleep
-                timeout_function_id = ctx.function_id
-                return self.sys_db.recv(
-                    ctx.workflow_uuid,
-                    ctx.curr_comm_function_id,
-                    timeout_function_id,
-                    topic,
-                    timeout_seconds,
-                )
-        else:
-            # Cannot call it from outside of a workflow
-            raise DBOSException("recv() must be called from within a workflow")
+        return _recv(self, topic, timeout_seconds)
 
     def sleep(self, seconds: float) -> None:
         attributes: TracedAttributes = {

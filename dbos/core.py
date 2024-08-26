@@ -30,6 +30,7 @@ from dbos.context import (
 )
 from dbos.error import (
     DBOSCommunicatorMaxRetriesExceededError,
+    DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSRecoveryError,
     DBOSWorkflowConflictUUIDError,
@@ -605,14 +606,14 @@ def _communicator(
 
 
 def _send(
-    self: "DBOS", destination_uuid: str, message: Any, topic: Optional[str] = None
+    dbos: "DBOS", destination_uuid: str, message: Any, topic: Optional[str] = None
 ) -> None:
     def do_send(destination_uuid: str, message: Any, topic: Optional[str]) -> None:
         attributes: TracedAttributes = {
             "name": "send",
         }
         with EnterDBOSCommunicator(attributes) as ctx:
-            self.sys_db.send(
+            dbos.sys_db.send(
                 ctx.workflow_uuid,
                 ctx.curr_comm_function_id,
                 destination_uuid,
@@ -625,6 +626,31 @@ def _send(
         assert ctx.is_workflow(), "send() must be called from within a workflow"
         return do_send(destination_uuid, message, topic)
     else:
-        wffn = self.workflow_info_map.get(TEMP_SEND_WF_NAME)
+        wffn = dbos.workflow_info_map.get(TEMP_SEND_WF_NAME)
         assert wffn
         wffn(destination_uuid, message, topic)
+
+
+def _recv(
+    dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60
+) -> Any:
+    cur_ctx = get_local_dbos_context()
+    if cur_ctx is not None:
+        # Must call it within a workflow
+        assert cur_ctx.is_workflow(), "recv() must be called from within a workflow"
+        attributes: TracedAttributes = {
+            "name": "recv",
+        }
+        with EnterDBOSCommunicator(attributes) as ctx:
+            ctx.function_id += 1  # Reserve for the sleep
+            timeout_function_id = ctx.function_id
+            return dbos.sys_db.recv(
+                ctx.workflow_uuid,
+                ctx.curr_comm_function_id,
+                timeout_function_id,
+                topic,
+                timeout_seconds,
+            )
+    else:
+        # Cannot call it from outside of a workflow
+        raise DBOSException("recv() must be called from within a workflow")
