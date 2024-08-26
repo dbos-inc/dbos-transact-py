@@ -64,7 +64,7 @@ from dbos.context import (
     assert_current_dbos_context,
     get_local_dbos_context,
 )
-from dbos.error import DBOSNonExistentWorkflowError
+from dbos.error import DBOSException, DBOSNonExistentWorkflowError
 
 from .application_database import ApplicationDatabase
 from .dbos_config import ConfigFile, load_config, set_env_vars
@@ -460,7 +460,9 @@ class WorkflowHandle(Generic[R], Protocol):
 
 
 class DBOSConfiguredInstance:
-    def __init__(self, config_name: str, dbos: Optional[DBOS]) -> None:
+    def __init__(self, config_name: str, dbos: Optional[DBOS] = None) -> None:
         self.config_name = config_name
         if dbos is not None:
             dbos.register_instance(self)
+        else:
+            DBOS().register_instance(self)
