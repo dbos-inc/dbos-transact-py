@@ -46,6 +46,7 @@ from dbos.registrations import (
 )
 from dbos.roles import check_required_roles
 from dbos.system_database import (
+    GetEventWorkflowContext,
     OperationResultInternal,
     WorkflowInputs,
     WorkflowStatusInternal,
@@ -654,3 +655,50 @@ def _recv(
     else:
         # Cannot call it from outside of a workflow
         raise DBOSException("recv() must be called from within a workflow")
+
+
+def _set_event(dbos: "DBOS", key: str, value: Any) -> None:
+    cur_ctx = get_local_dbos_context()
+    if cur_ctx is not None:
+        # Must call it within a workflow
+        assert (
+            cur_ctx.is_workflow()
+        ), "set_event() must be called from within a workflow"
+        attributes: TracedAttributes = {
+            "name": "set_event",
+        }
+        with EnterDBOSCommunicator(attributes) as ctx:
+            dbos.sys_db.set_event(
+                ctx.workflow_uuid, ctx.curr_comm_function_id, key, value
+            )
+    else:
+        # Cannot call it from outside of a workflow
+        raise DBOSException("set_event() must be called from within a workflow")
+
+
+def _get_event(
+    dbos: "DBOS", workflow_uuid: str, key: str, timeout_seconds: float = 60
+) -> Any:
+    cur_ctx = get_local_dbos_context()
+    if cur_ctx is not None and cur_ctx.is_within_workflow():
+        # Call it within a workflow
+        assert (
+            cur_ctx.is_workflow()
+        ), "get_event() must be called from within a workflow"
+        attributes: TracedAttributes = {
+            "name": "get_event",
+        }
+        with EnterDBOSCommunicator(attributes) as ctx:
+            ctx.function_id += 1
+            timeout_function_id = ctx.function_id
+            caller_ctx: GetEventWorkflowContext = {
+                "workflow_uuid": ctx.workflow_uuid,
+                "function_id": ctx.curr_comm_function_id,
+                "timeout_function_id": timeout_function_id,
+            }
+            return dbos.sys_db.get_event(
+                workflow_uuid, key, timeout_seconds, caller_ctx
+            )
+    else:
+        # Directly call it outside of a workflow
+        return dbos.sys_db.get_event(workflow_uuid, key, timeout_seconds)
