@@ -64,7 +64,7 @@ from dbos.context import (
     assert_current_dbos_context,
     get_local_dbos_context,
 )
-from dbos.error import DBOSException, DBOSNonExistentWorkflowError
+from dbos.error import DBOSNonExistentWorkflowError
 
 from .application_database import ApplicationDatabase
 from .dbos_config import ConfigFile, load_config, set_env_vars
