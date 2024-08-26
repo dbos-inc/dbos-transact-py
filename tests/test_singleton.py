@@ -10,9 +10,9 @@ from dbos import DBOS, DBOSConfiguredInstance, SetWorkflowUUID
 from dbos.context import DBOSContextEnsure, assert_current_dbos_context
 from tests.conftest import default_config
 
-"""
 # Initialize singleton
-dbos:DBOS = DBOS(config = default_config())
+dbos: DBOS = DBOS(config=default_config())
+
 
 @DBOS().dbos_class()
 class DBOSTestClass:
@@ -49,10 +49,11 @@ class DBOSTestClass:
         DBOS.logger.info("I'm test_communicator")
         return var
 
-def test_dbos_singleton() -> None:
+
+"""
+def test_dbos_singleton(postgres_db_engine: None, cleanup_test_databases: None) -> None:
     res = DBOSTestClass.test_workflow_cls("a", "b")
     assert res == "a1b"
-
 """
 
 """
@@ -492,4 +493,4 @@ def test_inst_recovery(dbos: DBOS) -> None:
 
 """
 
-# dbos.destroy()
+dbos.destroy()
