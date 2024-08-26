@@ -61,6 +61,8 @@ P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 F = TypeVar("F", bound=Callable[..., Any])
 
+TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
+
 
 class _WorkflowHandleFuture(Generic[R]):
 
@@ -600,3 +602,29 @@ def _communicator(
         return cast(F, wrapper)
 
     return decorator
+
+
+def _send(
+    self: "DBOS", destination_uuid: str, message: Any, topic: Optional[str] = None
+) -> None:
+    def do_send(destination_uuid: str, message: Any, topic: Optional[str]) -> None:
+        attributes: TracedAttributes = {
+            "name": "send",
+        }
+        with EnterDBOSCommunicator(attributes) as ctx:
+            self.sys_db.send(
+                ctx.workflow_uuid,
+                ctx.curr_comm_function_id,
+                destination_uuid,
+                message,
+                topic,
+            )
+
+    ctx = get_local_dbos_context()
+    if ctx and ctx.is_within_workflow():
+        assert ctx.is_workflow(), "send() must be called from within a workflow"
+        return do_send(destination_uuid, message, topic)
+    else:
+        wffn = self.workflow_info_map.get(TEMP_SEND_WF_NAME)
+        assert wffn
+        wffn(destination_uuid, message, topic)

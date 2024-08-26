@@ -22,8 +22,10 @@ from typing import (
 from opentelemetry.trace import Span
 
 from dbos.core import (
+    TEMP_SEND_WF_NAME,
     _communicator,
     _execute_workflow_uuid,
+    _send,
     _start_workflow,
     _transaction,
     _workflow_wrapper,
@@ -84,8 +86,6 @@ class DBOSCallProtocol(Protocol[P, R]):
 
 
 Workflow: TypeAlias = DBOSCallProtocol[P, R]
-
-TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
 
 IsolationLevel = Literal[
@@ -263,27 +263,7 @@ class DBOS:
     def send(
         self, destination_uuid: str, message: Any, topic: Optional[str] = None
     ) -> None:
-        def do_send(destination_uuid: str, message: Any, topic: Optional[str]) -> None:
-            attributes: TracedAttributes = {
-                "name": "send",
-            }
-            with EnterDBOSCommunicator(attributes) as ctx:
-                self.sys_db.send(
-                    ctx.workflow_uuid,
-                    ctx.curr_comm_function_id,
-                    destination_uuid,
-                    message,
-                    topic,
-                )
-
-        ctx = get_local_dbos_context()
-        if ctx and ctx.is_within_workflow():
-            assert ctx.is_workflow(), "send() must be called from within a workflow"
-            return do_send(destination_uuid, message, topic)
-        else:
-            wffn = self.workflow_info_map.get(TEMP_SEND_WF_NAME)
-            assert wffn
-            wffn(destination_uuid, message, topic)
+        return _send(self, destination_uuid, message, topic)
 
     def recv(self, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
         cur_ctx = get_local_dbos_context()
