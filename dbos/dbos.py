@@ -64,7 +64,7 @@ from dbos.context import (
     assert_current_dbos_context,
     get_local_dbos_context,
 )
-from dbos.error import DBOSNonExistentWorkflowError
+from dbos.error import DBOSException, DBOSNonExistentWorkflowError
 
 from .application_database import ApplicationDatabase
 from .dbos_config import ConfigFile, load_config, set_env_vars
@@ -149,25 +149,21 @@ class DBOS:
         set_env_vars(config)
         dbos_tracer.config(config)
         dbos_logger.info("Initializing DBOS")
-        self.config: Optional[ConfigFile] = config
-        self.sys_db: SystemDatabase = SystemDatabase(config)
-        self.app_db: ApplicationDatabase = ApplicationDatabase(config)
+        self.config: ConfigFile = config
+        self._launched = False
+        self._sys_db: Optional[SystemDatabase] = None
+        self._app_db: Optional[ApplicationDatabase] = None
         self.workflow_info_map: dict[str, Workflow[..., Any]] = {}
         self.class_info_map: dict[str, type] = {}
         self.instance_info_map: dict[str, object] = {}
         self.executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=64)
-        self.admin_server: AdminServer = AdminServer(dbos=self)
+        self._admin_server: Optional[AdminServer] = None
         self.stop_events: List[threading.Event] = []
-        if fastapi is not None:
+        self.fastapi = fastapi
+        if self.fastapi is not None:
             from dbos.fastapi import setup_fastapi_middleware
 
-            setup_fastapi_middleware(fastapi)
-        if not os.environ.get("DBOS__VMID"):
-            workflow_ids = self.sys_db.get_pending_workflows("local")
-            self.executor.submit(startup_recovery_thread, self, workflow_ids)
-
-        # Listen to notifications
-        self.executor.submit(self.sys_db._notification_listener)
+            setup_fastapi_middleware(self.fastapi)
 
         # Register send_stub as a workflow
         def send_temp_workflow(
@@ -178,18 +174,65 @@ class DBOS:
         temp_send_wf = _workflow_wrapper(self, send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
         self._register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
+
+    @property
+    def sys_db(self) -> SystemDatabase:
+        if self._sys_db is None:
+            self.launch()
+        if self._sys_db is None:
+            raise DBOSException("System database not initialized")
+        rv: SystemDatabase = self._sys_db
+        return rv
+
+    @property
+    def app_db(self) -> ApplicationDatabase:
+        if self._app_db is None:
+            self.launch()
+        if self._app_db is None:
+            raise DBOSException("Application database not initialized")
+        rv: ApplicationDatabase = self._app_db
+        return rv
+
+    @property
+    def admin_server(self) -> AdminServer:
+        if self._admin_server is None:
+            self.launch()
+        if self._admin_server is None:
+            raise DBOSException("Admin server is not initialized")
+        rv: AdminServer = self._admin_server
+        return rv
+
+    def launch(self) -> None:
+        self._launched = True
+        self._sys_db = SystemDatabase(self.config)
+        self._app_db = ApplicationDatabase(self.config)
+        self._admin_server = AdminServer(dbos=self)
+        if not os.environ.get("DBOS__VMID"):
+            workflow_ids = self.sys_db.get_pending_workflows("local")
+            self.executor.submit(startup_recovery_thread, self, workflow_ids)
+
+        # Listen to notifications
+        self.executor.submit(self.sys_db._notification_listener)
+
         dbos_logger.info("DBOS initialized")
         for handler in dbos_logger.handlers:
             handler.flush()
 
     def destroy(self) -> None:
+        self._initialized = False
         for event in self.stop_events:
             event.set()
-        self.sys_db.destroy()
-        self.app_db.destroy()
-        self.admin_server.stop()
+        if self._sys_db is not None:
+            self._sys_db.destroy()
+            self._sys_db = None
+        if self._app_db is not None:
+            self._app_db.destroy()
+            self._app_db = None
+        if self._admin_server is not None:
+            self._admin_server.stop()
+            self._admin_server = None
+        # CB Should this be done before DBs are destroyed?
         self.executor.shutdown(cancel_futures=True)
-        self._initialized = False
 
     @classmethod
     def _get_dbos(cls) -> DBOS:

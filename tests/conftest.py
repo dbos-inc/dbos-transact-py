@@ -97,6 +97,7 @@ def dbos(
     config: ConfigFile, cleanup_test_databases: None
 ) -> Generator[DBOS, Any, None]:
     dbos = DBOS.create_instance(config=config)
+    dbos.launch()
     yield dbos
     dbos.destroy()
 
