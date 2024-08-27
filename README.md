@@ -23,7 +23,7 @@ pip install --pre dbos
 
 Coming soon! 🚧
 
-But we have some cool demo apps for you to check out: [https://github.com/dbos-inc/dbos-demo-apps/tree/main/python](https://github.com/dbos-inc/dbos-demo-apps/tree/main/python)
+But we have some cool demo apps for you to check out [here](https://github.com/dbos-inc/dbos-demo-apps/tree/main/python).
 
 ## Main Features
 
