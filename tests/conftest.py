@@ -106,10 +106,12 @@ def dbos(
 def dbos_fastapi(
     config: ConfigFile, cleanup_test_databases: None
 ) -> Generator[Tuple[DBOSImpl, FastAPI], Any, None]:
+    DBOSImpl.clear_global_instance()
     app = FastAPI()
-    dbos = DBOSImpl.create_instance(fastapi=app, config=config)
+    dbos = DBOSImpl(fastapi=app, config=config)
     yield dbos, app
     dbos.destroy()
+    DBOSImpl.clear_global_instance()
 
 
 # Pretty-print test names
