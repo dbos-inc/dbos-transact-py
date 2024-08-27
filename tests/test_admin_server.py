@@ -38,6 +38,7 @@ def test_admin_endpoints(dbos: DBOS) -> None:
     assert response.status_code == 200
     perf_util = response.json()
     assert perf_util["utilization"] > 0.0
+    assert perf_util["utilization"] <= 1.0
 
     # Test GET not found
     response = requests.get("http://localhost:3001/stuff", timeout=5)

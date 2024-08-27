@@ -55,9 +55,9 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write("healthy".encode("utf-8"))
         elif self.path == perf_path:
             # Compares system CPU times elapsed since last call or module import, returning immediately (non blocking).
-            cpu_percent = psutil.cpu_percent(interval=None)
+            cpu_percent = psutil.cpu_percent(interval=None) / 100.0
             perf_util: PerfUtilization = {
-                "idle": 100.0 - cpu_percent,
+                "idle": 1.0 - cpu_percent,
                 "active": cpu_percent,
                 "utilization": cpu_percent,
             }
