@@ -6,6 +6,7 @@ import signal
 import subprocess
 import time
 import tomllib
+import typing
 from typing import Any
 
 import typer
@@ -73,7 +74,7 @@ def load_pyproject_name() -> str | None:
     try:
         with open("pyproject.toml", "rb") as file:
             pyproj = tomllib.load(file)
-            return pyproj["project"]["name"]
+            return typing.cast(str, pyproj["project"]["name"])
     except:
         return None
 
@@ -93,7 +94,7 @@ def get_template_directory() -> str:
     return os.path.join(package_dir, "templates")
 
 
-def copy_dbos_config(src: str, dst: str, project_name: str):
+def copy_dbos_config(src: str, dst: str, project_name: str) -> None:
     db_name = project_name.replace("-", "_")
     if db_name[0].isdigit():
         db_name = f"_{db_name}"
@@ -111,7 +112,7 @@ def copy_dbos_config(src: str, dst: str, project_name: str):
         pass
 
 
-def find_package_folder(project_name: str):
+def find_package_folder(project_name: str) -> str:
     package_name = project_name.replace("-", "_")
     for root, dirs, _ in os.walk("."):
         for dir in dirs:
@@ -120,9 +121,9 @@ def find_package_folder(project_name: str):
     return package_name
 
 
-def copy_template(template_dir: str, project_name: str):
+def copy_template(template_dir: str, project_name: str) -> None:
 
-    def copy_file(src: str, dst: str):
+    def copy_file(src: str, dst: str) -> None:
         if not os.path.exists(dst):
             shutil.copy2(src, dst)
 
