@@ -1,6 +1,7 @@
 import os
 import platform
 import re
+import shutil
 import signal
 import subprocess
 import time
@@ -8,7 +9,8 @@ import tomllib
 from typing import Any
 
 import typer
-import yaml
+from rich import print
+from rich.prompt import Prompt
 
 from dbos import load_config
 from dbos.application_database import ApplicationDatabase
@@ -91,37 +93,81 @@ def get_template_directory() -> str:
     return os.path.join(package_dir, "templates")
 
 
-def write_template_dbos_config(template_dir: str, project_name: str):
+def copy_dbos_config(src: str, dst: str, project_name: str):
     db_name = project_name.replace("-", "_")
     if db_name[0].isdigit():
         db_name = f"_{db_name}"
 
-    config_path = os.path.join(template_dir, "hello", "dbos-config.yaml")
-    with open(config_path, "r") as file:
+    with open(src, "r") as file:
         content = file.read()
 
     content = content.replace("${APP_NAME}", project_name)
     content = content.replace("${APP_DB_NAME}", db_name)
 
     try:
-        with open("dbos-config.yaml", "x") as file:
+        with open(dst, "x") as file:
             file.write(content)
     except FileExistsError:
-        typer.echo("dbos-config.yaml file already exists")
+        pass
+
+
+def find_package_folder(project_name: str):
+    package_name = project_name.replace("-", "_")
+    for root, dirs, _ in os.walk("."):
+        for dir in dirs:
+            if dir == package_name:
+                return os.path.join(root, dir)
+    return package_name
+
+
+def copy_template(template_dir: str, project_name: str):
+
+    def copy_file(src: str, dst: str):
+        if not os.path.exists(dst):
+            shutil.copy2(src, dst)
+
+    package_folder = find_package_folder(project_name)
+    shutil.copytree(
+        template_dir,
+        ".",
+        copy_function=copy_file,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("$package", "dbos-config.yaml"),
+    )
+    shutil.copytree(
+        os.path.join(template_dir, "$package"), package_folder, dirs_exist_ok=True
+    )
+
+    dbos_config_src = os.path.join(template_dir, "dbos-config.yaml")
+    if os.path.exists(dbos_config_src):
+        copy_dbos_config(dbos_config_src, "dbos-config.yaml", project_name)
 
 
 @app.command()
 def init() -> None:
-    project_name: str = typer.prompt(
-        "What is your project's name?", load_pyproject_name()
-    )
-    if is_valid_app_name(project_name) == False:
-        typer.echo(f"{project_name} is an invalid DBOS app name")
-        return
+    try:
+        project_name: str = typer.prompt(
+            "What is your project's name?", load_pyproject_name()
+        )
+        if not is_valid_app_name(project_name):
+            raise Exception(f"{project_name} is an invalid DBOS app name")
 
-    template_dir = get_template_directory()
+        template_dir = get_template_directory()
+        templates = [x.name for x in os.scandir(template_dir) if x.is_dir()]
+        templates_len = len(templates)
+        if templates_len == 0:
+            raise Exception(f"no DBOS templates found in {template_dir} ")
+        elif templates_len == 1:
+            template = templates[0]
+        else:
+            template = Prompt.ask(
+                "Which project template do you want to use?", choices=templates
+            )
 
-    write_template_dbos_config(template_dir, project_name)
+        chosen_template = os.path.join(template_dir, template)
+        copy_template(chosen_template, project_name)
+    except Exception as e:
+        print(f"[red]{e}[/red]")
 
 
 @app.command()
