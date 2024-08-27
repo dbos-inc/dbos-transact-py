@@ -8,6 +8,7 @@ import tomllib
 from typing import Any
 
 import typer
+import yaml
 
 from dbos import load_config
 from dbos.application_database import ApplicationDatabase
@@ -68,20 +69,45 @@ def start() -> None:
 
 def load_pyproject_name() -> str | None:
     try:
-        with open("pyproject.toml", "rb") as f:
-            pyproj = tomllib.load(f)
+        with open("pyproject.toml", "rb") as file:
+            pyproj = tomllib.load(file)
             return pyproj["project"]["name"]
     except:
         return None
 
 
 def is_valid_app_name(name: str) -> bool:
-    re.match()
     name_len = len(name)
     if name_len < 3 or name_len > 30:
         return False
     match = re.match("^[a-z0-9-_]+$", name)
     return True if match != None else False
+
+
+def get_template_directory() -> str:
+    import dbos
+
+    package_dir = os.path.abspath(os.path.dirname(dbos.__file__))
+    return os.path.join(package_dir, "templates")
+
+
+def write_template_dbos_config(template_dir: str, project_name: str):
+    db_name = project_name.replace("-", "_")
+    if db_name[0].isdigit():
+        db_name = f"_{db_name}"
+
+    config_path = os.path.join(template_dir, "hello", "dbos-config.yaml")
+    with open(config_path, "r") as file:
+        content = file.read()
+
+    content = content.replace("${APP_NAME}", project_name)
+    content = content.replace("${APP_DB_NAME}", db_name)
+
+    try:
+        with open("dbos-config.yaml", "x") as file:
+            file.write(content)
+    except FileExistsError:
+        typer.echo("dbos-config.yaml file already exists")
 
 
 @app.command()
@@ -93,11 +119,9 @@ def init() -> None:
         typer.echo(f"{project_name} is an invalid DBOS app name")
         return
 
-    db_name = project_name.replace("-", "_")
-    if db_name[0].isdigit():
-        db_name = f"_{db_name}"
+    template_dir = get_template_directory()
 
-    typer.echo(f"dbos init {project_name} {db_name}")
+    write_template_dbos_config(template_dir, project_name)
 
 
 @app.command()
