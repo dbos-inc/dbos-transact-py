@@ -7,6 +7,7 @@ DBOS Transact is a **Python library** for building durable and scalable applicat
 You want to use DBOS Transact in your application because you need:
 
 - **Resilience to any failure**.  If your app is interrupted for any reason, it automatically resumes from where it left off.  Reliable message delivery is built in. Idempotency is built in.
+- **Reliable event processing**. Need to consume Kafka events exactly-once? Just add one line of code to your app. Need to run a task exactly once per hour, day, or month? Just one more line of code.
 - **Built-in observability**. Automatically emit [OpenTelemetry](https://opentelemetry.io/)-compatible logs and traces from any application. Query your app's history from the command line or with SQL.
 - **Blazing-fast, developer-friendly serverless**.  Develop your project locally and run it anywhere. When you're ready, [deploy it for free to DBOS Cloud](https://docs.dbos.dev/getting-started/quickstart#deploying-to-dbos-cloud) and we'll host it for you, [25x faster](https://www.dbos.dev/blog/dbos-vs-aws-step-functions-benchmark) and [15x cheaper](https://www.dbos.dev/blog/dbos-vs-lambda-cost) than AWS Lambda.
 
