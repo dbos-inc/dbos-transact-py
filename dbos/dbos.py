@@ -97,6 +97,8 @@ IsolationLevel = Literal[
     "READ COMMITTED",
 ]
 
+_dbos_global_instance: Optional[DBOS] = None
+
 
 class DBOS:
     # TODO: Put comment where it really belongs
@@ -113,17 +115,16 @@ class DBOS:
     #  Create DBOS with `create_instance` and remember which it is
     #  Use that instance
 
-    _instance: Optional[DBOS] = None
-
     def __new__(
         cls: Type[DBOS],
         fastapi: Optional["FastAPI"] = None,
         config: Optional[ConfigFile] = None,
     ) -> DBOS:
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance.__init__(fastapi=fastapi, config=config)  # type: ignore
-        return cls._instance
+        global _dbos_global_instance
+        if _dbos_global_instance is None:
+            _dbos_global_instance = super().__new__(cls)
+            _dbos_global_instance.__init__(fastapi=fastapi, config=config)  # type: ignore
+        return _dbos_global_instance
 
     @classmethod
     def create_instance(
@@ -137,7 +138,8 @@ class DBOS:
 
     @classmethod
     def clear(cls) -> None:
-        cls._instance = None
+        global _dbos_global_instance
+        _dbos_global_instance = None
 
     def __init__(
         self, fastapi: Optional["FastAPI"] = None, config: Optional[ConfigFile] = None
