@@ -8,7 +8,7 @@ You want to use DBOS Transact in your application because you need:
 
 - **Resilience to any failure**.  If your app is interrupted for any reason, it automatically resumes from where it left off.  Reliable message delivery is built in. Idempotency is built in.
 - **Built-in observability**. Automatically emit [OpenTelemetry](https://opentelemetry.io/)-compatible logs and traces from any application. Query your app's history from the command line or with SQL.
-- **A framework built for the tools you love**. Build with TypeScript and **any** PostgreSQL-compatible database.
+- **A framework built for the tools you love**. Build with Python and **any** PostgreSQL-compatible database.
 - **Blazing-fast, developer-friendly serverless**.  Develop your project locally and run it anywhere. When you're ready, [deploy it for free to DBOS Cloud](https://docs.dbos.dev/getting-started/quickstart#deploying-to-dbos-cloud) and we'll host it for you, [25x faster](https://www.dbos.dev/blog/dbos-vs-aws-step-functions-benchmark) and [15x cheaper](https://www.dbos.dev/blog/dbos-vs-lambda-cost) than AWS Lambda.
 
 ## Getting Started
