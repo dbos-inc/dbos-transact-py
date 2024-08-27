@@ -53,7 +53,7 @@ from dbos.system_database import (
 )
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS, Workflow, WorkflowHandle, WorkflowStatus
+    from dbos.dbos import DBOSImpl, Workflow, WorkflowHandle, WorkflowStatus
     from dbos.dbos import IsolationLevel
 
 from sqlalchemy.exc import DBAPIError
@@ -68,7 +68,7 @@ TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
 class _WorkflowHandleFuture(Generic[R]):
 
-    def __init__(self, workflow_uuid: str, future: Future[R], dbos: "DBOS"):
+    def __init__(self, workflow_uuid: str, future: Future[R], dbos: "DBOSImpl"):
         self.workflow_uuid = workflow_uuid
         self.future = future
         self.dbos = dbos
@@ -88,7 +88,7 @@ class _WorkflowHandleFuture(Generic[R]):
 
 class _WorkflowHandlePolling(Generic[R]):
 
-    def __init__(self, workflow_uuid: str, dbos: "DBOS"):
+    def __init__(self, workflow_uuid: str, dbos: "DBOSImpl"):
         self.workflow_uuid = workflow_uuid
         self.dbos = dbos
 
@@ -107,7 +107,7 @@ class _WorkflowHandlePolling(Generic[R]):
 
 
 def _init_workflow(
-    dbos: "DBOS",
+    dbos: "DBOSImpl",
     ctx: DBOSContext,
     inputs: WorkflowInputs,
     wf_name: str,
@@ -144,7 +144,7 @@ def _init_workflow(
 
 
 def _execute_workflow(
-    dbos: "DBOS",
+    dbos: "DBOSImpl",
     status: WorkflowStatusInternal,
     func: "Workflow[P, R]",
     *args: Any,
@@ -170,7 +170,7 @@ def _execute_workflow(
 
 
 def _execute_workflow_wthread(
-    dbos: "DBOS",
+    dbos: "DBOSImpl",
     status: WorkflowStatusInternal,
     func: "Workflow[P, R]",
     ctx: DBOSContext,
@@ -192,7 +192,9 @@ def _execute_workflow_wthread(
                 raise e
 
 
-def _execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> "WorkflowHandle[Any]":
+def _execute_workflow_uuid(
+    dbos: "DBOSImpl", workflow_uuid: str
+) -> "WorkflowHandle[Any]":
     status = dbos.sys_db.get_workflow_status(workflow_uuid)
     if not status:
         raise DBOSRecoveryError(workflow_uuid, "Workflow status not found")
@@ -247,7 +249,7 @@ def _execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> "WorkflowHandle[
                 )
 
 
-def _workflow_wrapper(dbos: "DBOS", func: F) -> F:
+def _workflow_wrapper(dbos: "DBOSImpl", func: F) -> F:
     func.__orig_func = func  # type: ignore
 
     fi = get_or_create_func_info(func)
@@ -296,7 +298,7 @@ def _workflow_wrapper(dbos: "DBOS", func: F) -> F:
 
 
 def _start_workflow(
-    dbos: "DBOS",
+    dbos: "DBOSImpl",
     func: "Workflow[P, R]",
     *args: P.args,
     **kwargs: P.kwargs,
@@ -377,7 +379,7 @@ def _start_workflow(
 
 
 def _transaction(
-    dbos: "DBOS", isolation_level: "IsolationLevel" = "SERIALIZABLE"
+    dbos: "DBOSImpl", isolation_level: "IsolationLevel" = "SERIALIZABLE"
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
         def invoke_tx(*args: Any, **kwargs: Any) -> Any:
@@ -496,7 +498,7 @@ def _transaction(
 
 
 def _communicator(
-    dbos: "DBOS",
+    dbos: "DBOSImpl",
     *,
     retries_allowed: bool = False,
     interval_seconds: float = 1.0,
@@ -607,7 +609,7 @@ def _communicator(
 
 
 def _send(
-    dbos: "DBOS", destination_uuid: str, message: Any, topic: Optional[str] = None
+    dbos: "DBOSImpl", destination_uuid: str, message: Any, topic: Optional[str] = None
 ) -> None:
     def do_send(destination_uuid: str, message: Any, topic: Optional[str]) -> None:
         attributes: TracedAttributes = {
@@ -633,7 +635,7 @@ def _send(
 
 
 def _recv(
-    dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60
+    dbos: "DBOSImpl", topic: Optional[str] = None, timeout_seconds: float = 60
 ) -> Any:
     cur_ctx = get_local_dbos_context()
     if cur_ctx is not None:
@@ -657,7 +659,7 @@ def _recv(
         raise DBOSException("recv() must be called from within a workflow")
 
 
-def _set_event(dbos: "DBOS", key: str, value: Any) -> None:
+def _set_event(dbos: "DBOSImpl", key: str, value: Any) -> None:
     cur_ctx = get_local_dbos_context()
     if cur_ctx is not None:
         # Must call it within a workflow
@@ -677,7 +679,7 @@ def _set_event(dbos: "DBOS", key: str, value: Any) -> None:
 
 
 def _get_event(
-    dbos: "DBOS", workflow_uuid: str, key: str, timeout_seconds: float = 60
+    dbos: "DBOSImpl", workflow_uuid: str, key: str, timeout_seconds: float = 60
 ) -> Any:
     cur_ctx = get_local_dbos_context()
     if cur_ctx is not None and cur_ctx.is_within_workflow():

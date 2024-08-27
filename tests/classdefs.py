@@ -1,3 +1,5 @@
+from typing import Optional
+
 import sqlalchemy as sa
 
 # Public API
@@ -7,7 +9,7 @@ from dbos import DBOS, DBOSConfiguredInstance
 from dbos.context import assert_current_dbos_context
 
 
-@DBOS().dbos_class()
+@DBOS.dbos_class()
 class DBOSTestClass(DBOSConfiguredInstance):
     txn_counter_c = 0
     wf_counter_c = 0
@@ -20,7 +22,7 @@ class DBOSTestClass(DBOSConfiguredInstance):
         self.comm_counter: int = 0
 
     @classmethod
-    @DBOS().workflow()
+    @DBOS.workflow()
     def test_workflow_cls(cls, var: str, var2: str) -> str:
         cls.wf_counter_c += 1
         res = DBOSTestClass.test_transaction_cls(var2)
@@ -28,44 +30,94 @@ class DBOSTestClass(DBOSConfiguredInstance):
         return res + res2
 
     @classmethod
-    @DBOS().transaction()
+    @DBOS.transaction()
     def test_transaction_cls(cls, var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         cls.txn_counter_c += 1
         return var2 + str(rows[0][0])
 
     @classmethod
-    @DBOS().communicator()
+    @DBOS.communicator()
     def test_communicator_cls(cls, var: str) -> str:
         cls.comm_counter_c += 1
         return var
 
-    @DBOS().workflow()
+    @DBOS.workflow()
     def test_workflow(self, var: str, var2: str) -> str:
         self.wf_counter += 1
         res = self.test_transaction(var2)
         res2 = self.test_communicator(var)
         return res + res2
 
-    @DBOS().transaction()
+    @DBOS.transaction()
     def test_transaction(self, var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         self.txn_counter += 1
         return var2 + str(rows[0][0])
 
-    @DBOS().communicator()
+    @DBOS.communicator()
     def test_communicator(self, var: str) -> str:
         self.comm_counter += 1
         return var
 
-    @DBOS().workflow()
-    @DBOS().required_roles(["admin"])
+    @DBOS.workflow()
+    @DBOS.required_roles(["admin"])
     def test_func_admin(self, var: str) -> str:
         assert assert_current_dbos_context().assumed_role == "admin"
         return self.config_name + ":" + var
 
 
-@DBOS().workflow()
+@DBOS.default_required_roles(["user"])
+class DBOSTestRoles(DBOSConfiguredInstance):
+    @staticmethod
+    @DBOS.workflow()
+    def greetfunc(name: str) -> str:
+        return f"Hello {name}"
+
+
+@DBOS.dbos_class()
+class DBOSSendRecv:
+    send_counter: int = 0
+    recv_counter: int = 0
+
+    @staticmethod
+    @DBOS.workflow()
+    def test_send_workflow(dest_uuid: str, topic: str) -> str:
+        DBOS.send(dest_uuid, "test1")
+        DBOS.send(dest_uuid, "test2", topic=topic)
+        DBOS.send(dest_uuid, "test3")
+        DBOSSendRecv.send_counter += 1
+        return dest_uuid
+
+    @staticmethod
+    @DBOS.workflow()
+    def test_recv_workflow(topic: str) -> str:
+        msg1 = DBOS.recv(topic, timeout_seconds=10)
+        msg2 = DBOS.recv(timeout_seconds=10)
+        msg3 = DBOS.recv(timeout_seconds=10)
+        DBOSSendRecv.recv_counter += 1
+        return "-".join([str(msg1), str(msg2), str(msg3)])
+
+
+@DBOS.dbos_class()
+class DBOSWFEvents:
+    @staticmethod
+    @DBOS.workflow()
+    def test_setevent_workflow() -> None:
+        DBOS.set_event("key1", "value1")
+        DBOS.set_event("key2", "value2")
+        DBOS.set_event("key3", None)
+
+    @staticmethod
+    @DBOS.workflow()
+    def test_getevent_workflow(
+        target_uuid: str, key: str, timeout_seconds: float = 10
+    ) -> Optional[str]:
+        msg = DBOS.get_event(target_uuid, key, timeout_seconds)
+        return str(msg) if msg is not None else None
+
+
+@DBOS.workflow()
 def wfFunc(arg: str) -> str:
     assert DBOS.workflow_id == "wfid"
     return arg + "1"

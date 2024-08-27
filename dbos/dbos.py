@@ -97,10 +97,76 @@ IsolationLevel = Literal[
     "READ COMMITTED",
 ]
 
-_dbos_global_instance: Optional[DBOS] = None
+_dbos_global_instance: Optional[DBOSImpl] = None
 
 
-class DBOS:
+class IDBOS(Protocol):
+    def workflow(self) -> Callable[[F], F]: ...
+
+    def start_workflow(
+        self,
+        func: Workflow[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> WorkflowHandle[R]: ...
+
+    def retrieve_workflow(
+        self, workflow_uuid: str, existing_workflow: bool = True
+    ) -> WorkflowHandle[R]: ...
+
+    def get_workflow_status(self, workflow_uuid: str) -> Optional[WorkflowStatus]: ...
+
+    def transaction(
+        self, isolation_level: IsolationLevel = "SERIALIZABLE"
+    ) -> Callable[[F], F]: ...
+
+    # Mirror the CommunicatorConfig from TS. However, we disable retries by default.
+    def communicator(
+        self,
+        *,
+        retries_allowed: bool = False,
+        interval_seconds: float = 1.0,
+        max_attempts: int = 3,
+        backoff_rate: float = 2.0,
+    ) -> Callable[[F], F]: ...
+
+    def dbos_class(self) -> Callable[[Type[Any]], Type[Any]]: ...
+
+    def default_required_roles(
+        self, roles: List[str]
+    ) -> Callable[[Type[Any]], Type[Any]]: ...
+
+    def required_roles(self, roles: List[str]) -> Callable[[F], F]: ...
+
+    def scheduled(
+        self, cron: str
+    ) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]: ...
+
+    def send(
+        self, destination_uuid: str, message: Any, topic: Optional[str] = None
+    ) -> None: ...
+
+    def recv(self, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any: ...
+
+    def sleep(self, seconds: float) -> None: ...
+
+    def set_event(self, key: str, value: Any) -> None: ...
+
+    def get_event(
+        self, workflow_uuid: str, key: str, timeout_seconds: float = 60
+    ) -> Any: ...
+
+    def execute_workflow_uuid(self, workflow_uuid: str) -> WorkflowHandle[Any]: ...
+
+    def recover_pending_workflows(
+        self, executor_ids: List[str] = ["local"]
+    ) -> List[WorkflowHandle[Any]]: ...
+
+    @property
+    def logger(self) -> Logger: ...
+
+
+class DBOSImpl(IDBOS):
     # TODO: Put comment where it really belongs
     ### Lifecycles ###
     # We provide the following:
@@ -116,10 +182,10 @@ class DBOS:
     #  Use that instance
 
     def __new__(
-        cls: Type[DBOS],
+        cls: Type[DBOSImpl],
         fastapi: Optional["FastAPI"] = None,
         config: Optional[ConfigFile] = None,
-    ) -> DBOS:
+    ) -> DBOSImpl:
         global _dbos_global_instance
         if _dbos_global_instance is None:
             _dbos_global_instance = super().__new__(cls)
@@ -128,16 +194,16 @@ class DBOS:
 
     @classmethod
     def create_instance(
-        cls: Type[DBOS],
+        cls: Type[DBOSImpl],
         fastapi: Optional["FastAPI"] = None,
         config: Optional[ConfigFile] = None,
-    ) -> DBOS:
-        inst: DBOS = super().__new__(cls)
+    ) -> DBOSImpl:
+        inst: DBOSImpl = super().__new__(cls)
         inst.__init__(fastapi=fastapi, config=config)  # type: ignore
         return inst
 
     @classmethod
-    def clear(cls) -> None:
+    def clear_global_instance(cls) -> None:
         global _dbos_global_instance
         _dbos_global_instance = None
 
@@ -241,9 +307,9 @@ class DBOS:
         self.executor.shutdown(cancel_futures=True)
 
     @classmethod
-    def _get_dbos(cls) -> DBOS:
+    def _get_dbos(cls) -> DBOSImpl:
         # Could check context
-        return DBOS()
+        return DBOSImpl()
 
     def _register_wf_function(self, name: str, wrapped_func: F) -> None:
         self.workflow_info_map[name] = wrapped_func
@@ -397,6 +463,122 @@ class DBOS:
         """
         return recover_pending_workflows(self, executor_ids)
 
+    @property
+    def logger(self) -> Logger:
+        return dbos_logger
+
+
+def get_dbos_instance() -> DBOSImpl:
+    # Currently get / init the global singleton
+    #   (It could also check context?)
+    return DBOSImpl()
+
+
+class DBOS:
+    # Decorators for DBOS functionality
+    @classmethod
+    def workflow(cls) -> Callable[[F], F]:
+        return get_dbos_instance().workflow()
+
+    @classmethod
+    def transaction(
+        cls, isolation_level: IsolationLevel = "SERIALIZABLE"
+    ) -> Callable[[F], F]:
+        return get_dbos_instance().transaction(isolation_level)
+
+    @classmethod
+    def communicator(
+        cls,
+        *,
+        retries_allowed: bool = False,
+        interval_seconds: float = 1.0,
+        max_attempts: int = 3,
+        backoff_rate: float = 2.0,
+    ) -> Callable[[F], F]:
+        return get_dbos_instance().communicator(
+            retries_allowed=retries_allowed,
+            interval_seconds=interval_seconds,
+            max_attempts=max_attempts,
+            backoff_rate=backoff_rate,
+        )
+
+    @classmethod
+    def dbos_class(cls) -> Callable[[Type[Any]], Type[Any]]:
+        return get_dbos_instance().dbos_class()
+
+    @classmethod
+    def default_required_roles(
+        cls, roles: List[str]
+    ) -> Callable[[Type[Any]], Type[Any]]:
+        return get_dbos_instance().default_required_roles(roles)
+
+    @classmethod
+    def required_roles(cls, roles: List[str]) -> Callable[[F], F]:
+        return get_dbos_instance().required_roles(roles)
+
+    @classmethod
+    def scheduled(cls, cron: str) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
+        return get_dbos_instance().scheduled(cron)
+
+    @classmethod
+    def start_workflow(
+        cls,
+        func: Workflow[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> WorkflowHandle[R]:
+        return get_dbos_instance().start_workflow(func, *args, **kwargs)
+
+    @classmethod
+    def get_workflow_status(self, workflow_uuid: str) -> Optional[WorkflowStatus]:
+        return get_dbos_instance().get_workflow_status(workflow_uuid)
+
+    @classmethod
+    def retrieve_workflow(
+        self, workflow_uuid: str, existing_workflow: bool = True
+    ) -> WorkflowHandle[R]:
+        return get_dbos_instance().retrieve_workflow(workflow_uuid, existing_workflow)
+
+    @classmethod
+    def send(
+        cls, destination_uuid: str, message: Any, topic: Optional[str] = None
+    ) -> None:
+        return get_dbos_instance().send(destination_uuid, message, topic)
+
+    @classmethod
+    def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
+        return get_dbos_instance().recv(topic, timeout_seconds)
+
+    @classmethod
+    def sleep(cls, seconds: float) -> None:
+        return get_dbos_instance().sleep(seconds)
+
+    @classmethod
+    def set_event(cls, key: str, value: Any) -> None:
+        return get_dbos_instance().set_event(key, value)
+
+    @classmethod
+    def get_event(
+        cls, workflow_uuid: str, key: str, timeout_seconds: float = 60
+    ) -> Any:
+        return get_dbos_instance().get_event(workflow_uuid, key, timeout_seconds)
+
+    @classmethod
+    def execute_workflow_uuid(cls, workflow_uuid: str) -> WorkflowHandle[Any]:
+        """
+        This function is used to execute a workflow by a UUID for recovery.
+        """
+        return get_dbos_instance().execute_workflow_uuid(workflow_uuid)
+
+    @classmethod
+    def recover_pending_workflows(
+        cls, executor_ids: List[str] = ["local"]
+    ) -> List[WorkflowHandle[Any]]:
+        """
+        Find all PENDING workflows and execute them.
+        """
+        return get_dbos_instance().recover_pending_workflows(executor_ids)
+
     @classproperty
     def logger(cls) -> Logger:
         return dbos_logger  # TODO get from context if appropriate...
@@ -462,9 +644,10 @@ class WorkflowHandle(Generic[R], Protocol):
 
 
 class DBOSConfiguredInstance:
-    def __init__(self, config_name: str, dbos: Optional[DBOS] = None) -> None:
+    def __init__(self, config_name: str, dbos: Optional[IDBOS] = None) -> None:
         self.config_name = config_name
         if dbos is not None:
+            assert isinstance(dbos, DBOSImpl)
             dbos.register_instance(self)
         else:
-            DBOS().register_instance(self)
+            DBOSImpl().register_instance(self)

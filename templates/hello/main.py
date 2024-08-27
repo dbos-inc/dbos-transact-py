@@ -1,10 +1,10 @@
 import sqlalchemy as sa
 from fastapi import FastAPI
 
-from dbos import DBOS
+from dbos import DBOS, DBOSImpl
 
 app = FastAPI()
-dbos = DBOS(app)
+dbos = DBOSImpl(app)
 
 
 @app.get("/greeting/{name}")
@@ -15,7 +15,7 @@ def example_workflow(name: str) -> dict[str, str]:
     return {"name": output}
 
 
-@dbos.transaction()
+@DBOS.transaction()  # Mix of dbos and DBOS
 def example_transaction(name: str) -> str:
     rows = DBOS.sql_session.execute(
         sa.text(

@@ -1,11 +1,12 @@
 import time
 from datetime import datetime
 
+# Private test API
 # Public API
-from dbos import DBOS
+from dbos import DBOS, IDBOS, DBOSImpl
 
 
-def test_scheduled_workflow(dbos: DBOS) -> None:
+def test_scheduled_workflow(dbos: IDBOS) -> None:
     wf_counter: int = 0
 
     @dbos.scheduled("* * * * * *")
@@ -18,7 +19,7 @@ def test_scheduled_workflow(dbos: DBOS) -> None:
     assert wf_counter >= 1 and wf_counter <= 3
 
 
-def test_scheduled_workflow_exception(dbos: DBOS) -> None:
+def test_scheduled_workflow_exception(dbos: IDBOS) -> None:
     wf_counter: int = 0
 
     @dbos.scheduled("* * * * * *")
@@ -32,7 +33,7 @@ def test_scheduled_workflow_exception(dbos: DBOS) -> None:
     assert wf_counter >= 1 and wf_counter <= 3
 
 
-def test_scheduler_oaoo(dbos: DBOS) -> None:
+def test_scheduler_oaoo(dbos: DBOSImpl) -> None:
     wf_counter: int = 0
     txn_counter: int = 0
     workflow_id: str = ""
@@ -96,7 +97,7 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
                 time.sleep(1)
 
 
-def test_long_workflow(dbos: DBOS) -> None:
+def test_long_workflow(dbos: IDBOS) -> None:
     """
     This runs every hour and does nothing. Goal is to verify that it shuts down properly.
     """

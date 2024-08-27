@@ -11,7 +11,15 @@ import pytest
 import sqlalchemy as sa
 
 # Public API
-from dbos import DBOS, ConfigFile, SetWorkflowUUID, WorkflowHandle, WorkflowStatusString
+from dbos import (
+    DBOS,
+    IDBOS,
+    ConfigFile,
+    DBOSImpl,
+    SetWorkflowUUID,
+    WorkflowHandle,
+    WorkflowStatusString,
+)
 
 # Private API because this is a test
 from dbos.context import assert_current_dbos_context, get_local_dbos_context
@@ -19,7 +27,7 @@ from dbos.error import DBOSCommunicatorMaxRetriesExceededError
 from dbos.system_database import GetWorkflowsInput
 
 
-def test_simple_workflow(dbos: DBOS) -> None:
+def test_simple_workflow(dbos: IDBOS) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
     comm_counter: int = 0
@@ -65,7 +73,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
     assert wf_counter == 4
 
 
-def test_child_workflow(dbos: DBOS) -> None:
+def test_child_workflow(dbos: IDBOS) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
     comm_counter: int = 0
@@ -155,7 +163,7 @@ def test_child_workflow(dbos: DBOS) -> None:
     assert txn_ac_counter == 1  # Only ran tx once
 
 
-def test_exception_workflow(dbos: DBOS) -> None:
+def test_exception_workflow(dbos: IDBOS) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
     comm_counter: int = 0
@@ -218,7 +226,7 @@ def test_exception_workflow(dbos: DBOS) -> None:
     assert wf_counter == 4
 
 
-def test_temp_workflow(dbos: DBOS) -> None:
+def test_temp_workflow(dbos: DBOSImpl) -> None:
     txn_counter: int = 0
     comm_counter: int = 0
 
@@ -269,7 +277,7 @@ def test_temp_workflow(dbos: DBOS) -> None:
     assert comm_counter == 2
 
 
-def test_temp_workflow_errors(dbos: DBOS) -> None:
+def test_temp_workflow_errors(dbos: IDBOS) -> None:
     txn_counter: int = 0
     comm_counter: int = 0
     retried_comm_counter: int = 0
@@ -312,7 +320,7 @@ def test_temp_workflow_errors(dbos: DBOS) -> None:
     assert retried_comm_counter == 3
 
 
-def test_recovery_workflow(dbos: DBOS) -> None:
+def test_recovery_workflow(dbos: DBOSImpl) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
 
@@ -365,7 +373,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     assert stat.recovery_attempts == 1
 
 
-def test_recovery_temp_workflow(dbos: DBOS) -> None:
+def test_recovery_temp_workflow(dbos: DBOSImpl) -> None:
     txn_counter: int = 0
 
     @dbos.transaction()
@@ -427,7 +435,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert txn_counter == 1
 
 
-def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
+def test_recovery_thread(config: ConfigFile, dbos: DBOSImpl) -> None:
     wf_counter: int = 0
     test_var = "dbos"
 
@@ -484,7 +492,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     assert success
 
 
-def test_start_workflow(dbos: DBOS) -> None:
+def test_start_workflow(dbos: IDBOS) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
 
@@ -521,7 +529,7 @@ def test_start_workflow(dbos: DBOS) -> None:
     assert wf_counter == 3
 
 
-def test_retrieve_workflow(dbos: DBOS) -> None:
+def test_retrieve_workflow(dbos: IDBOS) -> None:
     @dbos.workflow()
     def test_sleep_workflow(secs: float) -> str:
         dbos.sleep(secs)
@@ -582,7 +590,7 @@ def test_retrieve_workflow(dbos: DBOS) -> None:
     assert istat.status == str(WorkflowStatusString.ERROR.value)
 
 
-def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
+def test_retrieve_workflow_in_workflow(dbos: IDBOS) -> None:
     @dbos.workflow()
     def test_sleep_workflow(secs: float) -> str:
         dbos.sleep(secs)
@@ -639,7 +647,7 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
     assert stat.recovery_attempts == 0
 
 
-def test_without_fastapi(dbos: DBOS) -> None:
+def test_without_fastapi(dbos: IDBOS) -> None:
     """
     Since DBOS does not depend on FastAPI directly, verify DBOS works in an environment without FastAPI.
     """
@@ -676,7 +684,7 @@ def test_without_fastapi(dbos: DBOS) -> None:
     assert test_workflow("bob") == "bob"
 
 
-def test_sleep(dbos: DBOS) -> None:
+def test_sleep(dbos: IDBOS) -> None:
     @dbos.workflow()
     def test_sleep_workflow(secs: float) -> str:
         dbos.sleep(secs)
@@ -693,7 +701,7 @@ def test_sleep(dbos: DBOS) -> None:
         assert time.time() - start_time < 0.3
 
 
-def test_send_recv(dbos: DBOS) -> None:
+def test_send_recv(dbos: IDBOS) -> None:
     send_counter: int = 0
     recv_counter: int = 0
 
@@ -792,7 +800,7 @@ def test_send_recv(dbos: DBOS) -> None:
     assert "recv() must be called from within a workflow" in str(exc_info.value)
 
 
-def test_send_recv_temp_wf(dbos: DBOS) -> None:
+def test_send_recv_temp_wf(dbos: DBOSImpl) -> None:
     recv_counter: int = 0
     cur_time: str = datetime.datetime.now().isoformat()
     gwi: GetWorkflowsInput = GetWorkflowsInput()
@@ -827,7 +835,7 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     assert recv_counter == 1
 
 
-def test_set_get_events(dbos: DBOS) -> None:
+def test_set_get_events(dbos: IDBOS) -> None:
     @dbos.workflow()
     def test_setevent_workflow() -> None:
         dbos.set_event("key1", "value1")

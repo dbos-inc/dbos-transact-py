@@ -3,10 +3,10 @@ import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 
 # Public API
-from dbos import DBOS
+from dbos import DBOS, IDBOS
 
 
-def test_transaction_errors(dbos: DBOS) -> None:
+def test_transaction_errors(dbos: IDBOS) -> None:
     retry_counter: int = 0
 
     @dbos.transaction()

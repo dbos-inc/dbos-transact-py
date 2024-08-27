@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS
+    from dbos.dbos import DBOSImpl
 
 from ..context import SetWorkflowUUID
 from ..logger import dbos_logger
@@ -33,7 +33,7 @@ def scheduler_loop(
 
 
 def scheduled(
-    dbos: "DBOS", cron: str
+    dbos: "DBOSImpl", cron: str
 ) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
     def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
         stop_event = threading.Event()

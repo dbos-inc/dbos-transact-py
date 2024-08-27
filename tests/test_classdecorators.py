@@ -4,13 +4,13 @@ import pytest
 import sqlalchemy as sa
 
 # Public API
-from dbos import DBOS, DBOSConfiguredInstance, SetWorkflowUUID
+from dbos import DBOS, IDBOS, DBOSConfiguredInstance, SetWorkflowUUID
 
 # Private API used because this is a test
 from dbos.context import DBOSContextEnsure, assert_current_dbos_context
 
 
-def test_required_roles(dbos: DBOS) -> None:
+def test_required_roles(dbos: IDBOS) -> None:
     @dbos.required_roles(["user"])
     def tfunc(var: str) -> str:
         assert assert_current_dbos_context().assumed_role == "user"
@@ -45,7 +45,7 @@ def test_required_roles(dbos: DBOS) -> None:
         tfunc("bare-ctx")
 
 
-def test_required_roles_class(dbos: DBOS) -> None:
+def test_required_roles_class(dbos: IDBOS) -> None:
     @dbos.default_required_roles(["user"])
     class DBOSTestClassRR(DBOSConfiguredInstance):
         def __init__(self) -> None:
@@ -186,7 +186,7 @@ def test_required_roles_class(dbos: DBOS) -> None:
 
 
 # We can put classes in functions to test decorators for now...
-def test_simple_workflow_static(dbos: DBOS) -> None:
+def test_simple_workflow_static(dbos: IDBOS) -> None:
     class DBOSTestClassStatic:
         txn_counter: int = 0
         wf_counter: int = 0
@@ -224,7 +224,7 @@ def test_simple_workflow_static(dbos: DBOS) -> None:
     assert DBOSTestClassStatic.comm_counter == 2
 
 
-def test_simple_workflow_class(dbos: DBOS) -> None:
+def test_simple_workflow_class(dbos: IDBOS) -> None:
     @dbos.dbos_class()
     class DBOSTestClassClass:
         txn_counter: int = 0
@@ -263,7 +263,7 @@ def test_simple_workflow_class(dbos: DBOS) -> None:
     assert DBOSTestClassClass.comm_counter == 2
 
 
-def test_no_instname(dbos: DBOS) -> None:
+def test_no_instname(dbos: IDBOS) -> None:
     @dbos.dbos_class()
     class DBOSTestClassInst:
         @dbos.workflow()
@@ -275,7 +275,7 @@ def test_no_instname(dbos: DBOS) -> None:
     assert "Function target appears to be a class instance, but does not have `config_name` set"
 
 
-def test_simple_workflow_inst(dbos: DBOS) -> None:
+def test_simple_workflow_inst(dbos: IDBOS) -> None:
     @dbos.dbos_class()
     class DBOSTestClassInst(DBOSConfiguredInstance):
         def __init__(self) -> None:
@@ -309,10 +309,10 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
     assert inst.test_workflow("bob", "bob") == "bob1bob"
 
     wfh = dbos.start_workflow(inst.test_workflow, "bob", "bob")
-    stati = dbos.sys_db.get_workflow_status(wfh.get_workflow_uuid())
+    stati = dbos.get_workflow_status(wfh.get_workflow_uuid())
     assert stati
-    assert stati["config_name"] == "bob"
-    assert stati["class_name"] == "DBOSTestClassInst"
+    assert stati.config_name == "bob"
+    assert stati.class_name == "DBOSTestClassInst"
     stat = wfh.get_status()
     assert stat
     assert stat.config_name == "bob"
@@ -324,7 +324,7 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
     assert inst.comm_counter == 2
 
 
-def test_forgotten_decorator(dbos: DBOS) -> None:
+def test_forgotten_decorator(dbos: IDBOS) -> None:
     class DBOSTestRegErr(DBOSConfiguredInstance):
         def __init__(self) -> None:
             super().__init__("bob", dbos)
@@ -358,7 +358,7 @@ def test_forgotten_decorator(dbos: DBOS) -> None:
     )
 
 
-def test_duplicate_reg(dbos: DBOS) -> None:
+def test_duplicate_reg(dbos: IDBOS) -> None:
     @dbos.dbos_class()
     class DBOSTestRegDup(DBOSConfiguredInstance):
         def __init__(self) -> None:
@@ -387,7 +387,7 @@ def test_duplicate_reg(dbos: DBOS) -> None:
     )
 
 
-def test_class_recovery(dbos: DBOS) -> None:
+def test_class_recovery(dbos: IDBOS) -> None:
     exc_cnt: int = 0
 
     @dbos.dbos_class()
@@ -412,7 +412,7 @@ def test_class_recovery(dbos: DBOS) -> None:
     assert exc_cnt == 2
 
 
-def test_inst_recovery(dbos: DBOS) -> None:
+def test_inst_recovery(dbos: IDBOS) -> None:
     exc_cnt: int = 0
     last_inst: Optional[DBOSTestInstRec] = None
 

@@ -8,10 +8,10 @@ from dbos.context import SetWorkflowRecovery
 from dbos.error import DBOSWorkflowFunctionNotFoundError
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS, WorkflowHandle
+    from dbos.dbos import DBOSImpl, WorkflowHandle
 
 
-def startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
+def startup_recovery_thread(dbos: "DBOSImpl", workflow_ids: List[str]) -> None:
     """
     A background thread that attempts to recover local pending workflows on startup.
     """
@@ -33,7 +33,7 @@ def startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
 
 
 def recover_pending_workflows(
-    dbos: "DBOS", executor_ids: List[str] = ["local"]
+    dbos: "DBOSImpl", executor_ids: List[str] = ["local"]
 ) -> List["WorkflowHandle[Any]"]:
     workflow_handles: List["WorkflowHandle[Any]"] = []
     for executor_id in executor_ids:

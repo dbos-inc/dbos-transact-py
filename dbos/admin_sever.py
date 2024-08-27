@@ -9,14 +9,14 @@ from typing import TYPE_CHECKING, Any, List
 from .logger import dbos_logger
 
 if TYPE_CHECKING:
-    from .dbos import DBOS
+    from .dbos import DBOSImpl
 
 health_check_path = "/dbos-healthz"
 workflow_recovery_path = "/dbos-workflow-recovery"
 
 
 class AdminServer:
-    def __init__(self, dbos: DBOS, port: int = 3001) -> None:
+    def __init__(self, dbos: DBOSImpl, port: int = 3001) -> None:
         self.port = port
         handler = partial(AdminRequestHandler, dbos)
         self.server = ThreadingHTTPServer(("0.0.0.0", port), handler)
@@ -34,7 +34,7 @@ class AdminServer:
 
 
 class AdminRequestHandler(BaseHTTPRequestHandler):
-    def __init__(self, dbos: DBOS, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, dbos: DBOSImpl, *args: Any, **kwargs: Any) -> None:
         self.dbos = dbos
         super().__init__(*args, **kwargs)
 

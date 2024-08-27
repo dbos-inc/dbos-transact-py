@@ -6,13 +6,13 @@ from alembic import command
 from alembic.config import Config
 
 # Public API
-from dbos import DBOS, ConfigFile
+from dbos import ConfigFile, DBOSImpl
 
 # Private API because this is a unit test
 from dbos.schemas.system_database import SystemSchema
 
 
-def test_systemdb_migration(dbos: DBOS) -> None:
+def test_systemdb_migration(dbos: DBOSImpl) -> None:
     # Make sure all tables exist
     with dbos.sys_db.engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
@@ -63,8 +63,8 @@ def test_custom_sysdb_name_migration(
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sysdb_name}"))
 
     # Test migrating up
-    DBOS.clear()  # In case of other tests leaving it
-    dbos = DBOS(config=config)
+    DBOSImpl.clear_global_instance()  # In case of other tests leaving it
+    dbos = DBOSImpl(config=config)
 
     # Make sure all tables exist
     with dbos.sys_db.engine.connect() as connection:
