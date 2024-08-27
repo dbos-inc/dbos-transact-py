@@ -25,6 +25,7 @@ from dbos import (
 from dbos.context import assert_current_dbos_context, get_local_dbos_context
 from dbos.error import DBOSCommunicatorMaxRetriesExceededError
 from dbos.system_database import GetWorkflowsInput
+from tests.conftest import default_config
 
 
 def test_simple_workflow(dbos: IDBOS) -> None:
@@ -32,7 +33,7 @@ def test_simple_workflow(dbos: IDBOS) -> None:
     wf_counter: int = 0
     comm_counter: int = 0
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow(var: str, var2: str) -> str:
         nonlocal wf_counter
         wf_counter += 1
@@ -41,7 +42,7 @@ def test_simple_workflow(dbos: IDBOS) -> None:
         DBOS.logger.info("I'm test_workflow")
         return res + res2
 
-    @dbos.transaction(isolation_level="REPEATABLE READ")
+    @DBOS.transaction(isolation_level="REPEATABLE READ")
     def test_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
@@ -49,7 +50,7 @@ def test_simple_workflow(dbos: IDBOS) -> None:
         DBOS.logger.info("I'm test_transaction")
         return var2 + str(rows[0][0])
 
-    @dbos.communicator()
+    @DBOS.communicator()
     def test_communicator(var: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
@@ -78,7 +79,7 @@ def test_child_workflow(dbos: IDBOS) -> None:
     wf_counter: int = 0
     comm_counter: int = 0
 
-    @dbos.transaction()
+    @DBOS.transaction()
     def test_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
@@ -86,14 +87,14 @@ def test_child_workflow(dbos: IDBOS) -> None:
         DBOS.logger.info("I'm test_transaction")
         return var2 + str(rows[0][0])
 
-    @dbos.communicator()
+    @DBOS.communicator()
     def test_communicator(var: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
         DBOS.logger.info("I'm test_communicator")
         return var
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow(var: str, var2: str) -> str:
         DBOS.logger.info("I'm test_workflow")
         if len(DBOS.parent_workflow_id):
@@ -106,7 +107,7 @@ def test_child_workflow(dbos: IDBOS) -> None:
         res2 = test_communicator(var)
         return res + res2
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow_child() -> str:
         nonlocal wf_counter
         wf_counter += 1
@@ -116,7 +117,7 @@ def test_child_workflow(dbos: IDBOS) -> None:
     wf_ac_counter: int = 0
     txn_ac_counter: int = 0
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow_children() -> str:
         nonlocal wf_counter
         wf_counter += 1
@@ -127,21 +128,21 @@ def test_child_workflow(dbos: IDBOS) -> None:
         res3 = wfh2.get_result()
         return res1 + res2 + res3
 
-    @dbos.transaction()
+    @DBOS.transaction()
     def test_transaction_ac(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_ac_counter
         txn_ac_counter += 1
         return var2 + str(rows[0][0])
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow_ac(var: str, var2: str) -> str:
         DBOS.logger.info("I'm test_workflow assigned child id")
         assert DBOS.workflow_id == "run_me_just_once"
         res = test_transaction_ac(var2)
         return var + res
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow_assignchild() -> str:
         nonlocal wf_ac_counter
         wf_ac_counter += 1
@@ -168,19 +169,19 @@ def test_exception_workflow(dbos: IDBOS) -> None:
     wf_counter: int = 0
     comm_counter: int = 0
 
-    @dbos.transaction()
+    @DBOS.transaction()
     def exception_transaction(var: str) -> str:
         nonlocal txn_counter
         txn_counter += 1
         raise Exception(var)
 
-    @dbos.communicator()
+    @DBOS.communicator()
     def exception_communicator(var: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
         raise Exception(var)
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def exception_workflow() -> None:
         nonlocal wf_counter
         wf_counter += 1
@@ -234,20 +235,20 @@ def test_temp_workflow(dbos: DBOSImpl) -> None:
     gwi: GetWorkflowsInput = GetWorkflowsInput()
     gwi.start_time = cur_time
 
-    @dbos.transaction(isolation_level="READ COMMITTED")
+    @DBOS.transaction(isolation_level="READ COMMITTED")
     def test_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
         return var2 + str(rows[0][0])
 
-    @dbos.communicator()
+    @DBOS.communicator()
     def test_communicator(var: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
         return var
 
-    @dbos.communicator()
+    @DBOS.communicator()
     def call_communicator(var: str) -> str:
         return test_communicator(var)
 
@@ -286,19 +287,19 @@ def test_temp_workflow_errors(dbos: IDBOS) -> None:
     gwi: GetWorkflowsInput = GetWorkflowsInput()
     gwi.start_time = cur_time
 
-    @dbos.transaction()
+    @DBOS.transaction()
     def test_transaction(var2: str) -> str:
         nonlocal txn_counter
         txn_counter += 1
         raise Exception(var2)
 
-    @dbos.communicator()
+    @DBOS.communicator()
     def test_communicator(var: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
         raise Exception(var)
 
-    @dbos.communicator(retries_allowed=True)
+    @DBOS.communicator(retries_allowed=True)
     def test_retried_communicator(var: str) -> str:
         nonlocal retried_comm_counter
         retried_comm_counter += 1
@@ -324,14 +325,14 @@ def test_recovery_workflow(dbos: DBOSImpl) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow(var: str, var2: str) -> str:
         nonlocal wf_counter
         wf_counter += 1
         res = test_transaction(var2)
         return res + var
 
-    @dbos.transaction()
+    @DBOS.transaction()
     def test_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
@@ -376,7 +377,7 @@ def test_recovery_workflow(dbos: DBOSImpl) -> None:
 def test_recovery_temp_workflow(dbos: DBOSImpl) -> None:
     txn_counter: int = 0
 
-    @dbos.transaction()
+    @DBOS.transaction()
     def test_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
@@ -439,7 +440,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOSImpl) -> None:
     wf_counter: int = 0
     test_var = "dbos"
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow(var: str) -> str:
         nonlocal wf_counter
         if var == test_var:
@@ -471,7 +472,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOSImpl) -> None:
     dbos.destroy()
     dbos.__init__(config=config)  # type: ignore
 
-    @dbos.workflow()  # type: ignore
+    @DBOS.workflow()  # type: ignore
     def test_workflow(var: str) -> str:
         nonlocal wf_counter
         if var == test_var:
@@ -496,14 +497,14 @@ def test_start_workflow(dbos: IDBOS) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow(var: str, var2: str) -> str:
         nonlocal wf_counter
         wf_counter += 1
         res = test_transaction(var2)
         return res + var
 
-    @dbos.transaction()
+    @DBOS.transaction()
     def test_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
@@ -530,12 +531,12 @@ def test_start_workflow(dbos: IDBOS) -> None:
 
 
 def test_retrieve_workflow(dbos: IDBOS) -> None:
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_sleep_workflow(secs: float) -> str:
         dbos.sleep(secs)
         return DBOS.workflow_id
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_sleep_workthrow(secs: float) -> str:
         dbos.sleep(secs)
         raise Exception("Wake Up!")
@@ -591,12 +592,12 @@ def test_retrieve_workflow(dbos: IDBOS) -> None:
 
 
 def test_retrieve_workflow_in_workflow(dbos: IDBOS) -> None:
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_sleep_workflow(secs: float) -> str:
         dbos.sleep(secs)
         return DBOS.workflow_id
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow_status_a() -> str:
         with SetWorkflowUUID("run_this_once_a"):
             dbos.start_workflow(test_sleep_workflow, 1.5)
@@ -608,7 +609,7 @@ def test_retrieve_workflow_in_workflow(dbos: IDBOS) -> None:
         assert fstat2
         return fstat1.status + fres + fstat2.status
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow_status_b() -> str:
         assert DBOS.workflow_id == "parent_b"
         with SetWorkflowUUID("run_this_once_b"):
@@ -647,10 +648,13 @@ def test_retrieve_workflow_in_workflow(dbos: IDBOS) -> None:
     assert stat.recovery_attempts == 0
 
 
-def test_without_fastapi(dbos: IDBOS) -> None:
+def test_without_fastapi() -> None:
     """
     Since DBOS does not depend on FastAPI directly, verify DBOS works in an environment without FastAPI.
     """
+    DBOSImpl.clear_global_instance()
+    config = default_config()
+
     # Unimport FastAPI
     for module_name in list(sys.modules.keys()):
         if module_name == "fastapi" or module_name.startswith("fastapi."):
@@ -677,15 +681,21 @@ def test_without_fastapi(dbos: IDBOS) -> None:
     finally:
         sys.meta_path.remove(blocker)
 
-    @dbos.workflow()
-    def test_workflow(var: str) -> str:
-        return var
+    dbos = DBOSImpl(config=config)
+    try:
 
-    assert test_workflow("bob") == "bob"
+        @DBOS.workflow()
+        def test_workflow(var: str) -> str:
+            return var
+
+        assert test_workflow("bob") == "bob"
+    finally:
+        dbos.destroy()
+        DBOSImpl.clear_global_instance()
 
 
 def test_sleep(dbos: IDBOS) -> None:
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_sleep_workflow(secs: float) -> str:
         dbos.sleep(secs)
         return DBOS.workflow_id
@@ -705,7 +715,7 @@ def test_send_recv(dbos: IDBOS) -> None:
     send_counter: int = 0
     recv_counter: int = 0
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_send_workflow(dest_uuid: str, topic: str) -> str:
         dbos.send(dest_uuid, "test1")
         dbos.send(dest_uuid, "test2", topic=topic)
@@ -714,7 +724,7 @@ def test_send_recv(dbos: IDBOS) -> None:
         send_counter += 1
         return dest_uuid
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_recv_workflow(topic: str) -> str:
         msg1 = dbos.recv(topic, timeout_seconds=10)
         msg2 = dbos.recv(timeout_seconds=10)
@@ -723,12 +733,12 @@ def test_send_recv(dbos: IDBOS) -> None:
         recv_counter += 1
         return "-".join([str(msg1), str(msg2), str(msg3)])
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_recv_timeout(timeout_seconds: float) -> None:
         msg = dbos.recv(timeout_seconds=timeout_seconds)
         assert msg is None
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_send_none(dest_uuid: str) -> None:
         dbos.send(dest_uuid, None)
 
@@ -806,7 +816,7 @@ def test_send_recv_temp_wf(dbos: DBOSImpl) -> None:
     gwi: GetWorkflowsInput = GetWorkflowsInput()
     gwi.start_time = cur_time
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_send_recv_workflow(topic: str) -> str:
         msg1 = dbos.recv(topic, timeout_seconds=10)
         nonlocal recv_counter
@@ -836,13 +846,13 @@ def test_send_recv_temp_wf(dbos: DBOSImpl) -> None:
 
 
 def test_set_get_events(dbos: IDBOS) -> None:
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_setevent_workflow() -> None:
         dbos.set_event("key1", "value1")
         dbos.set_event("key2", "value2")
         dbos.set_event("key3", None)
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_getevent_workflow(
         target_uuid: str, key: str, timeout_seconds: float = 10
     ) -> Optional[str]:
