@@ -41,7 +41,7 @@ def test_admin_recovery(dbos: DBOSImpl) -> None:
     comm_counter: int = 0
     wf_counter: int = 0
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow(var: str, var2: str) -> str:
         DBOS.logger.info("WFID: " + DBOS.workflow_id)
         nonlocal wf_counter
@@ -49,7 +49,7 @@ def test_admin_recovery(dbos: DBOSImpl) -> None:
         res = test_communicator(var2)
         return res + var
 
-    @dbos.communicator()
+    @DBOS.communicator()
     def test_communicator(var2: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
