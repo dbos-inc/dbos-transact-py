@@ -9,7 +9,7 @@ from dbos import DBOS, IDBOS
 def test_transaction_errors(dbos: IDBOS) -> None:
     retry_counter: int = 0
 
-    @dbos.transaction()
+    @DBOS.transaction()
     def test_retry_transaction(max_retry: int) -> int:
         nonlocal retry_counter
         if retry_counter < max_retry:
@@ -20,7 +20,7 @@ def test_transaction_errors(dbos: IDBOS) -> None:
             raise err
         return max_retry
 
-    @dbos.transaction()
+    @DBOS.transaction()
     def test_noretry_transaction() -> None:
         nonlocal retry_counter
         retry_counter += 1
