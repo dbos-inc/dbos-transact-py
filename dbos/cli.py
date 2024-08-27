@@ -1,8 +1,10 @@
 import os
 import platform
+import re
 import signal
 import subprocess
 import time
+import tomllib
 from typing import Any
 
 import typer
@@ -64,9 +66,38 @@ def start() -> None:
         process.wait()
 
 
+def load_pyproject_name() -> str | None:
+    try:
+        with open("pyproject.toml", "rb") as f:
+            pyproj = tomllib.load(f)
+            return pyproj["project"]["name"]
+    except:
+        return None
+
+
+def is_valid_app_name(name: str) -> bool:
+    re.match()
+    name_len = len(name)
+    if name_len < 3 or name_len > 30:
+        return False
+    match = re.match("^[a-z0-9-_]+$", name)
+    return True if match != None else False
+
+
 @app.command()
-def create() -> None:
-    typer.echo(f"dbos create coming soon")
+def init() -> None:
+    project_name: str = typer.prompt(
+        "What is your project's name?", load_pyproject_name()
+    )
+    if is_valid_app_name(project_name) == False:
+        typer.echo(f"{project_name} is an invalid DBOS app name")
+        return
+
+    db_name = project_name.replace("-", "_")
+    if db_name[0].isdigit():
+        db_name = f"_{db_name}"
+
+    typer.echo(f"dbos init {project_name} {db_name}")
 
 
 @app.command()
