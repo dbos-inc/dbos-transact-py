@@ -96,10 +96,12 @@ def cleanup_test_databases(config: ConfigFile, postgres_db_engine: sa.Engine) ->
 def dbos(
     config: ConfigFile, cleanup_test_databases: None
 ) -> Generator[DBOSImpl, Any, None]:
-    dbos = DBOSImpl.create_instance(config=config)
+    DBOSImpl.clear_global_instance()
+    dbos = DBOSImpl(config=config)
     dbos.launch()
     yield dbos
     dbos.destroy()
+    DBOSImpl.clear_global_instance()
 
 
 @pytest.fixture()
