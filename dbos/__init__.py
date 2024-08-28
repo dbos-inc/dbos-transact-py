@@ -5,7 +5,7 @@ from .dbos import DBOSConfiguredInstance as DBOSConfiguredInstance
 from .dbos import WorkflowHandle as WorkflowHandle
 from .dbos import WorkflowStatus as WorkflowStatus
 from .dbos_config import ConfigFile as ConfigFile
-from .dbos_config import load_config
+from .dbos_config import get_dbos_database_url, load_config
 from .system_database import WorkflowStatusString as WorkflowStatusString
 
 __all__ = [
@@ -17,5 +17,6 @@ __all__ = [
     "WorkflowStatus",
     "WorkflowStatusString",
     "load_config",
+    "get_dbos_database_url",
     "error",
 ]
