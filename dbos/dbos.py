@@ -130,6 +130,8 @@ class DBOS:
     @classmethod
     def clear_global_instance(cls) -> None:
         global _dbos_global_instance
+        if _dbos_global_instance is not None:
+            _dbos_global_instance.destroy()
         _dbos_global_instance = None
 
     def __init__(
