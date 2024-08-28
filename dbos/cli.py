@@ -124,7 +124,7 @@ def copy_template(template_dir: str, project_name: str) -> None:
         copy_dbos_config(dbos_config_src, "dbos-config.yaml", project_name)
 
 
-def get_project_name() -> str | None:
+def get_project_name() -> typing.Union[str, None]:
     name = None
     try:
         with open("pyproject.toml", "rb") as file:
