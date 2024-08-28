@@ -12,7 +12,6 @@ __all__ = [
     "ConfigFile",
     "DBOS",
     "DBOSConfiguredInstance",
-    "DBOS",
     "SetWorkflowUUID",
     "WorkflowHandle",
     "WorkflowStatus",
