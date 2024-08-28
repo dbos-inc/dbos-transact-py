@@ -95,11 +95,8 @@ def copy_dbos_config(src: str, dst: str, project_name: str) -> None:
         if not over:
             return
 
-    try:
-        with open(dst, "w") as file:
-            file.write(content)
-    except FileExistsError:
-        print(f"[yellow]dbos-config.yaml already exists, [/yellow]")
+    with open(dst, "w") as file:
+        file.write(content)
 
 
 def copy_template(template_dir: str, project_name: str) -> None:
