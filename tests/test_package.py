@@ -30,8 +30,6 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
         temp_path = tempfile.mkdtemp(prefix="dbos-")
         wheel_path = os.path.abspath(build_wheel)
 
-        print(temp_path)
-
         # Create a new virtual environment in the temp directory
         venv_path = os.path.join(temp_path, ".venv")
         if os.path.exists(venv_path):
