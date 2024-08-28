@@ -136,9 +136,11 @@ def get_project_name() -> str | None:
     if name == None:
         try:
             _, parent = path.split(path.abspath("."))
-            return parent
+            name = parent
         except:
-            return None
+            pass
+
+    return name
 
 
 def is_valid_app_name(name: str) -> bool:
@@ -152,13 +154,16 @@ def is_valid_app_name(name: str) -> bool:
 @app.command()
 def init(name: Annotated[typing.Optional[str], typer.Argument()] = None) -> None:
     try:
-        project_name = (
-            name
-            if name != None
-            else typing.cast(
+        project_name = name
+        if project_name == None:
+            project_name = typing.cast(
                 str, typer.prompt("What is your project's name?", get_project_name())
             )
-        )
+
+        if project_name == None:
+            raise Exception(f"Project name could not be determined")
+
+        project_name = typing.cast(str, project_name)
         if not is_valid_app_name(project_name):
             raise Exception(f"{project_name} is an invalid DBOS app name")
 
