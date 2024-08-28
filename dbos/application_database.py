@@ -62,7 +62,7 @@ class ApplicationDatabase:
             database=app_db_name,
         )
         self.engine = sa.create_engine(
-            app_db_url, pool_size=20, max_overflow=5, timeout=30
+            app_db_url, pool_size=20, max_overflow=5, pool_timeout=30
         )
         self.sessionmaker = sessionmaker(bind=self.engine)
 

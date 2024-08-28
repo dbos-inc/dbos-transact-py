@@ -158,7 +158,7 @@ class SystemDatabase:
 
         # Create a connection pool for the system database
         self.engine = sa.create_engine(
-            system_db_url, pool_size=20, max_overflow=5, timeout=30
+            system_db_url, pool_size=20, max_overflow=5, pool_timeout=30
         )
 
         # Run a schema migration for the system database
