@@ -15,6 +15,7 @@ from typing import (
     Literal,
     Optional,
     Protocol,
+    Tuple,
     Type,
     TypeVar,
 )
@@ -98,12 +99,75 @@ IsolationLevel = Literal[
 ]
 
 _dbos_global_instance: Optional[DBOS] = None
+_dbos_global_registry: Optional[_DBOSRegistry] = None
 
 
-def get_dbos_instance() -> DBOS:
+def _get_or_create_dbos_instance() -> DBOS:
     # Currently get / init the global singleton
-    #   (It could also check context?)
     return DBOS()
+
+
+def _get_dbos_instance() -> Optional[DBOS]:
+    return _dbos_global_instance
+
+
+def _get_or_create_dbos_registry() -> _DBOSRegistry:
+    # Currently get / init the global registry
+    global _dbos_global_registry
+    if _dbos_global_registry is None:
+        _dbos_global_registry = _DBOSRegistry()
+    return _dbos_global_registry
+
+
+_RegisteredJob = Tuple[
+    threading.Event, Callable[..., Any], Tuple[Any, ...], dict[str, Any]
+]
+
+
+class _DBOSRegistry:
+    def __init__(self) -> None:
+        self.workflow_info_map: dict[str, Workflow[..., Any]] = {}
+        self.class_info_map: dict[str, type] = {}
+        self.instance_info_map: dict[str, object] = {}
+        self.pollers: list[_RegisteredJob] = []
+        self.dbos: Optional[DBOS] = None
+
+    def register_wf_function(self, name: str, wrapped_func: F) -> None:
+        self.workflow_info_map[name] = wrapped_func
+
+    def register_class(self, cls: type, ci: DBOSClassInfo) -> None:
+        class_name = cls.__name__
+        if class_name in self.class_info_map:
+            if self.class_info_map[class_name] is not cls:
+                raise Exception(f"Duplicate type registration for class '{class_name}'")
+        else:
+            self.class_info_map[class_name] = cls
+
+    def create_class_info(self, cls: Type[Any]) -> Type[Any]:
+        ci = get_or_create_class_info(cls)
+        self.register_class(cls, ci)
+        return cls
+
+    def register_poller(
+        self, evt: threading.Event, func: Callable[..., Any], *args: Any, **kwargs: Any
+    ) -> None:
+        if self.dbos:
+            self.dbos.stop_events.append(evt)
+            self.dbos.executor.submit(func, *args, **kwargs)
+        else:
+            self.pollers.append((evt, func, args, kwargs))
+
+    def register_instance(self, inst: object) -> None:
+        config_name = getattr(inst, "config_name")
+        class_name = inst.__class__.__name__
+        fn = f"{class_name}/{config_name}"
+        if fn in self.instance_info_map:
+            if self.instance_info_map[fn] is not inst:
+                raise Exception(
+                    f"Duplicate instance registration for class '{class_name}' instance '{config_name}'"
+                )
+        else:
+            self.instance_info_map[fn] = inst
 
 
 class DBOS:
@@ -125,14 +189,19 @@ class DBOS:
         if _dbos_global_instance is None:
             _dbos_global_instance = super().__new__(cls)
             _dbos_global_instance.__init__(fastapi=fastapi, config=config)  # type: ignore
+        else:
+            # if (_dbos_global_instance.config is not config) or (_dbos_global_instance.fastapi is not fastapi) boo!
+            pass
         return _dbos_global_instance
 
     @classmethod
     def clear_global_instance(cls) -> None:
         global _dbos_global_instance
+        global _dbos_global_registry
         if _dbos_global_instance is not None:
             _dbos_global_instance.destroy()
         _dbos_global_instance = None
+        _dbos_global_registry = None
 
     def __init__(
         self, fastapi: Optional["FastAPI"] = None, config: Optional[ConfigFile] = None
@@ -152,9 +221,8 @@ class DBOS:
         self._launched = False
         self._sys_db: Optional[SystemDatabase] = None
         self._app_db: Optional[ApplicationDatabase] = None
-        self.workflow_info_map: dict[str, Workflow[..., Any]] = {}
-        self.class_info_map: dict[str, type] = {}
-        self.instance_info_map: dict[str, object] = {}
+        self._registry = _get_or_create_dbos_registry()
+        self._registry.dbos = self
         self.executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=64)
         self._admin_server: Optional[AdminServer] = None
         self.stop_events: List[threading.Event] = []
@@ -164,21 +232,27 @@ class DBOS:
 
             setup_fastapi_middleware(self.fastapi)
 
+        # Grab any pollers that were deferred and start them
+        for evt, func, args, kwargs in self._registry.pollers:
+            self.stop_events.append(evt)
+            self.executor.submit(func, *args, **kwargs)
+        self._registry.pollers = []
+
         # Register send_stub as a workflow
         def send_temp_workflow(
             destination_uuid: str, message: Any, topic: Optional[str]
         ) -> None:
             self.send(destination_uuid, message, topic)
 
-        temp_send_wf = _workflow_wrapper(self, send_temp_workflow)
+        temp_send_wf = _workflow_wrapper(self._registry, send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
-        self._register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
+        self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
 
     @property
     def sys_db(self) -> SystemDatabase:
         if self._sys_db is None:
             self.launch()
-        if self._sys_db is None:
+        if self._sys_db is None:  # Can't happen but makes mypy happy
             raise DBOSException("System database not initialized")
         rv: SystemDatabase = self._sys_db
         return rv
@@ -187,7 +261,7 @@ class DBOS:
     def app_db(self) -> ApplicationDatabase:
         if self._app_db is None:
             self.launch()
-        if self._app_db is None:
+        if self._app_db is None:  # Can't happen but makes mypy happy
             raise DBOSException("Application database not initialized")
         rv: ApplicationDatabase = self._app_db
         return rv
@@ -196,7 +270,7 @@ class DBOS:
     def admin_server(self) -> AdminServer:
         if self._admin_server is None:
             self.launch()
-        if self._admin_server is None:
+        if self._admin_server is None:  # Can't happen but makes mypy happy
             raise DBOSException("Admin server is not initialized")
         rv: AdminServer = self._admin_server
         return rv
@@ -233,49 +307,27 @@ class DBOS:
         # CB Should this be done before DBs are destroyed?
         self.executor.shutdown(cancel_futures=True)
 
-    def _register_wf_function(self, name: str, wrapped_func: F) -> None:
-        self.workflow_info_map[name] = wrapped_func
+    @classmethod
+    def register_instance(cls, inst: object) -> None:
+        return _get_or_create_dbos_registry().register_instance(inst)
 
-    def _workflow_decorator(self, func: F) -> F:
-        wrapped_func = _workflow_wrapper(self, func)
-        self._register_wf_function(func.__qualname__, wrapped_func)
+    @staticmethod
+    def _workflow_decorator(func: F) -> F:
+        reg = _get_or_create_dbos_registry()
+        wrapped_func = _workflow_wrapper(reg, func)
+        reg.register_wf_function(func.__qualname__, wrapped_func)
         return wrapped_func
-
-    def register_instance(self, inst: object) -> None:
-        config_name = getattr(inst, "config_name")
-        class_name = inst.__class__.__name__
-        fn = f"{class_name}/{config_name}"
-        if fn in self.instance_info_map:
-            if self.instance_info_map[fn] is not inst:
-                raise Exception(
-                    f"Duplicate instance registration for class '{class_name}' instance '{config_name}'"
-                )
-        else:
-            self.instance_info_map[fn] = inst
-
-    def register_class(self, cls: type, ci: DBOSClassInfo) -> None:
-        class_name = cls.__name__
-        if class_name in self.class_info_map:
-            if self.class_info_map[class_name] is not cls:
-                raise Exception(f"Duplicate type registration for class '{class_name}'")
-        else:
-            self.class_info_map[class_name] = cls
-
-    def _create_class_info(self, cls: Type[Any]) -> Type[Any]:
-        ci = get_or_create_class_info(cls)
-        self.register_class(cls, ci)
-        return cls
 
     # Decorators for DBOS functionality
     @classmethod
     def workflow(cls) -> Callable[[F], F]:
-        return get_dbos_instance()._workflow_decorator
+        return DBOS._workflow_decorator
 
     @classmethod
     def transaction(
         cls, isolation_level: IsolationLevel = "SERIALIZABLE"
     ) -> Callable[[F], F]:
-        return _transaction(get_dbos_instance(), isolation_level)
+        return _transaction(_get_or_create_dbos_registry(), isolation_level)
 
     # Mirror the CommunicatorConfig from TS. However, we disable retries by default.
     @classmethod
@@ -288,7 +340,7 @@ class DBOS:
         backoff_rate: float = 2.0,
     ) -> Callable[[F], F]:
         return _communicator(
-            get_dbos_instance(),
+            _get_or_create_dbos_registry(),
             retries_allowed=retries_allowed,
             interval_seconds=interval_seconds,
             max_attempts=max_attempts,
@@ -297,13 +349,13 @@ class DBOS:
 
     @classmethod
     def dbos_class(cls) -> Callable[[Type[Any]], Type[Any]]:
-        return get_dbos_instance()._create_class_info
+        return _get_or_create_dbos_registry().create_class_info
 
     @classmethod
     def default_required_roles(
         cls, roles: List[str]
     ) -> Callable[[Type[Any]], Type[Any]]:
-        return default_required_roles(get_dbos_instance(), roles)
+        return default_required_roles(_get_or_create_dbos_registry(), roles)
 
     @classmethod
     def required_roles(cls, roles: List[str]) -> Callable[[F], F]:
@@ -311,7 +363,7 @@ class DBOS:
 
     @classmethod
     def scheduled(cls, cron: str) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
-        return scheduled(get_dbos_instance(), cron)
+        return scheduled(_get_or_create_dbos_registry(), cron)
 
     @classmethod
     def start_workflow(
@@ -320,18 +372,20 @@ class DBOS:
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
-        return _start_workflow(get_dbos_instance(), func, *args, **kwargs)
+        return _start_workflow(_get_or_create_dbos_instance(), func, *args, **kwargs)
 
     @classmethod
     def get_workflow_status(cls, workflow_uuid: str) -> Optional[WorkflowStatus]:
         ctx = get_local_dbos_context()
         if ctx and ctx.is_within_workflow():
             ctx.function_id += 1
-            stat = get_dbos_instance().sys_db.get_workflow_status_within_wf(
+            stat = _get_or_create_dbos_instance().sys_db.get_workflow_status_within_wf(
                 workflow_uuid, ctx.workflow_uuid, ctx.function_id
             )
         else:
-            stat = get_dbos_instance().sys_db.get_workflow_status(workflow_uuid)
+            stat = _get_or_create_dbos_instance().sys_db.get_workflow_status(
+                workflow_uuid
+            )
         if stat is None:
             return None
 
@@ -351,7 +405,7 @@ class DBOS:
     def retrieve_workflow(
         cls, workflow_uuid: str, existing_workflow: bool = True
     ) -> WorkflowHandle[R]:
-        dbos = get_dbos_instance()
+        dbos = _get_or_create_dbos_instance()
         if existing_workflow:
             stat = dbos.get_workflow_status(workflow_uuid)
             if stat is None:
@@ -362,11 +416,11 @@ class DBOS:
     def send(
         cls, destination_uuid: str, message: Any, topic: Optional[str] = None
     ) -> None:
-        return _send(get_dbos_instance(), destination_uuid, message, topic)
+        return _send(_get_or_create_dbos_instance(), destination_uuid, message, topic)
 
     @classmethod
     def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
-        return _recv(get_dbos_instance(), topic, timeout_seconds)
+        return _recv(_get_or_create_dbos_instance(), topic, timeout_seconds)
 
     @classmethod
     def sleep(cls, seconds: float) -> None:
@@ -376,26 +430,28 @@ class DBOS:
         if seconds <= 0:
             return
         with EnterDBOSCommunicator(attributes) as ctx:
-            get_dbos_instance().sys_db.sleep(
+            _get_or_create_dbos_instance().sys_db.sleep(
                 ctx.workflow_uuid, ctx.curr_comm_function_id, seconds
             )
 
     @classmethod
     def set_event(cls, key: str, value: Any) -> None:
-        return _set_event(get_dbos_instance(), key, value)
+        return _set_event(_get_or_create_dbos_instance(), key, value)
 
     @classmethod
     def get_event(
         cls, workflow_uuid: str, key: str, timeout_seconds: float = 60
     ) -> Any:
-        return _get_event(get_dbos_instance(), workflow_uuid, key, timeout_seconds)
+        return _get_event(
+            _get_or_create_dbos_instance(), workflow_uuid, key, timeout_seconds
+        )
 
     @classmethod
     def execute_workflow_uuid(cls, workflow_uuid: str) -> WorkflowHandle[Any]:
         """
         This function is used to execute a workflow by a UUID for recovery.
         """
-        return _execute_workflow_uuid(get_dbos_instance(), workflow_uuid)
+        return _execute_workflow_uuid(_get_or_create_dbos_instance(), workflow_uuid)
 
     @classmethod
     def recover_pending_workflows(
@@ -404,7 +460,7 @@ class DBOS:
         """
         Find all PENDING workflows and execute them.
         """
-        return _recover_pending_workflows(get_dbos_instance(), executor_ids)
+        return _recover_pending_workflows(_get_or_create_dbos_instance(), executor_ids)
 
     @classproperty
     def logger(cls) -> Logger:
@@ -475,6 +531,6 @@ class DBOSConfiguredInstance:
         self.config_name = config_name
         if dbos is not None:
             assert isinstance(dbos, DBOS)
-            dbos.register_instance(self)
+            dbos._registry.register_instance(self)
         else:
-            DBOS().register_instance(self)
+            DBOS.register_instance(self)

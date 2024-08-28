@@ -1,20 +1,11 @@
 from functools import wraps
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    List,
-    Optional,
-    Tuple,
-    Type,
-    TypeVar,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Type, TypeVar, cast
 
 from dbos.error import DBOSNotAuthorizedError
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS
+    from dbos.dbos import DBOS, _DBOSRegistry
+
 from dbos.context import DBOSAssumeRole, get_local_dbos_context
 from dbos.registrations import (
     DBOSFuncInfo,
@@ -73,11 +64,11 @@ def required_roles(roles: List[str]) -> Callable[[F], F]:
 
 
 def default_required_roles(
-    dbos: "DBOS", roles: List[str]
+    dbosreg: "_DBOSRegistry", roles: List[str]
 ) -> Callable[[Type[Any]], Type[Any]]:
     def set_roles(cls: Type[Any]) -> Type[Any]:
         ci = get_or_create_class_info(cls)
-        dbos.register_class(cls, ci)
+        dbosreg.register_class(cls, ci)
         ci.def_required_roles = roles
         return cls
 

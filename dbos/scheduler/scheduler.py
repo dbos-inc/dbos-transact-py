@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS
+    from dbos.dbos import _DBOSRegistry
 
 from ..context import SetWorkflowUUID
 from ..logger import dbos_logger
@@ -33,12 +33,11 @@ def scheduler_loop(
 
 
 def scheduled(
-    dbos: "DBOS", cron: str
+    dbosreg: "_DBOSRegistry", cron: str
 ) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
     def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
         stop_event = threading.Event()
-        dbos.stop_events.append(stop_event)
-        dbos.executor.submit(scheduler_loop, func, cron, stop_event)
+        dbosreg.register_poller(stop_event, scheduler_loop, func, cron, stop_event)
         return func
 
     return decorator
