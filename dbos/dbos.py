@@ -32,6 +32,7 @@ from dbos.core import (
     _set_event,
     _start_workflow,
     _transaction,
+    _workflow,
     _workflow_wrapper,
     _WorkflowHandlePolling,
 )
@@ -311,17 +312,10 @@ class DBOS:
     def register_instance(cls, inst: object) -> None:
         return _get_or_create_dbos_registry().register_instance(inst)
 
-    @staticmethod
-    def _workflow_decorator(func: F) -> F:
-        reg = _get_or_create_dbos_registry()
-        wrapped_func = _workflow_wrapper(reg, func)
-        reg.register_wf_function(func.__qualname__, wrapped_func)
-        return wrapped_func
-
     # Decorators for DBOS functionality
     @classmethod
     def workflow(cls) -> Callable[[F], F]:
-        return DBOS._workflow_decorator
+        return _workflow(_get_or_create_dbos_registry())
 
     @classmethod
     def transaction(

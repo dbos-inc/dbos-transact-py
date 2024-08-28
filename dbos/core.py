@@ -301,6 +301,15 @@ def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
     return wrapped_func
 
 
+def _workflow(reg: "_DBOSRegistry") -> Callable[[F], F]:
+    def _workflow_decorator(func: F) -> F:
+        wrapped_func = _workflow_wrapper(reg, func)
+        reg.register_wf_function(func.__qualname__, wrapped_func)
+        return wrapped_func
+
+    return _workflow_decorator
+
+
 def _start_workflow(
     dbos: "DBOS",
     func: "Workflow[P, R]",
