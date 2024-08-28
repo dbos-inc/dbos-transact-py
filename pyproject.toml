@@ -19,6 +19,7 @@ dependencies = [
     "python-dateutil>=2.9.0.post0",
     "fastapi[standard]>=0.112.1",
     "psutil>=6.0.0",
+    "tomlkit>=0.13.2",
 ]
 requires-python = ">=3.9"
 readme = "README.md"

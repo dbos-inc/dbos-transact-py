@@ -5,11 +5,11 @@ import shutil
 import signal
 import subprocess
 import time
-import tomllib
 import typing
 from os import path
 from typing import Any
 
+import tomlkit
 import typer
 from rich import print
 from rich.prompt import Prompt
@@ -128,7 +128,7 @@ def get_project_name() -> str | None:
     name = None
     try:
         with open("pyproject.toml", "rb") as file:
-            pyproj = tomllib.load(file)
+            pyproj = tomlkit.load(file)
             name = typing.cast(str, pyproj["project"]["name"])
     except:
         pass
