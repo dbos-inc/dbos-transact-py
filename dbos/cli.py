@@ -12,7 +12,7 @@ from typing import Any
 import tomlkit
 import typer
 from rich import print
-from rich.prompt import Prompt
+from rich.prompt import Confirm, Prompt
 from typing_extensions import Annotated
 
 from dbos import load_config
@@ -90,11 +90,16 @@ def copy_dbos_config(src: str, dst: str, project_name: str) -> None:
     content = content.replace("${APP_DB_NAME}", db_name)
     content = content.replace("${APP_PACKAGE_NAME}", package_name)
 
+    if path.exists(dst):
+        over = Confirm.ask("Overwrite existing dbos-config.yaml file?")
+        if not over:
+            return
+
     try:
-        with open(dst, "x") as file:
+        with open(dst, "w") as file:
             file.write(content)
     except FileExistsError:
-        pass
+        print(f"[yellow]dbos-config.yaml already exists, [/yellow]")
 
 
 def copy_template(template_dir: str, project_name: str) -> None:
