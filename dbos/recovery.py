@@ -5,13 +5,14 @@ import traceback
 from typing import TYPE_CHECKING, Any, List
 
 from dbos.context import SetWorkflowRecovery
+from dbos.core import _execute_workflow_uuid
 from dbos.error import DBOSWorkflowFunctionNotFoundError
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOSImpl, WorkflowHandle
+    from dbos.dbos import DBOS, WorkflowHandle
 
 
-def startup_recovery_thread(dbos: "DBOSImpl", workflow_ids: List[str]) -> None:
+def _startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
     """
     A background thread that attempts to recover local pending workflows on startup.
     """
@@ -21,7 +22,7 @@ def startup_recovery_thread(dbos: "DBOSImpl", workflow_ids: List[str]) -> None:
         try:
             for workflowID in list(workflow_ids):
                 with SetWorkflowRecovery():
-                    dbos.execute_workflow_uuid(workflowID)
+                    _execute_workflow_uuid(dbos, workflowID)
                 workflow_ids.remove(workflowID)
         except DBOSWorkflowFunctionNotFoundError:
             time.sleep(1)
@@ -32,8 +33,8 @@ def startup_recovery_thread(dbos: "DBOSImpl", workflow_ids: List[str]) -> None:
             raise e
 
 
-def recover_pending_workflows(
-    dbos: "DBOSImpl", executor_ids: List[str] = ["local"]
+def _recover_pending_workflows(
+    dbos: "DBOS", executor_ids: List[str] = ["local"]
 ) -> List["WorkflowHandle[Any]"]:
     workflow_handles: List["WorkflowHandle[Any]"] = []
     for executor_id in executor_ids:
@@ -47,7 +48,7 @@ def recover_pending_workflows(
 
         for workflowID in workflow_ids:
             with SetWorkflowRecovery():
-                handle = dbos.execute_workflow_uuid(workflowID)
+                handle = _execute_workflow_uuid(dbos, workflowID)
             workflow_handles.append(handle)
 
     dbos.logger.info("Recovered pending workflows")

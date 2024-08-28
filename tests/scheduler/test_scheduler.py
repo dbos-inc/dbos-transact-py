@@ -3,10 +3,10 @@ from datetime import datetime
 
 # Private test API
 # Public API
-from dbos import DBOS, IDBOS, DBOSImpl
+from dbos import DBOS
 
 
-def test_scheduled_workflow(dbos: IDBOS) -> None:
+def test_scheduled_workflow(dbos: DBOS) -> None:
     wf_counter: int = 0
 
     @DBOS.scheduled("* * * * * *")
@@ -19,7 +19,7 @@ def test_scheduled_workflow(dbos: IDBOS) -> None:
     assert wf_counter >= 1 and wf_counter <= 3
 
 
-def test_scheduled_workflow_exception(dbos: IDBOS) -> None:
+def test_scheduled_workflow_exception(dbos: DBOS) -> None:
     wf_counter: int = 0
 
     @DBOS.scheduled("* * * * * *")
@@ -33,7 +33,7 @@ def test_scheduled_workflow_exception(dbos: IDBOS) -> None:
     assert wf_counter >= 1 and wf_counter <= 3
 
 
-def test_scheduler_oaoo(dbos: DBOSImpl) -> None:
+def test_scheduler_oaoo(dbos: DBOS) -> None:
     wf_counter: int = 0
     txn_counter: int = 0
     workflow_id: str = ""
@@ -82,7 +82,7 @@ def test_scheduler_oaoo(dbos: DBOSImpl) -> None:
         }
     )
 
-    workflow_handles = dbos.recover_pending_workflows()
+    workflow_handles = DBOS.recover_pending_workflows()
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == None
     max_tries = 10
@@ -97,7 +97,7 @@ def test_scheduler_oaoo(dbos: DBOSImpl) -> None:
                 time.sleep(1)
 
 
-def test_long_workflow(dbos: IDBOS) -> None:
+def test_long_workflow(dbos: DBOS) -> None:
     """
     This runs every hour and does nothing. Goal is to verify that it shuts down properly.
     """

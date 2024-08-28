@@ -1,10 +1,10 @@
 import sqlalchemy as sa
 from fastapi import FastAPI
 
-from dbos import DBOS, DBOSImpl
+from dbos import DBOS
 
 app = FastAPI()
-dbos = DBOSImpl(app)
+dbos = DBOS(app)
 
 # Question is about imports and starting.
 # Making them first, it's already serving now, and soon to learn about the code below

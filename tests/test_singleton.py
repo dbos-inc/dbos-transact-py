@@ -3,7 +3,7 @@ import time
 import pytest
 
 # Public API
-from dbos import DBOS, DBOSImpl, SetWorkflowUUID, WorkflowHandle
+from dbos import DBOS, SetWorkflowUUID, WorkflowHandle
 
 # Private API used because this is a test
 from dbos.context import DBOSContextEnsure, assert_current_dbos_context
@@ -12,8 +12,8 @@ from tests.conftest import default_config
 
 def test_dbos_singleton() -> None:
     # Initialize singleton
-    DBOSImpl.clear_global_instance()  # In case of other tests leaving it
-    dbos: DBOSImpl = DBOSImpl(None, default_config())
+    DBOS.clear_global_instance()  # In case of other tests leaving it
+    dbos: DBOS = DBOS(None, default_config())
 
     from tests.classdefs import (
         DBOSSendRecv,

@@ -6,10 +6,10 @@ import requests
 
 # Private test API
 # Public API
-from dbos import DBOS, IDBOS, DBOSImpl, SetWorkflowUUID
+from dbos import DBOS, SetWorkflowUUID
 
 
-def test_admin_endpoints(dbos: IDBOS) -> None:
+def test_admin_endpoints(dbos: DBOS) -> None:
 
     # Test GET /dbos-healthz
     response = requests.get("http://localhost:3001/dbos-healthz", timeout=5)
@@ -33,7 +33,7 @@ def test_admin_endpoints(dbos: IDBOS) -> None:
     assert response.status_code == 404
 
 
-def test_admin_recovery(dbos: DBOSImpl) -> None:
+def test_admin_recovery(dbos: DBOS) -> None:
     os.environ["DBOS__VMID"] = "testexecutor"
     os.environ["DBOS__APPVERSION"] = "testversion"
     os.environ["DBOS__APPID"] = "testappid"

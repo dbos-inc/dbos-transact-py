@@ -14,7 +14,7 @@ from typing import (
 from dbos.error import DBOSNotAuthorizedError
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOSImpl
+    from dbos.dbos import DBOS
 from dbos.context import DBOSAssumeRole, get_local_dbos_context
 from dbos.registrations import (
     DBOSFuncInfo,
@@ -73,7 +73,7 @@ def required_roles(roles: List[str]) -> Callable[[F], F]:
 
 
 def default_required_roles(
-    dbos: "DBOSImpl", roles: List[str]
+    dbos: "DBOS", roles: List[str]
 ) -> Callable[[Type[Any]], Type[Any]]:
     def set_roles(cls: Type[Any]) -> Type[Any]:
         ci = get_or_create_class_info(cls)

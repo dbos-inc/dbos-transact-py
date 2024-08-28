@@ -6,17 +6,19 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any, List
 
+from dbos.recovery import _recover_pending_workflows
+
 from .logger import dbos_logger
 
 if TYPE_CHECKING:
-    from .dbos import DBOSImpl
+    from .dbos import DBOS
 
 health_check_path = "/dbos-healthz"
 workflow_recovery_path = "/dbos-workflow-recovery"
 
 
 class AdminServer:
-    def __init__(self, dbos: DBOSImpl, port: int = 3001) -> None:
+    def __init__(self, dbos: DBOS, port: int = 3001) -> None:
         self.port = port
         handler = partial(AdminRequestHandler, dbos)
         self.server = ThreadingHTTPServer(("0.0.0.0", port), handler)
@@ -34,7 +36,7 @@ class AdminServer:
 
 
 class AdminRequestHandler(BaseHTTPRequestHandler):
-    def __init__(self, dbos: DBOSImpl, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, dbos: DBOS, *args: Any, **kwargs: Any) -> None:
         self.dbos = dbos
         super().__init__(*args, **kwargs)
 
@@ -63,7 +65,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         if self.path == workflow_recovery_path:
             executor_ids: List[str] = json.loads(post_data.decode("utf-8"))
             dbos_logger.info("Recovering workflows for executors: %s", executor_ids)
-            workflow_handles = self.dbos.recover_pending_workflows(executor_ids)
+            workflow_handles = _recover_pending_workflows(self.dbos, executor_ids)
             workflow_uuids = [handle.workflow_uuid for handle in workflow_handles]
             self.send_response(200)
             self._end_headers()

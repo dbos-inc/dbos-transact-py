@@ -35,7 +35,7 @@ from dbos.core import (
     _WorkflowHandlePolling,
 )
 from dbos.decorators import classproperty
-from dbos.recovery import recover_pending_workflows, startup_recovery_thread
+from dbos.recovery import _recover_pending_workflows, _startup_recovery_thread
 from dbos.registrations import (
     DBOSClassInfo,
     get_or_create_class_info,
@@ -97,76 +97,16 @@ IsolationLevel = Literal[
     "READ COMMITTED",
 ]
 
-_dbos_global_instance: Optional[DBOSImpl] = None
+_dbos_global_instance: Optional[DBOS] = None
 
 
-class IDBOS(Protocol):
-    def workflow(self) -> Callable[[F], F]: ...
-
-    def start_workflow(
-        self,
-        func: Workflow[P, R],
-        *args: P.args,
-        **kwargs: P.kwargs,
-    ) -> WorkflowHandle[R]: ...
-
-    def retrieve_workflow(
-        self, workflow_uuid: str, existing_workflow: bool = True
-    ) -> WorkflowHandle[R]: ...
-
-    def get_workflow_status(self, workflow_uuid: str) -> Optional[WorkflowStatus]: ...
-
-    def transaction(
-        self, isolation_level: IsolationLevel = "SERIALIZABLE"
-    ) -> Callable[[F], F]: ...
-
-    # Mirror the CommunicatorConfig from TS. However, we disable retries by default.
-    def communicator(
-        self,
-        *,
-        retries_allowed: bool = False,
-        interval_seconds: float = 1.0,
-        max_attempts: int = 3,
-        backoff_rate: float = 2.0,
-    ) -> Callable[[F], F]: ...
-
-    def dbos_class(self) -> Callable[[Type[Any]], Type[Any]]: ...
-
-    def default_required_roles(
-        self, roles: List[str]
-    ) -> Callable[[Type[Any]], Type[Any]]: ...
-
-    def required_roles(self, roles: List[str]) -> Callable[[F], F]: ...
-
-    def scheduled(
-        self, cron: str
-    ) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]: ...
-
-    def send(
-        self, destination_uuid: str, message: Any, topic: Optional[str] = None
-    ) -> None: ...
-
-    def recv(self, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any: ...
-
-    def sleep(self, seconds: float) -> None: ...
-
-    def set_event(self, key: str, value: Any) -> None: ...
-
-    def get_event(
-        self, workflow_uuid: str, key: str, timeout_seconds: float = 60
-    ) -> Any: ...
-
-    def execute_workflow_uuid(self, workflow_uuid: str) -> WorkflowHandle[Any]: ...
-
-    def recover_pending_workflows(
-        self, executor_ids: List[str] = ["local"]
-    ) -> List[WorkflowHandle[Any]]: ...
-
-    @property
-    def logger(self) -> Logger: ...
+def get_dbos_instance() -> DBOS:
+    # Currently get / init the global singleton
+    #   (It could also check context?)
+    return DBOS()
 
 
-class DBOSImpl(IDBOS):
+class DBOS:
     # TODO: Put comment where it really belongs
     ### Lifecycles ###
     # We provide the following:
@@ -182,10 +122,10 @@ class DBOSImpl(IDBOS):
     #  Use that instance
 
     def __new__(
-        cls: Type[DBOSImpl],
+        cls: Type[DBOS],
         fastapi: Optional["FastAPI"] = None,
         config: Optional[ConfigFile] = None,
-    ) -> DBOSImpl:
+    ) -> DBOS:
         global _dbos_global_instance
         if _dbos_global_instance is None:
             _dbos_global_instance = super().__new__(cls)
@@ -194,11 +134,11 @@ class DBOSImpl(IDBOS):
 
     @classmethod
     def create_instance(
-        cls: Type[DBOSImpl],
+        cls: Type[DBOS],
         fastapi: Optional["FastAPI"] = None,
         config: Optional[ConfigFile] = None,
-    ) -> DBOSImpl:
-        inst: DBOSImpl = super().__new__(cls)
+    ) -> DBOS:
+        inst: DBOS = super().__new__(cls)
         inst.__init__(fastapi=fastapi, config=config)  # type: ignore
         return inst
 
@@ -281,7 +221,7 @@ class DBOSImpl(IDBOS):
         self._admin_server = AdminServer(dbos=self)
         if not os.environ.get("DBOS__VMID"):
             workflow_ids = self.sys_db.get_pending_workflows("local")
-            self.executor.submit(startup_recovery_thread, self, workflow_ids)
+            self.executor.submit(_startup_recovery_thread, self, workflow_ids)
 
         # Listen to notifications
         self.executor.submit(self.sys_db._notification_listener)
@@ -306,11 +246,6 @@ class DBOSImpl(IDBOS):
         # CB Should this be done before DBs are destroyed?
         self.executor.shutdown(cancel_futures=True)
 
-    @classmethod
-    def _get_dbos(cls) -> DBOSImpl:
-        # Could check context
-        return DBOSImpl()
-
     def _register_wf_function(self, name: str, wrapped_func: F) -> None:
         self.workflow_info_map[name] = wrapped_func
 
@@ -318,72 +253,6 @@ class DBOSImpl(IDBOS):
         wrapped_func = _workflow_wrapper(self, func)
         self._register_wf_function(func.__qualname__, wrapped_func)
         return wrapped_func
-
-    def workflow(self) -> Callable[[F], F]:
-        return self._workflow_decorator
-
-    def start_workflow(
-        self,
-        func: Workflow[P, R],
-        *args: P.args,
-        **kwargs: P.kwargs,
-    ) -> WorkflowHandle[R]:
-        return _start_workflow(self, func, *args, **kwargs)
-
-    def retrieve_workflow(
-        self, workflow_uuid: str, existing_workflow: bool = True
-    ) -> WorkflowHandle[R]:
-        if existing_workflow:
-            stat = self.get_workflow_status(workflow_uuid)
-            if stat is None:
-                raise DBOSNonExistentWorkflowError(workflow_uuid)
-        return _WorkflowHandlePolling(workflow_uuid, self)
-
-    def get_workflow_status(self, workflow_uuid: str) -> Optional[WorkflowStatus]:
-        ctx = get_local_dbos_context()
-        if ctx and ctx.is_within_workflow():
-            ctx.function_id += 1
-            stat = self.sys_db.get_workflow_status_within_wf(
-                workflow_uuid, ctx.workflow_uuid, ctx.function_id
-            )
-        else:
-            stat = self.sys_db.get_workflow_status(workflow_uuid)
-        if stat is None:
-            return None
-
-        return WorkflowStatus(
-            workflow_uuid=workflow_uuid,
-            status=stat["status"],
-            name=stat["name"],
-            recovery_attempts=stat["recovery_attempts"],
-            class_name=stat["class_name"],
-            config_name=stat["config_name"],
-            authenticated_user=None,
-            assumed_role=None,
-            authenticatedRoles=None,
-        )
-
-    def transaction(
-        self, isolation_level: IsolationLevel = "SERIALIZABLE"
-    ) -> Callable[[F], F]:
-        return _transaction(self, isolation_level)
-
-    # Mirror the CommunicatorConfig from TS. However, we disable retries by default.
-    def communicator(
-        self,
-        *,
-        retries_allowed: bool = False,
-        interval_seconds: float = 1.0,
-        max_attempts: int = 3,
-        backoff_rate: float = 2.0,
-    ) -> Callable[[F], F]:
-        return _communicator(
-            self,
-            retries_allowed=retries_allowed,
-            interval_seconds=interval_seconds,
-            max_attempts=max_attempts,
-            backoff_rate=backoff_rate,
-        )
 
     def register_instance(self, inst: object) -> None:
         config_name = getattr(inst, "config_name")
@@ -405,87 +274,23 @@ class DBOSImpl(IDBOS):
         else:
             self.class_info_map[class_name] = cls
 
-    def dbos_class(self) -> Callable[[Type[Any]], Type[Any]]:
-        def create_class_info(cls: Type[Any]) -> Type[Any]:
-            ci = get_or_create_class_info(cls)
-            self.register_class(cls, ci)
-            return cls
+    def _create_class_info(self, cls: Type[Any]) -> Type[Any]:
+        ci = get_or_create_class_info(cls)
+        self.register_class(cls, ci)
+        return cls
 
-        return create_class_info
-
-    def default_required_roles(
-        self, roles: List[str]
-    ) -> Callable[[Type[Any]], Type[Any]]:
-        return default_required_roles(self, roles)
-
-    def required_roles(self, roles: List[str]) -> Callable[[F], F]:
-        return required_roles(roles)
-
-    def scheduled(self, cron: str) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
-        return scheduled(self, cron)
-
-    def send(
-        self, destination_uuid: str, message: Any, topic: Optional[str] = None
-    ) -> None:
-        return _send(self, destination_uuid, message, topic)
-
-    def recv(self, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
-        return _recv(self, topic, timeout_seconds)
-
-    def sleep(self, seconds: float) -> None:
-        attributes: TracedAttributes = {
-            "name": "sleep",
-        }
-        if seconds <= 0:
-            return
-        with EnterDBOSCommunicator(attributes) as ctx:
-            self.sys_db.sleep(ctx.workflow_uuid, ctx.curr_comm_function_id, seconds)
-
-    def set_event(self, key: str, value: Any) -> None:
-        return _set_event(self, key, value)
-
-    def get_event(
-        self, workflow_uuid: str, key: str, timeout_seconds: float = 60
-    ) -> Any:
-        return _get_event(self, workflow_uuid, key, timeout_seconds)
-
-    def execute_workflow_uuid(self, workflow_uuid: str) -> WorkflowHandle[Any]:
-        """
-        This function is used to execute a workflow by a UUID for recovery.
-        """
-        return _execute_workflow_uuid(self, workflow_uuid)
-
-    def recover_pending_workflows(
-        self, executor_ids: List[str] = ["local"]
-    ) -> List[WorkflowHandle[Any]]:
-        """
-        Find all PENDING workflows and execute them.
-        """
-        return recover_pending_workflows(self, executor_ids)
-
-    @property
-    def logger(self) -> Logger:
-        return dbos_logger
-
-
-def get_dbos_instance() -> DBOSImpl:
-    # Currently get / init the global singleton
-    #   (It could also check context?)
-    return DBOSImpl()
-
-
-class DBOS:
     # Decorators for DBOS functionality
     @classmethod
     def workflow(cls) -> Callable[[F], F]:
-        return get_dbos_instance().workflow()
+        return get_dbos_instance()._workflow_decorator
 
     @classmethod
     def transaction(
         cls, isolation_level: IsolationLevel = "SERIALIZABLE"
     ) -> Callable[[F], F]:
-        return get_dbos_instance().transaction(isolation_level)
+        return _transaction(get_dbos_instance(), isolation_level)
 
+    # Mirror the CommunicatorConfig from TS. However, we disable retries by default.
     @classmethod
     def communicator(
         cls,
@@ -495,7 +300,8 @@ class DBOS:
         max_attempts: int = 3,
         backoff_rate: float = 2.0,
     ) -> Callable[[F], F]:
-        return get_dbos_instance().communicator(
+        return _communicator(
+            get_dbos_instance(),
             retries_allowed=retries_allowed,
             interval_seconds=interval_seconds,
             max_attempts=max_attempts,
@@ -504,21 +310,21 @@ class DBOS:
 
     @classmethod
     def dbos_class(cls) -> Callable[[Type[Any]], Type[Any]]:
-        return get_dbos_instance().dbos_class()
+        return get_dbos_instance()._create_class_info
 
     @classmethod
     def default_required_roles(
         cls, roles: List[str]
     ) -> Callable[[Type[Any]], Type[Any]]:
-        return get_dbos_instance().default_required_roles(roles)
+        return default_required_roles(get_dbos_instance(), roles)
 
     @classmethod
     def required_roles(cls, roles: List[str]) -> Callable[[F], F]:
-        return get_dbos_instance().required_roles(roles)
+        return required_roles(roles)
 
     @classmethod
     def scheduled(cls, cron: str) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
-        return get_dbos_instance().scheduled(cron)
+        return scheduled(get_dbos_instance(), cron)
 
     @classmethod
     def start_workflow(
@@ -527,48 +333,82 @@ class DBOS:
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
-        return get_dbos_instance().start_workflow(func, *args, **kwargs)
+        return _start_workflow(get_dbos_instance(), func, *args, **kwargs)
 
     @classmethod
-    def get_workflow_status(self, workflow_uuid: str) -> Optional[WorkflowStatus]:
-        return get_dbos_instance().get_workflow_status(workflow_uuid)
+    def get_workflow_status(cls, workflow_uuid: str) -> Optional[WorkflowStatus]:
+        ctx = get_local_dbos_context()
+        if ctx and ctx.is_within_workflow():
+            ctx.function_id += 1
+            stat = get_dbos_instance().sys_db.get_workflow_status_within_wf(
+                workflow_uuid, ctx.workflow_uuid, ctx.function_id
+            )
+        else:
+            stat = get_dbos_instance().sys_db.get_workflow_status(workflow_uuid)
+        if stat is None:
+            return None
+
+        return WorkflowStatus(
+            workflow_uuid=workflow_uuid,
+            status=stat["status"],
+            name=stat["name"],
+            recovery_attempts=stat["recovery_attempts"],
+            class_name=stat["class_name"],
+            config_name=stat["config_name"],
+            authenticated_user=None,
+            assumed_role=None,
+            authenticatedRoles=None,
+        )
 
     @classmethod
     def retrieve_workflow(
-        self, workflow_uuid: str, existing_workflow: bool = True
+        cls, workflow_uuid: str, existing_workflow: bool = True
     ) -> WorkflowHandle[R]:
-        return get_dbos_instance().retrieve_workflow(workflow_uuid, existing_workflow)
+        dbos = get_dbos_instance()
+        if existing_workflow:
+            stat = dbos.get_workflow_status(workflow_uuid)
+            if stat is None:
+                raise DBOSNonExistentWorkflowError(workflow_uuid)
+        return _WorkflowHandlePolling(workflow_uuid, dbos)
 
     @classmethod
     def send(
         cls, destination_uuid: str, message: Any, topic: Optional[str] = None
     ) -> None:
-        return get_dbos_instance().send(destination_uuid, message, topic)
+        return _send(get_dbos_instance(), destination_uuid, message, topic)
 
     @classmethod
     def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
-        return get_dbos_instance().recv(topic, timeout_seconds)
+        return _recv(get_dbos_instance(), topic, timeout_seconds)
 
     @classmethod
     def sleep(cls, seconds: float) -> None:
-        return get_dbos_instance().sleep(seconds)
+        attributes: TracedAttributes = {
+            "name": "sleep",
+        }
+        if seconds <= 0:
+            return
+        with EnterDBOSCommunicator(attributes) as ctx:
+            get_dbos_instance().sys_db.sleep(
+                ctx.workflow_uuid, ctx.curr_comm_function_id, seconds
+            )
 
     @classmethod
     def set_event(cls, key: str, value: Any) -> None:
-        return get_dbos_instance().set_event(key, value)
+        return _set_event(get_dbos_instance(), key, value)
 
     @classmethod
     def get_event(
         cls, workflow_uuid: str, key: str, timeout_seconds: float = 60
     ) -> Any:
-        return get_dbos_instance().get_event(workflow_uuid, key, timeout_seconds)
+        return _get_event(get_dbos_instance(), workflow_uuid, key, timeout_seconds)
 
     @classmethod
     def execute_workflow_uuid(cls, workflow_uuid: str) -> WorkflowHandle[Any]:
         """
         This function is used to execute a workflow by a UUID for recovery.
         """
-        return get_dbos_instance().execute_workflow_uuid(workflow_uuid)
+        return _execute_workflow_uuid(get_dbos_instance(), workflow_uuid)
 
     @classmethod
     def recover_pending_workflows(
@@ -577,7 +417,7 @@ class DBOS:
         """
         Find all PENDING workflows and execute them.
         """
-        return get_dbos_instance().recover_pending_workflows(executor_ids)
+        return _recover_pending_workflows(get_dbos_instance(), executor_ids)
 
     @classproperty
     def logger(cls) -> Logger:
@@ -644,10 +484,10 @@ class WorkflowHandle(Generic[R], Protocol):
 
 
 class DBOSConfiguredInstance:
-    def __init__(self, config_name: str, dbos: Optional[IDBOS] = None) -> None:
+    def __init__(self, config_name: str, dbos: Optional[DBOS] = None) -> None:
         self.config_name = config_name
         if dbos is not None:
-            assert isinstance(dbos, DBOSImpl)
+            assert isinstance(dbos, DBOS)
             dbos.register_instance(self)
         else:
-            DBOSImpl().register_instance(self)
+            DBOS().register_instance(self)

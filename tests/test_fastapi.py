@@ -6,13 +6,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 # Public API
-from dbos import DBOS, IDBOS, DBOSImpl
+from dbos import DBOS
 
 # Private API because this is a unit test
 from dbos.context import assert_current_dbos_context
 
 
-def test_simple_endpoint(dbos_fastapi: Tuple[IDBOS, FastAPI]) -> None:
+def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     dbos, app = dbos_fastapi
     client = TestClient(app)
 
@@ -50,7 +50,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[IDBOS, FastAPI]) -> None:
     assert response.text == '"bob1bob"'
 
 
-def test_start_workflow(dbos_fastapi: Tuple[IDBOS, FastAPI]) -> None:
+def test_start_workflow(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     dbos, app = dbos_fastapi
     client = TestClient(app)
 
@@ -83,7 +83,7 @@ def test_start_workflow(dbos_fastapi: Tuple[IDBOS, FastAPI]) -> None:
     assert response.text == '"bob1bob"'
 
 
-def test_endpoint_recovery(dbos_fastapi: Tuple[DBOSImpl, FastAPI]) -> None:
+def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     dbos, app = dbos_fastapi
     client = TestClient(app)
 
@@ -130,6 +130,6 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOSImpl, FastAPI]) -> None:
     )
 
     # Recovery should execute the workflow again but skip the transaction
-    workflow_handles = dbos.recover_pending_workflows()
+    workflow_handles = DBOS.recover_pending_workflows()
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == ("a", wfuuid)

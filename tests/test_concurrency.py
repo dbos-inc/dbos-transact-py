@@ -7,10 +7,10 @@ from typing import Tuple
 from sqlalchemy import text
 
 # Public API
-from dbos import DBOS, IDBOS, SetWorkflowUUID
+from dbos import DBOS, SetWorkflowUUID
 
 
-def test_concurrent_workflows(dbos: IDBOS) -> None:
+def test_concurrent_workflows(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_workflow() -> str:
         time.sleep(1)
@@ -30,7 +30,7 @@ def test_concurrent_workflows(dbos: IDBOS) -> None:
             assert id == future.result()
 
 
-def test_concurrent_conflict_uuid(dbos: IDBOS) -> None:
+def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
     condition = threading.Condition()
     comm_count = 0
     txn_count = 0

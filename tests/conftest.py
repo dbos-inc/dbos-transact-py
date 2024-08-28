@@ -7,7 +7,7 @@ import pytest
 import sqlalchemy as sa
 from fastapi import FastAPI
 
-from dbos import ConfigFile, DBOSImpl
+from dbos import DBOS, ConfigFile
 
 
 @pytest.fixture(scope="session")
@@ -95,25 +95,25 @@ def cleanup_test_databases(config: ConfigFile, postgres_db_engine: sa.Engine) ->
 @pytest.fixture()
 def dbos(
     config: ConfigFile, cleanup_test_databases: None
-) -> Generator[DBOSImpl, Any, None]:
-    DBOSImpl.clear_global_instance()
-    dbos = DBOSImpl(config=config)
+) -> Generator[DBOS, Any, None]:
+    DBOS.clear_global_instance()
+    dbos = DBOS(config=config)
     dbos.launch()
     yield dbos
     dbos.destroy()
-    DBOSImpl.clear_global_instance()
+    DBOS.clear_global_instance()
 
 
 @pytest.fixture()
 def dbos_fastapi(
     config: ConfigFile, cleanup_test_databases: None
-) -> Generator[Tuple[DBOSImpl, FastAPI], Any, None]:
-    DBOSImpl.clear_global_instance()
+) -> Generator[Tuple[DBOS, FastAPI], Any, None]:
+    DBOS.clear_global_instance()
     app = FastAPI()
-    dbos = DBOSImpl(fastapi=app, config=config)
+    dbos = DBOS(fastapi=app, config=config)
     yield dbos, app
     dbos.destroy()
-    DBOSImpl.clear_global_instance()
+    DBOS.clear_global_instance()
 
 
 # Pretty-print test names
