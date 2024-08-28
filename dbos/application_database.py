@@ -61,7 +61,9 @@ class ApplicationDatabase:
             port=config["database"]["port"],
             database=app_db_name,
         )
-        self.engine = sa.create_engine(app_db_url)
+        self.engine = sa.create_engine(
+            app_db_url, pool_size=20, max_overflow=5, pool_timeout=30
+        )
         self.sessionmaker = sessionmaker(bind=self.engine)
 
         # Create the dbos schema and transaction_outputs table in the application database
