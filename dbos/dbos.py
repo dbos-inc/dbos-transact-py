@@ -107,19 +107,14 @@ def get_dbos_instance() -> DBOS:
 
 
 class DBOS:
-    # TODO: Put comment where it really belongs
     ### Lifecycles ###
-    # We provide the following:
-    #  A singleton, created / accessed as `DBOS(args)`
-    #  A factory method `create_instance(args)` to create a non-singleton instance
-    #  Access to the context's DBOS (or the singleton in the absence) decorators / methods via `DBOS.<thing>`
+    # We provide a singleton, created / accessed as `DBOS(args)`
+    #  Access to the the singleton via `DBOS.<thing>`
     #
     # If an application wants to control lifecycle of DBOS via singleton:
     #  Create DBOS with `DBOS()`
     #   Use DBOS or the instance returned from DBOS()
-    # If an application (or test) wants more than one:
-    #  Create DBOS with `create_instance` and remember which it is
-    #  Use that instance
+    #  clear_global_instance() to get rid of it so that DBOS() returns a new one
 
     def __new__(
         cls: Type[DBOS],
@@ -131,16 +126,6 @@ class DBOS:
             _dbos_global_instance = super().__new__(cls)
             _dbos_global_instance.__init__(fastapi=fastapi, config=config)  # type: ignore
         return _dbos_global_instance
-
-    @classmethod
-    def create_instance(
-        cls: Type[DBOS],
-        fastapi: Optional["FastAPI"] = None,
-        config: Optional[ConfigFile] = None,
-    ) -> DBOS:
-        inst: DBOS = super().__new__(cls)
-        inst.__init__(fastapi=fastapi, config=config)  # type: ignore
-        return inst
 
     @classmethod
     def clear_global_instance(cls) -> None:

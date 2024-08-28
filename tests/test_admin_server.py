@@ -4,7 +4,6 @@ import uuid
 
 import requests
 
-# Private test API
 # Public API
 from dbos import DBOS, SetWorkflowUUID
 
