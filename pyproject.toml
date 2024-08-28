@@ -18,6 +18,7 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.26.0",
     "python-dateutil>=2.9.0.post0",
     "fastapi[standard]>=0.112.1",
+    "psutil>=6.0.0",
 ]
 requires-python = ">=3.9"
 readme = "README.md"
@@ -47,7 +48,6 @@ dev = [
     "black>=24.8.0",
     "pre-commit>=3.8.0",
     "isort>=5.13.2",
-    "psutil>=6.0.0",
     "types-psutil>=6.0.0.20240621",
     "requests>=2.32.3",
     "types-requests>=2.32.0.20240712",
