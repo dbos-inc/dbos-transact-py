@@ -128,7 +128,7 @@ def get_project_name() -> typing.Union[str, None]:
     name = None
     try:
         with open("pyproject.toml", "rb") as file:
-            pyproj = tomlkit.load(file)
+            pyproj = typing.cast(dict[str, Any], tomlkit.load(file))
             name = typing.cast(str, pyproj["project"]["name"])
     except:
         pass
