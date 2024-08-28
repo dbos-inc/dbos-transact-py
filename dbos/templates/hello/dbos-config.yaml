@@ -7,7 +7,7 @@ name: ${APP_NAME}
 language: python
 runtimeConfig:
   start:
-    - "fastapi run"
+    - "fastapi run ${APP_PACKAGE_NAME}/main.py"
 database:
   hostname: localhost
   port: 5432
