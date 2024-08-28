@@ -674,6 +674,7 @@ def test_without_fastapi() -> None:
         sys.meta_path.remove(blocker)
 
     dbos = DBOS(config=config)
+    dbos.launch()  # Usually the framework does this...
     try:
 
         @DBOS.workflow()

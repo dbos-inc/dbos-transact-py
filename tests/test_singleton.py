@@ -23,6 +23,8 @@ def test_dbos_singleton() -> None:
         wfFunc,
     )
 
+    dbos.launch()  # Usually framework does this
+
     # Basics
     with SetWorkflowUUID("wfid"):
         res = wfFunc("f")

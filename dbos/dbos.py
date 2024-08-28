@@ -103,13 +103,11 @@ _dbos_global_instance: Optional[DBOS] = None
 _dbos_global_registry: Optional[_DBOSRegistry] = None
 
 
-def _get_or_create_dbos_instance() -> DBOS:
-    # Currently get / init the global singleton
-    return DBOS()
-
-
-def _get_dbos_instance() -> Optional[DBOS]:
-    return _dbos_global_instance
+def _get_dbos_instance() -> DBOS:
+    global _dbos_global_instance
+    if _dbos_global_instance is not None:
+        return _dbos_global_instance
+    raise DBOSException("No DBOS was created yet")
 
 
 def _get_or_create_dbos_registry() -> _DBOSRegistry:
@@ -174,7 +172,11 @@ class _DBOSRegistry:
 class DBOS:
     ### Lifecycles ###
     # We provide a singleton, created / accessed as `DBOS(args)`
-    #  Access to the the singleton via `DBOS.<thing>`
+    #  Access to the the singleton, or current context, via `DBOS.<thing>`
+    #
+    # If a DBOS decorator is used before there is a DBOS, the information gets
+    #  put in _dbos_global_registry.  When the DBOS is finally created, it will
+    #  get picked up.  Information can be added later.
     #
     # If an application wants to control lifecycle of DBOS via singleton:
     #  Create DBOS with `DBOS()`
@@ -191,8 +193,12 @@ class DBOS:
             _dbos_global_instance = super().__new__(cls)
             _dbos_global_instance.__init__(fastapi=fastapi, config=config)  # type: ignore
         else:
-            # if (_dbos_global_instance.config is not config) or (_dbos_global_instance.fastapi is not fastapi) boo!
-            pass
+            if (_dbos_global_instance.config is not config) or (
+                _dbos_global_instance.fastapi is not fastapi
+            ):
+                raise DBOSException(
+                    f"DBOS Initialized multiple times with conflicting configuration / fastapi information"
+                )
         return _dbos_global_instance
 
     @classmethod
@@ -249,12 +255,13 @@ class DBOS:
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
         self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
 
+        if self.fastapi is not None:
+            self.fastapi.on_event("startup")(self.launch)
+
     @property
     def sys_db(self) -> SystemDatabase:
         if self._sys_db is None:
-            self.launch()
-        if self._sys_db is None:  # Can't happen but makes mypy happy
-            raise DBOSException("System database not initialized")
+            raise DBOSException("System database accessed before DBOS was launched")
         rv: SystemDatabase = self._sys_db
         return rv
 
@@ -262,17 +269,17 @@ class DBOS:
     def app_db(self) -> ApplicationDatabase:
         if self._app_db is None:
             self.launch()
-        if self._app_db is None:  # Can't happen but makes mypy happy
-            raise DBOSException("Application database not initialized")
+        if self._app_db is None:
+            raise DBOSException(
+                "Application database accessed before DBOS was launched"
+            )
         rv: ApplicationDatabase = self._app_db
         return rv
 
     @property
     def admin_server(self) -> AdminServer:
         if self._admin_server is None:
-            self.launch()
-        if self._admin_server is None:  # Can't happen but makes mypy happy
-            raise DBOSException("Admin server is not initialized")
+            raise DBOSException("Admin server accessed before DBOS was launched")
         rv: AdminServer = self._admin_server
         return rv
 
@@ -366,20 +373,18 @@ class DBOS:
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
-        return _start_workflow(_get_or_create_dbos_instance(), func, *args, **kwargs)
+        return _start_workflow(_get_dbos_instance(), func, *args, **kwargs)
 
     @classmethod
     def get_workflow_status(cls, workflow_uuid: str) -> Optional[WorkflowStatus]:
         ctx = get_local_dbos_context()
         if ctx and ctx.is_within_workflow():
             ctx.function_id += 1
-            stat = _get_or_create_dbos_instance().sys_db.get_workflow_status_within_wf(
+            stat = _get_dbos_instance().sys_db.get_workflow_status_within_wf(
                 workflow_uuid, ctx.workflow_uuid, ctx.function_id
             )
         else:
-            stat = _get_or_create_dbos_instance().sys_db.get_workflow_status(
-                workflow_uuid
-            )
+            stat = _get_dbos_instance().sys_db.get_workflow_status(workflow_uuid)
         if stat is None:
             return None
 
@@ -399,7 +404,7 @@ class DBOS:
     def retrieve_workflow(
         cls, workflow_uuid: str, existing_workflow: bool = True
     ) -> WorkflowHandle[R]:
-        dbos = _get_or_create_dbos_instance()
+        dbos = _get_dbos_instance()
         if existing_workflow:
             stat = dbos.get_workflow_status(workflow_uuid)
             if stat is None:
@@ -410,11 +415,11 @@ class DBOS:
     def send(
         cls, destination_uuid: str, message: Any, topic: Optional[str] = None
     ) -> None:
-        return _send(_get_or_create_dbos_instance(), destination_uuid, message, topic)
+        return _send(_get_dbos_instance(), destination_uuid, message, topic)
 
     @classmethod
     def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
-        return _recv(_get_or_create_dbos_instance(), topic, timeout_seconds)
+        return _recv(_get_dbos_instance(), topic, timeout_seconds)
 
     @classmethod
     def sleep(cls, seconds: float) -> None:
@@ -424,28 +429,26 @@ class DBOS:
         if seconds <= 0:
             return
         with EnterDBOSCommunicator(attributes) as ctx:
-            _get_or_create_dbos_instance().sys_db.sleep(
+            _get_dbos_instance().sys_db.sleep(
                 ctx.workflow_uuid, ctx.curr_comm_function_id, seconds
             )
 
     @classmethod
     def set_event(cls, key: str, value: Any) -> None:
-        return _set_event(_get_or_create_dbos_instance(), key, value)
+        return _set_event(_get_dbos_instance(), key, value)
 
     @classmethod
     def get_event(
         cls, workflow_uuid: str, key: str, timeout_seconds: float = 60
     ) -> Any:
-        return _get_event(
-            _get_or_create_dbos_instance(), workflow_uuid, key, timeout_seconds
-        )
+        return _get_event(_get_dbos_instance(), workflow_uuid, key, timeout_seconds)
 
     @classmethod
     def execute_workflow_uuid(cls, workflow_uuid: str) -> WorkflowHandle[Any]:
         """
         This function is used to execute a workflow by a UUID for recovery.
         """
-        return _execute_workflow_uuid(_get_or_create_dbos_instance(), workflow_uuid)
+        return _execute_workflow_uuid(_get_dbos_instance(), workflow_uuid)
 
     @classmethod
     def recover_pending_workflows(
@@ -454,7 +457,7 @@ class DBOS:
         """
         Find all PENDING workflows and execute them.
         """
-        return _recover_pending_workflows(_get_or_create_dbos_instance(), executor_ids)
+        return _recover_pending_workflows(_get_dbos_instance(), executor_ids)
 
     @classproperty
     def logger(cls) -> Logger:
