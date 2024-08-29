@@ -97,14 +97,14 @@ def dbos(
     config: ConfigFile, cleanup_test_databases: None
 ) -> Generator[DBOS, Any, None]:
     DBOS.destroy()
-    dbos = DBOS(config=config)
-    # This is for test convenience.
+
+    # This launches for test convenience.
     #    Tests add to running DBOS and then call stuff without adding
-    #     launch themselves.  Which is weird, not what any app does, but
-    #     that's what they currently do.
+    #     launch themselves.
     # If your test is tricky and has a problem with this, use a different
     #   fixture that does not launch.
-    dbos.launch()
+    dbos = DBOS(config=config, launch=True)
+
     yield dbos
     DBOS.destroy()
 
@@ -118,7 +118,7 @@ def dbos_fastapi(
     dbos = DBOS(fastapi=app, config=config)
 
     # This is for test convenience.
-    #    Usually fastapi itself does launch, but our tests don't do this
+    #    Usually fastapi itself does launch, but we are not completing the fastapi lifecycle
     dbos.launch()
 
     yield dbos, app

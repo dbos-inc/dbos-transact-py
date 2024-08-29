@@ -18,11 +18,11 @@ def test_dbos_singleton() -> None:
     #    then imports more
     from tests.classdefs import DBOSSendRecv, DBOSTestClass, DBOSTestRoles
 
-    dbos: DBOS = DBOS(None, default_config())
+    dbos: DBOS = DBOS(None, default_config(), launch=False)
 
     from tests.more_classdefs import DBOSWFEvents, wfFunc
 
-    dbos.launch()  # Usually framework (fastapi) does this
+    dbos.launch()  # Usually framework (fastapi) does this via lifecycle event
 
     # Basics
     with SetWorkflowUUID("wfid"):
@@ -105,7 +105,7 @@ def test_dbos_singleton() -> None:
     duration = time.time() - begin_time
     assert duration < 1  # None is from the event not from the timeout
 
-    dbos.destroy()
+    DBOS.destroy()
 
 
 def test_dbos_singleton_negative() -> None:

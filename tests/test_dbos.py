@@ -462,7 +462,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     )
 
     dbos._destroy()  # Unusual pattern - reusing the memory
-    dbos.__init__(config=config)  # type: ignore
+    dbos.__init__(config=config, launch=False)  # type: ignore
 
     @DBOS.workflow()  # type: ignore
     def test_workflow(var: str) -> str:
@@ -674,7 +674,6 @@ def test_without_fastapi() -> None:
         sys.meta_path.remove(blocker)
 
     dbos = DBOS(config=config)
-    dbos.launch()  # Usually the framework does this...
 
     try:
 

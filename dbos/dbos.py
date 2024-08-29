@@ -189,11 +189,12 @@ class DBOS:
         cls: Type[DBOS],
         fastapi: Optional["FastAPI"] = None,
         config: Optional[ConfigFile] = None,
+        launch: bool = True,
     ) -> DBOS:
         global _dbos_global_instance
         if _dbos_global_instance is None:
             _dbos_global_instance = super().__new__(cls)
-            _dbos_global_instance.__init__(fastapi=fastapi, config=config)  # type: ignore
+            _dbos_global_instance.__init__(fastapi=fastapi, config=config, launch=launch)  # type: ignore
         else:
             if (_dbos_global_instance.config is not config) or (
                 _dbos_global_instance.fastapi is not fastapi
@@ -213,7 +214,10 @@ class DBOS:
         _dbos_global_registry = None
 
     def __init__(
-        self, fastapi: Optional["FastAPI"] = None, config: Optional[ConfigFile] = None
+        self,
+        fastapi: Optional["FastAPI"] = None,
+        config: Optional[ConfigFile] = None,
+        launch: bool = True,
     ) -> None:
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -240,6 +244,8 @@ class DBOS:
             from dbos.fastapi import setup_fastapi_middleware
 
             setup_fastapi_middleware(self.fastapi)
+            self.fastapi.on_event("startup")(self.launch)
+            launch = False
 
         # Register send_stub as a workflow
         def send_temp_workflow(
@@ -251,8 +257,8 @@ class DBOS:
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
         self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
 
-        if self.fastapi is not None:
-            self.fastapi.on_event("startup")(self.launch)
+        if launch:
+            self.launch()
 
     @property
     def executor(self) -> ThreadPoolExecutor:
@@ -270,8 +276,6 @@ class DBOS:
 
     @property
     def app_db(self) -> ApplicationDatabase:
-        if self._app_db is None:
-            self.launch()
         if self._app_db is None:
             raise DBOSException(
                 "Application database accessed before DBOS was launched"
