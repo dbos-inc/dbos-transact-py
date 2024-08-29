@@ -11,7 +11,7 @@ from dbos.context import DBOSContextEnsure, assert_current_dbos_context
 
 
 def test_required_roles(dbos: DBOS) -> None:
-    @dbos.required_roles(["user"])
+    @DBOS.required_roles(["user"])
     def tfunc(var: str) -> str:
         assert assert_current_dbos_context().assumed_role == "user"
         return var
@@ -46,64 +46,64 @@ def test_required_roles(dbos: DBOS) -> None:
 
 
 def test_required_roles_class(dbos: DBOS) -> None:
-    @dbos.default_required_roles(["user"])
+    @DBOS.default_required_roles(["user"])
     class DBOSTestClassRR(DBOSConfiguredInstance):
         def __init__(self) -> None:
             super().__init__("myconfig", dbos)
 
-        @dbos.workflow()
+        @DBOS.workflow()
         def test_func_user(self, var: str) -> str:
             assert assert_current_dbos_context().assumed_role == "user"
             return var
 
-        @dbos.workflow()
-        @dbos.required_roles(["admin"])
+        @DBOS.workflow()
+        @DBOS.required_roles(["admin"])
         def test_func_admin(self, var: str) -> str:
             assert assert_current_dbos_context().assumed_role == "admin"
             return var
 
-        @dbos.required_roles(["admin"])
-        @dbos.workflow()
+        @DBOS.required_roles(["admin"])
+        @DBOS.workflow()
         def test_func_admin_r(self, var: str) -> str:
             assert assert_current_dbos_context().assumed_role == "admin"
             return var
 
         @classmethod
-        @dbos.workflow()
+        @DBOS.workflow()
         def test_func_user_c(cls, var: str) -> str:
             assert assert_current_dbos_context().assumed_role == "user"
             return var
 
         @classmethod
-        @dbos.workflow()
-        @dbos.required_roles(["admin"])
+        @DBOS.workflow()
+        @DBOS.required_roles(["admin"])
         def test_func_admin_c(cls, var: str) -> str:
             assert assert_current_dbos_context().assumed_role == "admin"
             return var
 
         @classmethod
-        @dbos.required_roles(["admin"])
-        @dbos.workflow()
+        @DBOS.required_roles(["admin"])
+        @DBOS.workflow()
         def test_func_admin_r_c(cls, var: str) -> str:
             assert assert_current_dbos_context().assumed_role == "admin"
             return var
 
         @staticmethod
-        @dbos.workflow()
+        @DBOS.workflow()
         def test_func_user_s(var: str) -> str:
             assert assert_current_dbos_context().assumed_role == "user"
             return var
 
         @staticmethod
-        @dbos.workflow()
-        @dbos.required_roles(["admin"])
+        @DBOS.workflow()
+        @DBOS.required_roles(["admin"])
         def test_func_admin_s(var: str) -> str:
             assert assert_current_dbos_context().assumed_role == "admin"
             return var
 
         @staticmethod
-        @dbos.required_roles(["admin"])
-        @dbos.workflow()
+        @DBOS.required_roles(["admin"])
+        @DBOS.workflow()
         def test_func_admin_r_s(var: str) -> str:
             assert assert_current_dbos_context().assumed_role == "admin"
             return var
@@ -193,7 +193,7 @@ def test_simple_workflow_static(dbos: DBOS) -> None:
         comm_counter: int = 0
 
         @staticmethod
-        @dbos.workflow()
+        @DBOS.workflow()
         def test_workflow(var: str, var2: str) -> str:
             DBOSTestClassStatic.wf_counter += 1
             res = DBOSTestClassStatic.test_transaction(var2)
@@ -202,7 +202,7 @@ def test_simple_workflow_static(dbos: DBOS) -> None:
             return res + res2
 
         @staticmethod
-        @dbos.transaction()
+        @DBOS.transaction()
         def test_transaction(var2: str) -> str:
             rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
             DBOSTestClassStatic.txn_counter += 1
@@ -210,7 +210,7 @@ def test_simple_workflow_static(dbos: DBOS) -> None:
             return var2 + str(rows[0][0])
 
         @staticmethod
-        @dbos.communicator()
+        @DBOS.communicator()
         def test_communicator(var: str) -> str:
             DBOSTestClassStatic.comm_counter += 1
             DBOS.logger.info("I'm test_communicator")
@@ -225,14 +225,14 @@ def test_simple_workflow_static(dbos: DBOS) -> None:
 
 
 def test_simple_workflow_class(dbos: DBOS) -> None:
-    @dbos.dbos_class()
+    @DBOS.dbos_class()
     class DBOSTestClassClass:
         txn_counter: int = 0
         wf_counter: int = 0
         comm_counter: int = 0
 
         @classmethod
-        @dbos.workflow()
+        @DBOS.workflow()
         def test_workflow(cls, var: str, var2: str) -> str:
             DBOSTestClassClass.wf_counter += 1
             res = DBOSTestClassClass.test_transaction(var2)
@@ -241,7 +241,7 @@ def test_simple_workflow_class(dbos: DBOS) -> None:
             return res + res2
 
         @classmethod
-        @dbos.transaction()
+        @DBOS.transaction()
         def test_transaction(cls, var2: str) -> str:
             rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
             DBOSTestClassClass.txn_counter += 1
@@ -249,7 +249,7 @@ def test_simple_workflow_class(dbos: DBOS) -> None:
             return var2 + str(rows[0][0])
 
         @classmethod
-        @dbos.communicator()
+        @DBOS.communicator()
         def test_communicator(cls, var: str) -> str:
             DBOSTestClassClass.comm_counter += 1
             DBOS.logger.info("I'm test_communicator")
@@ -264,9 +264,9 @@ def test_simple_workflow_class(dbos: DBOS) -> None:
 
 
 def test_no_instname(dbos: DBOS) -> None:
-    @dbos.dbos_class()
+    @DBOS.dbos_class()
     class DBOSTestClassInst:
-        @dbos.workflow()
+        @DBOS.workflow()
         def test_workflow(self) -> str:
             return "Nope"
 
@@ -276,7 +276,7 @@ def test_no_instname(dbos: DBOS) -> None:
 
 
 def test_simple_workflow_inst(dbos: DBOS) -> None:
-    @dbos.dbos_class()
+    @DBOS.dbos_class()
     class DBOSTestClassInst(DBOSConfiguredInstance):
         def __init__(self) -> None:
             super().__init__("bob", dbos)
@@ -284,7 +284,7 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
             self.wf_counter: int = 0
             self.comm_counter: int = 0
 
-        @dbos.workflow()
+        @DBOS.workflow()
         def test_workflow(self, var: str, var2: str) -> str:
             self.wf_counter += 1
             res = self.test_transaction(var2)
@@ -292,14 +292,14 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
             DBOS.logger.info("I'm test_workflow")
             return res + res2
 
-        @dbos.transaction()
+        @DBOS.transaction()
         def test_transaction(self, var2: str) -> str:
             rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
             self.txn_counter += 1
             DBOS.logger.info("I'm test_transaction")
             return var2 + str(rows[0][0])
 
-        @dbos.communicator()
+        @DBOS.communicator()
         def test_communicator(self, var: str) -> str:
             self.comm_counter += 1
             DBOS.logger.info("I'm test_communicator")
@@ -309,10 +309,10 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
     assert inst.test_workflow("bob", "bob") == "bob1bob"
 
     wfh = dbos.start_workflow(inst.test_workflow, "bob", "bob")
-    stati = dbos.sys_db.get_workflow_status(wfh.get_workflow_uuid())
+    stati = dbos.get_workflow_status(wfh.get_workflow_uuid())
     assert stati
-    assert stati["config_name"] == "bob"
-    assert stati["class_name"] == "DBOSTestClassInst"
+    assert stati.config_name == "bob"
+    assert stati.class_name == "DBOSTestClassInst"
     stat = wfh.get_status()
     assert stat
     assert stat.config_name == "bob"
@@ -332,12 +332,12 @@ def test_forgotten_decorator(dbos: DBOS) -> None:
             self.wf_counter: int = 0
             self.comm_counter: int = 0
 
-        @dbos.workflow()
+        @DBOS.workflow()
         def test_workflow1(self) -> str:
             return "Forgot class decorator!"
 
         @classmethod
-        @dbos.workflow()
+        @DBOS.workflow()
         def test_workflow2(cls) -> str:
             return "Forgot class decorator!"
 
@@ -359,7 +359,7 @@ def test_forgotten_decorator(dbos: DBOS) -> None:
 
 
 def test_duplicate_reg(dbos: DBOS) -> None:
-    @dbos.dbos_class()
+    @DBOS.dbos_class()
     class DBOSTestRegDup(DBOSConfiguredInstance):
         def __init__(self) -> None:
             super().__init__("bob", dbos)
@@ -367,7 +367,7 @@ def test_duplicate_reg(dbos: DBOS) -> None:
     # Duplicate class registration
     with pytest.raises(Exception) as exc_info:
 
-        @dbos.dbos_class()
+        @DBOS.dbos_class()
         class DBOSTestRegDup(DBOSConfiguredInstance):  # type: ignore
             def __init__(self) -> None:
                 super().__init__("bob", dbos)
@@ -390,10 +390,10 @@ def test_duplicate_reg(dbos: DBOS) -> None:
 def test_class_recovery(dbos: DBOS) -> None:
     exc_cnt: int = 0
 
-    @dbos.dbos_class()
+    @DBOS.dbos_class()
     class DBOSTestClassRec:
         @classmethod
-        @dbos.workflow()
+        @DBOS.workflow()
         def check_cls(cls, arg1: str) -> str:
             nonlocal exc_cnt
             exc_cnt += 1
@@ -407,7 +407,7 @@ def test_class_recovery(dbos: DBOS) -> None:
     assert exc_cnt == 1
 
     # Test we can execute the workflow by uuid as recovery would do
-    handle = dbos.execute_workflow_uuid("run1")
+    handle = DBOS.execute_workflow_uuid("run1")
     assert handle.get_result() == "ran"
     assert exc_cnt == 2
 
@@ -416,12 +416,12 @@ def test_inst_recovery(dbos: DBOS) -> None:
     exc_cnt: int = 0
     last_inst: Optional[DBOSTestInstRec] = None
 
-    @dbos.dbos_class()
+    @DBOS.dbos_class()
     class DBOSTestInstRec(DBOSConfiguredInstance):
         def __init__(self) -> None:
             super().__init__("bob", dbos)
 
-        @dbos.workflow()
+        @DBOS.workflow()
         def check_inst(self, arg1: str) -> str:
             nonlocal exc_cnt
             nonlocal last_inst
@@ -439,7 +439,7 @@ def test_inst_recovery(dbos: DBOS) -> None:
 
     # Test we can execute the workflow by uuid as recovery would do
     last_inst = None
-    handle = dbos.execute_workflow_uuid("run2")
+    handle = DBOS.execute_workflow_uuid("run2")
     assert handle.get_result() == "ran2"
     assert exc_cnt == 2
     assert last_inst is inst

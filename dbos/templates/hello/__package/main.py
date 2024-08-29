@@ -7,18 +7,18 @@ from dbos import DBOS
 from .schema import dbos_hello
 
 app = FastAPI()
-dbos = DBOS(app)
+DBOS(app)
 
 
 @app.get("/greeting/{name}")
-@dbos.workflow()
+@DBOS.workflow()
 def example_workflow(name: str) -> dict[str, str]:
     DBOS.logger.info("Running workflow!")
     output = example_transaction(name)
     return {"name": output}
 
 
-@dbos.transaction()
+@DBOS.transaction()
 def example_transaction(name: str) -> str:
     query = (
         insert(dbos_hello)

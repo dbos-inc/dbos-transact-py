@@ -24,7 +24,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         return result
 
     @app.get("/workflow/{var1}/{var2}")
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow(var1: str, var2: str) -> str:
         DBOS.span.set_attribute("test_key", "test_value")
         assert DBOS.request is not None
@@ -32,12 +32,12 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         res2 = test_communicator(var2)
         return res1 + res2
 
-    @dbos.transaction()
+    @DBOS.transaction()
     def test_transaction(var: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         return var + str(rows[0][0])
 
-    @dbos.communicator()
+    @DBOS.communicator()
     def test_communicator(var: str) -> str:
         return var
 
@@ -61,7 +61,7 @@ def test_start_workflow(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         assert not context.is_within_workflow()
         return handle.get_result()
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow(var1: str, var2: str) -> str:
         DBOS.span.set_attribute("test_key", "test_value")
         assert DBOS.request is not None
@@ -69,12 +69,12 @@ def test_start_workflow(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         res2 = test_communicator(var2)
         return res1 + res2
 
-    @dbos.transaction()
+    @DBOS.transaction()
     def test_transaction(var: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         return var + str(rows[0][0])
 
-    @dbos.communicator()
+    @DBOS.communicator()
     def test_communicator(var: str) -> str:
         return var
 
@@ -89,7 +89,7 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     wfuuid = str(uuid.uuid4())
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow(var1: str) -> tuple[str, str]:
         assert DBOS.request is not None
         return var1, DBOS.workflow_id
@@ -130,6 +130,6 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     )
 
     # Recovery should execute the workflow again but skip the transaction
-    workflow_handles = dbos.recover_pending_workflows()
+    workflow_handles = DBOS.recover_pending_workflows()
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == ("a", wfuuid)
