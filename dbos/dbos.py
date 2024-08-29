@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import os
 import sys
 import threading
@@ -550,3 +551,28 @@ class DBOSConfiguredInstance:
             dbos._registry.register_instance(self)
         else:
             DBOS.register_instance(self)
+
+
+# Apps that import DBOS probably don't exit.  If they do, let's see if
+#   it looks like startup was abandoned or a call was forgotten...
+def log_exit_info() -> None:
+    if _dbos_global_registry is None:
+        print("DBOS exiting with no DBOS in existence")
+        dbos_logger.info("DBOS exiting with no DBOS in existence")
+        return
+    if _dbos_global_instance is None:
+        print("DBOS exiting; functions were registered but DBOS() was not called")
+        dbos_logger.warning(
+            "DBOS exiting; functions were registered but DBOS() was not called"
+        )
+        return
+    if not _dbos_global_instance._launched:
+        print("DBOS exiting; DBOS exists but launch() was not called")
+        dbos_logger.warning("DBOS exiting; DBOS exists but launch() was not called")
+        return
+    print("DBOS exiting; DBOS has been run.")
+    dbos_logger.info("DBOS exiting; DBOS has been run.")
+
+
+# Register the exit hook
+atexit.register(log_exit_info)

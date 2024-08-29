@@ -1,4 +1,7 @@
+import subprocess
+import sys
 import time
+from os import path
 
 import pytest
 
@@ -129,3 +132,39 @@ def test_dbos_singleton_negative() -> None:
     assert "launch" in str(exc_info.value)
 
     DBOS.destroy()
+
+
+def test_dbos_atexit_unused() -> None:
+    # Run the .py as a separate process
+    result = subprocess.run(
+        [sys.executable, path.join("tests", "atexit_no_dbos.py")],
+        capture_output=True,
+        text=True,
+    )
+
+    # Assert that the output contains the warning message
+    assert "DBOS exiting with no DBOS in existence" in result.stdout
+
+
+def test_dbos_atexit_no_dbos() -> None:
+    # Run the .py as a separate process
+    result = subprocess.run(
+        [sys.executable, path.join("tests", "atexit_no_ctor.py")],
+        capture_output=True,
+        text=True,
+    )
+
+    # Assert that the output contains the warning message
+    assert "DBOS exiting; functions were registered" in result.stdout
+
+
+def test_dbos_atexit_no_launch() -> None:
+    # Run the .py as a separate process
+    result = subprocess.run(
+        [sys.executable, path.join("tests", "atexit_no_launch.py")],
+        capture_output=True,
+        text=True,
+    )
+
+    # Assert that the output contains the warning message
+    assert "DBOS exists but launch() was not called" in result.stdout
