@@ -82,6 +82,8 @@ F = TypeVar("F", bound=Callable[..., Any])
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
+T = TypeVar("T")
+
 
 class DBOSCallProtocol(Protocol[P, R]):
     __name__: str
@@ -142,7 +144,7 @@ class _DBOSRegistry:
         else:
             self.class_info_map[class_name] = cls
 
-    def create_class_info(self, cls: Type[Any]) -> Type[Any]:
+    def create_class_info(self, cls: Type[T]) -> Type[T]:
         ci = get_or_create_class_info(cls)
         self.register_class(cls, ci)
         return cls
@@ -349,13 +351,11 @@ class DBOS:
         )
 
     @classmethod
-    def dbos_class(cls) -> Callable[[Type[Any]], Type[Any]]:
+    def dbos_class(cls) -> Callable[[Type[T]], Type[T]]:
         return _get_or_create_dbos_registry().create_class_info
 
     @classmethod
-    def default_required_roles(
-        cls, roles: List[str]
-    ) -> Callable[[Type[Any]], Type[Any]]:
+    def default_required_roles(cls, roles: List[str]) -> Callable[[Type[T]], Type[T]]:
         return default_required_roles(_get_or_create_dbos_registry(), roles)
 
     @classmethod

@@ -15,6 +15,7 @@ from dbos.registrations import (
 )
 
 F = TypeVar("F", bound=Callable[..., Any])
+T = TypeVar("T")
 
 
 def check_required_roles(
@@ -65,8 +66,8 @@ def required_roles(roles: List[str]) -> Callable[[F], F]:
 
 def default_required_roles(
     dbosreg: "_DBOSRegistry", roles: List[str]
-) -> Callable[[Type[Any]], Type[Any]]:
-    def set_roles(cls: Type[Any]) -> Type[Any]:
+) -> Callable[[Type[T]], Type[T]]:
+    def set_roles(cls: Type[T]) -> Type[T]:
         ci = get_or_create_class_info(cls)
         dbosreg.register_class(cls, ci)
         ci.def_required_roles = roles
