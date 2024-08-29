@@ -93,17 +93,8 @@ class DBOSSendRecv:
     @staticmethod
     @DBOS.workflow()
     def test_recv_workflow(topic: str) -> str:
-        begin_time = time.time()
         msg1 = DBOS.recv(topic, timeout_seconds=10)
-        duration = time.time() - begin_time
-        print(f"Duration 1: {duration}")
-        begin_time = time.time()
         msg2 = DBOS.recv(timeout_seconds=10)
-        duration = time.time() - begin_time
-        print(f"Duration 2: {duration}")
-        begin_time = time.time()
         msg3 = DBOS.recv(timeout_seconds=10)
-        duration = time.time() - begin_time
-        print(f"Duration 3: {duration}")
         DBOSSendRecv.recv_counter += 1
         return "-".join([str(msg1), str(msg2), str(msg3)])

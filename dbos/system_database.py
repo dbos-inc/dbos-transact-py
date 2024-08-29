@@ -597,8 +597,9 @@ class SystemDatabase:
             # Wait for the notification
             payload = f"{workflow_uuid}::{topic}"
             condition = threading.Condition()
-            self.notifications_map[payload] = condition
+            # Must acquire first before adding to the map. Otherwise, the notification listener may notify it before the condition is acquired and waited.
             condition.acquire()
+            self.notifications_map[payload] = condition
             # Support OAOO sleep
             actual_timeout = self.sleep(
                 workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True

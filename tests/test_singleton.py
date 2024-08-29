@@ -13,7 +13,7 @@ from dbos.context import DBOSContextEnsure, assert_current_dbos_context
 from tests.conftest import default_config
 
 
-def test_dbos_singleton() -> None:
+def test_dbos_singleton(cleanup_test_databases: None) -> None:
     # Initialize singleton
     DBOS.destroy()  # In case of other tests leaving it
 
@@ -80,7 +80,6 @@ def test_dbos_singleton() -> None:
     begin_time = time.time()
     assert handle.get_result() == "test2-test1-test3"
     duration = time.time() - begin_time
-    print(f"Total Duration: {duration}")
     assert duration < 3.0
 
     # Events
@@ -112,7 +111,7 @@ def test_dbos_singleton() -> None:
     DBOS.destroy()
 
 
-def test_dbos_singleton_negative() -> None:
+def test_dbos_singleton_negative(cleanup_test_databases: None) -> None:
     # Initialize singleton
     DBOS.destroy()  # In case of other tests leaving it
 
@@ -135,7 +134,7 @@ def test_dbos_singleton_negative() -> None:
     DBOS.destroy()
 
 
-def test_dbos_atexit_no_dbos() -> None:
+def test_dbos_atexit_no_dbos(cleanup_test_databases: None) -> None:
     # Run the .py as a separate process
     result = subprocess.run(
         [sys.executable, path.join("tests", "atexit_no_ctor.py")],
@@ -147,7 +146,7 @@ def test_dbos_atexit_no_dbos() -> None:
     assert "DBOS exiting; functions were registered" in result.stdout
 
 
-def test_dbos_atexit_no_launch() -> None:
+def test_dbos_atexit_no_launch(cleanup_test_databases: None) -> None:
     # Run the .py as a separate process
     result = subprocess.run(
         [sys.executable, path.join("tests", "atexit_no_launch.py")],
