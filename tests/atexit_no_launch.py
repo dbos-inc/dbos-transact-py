@@ -26,4 +26,4 @@ def default_config() -> ConfigFile:
     }
 
 
-DBOS(config=default_config, launch=False)
+DBOS(config=default_config(), launch=False)
