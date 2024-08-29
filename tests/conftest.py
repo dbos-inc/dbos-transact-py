@@ -96,7 +96,7 @@ def cleanup_test_databases(config: ConfigFile, postgres_db_engine: sa.Engine) ->
 def dbos(
     config: ConfigFile, cleanup_test_databases: None
 ) -> Generator[DBOS, Any, None]:
-    DBOS.clear_global_instance()
+    DBOS.destroy()
     dbos = DBOS(config=config)
     # This is for test convenience.
     #    Tests add to running DBOS and then call stuff without adding
@@ -107,14 +107,14 @@ def dbos(
     dbos.launch()
     yield dbos
     dbos.destroy()
-    DBOS.clear_global_instance()
+    DBOS.destroy()
 
 
 @pytest.fixture()
 def dbos_fastapi(
     config: ConfigFile, cleanup_test_databases: None
 ) -> Generator[Tuple[DBOS, FastAPI], Any, None]:
-    DBOS.clear_global_instance()
+    DBOS.destroy()
     app = FastAPI()
     dbos = DBOS(fastapi=app, config=config)
 
@@ -124,7 +124,7 @@ def dbos_fastapi(
 
     yield dbos, app
     dbos.destroy()
-    DBOS.clear_global_instance()
+    DBOS.destroy()
 
 
 # Pretty-print test names

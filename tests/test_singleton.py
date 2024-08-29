@@ -12,7 +12,7 @@ from tests.conftest import default_config
 
 def test_dbos_singleton() -> None:
     # Initialize singleton
-    DBOS.clear_global_instance()  # In case of other tests leaving it
+    DBOS.destroy()  # In case of other tests leaving it
 
     # Simulate an app that does some imports of its own code, then defines DBOS,
     #    then imports more
@@ -110,7 +110,7 @@ def test_dbos_singleton() -> None:
 
 def test_dbos_singleton_negative() -> None:
     # Initialize singleton
-    DBOS.clear_global_instance()  # In case of other tests leaving it
+    DBOS.destroy()  # In case of other tests leaving it
 
     # Simulate an app that does some imports of its own code, then defines DBOS,
     #    then imports more
@@ -128,4 +128,4 @@ def test_dbos_singleton_negative() -> None:
         DBOSTestClass.test_workflow_cls("a", "b")
     assert "launch" in str(exc_info.value)
 
-    DBOS.clear_global_instance()
+    DBOS.destroy()

@@ -183,7 +183,7 @@ class DBOS:
     # If an application wants to control lifecycle of DBOS via singleton:
     #  Create DBOS with `DBOS()`
     #   Use DBOS or the instance returned from DBOS()
-    #  clear_global_instance() to get rid of it so that DBOS() returns a new one
+    #  DBOS.destroy() to get rid of it so that DBOS() returns a new one
 
     def __new__(
         cls: Type[DBOS],
@@ -204,11 +204,11 @@ class DBOS:
         return _dbos_global_instance
 
     @classmethod
-    def clear_global_instance(cls) -> None:
+    def destroy(cls) -> None:
         global _dbos_global_instance
         global _dbos_global_registry
         if _dbos_global_instance is not None:
-            _dbos_global_instance.destroy()
+            _dbos_global_instance._destroy()
         _dbos_global_instance = None
         _dbos_global_registry = None
 
@@ -301,7 +301,7 @@ class DBOS:
         for handler in dbos_logger.handlers:
             handler.flush()
 
-    def destroy(self) -> None:
+    def _destroy(self) -> None:
         self._initialized = False
         for event in self.stop_events:
             event.set()

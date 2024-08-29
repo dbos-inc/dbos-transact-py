@@ -644,7 +644,7 @@ def test_without_fastapi() -> None:
     """
     Since DBOS does not depend on FastAPI directly, verify DBOS works in an environment without FastAPI.
     """
-    DBOS.clear_global_instance()
+    DBOS.destroy()
     config = default_config()
 
     # Unimport FastAPI
@@ -685,7 +685,7 @@ def test_without_fastapi() -> None:
         assert test_workflow("bob") == "bob"
     finally:
         dbos.destroy()
-        DBOS.clear_global_instance()
+        DBOS.destroy()
 
 
 def test_sleep(dbos: DBOS) -> None:
