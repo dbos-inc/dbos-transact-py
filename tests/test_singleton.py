@@ -13,17 +13,14 @@ from tests.conftest import default_config
 def test_dbos_singleton() -> None:
     # Initialize singleton
     DBOS.clear_global_instance()  # In case of other tests leaving it
+
+    from tests.classdefs import DBOSSendRecv, DBOSTestClass, DBOSTestRoles
+
     dbos: DBOS = DBOS(None, default_config())
 
-    from tests.classdefs import (
-        DBOSSendRecv,
-        DBOSTestClass,
-        DBOSTestRoles,
-        DBOSWFEvents,
-        wfFunc,
-    )
+    from tests.more_classdefs import DBOSWFEvents, wfFunc
 
-    dbos.launch()  # Usually framework does this
+    dbos.launch()  # Usually framework (fastapi) does this
 
     # Basics
     with SetWorkflowUUID("wfid"):
