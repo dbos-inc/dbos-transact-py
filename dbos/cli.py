@@ -9,6 +9,7 @@ import typing
 from os import path
 from typing import Any
 
+import mako
 import tomlkit
 import typer
 from rich import print
@@ -79,51 +80,52 @@ def get_template_directory() -> str:
     return path.join(package_dir, "templates")
 
 
-def copy_dbos_config(src: str, dst: str, project_name: str) -> None:
+def copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]):
+
+    for root, dirs, files in os.walk(src_dir, topdown=True):
+        dirs[:] = [d for d in dirs if d != "$package"]
+
+        dst_root = path.join(dst_dir, path.relpath(root, src_dir))
+        if len(dirs) == 0:
+            os.makedirs(dst_root, exist_ok=True)
+        else:
+            for dir in dirs:
+                os.makedirs(path.join(dst_root, dir), exist_ok=True)
+
+        for file in files:
+            src = path.join(root, file)
+            base, ext = path.splitext(file)
+
+            dst = path.join(dst_root, base if ext == ".dbos" else file)
+            if path.exists(dst):
+                continue
+
+            if ext == ".dbos":
+                makotmp = mako.template.Template(filename=src)
+                try:
+                    output = makotmp.render(**ctx)
+                    with open(dst, "w") as f:
+                        f.write(output)
+                except:
+                    print(src, mako.exceptions.text_error_template().render())
+            else:
+                shutil.copy(src, dst)
+
+
+def copy_template(src_dir: str, dst_dir: str, project_name: str):
     package_name = project_name.replace("-", "_")
     db_name = package_name if not package_name[0].isdigit() else f"_{package_name}"
+    ctx = {
+        "project_name": project_name,
+        "package_name": package_name,
+        "db_name": db_name,
+        "PGPASSWORD": "${PGPASSWORD}",
+    }
 
-    with open(src, "r") as file:
-        content = file.read()
-
-    content = content.replace("${APP_NAME}", project_name)
-    content = content.replace("${APP_DB_NAME}", db_name)
-    content = content.replace("${APP_PACKAGE_NAME}", package_name)
-
-    if path.exists(dst):
-        over = Confirm.ask("Overwrite existing dbos-config.yaml file?")
-        if not over:
-            return
-
-    with open(dst, "w") as file:
-        file.write(content)
-
-
-def copy_template(template_dir: str, project_name: str) -> None:
-
-    def copy_file(src: str, dst: str) -> None:
-        if not path.exists(dst):
-            shutil.copy2(src, dst)
-
-    shutil.copytree(
-        template_dir,
-        ".",
-        copy_function=copy_file,
-        dirs_exist_ok=True,
-        ignore=shutil.ignore_patterns("$package", "dbos-config.yaml"),
+    copy_template_dir(src_dir, dst_dir, ctx)
+    copy_template_dir(
+        path.join(src_dir, "$package"), path.join(dst_dir, package_name), ctx
     )
-
-    package_name = project_name.replace("-", "_")
-    shutil.copytree(
-        path.join(template_dir, "$package"),
-        package_name,
-        dirs_exist_ok=True,
-        copy_function=copy_file,
-    )
-
-    dbos_config_src = path.join(template_dir, "dbos-config.yaml")
-    if path.exists(dbos_config_src):
-        copy_dbos_config(dbos_config_src, "dbos-config.yaml", project_name)
 
 
 def get_project_name() -> typing.Union[str, None]:
