@@ -72,58 +72,67 @@ def start() -> None:
         process.wait()
 
 
-def get_template_directory() -> str:
+def get_templates_directory() -> str:
     import dbos
 
     package_dir = path.abspath(path.dirname(dbos.__file__))
     return path.join(package_dir, "templates")
 
 
-def copy_dbos_config(src: str, dst: str, project_name: str) -> None:
+def copy_dbos_template(src: str, dst: str, ctx: dict[str, str]) -> None:
+    with open(src, "r") as f:
+        content = f.read()
+
+    for key, value in ctx.items():
+        content = content.replace(f"${{{key}}}", value)
+
+    with open(dst, "w") as f:
+        f.write(content)
+
+
+def copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]) -> None:
+
+    for root, dirs, files in os.walk(src_dir, topdown=True):
+        dirs[:] = [d for d in dirs if d != "__package"]
+
+        dst_root = path.join(dst_dir, path.relpath(root, src_dir))
+        if len(dirs) == 0:
+            os.makedirs(dst_root, exist_ok=True)
+        else:
+            for dir in dirs:
+                os.makedirs(path.join(dst_root, dir), exist_ok=True)
+
+        for file in files:
+            src = path.join(root, file)
+            base, ext = path.splitext(file)
+
+            dst = path.join(dst_root, base if ext == ".dbos" else file)
+            if path.exists(dst):
+                print(f"[yellow]File {dst} already exists, skipping[/yellow]")
+                continue
+
+            if ext == ".dbos":
+                copy_dbos_template(src, dst, ctx)
+            else:
+                shutil.copy(src, dst)
+
+
+def copy_template(src_dir: str, project_name: str) -> None:
+
+    dst_dir = path.abspath(".")
+
     package_name = project_name.replace("-", "_")
     db_name = package_name if not package_name[0].isdigit() else f"_{package_name}"
+    ctx = {
+        "project_name": project_name,
+        "package_name": package_name,
+        "db_name": db_name,
+    }
 
-    with open(src, "r") as file:
-        content = file.read()
-
-    content = content.replace("${APP_NAME}", project_name)
-    content = content.replace("${APP_DB_NAME}", db_name)
-    content = content.replace("${APP_PACKAGE_NAME}", package_name)
-
-    if path.exists(dst):
-        over = Confirm.ask("Overwrite existing dbos-config.yaml file?")
-        if not over:
-            return
-
-    with open(dst, "w") as file:
-        file.write(content)
-
-
-def copy_template(template_dir: str, project_name: str) -> None:
-
-    def copy_file(src: str, dst: str) -> None:
-        if not path.exists(dst):
-            shutil.copy2(src, dst)
-
-    shutil.copytree(
-        template_dir,
-        ".",
-        copy_function=copy_file,
-        dirs_exist_ok=True,
-        ignore=shutil.ignore_patterns("$package", "dbos-config.yaml"),
+    copy_template_dir(src_dir, dst_dir, ctx)
+    copy_template_dir(
+        path.join(src_dir, "__package"), path.join(dst_dir, package_name), ctx
     )
-
-    package_name = project_name.replace("-", "_")
-    shutil.copytree(
-        path.join(template_dir, "$package"),
-        package_name,
-        dirs_exist_ok=True,
-        copy_function=copy_file,
-    )
-
-    dbos_config_src = path.join(template_dir, "dbos-config.yaml")
-    if path.exists(dbos_config_src):
-        copy_dbos_config(dbos_config_src, "dbos-config.yaml", project_name)
 
 
 def get_project_name() -> typing.Union[str, None]:
@@ -154,35 +163,41 @@ def is_valid_app_name(name: str) -> bool:
 
 
 @app.command()
-def init(name: Annotated[typing.Optional[str], typer.Argument()] = None) -> None:
+def init(
+    project_name: Annotated[
+        typing.Optional[str], typer.Argument(help="Specify application name")
+    ] = None,
+    template: Annotated[
+        typing.Optional[str],
+        typer.Option("--template", "-t", help="Specify template to use"),
+    ] = None,
+) -> None:
     try:
-        project_name = name
-        if project_name == None:
+        if project_name is None:
             project_name = typing.cast(
                 str, typer.prompt("What is your project's name?", get_project_name())
             )
 
-        if project_name == None:
-            raise Exception(f"Project name could not be determined")
-
-        project_name = typing.cast(str, project_name)
         if not is_valid_app_name(project_name):
             raise Exception(f"{project_name} is an invalid DBOS app name")
 
-        template_dir = get_template_directory()
-        templates = [x.name for x in os.scandir(template_dir) if x.is_dir()]
-        templates_len = len(templates)
-        if templates_len == 0:
-            raise Exception(f"no DBOS templates found in {template_dir} ")
-        elif templates_len == 1:
-            template = templates[0]
-        else:
-            template = Prompt.ask(
-                "Which project template do you want to use?", choices=templates
-            )
+        templates_dir = get_templates_directory()
+        templates = [x.name for x in os.scandir(templates_dir) if x.is_dir()]
+        if len(templates) == 0:
+            raise Exception(f"no DBOS templates found in {templates_dir} ")
 
-        chosen_template = path.join(template_dir, template)
-        copy_template(chosen_template, project_name)
+        if template == None:
+            if len(templates) == 1:
+                template = templates[0]
+            else:
+                template = Prompt.ask(
+                    "Which project template do you want to use?", choices=templates
+                )
+        else:
+            if template not in templates:
+                raise Exception(f"template {template} not found in {templates_dir}")
+
+        copy_template(path.join(templates_dir, template), project_name)
     except Exception as e:
         print(f"[red]{e}[/red]")
 
