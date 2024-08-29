@@ -581,6 +581,13 @@ class SystemDatabase:
             else:
                 raise Exception("No output recorded in the last recv")
 
+        # Insert a condition to the notifications map, so the listener can notify it when a message is received.
+        payload = f"{workflow_uuid}::{topic}"
+        condition = threading.Condition()
+        # Must acquire first before adding to the map. Otherwise, the notification listener may notify it before the condition is acquired and waited.
+        condition.acquire()
+        self.notifications_map[payload] = condition
+
         # Check if the key is already in the database. If not, wait for the notification.
         init_recv: Sequence[Any]
         with self.engine.begin() as c:
@@ -595,18 +602,12 @@ class SystemDatabase:
 
         if len(init_recv) == 0:
             # Wait for the notification
-            payload = f"{workflow_uuid}::{topic}"
-            condition = threading.Condition()
-            # Must acquire first before adding to the map. Otherwise, the notification listener may notify it before the condition is acquired and waited.
-            condition.acquire()
-            self.notifications_map[payload] = condition
             # Support OAOO sleep
             actual_timeout = self.sleep(
                 workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
             )
             condition.wait(timeout=actual_timeout)
             condition.release()
-            self.notifications_map.pop(payload)
 
         # Transactionally consume and return the message if it's in the database, otherwise return null.
         with self.engine.begin() as c:
@@ -651,6 +652,7 @@ class SystemDatabase:
                 },
                 conn=c,
             )
+        self.notifications_map.pop(payload)
         return message
 
     def _notification_listener(self) -> None:
