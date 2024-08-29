@@ -77,7 +77,11 @@ def test_dbos_singleton() -> None:
         res = DBOSSendRecv.test_send_workflow(handle.get_workflow_uuid(), "testtopic")
         assert res == dest_uuid
 
+    begin_time = time.time()
     assert handle.get_result() == "test2-test1-test3"
+    duration = time.time() - begin_time
+    print(f"Total Duration: {duration}")
+    assert duration < 3.0
 
     # Events
     wfuuid = str("sendwf1")
