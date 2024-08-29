@@ -557,8 +557,7 @@ class DBOSConfiguredInstance:
 #   it looks like startup was abandoned or a call was forgotten...
 def log_exit_info() -> None:
     if _dbos_global_registry is None:
-        print("DBOS exiting with no DBOS in existence")
-        dbos_logger.info("DBOS exiting with no DBOS in existence")
+        # Probably used as or for a support module
         return
     if _dbos_global_instance is None:
         print("DBOS exiting; functions were registered but DBOS() was not called")
@@ -570,8 +569,6 @@ def log_exit_info() -> None:
         print("DBOS exiting; DBOS exists but launch() was not called")
         dbos_logger.warning("DBOS exiting; DBOS exists but launch() was not called")
         return
-    print("DBOS exiting; DBOS has been run.")
-    dbos_logger.info("DBOS exiting; DBOS has been run.")
 
 
 # Register the exit hook

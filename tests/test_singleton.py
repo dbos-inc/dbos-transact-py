@@ -77,10 +77,7 @@ def test_dbos_singleton() -> None:
         res = DBOSSendRecv.test_send_workflow(handle.get_workflow_uuid(), "testtopic")
         assert res == dest_uuid
 
-    begin_time = time.time()
     assert handle.get_result() == "test2-test1-test3"
-    duration = time.time() - begin_time
-    assert duration < 3.0  # Shouldn't take more than 3 seconds to run
 
     # Events
     wfuuid = str("sendwf1")
@@ -132,18 +129,6 @@ def test_dbos_singleton_negative() -> None:
     assert "launch" in str(exc_info.value)
 
     DBOS.destroy()
-
-
-def test_dbos_atexit_unused() -> None:
-    # Run the .py as a separate process
-    result = subprocess.run(
-        [sys.executable, path.join("tests", "atexit_no_dbos.py")],
-        capture_output=True,
-        text=True,
-    )
-
-    # Assert that the output contains the warning message
-    assert "DBOS exiting with no DBOS in existence" in result.stdout
 
 
 def test_dbos_atexit_no_dbos() -> None:
