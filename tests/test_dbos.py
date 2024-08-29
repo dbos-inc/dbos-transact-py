@@ -471,7 +471,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
             wf_counter += 1
         return var
 
-    dbos.launch()
+    dbos.launch()  # Usually the framework does this but we destroyed it above
 
     # Upon re-initialization, the background thread should recover the workflow safely.
     max_retries = 5
@@ -675,6 +675,7 @@ def test_without_fastapi() -> None:
 
     dbos = DBOS(config=config)
     dbos.launch()  # Usually the framework does this...
+
     try:
 
         @DBOS.workflow()

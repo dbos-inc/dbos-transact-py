@@ -14,6 +14,8 @@ def test_dbos_singleton() -> None:
     # Initialize singleton
     DBOS.clear_global_instance()  # In case of other tests leaving it
 
+    # Simulate an app that does some imports of its own code, then defines DBOS,
+    #    then imports more
     from tests.classdefs import DBOSSendRecv, DBOSTestClass, DBOSTestRoles
 
     dbos: DBOS = DBOS(None, default_config())
@@ -104,3 +106,26 @@ def test_dbos_singleton() -> None:
     assert duration < 1  # None is from the event not from the timeout
 
     dbos.destroy()
+
+
+def test_dbos_singleton_negative() -> None:
+    # Initialize singleton
+    DBOS.clear_global_instance()  # In case of other tests leaving it
+
+    # Simulate an app that does some imports of its own code, then defines DBOS,
+    #    then imports more
+    from tests.classdefs import DBOSTestClass
+
+    dbos: DBOS = DBOS(None, default_config())
+
+    # Don't initialize DBOS twice
+    with pytest.raises(Exception) as exc_info:
+        DBOS(None, None)
+    assert "conflicting configuration" in str(exc_info.value)
+
+    # Something should have launched
+    with pytest.raises(Exception) as exc_info:
+        DBOSTestClass.test_workflow_cls("a", "b")
+    assert "launch" in str(exc_info.value)
+
+    DBOS.clear_global_instance()
