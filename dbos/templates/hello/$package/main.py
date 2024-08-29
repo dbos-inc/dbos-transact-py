@@ -1,7 +1,10 @@
 import sqlalchemy as sa
 from fastapi import FastAPI
+from sqlalchemy.dialects.postgresql import insert
 
 from dbos import DBOS
+
+from .schema import dbos_hello
 
 app = FastAPI()
 dbos = DBOS(app)
@@ -17,9 +20,15 @@ def example_workflow(name: str) -> dict[str, str]:
 
 @dbos.transaction()
 def example_transaction(name: str) -> str:
-    rows = DBOS.sql_session.execute(
-        sa.text(
-            "INSERT INTO dbos_hello (name, greet_count) VALUES ('dbos', 1) ON CONFLICT (name) DO UPDATE SET greet_count = dbos_hello.greet_count + 1 RETURNING greet_count;"
+    query = (
+        insert(dbos_hello)
+        .values(name="dbos", greet_count=1)
+        .on_conflict_do_update(
+            index_elements=["name"], set_={"greet_count": dbos_hello.c.greet_count + 1}
         )
-    ).all()
-    return name + str(rows[0][0])
+        .returning(dbos_hello.c.greet_count)
+    )
+
+    greet_count = DBOS.sql_session.execute(query).scalar_one()
+    DBOS.logger.info(f"{name} greet_count: {greet_count}")
+    return name + str(greet_count)
