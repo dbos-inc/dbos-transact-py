@@ -152,7 +152,7 @@ class _DBOSRegistry:
     def register_poller(
         self, evt: threading.Event, func: Callable[..., Any], *args: Any, **kwargs: Any
     ) -> None:
-        if self.dbos:
+        if self.dbos and self.dbos._launched:
             self.dbos.stop_events.append(evt)
             self.dbos.executor.submit(func, *args, **kwargs)
         else:
@@ -232,20 +232,14 @@ class DBOS:
         self._app_db: Optional[ApplicationDatabase] = None
         self._registry = _get_or_create_dbos_registry()
         self._registry.dbos = self
-        self.executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=64)
         self._admin_server: Optional[AdminServer] = None
         self.stop_events: List[threading.Event] = []
         self.fastapi = fastapi
+        self._executor: Optional[ThreadPoolExecutor] = None
         if self.fastapi is not None:
             from dbos.fastapi import setup_fastapi_middleware
 
             setup_fastapi_middleware(self.fastapi)
-
-        # Grab any pollers that were deferred and start them
-        for evt, func, args, kwargs in self._registry.pollers:
-            self.stop_events.append(evt)
-            self.executor.submit(func, *args, **kwargs)
-        self._registry.pollers = []
 
         # Register send_stub as a workflow
         def send_temp_workflow(
@@ -259,6 +253,13 @@ class DBOS:
 
         if self.fastapi is not None:
             self.fastapi.on_event("startup")(self.launch)
+
+    @property
+    def executor(self) -> ThreadPoolExecutor:
+        if self._executor is None:
+            raise DBOSException("Executor accessed before DBOS was launched")
+        rv: ThreadPoolExecutor = self._executor
+        return rv
 
     @property
     def sys_db(self) -> SystemDatabase:
@@ -286,16 +287,27 @@ class DBOS:
         return rv
 
     def launch(self) -> None:
+        if self._launched:
+            dbos_logger.warning(f"DBOS was already launched")
+            return
         self._launched = True
+        self._executor = ThreadPoolExecutor(max_workers=64)
         self._sys_db = SystemDatabase(self.config)
         self._app_db = ApplicationDatabase(self.config)
         self._admin_server = AdminServer(dbos=self)
+
         if not os.environ.get("DBOS__VMID"):
             workflow_ids = self.sys_db.get_pending_workflows("local")
             self.executor.submit(_startup_recovery_thread, self, workflow_ids)
 
         # Listen to notifications
         self.executor.submit(self.sys_db._notification_listener)
+
+        # Grab any pollers that were deferred and start them
+        for evt, func, args, kwargs in self._registry.pollers:
+            self.stop_events.append(evt)
+            self.executor.submit(func, *args, **kwargs)
+        self._registry.pollers = []
 
         dbos_logger.info("DBOS initialized")
         for handler in dbos_logger.handlers:
@@ -314,8 +326,11 @@ class DBOS:
         if self._admin_server is not None:
             self._admin_server.stop()
             self._admin_server = None
-        # CB Should this be done before DBs are destroyed?
-        self.executor.shutdown(cancel_futures=True)
+        # CB - This needs work, some things ought to stop before DBs are tossed out,
+        #  on the other hand it hangs to move it
+        if self._executor is not None:
+            self._executor.shutdown(cancel_futures=True)
+            self._executor = None
 
     @classmethod
     def register_instance(cls, inst: object) -> None:

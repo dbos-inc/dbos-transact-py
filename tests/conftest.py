@@ -106,7 +106,6 @@ def dbos(
     #   fixture that does not launch.
     dbos.launch()
     yield dbos
-    dbos.destroy()
     DBOS.destroy()
 
 
@@ -123,7 +122,6 @@ def dbos_fastapi(
     dbos.launch()
 
     yield dbos, app
-    dbos.destroy()
     DBOS.destroy()
 
 

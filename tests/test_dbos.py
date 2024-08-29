@@ -461,7 +461,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
         }
     )
 
-    dbos.destroy()
+    dbos._destroy()  # Unusual pattern - reusing the memory
     dbos.__init__(config=config)  # type: ignore
 
     @DBOS.workflow()  # type: ignore
@@ -684,7 +684,6 @@ def test_without_fastapi() -> None:
 
         assert test_workflow("bob") == "bob"
     finally:
-        dbos.destroy()
         DBOS.destroy()
 
 

@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from dbos import DBOS
 
 app = FastAPI()
-dbos = DBOS(app)
+DBOS(app)
 
 
 @app.get("/greeting/{name}")

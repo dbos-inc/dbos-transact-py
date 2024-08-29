@@ -83,7 +83,7 @@ def test_custom_sysdb_name_migration(
             sql = SystemSchema.workflow_status.select()
             result = connection.execute(sql)
         assert "does not exist" in str(exc_info.value)
-    dbos.destroy()
+    DBOS.destroy()
 
 
 def rollback_system_db(sysdb_url: str) -> None:
