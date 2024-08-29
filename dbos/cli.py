@@ -116,7 +116,10 @@ def copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]):
                 shutil.copy(src, dst)
 
 
-def copy_template(src_dir: str, dst_dir: str, project_name: str):
+def copy_template(src_dir: str, project_name: str):
+
+    dst_dir = path.abspath(".")
+
     package_name = project_name.replace("-", "_")
     db_name = package_name if not package_name[0].isdigit() else f"_{package_name}"
     ctx = {
