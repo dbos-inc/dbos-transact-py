@@ -9,7 +9,6 @@ import typing
 from os import path
 from typing import Any
 
-import mako
 import tomlkit
 import typer
 from rich import print
@@ -80,6 +79,17 @@ def get_template_directory() -> str:
     return path.join(package_dir, "templates")
 
 
+def copy_dbos_template(src: str, dst: str, ctx: dict[str, str]):
+    with open(src, "r") as f:
+        content = f.read()
+
+    for key, value in ctx.items():
+        content = content.replace(f"${{{key}}}", value)
+
+    with open(dst, "w") as f:
+        f.write(content)
+
+
 def copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]):
 
     for root, dirs, files in os.walk(src_dir, topdown=True):
@@ -101,13 +111,7 @@ def copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]):
                 continue
 
             if ext == ".dbos":
-                makotmp = mako.template.Template(filename=src)
-                try:
-                    output = makotmp.render(**ctx)
-                    with open(dst, "w") as f:
-                        f.write(output)
-                except:
-                    print(src, mako.exceptions.text_error_template().render())
+                copy_dbos_template(src, dst, ctx)
             else:
                 shutil.copy(src, dst)
 
@@ -119,7 +123,6 @@ def copy_template(src_dir: str, dst_dir: str, project_name: str):
         "project_name": project_name,
         "package_name": package_name,
         "db_name": db_name,
-        "PGPASSWORD": "${PGPASSWORD}",
     }
 
     copy_template_dir(src_dir, dst_dir, ctx)
