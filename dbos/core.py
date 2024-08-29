@@ -53,7 +53,7 @@ from dbos.system_database import (
 )
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS, Workflow, WorkflowHandle, WorkflowStatus
+    from dbos.dbos import DBOS, Workflow, WorkflowHandle, WorkflowStatus, _DBOSRegistry
     from dbos.dbos import IsolationLevel
 
 from sqlalchemy.exc import DBAPIError
@@ -199,7 +199,7 @@ def _execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> "WorkflowHandle[
     inputs = dbos.sys_db.get_workflow_inputs(workflow_uuid)
     if not inputs:
         raise DBOSRecoveryError(workflow_uuid, "Workflow inputs not found")
-    wf_func = dbos.workflow_info_map.get(status["name"], None)
+    wf_func = dbos._registry.workflow_info_map.get(status["name"], None)
     if not wf_func:
         raise DBOSWorkflowFunctionNotFoundError(
             workflow_uuid, "Workflow function not found"
@@ -212,7 +212,7 @@ def _execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> "WorkflowHandle[
             config_name = status["config_name"]
             class_name = status["class_name"]
             iname = f"{class_name}/{config_name}"
-            if iname not in dbos.instance_info_map:
+            if iname not in dbos._registry.instance_info_map:
                 raise DBOSWorkflowFunctionNotFoundError(
                     workflow_uuid,
                     f"Cannot execute workflow because instance '{iname}' is not registered",
@@ -221,13 +221,13 @@ def _execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> "WorkflowHandle[
                 return _start_workflow(
                     dbos,
                     wf_func,
-                    dbos.instance_info_map[iname],
+                    dbos._registry.instance_info_map[iname],
                     *inputs["args"],
                     **inputs["kwargs"],
                 )
         elif status["class_name"] is not None:
             class_name = status["class_name"]
-            if class_name not in dbos.class_info_map:
+            if class_name not in dbos._registry.class_info_map:
                 raise DBOSWorkflowFunctionNotFoundError(
                     workflow_uuid,
                     f"Cannot execute workflow because class '{class_name}' is not registered",
@@ -236,7 +236,7 @@ def _execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> "WorkflowHandle[
                 return _start_workflow(
                     dbos,
                     wf_func,
-                    dbos.class_info_map[class_name],
+                    dbos._registry.class_info_map[class_name],
                     *inputs["args"],
                     **inputs["kwargs"],
                 )
@@ -247,13 +247,19 @@ def _execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> "WorkflowHandle[
                 )
 
 
-def _workflow_wrapper(dbos: "DBOS", func: F) -> F:
+def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
     func.__orig_func = func  # type: ignore
 
     fi = get_or_create_func_info(func)
 
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
+        if dbosreg.dbos is None:
+            raise DBOSException(
+                f"Function {func.__name__} invoked before DBOS initialized"
+            )
+        dbos = dbosreg.dbos
+
         rr: Optional[str] = check_required_roles(func, fi)
         attributes: TracedAttributes = {
             "name": func.__name__,
@@ -293,6 +299,15 @@ def _workflow_wrapper(dbos: "DBOS", func: F) -> F:
 
     wrapped_func = cast(F, wrapper)
     return wrapped_func
+
+
+def _workflow(reg: "_DBOSRegistry") -> Callable[[F], F]:
+    def _workflow_decorator(func: F) -> F:
+        wrapped_func = _workflow_wrapper(reg, func)
+        reg.register_wf_function(func.__qualname__, wrapped_func)
+        return wrapped_func
+
+    return _workflow_decorator
 
 
 def _start_workflow(
@@ -377,10 +392,15 @@ def _start_workflow(
 
 
 def _transaction(
-    dbos: "DBOS", isolation_level: "IsolationLevel" = "SERIALIZABLE"
+    dbosreg: "_DBOSRegistry", isolation_level: "IsolationLevel" = "SERIALIZABLE"
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
         def invoke_tx(*args: Any, **kwargs: Any) -> Any:
+            if dbosreg.dbos is None:
+                raise DBOSException(
+                    f"Function {func.__name__} invoked before DBOS initialized"
+                )
+            dbos = dbosreg.dbos
             with dbos.app_db.sessionmaker() as session:
                 attributes: TracedAttributes = {
                     "name": func.__name__,
@@ -479,16 +499,16 @@ def _transaction(
                 with DBOSAssumeRole(rr):
                     return invoke_tx(*args, **kwargs)
             else:
-                tempwf = dbos.workflow_info_map.get("<temp>." + func.__qualname__)
+                tempwf = dbosreg.workflow_info_map.get("<temp>." + func.__qualname__)
                 assert tempwf
                 return tempwf(*args, **kwargs)
 
         def temp_wf(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
 
-        wrapped_wf = _workflow_wrapper(dbos, temp_wf)
+        wrapped_wf = _workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
-        dbos._register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+        dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
         return cast(F, wrapper)
 
@@ -496,7 +516,7 @@ def _transaction(
 
 
 def _communicator(
-    dbos: "DBOS",
+    dbosreg: "_DBOSRegistry",
     *,
     retries_allowed: bool = False,
     interval_seconds: float = 1.0,
@@ -506,6 +526,11 @@ def _communicator(
     def decorator(func: F) -> F:
 
         def invoke_comm(*args: Any, **kwargs: Any) -> Any:
+            if dbosreg.dbos is None:
+                raise DBOSException(
+                    f"Function {func.__name__} invoked before DBOS initialized"
+                )
+            dbos = dbosreg.dbos
 
             attributes: TracedAttributes = {
                 "name": func.__name__,
@@ -590,16 +615,16 @@ def _communicator(
                 with DBOSAssumeRole(rr):
                     return invoke_comm(*args, **kwargs)
             else:
-                tempwf = dbos.workflow_info_map.get("<temp>." + func.__qualname__)
+                tempwf = dbosreg.workflow_info_map.get("<temp>." + func.__qualname__)
                 assert tempwf
                 return tempwf(*args, **kwargs)
 
         def temp_wf(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
 
-        wrapped_wf = _workflow_wrapper(dbos, temp_wf)
+        wrapped_wf = _workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
-        dbos._register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+        dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
         return cast(F, wrapper)
 
@@ -627,7 +652,7 @@ def _send(
         assert ctx.is_workflow(), "send() must be called from within a workflow"
         return do_send(destination_uuid, message, topic)
     else:
-        wffn = dbos.workflow_info_map.get(TEMP_SEND_WF_NAME)
+        wffn = dbos._registry.workflow_info_map.get(TEMP_SEND_WF_NAME)
         assert wffn
         wffn(destination_uuid, message, topic)
 

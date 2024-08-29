@@ -11,8 +11,7 @@ from dbos import DBOS, SetWorkflowUUID
 
 
 def test_concurrent_workflows(dbos: DBOS) -> None:
-
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow() -> str:
         time.sleep(1)
         return DBOS.workflow_id
@@ -32,12 +31,11 @@ def test_concurrent_workflows(dbos: DBOS) -> None:
 
 
 def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
-
     condition = threading.Condition()
     comm_count = 0
     txn_count = 0
 
-    @dbos.communicator()
+    @DBOS.communicator()
     def test_communicator() -> str:
         nonlocal comm_count
         comm_count += 1
@@ -50,7 +48,7 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
         condition.release()
         return DBOS.workflow_id
 
-    @dbos.workflow()
+    @DBOS.workflow()
     def test_workflow() -> str:
         res = test_communicator()
         return res
@@ -60,7 +58,7 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
             return test_communicator()
 
     # Need to set isolation level to a lower one, otherwise it gets serialization error instead (we already handle it correctly by automatic retries).
-    @dbos.transaction(isolation_level="REPEATABLE READ")
+    @DBOS.transaction(isolation_level="REPEATABLE READ")
     def test_transaction() -> str:
         DBOS.sql_session.execute(text("SELECT 1")).fetchall()
         nonlocal txn_count

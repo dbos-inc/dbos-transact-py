@@ -1,6 +1,7 @@
 import time
 from datetime import datetime
 
+# Private test API
 # Public API
 from dbos import DBOS
 
@@ -8,8 +9,8 @@ from dbos import DBOS
 def test_scheduled_workflow(dbos: DBOS) -> None:
     wf_counter: int = 0
 
-    @dbos.scheduled("* * * * * *")
-    @dbos.workflow()
+    @DBOS.scheduled("* * * * * *")
+    @DBOS.workflow()
     def test_workflow(scheduled: datetime, actual: datetime) -> None:
         nonlocal wf_counter
         wf_counter += 1
@@ -21,8 +22,8 @@ def test_scheduled_workflow(dbos: DBOS) -> None:
 def test_scheduled_workflow_exception(dbos: DBOS) -> None:
     wf_counter: int = 0
 
-    @dbos.scheduled("* * * * * *")
-    @dbos.workflow()
+    @DBOS.scheduled("* * * * * *")
+    @DBOS.workflow()
     def test_failing_workflow(scheduled: datetime, actual: datetime) -> None:
         nonlocal wf_counter
         wf_counter += 1
@@ -37,8 +38,8 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
     txn_counter: int = 0
     workflow_id: str = ""
 
-    @dbos.scheduled("* * * * * *")
-    @dbos.workflow()
+    @DBOS.scheduled("* * * * * *")
+    @DBOS.workflow()
     def test_workflow(scheduled: datetime, actual: datetime) -> None:
         test_transaction()
         nonlocal wf_counter
@@ -46,7 +47,7 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
         nonlocal workflow_id
         workflow_id = DBOS.workflow_id
 
-    @dbos.transaction()
+    @DBOS.transaction()
     def test_transaction() -> None:
         nonlocal txn_counter
         txn_counter += 1
@@ -81,7 +82,7 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
         }
     )
 
-    workflow_handles = dbos.recover_pending_workflows()
+    workflow_handles = DBOS.recover_pending_workflows()
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == None
     max_tries = 10
@@ -101,7 +102,7 @@ def test_long_workflow(dbos: DBOS) -> None:
     This runs every hour and does nothing. Goal is to verify that it shuts down properly.
     """
 
-    @dbos.scheduled("0 * * * *")
-    @dbos.workflow()
+    @DBOS.scheduled("0 * * * *")
+    @DBOS.workflow()
     def test_workflow(scheduled: datetime, actual: datetime) -> None:
         pass

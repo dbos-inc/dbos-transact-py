@@ -4,18 +4,18 @@ from fastapi import FastAPI
 from dbos import DBOS
 
 app = FastAPI()
-dbos = DBOS(app)
+DBOS(app)
 
 
 @app.get("/greeting/{name}")
-@dbos.workflow()
+@DBOS.workflow()
 def example_workflow(name: str) -> dict[str, str]:
     DBOS.logger.info("Running workflow!")
     output = example_transaction(name)
     return {"name": output}
 
 
-@dbos.transaction()
+@DBOS.transaction()
 def example_transaction(name: str) -> str:
     rows = DBOS.sql_session.execute(
         sa.text(

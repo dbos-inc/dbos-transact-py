@@ -63,6 +63,7 @@ def test_custom_sysdb_name_migration(
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sysdb_name}"))
 
     # Test migrating up
+    DBOS.destroy()  # In case of other tests leaving it
     dbos = DBOS(config=config)
 
     # Make sure all tables exist
@@ -81,7 +82,7 @@ def test_custom_sysdb_name_migration(
             sql = SystemSchema.workflow_status.select()
             result = connection.execute(sql)
         assert "does not exist" in str(exc_info.value)
-    dbos.destroy()
+    DBOS.destroy()
 
 
 def rollback_system_db(sysdb_url: str) -> None:
