@@ -79,7 +79,7 @@ def get_templates_directory() -> str:
     return path.join(package_dir, "templates")
 
 
-def copy_dbos_template(src: str, dst: str, ctx: dict[str, str]):
+def copy_dbos_template(src: str, dst: str, ctx: dict[str, str]) -> None:
     with open(src, "r") as f:
         content = f.read()
 
@@ -90,10 +90,10 @@ def copy_dbos_template(src: str, dst: str, ctx: dict[str, str]):
         f.write(content)
 
 
-def copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]):
+def copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]) -> None:
 
     for root, dirs, files in os.walk(src_dir, topdown=True):
-        dirs[:] = [d for d in dirs if d != "$package"]
+        dirs[:] = [d for d in dirs if d != "__package"]
 
         dst_root = path.join(dst_dir, path.relpath(root, src_dir))
         if len(dirs) == 0:
@@ -117,7 +117,7 @@ def copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]):
                 shutil.copy(src, dst)
 
 
-def copy_template(src_dir: str, project_name: str):
+def copy_template(src_dir: str, project_name: str) -> None:
 
     dst_dir = path.abspath(".")
 
@@ -131,7 +131,7 @@ def copy_template(src_dir: str, project_name: str):
 
     copy_template_dir(src_dir, dst_dir, ctx)
     copy_template_dir(
-        path.join(src_dir, "$package"), path.join(dst_dir, package_name), ctx
+        path.join(src_dir, "__package"), path.join(dst_dir, package_name), ctx
     )
 
 
@@ -173,7 +173,7 @@ def init(
     ] = None,
 ) -> None:
     try:
-        if project_name == None:
+        if project_name is None:
             project_name = typing.cast(
                 str, typer.prompt("What is your project's name?", get_project_name())
             )
