@@ -72,7 +72,7 @@ def start() -> None:
         process.wait()
 
 
-def get_template_directory() -> str:
+def get_templates_directory() -> str:
     import dbos
 
     package_dir = path.abspath(path.dirname(dbos.__file__))
@@ -108,6 +108,7 @@ def copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]):
 
             dst = path.join(dst_root, base if ext == ".dbos" else file)
             if path.exists(dst):
+                print(f"[yellow]File {dst} already exists, skipping[/yellow]")
                 continue
 
             if ext == ".dbos":
@@ -162,35 +163,41 @@ def is_valid_app_name(name: str) -> bool:
 
 
 @app.command()
-def init(name: Annotated[typing.Optional[str], typer.Argument()] = None) -> None:
+def init(
+    project_name: Annotated[
+        typing.Optional[str], typer.Argument(help="Specify application name")
+    ] = None,
+    template: Annotated[
+        typing.Optional[str],
+        typer.Option("--template", "-t", help="Specify template to use"),
+    ] = None,
+) -> None:
     try:
-        project_name = name
         if project_name == None:
             project_name = typing.cast(
                 str, typer.prompt("What is your project's name?", get_project_name())
             )
 
-        if project_name == None:
-            raise Exception(f"Project name could not be determined")
-
-        project_name = typing.cast(str, project_name)
         if not is_valid_app_name(project_name):
             raise Exception(f"{project_name} is an invalid DBOS app name")
 
-        template_dir = get_template_directory()
-        templates = [x.name for x in os.scandir(template_dir) if x.is_dir()]
-        templates_len = len(templates)
-        if templates_len == 0:
-            raise Exception(f"no DBOS templates found in {template_dir} ")
-        elif templates_len == 1:
-            template = templates[0]
-        else:
-            template = Prompt.ask(
-                "Which project template do you want to use?", choices=templates
-            )
+        templates_dir = get_templates_directory()
+        templates = [x.name for x in os.scandir(templates_dir) if x.is_dir()]
+        if len(templates) == 0:
+            raise Exception(f"no DBOS templates found in {templates_dir} ")
 
-        chosen_template = path.join(template_dir, template)
-        copy_template(chosen_template, project_name)
+        if template == None:
+            if len(templates) == 1:
+                template = templates[0]
+            else:
+                template = Prompt.ask(
+                    "Which project template do you want to use?", choices=templates
+                )
+        else:
+            if template not in templates:
+                raise Exception(f"template {template} not found in {templates_dir}")
+
+        copy_template(path.join(templates_dir, template), project_name)
     except Exception as e:
         print(f"[red]{e}[/red]")
 
