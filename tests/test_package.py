@@ -67,8 +67,8 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
                         status_code = response.getcode()
                         assert status_code == 200
                         response_data = response.read().decode("utf-8")
-                        json_data = json.loads(response_data)
-                        assert json_data.get("name") == "dbos1"
+                        data = json.loads(response_data)
+                        assert data == "Greetings, dbos! You have been greeted 1 times."
                         break
                 except (urllib.error.URLError, AssertionError) as e:
                     if attempt < max_retries - 1:  # If not the last attempt

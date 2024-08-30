@@ -721,9 +721,7 @@ def _get_event(
                 "function_id": ctx.curr_comm_function_id,
                 "timeout_function_id": timeout_function_id,
             }
-            return dbos.sys_db.get_event(
-                workflow_id, key, timeout_seconds, caller_ctx
-            )
+            return dbos.sys_db.get_event(workflow_id, key, timeout_seconds, caller_ctx)
     else:
         # Directly call it outside of a workflow
         return dbos.sys_db.get_event(workflow_id, key, timeout_seconds)
