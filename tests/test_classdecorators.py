@@ -4,7 +4,7 @@ import pytest
 import sqlalchemy as sa
 
 # Public API
-from dbos import DBOS, DBOSConfiguredInstance, SetWorkflowUUID
+from dbos import DBOS, DBOSConfiguredInstance, SetWorkflowID
 
 # Private API used because this is a test
 from dbos.context import DBOSContextEnsure, assert_current_dbos_context
@@ -309,7 +309,7 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
     assert inst.test_workflow("bob", "bob") == "bob1bob"
 
     wfh = dbos.start_workflow(inst.test_workflow, "bob", "bob")
-    stati = dbos.get_workflow_status(wfh.get_workflow_uuid())
+    stati = dbos.get_workflow_status(wfh.get_workflow_id())
     assert stati
     assert stati.config_name == "bob"
     assert stati.class_name == "DBOSTestClassInst"
@@ -401,13 +401,13 @@ def test_class_recovery(dbos: DBOS) -> None:
             assert cls == DBOSTestClassRec
             return "ran"
 
-    with SetWorkflowUUID("run1"):
+    with SetWorkflowID("run1"):
         assert "ran" == DBOSTestClassRec.check_cls("arg1")
 
     assert exc_cnt == 1
 
     # Test we can execute the workflow by uuid as recovery would do
-    handle = DBOS.execute_workflow_uuid("run1")
+    handle = DBOS.execute_workflow_id("run1")
     assert handle.get_result() == "ran"
     assert exc_cnt == 2
 
@@ -431,7 +431,7 @@ def test_inst_recovery(dbos: DBOS) -> None:
             return "ran2"
 
     inst = DBOSTestInstRec()
-    with SetWorkflowUUID("run2"):
+    with SetWorkflowID("run2"):
         assert "ran2" == inst.check_inst("arg1")
 
     assert exc_cnt == 1
@@ -439,7 +439,7 @@ def test_inst_recovery(dbos: DBOS) -> None:
 
     # Test we can execute the workflow by uuid as recovery would do
     last_inst = None
-    handle = DBOS.execute_workflow_uuid("run2")
+    handle = DBOS.execute_workflow_id("run2")
     assert handle.get_result() == "ran2"
     assert exc_cnt == 2
     assert last_inst is inst

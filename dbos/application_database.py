@@ -5,7 +5,7 @@ import sqlalchemy.dialects.postgresql as pg
 import sqlalchemy.exc as sa_exc
 from sqlalchemy.orm import Session, sessionmaker
 
-from dbos.error import DBOSWorkflowConflictUUIDError
+from dbos.error import DBOSWorkflowConflictIDError
 from dbos.schemas.application_database import ApplicationSchema
 
 from .dbos_config import ConfigFile
@@ -96,7 +96,7 @@ class ApplicationDatabase:
                 )
             )
         except sa_exc.IntegrityError:
-            raise DBOSWorkflowConflictUUIDError(output["workflow_uuid"])
+            raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
         except Exception as e:
             raise e
 
@@ -119,7 +119,7 @@ class ApplicationDatabase:
                     )
                 )
         except sa_exc.IntegrityError:
-            raise DBOSWorkflowConflictUUIDError(output["workflow_uuid"])
+            raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
         except Exception as e:
             raise e
 

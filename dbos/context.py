@@ -58,9 +58,9 @@ class DBOSContext:
 
         self.id_assigned_for_next_workflow: str = ""
 
-        self.parent_workflow_uuid: str = ""
+        self.parent_workflow_id: str = ""
         self.parent_workflow_fid: int = -1
-        self.workflow_uuid: str = ""
+        self.workflow_id: str = ""
         self.function_id: int = -1
         self.in_recovery: bool = False
 
@@ -78,7 +78,7 @@ class DBOSContext:
         rv.logger = self.logger
         rv.id_assigned_for_next_workflow = self.id_assigned_for_next_workflow
         self.id_assigned_for_next_workflow = ""
-        rv.parent_workflow_uuid = self.workflow_uuid
+        rv.parent_workflow_id = self.workflow_id
         rv.parent_workflow_fid = self.function_id
         rv.in_recovery = self.in_recovery
         rv.authenticated_user = self.authenticated_user
@@ -102,21 +102,21 @@ class DBOSContext:
         if wfid is None or len(wfid) == 0:
             wfid = self.assign_workflow_id()
             self.id_assigned_for_next_workflow = ""
-        self.workflow_uuid = wfid
+        self.workflow_id = wfid
         self.function_id = 0
         self._start_span(attributes)
 
     def end_workflow(self, exc_value: Optional[BaseException]) -> None:
-        self.workflow_uuid = ""
+        self.workflow_id = ""
         self.function_id = -1
         self._end_span(exc_value)
 
     def is_within_workflow(self) -> bool:
-        return len(self.workflow_uuid) > 0
+        return len(self.workflow_id) > 0
 
     def is_workflow(self) -> bool:
         return (
-            len(self.workflow_uuid) > 0
+            len(self.workflow_id) > 0
             and not self.is_communicator()
             and not self.is_transaction()
         )
@@ -162,7 +162,7 @@ class DBOSContext:
 
     def _start_span(self, attributes: TracedAttributes) -> None:
         attributes["operationUUID"] = (
-            self.workflow_uuid if len(self.workflow_uuid) > 0 else None
+            self.workflow_id if len(self.workflow_id) > 0 else None
         )
         span = dbos_tracer.start_span(
             attributes, parent=self.spans[-1] if len(self.spans) > 0 else None
@@ -264,12 +264,12 @@ class DBOSContextSwap:
 
 
 # Set next WFID
-class SetWorkflowUUID:
+class SetWorkflowID:
     def __init__(self, wfid: str) -> None:
         self.created_ctx = False
         self.wfid = wfid
 
-    def __enter__(self) -> SetWorkflowUUID:
+    def __enter__(self) -> SetWorkflowID:
         # Code to create a basic context
         ctx = get_local_dbos_context()
         if ctx is None:
@@ -333,7 +333,7 @@ class EnterDBOSWorkflow:
         assert not ctx.is_within_workflow()
         ctx.start_workflow(
             None, self.attributes
-        )  # Will get from the context's next wf uuid
+        )  # Will get from the context's next workflow ID
         return ctx
 
     def __exit__(
@@ -364,7 +364,7 @@ class EnterDBOSChildWorkflow:
         ctx.function_id += 1
         if len(ctx.id_assigned_for_next_workflow) == 0:
             ctx.id_assigned_for_next_workflow = (
-                ctx.workflow_uuid + "-" + str(ctx.function_id)
+                ctx.workflow_id + "-" + str(ctx.function_id)
             )
         self.child_ctx = ctx.create_child()
         set_local_dbos_context(self.child_ctx)

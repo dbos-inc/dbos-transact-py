@@ -5,7 +5,7 @@ import uuid
 import requests
 
 # Public API
-from dbos import DBOS, SetWorkflowUUID
+from dbos import DBOS, SetWorkflowID
 
 
 def test_admin_endpoints(dbos: DBOS) -> None:
@@ -73,7 +73,7 @@ def test_admin_recovery(dbos: DBOS) -> None:
 
     wfuuid = str(uuid.uuid4())
     DBOS.logger.info("Initiating: " + wfuuid)
-    with SetWorkflowUUID(wfuuid):
+    with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") == "bob1bob"
 
     # Change the workflow status to pending

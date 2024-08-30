@@ -80,10 +80,10 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             executor_ids: List[str] = json.loads(post_data.decode("utf-8"))
             dbos_logger.info("Recovering workflows for executors: %s", executor_ids)
             workflow_handles = _recover_pending_workflows(self.dbos, executor_ids)
-            workflow_uuids = [handle.workflow_uuid for handle in workflow_handles]
+            workflow_ids = [handle.workflow_id for handle in workflow_handles]
             self.send_response(200)
             self._end_headers()
-            self.wfile.write(json.dumps(workflow_uuids).encode("utf-8"))
+            self.wfile.write(json.dumps(workflow_ids).encode("utf-8"))
         else:
             self.send_response(404)
             self._end_headers()

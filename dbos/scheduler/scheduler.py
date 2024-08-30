@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Callable
 if TYPE_CHECKING:
     from dbos.dbos import _DBOSRegistry
 
-from ..context import SetWorkflowUUID
+from ..context import SetWorkflowID
 from ..logger import dbos_logger
 from .croniter import croniter  # type: ignore
 
@@ -22,7 +22,7 @@ def scheduler_loop(
         sleepTime = nextExecTime - datetime.now(timezone.utc)
         if stop_event.wait(timeout=sleepTime.total_seconds()):
             return
-        with SetWorkflowUUID(f"sched-{func.__qualname__}-{nextExecTime.isoformat()}"):
+        with SetWorkflowID(f"sched-{func.__qualname__}-{nextExecTime.isoformat()}"):
             try:
                 func(nextExecTime, datetime.now(timezone.utc))
             except Exception as e:

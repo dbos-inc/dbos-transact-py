@@ -26,7 +26,7 @@ from opentelemetry.trace import Span
 from dbos.core import (
     TEMP_SEND_WF_NAME,
     _communicator,
-    _execute_workflow_uuid,
+    _execute_workflow_id,
     _get_event,
     _recv,
     _send,
@@ -250,9 +250,9 @@ class DBOS:
 
         # Register send_stub as a workflow
         def send_temp_workflow(
-            destination_uuid: str, message: Any, topic: Optional[str]
+            destination_id: str, message: Any, topic: Optional[str]
         ) -> None:
-            self.send(destination_uuid, message, topic)
+            self.send(destination_id, message, topic)
 
         temp_send_wf = _workflow_wrapper(self._registry, send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
@@ -396,20 +396,20 @@ class DBOS:
         return _start_workflow(_get_dbos_instance(), func, *args, **kwargs)
 
     @classmethod
-    def get_workflow_status(cls, workflow_uuid: str) -> Optional[WorkflowStatus]:
+    def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
         ctx = get_local_dbos_context()
         if ctx and ctx.is_within_workflow():
             ctx.function_id += 1
             stat = _get_dbos_instance().sys_db.get_workflow_status_within_wf(
-                workflow_uuid, ctx.workflow_uuid, ctx.function_id
+                workflow_id, ctx.workflow_id, ctx.function_id
             )
         else:
-            stat = _get_dbos_instance().sys_db.get_workflow_status(workflow_uuid)
+            stat = _get_dbos_instance().sys_db.get_workflow_status(workflow_id)
         if stat is None:
             return None
 
         return WorkflowStatus(
-            workflow_uuid=workflow_uuid,
+            workflow_id=workflow_id,
             status=stat["status"],
             name=stat["name"],
             recovery_attempts=stat["recovery_attempts"],
@@ -422,20 +422,20 @@ class DBOS:
 
     @classmethod
     def retrieve_workflow(
-        cls, workflow_uuid: str, existing_workflow: bool = True
+        cls, workflow_id: str, existing_workflow: bool = True
     ) -> WorkflowHandle[R]:
         dbos = _get_dbos_instance()
         if existing_workflow:
-            stat = dbos.get_workflow_status(workflow_uuid)
+            stat = dbos.get_workflow_status(workflow_id)
             if stat is None:
-                raise DBOSNonExistentWorkflowError(workflow_uuid)
-        return _WorkflowHandlePolling(workflow_uuid, dbos)
+                raise DBOSNonExistentWorkflowError(workflow_id)
+        return _WorkflowHandlePolling(workflow_id, dbos)
 
     @classmethod
     def send(
-        cls, destination_uuid: str, message: Any, topic: Optional[str] = None
+        cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
-        return _send(_get_dbos_instance(), destination_uuid, message, topic)
+        return _send(_get_dbos_instance(), destination_id, message, topic)
 
     @classmethod
     def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
@@ -450,7 +450,7 @@ class DBOS:
             return
         with EnterDBOSCommunicator(attributes) as ctx:
             _get_dbos_instance().sys_db.sleep(
-                ctx.workflow_uuid, ctx.curr_comm_function_id, seconds
+                ctx.workflow_id, ctx.curr_comm_function_id, seconds
             )
 
     @classmethod
@@ -459,16 +459,16 @@ class DBOS:
 
     @classmethod
     def get_event(
-        cls, workflow_uuid: str, key: str, timeout_seconds: float = 60
+        cls, workflow_id: str, key: str, timeout_seconds: float = 60
     ) -> Any:
-        return _get_event(_get_dbos_instance(), workflow_uuid, key, timeout_seconds)
+        return _get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
 
     @classmethod
-    def execute_workflow_uuid(cls, workflow_uuid: str) -> WorkflowHandle[Any]:
+    def execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """
-        This function is used to execute a workflow by a UUID for recovery.
+        This function is used to execute a workflow by ID for recovery.
         """
-        return _execute_workflow_uuid(_get_dbos_instance(), workflow_uuid)
+        return _execute_workflow_id(_get_dbos_instance(), workflow_id)
 
     @classmethod
     def recover_pending_workflows(
@@ -499,7 +499,7 @@ class DBOS:
         assert (
             ctx.is_within_workflow()
         ), "workflow_id is only available within a workflow, transaction, or communicator."
-        return ctx.workflow_uuid
+        return ctx.workflow_id
 
     @classproperty
     def parent_workflow_id(cls) -> str:
@@ -507,7 +507,7 @@ class DBOS:
         assert (
             ctx.is_within_workflow()
         ), "parent_workflow_id is only available within a workflow."
-        return ctx.parent_workflow_uuid
+        return ctx.parent_workflow_id
 
     @classproperty
     def span(cls) -> Span:
@@ -522,7 +522,7 @@ class DBOS:
 
 @dataclass
 class WorkflowStatus:
-    workflow_uuid: str
+    workflow_id: str
     status: str
     name: str
     class_name: Optional[str]
@@ -534,11 +534,11 @@ class WorkflowStatus:
 
 
 class WorkflowHandle(Generic[R], Protocol):
-    def __init__(self, workflow_uuid: str) -> None: ...
+    def __init__(self, workflow_id: str) -> None: ...
 
-    workflow_uuid: str
+    workflow_id: str
 
-    def get_workflow_uuid(self) -> str: ...
+    def get_workflow_id(self) -> str: ...
     def get_result(self) -> R: ...
     def get_status(self) -> WorkflowStatus: ...
 
