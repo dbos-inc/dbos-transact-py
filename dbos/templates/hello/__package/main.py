@@ -20,6 +20,7 @@ DBOS(app)
 # Next, let's use FastAPI to serve a simple HTML readme
 # from the root path.
 
+
 @app.get("/")
 def readme() -> HTMLResponse:
     readme = """
