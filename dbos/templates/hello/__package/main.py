@@ -4,6 +4,15 @@
 # It displays greetings to visitors and keeps track of how
 # many times each visitor has been greeted.
 
+# TO RUN THIS APP LOCALLY
+# Make sure you have a Postgres database to connect to.
+# "dbos migrate" to set up your database tables
+# "dbos start" to start the app
+
+# TO DEPLOY THIS APP TO DBOS CLOUD
+# "npm i -g @dbos-inc/dbos-cloud@latest" to install the Cloud CLI (requires Node)
+# "dbos-cloud app deploy" to deploy--your app will be live in under a minute!
+
 # First, let's do imports, create a FastAPI app, and initialize DBOS.
 
 from fastapi import FastAPI
@@ -17,7 +26,7 @@ from .schema import dbos_hello
 app = FastAPI()
 DBOS(app)
 
-# Next, let's use FastAPI to serve a simple HTML readme
+# Then, let's use FastAPI to serve a simple HTML readme
 # from the root path.
 
 
@@ -46,6 +55,18 @@ def readme() -> HTMLResponse:
     return HTMLResponse(readme)
 
 
+# Next, let's write a function that greets visitors.
+# To make it more interesting, we'll keep track of how
+# many times each visitor has been greeted and store
+# the count in the database.
+
+# We annotate this function with @DBOS.transaction to get
+# access to an automatically-configured database client,
+# then implement the database operations using SQLAlchemy.
+# We serve this function from a FastAPI endpoint.
+
+
+@app.get("/greeting/{name}")
 @DBOS.transaction()
 def example_transaction(name: str) -> str:
     query = (
@@ -56,7 +77,7 @@ def example_transaction(name: str) -> str:
         )
         .returning(dbos_hello.c.greet_count)
     )
-
     greet_count = DBOS.sql_session.execute(query).scalar_one()
-    DBOS.logger.info(f"{name} greet_count: {greet_count}")
-    return name + str(greet_count)
+    greeting = f"Greetings, {name}!  You have been greeted {greet_count} times."
+    DBOS.logger.info(greeting)
+    return greeting
