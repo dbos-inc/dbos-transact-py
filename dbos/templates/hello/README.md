@@ -17,7 +17,6 @@ python3 start_postgres_docker.py
 Then run:
 
 ```shell
-pip install -r requirements.txt
 dbos migrate
 dbos start
 ```
