@@ -23,7 +23,7 @@ from dbos.context import (
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
     OperationType,
-    SetWorkflowUUID,
+    SetWorkflowID,
     TracedAttributes,
     assert_current_dbos_context,
     get_local_dbos_context,
@@ -115,8 +115,8 @@ def _init_workflow(
     config_name: Optional[str],
 ) -> WorkflowStatusInternal:
     wfid = (
-        ctx.workflow_uuid
-        if len(ctx.workflow_uuid) > 0
+        ctx.workflow_id
+        if len(ctx.workflow_id) > 0
         else ctx.id_assigned_for_next_workflow
     )
     status: WorkflowStatusInternal = {
@@ -217,7 +217,7 @@ def _execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> "WorkflowHandle[
                     workflow_uuid,
                     f"Cannot execute workflow because instance '{iname}' is not registered",
                 )
-            with SetWorkflowUUID(workflow_uuid):
+            with SetWorkflowID(workflow_uuid):
                 return _start_workflow(
                     dbos,
                     wf_func,
@@ -232,7 +232,7 @@ def _execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> "WorkflowHandle[
                     workflow_uuid,
                     f"Cannot execute workflow because class '{class_name}' is not registered",
                 )
-            with SetWorkflowUUID(workflow_uuid):
+            with SetWorkflowID(workflow_uuid):
                 return _start_workflow(
                     dbos,
                     wf_func,
@@ -241,7 +241,7 @@ def _execute_workflow_uuid(dbos: "DBOS", workflow_uuid: str) -> "WorkflowHandle[
                     **inputs["kwargs"],
                 )
         else:
-            with SetWorkflowUUID(workflow_uuid):
+            with SetWorkflowID(workflow_uuid):
                 return _start_workflow(
                     dbos, wf_func, *inputs["args"], **inputs["kwargs"]
                 )
@@ -347,7 +347,7 @@ def _start_workflow(
         cur_ctx.function_id += 1
         if len(cur_ctx.id_assigned_for_next_workflow) == 0:
             cur_ctx.id_assigned_for_next_workflow = (
-                cur_ctx.workflow_uuid + "-" + str(cur_ctx.function_id)
+                cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
             )
 
     new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
@@ -408,7 +408,7 @@ def _transaction(
                 }
                 with EnterDBOSTransaction(session, attributes=attributes) as ctx:
                     txn_output: TransactionResultInternal = {
-                        "workflow_uuid": ctx.workflow_uuid,
+                        "workflow_uuid": ctx.workflow_id,
                         "function_id": ctx.function_id,
                         "output": None,
                         "error": None,
@@ -433,7 +433,7 @@ def _transaction(
                                 recorded_output = (
                                     ApplicationDatabase.check_transaction_execution(
                                         session,
-                                        ctx.workflow_uuid,
+                                        ctx.workflow_id,
                                         ctx.function_id,
                                     )
                                 )
@@ -538,13 +538,13 @@ def _communicator(
             }
             with EnterDBOSCommunicator(attributes) as ctx:
                 comm_output: OperationResultInternal = {
-                    "workflow_uuid": ctx.workflow_uuid,
+                    "workflow_uuid": ctx.workflow_id,
                     "function_id": ctx.function_id,
                     "output": None,
                     "error": None,
                 }
                 recorded_output = dbos.sys_db.check_operation_execution(
-                    ctx.workflow_uuid, ctx.function_id
+                    ctx.workflow_id, ctx.function_id
                 )
                 if recorded_output:
                     if recorded_output["error"] is not None:
@@ -640,7 +640,7 @@ def _send(
         }
         with EnterDBOSCommunicator(attributes) as ctx:
             dbos.sys_db.send(
-                ctx.workflow_uuid,
+                ctx.workflow_id,
                 ctx.curr_comm_function_id,
                 destination_uuid,
                 message,
@@ -671,7 +671,7 @@ def _recv(
             ctx.function_id += 1  # Reserve for the sleep
             timeout_function_id = ctx.function_id
             return dbos.sys_db.recv(
-                ctx.workflow_uuid,
+                ctx.workflow_id,
                 ctx.curr_comm_function_id,
                 timeout_function_id,
                 topic,
@@ -694,7 +694,7 @@ def _set_event(dbos: "DBOS", key: str, value: Any) -> None:
         }
         with EnterDBOSCommunicator(attributes) as ctx:
             dbos.sys_db.set_event(
-                ctx.workflow_uuid, ctx.curr_comm_function_id, key, value
+                ctx.workflow_id, ctx.curr_comm_function_id, key, value
             )
     else:
         # Cannot call it from outside of a workflow
@@ -717,7 +717,7 @@ def _get_event(
             ctx.function_id += 1
             timeout_function_id = ctx.function_id
             caller_ctx: GetEventWorkflowContext = {
-                "workflow_uuid": ctx.workflow_uuid,
+                "workflow_uuid": ctx.workflow_id,
                 "function_id": ctx.curr_comm_function_id,
                 "timeout_function_id": timeout_function_id,
             }

@@ -7,7 +7,7 @@ from fastapi import Request as FastAPIRequest
 from .context import (
     EnterDBOSHandler,
     OperationType,
-    SetWorkflowUUID,
+    SetWorkflowID,
     TracedAttributes,
     assert_current_dbos_context,
 )
@@ -56,6 +56,6 @@ def setup_fastapi_middleware(app: FastAPI) -> None:
             ctx = assert_current_dbos_context()
             ctx.request = Request(request)
             workflow_id = request.headers.get("dbos-idempotency-key", "")
-            with SetWorkflowUUID(workflow_id):
+            with SetWorkflowID(workflow_id):
                 response = await call_next(request)
         return response

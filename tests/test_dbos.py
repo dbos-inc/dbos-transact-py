@@ -11,7 +11,7 @@ import pytest
 import sqlalchemy as sa
 
 # Public API
-from dbos import DBOS, ConfigFile, SetWorkflowUUID, WorkflowHandle, WorkflowStatusString
+from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle, WorkflowStatusString
 
 # Private API because this is a test
 from dbos.context import assert_current_dbos_context, get_local_dbos_context
@@ -53,9 +53,9 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     # Test OAOO
     wfuuid = str(uuid.uuid4())
-    with SetWorkflowUUID(wfuuid):
+    with SetWorkflowID(wfuuid):
         assert test_workflow("alice", "alice") == "alice1alice"
-    with SetWorkflowUUID(wfuuid):
+    with SetWorkflowID(wfuuid):
         assert test_workflow("alice", "alice") == "alice1alice"
     assert txn_counter == 2  # Only increment once
     assert comm_counter == 2  # Only increment once
@@ -138,9 +138,9 @@ def test_child_workflow(dbos: DBOS) -> None:
     def test_workflow_assignchild() -> str:
         nonlocal wf_ac_counter
         wf_ac_counter += 1
-        with SetWorkflowUUID("run_me_just_once"):
+        with SetWorkflowID("run_me_just_once"):
             res1 = test_workflow_ac("child1", "child1")
-        with SetWorkflowUUID("run_me_just_once"):
+        with SetWorkflowID("run_me_just_once"):
             wfh = dbos.start_workflow(test_workflow_ac, "child1", "child1")
             res2 = wfh.get_result()
         return res1 + res2
@@ -200,12 +200,12 @@ def test_exception_workflow(dbos: DBOS) -> None:
     # Test OAOO
     wfuuid = str(uuid.uuid4())
     with pytest.raises(Exception) as exc_info:
-        with SetWorkflowUUID(wfuuid):
+        with SetWorkflowID(wfuuid):
             exception_workflow()
     assert "test error" == str(exc_info.value)
 
     with pytest.raises(Exception) as exc_info:
-        with SetWorkflowUUID(wfuuid):
+        with SetWorkflowID(wfuuid):
             exception_workflow()
     assert "test error" == str(exc_info.value)
     assert txn_counter == 2  # Only increment once
@@ -332,7 +332,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
         return var2 + str(rows[0][0])
 
     wfuuid = str(uuid.uuid4())
-    with SetWorkflowUUID(wfuuid):
+    with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") == "bob1bob"
 
     # Change the workflow status to pending
@@ -381,7 +381,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     gwi.start_time = cur_time
 
     wfuuid = str(uuid.uuid4())
-    with SetWorkflowUUID(wfuuid):
+    with SetWorkflowID(wfuuid):
         res = test_transaction("bob")
         assert res == "bob1"
 
@@ -440,7 +440,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
         return var
 
     wfuuid = str(uuid.uuid4())
-    with SetWorkflowUUID(wfuuid):
+    with SetWorkflowID(wfuuid):
         assert test_workflow(test_var) == test_var
 
     # Change the workflow status to pending
@@ -504,17 +504,17 @@ def test_start_workflow(dbos: DBOS) -> None:
         return var2 + str(rows[0][0])
 
     wfuuid = str(uuid.uuid4())
-    with SetWorkflowUUID(wfuuid):
+    with SetWorkflowID(wfuuid):
         handle = dbos.start_workflow(test_workflow, "bob", "bob")
         context = assert_current_dbos_context()
         assert not context.is_within_workflow()
         assert handle.get_result() == "bob1bob"
-    with SetWorkflowUUID(wfuuid):
+    with SetWorkflowID(wfuuid):
         handle = dbos.start_workflow(test_workflow, "bob", "bob")
         context = assert_current_dbos_context()
         assert not context.is_within_workflow()
         assert handle.get_result() == "bob1bob"
-    with SetWorkflowUUID(wfuuid):
+    with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") == "bob1bob"
         context = assert_current_dbos_context()
         assert not context.is_within_workflow()
@@ -591,7 +591,7 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def test_workflow_status_a() -> str:
-        with SetWorkflowUUID("run_this_once_a"):
+        with SetWorkflowID("run_this_once_a"):
             dbos.start_workflow(test_sleep_workflow, 1.5)
 
         fstat1 = dbos.get_workflow_status("run_this_once_a")
@@ -604,7 +604,7 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_workflow_status_b() -> str:
         assert DBOS.workflow_id == "parent_b"
-        with SetWorkflowUUID("run_this_once_b"):
+        with SetWorkflowID("run_this_once_b"):
             wfh = dbos.start_workflow(test_sleep_workflow, 1.5)
         assert DBOS.workflow_id == "parent_b"
 
@@ -615,14 +615,14 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
         assert fstat2
         return fstat1.status + fres + fstat2.status
 
-    with SetWorkflowUUID("parent_a"):
+    with SetWorkflowID("parent_a"):
         assert test_workflow_status_a() == "PENDINGrun_this_once_aSUCCESS"
-    with SetWorkflowUUID("parent_a"):
+    with SetWorkflowID("parent_a"):
         assert test_workflow_status_a() == "PENDINGrun_this_once_aSUCCESS"
 
-    with SetWorkflowUUID("parent_b"):
+    with SetWorkflowID("parent_b"):
         assert test_workflow_status_b() == "PENDINGrun_this_once_bSUCCESS"
-    with SetWorkflowUUID("parent_b"):
+    with SetWorkflowID("parent_b"):
         assert test_workflow_status_b() == "PENDINGrun_this_once_bSUCCESS"
 
     # Test that there were no recovery attempts of this
@@ -698,7 +698,7 @@ def test_sleep(dbos: DBOS) -> None:
 
     # Test sleep OAOO, skip sleep
     start_time = time.time()
-    with SetWorkflowUUID(sleep_uuid):
+    with SetWorkflowID(sleep_uuid):
         assert test_sleep_workflow(1.5) == sleep_uuid
         assert time.time() - start_time < 0.3
 
@@ -743,12 +743,12 @@ def test_send_recv(dbos: DBOS) -> None:
         exc_info.value
     )
 
-    with SetWorkflowUUID(dest_uuid):
+    with SetWorkflowID(dest_uuid):
         handle = dbos.start_workflow(test_recv_workflow, "testtopic")
         assert handle.get_workflow_uuid() == dest_uuid
 
     send_uuid = str(uuid.uuid4())
-    with SetWorkflowUUID(send_uuid):
+    with SetWorkflowID(send_uuid):
         res = test_send_workflow(handle.get_workflow_uuid(), "testtopic")
         assert res == dest_uuid
     begin_time = time.time()
@@ -759,7 +759,7 @@ def test_send_recv(dbos: DBOS) -> None:
     # Test send 'None'
     none_uuid = str(uuid.uuid4())
     none_handle = None
-    with SetWorkflowUUID(none_uuid):
+    with SetWorkflowID(none_uuid):
         none_handle = dbos.start_workflow(test_recv_timeout, 10.0)
     test_send_none(none_uuid)
     begin_time = time.time()
@@ -768,7 +768,7 @@ def test_send_recv(dbos: DBOS) -> None:
     assert duration < 1.0  # None is from the received message, not from the timeout.
 
     timeout_uuid = str(uuid.uuid4())
-    with SetWorkflowUUID(timeout_uuid):
+    with SetWorkflowID(timeout_uuid):
         begin_time = time.time()
         timeoutres = test_recv_timeout(1.0)
         duration = time.time() - begin_time
@@ -776,12 +776,12 @@ def test_send_recv(dbos: DBOS) -> None:
         assert timeoutres is None
 
     # Test OAOO
-    with SetWorkflowUUID(send_uuid):
+    with SetWorkflowID(send_uuid):
         res = test_send_workflow(handle.get_workflow_uuid(), "testtopic")
         assert res == dest_uuid
         assert send_counter == 2
 
-    with SetWorkflowUUID(dest_uuid):
+    with SetWorkflowID(dest_uuid):
         begin_time = time.time()
         res = test_recv_workflow("testtopic")
         duration = time.time() - begin_time
@@ -789,7 +789,7 @@ def test_send_recv(dbos: DBOS) -> None:
         assert res == "test2-test1-test3"
         assert recv_counter == 2
 
-    with SetWorkflowUUID(timeout_uuid):
+    with SetWorkflowID(timeout_uuid):
         begin_time = time.time()
         timeoutres = test_recv_timeout(1.0)
         duration = time.time() - begin_time
@@ -818,7 +818,7 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
 
     dest_uuid = str(uuid.uuid4())
 
-    with SetWorkflowUUID(dest_uuid):
+    with SetWorkflowID(dest_uuid):
         handle = dbos.start_workflow(test_send_recv_workflow, "testtopic")
         assert handle.get_workflow_uuid() == dest_uuid
 
@@ -852,9 +852,9 @@ def test_set_get_events(dbos: DBOS) -> None:
         return str(msg) if msg is not None else None
 
     wfuuid = str(uuid.uuid4())
-    with SetWorkflowUUID(wfuuid):
+    with SetWorkflowID(wfuuid):
         test_setevent_workflow()
-    with SetWorkflowUUID(wfuuid):
+    with SetWorkflowID(wfuuid):
         test_setevent_workflow()
 
     value1 = test_getevent_workflow(wfuuid, "key1")
@@ -878,14 +878,14 @@ def test_set_get_events(dbos: DBOS) -> None:
 
     # Test OAOO
     timeout_uuid = str(uuid.uuid4())
-    with SetWorkflowUUID(timeout_uuid):
+    with SetWorkflowID(timeout_uuid):
         begin_time = time.time()
         res = test_getevent_workflow("non-existent-uuid", "key1", 1.0)
         duration = time.time() - begin_time
         assert duration > 0.7
         assert res is None
 
-    with SetWorkflowUUID(timeout_uuid):
+    with SetWorkflowID(timeout_uuid):
         begin_time = time.time()
         res = test_getevent_workflow("non-existent-uuid", "key1", 1.0)
         duration = time.time() - begin_time

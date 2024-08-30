@@ -7,7 +7,7 @@ from typing import Tuple
 from sqlalchemy import text
 
 # Public API
-from dbos import DBOS, SetWorkflowUUID
+from dbos import DBOS, SetWorkflowID
 
 
 def test_concurrent_workflows(dbos: DBOS) -> None:
@@ -17,7 +17,7 @@ def test_concurrent_workflows(dbos: DBOS) -> None:
         return DBOS.workflow_id
 
     def test_thread(id: str) -> str:
-        with SetWorkflowUUID(id):
+        with SetWorkflowID(id):
             return test_workflow()
 
     num_threads = 10
@@ -54,7 +54,7 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
         return res
 
     def test_comm_thread(id: str) -> str:
-        with SetWorkflowUUID(id):
+        with SetWorkflowID(id):
             return test_communicator()
 
     # Need to set isolation level to a lower one, otherwise it gets serialization error instead (we already handle it correctly by automatic retries).
@@ -73,14 +73,14 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
         return DBOS.workflow_id
 
     def test_txn_thread(id: str) -> str:
-        with SetWorkflowUUID(id):
+        with SetWorkflowID(id):
             return test_transaction()
 
     wfuuid = str(uuid.uuid4())
-    with SetWorkflowUUID(wfuuid):
+    with SetWorkflowID(wfuuid):
         wf_handle1 = dbos.start_workflow(test_workflow)
 
-    with SetWorkflowUUID(wfuuid):
+    with SetWorkflowID(wfuuid):
         wf_handle2 = dbos.start_workflow(test_workflow)
 
     # These two workflows should run concurrently, but both should succeed.

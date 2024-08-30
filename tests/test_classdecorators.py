@@ -4,7 +4,7 @@ import pytest
 import sqlalchemy as sa
 
 # Public API
-from dbos import DBOS, DBOSConfiguredInstance, SetWorkflowUUID
+from dbos import DBOS, DBOSConfiguredInstance, SetWorkflowID
 
 # Private API used because this is a test
 from dbos.context import DBOSContextEnsure, assert_current_dbos_context
@@ -401,7 +401,7 @@ def test_class_recovery(dbos: DBOS) -> None:
             assert cls == DBOSTestClassRec
             return "ran"
 
-    with SetWorkflowUUID("run1"):
+    with SetWorkflowID("run1"):
         assert "ran" == DBOSTestClassRec.check_cls("arg1")
 
     assert exc_cnt == 1
@@ -431,7 +431,7 @@ def test_inst_recovery(dbos: DBOS) -> None:
             return "ran2"
 
     inst = DBOSTestInstRec()
-    with SetWorkflowUUID("run2"):
+    with SetWorkflowID("run2"):
         assert "ran2" == inst.check_inst("arg1")
 
     assert exc_cnt == 1

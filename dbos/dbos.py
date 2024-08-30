@@ -401,7 +401,7 @@ class DBOS:
         if ctx and ctx.is_within_workflow():
             ctx.function_id += 1
             stat = _get_dbos_instance().sys_db.get_workflow_status_within_wf(
-                workflow_uuid, ctx.workflow_uuid, ctx.function_id
+                workflow_uuid, ctx.workflow_id, ctx.function_id
             )
         else:
             stat = _get_dbos_instance().sys_db.get_workflow_status(workflow_uuid)
@@ -450,7 +450,7 @@ class DBOS:
             return
         with EnterDBOSCommunicator(attributes) as ctx:
             _get_dbos_instance().sys_db.sleep(
-                ctx.workflow_uuid, ctx.curr_comm_function_id, seconds
+                ctx.workflow_id, ctx.curr_comm_function_id, seconds
             )
 
     @classmethod
@@ -499,7 +499,7 @@ class DBOS:
         assert (
             ctx.is_within_workflow()
         ), "workflow_id is only available within a workflow, transaction, or communicator."
-        return ctx.workflow_uuid
+        return ctx.workflow_id
 
     @classproperty
     def parent_workflow_id(cls) -> str:
@@ -507,7 +507,7 @@ class DBOS:
         assert (
             ctx.is_within_workflow()
         ), "parent_workflow_id is only available within a workflow."
-        return ctx.parent_workflow_uuid
+        return ctx.parent_workflow_id
 
     @classproperty
     def span(cls) -> Span:

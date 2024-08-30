@@ -6,7 +6,7 @@ from os import path
 import pytest
 
 # Public API
-from dbos import DBOS, SetWorkflowUUID, WorkflowHandle
+from dbos import DBOS, SetWorkflowID, WorkflowHandle
 
 # Private API used because this is a test
 from dbos.context import DBOSContextEnsure, assert_current_dbos_context
@@ -28,7 +28,7 @@ def test_dbos_singleton(cleanup_test_databases: None) -> None:
     dbos.launch()  # Usually framework (fastapi) does this via lifecycle event
 
     # Basics
-    with SetWorkflowUUID("wfid"):
+    with SetWorkflowID("wfid"):
         res = wfFunc("f")
     assert res == "f1"
 
@@ -68,12 +68,12 @@ def test_dbos_singleton(cleanup_test_databases: None) -> None:
     # Send / Recv
     dest_uuid = str("sruuid1")
 
-    with SetWorkflowUUID(dest_uuid):
+    with SetWorkflowID(dest_uuid):
         handle = dbos.start_workflow(DBOSSendRecv.test_recv_workflow, "testtopic")
         assert handle.get_workflow_uuid() == dest_uuid
 
     send_uuid = str("sruuid2")
-    with SetWorkflowUUID(send_uuid):
+    with SetWorkflowID(send_uuid):
         res = DBOSSendRecv.test_send_workflow(handle.get_workflow_uuid(), "testtopic")
         assert res == dest_uuid
 
@@ -84,9 +84,9 @@ def test_dbos_singleton(cleanup_test_databases: None) -> None:
 
     # Events
     wfuuid = str("sendwf1")
-    with SetWorkflowUUID(wfuuid):
+    with SetWorkflowID(wfuuid):
         DBOSWFEvents.test_setevent_workflow()
-    with SetWorkflowUUID(wfuuid):
+    with SetWorkflowID(wfuuid):
         DBOSWFEvents.test_setevent_workflow()
 
     value1 = DBOSWFEvents.test_getevent_workflow(wfuuid, "key1")
