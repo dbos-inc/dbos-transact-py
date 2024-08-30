@@ -16,7 +16,7 @@ import dbos.utils as utils
 from dbos.error import (
     DBOSDuplicateWorkflowEventError,
     DBOSNonExistentWorkflowError,
-    DBOSWorkflowConflictUUIDError,
+    DBOSWorkflowConflictIDError,
 )
 
 from .dbos_config import ConfigFile
@@ -497,7 +497,7 @@ class SystemDatabase:
                 with self.engine.begin() as c:
                     c.execute(sql)
         except sa.exc.IntegrityError:
-            raise DBOSWorkflowConflictUUIDError(result["workflow_uuid"])
+            raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
         except Exception as e:
             raise e
 
@@ -718,7 +718,7 @@ class SystemDatabase:
                         "error": None,
                     }
                 )
-            except DBOSWorkflowConflictUUIDError:
+            except DBOSWorkflowConflictIDError:
                 pass
         duration = max(0, end_time - time.time())
         if not skip_sleep:

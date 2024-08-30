@@ -33,7 +33,7 @@ from dbos.error import (
     DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSRecoveryError,
-    DBOSWorkflowConflictUUIDError,
+    DBOSWorkflowConflictIDError,
     DBOSWorkflowFunctionNotFoundError,
 )
 from dbos.registrations import (
@@ -152,7 +152,7 @@ def _execute_workflow(
 ) -> R:
     try:
         output = func(*args, **kwargs)
-    except DBOSWorkflowConflictUUIDError:
+    except DBOSWorkflowConflictIDError:
         # Retrieve the workflow handle and wait for the result.
         wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(status["workflow_uuid"])
         output = wf_handle.get_result()

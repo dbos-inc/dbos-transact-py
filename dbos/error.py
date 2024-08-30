@@ -15,7 +15,7 @@ class DBOSException(Exception):
 
 
 class DBOSErrorCode(Enum):
-    ConflictingUUIDError = 1
+    ConflictingIDError = 1
     RecoveryError = 2
     InitializationError = 3
     WorkflowFunctionNotFound = 4
@@ -25,18 +25,18 @@ class DBOSErrorCode(Enum):
     NotAuthorized = 8
 
 
-class DBOSWorkflowConflictUUIDError(DBOSException):
-    def __init__(self, workflow_uuid: str):
+class DBOSWorkflowConflictIDError(DBOSException):
+    def __init__(self, workflow_id: str):
         super().__init__(
-            f"Conflicting workflow UUID {workflow_uuid}",
-            dbos_error_code=DBOSErrorCode.ConflictingUUIDError.value,
+            f"Conflicting workflow ID {workflow_id}",
+            dbos_error_code=DBOSErrorCode.ConflictingIDError.value,
         )
 
 
 class DBOSRecoveryError(DBOSException):
-    def __init__(self, workflow_uuid: str, message: Optional[str] = None):
+    def __init__(self, workflow_id: str, message: Optional[str] = None):
         super().__init__(
-            f"Recovery error for workflow UUID {workflow_uuid}: {message}",
+            f"Recovery error for workflow ID {workflow_id}: {message}",
             dbos_error_code=DBOSErrorCode.RecoveryError.value,
         )
 
@@ -50,25 +50,25 @@ class DBOSInitializationError(DBOSException):
 
 
 class DBOSWorkflowFunctionNotFoundError(DBOSException):
-    def __init__(self, workflow_uuid: str, message: Optional[str] = None):
+    def __init__(self, workflow_id: str, message: Optional[str] = None):
         super().__init__(
-            f"Workflow function not found for workflow UUID {workflow_uuid}: {message}",
+            f"Workflow function not found for workflow ID {workflow_id}: {message}",
             dbos_error_code=DBOSErrorCode.WorkflowFunctionNotFound.value,
         )
 
 
 class DBOSNonExistentWorkflowError(DBOSException):
-    def __init__(self, destination_uuid: str):
+    def __init__(self, destination_id: str):
         super().__init__(
-            f"Sent to non-existent destination workflow UUID: {destination_uuid}",
+            f"Sent to non-existent destination workflow ID: {destination_id}",
             dbos_error_code=DBOSErrorCode.NonExistentWorkflowError.value,
         )
 
 
 class DBOSDuplicateWorkflowEventError(DBOSException):
-    def __init__(self, workflow_uuid: str, key: str):
+    def __init__(self, workflow_id: str, key: str):
         super().__init__(
-            f"Workflow {workflow_uuid} has already emitted an event with key {key}",
+            f"Workflow {workflow_id} has already emitted an event with key {key}",
             dbos_error_code=DBOSErrorCode.DuplicateWorkflowEventError.value,
         )
 
