@@ -409,7 +409,7 @@ class DBOS:
             return None
 
         return WorkflowStatus(
-            workflow_uuid=workflow_id,
+            workflow_id=workflow_id,
             status=stat["status"],
             name=stat["name"],
             recovery_attempts=stat["recovery_attempts"],
@@ -522,7 +522,7 @@ class DBOS:
 
 @dataclass
 class WorkflowStatus:
-    workflow_uuid: str
+    workflow_id: str
     status: str
     name: str
     class_name: Optional[str]
