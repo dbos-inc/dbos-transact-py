@@ -458,9 +458,7 @@ class DBOS:
         return _set_event(_get_dbos_instance(), key, value)
 
     @classmethod
-    def get_event(
-        cls, workflow_id: str, key: str, timeout_seconds: float = 60
-    ) -> Any:
+    def get_event(cls, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:
         return _get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
 
     @classmethod
