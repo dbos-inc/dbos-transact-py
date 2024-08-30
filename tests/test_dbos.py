@@ -61,7 +61,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
     assert comm_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid
-    handle = DBOS.execute_workflow_uuid(wfuuid)
+    handle = DBOS.execute_workflow_id(wfuuid)
     assert handle.get_result() == "alice1alice"
     assert wf_counter == 4
 
@@ -212,7 +212,7 @@ def test_exception_workflow(dbos: DBOS) -> None:
     assert comm_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid, shouldn't throw errors
-    handle = DBOS.execute_workflow_uuid(wfuuid)
+    handle = DBOS.execute_workflow_id(wfuuid)
     with pytest.raises(Exception) as exc_info:
         handle.get_result()
     assert "test error" == str(exc_info.value)
