@@ -26,7 +26,7 @@ from opentelemetry.trace import Span
 from dbos.core import (
     TEMP_SEND_WF_NAME,
     _communicator,
-    _execute_workflow_uuid,
+    _execute_workflow_id,
     _get_event,
     _recv,
     _send,
@@ -468,7 +468,7 @@ class DBOS:
         """
         This function is used to execute a workflow by a UUID for recovery.
         """
-        return _execute_workflow_uuid(_get_dbos_instance(), workflow_uuid)
+        return _execute_workflow_id(_get_dbos_instance(), workflow_uuid)
 
     @classmethod
     def recover_pending_workflows(
@@ -536,9 +536,9 @@ class WorkflowStatus:
 class WorkflowHandle(Generic[R], Protocol):
     def __init__(self, workflow_uuid: str) -> None: ...
 
-    workflow_uuid: str
+    workflow_id: str
 
-    def get_workflow_uuid(self) -> str: ...
+    def get_workflow_id(self) -> str: ...
     def get_result(self) -> R: ...
     def get_status(self) -> WorkflowStatus: ...
 

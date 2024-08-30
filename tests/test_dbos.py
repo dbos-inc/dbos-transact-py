@@ -545,17 +545,17 @@ def test_retrieve_workflow(dbos: DBOS) -> None:
     assert istat
     assert istat.status == str(WorkflowStatusString.PENDING.value)
 
-    sleep_pwfh: WorkflowHandle[str] = dbos.retrieve_workflow(sleep_wfh.workflow_uuid)
-    assert sleep_wfh.workflow_uuid == sleep_pwfh.workflow_uuid
-    dbos.logger.info(f"UUID: {sleep_pwfh.get_workflow_uuid()}")
+    sleep_pwfh: WorkflowHandle[str] = dbos.retrieve_workflow(sleep_wfh.workflow_id)
+    assert sleep_wfh.workflow_id == sleep_pwfh.workflow_id
+    dbos.logger.info(f"UUID: {sleep_pwfh.get_workflow_id()}")
     hres = sleep_pwfh.get_result()
-    assert hres == sleep_pwfh.get_workflow_uuid()
+    assert hres == sleep_pwfh.get_workflow_id()
     dbos.logger.info(f"RES: {hres}")
     istat = sleep_pwfh.get_status()
     assert istat
     assert istat.status == str(WorkflowStatusString.SUCCESS.value)
 
-    assert sleep_wfh.get_result() == sleep_wfh.get_workflow_uuid()
+    assert sleep_wfh.get_result() == sleep_wfh.get_workflow_id()
     istat = sleep_wfh.get_status()
     assert istat
     assert istat.status == str(WorkflowStatusString.SUCCESS.value)
@@ -565,8 +565,8 @@ def test_retrieve_workflow(dbos: DBOS) -> None:
     istat = sleep_wfh.get_status()
     assert istat
     assert istat.status == str(WorkflowStatusString.PENDING.value)
-    sleep_pwfh = dbos.retrieve_workflow(sleep_wfh.workflow_uuid)
-    assert sleep_wfh.workflow_uuid == sleep_pwfh.workflow_uuid
+    sleep_pwfh = dbos.retrieve_workflow(sleep_wfh.workflow_id)
+    assert sleep_wfh.workflow_id == sleep_pwfh.workflow_id
 
     with pytest.raises(Exception) as exc_info:
         sleep_pwfh.get_result()
@@ -745,11 +745,11 @@ def test_send_recv(dbos: DBOS) -> None:
 
     with SetWorkflowID(dest_uuid):
         handle = dbos.start_workflow(test_recv_workflow, "testtopic")
-        assert handle.get_workflow_uuid() == dest_uuid
+        assert handle.get_workflow_id() == dest_uuid
 
     send_uuid = str(uuid.uuid4())
     with SetWorkflowID(send_uuid):
-        res = test_send_workflow(handle.get_workflow_uuid(), "testtopic")
+        res = test_send_workflow(handle.get_workflow_id(), "testtopic")
         assert res == dest_uuid
     begin_time = time.time()
     assert handle.get_result() == "test2-test1-test3"
@@ -777,7 +777,7 @@ def test_send_recv(dbos: DBOS) -> None:
 
     # Test OAOO
     with SetWorkflowID(send_uuid):
-        res = test_send_workflow(handle.get_workflow_uuid(), "testtopic")
+        res = test_send_workflow(handle.get_workflow_id(), "testtopic")
         assert res == dest_uuid
         assert send_counter == 2
 
@@ -820,7 +820,7 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
 
     with SetWorkflowID(dest_uuid):
         handle = dbos.start_workflow(test_send_recv_workflow, "testtopic")
-        assert handle.get_workflow_uuid() == dest_uuid
+        assert handle.get_workflow_id() == dest_uuid
 
     dbos.send(dest_uuid, "testsend1", "testtopic")
     assert handle.get_result() == "testsend1"

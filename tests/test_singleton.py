@@ -44,12 +44,12 @@ def test_dbos_singleton(cleanup_test_databases: None) -> None:
 
     wh = DBOS.start_workflow(inst.test_workflow, "c", "d")
     assert wh.get_result() == "d1c"
-    stati = DBOS.get_workflow_status(wh.get_workflow_uuid())
+    stati = DBOS.get_workflow_status(wh.get_workflow_id())
     assert stati
     assert stati.config_name == "myconfig"
     assert stati.class_name == "DBOSTestClass"
-    wfhr: WorkflowHandle[str] = DBOS.retrieve_workflow(wh.get_workflow_uuid())
-    assert wfhr.workflow_uuid == wh.get_workflow_uuid()
+    wfhr: WorkflowHandle[str] = DBOS.retrieve_workflow(wh.get_workflow_id())
+    assert wfhr.workflow_id == wh.get_workflow_id()
 
     # Roles
 
@@ -70,11 +70,11 @@ def test_dbos_singleton(cleanup_test_databases: None) -> None:
 
     with SetWorkflowID(dest_uuid):
         handle = dbos.start_workflow(DBOSSendRecv.test_recv_workflow, "testtopic")
-        assert handle.get_workflow_uuid() == dest_uuid
+        assert handle.get_workflow_id() == dest_uuid
 
     send_uuid = str("sruuid2")
     with SetWorkflowID(send_uuid):
-        res = DBOSSendRecv.test_send_workflow(handle.get_workflow_uuid(), "testtopic")
+        res = DBOSSendRecv.test_send_workflow(handle.get_workflow_id(), "testtopic")
         assert res == dest_uuid
 
     begin_time = time.time()

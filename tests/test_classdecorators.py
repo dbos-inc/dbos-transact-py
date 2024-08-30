@@ -309,7 +309,7 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
     assert inst.test_workflow("bob", "bob") == "bob1bob"
 
     wfh = dbos.start_workflow(inst.test_workflow, "bob", "bob")
-    stati = dbos.get_workflow_status(wfh.get_workflow_uuid())
+    stati = dbos.get_workflow_status(wfh.get_workflow_id())
     assert stati
     assert stati.config_name == "bob"
     assert stati.class_name == "DBOSTestClassInst"
