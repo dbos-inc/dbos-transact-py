@@ -26,7 +26,9 @@ from dbos.context import (
     SetWorkflowID,
     TracedAttributes,
     assert_current_dbos_context,
+    clear_local_dbos_context,
     get_local_dbos_context,
+    set_local_dbos_context,
 )
 from dbos.error import (
     DBOSCommunicatorMaxRetriesExceededError,
@@ -42,7 +44,9 @@ from dbos.registrations import (
     get_dbos_func_name,
     get_func_info,
     get_or_create_func_info,
+    get_temp_workflow_type,
     set_dbos_func_name,
+    set_temp_workflow_type,
 )
 from dbos.roles import check_required_roles
 from dbos.system_database import (
@@ -113,6 +117,7 @@ def _init_workflow(
     wf_name: str,
     class_name: Optional[str],
     config_name: Optional[str],
+    temp_wf_type: Optional[str],
 ) -> WorkflowStatusInternal:
     wfid = (
         ctx.workflow_id
@@ -133,12 +138,15 @@ def _init_workflow(
         "request": (utils.serialize(ctx.request) if ctx.request is not None else None),
         "recovery_attempts": None,
     }
-    dbos.sys_db.update_workflow_status(status, False, ctx.in_recovery)
 
-    # If we have an instance name, the first arg is the instance and do not serialize
-    if class_name is not None:
-        inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
-    dbos.sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
+    if temp_wf_type != "transaction":
+        # Don't synchronously record the status or inputs for single transaction workflows
+        dbos.sys_db.update_workflow_status(status, False, ctx.in_recovery)
+
+        # If we have a class name, the first arg is the instance and do not serialize
+        if class_name is not None:
+            inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
+        dbos.sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
 
     return status
 
@@ -152,9 +160,15 @@ def _execute_workflow(
 ) -> R:
     try:
         output = func(*args, **kwargs)
+        status["status"] = "SUCCESS"
+        status["output"] = utils.serialize(output)
+        dbos.sys_db.buffer_workflow_status(status)
     except DBOSWorkflowConflictIDError:
         # Retrieve the workflow handle and wait for the result.
-        wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(status["workflow_uuid"])
+        # Must use existing_workflow=False because workflow status might not be set yet for single transaction workflows.
+        wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(
+            status["workflow_uuid"], existing_workflow=False
+        )
         output = wf_handle.get_result()
         return output
     except Exception as error:
@@ -162,10 +176,21 @@ def _execute_workflow(
         status["error"] = utils.serialize(error)
         dbos.sys_db.update_workflow_status(status)
         raise error
+    finally:
+        if get_temp_workflow_type(func) == "transaction":
+            # Buffer the inputs for single transaction workflows
+            inputs: WorkflowInputs = {
+                "args": args,
+                "kwargs": kwargs,
+            }
+            # If we have a class name, the first arg is the instance and do not serialize
+            class_name = get_dbos_class_name(get_func_info(func), func, args)
+            if class_name is not None:
+                inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
+            dbos.sys_db.buffer_workflow_inputs(
+                status["workflow_uuid"], utils.serialize(inputs)
+            )
 
-    status["status"] = "SUCCESS"
-    status["output"] = utils.serialize(output)
-    dbos.sys_db.update_workflow_status(status)
     return output
 
 
@@ -280,6 +305,7 @@ def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
                     wf_name=get_dbos_func_name(func),
                     class_name=get_dbos_class_name(fi, func, args),
                     config_name=get_config_name(fi, func, args),
+                    temp_wf_type=get_temp_workflow_type(func),
                 )
 
                 return _execute_workflow(dbos, status, func, *args, **kwargs)
@@ -293,6 +319,7 @@ def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
                     wf_name=get_dbos_func_name(func),
                     class_name=get_dbos_class_name(fi, func, args),
                     config_name=get_config_name(fi, func, args),
+                    temp_wf_type=get_temp_workflow_type(func),
                 )
 
                 return _execute_workflow(dbos, status, func, *args, **kwargs)
@@ -365,6 +392,7 @@ def _start_workflow(
         wf_name=get_dbos_func_name(func),
         class_name=get_dbos_class_name(fi, func, gin_args),
         config_name=get_config_name(fi, func, gin_args),
+        temp_wf_type=get_temp_workflow_type(func),
     )
 
     if fself is not None:
@@ -508,6 +536,7 @@ def _transaction(
 
         wrapped_wf = _workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
+        set_temp_workflow_type(temp_wf, "transaction")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
         return cast(F, wrapper)
@@ -624,6 +653,7 @@ def _communicator(
 
         wrapped_wf = _workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
+        set_temp_workflow_type(temp_wf, "communicator")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
         return cast(F, wrapper)

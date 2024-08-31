@@ -21,9 +21,7 @@ def format_version(git_version: SCMVersion) -> str:
         elif is_preview:
             version = f"{next_version}a0"
         else:
-            raise Exception(
-                "Tagged releases may not be published from feature branches"
-            )
+            version = f"{next_version}a0+{git_version.node}"
     else:
         if is_release:
             raise Exception(

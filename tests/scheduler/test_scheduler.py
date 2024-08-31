@@ -65,6 +65,7 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
             else:
                 time.sleep(1)
 
+    dbos.sys_db.wait_for_buffer_flush()
     dbos.sys_db.update_workflow_status(
         {
             "workflow_uuid": workflow_id,

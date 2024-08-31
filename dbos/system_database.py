@@ -4,7 +4,17 @@ import select
 import threading
 import time
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Sequence, TypedDict, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    TypedDict,
+    cast,
+)
 
 import psycopg2
 import sqlalchemy as sa
@@ -22,6 +32,9 @@ from dbos.error import (
 from .dbos_config import ConfigFile
 from .logger import dbos_logger
 from .schemas.system_database import SystemSchema
+
+if TYPE_CHECKING:
+    from dbos.dbos import DBOS
 
 
 class WorkflowStatusString(Enum):
@@ -115,6 +128,8 @@ class WorkflowInformation(TypedDict, total=False):
 
 
 dbos_null_topic = "__null__topic__"
+buffer_flush_batch_size = 100
+buffer_flush_interval_secs = 1.0
 
 
 class SystemDatabase:
@@ -182,14 +197,28 @@ class SystemDatabase:
         self.notification_cursor = self.notification_conn.cursor()
         self.notifications_map: Dict[str, threading.Condition] = {}
         self.workflow_events_map: Dict[str, threading.Condition] = {}
-        self._run_notification_listener = True
+
+        # Initialize the workflow status and inputs buffers
+        self._workflow_status_buffer: Dict[str, WorkflowStatusInternal] = {}
+        self._workflow_inputs_buffer: Dict[str, str] = {}
+        self._is_flushing_status_buffer = False
+
+        # Now we can run background processes
+        self._run_background_processes = True
 
     # Destroy the pool when finished
     def destroy(self) -> None:
-        self._run_notification_listener = False
+        self.wait_for_buffer_flush()
+        self._run_background_processes = False
         self.notification_cursor.close()
         self.notification_conn.close()
         self.engine.dispose()
+
+    def wait_for_buffer_flush(self) -> None:
+        # Wait until the buffers are flushed.
+        while self._is_flushing_status_buffer or not self._is_buffers_empty:
+            dbos_logger.info("Waiting for system buffers to be exported")
+            time.sleep(1)
 
     def update_workflow_status(
         self,
@@ -660,7 +689,7 @@ class SystemDatabase:
         dbos_logger.info("Listening to notifications")
         self.notification_cursor.execute("LISTEN dbos_notifications_channel")
         self.notification_cursor.execute("LISTEN dbos_workflow_events_channel")
-        while self._run_notification_listener:
+        while self._run_background_processes:
             if select.select([self.notification_conn], [], [], 60) == ([], [], []):
                 continue
             else:
@@ -830,3 +859,61 @@ class SystemDatabase:
                 }
             )
         return value
+
+    def _flush_workflow_status_buffer(self) -> None:
+        """
+        Export the workflow status buffer to the database, up to the batch size.
+        """
+        if len(self._workflow_status_buffer) == 0:
+            return
+
+        exported = 0
+        while (
+            exported < buffer_flush_batch_size and len(self._workflow_status_buffer) > 0
+        ):
+            workflow_uuid, status = self._workflow_status_buffer.popitem()
+            self.update_workflow_status(status)
+            exported += 1
+
+    def _flush_workflow_inputs_buffer(self) -> None:
+        """
+        Export the workflow inputs buffer to the database, up to the batch size.
+        """
+        if len(self._workflow_inputs_buffer) == 0:
+            return
+
+        exported = 0
+        while (
+            exported < buffer_flush_batch_size and len(self._workflow_inputs_buffer) > 0
+        ):
+            workflow_uuid, inputs = self._workflow_inputs_buffer.popitem()
+            self.update_workflow_inputs(workflow_uuid, inputs)
+            exported += 1
+
+    def flush_workflow_buffers(self) -> None:
+        """
+        A background thread that flushes the workflow status and inputs buffers periodically.
+        """
+        while self._run_background_processes:
+            self._is_flushing_status_buffer = True
+            # Must flush the status buffer first, as the inputs table has a foreign key constraint on the status table.
+            self._flush_workflow_status_buffer()
+            self._flush_workflow_inputs_buffer()
+            self._is_flushing_status_buffer = False
+            if self._is_buffers_empty:
+                # Only sleep if both buffers are empty
+                time.sleep(buffer_flush_interval_secs)
+
+    def buffer_workflow_status(self, status: WorkflowStatusInternal) -> None:
+        self._workflow_status_buffer[status["workflow_uuid"]] = status
+
+    def buffer_workflow_inputs(self, workflow_id: str, inputs: str) -> None:
+        # inputs is a serialized WorkflowInputs string
+        self._workflow_inputs_buffer[workflow_id] = inputs
+
+    @property
+    def _is_buffers_empty(self) -> bool:
+        return (
+            len(self._workflow_status_buffer) == 0
+            and len(self._workflow_inputs_buffer) == 0
+        )
