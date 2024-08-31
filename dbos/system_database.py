@@ -225,6 +225,7 @@ class SystemDatabase:
         status: WorkflowStatusInternal,
         replace: bool = True,
         in_recovery: bool = False,
+        conn: Optional[sa.Connection] = None,
     ) -> None:
         cmd = pg.insert(SystemSchema.workflow_status).values(
             workflow_uuid=status["workflow_uuid"],
@@ -259,8 +260,11 @@ class SystemDatabase:
         else:
             cmd = cmd.on_conflict_do_nothing()
 
-        with self.engine.begin() as c:
-            c.execute(cmd)
+        if conn is not None:
+            conn.execute(cmd)
+        else:
+            with self.engine.begin() as c:
+                c.execute(cmd)
 
     def set_workflow_status(
         self,
@@ -435,16 +439,22 @@ class SystemDatabase:
 
         return info
 
-    def update_workflow_inputs(self, workflow_uuid: str, inputs: str) -> None:
-        with self.engine.begin() as c:
-            c.execute(
-                pg.insert(SystemSchema.workflow_inputs)
-                .values(
-                    workflow_uuid=workflow_uuid,
-                    inputs=inputs,
-                )
-                .on_conflict_do_nothing()
+    def update_workflow_inputs(
+        self, workflow_uuid: str, inputs: str, conn: Optional[sa.Connection] = None
+    ) -> None:
+        cmd = (
+            pg.insert(SystemSchema.workflow_inputs)
+            .values(
+                workflow_uuid=workflow_uuid,
+                inputs=inputs,
             )
+            .on_conflict_do_nothing()
+        )
+        if conn is not None:
+            conn.execute(cmd)
+        else:
+            with self.engine.begin() as c:
+                c.execute(cmd)
 
     def get_workflow_inputs(self, workflow_uuid: str) -> Optional[WorkflowInputs]:
         with self.engine.begin() as c:
@@ -867,13 +877,17 @@ class SystemDatabase:
         if len(self._workflow_status_buffer) == 0:
             return
 
-        exported = 0
-        while (
-            exported < buffer_flush_batch_size and len(self._workflow_status_buffer) > 0
-        ):
-            workflow_uuid, status = self._workflow_status_buffer.popitem()
-            self.update_workflow_status(status)
-            exported += 1
+        with self.engine.begin() as c:
+            exported = 0
+            local_batch_size = min(
+                buffer_flush_batch_size, len(self._workflow_status_buffer)
+            )
+            while exported < local_batch_size:
+                # Pop the first key in the buffer (FIFO)
+                wf_id = next(iter(self._workflow_status_buffer))
+                status = self._workflow_status_buffer.pop(wf_id)
+                self.update_workflow_status(status, conn=c)
+                exported += 1
 
     def _flush_workflow_inputs_buffer(self) -> None:
         """
@@ -882,13 +896,16 @@ class SystemDatabase:
         if len(self._workflow_inputs_buffer) == 0:
             return
 
-        exported = 0
-        while (
-            exported < buffer_flush_batch_size and len(self._workflow_inputs_buffer) > 0
-        ):
-            workflow_uuid, inputs = self._workflow_inputs_buffer.popitem()
-            self.update_workflow_inputs(workflow_uuid, inputs)
-            exported += 1
+        with self.engine.begin() as c:
+            exported = 0
+            local_batch_size = min(
+                buffer_flush_batch_size, len(self._workflow_inputs_buffer)
+            )
+            while exported < local_batch_size:
+                wf_id = next(iter(self._workflow_inputs_buffer))
+                inputs = self._workflow_inputs_buffer.pop(wf_id)
+                self.update_workflow_inputs(wf_id, inputs, conn=c)
+                exported += 1
 
     def flush_workflow_buffers(self) -> None:
         """

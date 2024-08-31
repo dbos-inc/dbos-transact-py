@@ -1,7 +1,7 @@
 import inspect
 from enum import Enum
 from types import FunctionType
-from typing import Any, Callable, List, Literal, Optional, Tuple, Type
+from typing import Any, Callable, List, Literal, Optional, Tuple, Type, cast
 
 
 def get_dbos_func_name(f: Any) -> str:
@@ -21,7 +21,7 @@ TempWorkflowType = Literal["transaction", "communicator", "send", None]
 
 def get_temp_workflow_type(f: Any) -> TempWorkflowType:
     if hasattr(f, "dbos_temp_workflow_type"):
-        return str(getattr(f, "dbos_temp_workflow_type"))
+        return cast(TempWorkflowType, str(getattr(f, "dbos_temp_workflow_type")))
     return None
 
 
