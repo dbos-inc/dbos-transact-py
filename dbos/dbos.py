@@ -243,14 +243,14 @@ class DBOS:
         dbos_tracer.config(config)
         dbos_logger.info("Initializing DBOS")
         self.config: ConfigFile = config
-        self._launched = False
+        self._launched: bool = False
         self._sys_db: Optional[SystemDatabase] = None
         self._app_db: Optional[ApplicationDatabase] = None
-        self._registry = _get_or_create_dbos_registry()
+        self._registry: _DBOSRegistry = _get_or_create_dbos_registry()
         self._registry.dbos = self
         self._admin_server: Optional[AdminServer] = None
         self.stop_events: List[threading.Event] = []
-        self.fastapi = fastapi
+        self.fastapi: Optional["FastAPI"] = fastapi
         self._executor: Optional[ThreadPoolExecutor] = None
         if self.fastapi is not None:
             from dbos.fastapi import setup_fastapi_middleware
@@ -494,9 +494,9 @@ class DBOS:
 
     @classproperty
     def config(cls) -> ConfigFile:
-        dbos = _get_dbos_instance()
-        if dbos is not None:
-            return dbos.config
+        global _dbos_global_instance
+        if _dbos_global_instance is not None:
+            return _dbos_global_instance.config
         reg = _get_or_create_dbos_registry()
         if reg.config is not None:
             return reg.config
