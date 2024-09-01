@@ -898,6 +898,8 @@ class SystemDatabase:
         if len(self._workflow_status_buffer) == 0:
             return
 
+        # Record the exported status so far, and add them back on errors.
+        exported_status: Dict[str, WorkflowStatusInternal] = {}
         with self.engine.begin() as c:
             exported = 0
             local_batch_size = min(
@@ -907,8 +909,16 @@ class SystemDatabase:
                 # Pop the first key in the buffer (FIFO)
                 wf_id = next(iter(self._workflow_status_buffer))
                 status = self._workflow_status_buffer.pop(wf_id)
-                self.update_workflow_status(status, conn=c)
-                exported += 1
+                exported_status[wf_id] = status
+                try:
+                    self.update_workflow_status(status, conn=c)
+                    exported += 1
+                except Exception as e:
+                    dbos_logger.error(f"Error while flushing status buffer: {e}")
+                    c.rollback()
+                    # Add the exported status back to the buffer, so they can be retried next time
+                    self._workflow_status_buffer.update(exported_status)
+                    break
 
     def _flush_workflow_inputs_buffer(self) -> None:
         """
@@ -917,6 +927,8 @@ class SystemDatabase:
         if len(self._workflow_inputs_buffer) == 0:
             return
 
+        # Record exported inputs so far, and add them back on errors.
+        exported_inputs: Dict[str, str] = {}
         with self.engine.begin() as c:
             exported = 0
             local_batch_size = min(
@@ -925,22 +937,35 @@ class SystemDatabase:
             while exported < local_batch_size:
                 wf_id = next(iter(self._workflow_inputs_buffer))
                 inputs = self._workflow_inputs_buffer.pop(wf_id)
-                self.update_workflow_inputs(wf_id, inputs, conn=c)
-                exported += 1
+                exported_inputs[wf_id] = inputs
+                try:
+                    self.update_workflow_inputs(wf_id, inputs, conn=c)
+                    exported += 1
+                except Exception as e:
+                    dbos_logger.error(f"Error while flushing inputs buffer: {e}")
+                    c.rollback()
+                    # Add the exported inputs back to the buffer, so they can be retried next time
+                    self._workflow_inputs_buffer.update(exported_inputs)
+                    break
 
     def flush_workflow_buffers(self) -> None:
         """
         A background thread that flushes the workflow status and inputs buffers periodically.
         """
         while self._run_background_processes:
-            self._is_flushing_status_buffer = True
-            # Must flush the status buffer first, as the inputs table has a foreign key constraint on the status table.
-            self._flush_workflow_status_buffer()
-            self._flush_workflow_inputs_buffer()
-            self._is_flushing_status_buffer = False
-            if self._is_buffers_empty:
-                # Only sleep if both buffers are empty
+            try:
+                self._is_flushing_status_buffer = True
+                # Must flush the status buffer first, as the inputs table has a foreign key constraint on the status table.
+                self._flush_workflow_status_buffer()
+                self._flush_workflow_inputs_buffer()
+                self._is_flushing_status_buffer = False
+                if self._is_buffers_empty:
+                    # Only sleep if both buffers are empty
+                    time.sleep(buffer_flush_interval_secs)
+            except Exception as e:
+                dbos_logger.error(f"Error while flushing buffers: {e}")
                 time.sleep(buffer_flush_interval_secs)
+                # Will retry next time
 
     def buffer_workflow_status(self, status: WorkflowStatusInternal) -> None:
         self._workflow_status_buffer[status["workflow_uuid"]] = status
