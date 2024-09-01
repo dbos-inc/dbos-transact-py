@@ -187,14 +187,7 @@ class SystemDatabase:
         )
         command.upgrade(alembic_cfg, "head")
 
-        # Start the notification listener
-        self.notification_conn = psycopg2.connect(
-            system_db_url.render_as_string(hide_password=False)
-        )
-        self.notification_conn.set_isolation_level(
-            psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
-        )
-        self.notification_cursor = self.notification_conn.cursor()
+        self.notification_conn: Optional[psycopg2.extensions.connection] = None
         self.notifications_map: Dict[str, threading.Condition] = {}
         self.workflow_events_map: Dict[str, threading.Condition] = {}
 
@@ -210,8 +203,8 @@ class SystemDatabase:
     def destroy(self) -> None:
         self.wait_for_buffer_flush()
         self._run_background_processes = False
-        self.notification_cursor.close()
-        self.notification_conn.close()
+        if self.notification_conn is not None:
+            self.notification_conn.close()
         self.engine.dispose()
 
     def wait_for_buffer_flush(self) -> None:
@@ -695,44 +688,72 @@ class SystemDatabase:
         return message
 
     def _notification_listener(self) -> None:
-        # Listen to notifications
-        dbos_logger.info("Listening to notifications")
-        self.notification_cursor.execute("LISTEN dbos_notifications_channel")
-        self.notification_cursor.execute("LISTEN dbos_workflow_events_channel")
+        notification_cursor: Optional[psycopg2.extensions.cursor] = None
         while self._run_background_processes:
-            if select.select([self.notification_conn], [], [], 60) == ([], [], []):
-                continue
-            else:
-                self.notification_conn.poll()
-                while self.notification_conn.notifies:
-                    notify = self.notification_conn.notifies.pop(0)
-                    channel = notify.channel
-                    dbos_logger.debug(
-                        f"Received notification on channel: {channel}, payload: {notify.payload}"
-                    )
-                    if channel == "dbos_notifications_channel":
-                        if notify.payload and notify.payload in self.notifications_map:
-                            condition = self.notifications_map[notify.payload]
-                            condition.acquire()
-                            condition.notify_all()
-                            condition.release()
-                            dbos_logger.debug(
-                                f"Signaled notifications condition for {notify.payload}"
-                            )
-                    elif channel == "dbos_workflow_events_channel":
-                        if (
-                            notify.payload
-                            and notify.payload in self.workflow_events_map
-                        ):
-                            condition = self.workflow_events_map[notify.payload]
-                            condition.acquire()
-                            condition.notify_all()
-                            condition.release()
-                            dbos_logger.debug(
-                                f"Signaled workflow_events condition for {notify.payload}"
-                            )
+            try:
+                # Listen to notifications
+                self.notification_conn = psycopg2.connect(
+                    self.engine.url.render_as_string(hide_password=False)
+                )
+                self.notification_conn.set_isolation_level(
+                    psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
+                )
+                notification_cursor = self.notification_conn.cursor()
+
+                dbos_logger.info("Listening to notifications")
+                notification_cursor.execute("LISTEN dbos_notifications_channel")
+                notification_cursor.execute("LISTEN dbos_workflow_events_channel")
+                while self._run_background_processes:
+                    if select.select([self.notification_conn], [], [], 60) == (
+                        [],
+                        [],
+                        [],
+                    ):
+                        continue
                     else:
-                        dbos_logger.error(f"Unknown channel: {channel}")
+                        self.notification_conn.poll()
+                        while self.notification_conn.notifies:
+                            notify = self.notification_conn.notifies.pop(0)
+                            channel = notify.channel
+                            dbos_logger.debug(
+                                f"Received notification on channel: {channel}, payload: {notify.payload}"
+                            )
+                            if channel == "dbos_notifications_channel":
+                                if (
+                                    notify.payload
+                                    and notify.payload in self.notifications_map
+                                ):
+                                    condition = self.notifications_map[notify.payload]
+                                    condition.acquire()
+                                    condition.notify_all()
+                                    condition.release()
+                                    dbos_logger.debug(
+                                        f"Signaled notifications condition for {notify.payload}"
+                                    )
+                            elif channel == "dbos_workflow_events_channel":
+                                if (
+                                    notify.payload
+                                    and notify.payload in self.workflow_events_map
+                                ):
+                                    condition = self.workflow_events_map[notify.payload]
+                                    condition.acquire()
+                                    condition.notify_all()
+                                    condition.release()
+                                    dbos_logger.debug(
+                                        f"Signaled workflow_events condition for {notify.payload}"
+                                    )
+                            else:
+                                dbos_logger.error(f"Unknown channel: {channel}")
+            except Exception as e:
+                if self._run_background_processes:
+                    dbos_logger.error(f"Notification listener error: {e}")
+                    time.sleep(1)
+                    # Then the loop will try to reconnect and restart the listener
+            finally:
+                if notification_cursor is not None:
+                    notification_cursor.close()
+                if self.notification_conn is not None:
+                    self.notification_conn.close()
 
     def sleep(
         self,
