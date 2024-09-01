@@ -43,6 +43,7 @@ from dbos.registrations import (
     DBOSClassInfo,
     get_or_create_class_info,
     set_dbos_func_name,
+    set_temp_workflow_type,
 )
 from dbos.roles import default_required_roles, required_roles
 from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled
@@ -267,6 +268,7 @@ class DBOS:
 
         temp_send_wf = _workflow_wrapper(self._registry, send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
+        set_temp_workflow_type(send_temp_workflow, "send")
         self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
 
         if launch:
@@ -318,6 +320,9 @@ class DBOS:
 
         # Listen to notifications
         self.executor.submit(self.sys_db._notification_listener)
+
+        # Start flush workflow buffers thread
+        self.executor.submit(self.sys_db.flush_workflow_buffers)
 
         # Grab any pollers that were deferred and start them
         for evt, func, args, kwargs in self._registry.pollers:

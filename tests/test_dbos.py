@@ -251,6 +251,8 @@ def test_temp_workflow(dbos: DBOS) -> None:
     res = test_communicator("var")
     assert res == "var"
 
+    # Wait for buffers to flush
+    dbos.sys_db.wait_for_buffer_flush()
     wfs = dbos.sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 2
 
@@ -335,6 +337,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") == "bob1bob"
 
+    dbos.sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
     dbos.sys_db.update_workflow_status(
         {
@@ -385,6 +388,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
         res = test_transaction("bob")
         assert res == "bob1"
 
+    dbos.sys_db.wait_for_buffer_flush()
     wfs = dbos.sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 1
     assert wfs.workflow_uuids[0] == wfuuid
@@ -420,6 +424,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert len(wfs.workflow_uuids) == 1
     assert wfs.workflow_uuids[0] == wfuuid
 
+    dbos.sys_db.wait_for_buffer_flush()
     wfi = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
     assert wfi
     assert wfi["name"].startswith("<temp>")
@@ -443,6 +448,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow(test_var) == test_var
 
+    dbos.sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
     dbos.sys_db.update_workflow_status(
         {
@@ -474,7 +480,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     dbos.launch()  # Usually the framework does this but we destroyed it above
 
     # Upon re-initialization, the background thread should recover the workflow safely.
-    max_retries = 5
+    max_retries = 10
     success = False
     for i in range(max_retries):
         try:
@@ -611,6 +617,7 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
         fstat1 = wfh.get_status()
         assert fstat1
         fres = wfh.get_result()
+        dbos.sys_db.wait_for_buffer_flush()  # Wait for status to export.
         fstat2 = wfh.get_status()
         assert fstat2
         return fstat1.status + fres + fstat2.status

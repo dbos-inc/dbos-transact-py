@@ -4,7 +4,17 @@ import select
 import threading
 import time
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Sequence, TypedDict, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    TypedDict,
+    cast,
+)
 
 import psycopg2
 import sqlalchemy as sa
@@ -22,6 +32,9 @@ from dbos.error import (
 from .dbos_config import ConfigFile
 from .logger import dbos_logger
 from .schemas.system_database import SystemSchema
+
+if TYPE_CHECKING:
+    from dbos.dbos import DBOS
 
 
 class WorkflowStatusString(Enum):
@@ -115,6 +128,8 @@ class WorkflowInformation(TypedDict, total=False):
 
 
 dbos_null_topic = "__null__topic__"
+buffer_flush_batch_size = 100
+buffer_flush_interval_secs = 1.0
 
 
 class SystemDatabase:
@@ -172,30 +187,38 @@ class SystemDatabase:
         )
         command.upgrade(alembic_cfg, "head")
 
-        # Start the notification listener
-        self.notification_conn = psycopg2.connect(
-            system_db_url.render_as_string(hide_password=False)
-        )
-        self.notification_conn.set_isolation_level(
-            psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
-        )
-        self.notification_cursor = self.notification_conn.cursor()
+        self.notification_conn: Optional[psycopg2.extensions.connection] = None
         self.notifications_map: Dict[str, threading.Condition] = {}
         self.workflow_events_map: Dict[str, threading.Condition] = {}
-        self._run_notification_listener = True
+
+        # Initialize the workflow status and inputs buffers
+        self._workflow_status_buffer: Dict[str, WorkflowStatusInternal] = {}
+        self._workflow_inputs_buffer: Dict[str, str] = {}
+        self._is_flushing_status_buffer = False
+
+        # Now we can run background processes
+        self._run_background_processes = True
 
     # Destroy the pool when finished
     def destroy(self) -> None:
-        self._run_notification_listener = False
-        self.notification_cursor.close()
-        self.notification_conn.close()
+        self.wait_for_buffer_flush()
+        self._run_background_processes = False
+        if self.notification_conn is not None:
+            self.notification_conn.close()
         self.engine.dispose()
+
+    def wait_for_buffer_flush(self) -> None:
+        # Wait until the buffers are flushed.
+        while self._is_flushing_status_buffer or not self._is_buffers_empty:
+            dbos_logger.info("Waiting for system buffers to be exported")
+            time.sleep(1)
 
     def update_workflow_status(
         self,
         status: WorkflowStatusInternal,
         replace: bool = True,
         in_recovery: bool = False,
+        conn: Optional[sa.Connection] = None,
     ) -> None:
         cmd = pg.insert(SystemSchema.workflow_status).values(
             workflow_uuid=status["workflow_uuid"],
@@ -230,8 +253,11 @@ class SystemDatabase:
         else:
             cmd = cmd.on_conflict_do_nothing()
 
-        with self.engine.begin() as c:
-            c.execute(cmd)
+        if conn is not None:
+            conn.execute(cmd)
+        else:
+            with self.engine.begin() as c:
+                c.execute(cmd)
 
     def set_workflow_status(
         self,
@@ -406,16 +432,22 @@ class SystemDatabase:
 
         return info
 
-    def update_workflow_inputs(self, workflow_uuid: str, inputs: str) -> None:
-        with self.engine.begin() as c:
-            c.execute(
-                pg.insert(SystemSchema.workflow_inputs)
-                .values(
-                    workflow_uuid=workflow_uuid,
-                    inputs=inputs,
-                )
-                .on_conflict_do_nothing()
+    def update_workflow_inputs(
+        self, workflow_uuid: str, inputs: str, conn: Optional[sa.Connection] = None
+    ) -> None:
+        cmd = (
+            pg.insert(SystemSchema.workflow_inputs)
+            .values(
+                workflow_uuid=workflow_uuid,
+                inputs=inputs,
             )
+            .on_conflict_do_nothing()
+        )
+        if conn is not None:
+            conn.execute(cmd)
+        else:
+            with self.engine.begin() as c:
+                c.execute(cmd)
 
     def get_workflow_inputs(self, workflow_uuid: str) -> Optional[WorkflowInputs]:
         with self.engine.begin() as c:
@@ -656,44 +688,72 @@ class SystemDatabase:
         return message
 
     def _notification_listener(self) -> None:
-        # Listen to notifications
-        dbos_logger.info("Listening to notifications")
-        self.notification_cursor.execute("LISTEN dbos_notifications_channel")
-        self.notification_cursor.execute("LISTEN dbos_workflow_events_channel")
-        while self._run_notification_listener:
-            if select.select([self.notification_conn], [], [], 60) == ([], [], []):
-                continue
-            else:
-                self.notification_conn.poll()
-                while self.notification_conn.notifies:
-                    notify = self.notification_conn.notifies.pop(0)
-                    channel = notify.channel
-                    dbos_logger.debug(
-                        f"Received notification on channel: {channel}, payload: {notify.payload}"
-                    )
-                    if channel == "dbos_notifications_channel":
-                        if notify.payload and notify.payload in self.notifications_map:
-                            condition = self.notifications_map[notify.payload]
-                            condition.acquire()
-                            condition.notify_all()
-                            condition.release()
-                            dbos_logger.debug(
-                                f"Signaled notifications condition for {notify.payload}"
-                            )
-                    elif channel == "dbos_workflow_events_channel":
-                        if (
-                            notify.payload
-                            and notify.payload in self.workflow_events_map
-                        ):
-                            condition = self.workflow_events_map[notify.payload]
-                            condition.acquire()
-                            condition.notify_all()
-                            condition.release()
-                            dbos_logger.debug(
-                                f"Signaled workflow_events condition for {notify.payload}"
-                            )
+        notification_cursor: Optional[psycopg2.extensions.cursor] = None
+        while self._run_background_processes:
+            try:
+                # Listen to notifications
+                self.notification_conn = psycopg2.connect(
+                    self.engine.url.render_as_string(hide_password=False)
+                )
+                self.notification_conn.set_isolation_level(
+                    psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
+                )
+                notification_cursor = self.notification_conn.cursor()
+
+                dbos_logger.info("Listening to notifications")
+                notification_cursor.execute("LISTEN dbos_notifications_channel")
+                notification_cursor.execute("LISTEN dbos_workflow_events_channel")
+                while self._run_background_processes:
+                    if select.select([self.notification_conn], [], [], 60) == (
+                        [],
+                        [],
+                        [],
+                    ):
+                        continue
                     else:
-                        dbos_logger.error(f"Unknown channel: {channel}")
+                        self.notification_conn.poll()
+                        while self.notification_conn.notifies:
+                            notify = self.notification_conn.notifies.pop(0)
+                            channel = notify.channel
+                            dbos_logger.debug(
+                                f"Received notification on channel: {channel}, payload: {notify.payload}"
+                            )
+                            if channel == "dbos_notifications_channel":
+                                if (
+                                    notify.payload
+                                    and notify.payload in self.notifications_map
+                                ):
+                                    condition = self.notifications_map[notify.payload]
+                                    condition.acquire()
+                                    condition.notify_all()
+                                    condition.release()
+                                    dbos_logger.debug(
+                                        f"Signaled notifications condition for {notify.payload}"
+                                    )
+                            elif channel == "dbos_workflow_events_channel":
+                                if (
+                                    notify.payload
+                                    and notify.payload in self.workflow_events_map
+                                ):
+                                    condition = self.workflow_events_map[notify.payload]
+                                    condition.acquire()
+                                    condition.notify_all()
+                                    condition.release()
+                                    dbos_logger.debug(
+                                        f"Signaled workflow_events condition for {notify.payload}"
+                                    )
+                            else:
+                                dbos_logger.error(f"Unknown channel: {channel}")
+            except Exception as e:
+                if self._run_background_processes:
+                    dbos_logger.error(f"Notification listener error: {e}")
+                    time.sleep(1)
+                    # Then the loop will try to reconnect and restart the listener
+            finally:
+                if notification_cursor is not None:
+                    notification_cursor.close()
+                if self.notification_conn is not None:
+                    self.notification_conn.close()
 
     def sleep(
         self,
@@ -830,3 +890,93 @@ class SystemDatabase:
                 }
             )
         return value
+
+    def _flush_workflow_status_buffer(self) -> None:
+        """
+        Export the workflow status buffer to the database, up to the batch size.
+        """
+        if len(self._workflow_status_buffer) == 0:
+            return
+
+        # Record the exported status so far, and add them back on errors.
+        exported_status: Dict[str, WorkflowStatusInternal] = {}
+        with self.engine.begin() as c:
+            exported = 0
+            local_batch_size = min(
+                buffer_flush_batch_size, len(self._workflow_status_buffer)
+            )
+            while exported < local_batch_size:
+                # Pop the first key in the buffer (FIFO)
+                wf_id = next(iter(self._workflow_status_buffer))
+                status = self._workflow_status_buffer.pop(wf_id)
+                exported_status[wf_id] = status
+                try:
+                    self.update_workflow_status(status, conn=c)
+                    exported += 1
+                except Exception as e:
+                    dbos_logger.error(f"Error while flushing status buffer: {e}")
+                    c.rollback()
+                    # Add the exported status back to the buffer, so they can be retried next time
+                    self._workflow_status_buffer.update(exported_status)
+                    break
+
+    def _flush_workflow_inputs_buffer(self) -> None:
+        """
+        Export the workflow inputs buffer to the database, up to the batch size.
+        """
+        if len(self._workflow_inputs_buffer) == 0:
+            return
+
+        # Record exported inputs so far, and add them back on errors.
+        exported_inputs: Dict[str, str] = {}
+        with self.engine.begin() as c:
+            exported = 0
+            local_batch_size = min(
+                buffer_flush_batch_size, len(self._workflow_inputs_buffer)
+            )
+            while exported < local_batch_size:
+                wf_id = next(iter(self._workflow_inputs_buffer))
+                inputs = self._workflow_inputs_buffer.pop(wf_id)
+                exported_inputs[wf_id] = inputs
+                try:
+                    self.update_workflow_inputs(wf_id, inputs, conn=c)
+                    exported += 1
+                except Exception as e:
+                    dbos_logger.error(f"Error while flushing inputs buffer: {e}")
+                    c.rollback()
+                    # Add the exported inputs back to the buffer, so they can be retried next time
+                    self._workflow_inputs_buffer.update(exported_inputs)
+                    break
+
+    def flush_workflow_buffers(self) -> None:
+        """
+        A background thread that flushes the workflow status and inputs buffers periodically.
+        """
+        while self._run_background_processes:
+            try:
+                self._is_flushing_status_buffer = True
+                # Must flush the status buffer first, as the inputs table has a foreign key constraint on the status table.
+                self._flush_workflow_status_buffer()
+                self._flush_workflow_inputs_buffer()
+                self._is_flushing_status_buffer = False
+                if self._is_buffers_empty:
+                    # Only sleep if both buffers are empty
+                    time.sleep(buffer_flush_interval_secs)
+            except Exception as e:
+                dbos_logger.error(f"Error while flushing buffers: {e}")
+                time.sleep(buffer_flush_interval_secs)
+                # Will retry next time
+
+    def buffer_workflow_status(self, status: WorkflowStatusInternal) -> None:
+        self._workflow_status_buffer[status["workflow_uuid"]] = status
+
+    def buffer_workflow_inputs(self, workflow_id: str, inputs: str) -> None:
+        # inputs is a serialized WorkflowInputs string
+        self._workflow_inputs_buffer[workflow_id] = inputs
+
+    @property
+    def _is_buffers_empty(self) -> bool:
+        return (
+            len(self._workflow_status_buffer) == 0
+            and len(self._workflow_inputs_buffer) == 0
+        )
