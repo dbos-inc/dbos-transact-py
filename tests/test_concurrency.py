@@ -35,7 +35,7 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
     comm_count = 0
     txn_count = 0
 
-    @DBOS.communicator()
+    @DBOS.step()
     def test_communicator() -> str:
         nonlocal comm_count
         comm_count += 1

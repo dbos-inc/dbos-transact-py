@@ -25,13 +25,13 @@ from opentelemetry.trace import Span
 
 from dbos.core import (
     TEMP_SEND_WF_NAME,
-    _communicator,
     _execute_workflow_id,
     _get_event,
     _recv,
     _send,
     _set_event,
     _start_workflow,
+    _step,
     _transaction,
     _workflow,
     _workflow_wrapper,
@@ -63,7 +63,7 @@ else:
 
 from dbos.admin_sever import AdminServer
 from dbos.context import (
-    EnterDBOSCommunicator,
+    EnterDBOSStep,
     TracedAttributes,
     assert_current_dbos_context,
     get_local_dbos_context,
@@ -179,7 +179,7 @@ class DBOS:
     Main access class for DBOS functionality.
 
     `DBOS` contains functions and properties for:
-    1. Decorating classes, workflows, transactions, and communicators
+    1. Decorating classes, workflows, and steps
     2. Starting workflow functions
     3. Retrieving workflow status information
     4. Interacting with workflows via events and messages
@@ -388,9 +388,8 @@ class DBOS:
         """
         return _transaction(_get_or_create_dbos_registry(), isolation_level)
 
-    # Mirror the CommunicatorConfig from TS. However, we disable retries by default.
     @classmethod
-    def communicator(
+    def step(
         cls,
         *,
         retries_allowed: bool = False,
@@ -399,17 +398,17 @@ class DBOS:
         backoff_rate: float = 2.0,
     ) -> Callable[[F], F]:
         """
-        Decorate and configure a function for use as a DBOS communicator.
+        Decorate and configure a function for use as a DBOS step.
 
         Args:
             retries_allowed(bool): If true, enable retries on thrown exceptions
             interval_seconds(float): Time between retry attempts
             backoff_rate(float): Multiplier for exponentially increasing `interval_seconds` between retries
-            max_attempts(int): Maximum number of communicator retries before raising an exception
+            max_attempts(int): Maximum number of retries before raising an exception
 
         """
 
-        return _communicator(
+        return _step(
             _get_or_create_dbos_registry(),
             retries_allowed=retries_allowed,
             interval_seconds=interval_seconds,
@@ -542,9 +541,9 @@ class DBOS:
         }
         if seconds <= 0:
             return
-        with EnterDBOSCommunicator(attributes) as ctx:
+        with EnterDBOSStep(attributes) as ctx:
             _get_dbos_instance().sys_db.sleep(
-                ctx.workflow_id, ctx.curr_comm_function_id, seconds
+                ctx.workflow_id, ctx.curr_step_function_id, seconds
             )
 
     @classmethod
@@ -628,7 +627,7 @@ class DBOS:
         ctx = assert_current_dbos_context()
         assert (
             ctx.is_within_workflow()
-        ), "workflow_id is only available within a workflow, transaction, or communicator."
+        ), "workflow_id is only available within a DBOS operation."
         return ctx.workflow_id
 
     @classproperty
@@ -722,9 +721,9 @@ class DBOSConfiguredInstance:
     """
     Base class for classes containing DBOS member functions.
 
-    When a class contains workflow, transaction, and communicator functions that access
-    instance state, the DBOS workflow executor needs a name for the instance.  This name
-    is recorded in the database, and used to refer to the proper instance upon recovery.
+    When a class contains DBOS functions that access instance state, the DBOS workflow
+    executor needs a name for the instance.  This name is recorded in the database, and
+    used to refer to the proper instance upon recovery.
 
     Use `DBOSConfiguredInstance` to specify the instance name and register the instance
     with the DBOS workflow executor.

@@ -37,7 +37,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         return var + str(rows[0][0])
 
-    @DBOS.communicator()
+    @DBOS.step()
     def test_communicator(var: str) -> str:
         return var
 
@@ -74,7 +74,7 @@ def test_start_workflow(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         return var + str(rows[0][0])
 
-    @DBOS.communicator()
+    @DBOS.step()
     def test_communicator(var: str) -> str:
         return var
 

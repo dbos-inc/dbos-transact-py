@@ -15,7 +15,7 @@ from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle, WorkflowStatus
 
 # Private API because this is a test
 from dbos.context import assert_current_dbos_context, get_local_dbos_context
-from dbos.error import DBOSCommunicatorMaxRetriesExceededError
+from dbos.error import MaxStepRetriesExceeded
 from dbos.system_database import GetWorkflowsInput
 from tests.conftest import default_config
 
@@ -42,7 +42,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
         DBOS.logger.info("I'm test_transaction")
         return var2 + str(rows[0][0])
 
-    @DBOS.communicator()
+    @DBOS.step()
     def test_communicator(var: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
@@ -79,7 +79,7 @@ def test_child_workflow(dbos: DBOS) -> None:
         DBOS.logger.info("I'm test_transaction")
         return var2 + str(rows[0][0])
 
-    @DBOS.communicator()
+    @DBOS.step()
     def test_communicator(var: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
@@ -167,7 +167,7 @@ def test_exception_workflow(dbos: DBOS) -> None:
         txn_counter += 1
         raise Exception(var)
 
-    @DBOS.communicator()
+    @DBOS.step()
     def exception_communicator(var: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
@@ -234,13 +234,13 @@ def test_temp_workflow(dbos: DBOS) -> None:
         txn_counter += 1
         return var2 + str(rows[0][0])
 
-    @DBOS.communicator()
+    @DBOS.step()
     def test_communicator(var: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
         return var
 
-    @DBOS.communicator()
+    @DBOS.step()
     def call_communicator(var: str) -> str:
         return test_communicator(var)
 
@@ -287,13 +287,13 @@ def test_temp_workflow_errors(dbos: DBOS) -> None:
         txn_counter += 1
         raise Exception(var2)
 
-    @DBOS.communicator()
+    @DBOS.step()
     def test_communicator(var: str) -> str:
         nonlocal comm_counter
         comm_counter += 1
         raise Exception(var)
 
-    @DBOS.communicator(retries_allowed=True)
+    @DBOS.step(retries_allowed=True)
     def test_retried_communicator(var: str) -> str:
         nonlocal retried_comm_counter
         retried_comm_counter += 1
@@ -307,7 +307,7 @@ def test_temp_workflow_errors(dbos: DBOS) -> None:
         test_communicator("cval")
     assert "cval" == str(exc_info.value)
 
-    with pytest.raises(DBOSCommunicatorMaxRetriesExceededError) as exc_info:
+    with pytest.raises(MaxStepRetriesExceeded) as exc_info:
         test_retried_communicator("rval")
 
     assert txn_counter == 1

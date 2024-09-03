@@ -16,7 +16,7 @@ def set_dbos_func_name(f: Any, name: str) -> None:
     setattr(f, "dbos_function_name", name)
 
 
-TempWorkflowType = Literal["transaction", "communicator", "send", None]
+TempWorkflowType = Literal["transaction", "step", "send", None]
 
 
 def get_temp_workflow_type(f: Any) -> TempWorkflowType:

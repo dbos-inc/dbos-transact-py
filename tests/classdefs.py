@@ -35,7 +35,7 @@ class DBOSTestClass(DBOSConfiguredInstance):
         return var2 + str(rows[0][0])
 
     @classmethod
-    @DBOS.communicator()
+    @DBOS.step()
     def test_communicator_cls(cls, var: str) -> str:
         cls.comm_counter_c += 1
         return var
@@ -53,7 +53,7 @@ class DBOSTestClass(DBOSConfiguredInstance):
         self.txn_counter += 1
         return var2 + str(rows[0][0])
 
-    @DBOS.communicator()
+    @DBOS.step()
     def test_communicator(self, var: str) -> str:
         self.comm_counter += 1
         return var

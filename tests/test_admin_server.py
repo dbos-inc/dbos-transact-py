@@ -65,7 +65,7 @@ def test_admin_recovery(dbos: DBOS) -> None:
         res = test_communicator(var2)
         return res + var
 
-    @DBOS.communicator()
+    @DBOS.step()
     def test_communicator(var2: str) -> str:
         nonlocal comm_counter
         comm_counter += 1

@@ -32,7 +32,7 @@ class DBOSErrorCode(Enum):
     WorkflowFunctionNotFound = 4
     NonExistentWorkflowError = 5
     DuplicateWorkflowEventError = 6
-    CommunicatorMaxRetriesExceeded = 7
+    MaxStepRetriesExceeded = 7
     NotAuthorized = 8
 
 
@@ -106,11 +106,11 @@ class DBOSNotAuthorizedError(DBOSException):
         )
 
 
-class DBOSCommunicatorMaxRetriesExceededError(DBOSException):
-    """Exception raised when a communicator function was retried the maximimum number of times without success."""
+class MaxStepRetriesExceeded(DBOSException):
+    """Exception raised when a step was retried the maximimum number of times without success."""
 
     def __init__(self) -> None:
         super().__init__(
-            "Communicator reached maximum retries.",
-            dbos_error_code=DBOSErrorCode.CommunicatorMaxRetriesExceeded.value,
+            "Step reached maximum retries.",
+            dbos_error_code=DBOSErrorCode.MaxStepRetriesExceeded.value,
         )

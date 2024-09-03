@@ -210,7 +210,7 @@ def test_simple_workflow_static(dbos: DBOS) -> None:
             return var2 + str(rows[0][0])
 
         @staticmethod
-        @DBOS.communicator()
+        @DBOS.step()
         def test_communicator(var: str) -> str:
             DBOSTestClassStatic.comm_counter += 1
             DBOS.logger.info("I'm test_communicator")
@@ -249,7 +249,7 @@ def test_simple_workflow_class(dbos: DBOS) -> None:
             return var2 + str(rows[0][0])
 
         @classmethod
-        @DBOS.communicator()
+        @DBOS.step()
         def test_communicator(cls, var: str) -> str:
             DBOSTestClassClass.comm_counter += 1
             DBOS.logger.info("I'm test_communicator")
@@ -299,7 +299,7 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
             DBOS.logger.info("I'm test_transaction")
             return var2 + str(rows[0][0])
 
-        @DBOS.communicator()
+        @DBOS.step()
         def test_communicator(self, var: str) -> str:
             self.comm_counter += 1
             DBOS.logger.info("I'm test_communicator")
