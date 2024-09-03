@@ -18,7 +18,7 @@ from .logger import dbos_logger
 from .tracer import dbos_tracer
 
 
-# Values must be the same as in TypeScript Transact
+# These are used to tag OTel traces
 class OperationType(Enum):
     HANDLER = "handler"
     WORKFLOW = "workflow"
