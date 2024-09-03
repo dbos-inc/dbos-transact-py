@@ -106,7 +106,7 @@ class DBOSNotAuthorizedError(DBOSException):
         )
 
 
-class MaxStepRetriesExceeded(DBOSException):
+class DBOSMaxStepRetriesExceeded(DBOSException):
     """Exception raised when a step was retried the maximimum number of times without success."""
 
     def __init__(self) -> None:

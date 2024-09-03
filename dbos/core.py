@@ -30,11 +30,11 @@ from dbos.context import (
 )
 from dbos.error import (
     DBOSException,
+    DBOSMaxStepRetriesExceeded,
     DBOSNonExistentWorkflowError,
     DBOSRecoveryError,
     DBOSWorkflowConflictIDError,
     DBOSWorkflowFunctionNotFoundError,
-    MaxStepRetriesExceeded,
 )
 from dbos.registrations import (
     get_config_name,
@@ -605,7 +605,7 @@ def _step(
                                 },
                             )
                             if attempt == local_max_attempts:
-                                error = MaxStepRetriesExceeded()
+                                error = DBOSMaxStepRetriesExceeded()
                             else:
                                 time.sleep(local_interval_seconds)
                                 local_interval_seconds = min(

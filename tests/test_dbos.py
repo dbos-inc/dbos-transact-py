@@ -15,7 +15,7 @@ from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle, WorkflowStatus
 
 # Private API because this is a test
 from dbos.context import assert_current_dbos_context, get_local_dbos_context
-from dbos.error import MaxStepRetriesExceeded
+from dbos.error import DBOSMaxStepRetriesExceeded
 from dbos.system_database import GetWorkflowsInput
 from tests.conftest import default_config
 
@@ -307,7 +307,7 @@ def test_temp_workflow_errors(dbos: DBOS) -> None:
         test_step("cval")
     assert "cval" == str(exc_info.value)
 
-    with pytest.raises(MaxStepRetriesExceeded) as exc_info:
+    with pytest.raises(DBOSMaxStepRetriesExceeded) as exc_info:
         test_retried_step("rval")
 
     assert txn_counter == 1
