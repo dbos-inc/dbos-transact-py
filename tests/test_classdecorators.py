@@ -190,14 +190,14 @@ def test_simple_workflow_static(dbos: DBOS) -> None:
     class DBOSTestClassStatic:
         txn_counter: int = 0
         wf_counter: int = 0
-        comm_counter: int = 0
+        step_counter: int = 0
 
         @staticmethod
         @DBOS.workflow()
         def test_workflow(var: str, var2: str) -> str:
             DBOSTestClassStatic.wf_counter += 1
             res = DBOSTestClassStatic.test_transaction(var2)
-            res2 = DBOSTestClassStatic.test_communicator(var)
+            res2 = DBOSTestClassStatic.test_step(var)
             DBOS.logger.info("I'm test_workflow")
             return res + res2
 
@@ -211,9 +211,9 @@ def test_simple_workflow_static(dbos: DBOS) -> None:
 
         @staticmethod
         @DBOS.step()
-        def test_communicator(var: str) -> str:
-            DBOSTestClassStatic.comm_counter += 1
-            DBOS.logger.info("I'm test_communicator")
+        def test_step(var: str) -> str:
+            DBOSTestClassStatic.step_counter += 1
+            DBOS.logger.info("I'm test_step")
             return var
 
     assert DBOSTestClassStatic.test_workflow("bob", "bob") == "bob1bob"
@@ -221,7 +221,7 @@ def test_simple_workflow_static(dbos: DBOS) -> None:
     assert wfh.get_result() == "bob1bob"
     assert DBOSTestClassStatic.txn_counter == 2
     assert DBOSTestClassStatic.wf_counter == 2
-    assert DBOSTestClassStatic.comm_counter == 2
+    assert DBOSTestClassStatic.step_counter == 2
 
 
 def test_simple_workflow_class(dbos: DBOS) -> None:
@@ -229,14 +229,14 @@ def test_simple_workflow_class(dbos: DBOS) -> None:
     class DBOSTestClassClass:
         txn_counter: int = 0
         wf_counter: int = 0
-        comm_counter: int = 0
+        step_counter: int = 0
 
         @classmethod
         @DBOS.workflow()
         def test_workflow(cls, var: str, var2: str) -> str:
             DBOSTestClassClass.wf_counter += 1
             res = DBOSTestClassClass.test_transaction(var2)
-            res2 = DBOSTestClassClass.test_communicator(var)
+            res2 = DBOSTestClassClass.test_step(var)
             DBOS.logger.info("I'm test_workflow")
             return res + res2
 
@@ -250,9 +250,9 @@ def test_simple_workflow_class(dbos: DBOS) -> None:
 
         @classmethod
         @DBOS.step()
-        def test_communicator(cls, var: str) -> str:
-            DBOSTestClassClass.comm_counter += 1
-            DBOS.logger.info("I'm test_communicator")
+        def test_step(cls, var: str) -> str:
+            DBOSTestClassClass.step_counter += 1
+            DBOS.logger.info("I'm test_step")
             return var
 
     assert DBOSTestClassClass.test_workflow("bob", "bob") == "bob1bob"
@@ -260,7 +260,7 @@ def test_simple_workflow_class(dbos: DBOS) -> None:
     assert wfh.get_result() == "bob1bob"
     assert DBOSTestClassClass.txn_counter == 2
     assert DBOSTestClassClass.wf_counter == 2
-    assert DBOSTestClassClass.comm_counter == 2
+    assert DBOSTestClassClass.step_counter == 2
 
 
 def test_no_instname(dbos: DBOS) -> None:
@@ -282,13 +282,13 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
             super().__init__("bob", dbos)
             self.txn_counter: int = 0
             self.wf_counter: int = 0
-            self.comm_counter: int = 0
+            self.step_counter: int = 0
 
         @DBOS.workflow()
         def test_workflow(self, var: str, var2: str) -> str:
             self.wf_counter += 1
             res = self.test_transaction(var2)
-            res2 = self.test_communicator(var)
+            res2 = self.test_step(var)
             DBOS.logger.info("I'm test_workflow")
             return res + res2
 
@@ -300,9 +300,9 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
             return var2 + str(rows[0][0])
 
         @DBOS.step()
-        def test_communicator(self, var: str) -> str:
-            self.comm_counter += 1
-            DBOS.logger.info("I'm test_communicator")
+        def test_step(self, var: str) -> str:
+            self.step_counter += 1
+            DBOS.logger.info("I'm test_step")
             return var
 
     inst = DBOSTestClassInst()
@@ -321,7 +321,7 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
     assert wfh.get_result() == "bob1bob"
     assert inst.txn_counter == 2
     assert inst.wf_counter == 2
-    assert inst.comm_counter == 2
+    assert inst.step_counter == 2
 
 
 def test_forgotten_decorator(dbos: DBOS) -> None:
@@ -330,7 +330,7 @@ def test_forgotten_decorator(dbos: DBOS) -> None:
             super().__init__("bob", dbos)
             self.txn_counter: int = 0
             self.wf_counter: int = 0
-            self.comm_counter: int = 0
+            self.step_counter: int = 0
 
         @DBOS.workflow()
         def test_workflow1(self) -> str:
