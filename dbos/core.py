@@ -26,9 +26,7 @@ from dbos.context import (
     SetWorkflowID,
     TracedAttributes,
     assert_current_dbos_context,
-    clear_local_dbos_context,
     get_local_dbos_context,
-    set_local_dbos_context,
 )
 from dbos.error import (
     DBOSException,
@@ -61,7 +59,6 @@ if TYPE_CHECKING:
     from dbos.dbos import IsolationLevel
 
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.orm import Session
 
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
