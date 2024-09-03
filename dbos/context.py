@@ -23,13 +23,11 @@ class OperationType(Enum):
     HANDLER = "handler"
     WORKFLOW = "workflow"
     TRANSACTION = "transaction"
-    COMMUNICATOR = "communicator"
+    STEP = "step"
     PROCEDURE = "procedure"
 
 
-OperationTypes = Literal[
-    "handler", "workflow", "transaction", "communicator", "procedure"
-]
+OperationTypes = Literal["handler", "workflow", "transaction", "step", "procedure"]
 
 
 # Keys must be the same as in TypeScript Transact

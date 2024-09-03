@@ -560,7 +560,7 @@ def _step(
 
             attributes: TracedAttributes = {
                 "name": func.__name__,
-                "operationType": OperationType.COMMUNICATOR.value,
+                "operationType": OperationType.STEP.value,
             }
             with EnterDBOSStep(attributes) as ctx:
                 step_output: OperationResultInternal = {
