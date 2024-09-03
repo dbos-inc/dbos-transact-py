@@ -175,6 +175,18 @@ class _DBOSRegistry:
 
 
 class DBOS:
+    """
+    Main access class for DBOS functionality.
+
+    `DBOS` contains functions and properties for:
+    1. Decorating classes, workflows, transactions, and communicators
+    2. Starting workflow functions
+    3. Retrieving workflow status information
+    4. Interacting with workflows via events and messages
+    5. Accessing context, including the current user, request, SQL session, logger, and tracer
+
+    """
+
     ### Lifecycles ###
     # We provide a singleton, created / accessed as `DBOS(args)`
     #  Access to the the singleton, or current context, via `DBOS.<thing>`
@@ -360,12 +372,20 @@ class DBOS:
     # Decorators for DBOS functionality
     @classmethod
     def workflow(cls) -> Callable[[F], F]:
+        """Decorate a function for use as a DBOS workflow."""
         return _workflow(_get_or_create_dbos_registry())
 
     @classmethod
     def transaction(
         cls, isolation_level: IsolationLevel = "SERIALIZABLE"
     ) -> Callable[[F], F]:
+        """
+        Decorate a function for use as a DBOS transaction.
+
+        Args:
+            isolation_level(IsolationLevel): Transaction isolation level
+
+        """
         return _transaction(_get_or_create_dbos_registry(), isolation_level)
 
     # Mirror the CommunicatorConfig from TS. However, we disable retries by default.
@@ -378,6 +398,17 @@ class DBOS:
         max_attempts: int = 3,
         backoff_rate: float = 2.0,
     ) -> Callable[[F], F]:
+        """
+        Decorate and configure a function for use as a DBOS communicator.
+
+        Args:
+            retries_allowed(bool): If true, enable retries on thrown exceptions
+            interval_seconds(float): Time between retry attempts
+            backoff_rate(float): Multiplier for exponentially increasing `interval_seconds` between retries
+            max_attempts(int): Maximum number of communicator retries before raising an exception
+
+        """
+
         return _communicator(
             _get_or_create_dbos_registry(),
             retries_allowed=retries_allowed,
@@ -388,18 +419,48 @@ class DBOS:
 
     @classmethod
     def dbos_class(cls) -> Callable[[Type[T]], Type[T]]:
+        """
+        Decorate a class that contains DBOS member functions.
+
+        All DBOS classes must be decorated, as this associates the class with
+        its member functions.
+        """
+
         return _get_or_create_dbos_registry().create_class_info
 
     @classmethod
     def default_required_roles(cls, roles: List[str]) -> Callable[[Type[T]], Type[T]]:
+        """
+        Decorate a class with the default list of required roles.
+
+        The defaults can be overridden on a per-function basis with `required_roles`.
+
+        Args:
+            roles(List[str]): The list of roles to be used on class member functions
+
+        """
+
         return default_required_roles(_get_or_create_dbos_registry(), roles)
 
     @classmethod
     def required_roles(cls, roles: List[str]) -> Callable[[F], F]:
+        """
+        Decorate a function with a list of required access roles.
+
+        If the function is called from a context that does not provide at least one
+        role from the list, a `DBOSNotAuthorizedError` exception will be raised.
+
+        Args:
+            roles(List[str]): The list of roles to be used on class member functions
+
+        """
+
         return required_roles(roles)
 
     @classmethod
     def scheduled(cls, cron: str) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
+        """Decorate a workflow function with its invocation schedule."""
+
         return scheduled(_get_or_create_dbos_registry(), cron)
 
     @classmethod
@@ -409,10 +470,12 @@ class DBOS:
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
+        """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
         return _start_workflow(_get_dbos_instance(), func, *args, **kwargs)
 
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
+        """Return the status of a workflow execution."""
         ctx = get_local_dbos_context()
         if ctx and ctx.is_within_workflow():
             ctx.function_id += 1
@@ -440,6 +503,7 @@ class DBOS:
     def retrieve_workflow(
         cls, workflow_id: str, existing_workflow: bool = True
     ) -> WorkflowHandle[R]:
+        """Return a `WorkflowHandle` for a workflow execution."""
         dbos = _get_dbos_instance()
         if existing_workflow:
             stat = dbos.get_workflow_status(workflow_id)
@@ -451,14 +515,28 @@ class DBOS:
     def send(
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
+        """Send a message to a workflow execution."""
         return _send(_get_dbos_instance(), destination_id, message, topic)
 
     @classmethod
     def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
+        """
+        Receive a workflow message.
+
+        This function is to be called from within a workflow.
+        `recv` will return the message sent on `topic`, waiting if necessary.
+        """
         return _recv(_get_dbos_instance(), topic, timeout_seconds)
 
     @classmethod
     def sleep(cls, seconds: float) -> None:
+        """
+        Sleep for the specified time (in seconds).
+
+        It is important to use `DBOS.sleep` (as opposed to any other sleep) within workflows,
+        as the `DBOS.sleep`s are durable and completed sleeps will be skipped during recovery.
+        """
+
         attributes: TracedAttributes = {
             "name": "sleep",
         }
@@ -471,34 +549,58 @@ class DBOS:
 
     @classmethod
     def set_event(cls, key: str, value: Any) -> None:
+        """
+        Set a workflow event.
+
+        This function is to be called from within a workflow.
+
+        `set_event` sets the `value` of `key` for the current workflow instance ID.
+        This `value` can then be retrieved by other functions, using `get_event` below.
+
+        Each workflow invocation should only call set_event once per `key`.
+
+        Args:
+            key(str): The event key / name within the workflow
+            value(Any): A serializable value to associate with the key
+
+        """
         return _set_event(_get_dbos_instance(), key, value)
 
     @classmethod
     def get_event(cls, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:
+        """
+        Return the `value` of a workflow event, waiting for it to occur if necessary.
+
+        `get_event` waits for a corresponding `set_event` by the workflow with ID `workflow_id` with the same `key`.
+
+        Args:
+            workflow_id(str): The workflow instance ID that is expected to call `set_event` on `key`
+            key(str): The event key / name within the workflow
+            timeout_seconds(float): The amount of time to wait, in case `set_event` has not yet been called byt the workflow
+
+        """
         return _get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
 
     @classmethod
     def execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
-        """
-        This function is used to execute a workflow by ID for recovery.
-        """
+        """Execute a workflow by ID (for recovery)."""
         return _execute_workflow_id(_get_dbos_instance(), workflow_id)
 
     @classmethod
     def recover_pending_workflows(
         cls, executor_ids: List[str] = ["local"]
     ) -> List[WorkflowHandle[Any]]:
-        """
-        Find all PENDING workflows and execute them.
-        """
+        """Find all PENDING workflows and execute them."""
         return _recover_pending_workflows(_get_dbos_instance(), executor_ids)
 
     @classproperty
     def logger(cls) -> Logger:
+        """Return the DBOS `Logger` for the current context."""
         return dbos_logger  # TODO get from context if appropriate...
 
     @classproperty
     def config(cls) -> ConfigFile:
+        """Return the DBOS `ConfigFile` for the current context."""
         global _dbos_global_instance
         if _dbos_global_instance is not None:
             return _dbos_global_instance.config
@@ -511,6 +613,7 @@ class DBOS:
 
     @classproperty
     def sql_session(cls) -> Session:
+        """Return the SQLAlchemy `Session` for the current context, which must be within a transaction function."""
         ctx = assert_current_dbos_context()
         assert (
             ctx.is_transaction()
@@ -521,6 +624,7 @@ class DBOS:
 
     @classproperty
     def workflow_id(cls) -> str:
+        """Return the workflow ID for the current context, which must be executing a workflow function."""
         ctx = assert_current_dbos_context()
         assert (
             ctx.is_within_workflow()
@@ -529,6 +633,12 @@ class DBOS:
 
     @classproperty
     def parent_workflow_id(cls) -> str:
+        """
+        Return the workflow ID for the parent workflow.
+
+        `parent_workflow_id` must be accessed from within a workflow function.
+        """
+
         ctx = assert_current_dbos_context()
         assert (
             ctx.is_within_workflow()
@@ -537,17 +647,37 @@ class DBOS:
 
     @classproperty
     def span(cls) -> Span:
+        """Return the tracing `Span` associated with the current context."""
         ctx = assert_current_dbos_context()
         return ctx.get_current_span()
 
     @classproperty
     def request(cls) -> Optional["Request"]:
+        """Return the FastAPI `Request`, if any, associated with the current context."""
         ctx = assert_current_dbos_context()
         return ctx.request
 
 
 @dataclass
 class WorkflowStatus:
+    """
+    Status of workflow execution.
+
+    This captures the state of a workflow execution at a point in time.
+
+    Attributes:
+        workflow_id(str):  The ID of the workflow execution
+        status(str):  The status of the execution, from `WorkflowStatusString`
+        name(str): The workflow function name
+        class_name(str): For member functions, the name of the class containing the workflow function
+        config_name(str): For instance member functions, the name of the class instance for the execution
+        authenticated_user(str): The user who invoked the workflow
+        assumed_role(str): The access role used by the user to allow access to the workflow function
+        authenticatedRoles(List[str]): List of all access roles available to the authenticated user
+        recovery_attempts(int): Number of times the workflow has been restarted (usually by recovery)
+
+    """
+
     workflow_id: str
     status: str
     name: str
@@ -560,16 +690,50 @@ class WorkflowStatus:
 
 
 class WorkflowHandle(Generic[R], Protocol):
+    """
+    Handle to a workflow function.
+
+    `WorkflowHandle` represents a current or previous workflow function invocation,
+    allowing its status and result to be accessed.
+
+    Attributes:
+        workflow_id(str): Workflow ID of the function invocation
+
+    """
+
     def __init__(self, workflow_id: str) -> None: ...
 
     workflow_id: str
 
-    def get_workflow_id(self) -> str: ...
-    def get_result(self) -> R: ...
-    def get_status(self) -> WorkflowStatus: ...
+    def get_workflow_id(self) -> str:
+        """Return the applicable workflow ID."""
+        ...
+
+    def get_result(self) -> R:
+        """Return the result of the workflow function invocation, waiting if necessary."""
+        ...
+
+    def get_status(self) -> WorkflowStatus:
+        """Return the current workflow function invocation status as `WorkflowStatus`."""
+        ...
 
 
 class DBOSConfiguredInstance:
+    """
+    Base class for classes containing DBOS member functions.
+
+    When a class contains workflow, transaction, and communicator functions that access
+    instance state, the DBOS workflow executor needs a name for the instance.  This name
+    is recorded in the database, and used to refer to the proper instance upon recovery.
+
+    Use `DBOSConfiguredInstance` to specify the instance name and register the instance
+    with the DBOS workflow executor.
+
+    Attributes:
+        config_name(str):  Instance name
+
+    """
+
     def __init__(self, config_name: str, dbos: Optional[DBOS] = None) -> None:
         self.config_name = config_name
         if dbos is not None:

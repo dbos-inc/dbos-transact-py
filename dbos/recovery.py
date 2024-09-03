@@ -13,9 +13,7 @@ if TYPE_CHECKING:
 
 
 def _startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
-    """
-    A background thread that attempts to recover local pending workflows on startup.
-    """
+    """Attempt to recover local pending workflows on startup using a background thread."""
     stop_event = threading.Event()
     dbos.stop_events.append(stop_event)
     while not stop_event.is_set() and len(workflow_ids) > 0:

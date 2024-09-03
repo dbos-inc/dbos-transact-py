@@ -1,9 +1,9 @@
-"""Added triggers
+"""
+Add triggers.
 
 Revision ID: a3b18ad34abe
 Revises: 5c361fc04708
 Create Date: 2024-07-21 13:07:09.814989
-
 """
 
 from typing import Sequence, Union

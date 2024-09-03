@@ -1,9 +1,9 @@
-"""init
+"""
+Initialize application database.
 
 Revision ID: c6b516e182b2
 Revises: 
 Create Date: 2024-07-31 18:06:42.500040
-
 """
 
 from typing import Sequence, Union

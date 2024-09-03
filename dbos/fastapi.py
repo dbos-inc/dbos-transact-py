@@ -25,7 +25,18 @@ def get_or_generate_request_id(request: FastAPIRequest) -> str:
 
 class Request:
     """
-    A serializable subset of the FastAPI Request object
+    Serializable subset of the FastAPI Request object.
+
+    Attributes:
+        base_url(URL): Base of URL requested, as in application code
+        client(Address): HTTP Client
+        cookies(Dict[str, str]): HTTP Cookies
+        headers(Headers): HTTP headers
+        method(str): HTTP verb
+        path_params(Dict[str,Any]): Parameters extracted from URL path sections
+        query_params(QueryParams): URL query string parameters
+        url(URL): Full URL accessed
+
     """
 
     def __init__(self, req: FastAPIRequest):

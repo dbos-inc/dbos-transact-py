@@ -1,7 +1,7 @@
 # type: ignore
 # This code was based on code from croniter: https://pypi.org/project/croniter/
 """
-Copyright (C) 2010-2012 Matsumoto Taichi
+Copyright (C) 2010-2012 Matsumoto Taichi.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this
 software and associated documentation files (the "Software"), to deal in the Software
@@ -125,7 +125,7 @@ def datetime_to_timestamp(d):
 
 def _get_caller_globals_and_locals():
     """
-    Returns the globals and locals of the calling frame.
+    Return the globals and locals of the calling frame.
 
     Is there an alternative to frame hacking here?
     """
@@ -136,23 +136,23 @@ def _get_caller_globals_and_locals():
 
 
 class CroniterError(ValueError):
-    """General top-level Croniter base exception"""
+    """General top-level Croniter base exception."""
 
     pass
 
 
 class CroniterBadTypeRangeError(TypeError):
-    """."""
+    """Bad Type Range."""
 
 
 class CroniterBadCronError(CroniterError):
-    """Syntax, unknown value, or range error within a cron expression"""
+    """Syntax, unknown value, or range error within a cron expression."""
 
     pass
 
 
 class CroniterUnsupportedSyntaxError(CroniterBadCronError):
-    """Valid cron syntax, but likely to produce inaccurate results"""
+    """Valid cron syntax, but likely to produce inaccurate results."""
 
     # Extending CroniterBadCronError, which may be contridatory, but this allows
     # catching both errors with a single exception.  From a user perspective
@@ -161,13 +161,13 @@ class CroniterUnsupportedSyntaxError(CroniterBadCronError):
 
 
 class CroniterBadDateError(CroniterError):
-    """Unable to find next/prev timestamp match"""
+    """Unable to find next/prev timestamp match."""
 
     pass
 
 
 class CroniterNotAlphaError(CroniterBadCronError):
-    """Cron syntax contains an invalid day or month abbreviation"""
+    """Cron syntax contains an invalid day or month abbreviation."""
 
     pass
 
@@ -301,15 +301,11 @@ class croniter(object):
 
     @classmethod
     def _datetime_to_timestamp(cls, d):
-        """
-        Converts a `datetime` object `d` into a UNIX timestamp.
-        """
+        """Convert a `datetime` object `d` into a UNIX timestamp."""
         return datetime_to_timestamp(d)
 
     def _timestamp_to_datetime(self, timestamp):
-        """
-        Converts a UNIX timestamp `timestamp` into a `datetime` object.
-        """
+        """Convert a UNIX timestamp `timestamp` into a `datetime` object."""
         result = datetime.datetime.fromtimestamp(timestamp, tz=tzutc()).replace(
             tzinfo=None
         )
@@ -321,8 +317,8 @@ class croniter(object):
     @classmethod
     def _timedelta_to_seconds(cls, td):
         """
-        Converts a 'datetime.timedelta' object `td` into seconds contained in
-        the duration.
+        Convert a 'datetime.timedelta' object `td` into seconds contained in the duration.
+
         Note: We cannot use `timedelta.total_seconds()` because this is not
         supported by Python 2.6.
         """
@@ -417,7 +413,10 @@ class croniter(object):
     # or for combining multiple croniters into single
     # dates feed using 'itertools' module
     def all_next(self, ret_type=None, start_time=None, update_current=None):
-        """Generator of all consecutive dates. Can be used instead of
+        """
+        Generate all consecutive dates.
+
+        Can be used instead of
         implicit call to __iter__, whenever non-default
         'ret_type' has to be specified.
         """
@@ -438,7 +437,7 @@ class croniter(object):
                 raise
 
     def all_prev(self, ret_type=None, start_time=None, update_current=None):
-        """Generator of all previous dates."""
+        """Generate all previous dates."""
         try:
             while True:
                 self._is_prev = True
@@ -719,6 +718,8 @@ class croniter(object):
 
     def _get_next_nearest_diff(self, x, to_check, range_val):
         """
+        Return diff between next and nearest.
+
         `range_val` is the range of a field.
         If no available time, we can move to next loop(like next month).
         `range_val` can also be set to `None` to indicate that there is no loop.
@@ -739,6 +740,8 @@ class croniter(object):
 
     def _get_prev_nearest_diff(self, x, to_check, range_val):
         """
+        Return diff between previous and nearest.
+
         `range_val` is the range of a field.
         If no available time, we can move to previous loop(like previous month).
         Range_val can also be set to `None` to indicate that there is no loop.
@@ -774,7 +777,9 @@ class croniter(object):
 
     @staticmethod
     def _get_nth_weekday_of_month(year, month, day_of_week):
-        """For a given year/month return a list of days in nth-day-of-month order.
+        """
+        Return list of days in nth-day-of-month order for a given year/month.
+
         The last weekday of the month is always [-1].
         """
         w = (day_of_week + 6) % 7
@@ -1025,7 +1030,7 @@ class croniter(object):
     def expand(
         cls, expr_format, hash_id=None, second_at_beginning=False, from_timestamp=None
     ):
-        """Shallow non Croniter ValueError inside a nice CroniterBadCronError"""
+        """Shallow non Croniter ValueError inside a nice CroniterBadCronError."""
         try:
             return cls._expand(
                 expr_format,
@@ -1127,7 +1132,8 @@ def croniter_range(
     expand_from_start_time=False,
 ):
     """
-    Generator that provides all times from start to stop matching the given cron expression.
+    Generate all times from start to stop matching the given cron expression.
+
     If the cron expression matches either 'start' and/or 'stop', those times will be returned as
     well unless 'exclude_ends=True' is passed.
 
@@ -1203,7 +1209,7 @@ class HashExpander:
         self.cron = cronit
 
     def do(self, idx, hash_type="h", hash_id=None, range_end=None, range_begin=None):
-        """Return a hashed/random integer given range/hash information"""
+        """Return a hashed/random integer given range/hash information."""
         if range_end is None:
             range_end = self.cron.RANGES[idx][1]
         if range_begin is None:
@@ -1218,7 +1224,7 @@ class HashExpander:
         return hash_expression_re.match(expr)
 
     def expand(self, efl, idx, expr, hash_id=None, match="", **kw):
-        """Expand a hashed/random expression to its normal representation"""
+        """Expand a hashed/random expression to its normal representation."""
         if match == "":
             match = self.match(efl, idx, expr, hash_id, **kw)
         if not match:

@@ -46,6 +46,23 @@ class TelemetryConfig(TypedDict, total=False):
 
 
 class ConfigFile(TypedDict, total=False):
+    """
+    Data structure containing the DBOS Configuration.
+
+    This configuration data is typically loaded from `dbos-config.yaml`.
+    See `https://docs.dbos.dev/api-reference/configuration`_
+
+    Attributes:
+        name (str): Application name
+        language (str): The app language (probably `python`)
+        runtimeConfig (RuntimeConfig): Configuration for request serving
+        database (DatabaseConfig): Configuration for the application and system databases
+        telemetry (TelemetryConfig): Configuration for tracing / logging
+        env (Dict[str,str]): Environment varialbes
+        application (Dict[str, Any]): Application-specific configuration section
+
+    """
+
     name: str
     language: str
     runtimeConfig: RuntimeConfig
@@ -72,6 +89,19 @@ def substitute_env_vars(content: str) -> str:
 
 
 def get_dbos_database_url(config_file_path: str = "dbos-config.yaml") -> str:
+    """
+    Retrieve application database URL from configuration `.yaml` file.
+
+    Loads the DBOS `ConfigFile` from the specified path (typically `dbos-config.yaml`),
+        and returns the database URL for the application database.
+
+    Args:
+        config_file_path (str): The path to the yaml configuration file.
+
+    Returns:
+        str: Database URL for the application database
+
+    """
     dbos_config = load_config(config_file_path)
     db_url = URL.create(
         "postgresql",
@@ -85,7 +115,19 @@ def get_dbos_database_url(config_file_path: str = "dbos-config.yaml") -> str:
 
 
 def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
-    # Load the YAML file
+    """
+    Load the DBOS `ConfigFile` from the specified path (typically `dbos-config.yaml`).
+
+    The configuration is also validated against the configuration file schema.
+
+    Args:
+        config_file_path (str): The path to the yaml configuration file.
+
+    Returns:
+        ConfigFile: The loaded configuration
+
+    """
+
     with open(config_file_path, "r") as file:
         content = file.read()
         substituted_content = substitute_env_vars(content)

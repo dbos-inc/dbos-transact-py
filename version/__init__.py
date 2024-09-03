@@ -3,6 +3,8 @@ from pdm.backend.hooks.version import SCMVersion
 
 def format_version(git_version: SCMVersion) -> str:
     """
+    Format version into string.
+
     1. Release versions may only be published from release branches. Their version is a git tag.
     2. Preview versions are published from main. They are PEP440 alpha releases whose version is the
     next release version number followed by "a" followed by the number of commits since the last release.
