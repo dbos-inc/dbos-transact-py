@@ -39,7 +39,7 @@ def example_transaction(name: str) -> str:
         )
         .returning(dbos_hello.c.greet_count)
     )
-    greet_count = DBOS.sql_session.execute(query).scalar_one()
+    greet_count = DBOS.db.execute(query).scalar_one()
     greeting = f"Greetings, {name}! You have been greeted {greet_count} times."
     DBOS.logger.info(greeting)
     return greeting

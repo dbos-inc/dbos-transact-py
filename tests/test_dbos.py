@@ -36,7 +36,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     @DBOS.transaction(isolation_level="REPEATABLE READ")
     def test_transaction(var2: str) -> str:
-        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        rows = DBOS.db.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
         DBOS.logger.info("I'm test_transaction")
@@ -73,7 +73,7 @@ def test_child_workflow(dbos: DBOS) -> None:
 
     @DBOS.transaction()
     def test_transaction(var2: str) -> str:
-        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        rows = DBOS.db.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
         DBOS.logger.info("I'm test_transaction")
@@ -122,7 +122,7 @@ def test_child_workflow(dbos: DBOS) -> None:
 
     @DBOS.transaction()
     def test_transaction_ac(var2: str) -> str:
-        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        rows = DBOS.db.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_ac_counter
         txn_ac_counter += 1
         return var2 + str(rows[0][0])
@@ -229,7 +229,7 @@ def test_temp_workflow(dbos: DBOS) -> None:
 
     @DBOS.transaction(isolation_level="READ COMMITTED")
     def test_transaction(var2: str) -> str:
-        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        rows = DBOS.db.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
         return var2 + str(rows[0][0])
@@ -328,7 +328,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
 
     @DBOS.transaction()
     def test_transaction(var2: str) -> str:
-        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        rows = DBOS.db.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
         return var2 + str(rows[0][0])
@@ -374,7 +374,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
 
     @DBOS.transaction()
     def test_transaction(var2: str) -> str:
-        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        rows = DBOS.db.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
         return var2 + str(rows[0][0])
@@ -504,7 +504,7 @@ def test_start_workflow(dbos: DBOS) -> None:
 
     @DBOS.transaction()
     def test_transaction(var2: str) -> str:
-        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        rows = DBOS.db.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
         return var2 + str(rows[0][0])

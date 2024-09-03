@@ -64,7 +64,7 @@ class DBOSContext:
 
         self.curr_step_function_id: int = -1
         self.curr_tx_function_id: int = -1
-        self.sql_session: Optional[Session] = None
+        self.db: Optional[Session] = None
         self.spans: list[Span] = []
 
         self.authenticated_user: Optional[str] = None
@@ -120,7 +120,7 @@ class DBOSContext:
         )
 
     def is_transaction(self) -> bool:
-        return self.sql_session is not None
+        return self.db is not None
 
     def is_step(self) -> bool:
         return self.curr_step_function_id >= 0
@@ -140,12 +140,12 @@ class DBOSContext:
     def start_transaction(
         self, ses: Session, fid: int, attributes: TracedAttributes
     ) -> None:
-        self.sql_session = ses
+        self.db = ses
         self.curr_tx_function_id = fid
         self._start_span(attributes)
 
     def end_transaction(self, exc_value: Optional[BaseException]) -> None:
-        self.sql_session = None
+        self.db = None
         self.curr_tx_function_id = -1
         self._end_span(exc_value)
 

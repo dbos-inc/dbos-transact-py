@@ -480,10 +480,10 @@ def _transaction(
                                 output = func(*args, **kwargs)
                                 txn_output["output"] = utils.serialize(output)
                                 assert (
-                                    ctx.sql_session is not None
+                                    ctx.db is not None
                                 ), "Cannot find a database connection"
                                 ApplicationDatabase.record_transaction_output(
-                                    ctx.sql_session, txn_output
+                                    ctx.db, txn_output
                                 )
                                 break
                         except DBAPIError as dbapi_error:

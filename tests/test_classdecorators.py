@@ -204,7 +204,7 @@ def test_simple_workflow_static(dbos: DBOS) -> None:
         @staticmethod
         @DBOS.transaction()
         def test_transaction(var2: str) -> str:
-            rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+            rows = DBOS.db.execute(sa.text("SELECT 1")).fetchall()
             DBOSTestClassStatic.txn_counter += 1
             DBOS.logger.info("I'm test_transaction")
             return var2 + str(rows[0][0])
@@ -243,7 +243,7 @@ def test_simple_workflow_class(dbos: DBOS) -> None:
         @classmethod
         @DBOS.transaction()
         def test_transaction(cls, var2: str) -> str:
-            rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+            rows = DBOS.db.execute(sa.text("SELECT 1")).fetchall()
             DBOSTestClassClass.txn_counter += 1
             DBOS.logger.info("I'm test_transaction")
             return var2 + str(rows[0][0])
@@ -294,7 +294,7 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
 
         @DBOS.transaction()
         def test_transaction(self, var2: str) -> str:
-            rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+            rows = DBOS.db.execute(sa.text("SELECT 1")).fetchall()
             self.txn_counter += 1
             DBOS.logger.info("I'm test_transaction")
             return var2 + str(rows[0][0])

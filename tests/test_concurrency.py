@@ -60,7 +60,7 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
     # Need to set isolation level to a lower one, otherwise it gets serialization error instead (we already handle it correctly by automatic retries).
     @DBOS.transaction(isolation_level="REPEATABLE READ")
     def test_transaction() -> str:
-        DBOS.sql_session.execute(text("SELECT 1")).fetchall()
+        DBOS.db.execute(text("SELECT 1")).fetchall()
         nonlocal txn_count
         txn_count += 1
         condition.acquire()
