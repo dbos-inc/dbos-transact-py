@@ -1,4 +1,5 @@
-"""Added system tables
+"""
+Add system tables.
 
 Revision ID: 5c361fc04708
 Revises: 

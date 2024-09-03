@@ -44,6 +44,8 @@ def start() -> None:
 
         def signal_handler(signum: int, frame: Any) -> None:
             """
+            Forward kill signals to children.
+
             When we receive a signal, send it to the entire process group of the child.
             If that doesn't work, SIGKILL them then exit.
             """

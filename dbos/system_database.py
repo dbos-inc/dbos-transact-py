@@ -38,6 +38,8 @@ if TYPE_CHECKING:
 
 
 class WorkflowStatusString(Enum):
+    """Enumeration of values allowed for `WorkflowSatusInternal.status`."""
+
     PENDING = "PENDING"
     SUCCESS = "SUCCESS"
     ERROR = "ERROR"
@@ -89,6 +91,22 @@ class GetEventWorkflowContext(TypedDict):
 
 
 class GetWorkflowsInput:
+    """
+    Structure for argument to `get_workflows` function.
+
+    This specifies the search criteria for workflow retrieval by `get_workflows`.
+
+    Attributes:
+       name(str):  The name of the workflow function
+       authenticated_user(str):  The name of the user who invoked the function
+       start_time(str): Beginning of search range for time of invocation, in ISO 8601 format
+       end_time(str): End of search range for time of invocation, in ISO 8601 format
+       status(str): Current status of the workflow invocation (see `WorkflowStatusString`)
+       application_version(str): Application version that invoked the workflow
+       limit(int): Limit on number of returned records
+
+    """
+
     def __init__(self) -> None:
         self.name: Optional[str] = None  # The name of the workflow function
         self.authenticated_user: Optional[str] = None  # The user who ran the workflow.
@@ -892,9 +910,7 @@ class SystemDatabase:
         return value
 
     def _flush_workflow_status_buffer(self) -> None:
-        """
-        Export the workflow status buffer to the database, up to the batch size.
-        """
+        """Export the workflow status buffer to the database, up to the batch size."""
         if len(self._workflow_status_buffer) == 0:
             return
 
@@ -921,9 +937,7 @@ class SystemDatabase:
                     break
 
     def _flush_workflow_inputs_buffer(self) -> None:
-        """
-        Export the workflow inputs buffer to the database, up to the batch size.
-        """
+        """Export the workflow inputs buffer to the database, up to the batch size."""
         if len(self._workflow_inputs_buffer) == 0:
             return
 
@@ -949,9 +963,7 @@ class SystemDatabase:
                     break
 
     def flush_workflow_buffers(self) -> None:
-        """
-        A background thread that flushes the workflow status and inputs buffers periodically.
-        """
+        """Flush the workflow status and inputs buffers periodically, via a background thread."""
         while self._run_background_processes:
             try:
                 self._is_flushing_status_buffer = True

@@ -263,8 +263,23 @@ class DBOSContextSwap:
         return False  # Did not handle
 
 
-# Set next WFID
 class SetWorkflowID:
+    """
+    Set the workflow ID to be used for the enclosed workflow invocation.
+
+    Typical Usage
+        ```
+        with SetWorkflowID(<workflow ID>):
+            result = workflow_function(...)
+        ```
+
+        or
+        ```
+        with SetWorkflowID(<workflow ID>):
+            wf_handle = start_workflow(workflow_function, ...)
+        ```
+    """
+
     def __init__(self, wfid: str) -> None:
         self.created_ctx = False
         self.wfid = wfid

@@ -1,8 +1,19 @@
+"""Errors thrown by DBOS."""
+
 from enum import Enum
 from typing import Optional
 
 
 class DBOSException(Exception):
+    """
+    Base class of DBOS Exceptions.
+
+    Attributes:
+        message(str): The error message string
+        dbos_error_code(DBOSErrorCode): The error code, from the `DBOSErrorCode` enum
+
+    """
+
     def __init__(self, message: str, dbos_error_code: Optional[int] = None):
         self.message = message
         self.dbos_error_code = dbos_error_code
@@ -26,6 +37,8 @@ class DBOSErrorCode(Enum):
 
 
 class DBOSWorkflowConflictIDError(DBOSException):
+    """Exception raised when a workflow database record already exists."""
+
     def __init__(self, workflow_id: str):
         super().__init__(
             f"Conflicting workflow ID {workflow_id}",
@@ -34,6 +47,8 @@ class DBOSWorkflowConflictIDError(DBOSException):
 
 
 class DBOSRecoveryError(DBOSException):
+    """Exception raised when a workflow recovery fails."""
+
     def __init__(self, workflow_id: str, message: Optional[str] = None):
         super().__init__(
             f"Recovery error for workflow ID {workflow_id}: {message}",
@@ -42,6 +57,8 @@ class DBOSRecoveryError(DBOSException):
 
 
 class DBOSInitializationError(DBOSException):
+    """Exception raised when DBOS initialization did not complete."""
+
     def __init__(self, message: str):
         super().__init__(
             f"Error initializing DBOS Transact: {message}",
@@ -50,6 +67,8 @@ class DBOSInitializationError(DBOSException):
 
 
 class DBOSWorkflowFunctionNotFoundError(DBOSException):
+    """Exception raised when the database refers to a workflow function that is not registered in the codebase."""
+
     def __init__(self, workflow_id: str, message: Optional[str] = None):
         super().__init__(
             f"Workflow function not found for workflow ID {workflow_id}: {message}",
@@ -58,6 +77,8 @@ class DBOSWorkflowFunctionNotFoundError(DBOSException):
 
 
 class DBOSNonExistentWorkflowError(DBOSException):
+    """Exception raised when a workflow database record does not exist for a given ID."""
+
     def __init__(self, destination_id: str):
         super().__init__(
             f"Sent to non-existent destination workflow ID: {destination_id}",
@@ -66,6 +87,8 @@ class DBOSNonExistentWorkflowError(DBOSException):
 
 
 class DBOSDuplicateWorkflowEventError(DBOSException):
+    """Exception raised when a workflow attempts to set an event value more than once per key."""
+
     def __init__(self, workflow_id: str, key: str):
         super().__init__(
             f"Workflow {workflow_id} has already emitted an event with key {key}",
@@ -74,6 +97,8 @@ class DBOSDuplicateWorkflowEventError(DBOSException):
 
 
 class DBOSNotAuthorizedError(DBOSException):
+    """Exception raised by DBOS role-based security when the user is not authorized to access a function."""
+
     def __init__(self, msg: str):
         super().__init__(
             msg,
@@ -82,6 +107,8 @@ class DBOSNotAuthorizedError(DBOSException):
 
 
 class DBOSCommunicatorMaxRetriesExceededError(DBOSException):
+    """Exception raised when a communicator function was retried the maximimum number of times without success."""
+
     def __init__(self) -> None:
         super().__init__(
             "Communicator reached maximum retries.",
