@@ -28,7 +28,7 @@ def test_transaction_errors(dbos: DBOS) -> None:
     def test_noretry_transaction() -> None:
         nonlocal retry_counter
         retry_counter += 1
-        DBOS.db.execute(sa.text("selct abc from c;")).fetchall()
+        DBOS.sql_session.execute(sa.text("selct abc from c;")).fetchall()
 
     res = test_retry_transaction(10)
     assert res == 10
@@ -84,7 +84,7 @@ def test_notification_errors(dbos: DBOS) -> None:
 def test_buffer_flush_errors(dbos: DBOS) -> None:
     @DBOS.transaction()
     def test_transaction(var: str) -> str:
-        rows = DBOS.db.execute(sa.text("SELECT 1")).fetchall()
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         return var + str(rows[0][0])
 
     cur_time: str = datetime.datetime.now().isoformat()

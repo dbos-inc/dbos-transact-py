@@ -611,7 +611,7 @@ class DBOS:
         return config
 
     @classproperty
-    def db(cls) -> Session:
+    def sql_session(cls) -> Session:
         """Return the SQLAlchemy `Session` for the current context, which must be within a transaction function."""
         ctx = assert_current_dbos_context()
         assert ctx.is_transaction(), "db is only available within a transaction."

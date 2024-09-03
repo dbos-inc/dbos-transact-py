@@ -34,7 +34,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     @DBOS.transaction()
     def test_transaction(var: str) -> str:
-        rows = DBOS.db.execute(sa.text("SELECT 1")).fetchall()
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         return var + str(rows[0][0])
 
     @DBOS.step()
@@ -71,7 +71,7 @@ def test_start_workflow(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     @DBOS.transaction()
     def test_transaction(var: str) -> str:
-        rows = DBOS.db.execute(sa.text("SELECT 1")).fetchall()
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         return var + str(rows[0][0])
 
     @DBOS.step()

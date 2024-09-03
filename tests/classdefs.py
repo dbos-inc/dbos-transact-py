@@ -30,7 +30,7 @@ class DBOSTestClass(DBOSConfiguredInstance):
     @classmethod
     @DBOS.transaction()
     def test_transaction_cls(cls, var2: str) -> str:
-        rows = DBOS.db.execute(sa.text("SELECT 1")).fetchall()
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         cls.txn_counter_c += 1
         return var2 + str(rows[0][0])
 
@@ -49,7 +49,7 @@ class DBOSTestClass(DBOSConfiguredInstance):
 
     @DBOS.transaction()
     def test_transaction(self, var2: str) -> str:
-        rows = DBOS.db.execute(sa.text("SELECT 1")).fetchall()
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         self.txn_counter += 1
         return var2 + str(rows[0][0])
 
