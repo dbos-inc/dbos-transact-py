@@ -19,20 +19,18 @@ from dbos.context import (
     DBOSContextEnsure,
     DBOSContextSwap,
     EnterDBOSChildWorkflow,
-    EnterDBOSCommunicator,
+    EnterDBOSStep,
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
     OperationType,
     SetWorkflowID,
     TracedAttributes,
     assert_current_dbos_context,
-    clear_local_dbos_context,
     get_local_dbos_context,
-    set_local_dbos_context,
 )
 from dbos.error import (
-    DBOSCommunicatorMaxRetriesExceededError,
     DBOSException,
+    DBOSMaxStepRetriesExceeded,
     DBOSNonExistentWorkflowError,
     DBOSRecoveryError,
     DBOSWorkflowConflictIDError,
@@ -61,7 +59,6 @@ if TYPE_CHECKING:
     from dbos.dbos import IsolationLevel
 
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.orm import Session
 
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
@@ -362,7 +359,7 @@ def _start_workflow(
 
     # Sequence of events for starting a workflow:
     #   First - is there a WF already running?
-    #      (and not in tx/comm as that is an error)
+    #      (and not in step as that is an error)
     #   Assign an ID to the workflow, if it doesn't have an app-assigned one
     #      If this is a root workflow, assign a new ID
     #      If this is a child workflow, assign parent wf id with call# suffix
@@ -370,7 +367,7 @@ def _start_workflow(
     #   Pass the new context to a worker thread that will run the wf function
     cur_ctx = get_local_dbos_context()
     if cur_ctx is not None and cur_ctx.is_within_workflow():
-        assert cur_ctx.is_workflow()  # Not in tx / comm
+        assert cur_ctx.is_workflow()  # Not in a step
         cur_ctx.function_id += 1
         if len(cur_ctx.id_assigned_for_next_workflow) == 0:
             cur_ctx.id_assigned_for_next_workflow = (
@@ -517,7 +514,7 @@ def _transaction(
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             rr: Optional[str] = check_required_roles(func, fi)
             # Entering transaction is allowed:
-            #  In a workflow (that is not in a transaction / comm already)
+            #  In a workflow (that is not in a step already)
             #  Not in a workflow (we will start the single op workflow)
             ctx = get_local_dbos_context()
             if ctx and ctx.is_within_workflow():
@@ -544,7 +541,7 @@ def _transaction(
     return decorator
 
 
-def _communicator(
+def _step(
     dbosreg: "_DBOSRegistry",
     *,
     retries_allowed: bool = False,
@@ -554,7 +551,7 @@ def _communicator(
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
 
-        def invoke_comm(*args: Any, **kwargs: Any) -> Any:
+        def invoke_step(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:
                 raise DBOSException(
                     f"Function {func.__name__} invoked before DBOS initialized"
@@ -563,10 +560,10 @@ def _communicator(
 
             attributes: TracedAttributes = {
                 "name": func.__name__,
-                "operationType": OperationType.COMMUNICATOR.value,
+                "operationType": OperationType.STEP.value,
             }
-            with EnterDBOSCommunicator(attributes) as ctx:
-                comm_output: OperationResultInternal = {
+            with EnterDBOSStep(attributes) as ctx:
+                step_output: OperationResultInternal = {
                     "workflow_uuid": ctx.workflow_id,
                     "function_id": ctx.function_id,
                     "output": None,
@@ -591,24 +588,24 @@ def _communicator(
                 for attempt in range(1, local_max_attempts + 1):
                     try:
                         output = func(*args, **kwargs)
-                        comm_output["output"] = utils.serialize(output)
+                        step_output["output"] = utils.serialize(output)
                         error = None
                         break
                     except Exception as err:
                         error = err
                         if retries_allowed:
                             dbos.logger.warning(
-                                f"Communicator being automatically retried. (attempt {attempt} of {local_max_attempts}). {traceback.format_exc()}"
+                                f"Step being automatically retried. (attempt {attempt} of {local_max_attempts}). {traceback.format_exc()}"
                             )
                             ctx.get_current_span().add_event(
-                                f"Communicator attempt {attempt} failed",
+                                f"Step attempt {attempt} failed",
                                 {
                                     "error": str(error),
                                     "retryIntervalSeconds": local_interval_seconds,
                                 },
                             )
                             if attempt == local_max_attempts:
-                                error = DBOSCommunicatorMaxRetriesExceededError()
+                                error = DBOSMaxStepRetriesExceeded()
                             else:
                                 time.sleep(local_interval_seconds)
                                 local_interval_seconds = min(
@@ -616,10 +613,10 @@ def _communicator(
                                     max_retry_interval_seconds,
                                 )
 
-                comm_output["error"] = (
+                step_output["error"] = (
                     utils.serialize(error) if error is not None else None
                 )
-                dbos.sys_db.record_operation_result(comm_output)
+                dbos.sys_db.record_operation_result(step_output)
                 if error is not None:
                     raise error
                 return output
@@ -629,20 +626,18 @@ def _communicator(
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             rr: Optional[str] = check_required_roles(func, fi)
-            # Entering communicator is allowed:
-            #  In a communicator already, just call the original function directly.
-            #  In a workflow (that is not in a transaction / comm already)
+            # Entering step is allowed:
+            #  In a step already, just call the original function directly.
+            #  In a workflow (that is not in a step already)
             #  Not in a workflow (we will start the single op workflow)
             ctx = get_local_dbos_context()
-            if ctx and ctx.is_communicator():
+            if ctx and ctx.is_step():
                 # Call the original function directly
                 return func(*args, **kwargs)
             if ctx and ctx.is_within_workflow():
-                assert (
-                    ctx.is_workflow()
-                ), "Communicators must be called from within workflows"
+                assert ctx.is_workflow(), "Steps must be called from within workflows"
                 with DBOSAssumeRole(rr):
-                    return invoke_comm(*args, **kwargs)
+                    return invoke_step(*args, **kwargs)
             else:
                 tempwf = dbosreg.workflow_info_map.get("<temp>." + func.__qualname__)
                 assert tempwf
@@ -653,7 +648,7 @@ def _communicator(
 
         wrapped_wf = _workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
-        set_temp_workflow_type(temp_wf, "communicator")
+        set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
 
         return cast(F, wrapper)
@@ -668,10 +663,10 @@ def _send(
         attributes: TracedAttributes = {
             "name": "send",
         }
-        with EnterDBOSCommunicator(attributes) as ctx:
+        with EnterDBOSStep(attributes) as ctx:
             dbos.sys_db.send(
                 ctx.workflow_id,
-                ctx.curr_comm_function_id,
+                ctx.curr_step_function_id,
                 destination_id,
                 message,
                 topic,
@@ -697,12 +692,12 @@ def _recv(
         attributes: TracedAttributes = {
             "name": "recv",
         }
-        with EnterDBOSCommunicator(attributes) as ctx:
+        with EnterDBOSStep(attributes) as ctx:
             ctx.function_id += 1  # Reserve for the sleep
             timeout_function_id = ctx.function_id
             return dbos.sys_db.recv(
                 ctx.workflow_id,
-                ctx.curr_comm_function_id,
+                ctx.curr_step_function_id,
                 timeout_function_id,
                 topic,
                 timeout_seconds,
@@ -722,9 +717,9 @@ def _set_event(dbos: "DBOS", key: str, value: Any) -> None:
         attributes: TracedAttributes = {
             "name": "set_event",
         }
-        with EnterDBOSCommunicator(attributes) as ctx:
+        with EnterDBOSStep(attributes) as ctx:
             dbos.sys_db.set_event(
-                ctx.workflow_id, ctx.curr_comm_function_id, key, value
+                ctx.workflow_id, ctx.curr_step_function_id, key, value
             )
     else:
         # Cannot call it from outside of a workflow
@@ -743,12 +738,12 @@ def _get_event(
         attributes: TracedAttributes = {
             "name": "get_event",
         }
-        with EnterDBOSCommunicator(attributes) as ctx:
+        with EnterDBOSStep(attributes) as ctx:
             ctx.function_id += 1
             timeout_function_id = ctx.function_id
             caller_ctx: GetEventWorkflowContext = {
                 "workflow_uuid": ctx.workflow_id,
-                "function_id": ctx.curr_comm_function_id,
+                "function_id": ctx.curr_step_function_id,
                 "timeout_function_id": timeout_function_id,
             }
             return dbos.sys_db.get_event(workflow_id, key, timeout_seconds, caller_ctx)

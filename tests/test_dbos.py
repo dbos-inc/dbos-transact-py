@@ -15,7 +15,7 @@ from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle, WorkflowStatus
 
 # Private API because this is a test
 from dbos.context import assert_current_dbos_context, get_local_dbos_context
-from dbos.error import DBOSCommunicatorMaxRetriesExceededError
+from dbos.error import DBOSMaxStepRetriesExceeded
 from dbos.system_database import GetWorkflowsInput
 from tests.conftest import default_config
 
@@ -23,14 +23,14 @@ from tests.conftest import default_config
 def test_simple_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
-    comm_counter: int = 0
+    step_counter: int = 0
 
     @DBOS.workflow()
     def test_workflow(var: str, var2: str) -> str:
         nonlocal wf_counter
         wf_counter += 1
         res = test_transaction(var2)
-        res2 = test_communicator(var)
+        res2 = test_step(var)
         DBOS.logger.info("I'm test_workflow")
         return res + res2
 
@@ -42,11 +42,11 @@ def test_simple_workflow(dbos: DBOS) -> None:
         DBOS.logger.info("I'm test_transaction")
         return var2 + str(rows[0][0])
 
-    @DBOS.communicator()
-    def test_communicator(var: str) -> str:
-        nonlocal comm_counter
-        comm_counter += 1
-        DBOS.logger.info("I'm test_communicator")
+    @DBOS.step()
+    def test_step(var: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
+        DBOS.logger.info("I'm test_step")
         return var
 
     assert test_workflow("bob", "bob") == "bob1bob"
@@ -58,7 +58,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow("alice", "alice") == "alice1alice"
     assert txn_counter == 2  # Only increment once
-    assert comm_counter == 2  # Only increment once
+    assert step_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid
     handle = DBOS.execute_workflow_id(wfuuid)
@@ -69,7 +69,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
 def test_child_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
-    comm_counter: int = 0
+    step_counter: int = 0
 
     @DBOS.transaction()
     def test_transaction(var2: str) -> str:
@@ -79,11 +79,11 @@ def test_child_workflow(dbos: DBOS) -> None:
         DBOS.logger.info("I'm test_transaction")
         return var2 + str(rows[0][0])
 
-    @DBOS.communicator()
-    def test_communicator(var: str) -> str:
-        nonlocal comm_counter
-        comm_counter += 1
-        DBOS.logger.info("I'm test_communicator")
+    @DBOS.step()
+    def test_step(var: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
+        DBOS.logger.info("I'm test_step")
         return var
 
     @DBOS.workflow()
@@ -96,7 +96,7 @@ def test_child_workflow(dbos: DBOS) -> None:
         nonlocal wf_counter
         wf_counter += 1
         res = test_transaction(var2)
-        res2 = test_communicator(var)
+        res2 = test_step(var)
         return res + res2
 
     @DBOS.workflow()
@@ -159,7 +159,7 @@ def test_child_workflow(dbos: DBOS) -> None:
 def test_exception_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
-    comm_counter: int = 0
+    step_counter: int = 0
 
     @DBOS.transaction()
     def exception_transaction(var: str) -> str:
@@ -167,10 +167,10 @@ def test_exception_workflow(dbos: DBOS) -> None:
         txn_counter += 1
         raise Exception(var)
 
-    @DBOS.communicator()
-    def exception_communicator(var: str) -> str:
-        nonlocal comm_counter
-        comm_counter += 1
+    @DBOS.step()
+    def exception_step(var: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
         raise Exception(var)
 
     @DBOS.workflow()
@@ -185,7 +185,7 @@ def test_exception_workflow(dbos: DBOS) -> None:
             err1 = e
 
         try:
-            exception_communicator("test error")
+            exception_step("test error")
         except Exception as e:
             err2 = e
         assert err1 is not None and err2 is not None
@@ -209,7 +209,7 @@ def test_exception_workflow(dbos: DBOS) -> None:
             exception_workflow()
     assert "test error" == str(exc_info.value)
     assert txn_counter == 2  # Only increment once
-    assert comm_counter == 2  # Only increment once
+    assert step_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid, shouldn't throw errors
     handle = DBOS.execute_workflow_id(wfuuid)
@@ -221,7 +221,7 @@ def test_exception_workflow(dbos: DBOS) -> None:
 
 def test_temp_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
-    comm_counter: int = 0
+    step_counter: int = 0
 
     cur_time: str = datetime.datetime.now().isoformat()
     gwi: GetWorkflowsInput = GetWorkflowsInput()
@@ -234,21 +234,21 @@ def test_temp_workflow(dbos: DBOS) -> None:
         txn_counter += 1
         return var2 + str(rows[0][0])
 
-    @DBOS.communicator()
-    def test_communicator(var: str) -> str:
-        nonlocal comm_counter
-        comm_counter += 1
+    @DBOS.step()
+    def test_step(var: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
         return var
 
-    @DBOS.communicator()
-    def call_communicator(var: str) -> str:
-        return test_communicator(var)
+    @DBOS.step()
+    def call_step(var: str) -> str:
+        return test_step(var)
 
     assert get_local_dbos_context() is None
     res = test_transaction("var2")
     assert res == "var21"
     assert get_local_dbos_context() is None
-    res = test_communicator("var")
+    res = test_step("var")
     assert res == "var"
 
     # Wait for buffers to flush
@@ -265,17 +265,17 @@ def test_temp_workflow(dbos: DBOS) -> None:
     assert wfi2["name"].startswith("<temp>")
 
     assert txn_counter == 1
-    assert comm_counter == 1
+    assert step_counter == 1
 
-    res = call_communicator("var2")
+    res = call_step("var2")
     assert res == "var2"
-    assert comm_counter == 2
+    assert step_counter == 2
 
 
 def test_temp_workflow_errors(dbos: DBOS) -> None:
     txn_counter: int = 0
-    comm_counter: int = 0
-    retried_comm_counter: int = 0
+    step_counter: int = 0
+    retried_step_counter: int = 0
 
     cur_time: str = datetime.datetime.now().isoformat()
     gwi: GetWorkflowsInput = GetWorkflowsInput()
@@ -287,16 +287,16 @@ def test_temp_workflow_errors(dbos: DBOS) -> None:
         txn_counter += 1
         raise Exception(var2)
 
-    @DBOS.communicator()
-    def test_communicator(var: str) -> str:
-        nonlocal comm_counter
-        comm_counter += 1
+    @DBOS.step()
+    def test_step(var: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
         raise Exception(var)
 
-    @DBOS.communicator(retries_allowed=True)
-    def test_retried_communicator(var: str) -> str:
-        nonlocal retried_comm_counter
-        retried_comm_counter += 1
+    @DBOS.step(retries_allowed=True)
+    def test_retried_step(var: str) -> str:
+        nonlocal retried_step_counter
+        retried_step_counter += 1
         raise Exception(var)
 
     with pytest.raises(Exception) as exc_info:
@@ -304,15 +304,15 @@ def test_temp_workflow_errors(dbos: DBOS) -> None:
     assert "tval" == str(exc_info.value)
 
     with pytest.raises(Exception) as exc_info:
-        test_communicator("cval")
+        test_step("cval")
     assert "cval" == str(exc_info.value)
 
-    with pytest.raises(DBOSCommunicatorMaxRetriesExceededError) as exc_info:
-        test_retried_communicator("rval")
+    with pytest.raises(DBOSMaxStepRetriesExceeded) as exc_info:
+        test_retried_step("rval")
 
     assert txn_counter == 1
-    assert comm_counter == 1
-    assert retried_comm_counter == 3
+    assert step_counter == 1
+    assert retried_step_counter == 3
 
 
 def test_recovery_workflow(dbos: DBOS) -> None:

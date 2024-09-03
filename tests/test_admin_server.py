@@ -54,7 +54,7 @@ def test_admin_recovery(dbos: DBOS) -> None:
     os.environ["DBOS__APPVERSION"] = "testversion"
     os.environ["DBOS__APPID"] = "testappid"
 
-    comm_counter: int = 0
+    step_counter: int = 0
     wf_counter: int = 0
 
     @DBOS.workflow()
@@ -62,13 +62,13 @@ def test_admin_recovery(dbos: DBOS) -> None:
         DBOS.logger.info("WFID: " + DBOS.workflow_id)
         nonlocal wf_counter
         wf_counter += 1
-        res = test_communicator(var2)
+        res = test_step(var2)
         return res + var
 
-    @DBOS.communicator()
-    def test_communicator(var2: str) -> str:
-        nonlocal comm_counter
-        comm_counter += 1
+    @DBOS.step()
+    def test_step(var2: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
         return var2 + "1"
 
     wfuuid = str(uuid.uuid4())

@@ -18,18 +18,16 @@ from .logger import dbos_logger
 from .tracer import dbos_tracer
 
 
-# Values must be the same as in TypeScript Transact
+# These are used to tag OTel traces
 class OperationType(Enum):
     HANDLER = "handler"
     WORKFLOW = "workflow"
     TRANSACTION = "transaction"
-    COMMUNICATOR = "communicator"
+    STEP = "step"
     PROCEDURE = "procedure"
 
 
-OperationTypes = Literal[
-    "handler", "workflow", "transaction", "communicator", "procedure"
-]
+OperationTypes = Literal["handler", "workflow", "transaction", "step", "procedure"]
 
 
 # Keys must be the same as in TypeScript Transact
@@ -64,7 +62,7 @@ class DBOSContext:
         self.function_id: int = -1
         self.in_recovery: bool = False
 
-        self.curr_comm_function_id: int = -1
+        self.curr_step_function_id: int = -1
         self.curr_tx_function_id: int = -1
         self.sql_session: Optional[Session] = None
         self.spans: list[Span] = []
@@ -117,26 +115,26 @@ class DBOSContext:
     def is_workflow(self) -> bool:
         return (
             len(self.workflow_id) > 0
-            and not self.is_communicator()
+            and not self.is_step()
             and not self.is_transaction()
         )
 
     def is_transaction(self) -> bool:
         return self.sql_session is not None
 
-    def is_communicator(self) -> bool:
-        return self.curr_comm_function_id >= 0
+    def is_step(self) -> bool:
+        return self.curr_step_function_id >= 0
 
-    def start_communicator(
+    def start_step(
         self,
         fid: int,
         attributes: TracedAttributes,
     ) -> None:
-        self.curr_comm_function_id = fid
+        self.curr_step_function_id = fid
         self._start_span(attributes)
 
-    def end_communicator(self, exc_value: Optional[BaseException]) -> None:
-        self.curr_comm_function_id = -1
+    def end_step(self, exc_value: Optional[BaseException]) -> None:
+        self.curr_step_function_id = -1
         self._end_span(exc_value)
 
     def start_transaction(
@@ -375,7 +373,7 @@ class EnterDBOSChildWorkflow:
     def __enter__(self) -> DBOSContext:
         ctx = assert_current_dbos_context()
         self.parent_ctx = ctx
-        assert ctx.is_workflow()  # Is in a workflow and not in tx/comm
+        assert ctx.is_workflow()  # Is in a workflow and not in a step
         ctx.function_id += 1
         if len(ctx.id_assigned_for_next_workflow) == 0:
             ctx.id_assigned_for_next_workflow = (
@@ -401,7 +399,7 @@ class EnterDBOSChildWorkflow:
         return False  # Did not handle
 
 
-class EnterDBOSCommunicator:
+class EnterDBOSStep:
     def __init__(
         self,
         attributes: TracedAttributes,
@@ -412,7 +410,7 @@ class EnterDBOSCommunicator:
         ctx = assert_current_dbos_context()
         assert ctx.is_workflow()
         ctx.function_id += 1
-        ctx.start_communicator(ctx.function_id, attributes=self.attributes)
+        ctx.start_step(ctx.function_id, attributes=self.attributes)
         return ctx
 
     def __exit__(
@@ -422,8 +420,8 @@ class EnterDBOSCommunicator:
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
         ctx = assert_current_dbos_context()
-        assert ctx.is_communicator()
-        ctx.end_communicator(exc_value)
+        assert ctx.is_step()
+        ctx.end_step(exc_value)
         return False  # Did not handle
 
 

@@ -32,15 +32,15 @@ def test_concurrent_workflows(dbos: DBOS) -> None:
 
 def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
     condition = threading.Condition()
-    comm_count = 0
+    step_count = 0
     txn_count = 0
 
-    @DBOS.communicator()
-    def test_communicator() -> str:
-        nonlocal comm_count
-        comm_count += 1
+    @DBOS.step()
+    def test_step() -> str:
+        nonlocal step_count
+        step_count += 1
         condition.acquire()
-        if comm_count == 1:
+        if step_count == 1:
             # Wait for the other one to notify
             condition.wait()
         else:
@@ -50,12 +50,12 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def test_workflow() -> str:
-        res = test_communicator()
+        res = test_step()
         return res
 
     def test_comm_thread(id: str) -> str:
         with SetWorkflowID(id):
-            return test_communicator()
+            return test_step()
 
     # Need to set isolation level to a lower one, otherwise it gets serialization error instead (we already handle it correctly by automatic retries).
     @DBOS.transaction(isolation_level="REPEATABLE READ")
@@ -88,7 +88,7 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
     assert wf_handle2.get_result() == wfuuid
 
     # Make sure temp workflows can handle conflicts as well.
-    comm_count = 0
+    step_count = 0
     wfuuid = str(uuid.uuid4())
     with ThreadPoolExecutor(max_workers=2) as executor:
         future1 = executor.submit(test_comm_thread, wfuuid)

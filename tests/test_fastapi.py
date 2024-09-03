@@ -29,7 +29,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         DBOS.span.set_attribute("test_key", "test_value")
         assert DBOS.request is not None
         res1 = test_transaction(var1)
-        res2 = test_communicator(var2)
+        res2 = test_step(var2)
         return res1 + res2
 
     @DBOS.transaction()
@@ -37,8 +37,8 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         return var + str(rows[0][0])
 
-    @DBOS.communicator()
-    def test_communicator(var: str) -> str:
+    @DBOS.step()
+    def test_step(var: str) -> str:
         return var
 
     response = client.get("/workflow/bob/bob")
@@ -66,7 +66,7 @@ def test_start_workflow(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         DBOS.span.set_attribute("test_key", "test_value")
         assert DBOS.request is not None
         res1 = test_transaction(var1)
-        res2 = test_communicator(var2)
+        res2 = test_step(var2)
         return res1 + res2
 
     @DBOS.transaction()
@@ -74,8 +74,8 @@ def test_start_workflow(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         return var + str(rows[0][0])
 
-    @DBOS.communicator()
-    def test_communicator(var: str) -> str:
+    @DBOS.step()
+    def test_step(var: str) -> str:
         return var
 
     response = client.get("/bob/bob")

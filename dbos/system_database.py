@@ -4,17 +4,7 @@ import select
 import threading
 import time
 from enum import Enum
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Sequence,
-    TypedDict,
-    cast,
-)
+from typing import Any, Dict, List, Literal, Optional, Sequence, TypedDict, cast
 
 import psycopg2
 import sqlalchemy as sa
@@ -32,9 +22,6 @@ from dbos.error import (
 from .dbos_config import ConfigFile
 from .logger import dbos_logger
 from .schemas.system_database import SystemSchema
-
-if TYPE_CHECKING:
-    from dbos.dbos import DBOS
 
 
 class WorkflowStatusString(Enum):
