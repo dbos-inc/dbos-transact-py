@@ -58,6 +58,8 @@ dev = [
     "pdm>=2.18.0",
     "pdm-backend>=2.3.3",
     "GitPython>=3.1.43",
+    "confluent-kafka>=2.5.3",
+    "types-confluent-kafka>=1.2.2",
 ]
 
 [tool.black]
