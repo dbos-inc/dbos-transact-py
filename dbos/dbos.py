@@ -72,7 +72,7 @@ from dbos.error import DBOSException, DBOSNonExistentWorkflowError
 
 from .application_database import ApplicationDatabase
 from .dbos_config import ConfigFile, load_config, set_env_vars
-from .logger import config_logger, dbos_logger, init_logger
+from .logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
 from .system_database import SystemDatabase
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
@@ -280,6 +280,9 @@ class DBOS:
         set_temp_workflow_type(send_temp_workflow, "send")
         self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
 
+        for handler in dbos_logger.handlers:
+            handler.flush()
+
     @property
     def executor(self) -> ThreadPoolExecutor:
         if self._executor is None:
@@ -336,9 +339,13 @@ class DBOS:
             self.executor.submit(func, *args, **kwargs)
         self._registry.pollers = []
 
-        dbos_logger.info("DBOS initialized")
+        dbos_logger.info("DBOS launched")
+
+        # Flush handlers and add OTLP to all loggers if enabled
+        # to enable their export in DBOS Cloud
         for handler in dbos_logger.handlers:
             handler.flush()
+        add_otlp_to_all_loggers()
 
     def _destroy(self) -> None:
         self._initialized = False

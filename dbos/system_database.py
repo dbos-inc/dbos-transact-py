@@ -734,7 +734,6 @@ class SystemDatabase:
                 )
                 notification_cursor = self.notification_conn.cursor()
 
-                dbos_logger.info("Listening to notifications")
                 notification_cursor.execute("LISTEN dbos_notifications_channel")
                 notification_cursor.execute("LISTEN dbos_workflow_events_channel")
                 while self._run_background_processes:
