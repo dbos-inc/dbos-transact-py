@@ -266,6 +266,24 @@ class DBOS:
         self.fastapi: Optional["FastAPI"] = fastapi
         self._executor: Optional[ThreadPoolExecutor] = None
         if self.fastapi is not None:
+            from fastapi.responses import JSONResponse
+
+            @self.fastapi.exception_handler(DBOSException)
+            async def role_error_handler(
+                request: Request, exc: DBOSException
+            ) -> JSONResponse:
+                status_code = 500
+                if exc.status_code is not None:
+                    status_code = exc.status_code
+                return JSONResponse(
+                    status_code=status_code,
+                    content={
+                        "message": str(exc.message),
+                        "dbos_error_code": str(exc.dbos_error_code),
+                        "dbos_error": str(exc.__class__.__name__),
+                    },
+                )
+
             from dbos.fastapi import setup_fastapi_middleware
 
             setup_fastapi_middleware(self.fastapi)

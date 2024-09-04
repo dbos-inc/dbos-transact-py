@@ -3,7 +3,6 @@ from typing import Awaitable, Callable, Tuple
 import pytest
 import sqlalchemy as sa
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -12,11 +11,7 @@ from dbos import DBOS, DBOSContextEnsure
 
 # Private API because this is a unit test
 from dbos.context import assert_current_dbos_context
-from dbos.error import (
-    DBOSDuplicateWorkflowEventError,
-    DBOSException,
-    DBOSNotAuthorizedError,
-)
+from dbos.error import DBOSDuplicateWorkflowEventError, DBOSNotAuthorizedError
 
 
 def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
@@ -37,20 +32,6 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
                     ctx.authenticated_roles = None
 
     app.add_middleware(SetRoleMiddleware)
-
-    @app.exception_handler(DBOSException)
-    async def role_error_handler(request: Request, exc: DBOSException) -> JSONResponse:
-        status_code = 500
-        if exc.status_code is not None:
-            status_code = exc.status_code
-        return JSONResponse(
-            status_code=status_code,
-            content={
-                "message": str(exc.message),
-                "dbos_error_code": str(exc.dbos_error_code),
-                "dbos_error": str(exc.__class__.__name__),
-            },
-        )
 
     @app.get("/dboserror")
     def test_dbos_error() -> None:
@@ -139,3 +120,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     response = client.get("/admin/d")
     assert response.status_code == 403
+    assert (
+        response.text
+        == '{"message":"Function test_admin_endpoint has required roles, but user is not authenticated for any of them","dbos_error_code":"8","dbos_error":"DBOSNotAuthorizedError"}'
+    )
