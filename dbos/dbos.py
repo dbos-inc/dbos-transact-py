@@ -19,6 +19,7 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
+    cast,
 )
 
 from opentelemetry.trace import Span
@@ -266,12 +267,13 @@ class DBOS:
         self.fastapi: Optional["FastAPI"] = fastapi
         self._executor: Optional[ThreadPoolExecutor] = None
         if self.fastapi is not None:
+            from fastapi.requests import Request as FARequest
             from fastapi.responses import JSONResponse
 
-            @self.fastapi.exception_handler(DBOSException)
-            async def role_error_handler(
-                request: Request, exc: DBOSException
+            async def dbos_error_handler(
+                request: FARequest, gexc: Exception
             ) -> JSONResponse:
+                exc: DBOSException = cast(DBOSException, gexc)
                 status_code = 500
                 if exc.status_code is not None:
                     status_code = exc.status_code
@@ -283,6 +285,8 @@ class DBOS:
                         "dbos_error": str(exc.__class__.__name__),
                     },
                 )
+
+            self.fastapi.add_exception_handler(DBOSException, dbos_error_handler)
 
             from dbos.fastapi import setup_fastapi_middleware
 
