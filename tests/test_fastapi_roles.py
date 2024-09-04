@@ -12,7 +12,11 @@ from dbos import DBOS, DBOSContextEnsure
 
 # Private API because this is a unit test
 from dbos.context import assert_current_dbos_context
-from dbos.error import DBOSException, DBOSNotAuthorizedError
+from dbos.error import (
+    DBOSDuplicateWorkflowEventError,
+    DBOSException,
+    DBOSNotAuthorizedError,
+)
 
 
 def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
@@ -34,18 +38,27 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     app.add_middleware(SetRoleMiddleware)
 
-    @app.exception_handler(DBOSNotAuthorizedError)
-    async def role_error_handler(
-        request: Request, exc: DBOSNotAuthorizedError
-    ) -> JSONResponse:
+    @app.exception_handler(DBOSException)
+    async def role_error_handler(request: Request, exc: DBOSException) -> JSONResponse:
+        status_code = 500
+        if exc.status_code is not None:
+            status_code = exc.status_code
         return JSONResponse(
-            status_code=403,
-            content={"detail": str(exc)},
+            status_code=status_code,
+            content={
+                "message": str(exc.message),
+                "dbos_error_code": str(exc.dbos_error_code),
+                "dbos_error": str(exc.__class__.__name__),
+            },
         )
 
     @app.get("/dboserror")
     def test_dbos_error() -> None:
         raise DBOSNotAuthorizedError("test")
+
+    @app.get("/dbosinternalerror")
+    def test_dbos_error_internal() -> None:
+        raise DBOSDuplicateWorkflowEventError("nosuchwf", "test")
 
     @app.get("/open/{var1}")
     @DBOS.required_roles([])
@@ -106,6 +119,9 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     response = client.get("/dboserror")
     assert response.status_code == 403
 
+    response = client.get("/dbosinternalerror")
+    assert response.status_code == 500
+
     response = client.get("/open/a")
     assert response.status_code == 200
     assert response.text == '"a"'
@@ -123,11 +139,3 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     response = client.get("/admin/d")
     assert response.status_code == 403
-
-    # assert exc_info.value.__class__.__qualname__ == DBOSNotAuthorizedError.__qualname__
-    # assert exc_info.value.__class__.__module__ == DBOSNotAuthorizedError.__module__
-    # assert id(exc_info.value.__class__) == id(DBOSNotAuthorizedError)
-
-    # assert isinstance(exc_info.value, DBOSNotAuthorizedError)
-    # assert exc_info.errisinstance(DBOSNotAuthorizedError)
-    # assert str(exc_info.value) == "well no"
