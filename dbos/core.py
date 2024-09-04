@@ -142,7 +142,7 @@ def _init_workflow(
 
     if temp_wf_type != "transaction":
         # Synchronously record the status and inputs for workflows and single-step workflows
-        # We also have to do this for non-transaction workflows because of the foreign key constraint on the operation outputs table
+        # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
         dbos.sys_db.update_workflow_status(status, False, ctx.in_recovery)
         dbos.sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
     else:
