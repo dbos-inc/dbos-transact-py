@@ -286,6 +286,7 @@ class DBOS:
         if launch:
             self.launch()
 
+        dbos_logger.info("DBOS initialized")
         for handler in dbos_logger.handlers:
             handler.flush()
 
