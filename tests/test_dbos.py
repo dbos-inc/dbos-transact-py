@@ -651,55 +651,6 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
     assert stat.recovery_attempts == 0
 
 
-# This makes other tests break if run in the middle of the suite
-# If run at the end of the suite, it fails because something imported fastapi.
-# @pytest.mark.order("last")
-def disabled_test_without_fastapi() -> None:
-    """
-    Since DBOS does not depend on FastAPI directly, verify DBOS works in an environment without FastAPI.
-    """
-    DBOS.destroy()
-    config = default_config()
-
-    # Unimport FastAPI
-    for module_name in list(sys.modules.keys()):
-        if module_name == "fastapi" or module_name.startswith("fastapi."):
-            del sys.modules[module_name]
-
-    # Throw an error if FastAPI is imported
-    class FastAPIBlocker(MetaPathFinder):
-        def find_spec(
-            self, fullname: str, path: Any = None, target: Any = None
-        ) -> Optional[ModuleSpec]:
-            if fullname == "fastapi" or fullname.startswith("fastapi."):
-                raise ImportError(f"Illegal FastAPI import detected: {fullname}")
-            return None
-
-    blocker = FastAPIBlocker()
-    sys.meta_path.insert(0, blocker)
-
-    # Reload all DBOS modules, verifying none import FastAPI
-    try:
-        for module_name in dict(sys.modules.items()):
-            module = sys.modules[module_name]
-            if module_name == "dbos" or module_name.startswith("dbos."):
-                importlib.reload(module)
-    finally:
-        sys.meta_path.remove(blocker)
-
-    dbos = DBOS(config=config)
-
-    try:
-
-        @DBOS.workflow()
-        def test_workflow(var: str) -> str:
-            return var
-
-        assert test_workflow("bob") == "bob"
-    finally:
-        DBOS.destroy()
-
-
 def test_sleep(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_sleep_workflow(secs: float) -> str:

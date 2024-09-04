@@ -1,7 +1,5 @@
 from typing import Awaitable, Callable, Tuple
 
-import pytest
-import sqlalchemy as sa
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -31,7 +29,21 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
                     ctx.authenticated_user = None
                     ctx.authenticated_roles = None
 
-    app.add_middleware(SetRoleMiddleware)
+    # app.add_middleware(SetRoleMiddleware)
+
+    @app.middleware("http")
+    async def authMiddleware(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        with DBOSContextEnsure() as ctx:
+            ctx.authenticated_user = "user1"
+            ctx.authenticated_roles = ["user", "engineer"]
+            try:
+                response = await call_next(request)
+                return response
+            finally:
+                ctx.authenticated_user = None
+                ctx.authenticated_roles = None
 
     @app.get("/dboserror")
     def test_dbos_error() -> None:
