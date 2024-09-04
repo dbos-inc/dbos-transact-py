@@ -644,7 +644,7 @@ class DBOS:
 
     @classproperty
     def request(cls) -> Optional["Request"]:
-        """Return the FastAPI `Request`, if any, associated with the current context."""
+        """Return the HTTP `Request`, if any, associated with the current context."""
         ctx = assert_current_dbos_context()
         return ctx.request
 
