@@ -38,6 +38,7 @@ from dbos.core import (
     _WorkflowHandlePolling,
 )
 from dbos.decorators import classproperty
+from dbos.kafka import KafkaConsumerWorkflow, kafka_consumer
 from dbos.recovery import _recover_pending_workflows, _startup_recovery_thread
 from dbos.registrations import (
     DBOSClassInfo,
@@ -461,6 +462,14 @@ class DBOS:
         """Decorate a workflow function with its invocation schedule."""
 
         return scheduled(_get_or_create_dbos_registry(), cron)
+
+    @classmethod
+    def kafka_consumer(
+        cls, config: dict[str, Any], topics: list[str]
+    ) -> Callable[[KafkaConsumerWorkflow], KafkaConsumerWorkflow]:
+        """Decorate a function to be used as a Kafka consumer."""
+
+        return kafka_consumer(_get_or_create_dbos_registry(), config, topics)
 
     @classmethod
     def start_workflow(

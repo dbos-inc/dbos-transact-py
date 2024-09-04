@@ -1,6 +1,5 @@
 import threading
 import traceback
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable
 
 from confluent_kafka import Consumer, Message
