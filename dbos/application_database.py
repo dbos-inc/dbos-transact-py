@@ -3,6 +3,7 @@ from typing import Optional, TypedDict, cast
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 import sqlalchemy.exc as sa_exc
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from dbos.error import DBOSWorkflowConflictIDError
@@ -95,8 +96,10 @@ class ApplicationDatabase:
                     ),
                 )
             )
-        except sa_exc.IntegrityError:
-            raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
+        except DBAPIError as dbapi_error:
+            if dbapi_error.orig.pgcode == "23505":  # type: ignore
+                raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
+            raise dbapi_error
         except Exception as e:
             raise e
 
@@ -118,8 +121,10 @@ class ApplicationDatabase:
                         ),
                     )
                 )
-        except sa_exc.IntegrityError:
-            raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
+        except DBAPIError as dbapi_error:
+            if dbapi_error.orig.pgcode == "23505":  # type: ignore
+                raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
+            raise dbapi_error
         except Exception as e:
             raise e
 
