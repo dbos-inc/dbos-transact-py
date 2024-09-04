@@ -220,13 +220,13 @@ class DBOSContextEnsure:
     def __init__(self) -> None:
         self.created_ctx = False
 
-    def __enter__(self) -> DBOSContextEnsure:
+    def __enter__(self) -> DBOSContext:
         # Code to create a basic context
         ctx = get_local_dbos_context()
         if ctx is None:
             self.created_ctx = True
             set_local_dbos_context(DBOSContext())
-        return self
+        return assert_current_dbos_context()
 
     def __exit__(
         self,
