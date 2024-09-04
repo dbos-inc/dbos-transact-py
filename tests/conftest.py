@@ -103,7 +103,8 @@ def dbos(
     #     launch themselves.
     # If your test is tricky and has a problem with this, use a different
     #   fixture that does not launch.
-    dbos = DBOS(config=config, launch=True)
+    dbos = DBOS(config=config)
+    dbos.launch()
 
     yield dbos
     DBOS.destroy()

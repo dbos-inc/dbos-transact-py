@@ -472,7 +472,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     )
 
     dbos._destroy()  # Unusual pattern - reusing the memory
-    dbos.__init__(config=config, launch=False)  # type: ignore
+    dbos.__init__(config=config)  # type: ignore
 
     @DBOS.workflow()  # type: ignore
     def test_workflow(var: str) -> str:

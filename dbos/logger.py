@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from dbos.dbos_config import ConfigFile
 
 dbos_logger = logging.getLogger("dbos")
+otlp_handler, otlp_transformer = None, None
 
 
 class DBOSLogTransformer(logging.Filter):
@@ -73,25 +74,28 @@ def config_logger(config: "ConfigFile") -> None:
                 export_timeout_millis=5000,
             )
         )
+        global otlp_handler
         otlp_handler = LoggingHandler(logger_provider=log_provider)
 
         # Attach DBOS-specific attributes to all log entries.
+        global otlp_transformer
         otlp_transformer = DBOSLogTransformer()
 
-        # Direct all logs to OTLP
-        add_otlp_to_all_loggers(otlp_handler, otlp_transformer)
+        # Direct DBOS logs to OTLP
+        dbos_logger.addHandler(otlp_handler)
+        dbos_logger.addFilter(otlp_transformer)
 
 
-def add_otlp_to_all_loggers(
-    otlp_handler: LoggingHandler, otlp_transformer: DBOSLogTransformer
-) -> None:
-    root = logging.root
+def add_otlp_to_all_loggers() -> None:
+    if otlp_handler is not None and otlp_transformer is not None:
+        root = logging.root
 
-    root.addHandler(otlp_handler)
-    root.addFilter(otlp_transformer)
+        root.addHandler(otlp_handler)
+        root.addFilter(otlp_transformer)
 
-    for logger_name in root.manager.loggerDict:
-        logger = logging.getLogger(logger_name)
-        if not logger.propagate:
-            logger.addHandler(otlp_handler)
-        logger.addFilter(otlp_transformer)
+        for logger_name in root.manager.loggerDict:
+            if logger_name != dbos_logger.name:
+                logger = logging.getLogger(logger_name)
+                if not logger.propagate:
+                    logger.addHandler(otlp_handler)
+                logger.addFilter(otlp_transformer)
