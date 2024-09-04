@@ -8,10 +8,10 @@ from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 
 # Public API
-from dbos import DBOS
+from dbos import DBOS, DBOSContextEnsure
 
 # Private API because this is a unit test
-from dbos.context import DBOSContextEnsure, assert_current_dbos_context
+from dbos.context import assert_current_dbos_context
 from dbos.error import DBOSException, DBOSNotAuthorizedError
 
 
@@ -39,7 +39,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         request: Request, exc: DBOSNotAuthorizedError
     ) -> JSONResponse:
         return JSONResponse(
-            status_code=400,
+            status_code=403,
             content={"detail": str(exc)},
         )
 
@@ -104,7 +104,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert response.status_code == 401
 
     response = client.get("/dboserror")
-    assert response.status_code == 400
+    assert response.status_code == 403
 
     response = client.get("/open/a")
     assert response.status_code == 200
@@ -118,15 +118,16 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert response.status_code == 200
     assert response.text == '"c"'
 
-    # response = client.get("/adminalt/d")
-    # assert response.status_code == 400
+    response = client.get("/adminalt/d")
+    assert response.status_code == 403
 
-    with pytest.raises(Exception) as exc_info:
-        response = client.get("/admin/d")
-    assert exc_info.value.__class__.__qualname__ == DBOSNotAuthorizedError.__qualname__
-    assert exc_info.value.__class__.__module__ == DBOSNotAuthorizedError.__module__
-    assert id(exc_info.value.__class__) == id(DBOSNotAuthorizedError)
+    response = client.get("/admin/d")
+    assert response.status_code == 403
 
-    assert isinstance(exc_info.value, DBOSNotAuthorizedError)
-    assert exc_info.errisinstance(DBOSNotAuthorizedError)
-    assert str(exc_info.value) == "well no"
+    # assert exc_info.value.__class__.__qualname__ == DBOSNotAuthorizedError.__qualname__
+    # assert exc_info.value.__class__.__module__ == DBOSNotAuthorizedError.__module__
+    # assert id(exc_info.value.__class__) == id(DBOSNotAuthorizedError)
+
+    # assert isinstance(exc_info.value, DBOSNotAuthorizedError)
+    # assert exc_info.errisinstance(DBOSNotAuthorizedError)
+    # assert str(exc_info.value) == "well no"

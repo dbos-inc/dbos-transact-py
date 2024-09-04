@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:5406291ddfe1bed4b55b468933833e06086192458def0fe542c358a012a5129e"
+content_hash = "sha256:e8efa5c58d0f11b67f9e4ecd96a268a3c5d1818b9b0fdd1ee18e43e50b63775a"
 
 [[metadata.targets]]
 requires_python = ">=3.9"
@@ -1418,6 +1418,21 @@ dependencies = [
 files = [
     {file = "pytest-mock-3.14.0.tar.gz", hash = "sha256:2719255a1efeceadbc056d6bf3df3d1c5015530fb40cf347c0f9afac88410bd0"},
     {file = "pytest_mock-3.14.0-py3-none-any.whl", hash = "sha256:0b72c38033392a5f4621342fe11e9219ac11ec9d375f8e2a0c164539e0d70f6f"},
+]
+
+[[package]]
+name = "pytest-order"
+version = "1.3.0"
+requires_python = ">=3.7"
+summary = "pytest plugin to run your tests in a specific order"
+groups = ["dev"]
+dependencies = [
+    "pytest>=5.0; python_version < \"3.10\"",
+    "pytest>=6.2.4; python_version >= \"3.10\"",
+]
+files = [
+    {file = "pytest_order-1.3.0-py3-none-any.whl", hash = "sha256:2cd562a21380345dd8d5774aa5fd38b7849b6ee7397ca5f6999bbe6e89f07f6e"},
+    {file = "pytest_order-1.3.0.tar.gz", hash = "sha256:51608fec3d3ee9c0adaea94daa124a5c4c1d2bb99b00269f098f414307f23dde"},
 ]
 
 [[package]]

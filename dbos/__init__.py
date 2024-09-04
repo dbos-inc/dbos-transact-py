@@ -1,4 +1,5 @@
 from . import error as error
+from .context import DBOSContextEnsure as DBOSContextEnsure
 from .context import SetWorkflowID as SetWorkflowID
 from .dbos import DBOS as DBOS
 from .dbos import DBOSConfiguredInstance as DBOSConfiguredInstance
@@ -13,6 +14,7 @@ __all__ = [
     "ConfigFile",
     "DBOS",
     "DBOSConfiguredInstance",
+    "DBOSContextEnsure",
     "GetWorkflowsInput",
     "SetWorkflowID",
     "WorkflowHandle",
