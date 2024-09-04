@@ -11,6 +11,7 @@ from .context import (
     TracedAttributes,
     assert_current_dbos_context,
 )
+from .request import Address, Request
 
 request_id_header = "x-request-id"
 
@@ -23,31 +24,17 @@ def get_or_generate_request_id(request: FastAPIRequest) -> str:
         return str(uuid.uuid4())
 
 
-class Request:
-    """
-    Serializable subset of the FastAPI Request object.
-
-    Attributes:
-        base_url(URL): Base of URL requested, as in application code
-        client(Address): HTTP Client
-        cookies(Dict[str, str]): HTTP Cookies
-        headers(Headers): HTTP headers
-        method(str): HTTP verb
-        path_params(Dict[str,Any]): Parameters extracted from URL path sections
-        query_params(QueryParams): URL query string parameters
-        url(URL): Full URL accessed
-
-    """
-
-    def __init__(self, req: FastAPIRequest):
-        self.headers = req.headers
-        self.path_params = req.path_params
-        self.query_params = req.query_params
-        self.url = req.url
-        self.base_url = req.base_url
-        self.client = req.client
-        self.cookies = req.cookies
-        self.method = req.method
+def make_request(request: FastAPIRequest) -> Request:
+    return Request(
+        headers=request.headers,
+        path_params=request.path_params,
+        query_params=request.query_params,
+        url=str(request.url),
+        base_url=str(request.base_url),
+        client=Address(*request.client) if request.client is not None else None,
+        cookies=request.cookies,
+        method=request.method,
+    )
 
 
 def setup_fastapi_middleware(app: FastAPI) -> None:
@@ -65,7 +52,7 @@ def setup_fastapi_middleware(app: FastAPI) -> None:
         }
         with EnterDBOSHandler(attributes):
             ctx = assert_current_dbos_context()
-            ctx.request = Request(request)
+            ctx.request = make_request(request)
             workflow_id = request.headers.get("dbos-idempotency-key", "")
             with SetWorkflowID(workflow_id):
                 response = await call_next(request)

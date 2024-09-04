@@ -8,13 +8,10 @@ from types import TracebackType
 from typing import TYPE_CHECKING, List, Literal, Optional, Type, TypedDict
 
 from opentelemetry.trace import Span, Status, StatusCode
-
-if TYPE_CHECKING:
-    from .fastapi import Request
-
 from sqlalchemy.orm import Session
 
 from .logger import dbos_logger
+from .request import Request
 from .tracer import dbos_tracer
 
 
