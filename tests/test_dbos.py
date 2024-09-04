@@ -251,6 +251,10 @@ def test_temp_workflow(dbos: DBOS) -> None:
     res = test_step("var")
     assert res == "var"
 
+    # Flush workflow inputs buffer shouldn't fail due to foreign key violation.
+    # It should properly skip the transaction inputs.
+    dbos.sys_db._flush_workflow_inputs_buffer()
+
     # Wait for buffers to flush
     dbos.sys_db.wait_for_buffer_flush()
     wfs = dbos.sys_db.get_workflows(gwi)
