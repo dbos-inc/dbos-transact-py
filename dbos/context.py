@@ -42,6 +42,7 @@ class TracedAttributes(TypedDict, total=False):
     applicationID: Optional[str]
     applicationVersion: Optional[str]
     executorID: Optional[str]
+    authenticatedUser: Optional[str]
 
 
 class DBOSContext:
@@ -162,6 +163,7 @@ class DBOSContext:
         attributes["operationUUID"] = (
             self.workflow_id if len(self.workflow_id) > 0 else None
         )
+        attributes["authenticatedUser"] = self.authenticated_user
         span = dbos_tracer.start_span(
             attributes, parent=self.spans[-1] if len(self.spans) > 0 else None
         )
@@ -181,6 +183,8 @@ class DBOSContext:
     ) -> None:
         self.authenticated_user = user
         self.authenticated_roles = roles
+        if user is not None and len(self.spans) > 0:
+            self.spans[-1].set_attribute("authenticatedUser", user)
 
 
 ##############################################################

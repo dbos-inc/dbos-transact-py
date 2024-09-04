@@ -15,35 +15,17 @@ from dbos.error import DBOSDuplicateWorkflowEventError, DBOSNotAuthorizedError
 def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     dbos, app = dbos_fastapi
 
-    class SetRoleMiddleware(BaseHTTPMiddleware):
-        async def dispatch(
-            self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
-        ) -> Response:
-            with DBOSContextEnsure() as ctx:
-                ctx.authenticated_user = "user1"
-                ctx.authenticated_roles = ["user", "engineer"]
-                try:
-                    response = await call_next(request)
-                    return response
-                finally:
-                    ctx.authenticated_user = None
-                    ctx.authenticated_roles = None
-
-    # app.add_middleware(SetRoleMiddleware)
-
     @app.middleware("http")
     async def authMiddleware(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         with DBOSContextEnsure() as ctx:
-            ctx.authenticated_user = "user1"
-            ctx.authenticated_roles = ["user", "engineer"]
+            ctx.set_authentication("user1", ["user", "engineer"])
             try:
                 response = await call_next(request)
                 return response
             finally:
-                ctx.authenticated_user = None
-                ctx.authenticated_roles = None
+                ctx.set_authentication(None, None)
 
     @app.get("/dboserror")
     def test_dbos_error() -> None:
