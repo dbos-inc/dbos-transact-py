@@ -22,7 +22,7 @@ def test_dbos_singleton(cleanup_test_databases: None) -> None:
     #    then imports more
     from tests.classdefs import DBOSSendRecv, DBOSTestClass, DBOSTestRoles
 
-    dbos: DBOS = DBOS(None, default_config(), launch=False)
+    dbos: DBOS = DBOS(None, default_config())
 
     from tests.more_classdefs import DBOSWFEvents, wfFunc
 
