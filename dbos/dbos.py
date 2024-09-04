@@ -204,7 +204,6 @@ class DBOS:
         cls: Type[DBOS],
         fastapi: Optional["FastAPI"] = None,
         config: Optional[ConfigFile] = None,
-        launch: bool = True,
     ) -> DBOS:
         global _dbos_global_instance
         global _dbos_global_registry
@@ -219,7 +218,7 @@ class DBOS:
                     )
                 config = _dbos_global_registry.config
             _dbos_global_instance = super().__new__(cls)
-            _dbos_global_instance.__init__(fastapi=fastapi, config=config, launch=launch)  # type: ignore
+            _dbos_global_instance.__init__(fastapi=fastapi, config=config)  # type: ignore
         else:
             if (config is not None and _dbos_global_instance.config is not config) or (
                 _dbos_global_instance.fastapi is not fastapi
@@ -242,7 +241,6 @@ class DBOS:
         self,
         fastapi: Optional["FastAPI"] = None,
         config: Optional[ConfigFile] = None,
-        launch: bool = True,
     ) -> None:
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -270,7 +268,6 @@ class DBOS:
 
             setup_fastapi_middleware(self.fastapi)
             self.fastapi.on_event("startup")(self.launch)
-            launch = False
 
         # Register send_stub as a workflow
         def send_temp_workflow(
@@ -282,9 +279,6 @@ class DBOS:
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
         set_temp_workflow_type(send_temp_workflow, "send")
         self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
-
-        if launch:
-            self.launch()
 
     @property
     def executor(self) -> ThreadPoolExecutor:
