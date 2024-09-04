@@ -4,7 +4,18 @@ import select
 import threading
 import time
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Sequence, TypedDict, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Set,
+    TypedDict,
+    cast,
+)
 
 import psycopg2
 import sqlalchemy as sa
@@ -199,6 +210,9 @@ class SystemDatabase:
         # Initialize the workflow status and inputs buffers
         self._workflow_status_buffer: Dict[str, WorkflowStatusInternal] = {}
         self._workflow_inputs_buffer: Dict[str, str] = {}
+        # Two sets for tracking which single-transaction workflows have been exported to the status table
+        self._exported_temp_txn_wf_status: Set[str] = set()
+        self._temp_txn_wf_ids: Set[str] = set()
         self._is_flushing_status_buffer = False
 
         # Now we can run background processes
@@ -263,6 +277,10 @@ class SystemDatabase:
         else:
             with self.engine.begin() as c:
                 c.execute(cmd)
+
+        # Record we have exported status for this single-transaction workflow
+        if status["workflow_uuid"] in self._temp_txn_wf_ids:
+            self._exported_temp_txn_wf_status.add(status["workflow_uuid"])
 
     def set_workflow_status(
         self,
@@ -453,6 +471,11 @@ class SystemDatabase:
         else:
             with self.engine.begin() as c:
                 c.execute(cmd)
+
+        if workflow_uuid in self._temp_txn_wf_ids:
+            # Clean up the single-transaction tracking sets
+            self._exported_temp_txn_wf_status.discard(workflow_uuid)
+            self._temp_txn_wf_ids.discard(workflow_uuid)
 
     def get_workflow_inputs(self, workflow_uuid: str) -> Optional[WorkflowInputs]:
         with self.engine.begin() as c:
@@ -897,7 +920,7 @@ class SystemDatabase:
         return value
 
     def _flush_workflow_status_buffer(self) -> None:
-        """Export the workflow status buffer to the database, up to the batch size."""
+        """Export the workflow status buffer to the database, up to the batch size"""
         if len(self._workflow_status_buffer) == 0:
             return
 
@@ -905,13 +928,16 @@ class SystemDatabase:
         exported_status: Dict[str, WorkflowStatusInternal] = {}
         with self.engine.begin() as c:
             exported = 0
-            local_batch_size = min(
-                buffer_flush_batch_size, len(self._workflow_status_buffer)
-            )
-            while exported < local_batch_size:
+            status_iter = iter(list(self._workflow_status_buffer))
+            wf_id: Optional[str] = None
+            while (
+                exported < buffer_flush_batch_size
+                and (wf_id := next(status_iter, None)) is not None
+            ):
                 # Pop the first key in the buffer (FIFO)
-                wf_id = next(iter(self._workflow_status_buffer))
-                status = self._workflow_status_buffer.pop(wf_id)
+                status = self._workflow_status_buffer.pop(wf_id, None)
+                if status is None:
+                    continue
                 exported_status[wf_id] = status
                 try:
                     self.update_workflow_status(status, conn=c)
@@ -932,12 +958,18 @@ class SystemDatabase:
         exported_inputs: Dict[str, str] = {}
         with self.engine.begin() as c:
             exported = 0
-            local_batch_size = min(
-                buffer_flush_batch_size, len(self._workflow_inputs_buffer)
-            )
-            while exported < local_batch_size:
-                wf_id = next(iter(self._workflow_inputs_buffer))
-                inputs = self._workflow_inputs_buffer.pop(wf_id)
+            input_iter = iter(list(self._workflow_inputs_buffer))
+            wf_id: Optional[str] = None
+            while (
+                exported < buffer_flush_batch_size
+                and (wf_id := next(input_iter, None)) is not None
+            ):
+                if wf_id not in self._exported_temp_txn_wf_status:
+                    # Skip exporting inputs if the status has not been exported yet
+                    continue
+                inputs = self._workflow_inputs_buffer.pop(wf_id, None)
+                if inputs is None:
+                    continue
                 exported_inputs[wf_id] = inputs
                 try:
                     self.update_workflow_inputs(wf_id, inputs, conn=c)
@@ -972,6 +1004,7 @@ class SystemDatabase:
     def buffer_workflow_inputs(self, workflow_id: str, inputs: str) -> None:
         # inputs is a serialized WorkflowInputs string
         self._workflow_inputs_buffer[workflow_id] = inputs
+        self._temp_txn_wf_ids.add(workflow_id)
 
     @property
     def _is_buffers_empty(self) -> bool:

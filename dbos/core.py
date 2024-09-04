@@ -136,14 +136,18 @@ def _init_workflow(
         "recovery_attempts": None,
     }
 
-    if temp_wf_type != "transaction":
-        # Don't synchronously record the status or inputs for single transaction workflows
-        dbos.sys_db.update_workflow_status(status, False, ctx.in_recovery)
+    # If we have a class name, the first arg is the instance and do not serialize
+    if class_name is not None:
+        inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
 
-        # If we have a class name, the first arg is the instance and do not serialize
-        if class_name is not None:
-            inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
+    if temp_wf_type != "transaction":
+        # Synchronously record the status and inputs for workflows and single-step workflows
+        # We also have to do this for non-transaction workflows because of the foreign key constraint on the operation outputs table
+        dbos.sys_db.update_workflow_status(status, False, ctx.in_recovery)
         dbos.sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
+    else:
+        # Buffer the inputs for single-transaction workflows, but don't buffer the status
+        dbos.sys_db.buffer_workflow_inputs(wfid, utils.serialize(inputs))
 
     return status
 
@@ -173,20 +177,6 @@ def _execute_workflow(
         status["error"] = utils.serialize(error)
         dbos.sys_db.update_workflow_status(status)
         raise error
-    finally:
-        if get_temp_workflow_type(func) == "transaction":
-            # Buffer the inputs for single transaction workflows
-            inputs: WorkflowInputs = {
-                "args": args,
-                "kwargs": kwargs,
-            }
-            # If we have a class name, the first arg is the instance and do not serialize
-            class_name = get_dbos_class_name(get_func_info(func), func, args)
-            if class_name is not None:
-                inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
-            dbos.sys_db.buffer_workflow_inputs(
-                status["workflow_uuid"], utils.serialize(inputs)
-            )
 
     return output
 
@@ -617,6 +607,7 @@ def _step(
                     utils.serialize(error) if error is not None else None
                 )
                 dbos.sys_db.record_operation_result(step_output)
+
                 if error is not None:
                     raise error
                 return output

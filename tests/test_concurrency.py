@@ -34,18 +34,24 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
     condition = threading.Condition()
     step_count = 0
     txn_count = 0
+    notified = False
 
     @DBOS.step()
     def test_step() -> str:
-        nonlocal step_count
+        nonlocal step_count, notified
         step_count += 1
-        condition.acquire()
         if step_count == 1:
             # Wait for the other one to notify
+            condition.acquire()
             condition.wait()
+            notified = True
+            condition.release()
         else:
-            condition.notify()
-        condition.release()
+            while not notified:
+                condition.acquire()
+                condition.notify()
+                condition.release()
+                time.sleep(0.1)
         return DBOS.workflow_id
 
     @DBOS.workflow()
@@ -61,15 +67,20 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
     @DBOS.transaction(isolation_level="REPEATABLE READ")
     def test_transaction() -> str:
         DBOS.sql_session.execute(text("SELECT 1")).fetchall()
-        nonlocal txn_count
+        nonlocal txn_count, notified
         txn_count += 1
-        condition.acquire()
         if txn_count == 1:
             # Wait for the other one to notify
+            condition.acquire()
             condition.wait()
+            notified = True
+            condition.release()
         else:
-            condition.notify()
-        condition.release()
+            while not notified:
+                condition.acquire()
+                condition.notify()
+                condition.release()
+                time.sleep(0.1)
         return DBOS.workflow_id
 
     def test_txn_thread(id: str) -> str:
@@ -89,19 +100,21 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
 
     # Make sure temp workflows can handle conflicts as well.
     step_count = 0
+    notified = False
     wfuuid = str(uuid.uuid4())
     with ThreadPoolExecutor(max_workers=2) as executor:
         future1 = executor.submit(test_comm_thread, wfuuid)
         future2 = executor.submit(test_comm_thread, wfuuid)
 
-        assert future1.result() == wfuuid
-        assert future2.result() == wfuuid
+    assert future1.result() == wfuuid
+    assert future2.result() == wfuuid
 
     # Make sure temp transactions can handle conflicts as well.
     wfuuid = str(uuid.uuid4())
+    notified = False
     with ThreadPoolExecutor(max_workers=2) as executor:
         future1 = executor.submit(test_txn_thread, wfuuid)
         future2 = executor.submit(test_txn_thread, wfuuid)
 
-        assert future1.result() == wfuuid
-        assert future2.result() == wfuuid
+    assert future1.result() == wfuuid
+    assert future2.result() == wfuuid
