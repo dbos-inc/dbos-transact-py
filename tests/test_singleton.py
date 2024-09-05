@@ -26,7 +26,7 @@ def test_dbos_singleton(cleanup_test_databases: None) -> None:
 
     from tests.more_classdefs import DBOSWFEvents, wfFunc
 
-    dbos.launch()  # Usually framework (fastapi) does this via lifecycle event
+    DBOS.launch()  # Usually framework (fastapi) does this via lifecycle event
 
     # Basics
     with SetWorkflowID("wfid"):
