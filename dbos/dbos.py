@@ -268,6 +268,7 @@ class DBOS:
 
             setup_fastapi_middleware(self.fastapi)
             self.fastapi.on_event("startup")(self._launch)
+            self.fastapi.on_event("shutdown")(self._destroy)
 
         # Register send_stub as a workflow
         def send_temp_workflow(
