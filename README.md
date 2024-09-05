@@ -31,6 +31,8 @@ def workflow()
 
 Durable execution means your program is **resilient to any failure**.
 If it is ever interrupted or crashes, all your workflows will automatically resume from the last completed step.
+If you want to see durable execution in action, check out [this demo app](https://demo-widget-store.cloud.dbos.dev/) (source code [here](https://github.com/dbos-inc/dbos-demo-apps/tree/main/python/widget-store)).
+No matter how many times you try to crash it, it always resumes from exactly where it left off!
 
 Under the hood, DBOS Transact works by storing your program's execution state (which workflows are currently executing and which steps they've completed) in a Postgres database.
 So all you need to use it is a Postgres database to connect to&mdash;there's no need for a "workflow server."
