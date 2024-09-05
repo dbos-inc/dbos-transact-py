@@ -22,7 +22,7 @@ def test_dbos_singleton(cleanup_test_databases: None) -> None:
     #    then imports more
     from tests.classdefs import DBOSSendRecv, DBOSTestClass, DBOSTestRoles
 
-    dbos: DBOS = DBOS(None, default_config())
+    dbos: DBOS = DBOS(config=default_config())
 
     from tests.more_classdefs import DBOSWFEvents, wfFunc
 
@@ -120,11 +120,11 @@ def test_dbos_singleton_negative(cleanup_test_databases: None) -> None:
     #    then imports more
     from tests.classdefs import DBOSTestClass
 
-    dbos: DBOS = DBOS(None, default_config())
+    dbos: DBOS = DBOS(config=default_config())
 
     # Don't initialize DBOS twice
     with pytest.raises(Exception) as exc_info:
-        DBOS(None, default_config())
+        DBOS(config=default_config())
     assert "conflicting configuration" in str(exc_info.value)
 
     # Something should have launched
@@ -188,7 +188,7 @@ def test_config_before_singleton_negative(cleanup_test_databases: None) -> None:
 
         # Not OK, config already loaded in the default way
         with pytest.raises(Exception) as exc_info:
-            DBOS(None, config=default_config())
+            DBOS(config=default_config())
         assert "configured multiple" in str(exc_info.value)
     finally:
         DBOS.destroy()
