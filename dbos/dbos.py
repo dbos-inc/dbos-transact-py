@@ -478,9 +478,14 @@ class DBOS:
         cls, config: dict[str, Any], topics: list[str]
     ) -> Callable[[KafkaConsumerWorkflow], KafkaConsumerWorkflow]:
         """Decorate a function to be used as a Kafka consumer."""
-        from dbos.kafka import kafka_consumer
+        try:
+            from dbos.kafka import kafka_consumer
 
-        return kafka_consumer(_get_or_create_dbos_registry(), config, topics)
+            return kafka_consumer(_get_or_create_dbos_registry(), config, topics)
+        except ModuleNotFoundError as e:
+            raise DBOSException(
+                f"{e.name} dependency not found. Please install {e.name} via your package manager."
+            ) from e
 
     @classmethod
     def start_workflow(

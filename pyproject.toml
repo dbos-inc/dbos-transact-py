@@ -20,6 +20,7 @@ dependencies = [
     "fastapi[standard]>=0.112.1",
     "psutil>=6.0.0",
     "tomlkit>=0.13.2",
+    "pdm-backend>=2.3.3",
 ]
 requires-python = ">=3.9"
 readme = "README.md"
@@ -55,8 +56,6 @@ dev = [
     "httpx>=0.27.0",
     "types-psycopg2>=2.9.21.20240417",
     "pytz>=2024.1",
-    "pdm>=2.18.0",
-    "pdm-backend>=2.3.3",
     "GitPython>=3.1.43",
     "confluent-kafka>=2.5.3",
     "types-confluent-kafka>=1.2.2",
