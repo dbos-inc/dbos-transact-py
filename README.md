@@ -70,7 +70,6 @@ def step_one():
 def step_two():
     print("Step two completed!")
 
-@app.get("/")
 @DBOS.workflow()
 def workflow():
     step_one()
@@ -78,6 +77,10 @@ def workflow():
         print("Press Control + \ to stop the app...")
         DBOS.sleep(1)
     step_two()
+
+@app.get("/")
+def endpoint():
+    workflow()
 ```
 
 Save the program into `main.py` and start it with `fastapi run`.
