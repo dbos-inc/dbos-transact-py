@@ -2,7 +2,7 @@
 
 ---
 
-📚 **Documentation**: [Explore the Docs 📖](https://docs.dbos.dev)
+📚 **Documentation**: Under Construction 🚧
 
 💬 **Join the Discussion**: [Discord Community](https://discord.gg/fMwQjeW5zg)
 
