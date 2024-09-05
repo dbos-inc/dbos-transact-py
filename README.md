@@ -82,7 +82,7 @@ def workflow():
 
 Save the program into `main.py` and start it with `fastapi run`.
 Visit `localhost:8000` in your browser (or curl it) to start the workflow.
-When prompted, press Control + \ to force quit your application.
+When prompted, press `Control + \` to force quit your application.
 It should crash midway through the workflow, having completed step one but not step two.
 Then, restart your app with `fastapi run`.
 It should resume the workflow from where it left off, completing step two without re-executing step one.
