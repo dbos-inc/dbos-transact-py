@@ -313,7 +313,12 @@ class DBOS:
         rv: AdminServer = self._admin_server
         return rv
 
-    def launch(self) -> None:
+    @classmethod
+    def launch(cls) -> None:
+        if _dbos_global_instance is not None:
+            _dbos_global_instance._launch()
+
+    def _launch(self) -> None:
         if self._launched:
             dbos_logger.warning(f"DBOS was already launched")
             return
