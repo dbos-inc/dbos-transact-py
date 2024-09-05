@@ -4,18 +4,7 @@ import select
 import threading
 import time
 from enum import Enum
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Sequence,
-    Set,
-    TypedDict,
-    cast,
-)
+from typing import Any, Dict, List, Literal, Optional, Sequence, Set, TypedDict, cast
 
 import psycopg2
 import sqlalchemy as sa

@@ -1,12 +1,10 @@
-import json
-from typing import Any, Awaitable, Callable, Dict, List, Protocol, Tuple, cast
+from typing import Awaitable, Callable, Tuple
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.testclient import TestClient
 
 # For tracing test
-from opentelemetry import trace
 from opentelemetry.sdk import trace as tracesdk
 
 # from opentelemetry.sdk.trace import TracerProvider
