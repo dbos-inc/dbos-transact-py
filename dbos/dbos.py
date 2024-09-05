@@ -38,7 +38,6 @@ from dbos.core import (
     _WorkflowHandlePolling,
 )
 from dbos.decorators import classproperty
-from dbos.kafka import KafkaConsumerWorkflow, kafka_consumer
 from dbos.recovery import _recover_pending_workflows, _startup_recovery_thread
 from dbos.registrations import (
     DBOSClassInfo,
@@ -53,9 +52,11 @@ from .tracer import dbos_tracer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
-    from .request import Request
+    from dbos.kafka import KafkaConsumerWorkflow
 
 from sqlalchemy.orm import Session
+
+from dbos.request import Request
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec, TypeAlias
@@ -477,6 +478,7 @@ class DBOS:
         cls, config: dict[str, Any], topics: list[str]
     ) -> Callable[[KafkaConsumerWorkflow], KafkaConsumerWorkflow]:
         """Decorate a function to be used as a Kafka consumer."""
+        from dbos.kafka import kafka_consumer
 
         return kafka_consumer(_get_or_create_dbos_registry(), config, topics)
 
