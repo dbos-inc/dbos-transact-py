@@ -17,6 +17,7 @@ from dbos import DBOS, DBOSContextEnsure
 # Private API because this is a unit test
 from dbos.context import assert_current_dbos_context
 from dbos.error import DBOSDuplicateWorkflowEventError, DBOSNotAuthorizedError
+from dbos.system_database import GetWorkflowsInput
 from dbos.tracer import dbos_tracer
 
 
@@ -131,6 +132,17 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert span.attributes["authenticatedUser"] == "user1"
     assert span.attributes["authenticatedUserAssumedRole"] == "user"
     assert span.attributes["authenticatedUserRoles"] == "user,engineer"
+
+    # Verify that there is one workflow for this user.
+    gwi = GetWorkflowsInput()
+    gwi.authenticated_user = "user1"
+    wfl = dbos.sys_db.get_workflows(gwi)
+    assert len(wfl.workflow_uuids) == 1
+    wfs = DBOS.get_workflow_status(wfl.workflow_uuids[0])
+    assert wfs
+    assert wfs.assumed_role == "user"
+    assert wfs.authenticated_user == "user1"
+    assert wfs.authenticated_roles == ["user", "engineer"]
 
     response = client.get("/error")
     assert response.status_code == 401
