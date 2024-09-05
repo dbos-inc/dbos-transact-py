@@ -244,6 +244,9 @@ class SystemDatabase:
             application_version=status["app_version"],
             application_id=status["app_id"],
             request=status["request"],
+            authenticated_user=status["authenticated_user"],
+            authenticated_roles=status["authenticated_roles"],
+            assumed_role=status["assumed_role"],
         )
         if replace:
             cmd = cmd.on_conflict_do_update(
