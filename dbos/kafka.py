@@ -1,11 +1,11 @@
 import threading
 import traceback
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Generator
 
 if TYPE_CHECKING:
     from dbos.dbos import _DBOSRegistry
-    from confluent_kafka import Message as CTypeMessage
+    from confluent_kafka import Message as CTypeMessage, Consumer
 
 from .context import SetWorkflowID
 from .logger import dbos_logger
@@ -47,7 +47,7 @@ from contextlib import contextmanager
 def _make_kafka_consumer(
     config: dict[str, Any],
     topics: list[str],
-):
+) -> Generator["Consumer", Any, None]:
     from confluent_kafka import Consumer
 
     consumer = Consumer(config)
