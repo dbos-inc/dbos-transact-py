@@ -46,10 +46,11 @@ Some more cool features include:
 
 ## Getting Started
 
-To try out the latest pre-release version, install with:
+To try out the latest pre-release version, install and configure with:
 
 ```shell
 pip install --pre dbos
+dbos init --lightweight
 ```
 
 ## Documentation
