@@ -1,6 +1,7 @@
 import glob
 import os
 import subprocess
+import warnings
 from typing import Any, Generator, Tuple
 
 import pytest
@@ -103,7 +104,8 @@ def dbos(
     #     launch themselves.
     # If your test is tricky and has a problem with this, use a different
     #   fixture that does not launch.
-    dbos = DBOS(config=config, launch=True)
+    dbos = DBOS(config=config)
+    DBOS.launch()
 
     yield dbos
     DBOS.destroy()
@@ -115,11 +117,19 @@ def dbos_fastapi(
 ) -> Generator[Tuple[DBOS, FastAPI], Any, None]:
     DBOS.destroy()
     app = FastAPI()
-    dbos = DBOS(fastapi=app, config=config)
+
+    # ignore the on_event deprecation warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=DeprecationWarning,
+            message="\s*on_event is deprecated, use lifespan event handlers instead\.",
+        )
+        dbos = DBOS(fastapi=app, config=config)
 
     # This is for test convenience.
     #    Usually fastapi itself does launch, but we are not completing the fastapi lifecycle
-    dbos.launch()
+    DBOS.launch()
 
     yield dbos, app
     DBOS.destroy()

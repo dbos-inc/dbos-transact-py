@@ -38,14 +38,16 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
     @DBOS.step()
     def test_step() -> str:
         nonlocal step_count
-        step_count += 1
         condition.acquire()
-        if step_count == 1:
+        step_count += 1
+        if step_count % 2 == 1:
             # Wait for the other one to notify
             condition.wait()
         else:
+            # Notify the other one
             condition.notify()
         condition.release()
+
         return DBOS.workflow_id
 
     @DBOS.workflow()
@@ -62,14 +64,16 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
     def test_transaction() -> str:
         DBOS.sql_session.execute(text("SELECT 1")).fetchall()
         nonlocal txn_count
-        txn_count += 1
         condition.acquire()
-        if txn_count == 1:
+        txn_count += 1
+        if txn_count % 2 == 1:
             # Wait for the other one to notify
             condition.wait()
         else:
+            # Notify the other one
             condition.notify()
         condition.release()
+
         return DBOS.workflow_id
 
     def test_txn_thread(id: str) -> str:
@@ -88,14 +92,13 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
     assert wf_handle2.get_result() == wfuuid
 
     # Make sure temp workflows can handle conflicts as well.
-    step_count = 0
     wfuuid = str(uuid.uuid4())
     with ThreadPoolExecutor(max_workers=2) as executor:
         future1 = executor.submit(test_comm_thread, wfuuid)
         future2 = executor.submit(test_comm_thread, wfuuid)
 
-        assert future1.result() == wfuuid
-        assert future2.result() == wfuuid
+    assert future1.result() == wfuuid
+    assert future2.result() == wfuuid
 
     # Make sure temp transactions can handle conflicts as well.
     wfuuid = str(uuid.uuid4())
@@ -103,5 +106,5 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
         future1 = executor.submit(test_txn_thread, wfuuid)
         future2 = executor.submit(test_txn_thread, wfuuid)
 
-        assert future1.result() == wfuuid
-        assert future2.result() == wfuuid
+    assert future1.result() == wfuuid
+    assert future2.result() == wfuuid

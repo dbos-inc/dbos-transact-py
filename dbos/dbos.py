@@ -53,7 +53,7 @@ from .tracer import dbos_tracer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
-    from .fastapi import Request
+    from .request import Request
 
 from sqlalchemy.orm import Session
 
@@ -73,7 +73,7 @@ from dbos.error import DBOSException, DBOSNonExistentWorkflowError
 
 from .application_database import ApplicationDatabase
 from .dbos_config import ConfigFile, load_config, set_env_vars
-from .logger import config_logger, dbos_logger, init_logger
+from .logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
 from .system_database import SystemDatabase
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
@@ -203,9 +203,9 @@ class DBOS:
 
     def __new__(
         cls: Type[DBOS],
-        fastapi: Optional["FastAPI"] = None,
+        *,
         config: Optional[ConfigFile] = None,
-        launch: bool = True,
+        fastapi: Optional["FastAPI"] = None,
     ) -> DBOS:
         global _dbos_global_instance
         global _dbos_global_registry
@@ -220,7 +220,7 @@ class DBOS:
                     )
                 config = _dbos_global_registry.config
             _dbos_global_instance = super().__new__(cls)
-            _dbos_global_instance.__init__(fastapi=fastapi, config=config, launch=launch)  # type: ignore
+            _dbos_global_instance.__init__(fastapi=fastapi, config=config)  # type: ignore
         else:
             if (config is not None and _dbos_global_instance.config is not config) or (
                 _dbos_global_instance.fastapi is not fastapi
@@ -241,9 +241,9 @@ class DBOS:
 
     def __init__(
         self,
-        fastapi: Optional["FastAPI"] = None,
+        *,
         config: Optional[ConfigFile] = None,
-        launch: bool = True,
+        fastapi: Optional["FastAPI"] = None,
     ) -> None:
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -270,8 +270,8 @@ class DBOS:
             from dbos.fastapi import setup_fastapi_middleware
 
             setup_fastapi_middleware(self.fastapi)
-            self.fastapi.on_event("startup")(self.launch)
-            launch = False
+            self.fastapi.on_event("startup")(self._launch)
+            self.fastapi.on_event("shutdown")(self._destroy)
 
         # Register send_stub as a workflow
         def send_temp_workflow(
@@ -284,8 +284,8 @@ class DBOS:
         set_temp_workflow_type(send_temp_workflow, "send")
         self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
 
-        if launch:
-            self.launch()
+        for handler in dbos_logger.handlers:
+            handler.flush()
 
     @property
     def executor(self) -> ThreadPoolExecutor:
@@ -317,7 +317,12 @@ class DBOS:
         rv: AdminServer = self._admin_server
         return rv
 
-    def launch(self) -> None:
+    @classmethod
+    def launch(cls) -> None:
+        if _dbos_global_instance is not None:
+            _dbos_global_instance._launch()
+
+    def _launch(self) -> None:
         if self._launched:
             dbos_logger.warning(f"DBOS was already launched")
             return
@@ -343,9 +348,13 @@ class DBOS:
             self.executor.submit(func, *args, **kwargs)
         self._registry.pollers = []
 
-        dbos_logger.info("DBOS initialized")
+        dbos_logger.info("DBOS launched")
+
+        # Flush handlers and add OTLP to all loggers if enabled
+        # to enable their export in DBOS Cloud
         for handler in dbos_logger.handlers:
             handler.flush()
+        add_otlp_to_all_loggers()
 
     def _destroy(self) -> None:
         self._initialized = False
@@ -659,7 +668,7 @@ class DBOS:
 
     @classproperty
     def request(cls) -> Optional["Request"]:
-        """Return the FastAPI `Request`, if any, associated with the current context."""
+        """Return the HTTP `Request`, if any, associated with the current context."""
         ctx = assert_current_dbos_context()
         return ctx.request
 

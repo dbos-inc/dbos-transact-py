@@ -251,6 +251,10 @@ def test_temp_workflow(dbos: DBOS) -> None:
     res = test_step("var")
     assert res == "var"
 
+    # Flush workflow inputs buffer shouldn't fail due to foreign key violation.
+    # It should properly skip the transaction inputs.
+    dbos.sys_db._flush_workflow_inputs_buffer()
+
     # Wait for buffers to flush
     dbos.sys_db.wait_for_buffer_flush()
     wfs = dbos.sys_db.get_workflows(gwi)
@@ -468,7 +472,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     )
 
     dbos._destroy()  # Unusual pattern - reusing the memory
-    dbos.__init__(config=config, launch=False)  # type: ignore
+    dbos.__init__(config=config)  # type: ignore
 
     @DBOS.workflow()  # type: ignore
     def test_workflow(var: str) -> str:
@@ -477,7 +481,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
             wf_counter += 1
         return var
 
-    dbos.launch()  # Usually the framework does this but we destroyed it above
+    DBOS.launch()  # Usually the framework does this but we destroyed it above
 
     # Upon re-initialization, the background thread should recover the workflow safely.
     max_retries = 10
@@ -681,6 +685,7 @@ def test_without_fastapi() -> None:
         sys.meta_path.remove(blocker)
 
     dbos = DBOS(config=config)
+    DBOS.launch()
 
     try:
 
