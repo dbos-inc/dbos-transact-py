@@ -65,7 +65,7 @@ def test_custom_sysdb_name_migration(
     # Test migrating up
     DBOS.destroy()  # In case of other tests leaving it
     dbos = DBOS(config=config)
-    dbos.launch()
+    DBOS.launch()
 
     # Make sure all tables exist
     with dbos.sys_db.engine.connect() as connection:

@@ -105,7 +105,7 @@ def dbos(
     # If your test is tricky and has a problem with this, use a different
     #   fixture that does not launch.
     dbos = DBOS(config=config)
-    dbos.launch()
+    DBOS.launch()
 
     yield dbos
     DBOS.destroy()
@@ -129,7 +129,7 @@ def dbos_fastapi(
 
     # This is for test convenience.
     #    Usually fastapi itself does launch, but we are not completing the fastapi lifecycle
-    dbos.launch()
+    DBOS.launch()
 
     yield dbos, app
     DBOS.destroy()
