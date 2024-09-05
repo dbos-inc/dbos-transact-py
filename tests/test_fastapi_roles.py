@@ -1,8 +1,15 @@
-from typing import Awaitable, Callable, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Protocol, Tuple, cast
 
+import pytest
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.testclient import TestClient
-from starlette.middleware.base import BaseHTTPMiddleware
+
+# For tracing test
+from opentelemetry.sdk import trace
+
+# from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 # Public API
 from dbos import DBOS, DBOSContextEnsure
@@ -118,3 +125,43 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         response.text
         == '{"message":"Function test_admin_endpoint has required roles, but user is not authenticated for any of them","dbos_error_code":"8","dbos_error":"DBOSNotAuthorizedError"}'
     )
+
+
+class SpanProtocol(Protocol):
+    attributes: Dict[str, Any]
+    name: str
+
+
+def test_role_tracing() -> None:
+    # Set up a simple in-memory span exporter for testing
+    exporter = InMemorySpanExporter()
+    span_processor = SimpleSpanProcessor(exporter)
+    provider = trace.TracerProvider()
+    provider.add_span_processor(span_processor)
+    # trace.set_tracer_provider(provider)
+    tracer = provider.get_tracer(__name__)
+
+    def function_to_trace() -> None:
+        with tracer.start_as_current_span("test-span") as span:
+            span.set_attribute("testattribute", "value")
+
+    # Clear any existing spans
+    exporter.clear()
+
+    # Run the function that generates the trace spans
+    function_to_trace()
+
+    # Get the spans that were recorded
+    span_processor.force_flush()
+    exporter.force_flush()
+    spans = exporter.get_finished_spans()
+
+    # Assert that we have exactly one span
+    assert len(spans) == 1
+
+    # Inspect the span and its attributes
+    # span = cast(SpanProtocol, spans[0])
+    span = spans[0]
+    assert span.name == "test-span"
+    assert span.attributes is not None
+    assert span.attributes["testattribute"] == "value"
