@@ -1,4 +1,5 @@
 import threading
+import traceback
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -23,7 +24,7 @@ class KafkaMessage:
     value: str | bytes | None
 
 
-def from_kafka_message(kafka_message: "CTypeMessage") -> KafkaMessage:
+def _from_kafka_message(kafka_message: "CTypeMessage") -> KafkaMessage:
     return KafkaMessage(
         headers=kafka_message.headers(),
         key=kafka_message.key(),
@@ -39,34 +40,53 @@ def from_kafka_message(kafka_message: "CTypeMessage") -> KafkaMessage:
 
 KafkaConsumerWorkflow = Callable[[KafkaMessage], None]
 
+from contextlib import contextmanager
 
-def kafka_consumer_loop(
+
+@contextmanager
+def _make_kafka_consumer(
+    config: dict[str, Any],
+    topics: list[str],
+):
+    from confluent_kafka import Consumer
+
+    consumer = Consumer(config)
+    try:
+        consumer.subscribe(topics)
+        yield consumer
+    finally:
+        consumer.close()
+
+
+def _kafka_consumer_loop(
     func: KafkaConsumerWorkflow,
     config: dict[str, Any],
     topics: list[str],
     stop_event: threading.Event,
 ) -> None:
-    from confluent_kafka import Consumer
 
-    consumer = Consumer(config)
-    consumer.subscribe(topics)
-    while not stop_event.is_set():
-        if stop_event.wait(timeout=1):
-            return
+    with _make_kafka_consumer(config, topics) as consumer:
+        while not stop_event.is_set():
+            if stop_event.wait(timeout=1):
+                return
 
-        cmsg = consumer.poll(0)
-        if cmsg is None:
-            continue
-        elif cmsg.error():
-            dbos_logger.error(f"Kafka consumer error: {cmsg.error()}")
-            continue
-        else:
-            msg = from_kafka_message(cmsg)
-            with SetWorkflowID(
-                f"kafka-unique-id-{msg.topic}-{msg.partition}-{msg.offset}"
-            ):
-                func(msg)
-    consumer.close()
+            cmsg = consumer.poll(0)
+            if cmsg is None:
+                continue
+            elif cmsg.error():
+                dbos_logger.error(f"Kafka consumer error: {cmsg.error()}")
+                continue
+            else:
+                msg = _from_kafka_message(cmsg)
+                with SetWorkflowID(
+                    f"kafka-unique-id-{msg.topic}-{msg.partition}-{msg.offset}"
+                ):
+                    try:
+                        func(msg)
+                    except Exception as e:
+                        dbos_logger.error(
+                            f"Exception encountered in scheduled workflow: {traceback.format_exc()}"
+                        )
 
 
 def kafka_consumer(
@@ -75,7 +95,7 @@ def kafka_consumer(
     def decorator(func: KafkaConsumerWorkflow) -> KafkaConsumerWorkflow:
         stop_event = threading.Event()
         dbosreg.register_poller(
-            stop_event, kafka_consumer_loop, func, config, topics, stop_event
+            stop_event, _kafka_consumer_loop, func, config, topics, stop_event
         )
         return func
 
