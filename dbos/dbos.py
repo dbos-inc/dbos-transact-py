@@ -53,7 +53,7 @@ from .tracer import dbos_tracer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
-    from .fastapi import Request
+    from .request import Request
 
 from sqlalchemy.orm import Session
 
@@ -673,7 +673,7 @@ class DBOS:
 
     @classproperty
     def request(cls) -> Optional["Request"]:
-        """Return the FastAPI `Request`, if any, associated with the current context."""
+        """Return the HTTP `Request`, if any, associated with the current context."""
         ctx = assert_current_dbos_context()
         return ctx.request
 
