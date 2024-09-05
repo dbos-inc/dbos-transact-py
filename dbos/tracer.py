@@ -19,6 +19,7 @@ class DBOSTracer:
         self.app_id = os.environ.get("DBOS__APPID", None)
         self.app_version = os.environ.get("DBOS__APPVERSION", None)
         self.executor_id = os.environ.get("DBOS__VMID", "local")
+        self.provider: Optional[TracerProvider] = None
 
     def config(self, config: ConfigFile) -> None:
         if not isinstance(trace.get_tracer_provider(), TracerProvider):
@@ -36,10 +37,17 @@ class DBOSTracer:
                 provider.add_span_processor(processor)
             trace.set_tracer_provider(provider)
 
+    def set_provider(self, provider: Optional[TracerProvider]) -> None:
+        self.provider = provider
+
     def start_span(
         self, attributes: "TracedAttributes", parent: Optional[Span] = None
     ) -> Span:
-        tracer = trace.get_tracer("dbos-tracer")
+        tracer = (
+            self.provider.get_tracer("dbos-tracer")
+            if self.provider is not None
+            else trace.get_tracer("dbos-tracer")
+        )
         context = trace.set_span_in_context(parent) if parent else None
         span: Span = tracer.start_span(name=attributes["name"], context=context)
         attributes["applicationID"] = self.app_id
