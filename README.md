@@ -53,11 +53,47 @@ pip install --pre dbos
 dbos init --lightweight
 ```
 
+Try it out with this simple program (requires Postgres):
+
+```python
+from dbos import DBOS
+from fastapi import FastAPI
+
+app = FastAPI()
+DBOS(fastapi=app)
+
+@DBOS.step()
+def step_one():
+    print("Step one completed!")
+
+@DBOS.step()
+def step_two():
+    print("Step two completed!")
+
+@app.get("/")
+@DBOS.workflow()
+def workflow():
+    step_one()
+    for _ in range(5):
+        print("Press Control + C to stop the app...")
+        DBOS.sleep(1)
+    step_two()
+```
+
+Save the program into `main.py` and start it with `fastapi run`.
+Visit `localhost:8000` in your browser (or curl it) to start the workflow.
+When prompted, Control + C to "crash" your application, then restart it with `fastapi run`.
+It should resume the workflow from where it left off, completing step two without re-executing step one.
+
+To learn how to build more complex examples, see our programming guide (coming soon).
+
 ## Documentation
 
 Coming soon! 🚧
 
-But we have some cool demo apps for you to check out: [https://github.com/dbos-inc/dbos-demo-apps/tree/main/python](https://github.com/dbos-inc/dbos-demo-apps/tree/main/python)
+## Examples
+
+Check out some cool demo apps here: [https://github.com/dbos-inc/dbos-demo-apps/tree/main/python](https://github.com/dbos-inc/dbos-demo-apps/tree/main/python)
 
 ## Community
 
