@@ -202,8 +202,9 @@ class DBOS:
 
     def __new__(
         cls: Type[DBOS],
-        fastapi: Optional["FastAPI"] = None,
+        *,
         config: Optional[ConfigFile] = None,
+        fastapi: Optional["FastAPI"] = None,
     ) -> DBOS:
         global _dbos_global_instance
         global _dbos_global_registry
@@ -239,8 +240,9 @@ class DBOS:
 
     def __init__(
         self,
-        fastapi: Optional["FastAPI"] = None,
+        *,
         config: Optional[ConfigFile] = None,
+        fastapi: Optional["FastAPI"] = None,
     ) -> None:
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -268,6 +270,7 @@ class DBOS:
 
             setup_fastapi_middleware(self.fastapi)
             self.fastapi.on_event("startup")(self._launch)
+            self.fastapi.on_event("shutdown")(self._destroy)
 
         # Register send_stub as a workflow
         def send_temp_workflow(
