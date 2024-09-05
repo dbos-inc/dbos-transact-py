@@ -1,3 +1,4 @@
+import json
 from typing import Any, Awaitable, Callable, Dict, List, Protocol, Tuple, cast
 
 import pytest
@@ -21,8 +22,8 @@ from dbos.error import DBOSDuplicateWorkflowEventError, DBOSNotAuthorizedError
 from dbos.tracer import dbos_tracer
 
 
-# @pytest.mark.order(1)
-def nt_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
+@pytest.mark.order(1)
+def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     # Set up a simple in-memory span exporter for testing
     exporter = InMemorySpanExporter()
     span_processor = SimpleSpanProcessor(exporter)
@@ -113,14 +114,25 @@ def nt_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     # Get the spans that were recorded
     spans = exporter.get_finished_spans()
 
-    # Assert that we have exactly one span
-    assert len(spans) == 1
+    # Assert that we have two spans
+    #  One is the handler span
+    #  The other is the WF span
+    assert len(spans) == 2
+    assert spans[0].context is not None
+    assert spans[1].context is not None
 
-    # Inspect the span and its attributes
-    span = spans[0]
-    assert span.name == "test-span"
+    span = spans[1]
+    assert span.name == "/user/b"
     assert span.attributes is not None
-    assert span.attributes["testattribute"] == "value"
+
+    span = spans[0]
+    assert span.name == "test_user_endpoint"
+    assert span.parent is not None
+    assert span.parent.span_id == spans[1].context.span_id
+    assert span.attributes is not None
+    assert span.attributes["authenticatedUser"] == "user1"
+    assert span.attributes["authenticatedUserAssumedRole"] == "user"
+    assert span.attributes["authenticatedUserRoles"] == "user,engineer"
 
     response = client.get("/error")
     assert response.status_code == 401
@@ -150,11 +162,8 @@ def nt_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     )
 
 
-class SpanProtocol(Protocol):
-    attributes: Dict[str, Any]
-    name: str
-
-
+# This does not test DBOS at all
+# (It's just a hard-earned example of how you can unit test your spans)
 def test_role_tracing() -> None:
     # Set up a simple in-memory span exporter for testing
     exporter = InMemorySpanExporter()
