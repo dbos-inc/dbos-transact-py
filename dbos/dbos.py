@@ -516,9 +516,13 @@ class DBOS:
             recovery_attempts=stat["recovery_attempts"],
             class_name=stat["class_name"],
             config_name=stat["config_name"],
-            authenticated_user=None,
-            assumed_role=None,
-            authenticatedRoles=None,
+            authenticated_user=stat["authenticated_user"],
+            assumed_role=stat["assumed_role"],
+            authenticated_roles=(
+                stat["authenticated_roles"].split(",")
+                if stat["authenticated_roles"] is not None
+                else None
+            ),
         )
 
     @classmethod
@@ -693,7 +697,7 @@ class WorkflowStatus:
         config_name(str): For instance member functions, the name of the class instance for the execution
         authenticated_user(str): The user who invoked the workflow
         assumed_role(str): The access role used by the user to allow access to the workflow function
-        authenticatedRoles(List[str]): List of all access roles available to the authenticated user
+        authenticated_roles(List[str]): List of all access roles available to the authenticated user
         recovery_attempts(int): Number of times the workflow has been restarted (usually by recovery)
 
     """
@@ -705,7 +709,7 @@ class WorkflowStatus:
     config_name: Optional[str]
     authenticated_user: Optional[str]
     assumed_role: Optional[str]
-    authenticatedRoles: Optional[List[str]]
+    authenticated_roles: Optional[List[str]]
     recovery_attempts: Optional[int]
 
 
