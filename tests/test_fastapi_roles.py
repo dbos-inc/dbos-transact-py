@@ -131,7 +131,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert span.attributes is not None
     assert span.attributes["authenticatedUser"] == "user1"
     assert span.attributes["authenticatedUserAssumedRole"] == "user"
-    assert span.attributes["authenticatedUserRoles"] == "user,engineer"
+    assert span.attributes["authenticatedUserRoles"] == '["user", "engineer"]'
 
     # Verify that there is one workflow for this user.
     gwi = GetWorkflowsInput()

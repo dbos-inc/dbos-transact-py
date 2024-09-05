@@ -60,7 +60,7 @@ class WorkflowStatusInternal(TypedDict):
     recovery_attempts: Optional[int]
     authenticated_user: Optional[str]
     assumed_role: Optional[str]
-    authenticated_roles: Optional[str]  # Comma-delimited list of roles.
+    authenticated_roles: Optional[str]  # JSON list of roles.
 
 
 class RecordedResult(TypedDict):

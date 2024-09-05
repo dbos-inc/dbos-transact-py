@@ -1,3 +1,4 @@
+import json
 import sys
 import time
 import traceback
@@ -146,7 +147,7 @@ def _init_workflow(
         "recovery_attempts": None,
         "authenticated_user": ctx.authenticated_user,
         "authenticated_roles": (
-            ",".join(ctx.authenticated_roles) if ctx.authenticated_roles else None
+            json.dumps(ctx.authenticated_roles) if ctx.authenticated_roles else None
         ),
         "assumed_role": ctx.assumed_role,
     }

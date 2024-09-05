@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from contextvars import ContextVar
@@ -164,7 +165,7 @@ class DBOSContext:
         )
         attributes["authenticatedUser"] = self.authenticated_user
         attributes["authenticatedUserRoles"] = (
-            ",".join(self.authenticated_roles)
+            json.dumps(self.authenticated_roles)
             if self.authenticated_roles is not None
             else ""
         )
@@ -191,7 +192,7 @@ class DBOSContext:
         if user is not None and len(self.spans) > 0:
             self.spans[-1].set_attribute("authenticatedUser", user)
             self.spans[-1].set_attribute(
-                "authenticatedUserRoles", ",".join(roles) if roles is not None else ""
+                "authenticatedUserRoles", json.dumps(roles) if roles is not None else ""
             )
 
 

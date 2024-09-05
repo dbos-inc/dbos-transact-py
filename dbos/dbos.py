@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import json
 import os
 import sys
 import threading
@@ -527,7 +528,7 @@ class DBOS:
             authenticated_user=stat["authenticated_user"],
             assumed_role=stat["assumed_role"],
             authenticated_roles=(
-                stat["authenticated_roles"].split(",")
+                json.loads(stat["authenticated_roles"])
                 if stat["authenticated_roles"] is not None
                 else None
             ),
