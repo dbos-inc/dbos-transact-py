@@ -119,7 +119,7 @@ def copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]) -> None:
                 shutil.copy(src, dst)
 
 
-def copy_template(src_dir: str, project_name: str, lightweight: bool) -> None:
+def copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
 
     dst_dir = path.abspath(".")
 
@@ -131,7 +131,7 @@ def copy_template(src_dir: str, project_name: str, lightweight: bool) -> None:
         "db_name": db_name,
     }
 
-    if lightweight:
+    if config_mode:
         copy_dbos_template(
             os.path.join(src_dir, "dbos-config.yaml.dbos"),
             os.path.join(dst_dir, "dbos-config.yaml"),
@@ -180,9 +180,9 @@ def init(
         typing.Optional[str],
         typer.Option("--template", "-t", help="Specify template to use"),
     ] = None,
-    lightweight: Annotated[
+    config: Annotated[
         bool,
-        typer.Option("--lightweight", "-l", help="Use lightweight mode"),
+        typer.Option("--config", "-c", help="Only add dbos-config.yaml"),
     ] = False,
 ) -> None:
     try:
@@ -211,7 +211,7 @@ def init(
                 raise Exception(f"template {template} not found in {templates_dir}")
 
         copy_template(
-            path.join(templates_dir, template), project_name, lightweight=lightweight
+            path.join(templates_dir, template), project_name, config_mode=config
         )
     except Exception as e:
         print(f"[red]{e}[/red]")

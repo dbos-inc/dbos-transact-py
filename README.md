@@ -50,7 +50,7 @@ To try out the latest pre-release version, install and configure with:
 
 ```shell
 pip install --pre dbos
-dbos init --lightweight
+dbos init --config
 ```
 
 Try it out with this simple program (requires Postgres):
