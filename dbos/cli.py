@@ -119,7 +119,7 @@ def copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]) -> None:
                 shutil.copy(src, dst)
 
 
-def copy_template(src_dir: str, project_name: str) -> None:
+def copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
 
     dst_dir = path.abspath(".")
 
@@ -131,10 +131,17 @@ def copy_template(src_dir: str, project_name: str) -> None:
         "db_name": db_name,
     }
 
-    copy_template_dir(src_dir, dst_dir, ctx)
-    copy_template_dir(
-        path.join(src_dir, "__package"), path.join(dst_dir, package_name), ctx
-    )
+    if config_mode:
+        copy_dbos_template(
+            os.path.join(src_dir, "dbos-config.yaml.dbos"),
+            os.path.join(dst_dir, "dbos-config.yaml"),
+            ctx,
+        )
+    else:
+        copy_template_dir(src_dir, dst_dir, ctx)
+        copy_template_dir(
+            path.join(src_dir, "__package"), path.join(dst_dir, package_name), ctx
+        )
 
 
 def get_project_name() -> typing.Union[str, None]:
@@ -173,6 +180,10 @@ def init(
         typing.Optional[str],
         typer.Option("--template", "-t", help="Specify template to use"),
     ] = None,
+    config: Annotated[
+        bool,
+        typer.Option("--config", "-c", help="Only add dbos-config.yaml"),
+    ] = False,
 ) -> None:
     try:
         if project_name is None:
@@ -199,7 +210,9 @@ def init(
             if template not in templates:
                 raise Exception(f"template {template} not found in {templates_dir}")
 
-        copy_template(path.join(templates_dir, template), project_name)
+        copy_template(
+            path.join(templates_dir, template), project_name, config_mode=config
+        )
     except Exception as e:
         print(f"[red]{e}[/red]")
 

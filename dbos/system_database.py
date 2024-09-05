@@ -230,7 +230,7 @@ class SystemDatabase:
     def wait_for_buffer_flush(self) -> None:
         # Wait until the buffers are flushed.
         while self._is_flushing_status_buffer or not self._is_buffers_empty:
-            dbos_logger.info("Waiting for system buffers to be exported")
+            dbos_logger.debug("Waiting for system buffers to be exported")
             time.sleep(1)
 
     def update_workflow_status(

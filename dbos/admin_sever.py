@@ -28,11 +28,11 @@ class AdminServer:
         self.server_thread = threading.Thread(target=self.server.serve_forever)
         self.server_thread.daemon = True
 
-        dbos_logger.info("Starting DBOS admin server on port %d", self.port)
+        dbos_logger.debug("Starting DBOS admin server on port %d", self.port)
         self.server_thread.start()
 
     def stop(self) -> None:
-        dbos_logger.info("Stopping DBOS admin server")
+        dbos_logger.debug("Stopping DBOS admin server")
         self.server.shutdown()
         self.server.server_close()
         self.server_thread.join()

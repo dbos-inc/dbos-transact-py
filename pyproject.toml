@@ -1,7 +1,7 @@
 [project]
 name = "dbos"
 dynamic = ["version"]
-description = "A Python framework for backends that scale"
+description = "Ultra-lightweight durable execution in Python"
 authors = [
     {name = "DBOS, Inc.", email = "contact@dbos.dev"},
 ]
