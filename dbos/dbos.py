@@ -202,8 +202,8 @@ class DBOS:
 
     def __new__(
         cls: Type[DBOS],
-        config: Optional[ConfigFile] = None,
         *,
+        config: Optional[ConfigFile] = None,
         fastapi: Optional["FastAPI"] = None,
     ) -> DBOS:
         global _dbos_global_instance
@@ -240,8 +240,8 @@ class DBOS:
 
     def __init__(
         self,
-        config: Optional[ConfigFile] = None,
         *,
+        config: Optional[ConfigFile] = None,
         fastapi: Optional["FastAPI"] = None,
     ) -> None:
         if hasattr(self, "_initialized") and self._initialized:
