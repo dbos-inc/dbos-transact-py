@@ -3,25 +3,15 @@ import traceback
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Generator, Optional, Union
 
+from confluent_kafka import Consumer
+from confluent_kafka import Message as CTypeMessage
+
 if TYPE_CHECKING:
     from dbos.dbos import _DBOSRegistry
-    from confluent_kafka import Message as CTypeMessage, Consumer
 
 from .context import SetWorkflowID
+from .kafka_message import KafkaMessage
 from .logger import dbos_logger
-
-
-@dataclass
-class KafkaMessage:
-    headers: Optional[list[tuple[str, Union[str, bytes]]]]
-    key: Optional[Union[str, bytes]]
-    latency: Optional[float]
-    leader_epoch: Optional[int]
-    offset: Optional[int]
-    partition: Optional[int]
-    timestamp: tuple[int, int]
-    topic: Optional[str]
-    value: Optional[Union[str, bytes]]
 
 
 def _from_kafka_message(kafka_message: "CTypeMessage") -> KafkaMessage:
@@ -48,7 +38,6 @@ def _make_kafka_consumer(
     config: dict[str, Any],
     topics: list[str],
 ) -> Generator["Consumer", Any, None]:
-    from confluent_kafka import Consumer
 
     consumer = Consumer(config)
     try:
