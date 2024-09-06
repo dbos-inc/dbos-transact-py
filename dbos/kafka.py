@@ -1,7 +1,7 @@
 import threading
 import traceback
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Generator, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Generator, NoReturn, Optional, Union
 
 from confluent_kafka import Consumer, KafkaError, KafkaException
 from confluent_kafka import Message as CTypeMessage
@@ -38,9 +38,8 @@ def _kafka_consumer_loop(
     stop_event: threading.Event,
 ) -> None:
 
-    def on_error(err: KafkaError):
-        if err:
-            raise KafkaException(err)
+    def on_error(err: KafkaError) -> NoReturn:
+        raise KafkaException(err)
 
     config["error_cb"] = on_error
     if "auto.offset.reset" not in config:
@@ -57,8 +56,10 @@ def _kafka_consumer_loop(
 
             if cmsg is None:
                 continue
-            elif cmsg.error():
-                if cmsg.error().code() == KafkaError._PARTITION_EOF:
+
+            msg_error = cmsg.error()
+            if msg_error is not None:
+                if msg_error.code() == KafkaError._PARTITION_EOF:
                     dbos_logger.warning(
                         f"{cmsg.topic()} [{cmsg.partition()}] readed end at offset {cmsg.offset()}"
                     )

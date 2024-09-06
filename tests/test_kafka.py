@@ -1,7 +1,7 @@
 import random
 import threading
 import uuid
-from typing import Any, List
+from typing import Any, List, NoReturn
 
 import pytest
 from confluent_kafka import KafkaError, Producer
@@ -31,13 +31,12 @@ from dbos import DBOS, KafkaMessage
 #         KAFKA_CFG_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
 
 
-def send_test_messages(server: str, topic: str):
+def send_test_messages(server: str, topic: str) -> bool:
 
     try:
 
-        def on_error(err: KafkaError):
-            if err:
-                raise Exception(err)
+        def on_error(err: KafkaError) -> NoReturn:
+            raise Exception(err)
 
         producer = Producer({"bootstrap.servers": server, "error_cb": on_error})
 
@@ -52,7 +51,7 @@ def send_test_messages(server: str, topic: str):
         pass
 
 
-def test_kafka(dbos: DBOS):
+def test_kafka(dbos: DBOS) -> None:
     event = threading.Event()
     server = "localhost:9092"
     topic = f"dbos-kafka-{random.randrange(1_000_000_000)}"
@@ -71,7 +70,7 @@ def test_kafka(dbos: DBOS):
         [topic],
     )
     @DBOS.workflow()
-    def test_kafka_workflow(msg: KafkaMessage):
+    def test_kafka_workflow(msg: KafkaMessage) -> None:
         print(msg)
         messages.append(msg)
         event.set()
