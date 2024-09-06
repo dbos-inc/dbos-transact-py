@@ -2,14 +2,11 @@
 
 ---
 
-📚 **Documentation**: Under Construction 🚧
+📚 **Documentation**: [Explore the Docs](https://docs.dbos.dev)
 
 💬 **Join the Discussion**: [Discord Community](https://discord.gg/fMwQjeW5zg)
 
 ---
-
-
-**DBOS Python is under construction! 🚧🚧🚧 Check back regularly for updates, release coming in mid-September!**
 
 DBOS Transact is a **Python library** providing ultra-lightweight durable execution.
 For example:
@@ -46,14 +43,14 @@ Some more cool features include:
 
 ## Getting Started
 
-To try out the latest pre-release version, install and configure with:
+Install and configure with:
 
 ```shell
-pip install --pre dbos
+pip install dbos
 dbos init --config
 ```
 
-Try it out with this simple program (requires Postgres):
+Then, try it out with this simple program (requires Postgres):
 
 ```python
 from fastapi import FastAPI
@@ -83,7 +80,7 @@ def endpoint():
     workflow()
 ```
 
-Save the program into `main.py`, tell it your local Postgres password via `export PGPASSWORD=<your password>` and start it with `fastapi run`.
+Save the program into `main.py`, edit `dbos-config.yaml` to configure your Postgres connection settings, and start it with `fastapi run`.
 Visit `localhost:8000` in your browser (or curl it) to start the workflow.
 When prompted, press `Control + \` to force quit your application.
 It should crash midway through the workflow, having completed step one but not step two.
