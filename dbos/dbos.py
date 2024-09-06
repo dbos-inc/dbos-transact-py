@@ -690,6 +690,27 @@ class DBOS:
         ctx = assert_current_dbos_context()
         return ctx.request
 
+    @classproperty
+    def authenticated_user(cls) -> Optional[str]:
+        """Return the current authenticated user, if any, associated with the current context."""
+        ctx = assert_current_dbos_context()
+        return ctx.authenticated_user
+
+    @classproperty
+    def authenticated_roles(cls) -> Optional[List[str]]:
+        """Return the roles granted to the current authenticated user, if any, associated with the current context."""
+        ctx = assert_current_dbos_context()
+        return ctx.authenticated_roles
+
+    @classmethod
+    def set_authentication(
+        cls, authenticated_user: Optional[str], authenticated_roles: Optional[List[str]]
+    ) -> None:
+        """Set the current authenticated user and granted roles into the current context."""
+        ctx = assert_current_dbos_context()
+        ctx.authenticated_user = authenticated_user
+        ctx.authenticated_roles = authenticated_roles
+
 
 @dataclass
 class WorkflowStatus:
