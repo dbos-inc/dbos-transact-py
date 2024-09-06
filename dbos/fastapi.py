@@ -11,9 +11,7 @@ from .context import (
     TracedAttributes,
     assert_current_dbos_context,
 )
-from .request import Address, Request
-
-request_id_header = "x-request-id"
+from .request import Address, Request, request_id_header
 
 
 def get_or_generate_request_id(request: FastAPIRequest) -> str:

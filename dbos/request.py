@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Any, Mapping, NamedTuple, Optional
 
+request_id_header = "x-request-id"
+
 
 class Address(NamedTuple):
     hostname: str
