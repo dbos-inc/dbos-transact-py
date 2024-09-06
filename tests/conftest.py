@@ -123,7 +123,7 @@ def dbos_fastapi(
         warnings.filterwarnings(
             "ignore",
             category=DeprecationWarning,
-            message="\s*on_event is deprecated, use lifespan event handlers instead\.",
+            message=r"\s*on_event is deprecated, use lifespan event handlers instead\.",
         )
         dbos = DBOS(fastapi=app, config=config)
 
