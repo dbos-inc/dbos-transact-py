@@ -3,7 +3,7 @@ import traceback
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Generator, Optional, Union
 
-from confluent_kafka import Consumer
+from confluent_kafka import Consumer, KafkaError, KafkaException
 from confluent_kafka import Message as CTypeMessage
 
 if TYPE_CHECKING:
@@ -30,22 +30,6 @@ def _from_kafka_message(kafka_message: "CTypeMessage") -> KafkaMessage:
 
 KafkaConsumerWorkflow = Callable[[KafkaMessage], None]
 
-from contextlib import contextmanager
-
-
-@contextmanager
-def _make_kafka_consumer(
-    config: dict[str, Any],
-    topics: list[str],
-) -> Generator["Consumer", Any, None]:
-
-    consumer = Consumer(config)
-    try:
-        consumer.subscribe(topics)
-        yield consumer
-    finally:
-        consumer.close()
-
 
 def _kafka_consumer_loop(
     func: KafkaConsumerWorkflow,
@@ -54,17 +38,33 @@ def _kafka_consumer_loop(
     stop_event: threading.Event,
 ) -> None:
 
-    with _make_kafka_consumer(config, topics) as consumer:
+    def on_error(err: KafkaError):
+        if err:
+            raise KafkaException(err)
+
+    config["error_cb"] = on_error
+    if "auto.offset.reset" not in config:
+        config["auto.offset.reset"] = "earliest"
+
+    consumer = Consumer(config)
+    try:
+        consumer.subscribe(topics)
         while not stop_event.is_set():
-            if stop_event.wait(timeout=1):
+            cmsg = consumer.poll(1.0)
+
+            if stop_event.is_set():
                 return
 
-            cmsg = consumer.poll(0)
             if cmsg is None:
                 continue
             elif cmsg.error():
-                dbos_logger.error(f"Kafka consumer error: {cmsg.error()}")
-                continue
+                if cmsg.error().code() == KafkaError._PARTITION_EOF:
+                    dbos_logger.warning(
+                        f"{cmsg.topic()} [{cmsg.partition()}] readed end at offset {cmsg.offset()}"
+                    )
+                    continue
+                else:
+                    raise KafkaException(cmsg.error())
             else:
                 msg = _from_kafka_message(cmsg)
                 with SetWorkflowID(
@@ -76,6 +76,9 @@ def _kafka_consumer_loop(
                         dbos_logger.error(
                             f"Exception encountered in scheduled workflow: {traceback.format_exc()}"
                         )
+
+    finally:
+        consumer.close()
 
 
 def kafka_consumer(
