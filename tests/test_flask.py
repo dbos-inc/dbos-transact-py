@@ -92,6 +92,9 @@ def test_endpoint_recovery(dbos_flask: Tuple[DBOS, Flask]) -> None:
             "app_version": None,
             "request": None,
             "recovery_attempts": None,
+            "authenticated_user": None,
+            "authenticated_roles": None,
+            "assumed_role": None,
         }
     )
 
