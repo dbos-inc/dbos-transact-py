@@ -7,6 +7,7 @@ from typing import Any, Generator, Tuple
 import pytest
 import sqlalchemy as sa
 from fastapi import FastAPI
+from flask import Flask
 
 from dbos import DBOS, ConfigFile
 
@@ -126,6 +127,23 @@ def dbos_fastapi(
             message=r"\s*on_event is deprecated, use lifespan event handlers instead\.",
         )
         dbos = DBOS(fastapi=app, config=config)
+
+    # This is for test convenience.
+    #    Usually fastapi itself does launch, but we are not completing the fastapi lifecycle
+    DBOS.launch()
+
+    yield dbos, app
+    DBOS.destroy()
+
+
+@pytest.fixture()
+def dbos_flask(
+    config: ConfigFile, cleanup_test_databases: None
+) -> Generator[Tuple[DBOS, Flask], Any, None]:
+    DBOS.destroy()
+    app = Flask(__name__)
+
+    dbos = DBOS(flask=app, config=config)
 
     # This is for test convenience.
     #    Usually fastapi itself does launch, but we are not completing the fastapi lifecycle
