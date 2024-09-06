@@ -8,8 +8,6 @@ from dbos import DBOS
 def test_flask_endpoint(dbos: DBOS) -> None:
     app = Flask("test_flask_endpoint")
 
-    app.route("/hello")
-
     @app.route("/endpoint/<var1>/<var2>")
     def hello(var1: str, var2: str) -> Response:
         return test_workflow(var1, var2)
