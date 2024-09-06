@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import sqlalchemy as sa
 from flask import Flask, Response, jsonify
 
@@ -5,8 +7,8 @@ from flask import Flask, Response, jsonify
 from dbos import DBOS
 
 
-def test_flask_endpoint(dbos: DBOS) -> None:
-    app = Flask("test_flask_endpoint")
+def test_flask_endpoint(dbos_flask: Tuple[DBOS, Flask]) -> None:
+    _, app = dbos_flask
 
     @app.route("/endpoint/<var1>/<var2>")
     def hello(var1: str, var2: str) -> Response:
