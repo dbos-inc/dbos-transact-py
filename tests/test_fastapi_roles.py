@@ -38,7 +38,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     async def authMiddleware(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        with DBOSContextEnsure() as ctx:
+        with DBOSContextEnsure():
             prev_user = DBOS.authenticated_user
             prev_roles = DBOS.authenticated_roles
             DBOS.set_authentication("user1", ["user", "engineer"])
@@ -138,6 +138,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert span.attributes["authenticatedUserRoles"] == '["user", "engineer"]'
 
     # Verify that there is one workflow for this user.
+    dbos.sys_db.wait_for_buffer_flush()
     gwi = GetWorkflowsInput()
     gwi.authenticated_user = "user1"
     wfl = dbos.sys_db.get_workflows(gwi)
@@ -237,7 +238,7 @@ def test_jwt_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         except Exception as e:
             pass
 
-        with DBOSContextEnsure() as ctx:
+        with DBOSContextEnsure():
             prev_user = DBOS.authenticated_user
             prev_roles = DBOS.authenticated_roles
             DBOS.set_authentication(user, roles)
