@@ -39,12 +39,14 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         with DBOSContextEnsure() as ctx:
+            prev_user = ctx.authenticated_user
+            prev_roles = ctx.authenticated_roles
             ctx.set_authentication("user1", ["user", "engineer"])
             try:
                 response = await call_next(request)
                 return response
             finally:
-                ctx.set_authentication(None, None)
+                ctx.set_authentication(prev_user, prev_roles)
 
     @app.get("/dboserror")
     def test_dbos_error() -> None:
@@ -236,12 +238,14 @@ def test_jwt_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
             pass
 
         with DBOSContextEnsure() as ctx:
+            prev_user = ctx.authenticated_user
+            prev_roles = ctx.authenticated_roles
             ctx.set_authentication(user, roles)
             try:
                 response = await call_next(request)
                 return response
             finally:
-                ctx.set_authentication(None, None)
+                ctx.set_authentication(prev_user, prev_roles)
 
     @app.get("/open/{var1}")
     @DBOS.required_roles([])
