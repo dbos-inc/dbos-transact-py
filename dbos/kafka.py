@@ -1,7 +1,7 @@
 import threading
 import traceback
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Generator
+from typing import TYPE_CHECKING, Any, Callable, Generator, Optional, Union
 
 if TYPE_CHECKING:
     from dbos.dbos import _DBOSRegistry
@@ -13,15 +13,15 @@ from .logger import dbos_logger
 
 @dataclass
 class KafkaMessage:
-    headers: list[tuple[str, str | bytes]] | None
-    key: str | bytes | None
-    latency: float | None
-    leader_epoch: int | None
-    offset: int | None
-    partition: int | None
+    headers: Optional[list[tuple[str, Union[str, bytes]]]]
+    key: Optional[Union[str, bytes]]
+    latency: Optional[float]
+    leader_epoch: Optional[int]
+    offset: Optional[int]
+    partition: Optional[int]
     timestamp: tuple[int, int]
-    topic: str | None
-    value: str | bytes | None
+    topic: Optional[str]
+    value: Optional[Union[str, bytes]]
 
 
 def _from_kafka_message(kafka_message: "CTypeMessage") -> KafkaMessage:
