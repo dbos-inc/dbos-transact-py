@@ -177,6 +177,79 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     )
 
 
+@pytest.mark.order(2)
+def test_jwt_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
+    dbos, app = dbos_fastapi
+
+    @app.middleware("http")
+    async def jwtAuthMiddleware(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        with DBOSContextEnsure() as ctx:
+            ctx.set_authentication("user1", ["user", "engineer"])
+            try:
+                response = await call_next(request)
+                return response
+            finally:
+                ctx.set_authentication(None, None)
+
+    @app.get("/open/{var1}")
+    @DBOS.required_roles([])
+    @DBOS.workflow()
+    def test_open_endpoint(var1: str) -> str:
+        result = var1
+        ctx = assert_current_dbos_context()
+        return result
+
+    @app.get("/user/{var1}")
+    @DBOS.required_roles(["user"])
+    @DBOS.workflow()
+    def test_user_endpoint(var1: str) -> str:
+        result = var1
+        ctx = assert_current_dbos_context()
+        assert ctx.assumed_role == "user"
+        return result
+
+    @app.get("/engineer/{var1}")
+    @DBOS.required_roles(["engineer"])
+    @DBOS.workflow()
+    def test_engineer_endpoint(var1: str) -> str:
+        result = var1
+        ctx = assert_current_dbos_context()
+        assert ctx.assumed_role == "engineer"
+        return result
+
+    @app.get("/admin/{var1}")
+    @DBOS.required_roles(["admin"])
+    @DBOS.workflow()
+    def test_admin_endpoint(var1: str) -> str:
+        result = var1
+        ctx = assert_current_dbos_context()
+        assert ctx.assumed_role == "admin"
+        return result
+
+    client = TestClient(app)
+
+    response = client.get("/open/a")
+    assert response.status_code == 200
+    assert response.text == '"a"'
+
+    response = client.get("/user/b")
+    assert response.status_code == 200
+    assert response.text == '"b"'
+
+    response = client.get("/engineer/c")
+    assert response.status_code == 200
+    assert response.text == '"c"'
+
+    response = client.get("/admin/d")
+    assert response.status_code == 403
+    assert (
+        response.text
+        == '{"message":"Function test_admin_endpoint has required roles, but user is not authenticated for any of them","dbos_error_code":"8","dbos_error":"DBOSNotAuthorizedError"}'
+    )
+
+
 # This does not test DBOS at all
 # (It's just a hard-earned example of how you can unit test your spans)
 def test_role_tracing() -> None:
