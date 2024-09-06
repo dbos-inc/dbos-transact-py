@@ -4,18 +4,7 @@ import select
 import threading
 import time
 from enum import Enum
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Sequence,
-    Set,
-    TypedDict,
-    cast,
-)
+from typing import Any, Dict, List, Literal, Optional, Sequence, Set, TypedDict, cast
 
 import psycopg2
 import sqlalchemy as sa
@@ -69,6 +58,9 @@ class WorkflowStatusInternal(TypedDict):
     app_id: Optional[str]
     request: Optional[str]  # JSON (jsonpickle)
     recovery_attempts: Optional[int]
+    authenticated_user: Optional[str]
+    assumed_role: Optional[str]
+    authenticated_roles: Optional[str]  # JSON list of roles.
 
 
 class RecordedResult(TypedDict):
@@ -136,7 +128,7 @@ class WorkflowInformation(TypedDict, total=False):
     authenticated_user: str  # The user who ran the workflow. Empty string if not set.
     assumed_role: str
     # The role used to run this workflow.  Empty string if authorization is not required.
-    authenticatedRoles: List[str]
+    authenticated_roles: List[str]
     # All roles the authenticated user has, if any.
     input: Optional[WorkflowInputs]
     output: Optional[str]
@@ -252,6 +244,9 @@ class SystemDatabase:
             application_version=status["app_version"],
             application_id=status["app_id"],
             request=status["request"],
+            authenticated_user=status["authenticated_user"],
+            authenticated_roles=status["authenticated_roles"],
+            assumed_role=status["assumed_role"],
         )
         if replace:
             cmd = cmd.on_conflict_do_update(
@@ -322,6 +317,9 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.recovery_attempts,
                     SystemSchema.workflow_status.c.config_name,
                     SystemSchema.workflow_status.c.class_name,
+                    SystemSchema.workflow_status.c.authenticated_user,
+                    SystemSchema.workflow_status.c.authenticated_roles,
+                    SystemSchema.workflow_status.c.assumed_role,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -339,6 +337,9 @@ class SystemDatabase:
                 "executor_id": None,
                 "request": row[2],
                 "recovery_attempts": row[3],
+                "authenticated_user": row[6],
+                "authenticated_roles": row[7],
+                "assumed_role": row[8],
             }
             return status
 
@@ -375,6 +376,9 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.error,
                     SystemSchema.workflow_status.c.config_name,
                     SystemSchema.workflow_status.c.class_name,
+                    SystemSchema.workflow_status.c.authenticated_user,
+                    SystemSchema.workflow_status.c.authenticated_roles,
+                    SystemSchema.workflow_status.c.assumed_role,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -392,6 +396,9 @@ class SystemDatabase:
                 "executor_id": None,
                 "request": row[2],
                 "recovery_attempts": None,
+                "authenticated_user": row[7],
+                "authenticated_roles": row[8],
+                "assumed_role": row[9],
             }
             return status
 

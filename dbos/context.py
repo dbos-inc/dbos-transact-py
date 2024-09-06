@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from contextvars import ContextVar
@@ -39,6 +40,9 @@ class TracedAttributes(TypedDict, total=False):
     applicationID: Optional[str]
     applicationVersion: Optional[str]
     executorID: Optional[str]
+    authenticatedUser: Optional[str]
+    authenticatedUserRoles: Optional[str]
+    authenticatedUserAssumedRole: Optional[str]
 
 
 class DBOSContext:
@@ -159,6 +163,13 @@ class DBOSContext:
         attributes["operationUUID"] = (
             self.workflow_id if len(self.workflow_id) > 0 else None
         )
+        attributes["authenticatedUser"] = self.authenticated_user
+        attributes["authenticatedUserRoles"] = (
+            json.dumps(self.authenticated_roles)
+            if self.authenticated_roles is not None
+            else ""
+        )
+        attributes["authenticatedUserAssumedRole"] = self.assumed_role
         span = dbos_tracer.start_span(
             attributes, parent=self.spans[-1] if len(self.spans) > 0 else None
         )
@@ -178,6 +189,11 @@ class DBOSContext:
     ) -> None:
         self.authenticated_user = user
         self.authenticated_roles = roles
+        if user is not None and len(self.spans) > 0:
+            self.spans[-1].set_attribute("authenticatedUser", user)
+            self.spans[-1].set_attribute(
+                "authenticatedUserRoles", json.dumps(roles) if roles is not None else ""
+            )
 
 
 ##############################################################
@@ -217,13 +233,13 @@ class DBOSContextEnsure:
     def __init__(self) -> None:
         self.created_ctx = False
 
-    def __enter__(self) -> DBOSContextEnsure:
+    def __enter__(self) -> DBOSContext:
         # Code to create a basic context
         ctx = get_local_dbos_context()
         if ctx is None:
             self.created_ctx = True
             set_local_dbos_context(DBOSContext())
-        return self
+        return assert_current_dbos_context()
 
     def __exit__(
         self,

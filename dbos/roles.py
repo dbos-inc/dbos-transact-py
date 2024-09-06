@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Callable, List, Optional, Type, TypeVar, 
 from dbos.error import DBOSNotAuthorizedError
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS, _DBOSRegistry
+    from dbos.dbos import _DBOSRegistry
 
 from dbos.context import DBOSAssumeRole, get_local_dbos_context
 from dbos.registrations import (

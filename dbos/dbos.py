@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import json
 import os
 import sys
 import threading
@@ -19,6 +20,7 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
+    cast,
 )
 
 from opentelemetry.trace import Span
@@ -266,6 +268,27 @@ class DBOS:
         self.fastapi: Optional["FastAPI"] = fastapi
         self._executor: Optional[ThreadPoolExecutor] = None
         if self.fastapi is not None:
+            from fastapi.requests import Request as FARequest
+            from fastapi.responses import JSONResponse
+
+            async def dbos_error_handler(
+                request: FARequest, gexc: Exception
+            ) -> JSONResponse:
+                exc: DBOSException = cast(DBOSException, gexc)
+                status_code = 500
+                if exc.status_code is not None:
+                    status_code = exc.status_code
+                return JSONResponse(
+                    status_code=status_code,
+                    content={
+                        "message": str(exc.message),
+                        "dbos_error_code": str(exc.dbos_error_code),
+                        "dbos_error": str(exc.__class__.__name__),
+                    },
+                )
+
+            self.fastapi.add_exception_handler(DBOSException, dbos_error_handler)
+
             from dbos.fastapi import setup_fastapi_middleware
 
             setup_fastapi_middleware(self.fastapi)
@@ -502,9 +525,13 @@ class DBOS:
             recovery_attempts=stat["recovery_attempts"],
             class_name=stat["class_name"],
             config_name=stat["config_name"],
-            authenticated_user=None,
-            assumed_role=None,
-            authenticatedRoles=None,
+            authenticated_user=stat["authenticated_user"],
+            assumed_role=stat["assumed_role"],
+            authenticated_roles=(
+                json.loads(stat["authenticated_roles"])
+                if stat["authenticated_roles"] is not None
+                else None
+            ),
         )
 
     @classmethod
@@ -663,6 +690,27 @@ class DBOS:
         ctx = assert_current_dbos_context()
         return ctx.request
 
+    @classproperty
+    def authenticated_user(cls) -> Optional[str]:
+        """Return the current authenticated user, if any, associated with the current context."""
+        ctx = assert_current_dbos_context()
+        return ctx.authenticated_user
+
+    @classproperty
+    def authenticated_roles(cls) -> Optional[List[str]]:
+        """Return the roles granted to the current authenticated user, if any, associated with the current context."""
+        ctx = assert_current_dbos_context()
+        return ctx.authenticated_roles
+
+    @classmethod
+    def set_authentication(
+        cls, authenticated_user: Optional[str], authenticated_roles: Optional[List[str]]
+    ) -> None:
+        """Set the current authenticated user and granted roles into the current context."""
+        ctx = assert_current_dbos_context()
+        ctx.authenticated_user = authenticated_user
+        ctx.authenticated_roles = authenticated_roles
+
 
 @dataclass
 class WorkflowStatus:
@@ -679,7 +727,7 @@ class WorkflowStatus:
         config_name(str): For instance member functions, the name of the class instance for the execution
         authenticated_user(str): The user who invoked the workflow
         assumed_role(str): The access role used by the user to allow access to the workflow function
-        authenticatedRoles(List[str]): List of all access roles available to the authenticated user
+        authenticated_roles(List[str]): List of all access roles available to the authenticated user
         recovery_attempts(int): Number of times the workflow has been restarted (usually by recovery)
 
     """
@@ -691,7 +739,7 @@ class WorkflowStatus:
     config_name: Optional[str]
     authenticated_user: Optional[str]
     assumed_role: Optional[str]
-    authenticatedRoles: Optional[List[str]]
+    authenticated_roles: Optional[List[str]]
     recovery_attempts: Optional[int]
 
 
