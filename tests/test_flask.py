@@ -70,6 +70,7 @@ def test_endpoint_recovery(dbos_flask: Tuple[DBOS, Flask]) -> None:
 
     response = client.get("/a/b", headers={"dbos-idempotency-key": wfuuid})
     assert response.status_code == 200
+    assert response.json is not None
     assert response.json.get("res1") == "a"
     assert response.json.get("res2") == "b"
     assert response.json.get("id1") == wfuuid

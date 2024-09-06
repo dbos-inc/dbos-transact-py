@@ -139,7 +139,7 @@ def dbos_fastapi(
 @pytest.fixture()
 def dbos_flask(
     config: ConfigFile, cleanup_test_databases: None
-) -> Generator[Tuple[DBOS, FastAPI], Any, None]:
+) -> Generator[Tuple[DBOS, Flask], Any, None]:
     DBOS.destroy()
     app = Flask(__name__)
 

@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 from urllib.parse import urlparse
 
 from flask import Flask, request
@@ -16,10 +17,10 @@ from .request import Address, Request, request_id_header
 
 
 class FlaskMiddleware:
-    def __init__(self, app):
+    def __init__(self, app: Any) -> None:
         self.app = app
 
-    def __call__(self, environ, start_response):
+    def __call__(self, environ: Any, start_response: Any) -> Any:
         request = WRequest(environ)
         attributes: TracedAttributes = {
             "name": request.url,
@@ -75,5 +76,5 @@ def make_request(request: WRequest) -> Request:
     )
 
 
-def setup_flask_middleware(app: Flask):
-    app.wsgi_app = FlaskMiddleware(app.wsgi_app)
+def setup_flask_middleware(app: Flask) -> None:
+    app.wsgi_app = FlaskMiddleware(app.wsgi_app)  # type: ignore
