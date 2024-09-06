@@ -1,7 +1,9 @@
-from typing import Awaitable, Callable, Tuple
+from typing import Awaitable, Callable, List, Optional, Tuple
 
+import jwt
 import pytest
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.security import OAuth2PasswordBearer
 from fastapi.testclient import TestClient
 
 # For tracing test
@@ -181,12 +183,60 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 def test_jwt_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     dbos, app = dbos_fastapi
 
+    JWT_SECRET = "dbsecret"
+    JWT_ALG = "HS256"
+
+    class TokenData:
+        def __init__(self) -> None:
+            self.username: str = ""
+            self.roles: List[str] = []
+
+    def decode_jwt(token: str) -> TokenData:
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+            username: str = payload.get("sub")
+            roles: List[str] = payload.get("roles", [])
+            if username is None or not len(username):
+                raise HTTPException(
+                    status_code=401,
+                    detail="Could not validate credentials",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            td = TokenData()
+            td.username = username
+            td.roles = roles
+            return td
+        except jwt.PyJWTError:
+            raise HTTPException(
+                status_code=401,
+                detail="Could not validate credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    def create_jwt_token(username: str, roles: List[str]) -> str:
+        to_encode = {"sub": username, "roles": roles}
+        encoded_jwt = jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALG)
+        return encoded_jwt
+
+    oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
     @app.middleware("http")
     async def jwtAuthMiddleware(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
+        user: Optional[str] = None
+        roles: Optional[List[str]] = None
+        try:
+            token = await oauth2_scheme(request)
+            if token is not None:
+                tdata = decode_jwt(token)
+                user = tdata.username
+                roles = tdata.roles
+        except Exception as e:
+            pass
+
         with DBOSContextEnsure() as ctx:
-            ctx.set_authentication("user1", ["user", "engineer"])
+            ctx.set_authentication(user, roles)
             try:
                 response = await call_next(request)
                 return response
@@ -230,19 +280,24 @@ def test_jwt_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     client = TestClient(app)
 
+    token = create_jwt_token(username="user1", roles=["user", "engineer"])
+
     response = client.get("/open/a")
     assert response.status_code == 200
     assert response.text == '"a"'
 
     response = client.get("/user/b")
+    assert response.status_code == 403
+
+    response = client.get("/user/b", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     assert response.text == '"b"'
 
-    response = client.get("/engineer/c")
+    response = client.get("/engineer/c", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     assert response.text == '"c"'
 
-    response = client.get("/admin/d")
+    response = client.get("/admin/d", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 403
     assert (
         response.text
