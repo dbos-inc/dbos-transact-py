@@ -87,7 +87,7 @@ It should crash midway through the workflow, having completed step one but not s
 Then, restart your app with `fastapi run`.
 It should resume the workflow from where it left off, completing step two without re-executing step one.
 
-To learn how to build more complex examples, see our programming guide (coming soon).
+To learn how to build more complex workflows, see our [programming guide](https://docs.dbos.dev/python/programming-guide) or [examples](https://docs.dbos.dev/examples).
 
 ## Documentation
 
