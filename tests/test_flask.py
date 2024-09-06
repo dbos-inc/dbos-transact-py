@@ -1,5 +1,5 @@
 import sqlalchemy as sa
-from flask import Flask, jsonify
+from flask import Flask, Response, jsonify
 
 # Public API
 from dbos import DBOS
@@ -11,12 +11,12 @@ def test_flask_endpoint(dbos: DBOS) -> None:
     app.route("/hello")
 
     @app.route("/endpoint/<var1>/<var2>")
-    def hello(var1, var2):
+    def hello(var1: str, var2: str) -> Response:
         return test_workflow(var1, var2)
 
     @app.route("/workflow/<var1>/<var2>")
     @DBOS.workflow()
-    def test_workflow(var1: str, var2: str) -> str:
+    def test_workflow(var1: str, var2: str) -> Response:
         res1 = test_transaction(var1)
         res2 = test_step(var2)
         result = res1 + res2
