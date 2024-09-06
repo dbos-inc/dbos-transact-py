@@ -23,7 +23,7 @@ class FlaskMiddleware:
     def __call__(self, environ: Any, start_response: Any) -> Any:
         request = WRequest(environ)
         attributes: TracedAttributes = {
-            "name": request.url,
+            "name": urlparse(request.url).path,
             "requestID": get_or_generate_request_id(request),
             "requestIP": (
                 request.remote_addr if request.remote_addr is not None else None
