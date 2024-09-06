@@ -1,52 +1,104 @@
-# DBOS Transact Python
+## 🚀 DBOS Transact - Ultra-Lightweight Durable Execution in Python 🚀
+
+---
+
+📚 **Documentation**: Under Construction 🚧
+
+💬 **Join the Discussion**: [Discord Community](https://discord.gg/fMwQjeW5zg)
+
+---
+
 
 **DBOS Python is under construction! 🚧🚧🚧 Check back regularly for updates, release coming in mid-September!**
 
-DBOS Transact is a **Python library** for building durable and scalable applications.
+DBOS Transact is a **Python library** providing ultra-lightweight durable execution.
+For example:
 
-You want to use DBOS Transact in your application because you need:
+```python
+@DBOS.step()
+def step_one():
+    ...
 
-- **Resilience to any failure**.  If your app is interrupted for any reason, it automatically resumes from where it left off.  Reliable message delivery is built in. Idempotency is built in.
-- **Reliable event processing**. Need to consume Kafka events exactly-once? Just add one line of code to your app. Need to run a task exactly once per hour, day, or month? Just one more line of code.
-- **Built-in observability**. Automatically emit [OpenTelemetry](https://opentelemetry.io/)-compatible logs and traces from any application. Query your app's history from the command line or with SQL.
-- **Blazing-fast, developer-friendly serverless**.  Develop your project locally and run it anywhere. When you're ready, [deploy it for free to DBOS Cloud](https://docs.dbos.dev/getting-started/quickstart#deploying-to-dbos-cloud) and we'll host it for you, [25x faster](https://www.dbos.dev/blog/dbos-vs-aws-step-functions-benchmark) and [15x cheaper](https://www.dbos.dev/blog/dbos-vs-lambda-cost) than AWS Lambda.
+@DBOS.step()
+def step_two():
+    ...
+
+@DBOS.workflow()
+def workflow()
+    step_one()
+    step_two()
+```
+
+Durable execution means your program is **resilient to any failure**.
+If it is ever interrupted or crashes, all your workflows will automatically resume from the last completed step.
+If you want to see durable execution in action, check out [this demo app](https://demo-widget-store.cloud.dbos.dev/) (source code [here](https://github.com/dbos-inc/dbos-demo-apps/tree/main/python/widget-store)).
+No matter how many times you try to crash it, it always resumes from exactly where it left off!
+
+Under the hood, DBOS Transact works by storing your program's execution state (which workflows are currently executing and which steps they've completed) in a Postgres database.
+So all you need to use it is a Postgres database to connect to&mdash;there's no need for a "workflow server."
+This approach is also incredibly fast, for example [25x faster than AWS Step Functions](https://www.dbos.dev/blog/dbos-vs-aws-step-functions-benchmark).
+
+Some more cool features include:
+
+- Scheduled jobs&mdash;run your workflows exactly-once per time interval.
+- Exactly-once event processing&mdash;use workflows to process incoming events (for example, from a Kafka topic) exactly-once.
+- Observability&mdash;all workflows automatically emit [OpenTelemetry](https://opentelemetry.io/) traces.
 
 ## Getting Started
 
-To try out the latest pre-release version, install with:
+To try out the latest pre-release version, install and configure with:
 
 ```shell
 pip install --pre dbos
+dbos init --config
 ```
+
+Try it out with this simple program (requires Postgres):
+
+```python
+from fastapi import FastAPI
+from dbos import DBOS
+
+app = FastAPI()
+DBOS(fastapi=app)
+
+@DBOS.step()
+def step_one():
+    print("Step one completed!")
+
+@DBOS.step()
+def step_two():
+    print("Step two completed!")
+
+@DBOS.workflow()
+def workflow():
+    step_one()
+    for _ in range(5):
+        print("Press Control + \ to stop the app...")
+        DBOS.sleep(1)
+    step_two()
+
+@app.get("/")
+def endpoint():
+    workflow()
+```
+
+Save the program into `main.py`, tell it your local Postgres password via `export PGPASSWORD=<your password>` and start it with `fastapi run`.
+Visit `localhost:8000` in your browser (or curl it) to start the workflow.
+When prompted, press `Control + \` to force quit your application.
+It should crash midway through the workflow, having completed step one but not step two.
+Then, restart your app with `fastapi run`.
+It should resume the workflow from where it left off, completing step two without re-executing step one.
+
+To learn how to build more complex examples, see our programming guide (coming soon).
 
 ## Documentation
 
 Coming soon! 🚧
 
-But we have some cool demo apps for you to check out: [https://github.com/dbos-inc/dbos-demo-apps/tree/main/python](https://github.com/dbos-inc/dbos-demo-apps/tree/main/python)
+## Examples
 
-## Main Features
-
-Here are some of the core features of DBOS Transact:
-
-| Feature                                                                       | Description
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| [Transactions](https://www.dbos.dev/dbos-transact-python)                                      | Easily and safely query your application database using [SQLAlchemy](https://www.sqlalchemy.org/) or raw SQL.
-| [Workflows](https://www.dbos.dev/dbos-transact-python)                                         | Reliable workflow orchestration&#8212;resume your program after any failure.
-| [Idempotency](https://www.dbos.dev/dbos-transact-python)                                       | Automatically make any request idempotent, so your requests happen exactly once.
-| [Authentication and Authorization](https://www.dbos.dev/dbos-transact-python)                  | Secure your HTTP endpoints so only authorized users can access them.
-| [Kafka Integration](https://www.dbos.dev/dbos-transact-python)                                 | Consume Kafka messages exactly-once with transactions or workflows.
-| [Scheduled Workflows](https://www.dbos.dev/dbos-transact-python)                               | Schedule your workflows to run exactly-once per time interval with cron-like syntax.
-| [Self-Hosting](https://www.dbos.dev/dbos-transact-python)                                      | Host your applications anywhere, as long as they have a Postgres database to connect to.
-
-And DBOS Cloud:
-
-| Feature                                                                       | Description
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| [Serverless App Deployment](https://docs.dbos.dev/cloud-tutorials/application-management)      | Deploy apps to DBOS Cloud in minutes.
-| [Interactive Time Travel](https://docs.dbos.dev/cloud-tutorials/interactive-timetravel)        | Query your application database as of any past point in time.
-| [Cloud Database Management](https://docs.dbos.dev/cloud-tutorials/database-management)         | Provision cloud Postgres instances for your applications. Alternatively, [bring your own database](https://docs.dbos.dev/cloud-tutorials/byod-management).
-| [Built-in Observability](https://docs.dbos.dev/cloud-tutorials/monitoring-dashboard)           | Built-in log capture, request tracing, and dashboards.
+Check out some cool demo apps here: [https://github.com/dbos-inc/dbos-demo-apps/tree/main/python](https://github.com/dbos-inc/dbos-demo-apps/tree/main/python)
 
 ## Community
 
