@@ -1,9 +1,20 @@
+import json
 import sys
 import time
 import traceback
 from concurrent.futures import Future
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Generic,
+    List,
+    Optional,
+    Tuple,
+    TypeVar,
+    cast,
+)
 
 from dbos.application_database import ApplicationDatabase, TransactionResultInternal
 
@@ -134,6 +145,11 @@ def _init_workflow(
         "executor_id": ctx.executor_id,
         "request": (utils.serialize(ctx.request) if ctx.request is not None else None),
         "recovery_attempts": None,
+        "authenticated_user": ctx.authenticated_user,
+        "authenticated_roles": (
+            json.dumps(ctx.authenticated_roles) if ctx.authenticated_roles else None
+        ),
+        "assumed_role": ctx.assumed_role,
     }
 
     # If we have a class name, the first arg is the instance and do not serialize

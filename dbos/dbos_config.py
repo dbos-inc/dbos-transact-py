@@ -2,7 +2,7 @@ import json
 import os
 import re
 from importlib import resources
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Dict, List, Optional, TypedDict
 
 import yaml
 from jsonschema import ValidationError, validate
