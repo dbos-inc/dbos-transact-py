@@ -53,7 +53,6 @@ def make_request(request: WRequest) -> Request:
     parsed_url = urlparse(request.url)
     base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
-    # Extract client information
     client = None
     if request.remote_addr:
         hostname = request.remote_addr
@@ -61,7 +60,7 @@ def make_request(request: WRequest) -> Request:
         if port:
             client = Address(hostname=hostname, port=int(port))
         else:
-            # If port is not available, we'll use 0 as a placeholder
+            # If port is not available, use 0 as a placeholder
             client = Address(hostname=hostname, port=0)
 
     return Request(
