@@ -55,6 +55,7 @@ from .tracer import dbos_tracer
 if TYPE_CHECKING:
     from fastapi import FastAPI
     from .request import Request
+    from flask import Flask
 
 from sqlalchemy.orm import Session
 
@@ -207,6 +208,7 @@ class DBOS:
         *,
         config: Optional[ConfigFile] = None,
         fastapi: Optional["FastAPI"] = None,
+        flask: Optional["Flask"] = None,
     ) -> DBOS:
         global _dbos_global_instance
         global _dbos_global_registry
@@ -221,7 +223,7 @@ class DBOS:
                     )
                 config = _dbos_global_registry.config
             _dbos_global_instance = super().__new__(cls)
-            _dbos_global_instance.__init__(fastapi=fastapi, config=config)  # type: ignore
+            _dbos_global_instance.__init__(fastapi=fastapi, config=config, flask=flask)  # type: ignore
         else:
             if (config is not None and _dbos_global_instance.config is not config) or (
                 _dbos_global_instance.fastapi is not fastapi
@@ -245,6 +247,7 @@ class DBOS:
         *,
         config: Optional[ConfigFile] = None,
         fastapi: Optional["FastAPI"] = None,
+        flask: Optional["Flask"] = None,
     ) -> None:
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -266,7 +269,10 @@ class DBOS:
         self._admin_server: Optional[AdminServer] = None
         self.stop_events: List[threading.Event] = []
         self.fastapi: Optional["FastAPI"] = fastapi
+        self.flask: Optional["Flask"] = flask
         self._executor: Optional[ThreadPoolExecutor] = None
+
+        # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
             from fastapi.requests import Request as FARequest
             from fastapi.responses import JSONResponse
@@ -294,6 +300,12 @@ class DBOS:
             setup_fastapi_middleware(self.fastapi)
             self.fastapi.on_event("startup")(self._launch)
             self.fastapi.on_event("shutdown")(self._destroy)
+
+        # If using Flask, set up middleware
+        if self.flask is not None:
+            from dbos.flask import setup_flask_middleware
+
+            setup_flask_middleware(self.flask)
 
         # Register send_stub as a workflow
         def send_temp_workflow(

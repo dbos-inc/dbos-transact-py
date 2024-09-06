@@ -1,0 +1,104 @@
+import uuid
+from typing import Tuple
+
+import sqlalchemy as sa
+from flask import Flask, Response, jsonify
+
+from dbos import DBOS
+from dbos.context import assert_current_dbos_context
+
+
+def test_flask_endpoint(dbos_flask: Tuple[DBOS, Flask]) -> None:
+    _, app = dbos_flask
+
+    @app.route("/endpoint/<var1>/<var2>")
+    def test_endpoint(var1: str, var2: str) -> Response:
+        ctx = assert_current_dbos_context()
+        assert not ctx.is_within_workflow()
+        return test_workflow(var1, var2)
+
+    @app.route("/workflow/<var1>/<var2>")
+    @DBOS.workflow()
+    def test_workflow(var1: str, var2: str) -> Response:
+        assert DBOS.request is not None
+        assert DBOS.request.headers.get("Host") == "localhost"
+        res1 = test_transaction(var1)
+        res2 = test_step(var2)
+        result = res1 + res2
+        return jsonify({"result": result})
+
+    @DBOS.transaction()
+    def test_transaction(var: str) -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        return var + str(rows[0][0])
+
+    @DBOS.step()
+    def test_step(var: str) -> str:
+        return var
+
+    app.config["TESTING"] = True
+    client = app.test_client()
+
+    response = client.get("/endpoint/a/b")
+    assert response.status_code == 200
+    assert response.json == {"result": "a1b"}
+
+    response = client.get("/workflow/a/b")
+    assert response.status_code == 200
+    assert response.json == {"result": "a1b"}
+
+
+def test_endpoint_recovery(dbos_flask: Tuple[DBOS, Flask]) -> None:
+    dbos, app = dbos_flask
+
+    wfuuid = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    def test_workflow(var1: str) -> tuple[str, str]:
+        assert DBOS.request is not None
+        return var1, DBOS.workflow_id
+
+    @app.route("/<var1>/<var2>")
+    def test_endpoint(var1: str, var2: str) -> dict[str, str]:
+        assert DBOS.request is not None
+        res1, id1 = test_workflow(var1)
+        res2, id2 = test_workflow(var2)
+        return {"res1": res1, "res2": res2, "id1": id1, "id2": id2}
+
+    app.config["TESTING"] = True
+    client = app.test_client()
+
+    response = client.get("/a/b", headers={"dbos-idempotency-key": wfuuid})
+    assert response.status_code == 200
+    assert response.json is not None
+    assert response.json.get("res1") == "a"
+    assert response.json.get("res2") == "b"
+    assert response.json.get("id1") == wfuuid
+    assert response.json.get("id2") != wfuuid
+
+    dbos.sys_db.wait_for_buffer_flush()
+    # Change the workflow status to pending
+    dbos.sys_db.update_workflow_status(
+        {
+            "workflow_uuid": wfuuid,
+            "status": "PENDING",
+            "name": test_workflow.__qualname__,
+            "class_name": None,
+            "config_name": None,
+            "output": None,
+            "error": None,
+            "executor_id": None,
+            "app_id": None,
+            "app_version": None,
+            "request": None,
+            "recovery_attempts": None,
+            "authenticated_user": None,
+            "authenticated_roles": None,
+            "assumed_role": None,
+        }
+    )
+
+    # Recovery should execute the workflow again but skip the transaction
+    workflow_handles = DBOS.recover_pending_workflows()
+    assert len(workflow_handles) == 1
+    assert workflow_handles[0].get_result() == ("a", wfuuid)
