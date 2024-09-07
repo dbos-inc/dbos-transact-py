@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:7d6e6244779680f702dfbeca8e5830077264db103f09de55257fa44b9118b0d9"
+content_hash = "sha256:15985e71c4974c90efdd5b8da2d473426260a8b89ceef4e58f209a4423e0792a"
 
 [[metadata.targets]]
 requires_python = ">=3.9"
@@ -1009,7 +1009,7 @@ name = "pdm-backend"
 version = "2.3.3"
 requires_python = ">=3.8"
 summary = "The build backend used by PDM that supports latest packaging standards"
-groups = ["default"]
+groups = ["dev"]
 dependencies = [
     "importlib-metadata>=3.6; python_version < \"3.10\"",
 ]
