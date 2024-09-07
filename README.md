@@ -1,8 +1,10 @@
-## 🚀 DBOS Transact - Ultra-Lightweight Durable Execution in Python 🚀
+<div align="center">
 
-📚 **Documentation**: [Explore the Docs](https://docs.dbos.dev)
+<h1> DBOS Transact</h1>
+<h3> Ultra-Lightweight Durable Execution in Python</h3>
 
-💬 **Join the Discussion**: [Discord Community](https://discord.gg/fMwQjeW5zg)
+### [Documentation](https://docs.dbos.dev/) &emsp;  [Examples](https://docs.dbos.dev/examples) &emsp;  [Github](https://github.com/dbos-inc) &emsp; [Discord](https://discord.com/invite/jsmC6pXGgX)
+</div>
 
 DBOS Transact is a **Python library** providing ultra-lightweight durable execution.
 For example:
