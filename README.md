@@ -1,6 +1,9 @@
 <div align="center">
 
-<h1> DBOS Transact -  Ultra-Lightweight Durable Execution in Python</h1>
+<h1 style="border-bottom: none;"> DBOS Transact</h1>
+
+<h3 style="border-bottom: none;">Ultra-Lightweight Durable Execution in Python</h3>
+
 
 ### [Documentation](https://docs.dbos.dev/) &emsp;  [Examples](https://docs.dbos.dev/examples) &emsp;  [Github](https://github.com/dbos-inc) &emsp; [Discord](https://discord.com/invite/jsmC6pXGgX)
 </div>
