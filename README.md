@@ -97,8 +97,8 @@ To learn how to build more complex workflows, see our [programming guide](https:
 
 
 - [**AI-Powered Slackbot**](https://docs.dbos.dev/python/examples/rag-slackbot) &mdash; A Slackbot that answers questions about previous Slack conversations, using DBOS to durably orchestrate its RAG pipeline.
-- [**Widget Store**](https://docs.dbos.dev/python/examples/widget-store) &mdash; An online storefront that's resilient to any failure.
-- [**Earthquake Tracker**](https://docs.dbos.dev/python/examples/earthquake-tracker) &mdash; A real-time earthquake dashboard that streams data from the USGS into Postgres, then visualization it with Streamlit.
+- [**Widget Store**](https://docs.dbos.dev/python/examples/widget-store) &mdash; An online storefront that uses DBOS durable workflows to be resilient to any failure.
+- [**Earthquake Tracker**](https://docs.dbos.dev/python/examples/earthquake-tracker) &mdash; A real-time earthquake dashboard that uses DBOS to stream data from the USGS into Postgres, then visualizes it with Streamlit.
 
 More examples [here](https://docs.dbos.dev/examples)!
 
