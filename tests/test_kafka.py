@@ -78,18 +78,3 @@ def test_kafka(dbos: DBOS) -> None:
     wait = event.wait(timeout=10)
     assert wait
     assert len(messages) > 0
-
-
-# from dbos import DBOS, SetWorkflowID
-
-
-# @DBOS.kafka_consumer(
-#     {
-#         "bootstrap.servers": "localhost:9092",
-#         "group.id": "dbos-test",
-#     },
-#     ["dbos-test-topic"],
-# )
-# @DBOS.workflow()
-# def foo(msg: Message):
-#     DBOS.logger.info(f"Received message: {msg.key()} {msg.value()}")
