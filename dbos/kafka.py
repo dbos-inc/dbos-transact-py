@@ -75,7 +75,7 @@ def _kafka_consumer_loop(
                         func(msg)
                     except Exception as e:
                         dbos_logger.error(
-                            f"Exception encountered in scheduled workflow: {traceback.format_exc()}"
+                            f"Exception encountered in Kafka consumer: {traceback.format_exc()}"
                         )
 
     finally:
