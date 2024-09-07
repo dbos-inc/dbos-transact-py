@@ -5,7 +5,7 @@
 
 ---
 
-DBOS Transact is a **Python library** providing ultra-lightweight durable execution.
+DBOS Transact is a Python library providing **ultra-lightweight durable execution**.
 For example:
 
 ```python
