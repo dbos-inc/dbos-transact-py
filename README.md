@@ -1,7 +1,9 @@
 
-# DBOS Transact
+# 🚀 DBOS Transact: Ultra-Lightweight Durable Execution
 
-#### [Documentation](https://docs.dbos.dev/) &emsp;  [Examples](https://docs.dbos.dev/examples) &emsp;  [Github](https://github.com/dbos-inc) &emsp; [Discord](https://discord.com/invite/jsmC6pXGgX)
+<div align="center">
+#### [Documentation](https://docs.dbos.dev/) &nbsp;&nbsp;•&nbsp;&nbsp;  [Examples](https://docs.dbos.dev/examples) &nbsp;&nbsp;•&nbsp;&nbsp; [Github](https://github.com/dbos-inc) &nbsp;&nbsp;•&nbsp;&nbsp; [Discord](https://discord.com/invite/jsmC6pXGgX)
+</div>
 
 ---
 
