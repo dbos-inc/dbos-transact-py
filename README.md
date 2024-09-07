@@ -1,9 +1,11 @@
 <div align="center">
 
-<h3> DBOS Transact -  Ultra-Lightweight Durable Execution in Python</h3>
+<h1> DBOS Transact -  Ultra-Lightweight Durable Execution in Python</h1>
 
 ### [Documentation](https://docs.dbos.dev/) &emsp;  [Examples](https://docs.dbos.dev/examples) &emsp;  [Github](https://github.com/dbos-inc) &emsp; [Discord](https://discord.com/invite/jsmC6pXGgX)
 </div>
+
+---
 
 DBOS Transact is a **Python library** providing ultra-lightweight durable execution.
 For example:
