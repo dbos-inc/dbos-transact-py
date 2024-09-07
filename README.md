@@ -1,7 +1,9 @@
 
 # DBOS Transact
 
-### [Documentation](https://docs.dbos.dev/) &emsp;  [Examples](https://docs.dbos.dev/examples) &emsp;  [Github](https://github.com/dbos-inc) &emsp; [Discord](https://discord.com/invite/jsmC6pXGgX)
+#### Ultra-lightweight Durable Execution in Python
+
+#### [Documentation](https://docs.dbos.dev/) &emsp;  [Examples](https://docs.dbos.dev/examples) &emsp;  [Github](https://github.com/dbos-inc) &emsp; [Discord](https://discord.com/invite/jsmC6pXGgX)
 
 ---
 
