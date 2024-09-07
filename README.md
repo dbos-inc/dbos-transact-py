@@ -1,17 +1,14 @@
-## 🚀 DBOS Transact - Ultra-Lightweight Durable Execution in Python 🚀
+
+<div align="center">
+
+# DBOS Transact: Ultra-Lightweight Durable Execution
+
+#### [Documentation](https://docs.dbos.dev/) &nbsp;&nbsp;•&nbsp;&nbsp;  [Examples](https://docs.dbos.dev/examples) &nbsp;&nbsp;•&nbsp;&nbsp; [Github](https://github.com/dbos-inc) &nbsp;&nbsp;•&nbsp;&nbsp; [Discord](https://discord.com/invite/jsmC6pXGgX)
+</div>
 
 ---
 
-📚 **Documentation**: Under Construction 🚧
-
-💬 **Join the Discussion**: [Discord Community](https://discord.gg/fMwQjeW5zg)
-
----
-
-
-**DBOS Python is under construction! 🚧🚧🚧 Check back regularly for updates, release coming in mid-September!**
-
-DBOS Transact is a **Python library** providing ultra-lightweight durable execution.
+DBOS Transact is a Python library providing **ultra-lightweight durable execution**.
 For example:
 
 ```python
@@ -46,14 +43,14 @@ Some more cool features include:
 
 ## Getting Started
 
-To try out the latest pre-release version, install and configure with:
+Install and configure with:
 
 ```shell
-pip install --pre dbos
+pip install dbos
 dbos init --config
 ```
 
-Try it out with this simple program (requires Postgres):
+Then, try it out with this simple program (requires Postgres):
 
 ```python
 from fastapi import FastAPI
@@ -83,22 +80,27 @@ def endpoint():
     workflow()
 ```
 
-Save the program into `main.py`, tell it your local Postgres password via `export PGPASSWORD=<your password>` and start it with `fastapi run`.
-Visit `localhost:8000` in your browser (or curl it) to start the workflow.
+Save the program into `main.py`, edit `dbos-config.yaml` to configure your Postgres connection settings, and start it with `fastapi run`.
+Visit `localhost:8000` in your browser to start the workflow.
 When prompted, press `Control + \` to force quit your application.
 It should crash midway through the workflow, having completed step one but not step two.
 Then, restart your app with `fastapi run`.
 It should resume the workflow from where it left off, completing step two without re-executing step one.
 
-To learn how to build more complex examples, see our programming guide (coming soon).
+To learn how to build more complex workflows, see our [programming guide](https://docs.dbos.dev/python/programming-guide) or [examples](https://docs.dbos.dev/examples).
 
 ## Documentation
 
-Coming soon! 🚧
+[https://docs.dbos.dev](https://docs.dbos.dev)
 
 ## Examples
 
-Check out some cool demo apps here: [https://github.com/dbos-inc/dbos-demo-apps/tree/main/python](https://github.com/dbos-inc/dbos-demo-apps/tree/main/python)
+
+- [**AI-Powered Slackbot**](https://docs.dbos.dev/python/examples/rag-slackbot) &mdash; A Slackbot that answers questions about previous Slack conversations, using DBOS to durably orchestrate its RAG pipeline.
+- [**Widget Store**](https://docs.dbos.dev/python/examples/widget-store) &mdash; An online storefront that uses DBOS durable workflows to be resilient to any failure.
+- [**Earthquake Tracker**](https://docs.dbos.dev/python/examples/earthquake-tracker) &mdash; A real-time earthquake dashboard that uses DBOS to stream data from the USGS into Postgres, then visualizes it with Streamlit.
+
+More examples [here](https://docs.dbos.dev/examples)!
 
 ## Community
 
