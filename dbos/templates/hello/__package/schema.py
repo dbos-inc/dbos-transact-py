@@ -5,6 +5,6 @@ metadata = MetaData()
 dbos_hello = Table(
     "dbos_hello",
     metadata,
-    Column("name", String, primary_key=True),
-    Column("greet_count", Integer, default=0),
+    Column("greet_count", Integer, primary_key=True, autoincrement=True),
+    Column("name", String, nullable=False),
 )

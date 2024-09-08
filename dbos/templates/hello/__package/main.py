@@ -8,7 +8,6 @@
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-from sqlalchemy.dialects.postgresql import insert
 
 from dbos import DBOS
 
@@ -19,7 +18,7 @@ DBOS(fastapi=app)
 
 # Next, let's write a function that greets visitors.
 # To make it more interesting, we'll keep track of how
-# many times each visitor has been greeted and store
+# many times visitors have been greeted and store
 # the count in the database.
 
 # We annotate this function with @DBOS.transaction to
@@ -31,14 +30,7 @@ DBOS(fastapi=app)
 @app.get("/greeting/{name}")
 @DBOS.transaction()
 def example_transaction(name: str) -> str:
-    query = (
-        insert(dbos_hello)
-        .values(name=name, greet_count=1)
-        .on_conflict_do_update(
-            index_elements=["name"], set_={"greet_count": dbos_hello.c.greet_count + 1}
-        )
-        .returning(dbos_hello.c.greet_count)
-    )
+    query = dbos_hello.insert().values(name=name).returning(dbos_hello.c.greet_count)
     greet_count = DBOS.sql_session.execute(query).scalar_one()
     greeting = f"Greetings, {name}! You have been greeted {greet_count} times."
     DBOS.logger.info(greeting)
