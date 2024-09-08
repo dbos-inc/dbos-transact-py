@@ -33,7 +33,7 @@ DBOS(fastapi=app)
 def example_transaction(name: str) -> str:
     query = (
         insert(dbos_hello)
-        .values(name="dbos", greet_count=1)
+        .values(name=name, greet_count=1)
         .on_conflict_do_update(
             index_elements=["name"], set_={"greet_count": dbos_hello.c.greet_count + 1}
         )
