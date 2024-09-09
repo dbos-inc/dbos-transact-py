@@ -61,7 +61,7 @@ class DBOSTestClass(DBOSConfiguredInstance):
     @DBOS.workflow()
     @DBOS.required_roles(["admin"])
     def test_func_admin(self, var: str) -> str:
-        assert assert_current_dbos_context().assumed_role == "admin"
+        assert DBOS.assumed_role == "admin"
         return self.config_name + ":" + var
 
 

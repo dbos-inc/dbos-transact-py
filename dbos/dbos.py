@@ -714,6 +714,12 @@ class DBOS:
         ctx = assert_current_dbos_context()
         return ctx.authenticated_roles
 
+    @classproperty
+    def assumed_role(cls) -> Optional[str]:
+        """Return the role currently assumed by the authenticated user, if any, associated with the current context."""
+        ctx = assert_current_dbos_context()
+        return ctx.assumed_role
+
     @classmethod
     def set_authentication(
         cls, authenticated_user: Optional[str], authenticated_roles: Optional[List[str]]
@@ -800,13 +806,9 @@ class DBOSConfiguredInstance:
 
     """
 
-    def __init__(self, config_name: str, dbos: Optional[DBOS] = None) -> None:
+    def __init__(self, config_name: str) -> None:
         self.config_name = config_name
-        if dbos is not None:
-            assert isinstance(dbos, DBOS)
-            dbos._registry.register_instance(self)
-        else:
-            DBOS.register_instance(self)
+        DBOS.register_instance(self)
 
 
 # Apps that import DBOS probably don't exit.  If they do, let's see if

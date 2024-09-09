@@ -49,7 +49,7 @@ def test_required_roles_class(dbos: DBOS) -> None:
     @DBOS.default_required_roles(["user"])
     class DBOSTestClassRR(DBOSConfiguredInstance):
         def __init__(self) -> None:
-            super().__init__("myconfig", dbos)
+            super().__init__("myconfig")
 
         @DBOS.workflow()
         def test_func_user(self, var: str) -> str:
@@ -279,7 +279,7 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
     @DBOS.dbos_class()
     class DBOSTestClassInst(DBOSConfiguredInstance):
         def __init__(self) -> None:
-            super().__init__("bob", dbos)
+            super().__init__("bob")
             self.txn_counter: int = 0
             self.wf_counter: int = 0
             self.step_counter: int = 0
@@ -327,7 +327,7 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
 def test_forgotten_decorator(dbos: DBOS) -> None:
     class DBOSTestRegErr(DBOSConfiguredInstance):
         def __init__(self) -> None:
-            super().__init__("bob", dbos)
+            super().__init__("bob")
             self.txn_counter: int = 0
             self.wf_counter: int = 0
             self.step_counter: int = 0
@@ -362,7 +362,7 @@ def test_duplicate_reg(dbos: DBOS) -> None:
     @DBOS.dbos_class()
     class DBOSTestRegDup(DBOSConfiguredInstance):
         def __init__(self) -> None:
-            super().__init__("bob", dbos)
+            super().__init__("bob")
 
     # Duplicate class registration
     with pytest.raises(Exception) as exc_info:
@@ -370,7 +370,7 @@ def test_duplicate_reg(dbos: DBOS) -> None:
         @DBOS.dbos_class()
         class DBOSTestRegDup(DBOSConfiguredInstance):  # type: ignore
             def __init__(self) -> None:
-                super().__init__("bob", dbos)
+                super().__init__("bob")
 
     assert "Duplicate type registration for class 'DBOSTestRegDup'" == str(
         exc_info.value
@@ -419,7 +419,7 @@ def test_inst_recovery(dbos: DBOS) -> None:
     @DBOS.dbos_class()
     class DBOSTestInstRec(DBOSConfiguredInstance):
         def __init__(self) -> None:
-            super().__init__("bob", dbos)
+            super().__init__("bob")
 
         @DBOS.workflow()
         def check_inst(self, arg1: str) -> str:
