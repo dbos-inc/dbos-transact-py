@@ -13,21 +13,6 @@ from .context import SetWorkflowID
 from .kafka_message import KafkaMessage
 from .logger import dbos_logger
 
-
-def _from_kafka_message(kafka_message: "CTypeMessage") -> KafkaMessage:
-    return KafkaMessage(
-        headers=kafka_message.headers(),
-        key=kafka_message.key(),
-        latency=kafka_message.latency(),
-        leader_epoch=kafka_message.leader_epoch(),
-        offset=kafka_message.offset(),
-        partition=kafka_message.partition(),
-        timestamp=kafka_message.timestamp(),
-        topic=kafka_message.topic(),
-        value=kafka_message.value(),
-    )
-
-
 KafkaConsumerWorkflow = Callable[[KafkaMessage], None]
 
 
@@ -57,17 +42,31 @@ def _kafka_consumer_loop(
             if cmsg is None:
                 continue
 
-            msg_error = cmsg.error()
-            if msg_error is not None:
-                if msg_error.code() == KafkaError._PARTITION_EOF:
-                    dbos_logger.warning(
-                        f"{cmsg.topic()} [{cmsg.partition()}] readed end at offset {cmsg.offset()}"
-                    )
-                    continue
-                else:
-                    raise KafkaException(cmsg.error())
+            err = cmsg.error()
+            if err is not None:
+                dbos_logger.error(
+                    f"Kafka error {err.code()} ({err.name()}): {err.str()}"
+                )
+                # fatal errors require an updated consumer instance
+                if err.code() == KafkaError._FATAL or err.fatal():
+                    original_consumer = consumer
+                    try:
+                        consumer = Consumer(config)
+                        consumer.subscribe(topics)
+                    finally:
+                        original_consumer.close()
             else:
-                msg = _from_kafka_message(cmsg)
+                msg = KafkaMessage(
+                    headers=cmsg.headers(),
+                    key=cmsg.key(),
+                    latency=cmsg.latency(),
+                    leader_epoch=cmsg.leader_epoch(),
+                    offset=cmsg.offset(),
+                    partition=cmsg.partition(),
+                    timestamp=cmsg.timestamp(),
+                    topic=cmsg.topic(),
+                    value=cmsg.value(),
+                )
                 with SetWorkflowID(
                     f"kafka-unique-id-{msg.topic}-{msg.partition}-{msg.offset}"
                 ):
