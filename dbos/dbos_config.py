@@ -2,7 +2,7 @@ import json
 import os
 import re
 from importlib import resources
-from typing import Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict
 
 import yaml
 from jsonschema import ValidationError, validate
@@ -69,6 +69,7 @@ class ConfigFile(TypedDict, total=False):
     database: DatabaseConfig
     telemetry: Optional[TelemetryConfig]
     env: Dict[str, str]
+    application: Dict[str, Any]
 
 
 def substitute_env_vars(content: str) -> str:

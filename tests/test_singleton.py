@@ -146,6 +146,12 @@ database:
 runtimeConfig:
   start:
     - python3 main.py
+application:
+  service_url: 'https://service.org'
+  service_config:
+    port: 80
+    user: "user"
+    password: "password"
 """
 
 
@@ -164,6 +170,12 @@ def test_config_before_singleton(cleanup_test_databases: None) -> None:
 
         x = DBOS.config.get("language")
         assert x == "python"
+        y = DBOS.config["language"]
+        assert y == "python"
+        url = DBOS.config["application"]["service_url"]
+        assert url == "https://service.org"
+        port = DBOS.config["application"]["service_config"]["port"]
+        assert port == 80
 
         # This is OK, it meant load_config anyway
         dbos: DBOS = DBOS()
