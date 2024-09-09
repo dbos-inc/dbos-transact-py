@@ -37,7 +37,7 @@ def example_transaction(name: str) -> str:
     return greeting
 
 
-# Finally, let's use FastAPI to serve a simple HTML readme
+# Finally, let's use FastAPI to serve an HTML + CSS readme
 # from the root path.
 
 
@@ -66,13 +66,14 @@ def readme() -> HTMLResponse:
     return HTMLResponse(readme)
 
 
-# To run this app locally:
-# - Make sure you have a Postgres database to connect
-# - "dbos migrate" to set up your database tables
-# - "dbos start" to start the app
-# - Visit localhost:8000 to see your app!
-
 # To deploy this app to DBOS Cloud:
 # - "npm i -g @dbos-inc/dbos-cloud@latest" to install the Cloud CLI (requires Node)
 # - "dbos-cloud app deploy" to deploy your app
 # - Deploy outputs a URL--visit it to see your app!
+
+
+# To run this app locally:
+# - Make sure you have a Postgres database to connect to
+# - "dbos migrate" to set up your database tables
+# - "dbos start" to start the app
+# - Visit localhost:8000 to see your app!
