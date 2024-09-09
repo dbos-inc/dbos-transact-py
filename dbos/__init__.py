@@ -2,6 +2,7 @@ from . import error as error
 from .context import DBOSContextEnsure, SetWorkflowID
 from .dbos import DBOS, DBOSConfiguredInstance, WorkflowHandle, WorkflowStatus
 from .dbos_config import ConfigFile, get_dbos_database_url, load_config
+from .kafka_message import KafkaMessage
 from .system_database import GetWorkflowsInput, WorkflowStatusString
 
 __all__ = [
@@ -10,6 +11,7 @@ __all__ = [
     "DBOSConfiguredInstance",
     "DBOSContextEnsure",
     "GetWorkflowsInput",
+    "KafkaMessage",
     "SetWorkflowID",
     "WorkflowHandle",
     "WorkflowStatus",

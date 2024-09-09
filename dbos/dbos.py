@@ -54,10 +54,13 @@ from .tracer import dbos_tracer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+    from dbos.kafka import KafkaConsumerWorkflow
     from .request import Request
     from flask import Flask
 
 from sqlalchemy.orm import Session
+
+from dbos.request import Request
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec, TypeAlias
@@ -505,6 +508,20 @@ class DBOS:
         """Decorate a workflow function with its invocation schedule."""
 
         return scheduled(_get_or_create_dbos_registry(), cron)
+
+    @classmethod
+    def kafka_consumer(
+        cls, config: dict[str, Any], topics: list[str]
+    ) -> Callable[[KafkaConsumerWorkflow], KafkaConsumerWorkflow]:
+        """Decorate a function to be used as a Kafka consumer."""
+        try:
+            from dbos.kafka import kafka_consumer
+
+            return kafka_consumer(_get_or_create_dbos_registry(), config, topics)
+        except ModuleNotFoundError as e:
+            raise DBOSException(
+                f"{e.name} dependency not found. Please install {e.name} via your package manager."
+            ) from e
 
     @classmethod
     def start_workflow(
