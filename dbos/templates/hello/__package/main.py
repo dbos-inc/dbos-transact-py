@@ -21,10 +21,10 @@ DBOS(fastapi=app)
 # many times visitors have been greeted and store
 # the count in the database.
 
-# We annotate this function with @DBOS.transaction to
-# access to an automatically-configured database client,
-# (DBOS.sql_sesion) then implement the database operations
-# using SQLAlchemy. We serve this function from a FastAPI endpoint.
+# We implement the database operations using SQLAlchemy
+# and serve the function from a FastAPI endpoint.
+# We annotate it with @DBOS.transaction() to access
+# an automatically-configured database client.
 
 
 @app.get("/greeting/{name}")
