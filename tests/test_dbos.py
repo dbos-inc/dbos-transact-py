@@ -1,8 +1,7 @@
 import datetime
-import threading
 import time
 import uuid
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import pytest
 import sqlalchemy as sa
@@ -880,23 +879,3 @@ def test_set_get_events(dbos: DBOS) -> None:
     with pytest.raises(Exception) as exc_info:
         dbos.set_event("key1", "value1")
     assert "set_event() must be called from within a workflow" in str(exc_info.value)
-
-
-def test_register_poller(dbos: DBOS) -> None:
-
-    wf_counter: int = 0
-
-    @DBOS.workflow()
-    def test_poller_workflow() -> None:
-        nonlocal wf_counter
-        wf_counter += 1
-
-    def _poller_func(func: Callable[[], None], stop_event: threading.Event) -> None:
-        if not stop_event.wait(timeout=1.0):
-            func()
-
-    stop_event = threading.Event()
-    DBOS.register_poller(stop_event, _poller_func, test_poller_workflow, stop_event)
-    stop_event.wait(2.0)
-
-    assert wf_counter == 1

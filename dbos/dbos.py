@@ -416,14 +416,6 @@ class DBOS:
     def register_instance(cls, inst: object) -> None:
         return _get_or_create_dbos_registry().register_instance(inst)
 
-    @classmethod
-    def register_poller(
-        cls, evt: threading.Event, func: Callable[..., Any], *args: Any, **kwargs: Any
-    ) -> None:
-        return _get_or_create_dbos_registry().register_poller(
-            evt, func, *args, **kwargs
-        )
-
     # Decorators for DBOS functionality
     @classmethod
     def workflow(cls) -> Callable[[F], F]:
