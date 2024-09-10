@@ -12,7 +12,7 @@ from typing import Any
 import tomlkit
 import typer
 from rich import print
-from rich.prompt import Confirm, Prompt
+from rich.prompt import Prompt
 from typing_extensions import Annotated
 
 from dbos import load_config
@@ -30,6 +30,7 @@ def on_windows() -> bool:
 def start() -> None:
     config = load_config()
     start_commands = config["runtimeConfig"]["start"]
+    typer.echo("Executing start commands from 'dbos-config.yaml'")
     for command in start_commands:
         typer.echo(f"Executing: {command}")
 
@@ -247,6 +248,7 @@ def migrate() -> None:
             app_db.destroy()
 
     # Next, run any custom migration commands specified in the configuration
+    typer.echo("Executing migration commands from 'dbos-config.yaml'")
     try:
         migrate_commands = (
             config["database"]["migrate"]
