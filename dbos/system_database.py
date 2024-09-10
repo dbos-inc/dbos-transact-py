@@ -782,8 +782,6 @@ class SystemDatabase:
                     time.sleep(1)
                     # Then the loop will try to reconnect and restart the listener
             finally:
-                if notification_cursor is not None:
-                    notification_cursor.close()
                 if self.notification_conn is not None:
                     self.notification_conn.close()
 
