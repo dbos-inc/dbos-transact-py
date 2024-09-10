@@ -68,7 +68,7 @@ def step_two():
     print("Step two completed!")
 
 @DBOS.workflow()
-def my_first_workflow():
+def dbos_workflow():
     step_one()
     for _ in range(5):
         print("Press Control + \ to stop the app...")
@@ -77,7 +77,7 @@ def my_first_workflow():
 
 @app.get("/")
 def fastapi_endpoint():
-    my_first_workflow()
+    dbos_workflow()
 ```
 
 Save the program into `main.py`, edit `dbos-config.yaml` to configure your Postgres connection settings, and start it with `fastapi run`.
