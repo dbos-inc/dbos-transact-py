@@ -96,7 +96,7 @@ class ApplicationDatabase:
                 )
             )
         except DBAPIError as dbapi_error:
-            if dbapi_error.orig.pgcode == "23505":  # type: ignore
+            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
             raise dbapi_error
         except Exception as e:
@@ -121,7 +121,7 @@ class ApplicationDatabase:
                     )
                 )
         except DBAPIError as dbapi_error:
-            if dbapi_error.orig.pgcode == "23505":  # type: ignore
+            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
             raise dbapi_error
         except Exception as e:

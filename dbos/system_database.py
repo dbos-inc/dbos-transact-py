@@ -565,7 +565,7 @@ class SystemDatabase:
                 with self.engine.begin() as c:
                     c.execute(sql)
         except DBAPIError as dbapi_error:
-            if dbapi_error.orig.pgcode == "23505":  # type: ignore
+            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
             raise dbapi_error
         except Exception as e:
@@ -623,7 +623,7 @@ class SystemDatabase:
                 )
             except DBAPIError as dbapi_error:
                 # Foreign key violation
-                if dbapi_error.orig.pgcode == "23503":  # type: ignore
+                if dbapi_error.orig.sqlstate == "23503":  # type: ignore
                     raise DBOSNonExistentWorkflowError(destination_uuid)
                 raise dbapi_error
             except Exception as e:
@@ -838,7 +838,7 @@ class SystemDatabase:
                     )
                 )
             except DBAPIError as dbapi_error:
-                if dbapi_error.orig.pgcode == "23505":  # type: ignore
+                if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                     raise DBOSDuplicateWorkflowEventError(workflow_uuid, key)
                 raise dbapi_error
             except Exception as e:
