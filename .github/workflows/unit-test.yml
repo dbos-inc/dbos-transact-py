@@ -18,12 +18,11 @@ on:
 
 jobs:
   integration:
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ['3.9', '3.10', '3.11', '3.12']
-        runs-on: [ubuntu-latest, linux-arm, windows-latest, macos-13, macos-latest]
-    runs-on: ${{ matrix.runs-on }}
     services:
       # Postgres service container
       postgres:
