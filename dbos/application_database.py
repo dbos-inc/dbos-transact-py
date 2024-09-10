@@ -98,9 +98,7 @@ class ApplicationDatabase:
         except DBAPIError as dbapi_error:
             if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
-            raise dbapi_error
-        except Exception as e:
-            raise e
+            raise
 
     def record_transaction_error(self, output: TransactionResultInternal) -> None:
         try:
@@ -123,9 +121,7 @@ class ApplicationDatabase:
         except DBAPIError as dbapi_error:
             if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
-            raise dbapi_error
-        except Exception as e:
-            raise e
+            raise
 
     @staticmethod
     def check_transaction_execution(

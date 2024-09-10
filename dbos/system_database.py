@@ -567,9 +567,7 @@ class SystemDatabase:
         except DBAPIError as dbapi_error:
             if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
-            raise dbapi_error
-        except Exception as e:
-            raise e
+            raise
 
     def check_operation_execution(
         self, workflow_uuid: str, function_id: int, conn: Optional[sa.Connection] = None
@@ -625,9 +623,7 @@ class SystemDatabase:
                 # Foreign key violation
                 if dbapi_error.orig.sqlstate == "23503":  # type: ignore
                     raise DBOSNonExistentWorkflowError(destination_uuid)
-                raise dbapi_error
-            except Exception as e:
-                raise e
+                raise
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
@@ -840,9 +836,7 @@ class SystemDatabase:
             except DBAPIError as dbapi_error:
                 if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                     raise DBOSDuplicateWorkflowEventError(workflow_uuid, key)
-                raise dbapi_error
-            except Exception as e:
-                raise e
+                raise
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
