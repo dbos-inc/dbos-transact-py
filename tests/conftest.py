@@ -55,7 +55,6 @@ def postgres_db_engine() -> sa.Engine:
         port=cfg["database"]["port"],
         database="postgres",
     )
-    print(f"Connecting to {postgres_db_url.render_as_string()}")
     return sa.create_engine(postgres_db_url)
 
 
