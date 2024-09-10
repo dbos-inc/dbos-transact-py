@@ -2,7 +2,6 @@ from typing import Optional, TypedDict, cast
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
-import sqlalchemy.exc as sa_exc
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
