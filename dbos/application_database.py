@@ -2,7 +2,7 @@ from typing import Optional, TypedDict, cast
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from dbos.error import DBOSWorkflowConflictIDError
@@ -95,8 +95,12 @@ class ApplicationDatabase:
                     ),
                 )
             )
-        except IntegrityError as dbapi_error:
-            raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
+        except DBAPIError as dbapi_error:
+            if dbapi_error.orig.pgcode == "23505":  # type: ignore
+                raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
+            raise dbapi_error
+        except Exception as e:
+            raise e
 
     def record_transaction_error(self, output: TransactionResultInternal) -> None:
         try:
@@ -116,8 +120,12 @@ class ApplicationDatabase:
                         ),
                     )
                 )
-        except IntegrityError as dbapi_error:
-            raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
+        except DBAPIError as dbapi_error:
+            if dbapi_error.orig.pgcode == "23505":  # type: ignore
+                raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
+            raise dbapi_error
+        except Exception as e:
+            raise e
 
     @staticmethod
     def check_transaction_execution(

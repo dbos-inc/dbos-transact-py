@@ -11,7 +11,7 @@ import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 from alembic import command
 from alembic.config import Config
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError
 
 import dbos.utils as utils
 from dbos.error import (
@@ -564,8 +564,12 @@ class SystemDatabase:
             else:
                 with self.engine.begin() as c:
                     c.execute(sql)
-        except IntegrityError as ie:
-            raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+        except DBAPIError as dbapi_error:
+            if dbapi_error.orig.pgcode == "23505":  # type: ignore
+                raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+            raise dbapi_error
+        except Exception as e:
+            raise e
 
     def check_operation_execution(
         self, workflow_uuid: str, function_id: int, conn: Optional[sa.Connection] = None
@@ -617,8 +621,13 @@ class SystemDatabase:
                         message=utils.serialize(message),
                     )
                 )
-            except IntegrityError:
-                raise DBOSNonExistentWorkflowError(destination_uuid)
+            except DBAPIError as dbapi_error:
+                # Foreign key violation
+                if dbapi_error.orig.pgcode == "23503":  # type: ignore
+                    raise DBOSNonExistentWorkflowError(destination_uuid)
+                raise dbapi_error
+            except Exception as e:
+                raise e
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
@@ -828,8 +837,12 @@ class SystemDatabase:
                         value=utils.serialize(message),
                     )
                 )
-            except IntegrityError as dbapi_error:
-                raise DBOSDuplicateWorkflowEventError(workflow_uuid, key)
+            except DBAPIError as dbapi_error:
+                if dbapi_error.orig.pgcode == "23505":  # type: ignore
+                    raise DBOSDuplicateWorkflowEventError(workflow_uuid, key)
+                raise dbapi_error
+            except Exception as e:
+                raise e
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
