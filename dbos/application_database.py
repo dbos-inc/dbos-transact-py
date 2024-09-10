@@ -36,7 +36,7 @@ class ApplicationDatabase:
 
         # If the application database does not already exist, create it
         postgres_db_url = sa.URL.create(
-            "postgresql",
+            "postgresql+psycopg",
             username=config["database"]["username"],
             password=config["database"]["password"],
             host=config["database"]["hostname"],
@@ -55,7 +55,7 @@ class ApplicationDatabase:
 
         # Create a connection pool for the application database
         app_db_url = sa.URL.create(
-            "postgresql",
+            "postgresql+psycopg",
             username=config["database"]["username"],
             password=config["database"]["password"],
             host=config["database"]["hostname"],

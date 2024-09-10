@@ -101,7 +101,7 @@ def test_buffer_flush_errors(dbos: DBOS) -> None:
     # Crash the system database connection and make sure the buffer flush works on time.
     backup_engine = dbos.sys_db.engine
     dbos.sys_db.engine = sa.create_engine(
-        "postgresql+psycopg2://fake:database@localhost/fake_db"
+        "postgresql+psycopg://fake:database@localhost/fake_db"
     )
 
     res = test_transaction("bob")

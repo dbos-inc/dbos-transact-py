@@ -48,13 +48,14 @@ def config() -> ConfigFile:
 def postgres_db_engine() -> sa.Engine:
     cfg = default_config()
     postgres_db_url = sa.URL.create(
-        "postgresql",
+        "postgresql+psycopg",
         username=cfg["database"]["username"],
         password=cfg["database"]["password"],
         host=cfg["database"]["hostname"],
         port=cfg["database"]["port"],
         database="postgres",
     )
+    print(f"Connecting to {postgres_db_url.render_as_string()}")
     return sa.create_engine(postgres_db_url)
 
 
