@@ -493,7 +493,7 @@ def _transaction(
                                 )
                                 break
                         except DBAPIError as dbapi_error:
-                            if dbapi_error.orig.pgcode == "40001":  # type: ignore
+                            if dbapi_error.orig.sqlstate == "40001":  # type: ignore
                                 # Retry on serialization failure
                                 ctx.get_current_span().add_event(
                                     "Transaction Serialization Failure",

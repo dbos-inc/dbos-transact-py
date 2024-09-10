@@ -4,7 +4,8 @@ import uuid
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.exc import DBAPIError
+from psycopg.errors import SerializationFailure
+from sqlalchemy.exc import OperationalError
 
 # Public API
 from dbos import DBOS, GetWorkflowsInput, SetWorkflowID
@@ -18,10 +19,9 @@ def test_transaction_errors(dbos: DBOS) -> None:
         nonlocal retry_counter
         if retry_counter < max_retry:
             retry_counter += 1
-            base_err = BaseException()
-            base_err.pgcode = "40001"  # type: ignore
-            err = DBAPIError("Serialization test error", {}, base_err)
-            raise err
+            raise OperationalError(
+                "Serialization test error", {}, SerializationFailure()
+            )
         return max_retry
 
     @DBOS.transaction()
@@ -36,7 +36,7 @@ def test_transaction_errors(dbos: DBOS) -> None:
 
     with pytest.raises(Exception) as exc_info:
         test_noretry_transaction()
-    assert exc_info.value.orig.pgcode == "42601"  # type: ignore
+    assert exc_info.value.orig.sqlstate == "42601"  # type: ignore
     assert retry_counter == 11
 
 
