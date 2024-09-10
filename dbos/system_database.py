@@ -6,7 +6,7 @@ import time
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Sequence, Set, TypedDict, cast
 
-import psycopg2
+import psycopg
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 from alembic import command
@@ -154,7 +154,7 @@ class SystemDatabase:
 
         # If the system database does not already exist, create it
         postgres_db_url = sa.URL.create(
-            "postgresql",
+            "postgresql+psycopg",
             username=config["database"]["username"],
             password=config["database"]["password"],
             host=config["database"]["hostname"],
@@ -172,7 +172,7 @@ class SystemDatabase:
         engine.dispose()
 
         system_db_url = sa.URL.create(
-            "postgresql",
+            "postgresql+psycopg",
             username=config["database"]["username"],
             password=config["database"]["password"],
             host=config["database"]["hostname"],
@@ -196,7 +196,7 @@ class SystemDatabase:
         )
         command.upgrade(alembic_cfg, "head")
 
-        self.notification_conn: Optional[psycopg2.extensions.connection] = None
+        self.notification_conn: Optional[psycopg.connection.Connection] = None
         self.notifications_map: Dict[str, threading.Condition] = {}
         self.workflow_events_map: Dict[str, threading.Condition] = {}
 
@@ -565,11 +565,9 @@ class SystemDatabase:
                 with self.engine.begin() as c:
                     c.execute(sql)
         except DBAPIError as dbapi_error:
-            if dbapi_error.orig.pgcode == "23505":  # type: ignore
+            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
-            raise dbapi_error
-        except Exception as e:
-            raise e
+            raise
 
     def check_operation_execution(
         self, workflow_uuid: str, function_id: int, conn: Optional[sa.Connection] = None
@@ -623,11 +621,9 @@ class SystemDatabase:
                 )
             except DBAPIError as dbapi_error:
                 # Foreign key violation
-                if dbapi_error.orig.pgcode == "23503":  # type: ignore
+                if dbapi_error.orig.sqlstate == "23503":  # type: ignore
                     raise DBOSNonExistentWorkflowError(destination_uuid)
-                raise dbapi_error
-            except Exception as e:
-                raise e
+                raise
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
@@ -729,69 +725,59 @@ class SystemDatabase:
         return message
 
     def _notification_listener(self) -> None:
-        notification_cursor: Optional[psycopg2.extensions.cursor] = None
         while self._run_background_processes:
             try:
+                # since we're using the psycopg connection directly, we need a url without the "+pycopg" suffix
+                url = sa.URL.create(
+                    "postgresql", **self.engine.url.translate_connect_args()
+                )
                 # Listen to notifications
-                self.notification_conn = psycopg2.connect(
-                    self.engine.url.render_as_string(hide_password=False)
+                self.notification_conn = psycopg.connect(
+                    url.render_as_string(hide_password=False), autocommit=True
                 )
-                self.notification_conn.set_isolation_level(
-                    psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
-                )
-                notification_cursor = self.notification_conn.cursor()
 
-                notification_cursor.execute("LISTEN dbos_notifications_channel")
-                notification_cursor.execute("LISTEN dbos_workflow_events_channel")
+                self.notification_conn.execute("LISTEN dbos_notifications_channel")
+                self.notification_conn.execute("LISTEN dbos_workflow_events_channel")
+
                 while self._run_background_processes:
-                    if select.select([self.notification_conn], [], [], 60) == (
-                        [],
-                        [],
-                        [],
-                    ):
-                        continue
-                    else:
-                        self.notification_conn.poll()
-                        while self.notification_conn.notifies:
-                            notify = self.notification_conn.notifies.pop(0)
-                            channel = notify.channel
-                            dbos_logger.debug(
-                                f"Received notification on channel: {channel}, payload: {notify.payload}"
-                            )
-                            if channel == "dbos_notifications_channel":
-                                if (
-                                    notify.payload
-                                    and notify.payload in self.notifications_map
-                                ):
-                                    condition = self.notifications_map[notify.payload]
-                                    condition.acquire()
-                                    condition.notify_all()
-                                    condition.release()
-                                    dbos_logger.debug(
-                                        f"Signaled notifications condition for {notify.payload}"
-                                    )
-                            elif channel == "dbos_workflow_events_channel":
-                                if (
-                                    notify.payload
-                                    and notify.payload in self.workflow_events_map
-                                ):
-                                    condition = self.workflow_events_map[notify.payload]
-                                    condition.acquire()
-                                    condition.notify_all()
-                                    condition.release()
-                                    dbos_logger.debug(
-                                        f"Signaled workflow_events condition for {notify.payload}"
-                                    )
-                            else:
-                                dbos_logger.error(f"Unknown channel: {channel}")
+                    gen = self.notification_conn.notifies(timeout=60)
+                    for notify in gen:
+                        channel = notify.channel
+                        dbos_logger.debug(
+                            f"Received notification on channel: {channel}, payload: {notify.payload}"
+                        )
+                        if channel == "dbos_notifications_channel":
+                            if (
+                                notify.payload
+                                and notify.payload in self.notifications_map
+                            ):
+                                condition = self.notifications_map[notify.payload]
+                                condition.acquire()
+                                condition.notify_all()
+                                condition.release()
+                                dbos_logger.debug(
+                                    f"Signaled notifications condition for {notify.payload}"
+                                )
+                        elif channel == "dbos_workflow_events_channel":
+                            if (
+                                notify.payload
+                                and notify.payload in self.workflow_events_map
+                            ):
+                                condition = self.workflow_events_map[notify.payload]
+                                condition.acquire()
+                                condition.notify_all()
+                                condition.release()
+                                dbos_logger.debug(
+                                    f"Signaled workflow_events condition for {notify.payload}"
+                                )
+                        else:
+                            dbos_logger.error(f"Unknown channel: {channel}")
             except Exception as e:
                 if self._run_background_processes:
                     dbos_logger.error(f"Notification listener error: {e}")
                     time.sleep(1)
                     # Then the loop will try to reconnect and restart the listener
             finally:
-                if notification_cursor is not None:
-                    notification_cursor.close()
                 if self.notification_conn is not None:
                     self.notification_conn.close()
 
@@ -848,11 +834,9 @@ class SystemDatabase:
                     )
                 )
             except DBAPIError as dbapi_error:
-                if dbapi_error.orig.pgcode == "23505":  # type: ignore
+                if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                     raise DBOSDuplicateWorkflowEventError(workflow_uuid, key)
-                raise dbapi_error
-            except Exception as e:
-                raise e
+                raise
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,

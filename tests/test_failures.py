@@ -4,7 +4,8 @@ import uuid
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.exc import DBAPIError
+from psycopg.errors import SerializationFailure
+from sqlalchemy.exc import OperationalError
 
 # Public API
 from dbos import DBOS, GetWorkflowsInput, SetWorkflowID
@@ -18,10 +19,9 @@ def test_transaction_errors(dbos: DBOS) -> None:
         nonlocal retry_counter
         if retry_counter < max_retry:
             retry_counter += 1
-            base_err = BaseException()
-            base_err.pgcode = "40001"  # type: ignore
-            err = DBAPIError("Serialization test error", {}, base_err)
-            raise err
+            raise OperationalError(
+                "Serialization test error", {}, SerializationFailure()
+            )
         return max_retry
 
     @DBOS.transaction()
@@ -36,7 +36,7 @@ def test_transaction_errors(dbos: DBOS) -> None:
 
     with pytest.raises(Exception) as exc_info:
         test_noretry_transaction()
-    assert exc_info.value.orig.pgcode == "42601"  # type: ignore
+    assert exc_info.value.orig.sqlstate == "42601"  # type: ignore
     assert retry_counter == 11
 
 
@@ -101,7 +101,7 @@ def test_buffer_flush_errors(dbos: DBOS) -> None:
     # Crash the system database connection and make sure the buffer flush works on time.
     backup_engine = dbos.sys_db.engine
     dbos.sys_db.engine = sa.create_engine(
-        "postgresql+psycopg2://fake:database@localhost/fake_db"
+        "postgresql+psycopg://fake:database@localhost/fake_db"
     )
 
     res = test_transaction("bob")

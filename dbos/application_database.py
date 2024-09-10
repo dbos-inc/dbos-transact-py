@@ -2,7 +2,6 @@ from typing import Optional, TypedDict, cast
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
-import sqlalchemy.exc as sa_exc
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -36,7 +35,7 @@ class ApplicationDatabase:
 
         # If the application database does not already exist, create it
         postgres_db_url = sa.URL.create(
-            "postgresql",
+            "postgresql+psycopg",
             username=config["database"]["username"],
             password=config["database"]["password"],
             host=config["database"]["hostname"],
@@ -55,7 +54,7 @@ class ApplicationDatabase:
 
         # Create a connection pool for the application database
         app_db_url = sa.URL.create(
-            "postgresql",
+            "postgresql+psycopg",
             username=config["database"]["username"],
             password=config["database"]["password"],
             host=config["database"]["hostname"],
@@ -97,11 +96,9 @@ class ApplicationDatabase:
                 )
             )
         except DBAPIError as dbapi_error:
-            if dbapi_error.orig.pgcode == "23505":  # type: ignore
+            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
-            raise dbapi_error
-        except Exception as e:
-            raise e
+            raise
 
     def record_transaction_error(self, output: TransactionResultInternal) -> None:
         try:
@@ -122,11 +119,9 @@ class ApplicationDatabase:
                     )
                 )
         except DBAPIError as dbapi_error:
-            if dbapi_error.orig.pgcode == "23505":  # type: ignore
+            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
-            raise dbapi_error
-        except Exception as e:
-            raise e
+            raise
 
     @staticmethod
     def check_transaction_execution(

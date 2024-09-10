@@ -192,7 +192,7 @@ def _execute_workflow(
         status["status"] = "ERROR"
         status["error"] = utils.serialize(error)
         dbos.sys_db.update_workflow_status(status)
-        raise error
+        raise
 
     return output
 
@@ -217,7 +217,7 @@ def _execute_workflow_wthread(
                 dbos.logger.error(
                     f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
                 )
-                raise e
+                raise
 
 
 def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]":
@@ -493,7 +493,7 @@ def _transaction(
                                 )
                                 break
                         except DBAPIError as dbapi_error:
-                            if dbapi_error.orig.pgcode == "40001":  # type: ignore
+                            if dbapi_error.orig.sqlstate == "40001":  # type: ignore
                                 # Retry on serialization failure
                                 ctx.get_current_span().add_event(
                                     "Transaction Serialization Failure",
@@ -505,13 +505,13 @@ def _transaction(
                                     max_retry_wait_seconds,
                                 )
                                 continue
-                            raise dbapi_error
+                            raise
                         except Exception as error:
                             # Don't record the error if it was already recorded
                             if not has_recorded_error:
                                 txn_output["error"] = utils.serialize(error)
                                 dbos.app_db.record_transaction_error(txn_output)
-                            raise error
+                            raise
             return output
 
         fi = get_or_create_func_info(func)

@@ -105,7 +105,7 @@ def get_dbos_database_url(config_file_path: str = "dbos-config.yaml") -> str:
     """
     dbos_config = load_config(config_file_path)
     db_url = URL.create(
-        "postgresql",
+        "postgresql+psycopg",
         username=dbos_config["database"]["username"],
         password=dbos_config["database"]["password"],
         host=dbos_config["database"]["hostname"],
