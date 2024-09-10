@@ -15,7 +15,7 @@ database:
   password: ${PGPASSWORD}
   app_db_name: ${db_name}
   migrate:
-    - alembic upgrade head
+    - ${migration_command}
 telemetry:
   logs:
     logLevel: INFO

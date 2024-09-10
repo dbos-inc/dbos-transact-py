@@ -129,9 +129,12 @@ def copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
         "project_name": project_name,
         "package_name": package_name,
         "db_name": db_name,
+        "migration_command": "alembic upgrade head",
     }
 
     if config_mode:
+        ctx["package_name"] = "."
+        ctx["migration_command"] = "echo 'No migrations specified'"
         copy_dbos_template(
             os.path.join(src_dir, "dbos-config.yaml.dbos"),
             os.path.join(dst_dir, "dbos-config.yaml"),
