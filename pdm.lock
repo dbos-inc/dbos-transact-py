@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:b2db93dba1714fcd747307776be9b9f0c74e224d96a108c39acfedaff493105c"
+content_hash = "sha256:44a6e734003aaf32c6e76186bf8c981e1799a7ab4e13befc4254f4da9986e57b"
 
 [[metadata.targets]]
 requires_python = ">=3.9"
@@ -1103,33 +1103,6 @@ dependencies = [
     "backports-zoneinfo>=0.2.0; python_version < \"3.9\"",
     "typing-extensions>=4.4",
     "tzdata; sys_platform == \"win32\"",
-]
-files = [
-    {file = "psycopg-3.2.1-py3-none-any.whl", hash = "sha256:ece385fb413a37db332f97c49208b36cf030ff02b199d7635ed2fbd378724175"},
-    {file = "psycopg-3.2.1.tar.gz", hash = "sha256:dc8da6dc8729dacacda3cc2f17d2c9397a70a66cf0d2b69c91065d60d5f00cb7"},
-]
-
-[[package]]
-name = "psycopg-c"
-version = "3.2.1"
-requires_python = ">=3.8"
-summary = "PostgreSQL database adapter for Python -- C optimisation distribution"
-groups = ["default"]
-marker = "implementation_name != \"pypy\""
-files = [
-    {file = "psycopg_c-3.2.1.tar.gz", hash = "sha256:2d09943cc8a855c42c1e23b4298957b7ce8f27bf3683258c52fd139f601f7cda"},
-]
-
-[[package]]
-name = "psycopg"
-version = "3.2.1"
-extras = ["c"]
-requires_python = ">=3.8"
-summary = "PostgreSQL database adapter for Python"
-groups = ["default"]
-dependencies = [
-    "psycopg-c==3.2.1; implementation_name != \"pypy\"",
-    "psycopg==3.2.1",
 ]
 files = [
     {file = "psycopg-3.2.1-py3-none-any.whl", hash = "sha256:ece385fb413a37db332f97c49208b36cf030ff02b199d7635ed2fbd378724175"},
