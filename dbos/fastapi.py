@@ -60,7 +60,7 @@ class LifespanMiddleware:
         self.app = app
         self.dbos = dbos
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
             while True:
                 message = await receive()
