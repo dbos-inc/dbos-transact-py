@@ -277,32 +277,9 @@ class DBOS:
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
-            from fastapi.requests import Request as FARequest
-            from fastapi.responses import JSONResponse
-
-            async def dbos_error_handler(
-                request: FARequest, gexc: Exception
-            ) -> JSONResponse:
-                exc: DBOSException = cast(DBOSException, gexc)
-                status_code = 500
-                if exc.status_code is not None:
-                    status_code = exc.status_code
-                return JSONResponse(
-                    status_code=status_code,
-                    content={
-                        "message": str(exc.message),
-                        "dbos_error_code": str(exc.dbos_error_code),
-                        "dbos_error": str(exc.__class__.__name__),
-                    },
-                )
-
-            self.fastapi.add_exception_handler(DBOSException, dbos_error_handler)
-
             from dbos.fastapi import setup_fastapi_middleware
 
-            setup_fastapi_middleware(self.fastapi)
-            self.fastapi.on_event("startup")(self._launch)
-            self.fastapi.on_event("shutdown")(self._destroy)
+            setup_fastapi_middleware(self.fastapi, _get_dbos_instance())
 
         # If using Flask, set up middleware
         if self.flask is not None:
