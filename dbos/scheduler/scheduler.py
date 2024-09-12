@@ -16,7 +16,7 @@ ScheduledWorkflow = Callable[[datetime, datetime], None]
 def scheduler_loop(
     func: ScheduledWorkflow, cron: str, stop_event: threading.Event
 ) -> None:
-    iter = croniter(cron, datetime.now(timezone.utc))
+    iter = croniter(cron, datetime.now(timezone.utc), second_at_beginning=True)
     while not stop_event.is_set():
         nextExecTime = iter.get_next(datetime)
         sleepTime = nextExecTime - datetime.now(timezone.utc)
