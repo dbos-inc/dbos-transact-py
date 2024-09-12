@@ -70,6 +70,7 @@ class LifespanMiddleware:
                 elif message["type"] == "lifespan.shutdown":
                     self.dbos._destroy()
                     await send({"type": "lifespan.shutdown.complete"})
+                    break
         else:
             await self.app(scope, receive, send)
 
