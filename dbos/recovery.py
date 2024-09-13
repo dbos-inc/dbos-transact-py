@@ -41,7 +41,7 @@ def _recover_pending_workflows(
                 f"Skip local recovery because it's running in a VM: {os.environ.get('DBOS__VMID')}"
             )
         dbos.logger.debug(f"Recovering pending workflows for executor: {executor_id}")
-        workflow_ids = dbos.sys_db.get_pending_workflows(executor_id)
+        workflow_ids = dbos._sys_db.get_pending_workflows(executor_id)
         dbos.logger.debug(f"Pending workflows: {workflow_ids}")
 
         for workflowID in workflow_ids:

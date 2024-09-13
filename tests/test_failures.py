@@ -56,13 +56,13 @@ def test_notification_errors(dbos: DBOS) -> None:
         return "-".join([str(msg1), str(msg2), str(msg3)])
 
     # Crash the notification connection and make sure send/recv works on time.
-    while dbos.sys_db.notification_conn is None:
+    while dbos._sys_db.notification_conn is None:
         time.sleep(1)
-    dbos.sys_db.notification_conn.close()
-    assert dbos.sys_db.notification_conn.closed == 1
+    dbos._sys_db.notification_conn.close()
+    assert dbos._sys_db.notification_conn.closed == 1
 
     # Wait for the connection to be re-established
-    while dbos.sys_db.notification_conn.closed != 0:
+    while dbos._sys_db.notification_conn.closed != 0:
         time.sleep(1)
 
     dest_uuid = str("sruuid1")
@@ -94,13 +94,13 @@ def test_buffer_flush_errors(dbos: DBOS) -> None:
     res = test_transaction("bob")
     assert res == "bob1"
 
-    dbos.sys_db.wait_for_buffer_flush()
-    wfs = dbos.sys_db.get_workflows(gwi)
+    dbos._sys_db.wait_for_buffer_flush()
+    wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 1
 
     # Crash the system database connection and make sure the buffer flush works on time.
-    backup_engine = dbos.sys_db.engine
-    dbos.sys_db.engine = sa.create_engine(
+    backup_engine = dbos._sys_db.engine
+    dbos._sys_db.engine = sa.create_engine(
         "postgresql+psycopg://fake:database@localhost/fake_db"
     )
 
@@ -111,8 +111,8 @@ def test_buffer_flush_errors(dbos: DBOS) -> None:
     time.sleep(2)
 
     # Switch back to the original good engine.
-    dbos.sys_db.engine = backup_engine
+    dbos._sys_db.engine = backup_engine
 
-    dbos.sys_db.wait_for_buffer_flush()
-    wfs = dbos.sys_db.get_workflows(gwi)
+    dbos._sys_db.wait_for_buffer_flush()
+    wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 2
