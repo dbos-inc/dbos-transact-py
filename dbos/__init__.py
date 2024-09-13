@@ -20,4 +20,5 @@ __all__ = [
     "load_config",
     "get_dbos_database_url",
     "error",
+    "Queue",
 ]

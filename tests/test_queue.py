@@ -1,5 +1,3 @@
-import sqlalchemy as sa
-
 from dbos import DBOS, Queue
 
 
@@ -15,6 +13,6 @@ def test_simple_workflow(dbos: DBOS) -> None:
     assert test_workflow("abc", "123") == "abc123"
     assert wf_counter == 1
 
-    queue = Queue("test_queue", None)
+    queue = Queue("test_queue")
 
     queue.enqueue(test_workflow, "abc", "123")
