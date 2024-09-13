@@ -139,3 +139,24 @@ class SystemSchema:
         Column("workflow_fn_name", Text, primary_key=True, nullable=False),
         Column("last_run_time", BigInteger, nullable=False),
     )
+
+    job_queue = Table(
+        "job_queue",
+        metadata_obj,
+        Column(
+            "workflow_uuid",
+            Text,
+            ForeignKey(
+                "workflow_status.workflow_uuid", onupdate="CASCADE", ondelete="CASCADE"
+            ),
+            nullable=False,
+            primary_key=True,
+        ),
+        Column("queue_name", Text, nullable=False),
+        Column(
+            "created_at_epoch_ms",
+            BigInteger,
+            nullable=False,
+            server_default=text("(EXTRACT(epoch FROM now()) * 1000::numeric)::bigint"),
+        ),
+    )
