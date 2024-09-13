@@ -76,9 +76,9 @@ def test_endpoint_recovery(dbos_flask: Tuple[DBOS, Flask]) -> None:
     assert response.json.get("id1") == wfuuid
     assert response.json.get("id2") != wfuuid
 
-    dbos.sys_db.wait_for_buffer_flush()
+    dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
-    dbos.sys_db.update_workflow_status(
+    dbos._sys_db.update_workflow_status(
         {
             "workflow_uuid": wfuuid,
             "status": "PENDING",

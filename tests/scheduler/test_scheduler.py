@@ -69,8 +69,8 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
     for event in dbos.stop_events:
         event.set()
 
-    dbos.sys_db.wait_for_buffer_flush()
-    dbos.sys_db.update_workflow_status(
+    dbos._sys_db.wait_for_buffer_flush()
+    dbos._sys_db.update_workflow_status(
         {
             "workflow_uuid": workflow_id,
             "status": "PENDING",

@@ -249,18 +249,18 @@ def test_temp_workflow(dbos: DBOS) -> None:
 
     # Flush workflow inputs buffer shouldn't fail due to foreign key violation.
     # It should properly skip the transaction inputs.
-    dbos.sys_db._flush_workflow_inputs_buffer()
+    dbos._sys_db._flush_workflow_inputs_buffer()
 
     # Wait for buffers to flush
-    dbos.sys_db.wait_for_buffer_flush()
-    wfs = dbos.sys_db.get_workflows(gwi)
+    dbos._sys_db.wait_for_buffer_flush()
+    wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 2
 
-    wfi1 = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    wfi1 = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
     assert wfi1
     assert wfi1["name"].startswith("<temp>")
 
-    wfi2 = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[1], False)
+    wfi2 = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[1], False)
     assert wfi2
     assert wfi2["name"].startswith("<temp>")
 
@@ -337,9 +337,9 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") == "bob1bob"
 
-    dbos.sys_db.wait_for_buffer_flush()
+    dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
-    dbos.sys_db.update_workflow_status(
+    dbos._sys_db.update_workflow_status(
         {
             "workflow_uuid": wfuuid,
             "status": "PENDING",
@@ -391,17 +391,17 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
         res = test_transaction("bob")
         assert res == "bob1"
 
-    dbos.sys_db.wait_for_buffer_flush()
-    wfs = dbos.sys_db.get_workflows(gwi)
+    dbos._sys_db.wait_for_buffer_flush()
+    wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 1
     assert wfs.workflow_uuids[0] == wfuuid
 
-    wfi = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    wfi = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
     assert wfi
     assert wfi["name"].startswith("<temp>")
 
     # Change the workflow status to pending
-    dbos.sys_db.update_workflow_status(
+    dbos._sys_db.update_workflow_status(
         {
             "workflow_uuid": wfuuid,
             "status": "PENDING",
@@ -426,12 +426,12 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == "bob1"
 
-    wfs = dbos.sys_db.get_workflows(gwi)
+    wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 1
     assert wfs.workflow_uuids[0] == wfuuid
 
-    dbos.sys_db.wait_for_buffer_flush()
-    wfi = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    dbos._sys_db.wait_for_buffer_flush()
+    wfi = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
     assert wfi
     assert wfi["name"].startswith("<temp>")
     assert wfi["status"] == "SUCCESS"
@@ -454,9 +454,9 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow(test_var) == test_var
 
-    dbos.sys_db.wait_for_buffer_flush()
+    dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
-    dbos.sys_db.update_workflow_status(
+    dbos._sys_db.update_workflow_status(
         {
             "workflow_uuid": wfuuid,
             "status": "PENDING",
@@ -626,7 +626,7 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
         fstat1 = wfh.get_status()
         assert fstat1
         fres = wfh.get_result()
-        dbos.sys_db.wait_for_buffer_flush()  # Wait for status to export.
+        dbos._sys_db.wait_for_buffer_flush()  # Wait for status to export.
         fstat2 = wfh.get_status()
         assert fstat2
         return fstat1.status + fres + fstat2.status
@@ -795,12 +795,12 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     dbos.send(dest_uuid, "testsend1", "testtopic")
     assert handle.get_result() == "testsend1"
 
-    wfs = dbos.sys_db.get_workflows(gwi)
+    wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 2
     assert wfs.workflow_uuids[1] == dest_uuid
     assert wfs.workflow_uuids[0] != dest_uuid
 
-    wfi = dbos.sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    wfi = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
     assert wfi
     assert wfi["name"] == "<temp>.temp_send_workflow"
 
