@@ -1012,41 +1012,13 @@ class SystemDatabase:
             and len(self._workflow_inputs_buffer) == 0
         )
 
-    def enqueue(self, status: WorkflowStatusInternal, inputs: str, queue_name: str):
-        with self.engine.begin as c:
-            c.execute(
-                pg.insert(SystemSchema.workflow_status)
-                .values(
-                    workflow_uuid=status["workflow_uuid"],
-                    status=status["status"],
-                    name=status["name"],
-                    class_name=status["class_name"],
-                    config_name=status["config_name"],
-                    output=status["output"],
-                    error=status["error"],
-                    executor_id=status["executor_id"],
-                    application_version=status["app_version"],
-                    application_id=status["app_id"],
-                    request=status["request"],
-                    authenticated_user=status["authenticated_user"],
-                    authenticated_roles=status["authenticated_roles"],
-                    assumed_role=status["assumed_role"],
-                )
-                .on_conflict_do_nothing()
-            )
-            c.execute(
-                pg.insert(SystemSchema.workflow_inputs)
-                .values(
-                    workflow_uuid=status["workflow_uuid"],
-                    inputs=inputs,
-                )
-                .on_conflict_do_nothing()
-            )
+    def enqueue(self, workflow_uuid: str, queue_name: str):
+        with self.engine.begin() as c:
             c.execute(
                 pg.insert(SystemSchema.job_queue)
                 .values(
-                    workflow_uuid=status["workflow_uuid"],
+                    workflow_uuid=workflow_uuid,
                     queue_name=queue_name,
                 )
-                .on_conflict_do_nothing
+                .on_conflict_do_nothing()
             )

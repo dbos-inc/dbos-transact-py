@@ -63,6 +63,7 @@ from dbos.system_database import (
     OperationResultInternal,
     WorkflowInputs,
     WorkflowStatusInternal,
+    WorkflowStatusString,
 )
 
 if TYPE_CHECKING:
@@ -126,6 +127,7 @@ def _init_workflow(
     class_name: Optional[str],
     config_name: Optional[str],
     temp_wf_type: Optional[str],
+    queue: Optional[str] = None,
 ) -> WorkflowStatusInternal:
     wfid = (
         ctx.workflow_id
@@ -134,7 +136,11 @@ def _init_workflow(
     )
     status: WorkflowStatusInternal = {
         "workflow_uuid": wfid,
-        "status": "PENDING",
+        "status": (
+            WorkflowStatusString.PENDING.value
+            if queue is None
+            else WorkflowStatusString.ENQUEUED.value
+        ),
         "name": wf_name,
         "class_name": class_name,
         "config_name": config_name,
@@ -164,6 +170,9 @@ def _init_workflow(
     else:
         # Buffer the inputs for single-transaction workflows, but don't buffer the status
         dbos._sys_db.buffer_workflow_inputs(wfid, utils.serialize(inputs))
+
+    if queue is not None:
+        dbos._sys_db.enqueue(wfid, queue)
 
     return status
 

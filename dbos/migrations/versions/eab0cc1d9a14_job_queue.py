@@ -38,6 +38,7 @@ def upgrade() -> None:
             onupdate="CASCADE",
             ondelete="CASCADE",
         ),
+        schema="dbos",
     )
 
 
