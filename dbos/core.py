@@ -108,7 +108,7 @@ class _WorkflowHandlePolling(Generic[R]):
         return self.workflow_id
 
     def get_result(self) -> R:
-        res: R = self.dbos.sys_db.await_workflow_result(self.workflow_id)
+        res: R = self.dbos._sys_db.await_workflow_result(self.workflow_id)
         return res
 
     def get_status(self) -> "WorkflowStatus":
@@ -159,11 +159,11 @@ def _init_workflow(
     if temp_wf_type != "transaction":
         # Synchronously record the status and inputs for workflows and single-step workflows
         # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
-        dbos.sys_db.update_workflow_status(status, False, ctx.in_recovery)
-        dbos.sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
+        dbos._sys_db.update_workflow_status(status, False, ctx.in_recovery)
+        dbos._sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
     else:
         # Buffer the inputs for single-transaction workflows, but don't buffer the status
-        dbos.sys_db.buffer_workflow_inputs(wfid, utils.serialize(inputs))
+        dbos._sys_db.buffer_workflow_inputs(wfid, utils.serialize(inputs))
 
     return status
 
@@ -179,7 +179,7 @@ def _execute_workflow(
         output = func(*args, **kwargs)
         status["status"] = "SUCCESS"
         status["output"] = utils.serialize(output)
-        dbos.sys_db.buffer_workflow_status(status)
+        dbos._sys_db.buffer_workflow_status(status)
     except DBOSWorkflowConflictIDError:
         # Retrieve the workflow handle and wait for the result.
         # Must use existing_workflow=False because workflow status might not be set yet for single transaction workflows.
@@ -191,7 +191,7 @@ def _execute_workflow(
     except Exception as error:
         status["status"] = "ERROR"
         status["error"] = utils.serialize(error)
-        dbos.sys_db.update_workflow_status(status)
+        dbos._sys_db.update_workflow_status(status)
         raise
 
     return output
@@ -221,10 +221,10 @@ def _execute_workflow_wthread(
 
 
 def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]":
-    status = dbos.sys_db.get_workflow_status(workflow_id)
+    status = dbos._sys_db.get_workflow_status(workflow_id)
     if not status:
         raise DBOSRecoveryError(workflow_id, "Workflow status not found")
-    inputs = dbos.sys_db.get_workflow_inputs(workflow_id)
+    inputs = dbos._sys_db.get_workflow_inputs(workflow_id)
     if not inputs:
         raise DBOSRecoveryError(workflow_id, "Workflow inputs not found")
     wf_func = dbos._registry.workflow_info_map.get(status["name"], None)
@@ -399,7 +399,7 @@ def _start_workflow(
     )
 
     if fself is not None:
-        future = dbos.executor.submit(
+        future = dbos._executor.submit(
             cast(Callable[..., R], _execute_workflow_wthread),
             dbos,
             status,
@@ -410,7 +410,7 @@ def _start_workflow(
             **kwargs,
         )
     else:
-        future = dbos.executor.submit(
+        future = dbos._executor.submit(
             cast(Callable[..., R], _execute_workflow_wthread),
             dbos,
             status,
@@ -432,7 +432,7 @@ def _transaction(
                     f"Function {func.__name__} invoked before DBOS initialized"
                 )
             dbos = dbosreg.dbos
-            with dbos.app_db.sessionmaker() as session:
+            with dbos._app_db.sessionmaker() as session:
                 attributes: TracedAttributes = {
                     "name": func.__name__,
                     "operationType": OperationType.TRANSACTION.value,
@@ -510,7 +510,7 @@ def _transaction(
                             # Don't record the error if it was already recorded
                             if not has_recorded_error:
                                 txn_output["error"] = utils.serialize(error)
-                                dbos.app_db.record_transaction_error(txn_output)
+                                dbos._app_db.record_transaction_error(txn_output)
                             raise
             return output
 
@@ -575,7 +575,7 @@ def _step(
                     "output": None,
                     "error": None,
                 }
-                recorded_output = dbos.sys_db.check_operation_execution(
+                recorded_output = dbos._sys_db.check_operation_execution(
                     ctx.workflow_id, ctx.function_id
                 )
                 if recorded_output:
@@ -622,7 +622,7 @@ def _step(
                 step_output["error"] = (
                     utils.serialize(error) if error is not None else None
                 )
-                dbos.sys_db.record_operation_result(step_output)
+                dbos._sys_db.record_operation_result(step_output)
 
                 if error is not None:
                     raise error
@@ -671,7 +671,7 @@ def _send(
             "name": "send",
         }
         with EnterDBOSStep(attributes) as ctx:
-            dbos.sys_db.send(
+            dbos._sys_db.send(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
                 destination_id,
@@ -702,7 +702,7 @@ def _recv(
         with EnterDBOSStep(attributes) as ctx:
             ctx.function_id += 1  # Reserve for the sleep
             timeout_function_id = ctx.function_id
-            return dbos.sys_db.recv(
+            return dbos._sys_db.recv(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
                 timeout_function_id,
@@ -725,7 +725,7 @@ def _set_event(dbos: "DBOS", key: str, value: Any) -> None:
             "name": "set_event",
         }
         with EnterDBOSStep(attributes) as ctx:
-            dbos.sys_db.set_event(
+            dbos._sys_db.set_event(
                 ctx.workflow_id, ctx.curr_step_function_id, key, value
             )
     else:
@@ -753,7 +753,7 @@ def _get_event(
                 "function_id": ctx.curr_step_function_id,
                 "timeout_function_id": timeout_function_id,
             }
-            return dbos.sys_db.get_event(workflow_id, key, timeout_seconds, caller_ctx)
+            return dbos._sys_db.get_event(workflow_id, key, timeout_seconds, caller_ctx)
     else:
         # Directly call it outside of a workflow
-        return dbos.sys_db.get_event(workflow_id, key, timeout_seconds)
+        return dbos._sys_db.get_event(workflow_id, key, timeout_seconds)

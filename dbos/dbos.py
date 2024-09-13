@@ -163,7 +163,7 @@ class _DBOSRegistry:
     ) -> None:
         if self.dbos and self.dbos._launched:
             self.dbos.stop_events.append(evt)
-            self.dbos.executor.submit(func, *args, **kwargs)
+            self.dbos._executor.submit(func, *args, **kwargs)
         else:
             self.pollers.append((evt, func, args, kwargs))
 
@@ -265,15 +265,15 @@ class DBOS:
         dbos_logger.info("Initializing DBOS")
         self.config: ConfigFile = config
         self._launched: bool = False
-        self._sys_db: Optional[SystemDatabase] = None
-        self._app_db: Optional[ApplicationDatabase] = None
+        self._sys_db_field: Optional[SystemDatabase] = None
+        self._app_db_field: Optional[ApplicationDatabase] = None
         self._registry: _DBOSRegistry = _get_or_create_dbos_registry()
         self._registry.dbos = self
-        self._admin_server: Optional[AdminServer] = None
+        self._admin_server_field: Optional[AdminServer] = None
         self.stop_events: List[threading.Event] = []
         self.fastapi: Optional["FastAPI"] = fastapi
         self.flask: Optional["Flask"] = flask
-        self._executor: Optional[ThreadPoolExecutor] = None
+        self._executor_field: Optional[ThreadPoolExecutor] = None
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
@@ -302,33 +302,33 @@ class DBOS:
             handler.flush()
 
     @property
-    def executor(self) -> ThreadPoolExecutor:
-        if self._executor is None:
+    def _executor(self) -> ThreadPoolExecutor:
+        if self._executor_field is None:
             raise DBOSException("Executor accessed before DBOS was launched")
-        rv: ThreadPoolExecutor = self._executor
+        rv: ThreadPoolExecutor = self._executor_field
         return rv
 
     @property
-    def sys_db(self) -> SystemDatabase:
-        if self._sys_db is None:
+    def _sys_db(self) -> SystemDatabase:
+        if self._sys_db_field is None:
             raise DBOSException("System database accessed before DBOS was launched")
-        rv: SystemDatabase = self._sys_db
+        rv: SystemDatabase = self._sys_db_field
         return rv
 
     @property
-    def app_db(self) -> ApplicationDatabase:
-        if self._app_db is None:
+    def _app_db(self) -> ApplicationDatabase:
+        if self._app_db_field is None:
             raise DBOSException(
                 "Application database accessed before DBOS was launched"
             )
-        rv: ApplicationDatabase = self._app_db
+        rv: ApplicationDatabase = self._app_db_field
         return rv
 
     @property
-    def admin_server(self) -> AdminServer:
-        if self._admin_server is None:
+    def _admin_server(self) -> AdminServer:
+        if self._admin_server_field is None:
             raise DBOSException("Admin server accessed before DBOS was launched")
-        rv: AdminServer = self._admin_server
+        rv: AdminServer = self._admin_server_field
         return rv
 
     @classmethod
@@ -341,25 +341,25 @@ class DBOS:
             dbos_logger.warning(f"DBOS was already launched")
             return
         self._launched = True
-        self._executor = ThreadPoolExecutor(max_workers=64)
-        self._sys_db = SystemDatabase(self.config)
-        self._app_db = ApplicationDatabase(self.config)
-        self._admin_server = AdminServer(dbos=self)
+        self._executor_field = ThreadPoolExecutor(max_workers=64)
+        self._sys_db_field = SystemDatabase(self.config)
+        self._app_db_field = ApplicationDatabase(self.config)
+        self._admin_server_field = AdminServer(dbos=self)
 
         if not os.environ.get("DBOS__VMID"):
-            workflow_ids = self.sys_db.get_pending_workflows("local")
-            self.executor.submit(_startup_recovery_thread, self, workflow_ids)
+            workflow_ids = self._sys_db.get_pending_workflows("local")
+            self._executor.submit(_startup_recovery_thread, self, workflow_ids)
 
         # Listen to notifications
-        self.executor.submit(self.sys_db._notification_listener)
+        self._executor.submit(self._sys_db._notification_listener)
 
         # Start flush workflow buffers thread
-        self.executor.submit(self.sys_db.flush_workflow_buffers)
+        self._executor.submit(self._sys_db.flush_workflow_buffers)
 
         # Grab any pollers that were deferred and start them
         for evt, func, args, kwargs in self._registry.pollers:
             self.stop_events.append(evt)
-            self.executor.submit(func, *args, **kwargs)
+            self._executor.submit(func, *args, **kwargs)
         self._registry.pollers = []
 
         dbos_logger.info("DBOS launched")
@@ -374,20 +374,20 @@ class DBOS:
         self._initialized = False
         for event in self.stop_events:
             event.set()
-        if self._sys_db is not None:
-            self._sys_db.destroy()
-            self._sys_db = None
-        if self._app_db is not None:
-            self._app_db.destroy()
-            self._app_db = None
-        if self._admin_server is not None:
-            self._admin_server.stop()
-            self._admin_server = None
+        if self._sys_db_field is not None:
+            self._sys_db_field.destroy()
+            self._sys_db_field = None
+        if self._app_db_field is not None:
+            self._app_db_field.destroy()
+            self._app_db_field = None
+        if self._admin_server_field is not None:
+            self._admin_server_field.stop()
+            self._admin_server_field = None
         # CB - This needs work, some things ought to stop before DBs are tossed out,
         #  on the other hand it hangs to move it
-        if self._executor is not None:
-            self._executor.shutdown(cancel_futures=True)
-            self._executor = None
+        if self._executor_field is not None:
+            self._executor_field.shutdown(cancel_futures=True)
+            self._executor_field = None
 
     @classmethod
     def register_instance(cls, inst: object) -> None:
@@ -516,11 +516,11 @@ class DBOS:
         ctx = get_local_dbos_context()
         if ctx and ctx.is_within_workflow():
             ctx.function_id += 1
-            stat = _get_dbos_instance().sys_db.get_workflow_status_within_wf(
+            stat = _get_dbos_instance()._sys_db.get_workflow_status_within_wf(
                 workflow_id, ctx.workflow_id, ctx.function_id
             )
         else:
-            stat = _get_dbos_instance().sys_db.get_workflow_status(workflow_id)
+            stat = _get_dbos_instance()._sys_db.get_workflow_status(workflow_id)
         if stat is None:
             return None
 
@@ -584,7 +584,7 @@ class DBOS:
         if seconds <= 0:
             return
         with EnterDBOSStep(attributes) as ctx:
-            _get_dbos_instance().sys_db.sleep(
+            _get_dbos_instance()._sys_db.sleep(
                 ctx.workflow_id, ctx.curr_step_function_id, seconds
             )
 
