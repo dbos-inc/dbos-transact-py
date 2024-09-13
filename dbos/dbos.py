@@ -20,7 +20,6 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
-    cast,
 )
 
 from opentelemetry.trace import Span
