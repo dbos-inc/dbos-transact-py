@@ -43,4 +43,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("job_queue")
+    op.drop_table("job_queue", schema="dbos")
