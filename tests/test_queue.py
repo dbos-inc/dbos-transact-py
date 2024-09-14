@@ -1,4 +1,6 @@
-from dbos import DBOS, Queue
+import uuid
+
+from dbos import DBOS, Queue, SetWorkflowID
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -15,4 +17,10 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     queue = Queue("test_queue")
 
-    queue.enqueue(test_workflow, "abc", "123")
+    wfid = str(uuid.uuid4())
+
+    with SetWorkflowID(wfid):
+        queue.enqueue(test_workflow, "abc", "123")
+
+    handle = DBOS.execute_workflow_id(wfid)
+    assert handle.get_result() == "abc123"
