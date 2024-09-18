@@ -39,6 +39,7 @@ from dbos.core import (
     _WorkflowHandlePolling,
 )
 from dbos.decorators import classproperty
+from dbos.queue import Queue
 from dbos.recovery import _recover_pending_workflows, _startup_recovery_thread
 from dbos.registrations import (
     DBOSClassInfo,
@@ -137,6 +138,7 @@ class _DBOSRegistry:
         self.workflow_info_map: dict[str, Workflow[..., Any]] = {}
         self.class_info_map: dict[str, type] = {}
         self.instance_info_map: dict[str, object] = {}
+        self.queue_info_map: dict[str, Queue] = {}
         self.pollers: list[_RegisteredJob] = []
         self.dbos: Optional[DBOS] = None
         self.config: Optional[ConfigFile] = None

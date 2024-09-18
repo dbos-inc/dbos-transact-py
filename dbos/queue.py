@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 from dbos.context import DBOSContext, get_local_dbos_context
 from dbos.core import P, R, _init_workflow, _WorkflowHandlePolling
-from dbos.error import DBOSWorkflowFunctionNotFoundError
+from dbos.error import DBOSInitializationError, DBOSWorkflowFunctionNotFoundError
 from dbos.registrations import (
     get_config_name,
     get_dbos_class_name,
@@ -20,6 +20,14 @@ class Queue:
     def __init__(self, name: str, concurrency: Optional[int] = None) -> None:
         self.name = name
         self.concurrency = concurrency
+        from dbos.dbos import _get_or_create_dbos_registry
+
+        registry = _get_or_create_dbos_registry()
+        if self.name in registry.queue_info_map:
+            raise DBOSInitializationError(
+                f"Failed to register queue {self.name}: a queue of this name already exists."
+            )
+        registry.queue_info_map[self.name] = self
 
     def enqueue(
         self, func: "Workflow[P, R]", *args: P.args, **kwargs: P.kwargs
