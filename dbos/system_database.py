@@ -1049,7 +1049,7 @@ class SystemDatabase:
                     ret_ids.append(id)
             return ret_ids
 
-    def remove_from_queue(self, workflow_id: str):
+    def remove_from_queue(self, workflow_id: str) -> None:
         with self.engine.begin() as c:
             c.execute(
                 sa.delete(SystemSchema.job_queue).where(
