@@ -39,7 +39,7 @@ from dbos.core import (
     _WorkflowHandlePolling,
 )
 from dbos.decorators import classproperty
-from dbos.queue import Queue
+from dbos.queue import Queue, queue_thread
 from dbos.recovery import _recover_pending_workflows, _startup_recovery_thread
 from dbos.registrations import (
     DBOSClassInfo,
@@ -356,6 +356,11 @@ class DBOS:
 
         # Start flush workflow buffers thread
         self._executor.submit(self._sys_db.flush_workflow_buffers)
+
+        # Start the queue thread
+        evt = threading.Event()
+        self.stop_events.append(evt)
+        self._executor.submit(queue_thread, evt, self)
 
         # Grab any pollers that were deferred and start them
         for evt, func, args, kwargs in self._registry.pollers:

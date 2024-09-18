@@ -1,7 +1,9 @@
+import threading
+import time
 from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 from dbos.context import DBOSContext, get_local_dbos_context
-from dbos.core import P, R, _init_workflow, _WorkflowHandlePolling
+from dbos.core import P, R, _execute_workflow_id, _init_workflow, _WorkflowHandlePolling
 from dbos.error import DBOSInitializationError, DBOSWorkflowFunctionNotFoundError
 from dbos.registrations import (
     get_config_name,
@@ -13,7 +15,7 @@ from dbos.registrations import (
 from dbos.system_database import WorkflowInputs
 
 if TYPE_CHECKING:
-    from dbos.dbos import Workflow, WorkflowHandle
+    from dbos.dbos import DBOS, Workflow, WorkflowHandle
 
 
 class Queue:
@@ -78,3 +80,12 @@ class Queue:
             queue=self.name,
         )
         return _WorkflowHandlePolling(new_wf_id, dbos)
+
+
+def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
+    while not stop_event.is_set():
+        time.sleep(1)
+        for queue_name, queue in dbos._registry.queue_info_map.items():
+            wf_ids = dbos._sys_db.dequeue(queue_name, queue.concurrency)
+            for id in wf_ids:
+                _execute_workflow_id(dbos, id)
