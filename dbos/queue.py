@@ -1,8 +1,7 @@
-from typing import Any, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 from dbos.context import DBOSContext, get_local_dbos_context
 from dbos.core import P, R, _init_workflow, _WorkflowHandlePolling
-from dbos.dbos import Workflow, WorkflowHandle, _get_dbos_instance
 from dbos.error import DBOSWorkflowFunctionNotFoundError
 from dbos.registrations import (
     get_config_name,
@@ -13,6 +12,9 @@ from dbos.registrations import (
 )
 from dbos.system_database import WorkflowInputs
 
+if TYPE_CHECKING:
+    from dbos.dbos import Workflow, WorkflowHandle
+
 
 class Queue:
     def __init__(self, name: str, concurrency: Optional[int] = None) -> None:
@@ -22,6 +24,8 @@ class Queue:
     def enqueue(
         self, func: "Workflow[P, R]", *args: P.args, **kwargs: P.kwargs
     ) -> "WorkflowHandle[R]":
+        from dbos.dbos import _get_dbos_instance
+
         dbos = _get_dbos_instance()
         fself: Optional[object] = None
         if hasattr(func, "__self__"):
