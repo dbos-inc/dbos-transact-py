@@ -1022,3 +1022,29 @@ class SystemDatabase:
                 )
                 .on_conflict_do_nothing()
             )
+
+    def dequeue(self, queue_name: str, concurrency: Optional[int]) -> List[str]:
+        with self.engine.begin() as c:
+            query = sa.select(SystemSchema.job_queue.c.workflow_uuid).where(
+                SystemSchema.job_queue.c.queue_name == queue_name
+            )
+            if concurrency is not None:
+                query = query.order_by(
+                    SystemSchema.job_queue.c.created_at_epoch_ms.asc()
+                ).limit(concurrency)
+            rows = c.execute(query).fetchall()
+            dequeued_ids: List[str] = [row[0] for row in rows]
+            ret_ids = []
+            for id in dequeued_ids:
+                result = c.execute(
+                    SystemSchema.workflow_status.update()
+                    .where(SystemSchema.workflow_status.c.workflow_uuid == id)
+                    .where(
+                        SystemSchema.workflow_status.c.status
+                        == WorkflowStatusString.ENQUEUED.value
+                    )
+                    .values(status=WorkflowStatusString.PENDING.value)
+                )
+                if result.rowcount > 0:
+                    ret_ids.append(id)
+            return ret_ids

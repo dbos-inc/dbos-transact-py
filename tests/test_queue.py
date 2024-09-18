@@ -21,6 +21,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     with SetWorkflowID(wfid):
         queue.enqueue(test_workflow, "abc", "123")
-
+    dequeue = dbos._sys_db.dequeue("test_queue", None)
+    assert dequeue == [wfid]
     handle = DBOS.execute_workflow_id(wfid)
     assert handle.get_result() == "abc123"
