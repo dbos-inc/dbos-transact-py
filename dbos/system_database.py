@@ -1012,12 +1012,12 @@ class SystemDatabase:
             and len(self._workflow_inputs_buffer) == 0
         )
 
-    def enqueue(self, workflow_uuid: str, queue_name: str) -> None:
+    def enqueue(self, workflow_id: str, queue_name: str) -> None:
         with self.engine.begin() as c:
             c.execute(
                 pg.insert(SystemSchema.job_queue)
                 .values(
-                    workflow_uuid=workflow_uuid,
+                    workflow_uuid=workflow_id,
                     queue_name=queue_name,
                 )
                 .on_conflict_do_nothing()
@@ -1048,3 +1048,11 @@ class SystemDatabase:
                 if result.rowcount > 0:
                     ret_ids.append(id)
             return ret_ids
+
+    def remove_from_queue(self, workflow_id: str):
+        with self.engine.begin() as c:
+            c.execute(
+                sa.delete(SystemSchema.job_queue).where(
+                    SystemSchema.job_queue.c.workflow_uuid == workflow_id
+                )
+            )

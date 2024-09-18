@@ -188,6 +188,7 @@ def _execute_workflow(
         output = func(*args, **kwargs)
         status["status"] = "SUCCESS"
         status["output"] = utils.serialize(output)
+        dbos._sys_db.remove_from_queue(status["workflow_uuid"])
         dbos._sys_db.buffer_workflow_status(status)
     except DBOSWorkflowConflictIDError:
         # Retrieve the workflow handle and wait for the result.
@@ -200,6 +201,7 @@ def _execute_workflow(
     except Exception as error:
         status["status"] = "ERROR"
         status["error"] = utils.serialize(error)
+        dbos._sys_db.remove_from_queue(status["workflow_uuid"])
         dbos._sys_db.update_workflow_status(status)
         raise
 
