@@ -9,14 +9,27 @@ from dbos import DBOS
 def test_scheduled_workflow(dbos: DBOS) -> None:
     wf_counter: int = 0
 
-    @DBOS.scheduled("*/2 * * * * *")
+    @DBOS.scheduled("* * * * * *")
     @DBOS.workflow()
     def test_workflow(scheduled: datetime, actual: datetime) -> None:
         nonlocal wf_counter
         wf_counter += 1
 
     time.sleep(4)
-    assert wf_counter > 1 and wf_counter <= 3
+    assert wf_counter > 1 and wf_counter <= 4
+
+
+def test_scheduled_transaction(dbos: DBOS) -> None:
+    txn_counter: int = 0
+
+    @DBOS.scheduled("* * * * * *")
+    @DBOS.transaction()
+    def test_transaction(scheduled: datetime, actual: datetime) -> None:
+        nonlocal txn_counter
+        txn_counter += 1
+
+    time.sleep(4)
+    assert txn_counter > 1 and txn_counter <= 4
 
 
 def test_scheduled_workflow_exception(dbos: DBOS) -> None:
