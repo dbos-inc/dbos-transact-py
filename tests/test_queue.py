@@ -60,3 +60,45 @@ def test_one_at_a_time(dbos: DBOS) -> None:
     assert handle1.get_result() == None
     assert handle2.get_result() == None
     assert flag
+
+
+def test_queue_step(dbos: DBOS) -> None:
+    step_counter: int = 0
+    wfid = str(uuid.uuid4())
+
+    @DBOS.step()
+    def test_step(var: str) -> str:
+        assert DBOS.workflow_id == wfid
+        nonlocal step_counter
+        step_counter += 1
+        return var + "1"
+
+    queue = Queue("test_queue")
+
+    with SetWorkflowID(wfid):
+        handle = queue.enqueue(test_step, "abc")
+    assert handle.get_result() == "abc1"
+    with SetWorkflowID(wfid):
+        assert test_step("abc") == "abc1"
+    assert step_counter == 1
+
+
+def test_queue_transaction(dbos: DBOS) -> None:
+    step_counter: int = 0
+    wfid = str(uuid.uuid4())
+
+    @DBOS.transaction()
+    def test_transaction(var: str) -> str:
+        assert DBOS.workflow_id == wfid
+        nonlocal step_counter
+        step_counter += 1
+        return var + "1"
+
+    queue = Queue("test_queue")
+
+    with SetWorkflowID(wfid):
+        handle = queue.enqueue(test_transaction, "abc")
+    assert handle.get_result() == "abc1"
+    with SetWorkflowID(wfid):
+        assert test_transaction("abc") == "abc1"
+    assert step_counter == 1

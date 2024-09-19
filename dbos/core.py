@@ -163,7 +163,7 @@ def _init_workflow(
     if class_name is not None:
         inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
 
-    if temp_wf_type != "transaction":
+    if temp_wf_type != "transaction" or queue is not None:
         # Synchronously record the status and inputs for workflows and single-step workflows
         # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
         dbos._sys_db.update_workflow_status(status, False, ctx.in_recovery)
@@ -570,6 +570,7 @@ def _transaction(
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "transaction")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+        wrapper.__orig_func = temp_wf
 
         return cast(F, wrapper)
 
@@ -686,6 +687,7 @@ def _step(
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+        wrapper.__orig_func = temp_wf
 
         return cast(F, wrapper)
 
