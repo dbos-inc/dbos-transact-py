@@ -298,34 +298,22 @@ def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
             "kwargs": kwargs,
         }
         ctx = get_local_dbos_context()
-        if ctx and ctx.is_workflow():
-            with EnterDBOSChildWorkflow(attributes), DBOSAssumeRole(rr):
-                ctx = assert_current_dbos_context()  # Now the child ctx
-                status = _init_workflow(
-                    dbos,
-                    ctx,
-                    inputs=inputs,
-                    wf_name=get_dbos_func_name(func),
-                    class_name=get_dbos_class_name(fi, func, args),
-                    config_name=get_config_name(fi, func, args),
-                    temp_wf_type=get_temp_workflow_type(func),
-                )
+        enterWorkflowCtxMgr = (
+            EnterDBOSChildWorkflow if ctx and ctx.is_workflow() else EnterDBOSWorkflow
+        )
+        with enterWorkflowCtxMgr(attributes), DBOSAssumeRole(rr):
+            ctx = assert_current_dbos_context()  # Now the child ctx
+            status = _init_workflow(
+                dbos,
+                ctx,
+                inputs=inputs,
+                wf_name=get_dbos_func_name(func),
+                class_name=get_dbos_class_name(fi, func, args),
+                config_name=get_config_name(fi, func, args),
+                temp_wf_type=get_temp_workflow_type(func),
+            )
 
-                return _execute_workflow(dbos, status, func, *args, **kwargs)
-        else:
-            with EnterDBOSWorkflow(attributes), DBOSAssumeRole(rr):
-                ctx = assert_current_dbos_context()
-                status = _init_workflow(
-                    dbos,
-                    ctx,
-                    inputs=inputs,
-                    wf_name=get_dbos_func_name(func),
-                    class_name=get_dbos_class_name(fi, func, args),
-                    config_name=get_config_name(fi, func, args),
-                    temp_wf_type=get_temp_workflow_type(func),
-                )
-
-                return _execute_workflow(dbos, status, func, *args, **kwargs)
+            return _execute_workflow(dbos, status, func, *args, **kwargs)
 
     wrapped_func = cast(F, wrapper)
     return wrapped_func
