@@ -264,6 +264,7 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
                     dbos,
                     wf_func,
                     status["queue_name"],
+                    True,
                     dbos._registry.instance_info_map[iname],
                     *inputs["args"],
                     **inputs["kwargs"],
@@ -280,6 +281,7 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
                     dbos,
                     wf_func,
                     status["queue_name"],
+                    True,
                     dbos._registry.class_info_map[class_name],
                     *inputs["args"],
                     **inputs["kwargs"],
@@ -290,6 +292,7 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
                     dbos,
                     wf_func,
                     status["queue_name"],
+                    True,
                     *inputs["args"],
                     **inputs["kwargs"],
                 )
@@ -364,6 +367,7 @@ def _start_workflow(
     dbos: "DBOS",
     func: "Workflow[P, R]",
     queue_name: Optional[str],
+    submit_workflow: bool,
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> "WorkflowHandle[R]":
@@ -419,6 +423,9 @@ def _start_workflow(
         temp_wf_type=get_temp_workflow_type(func),
         queue=queue_name,
     )
+
+    if not submit_workflow:
+        return _WorkflowHandlePolling(new_wf_id, dbos)
 
     if fself is not None:
         future = dbos._executor.submit(

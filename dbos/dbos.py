@@ -514,7 +514,7 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
-        return _start_workflow(_get_dbos_instance(), func, None, *args, **kwargs)
+        return _start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs)
 
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
