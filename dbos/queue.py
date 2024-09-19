@@ -16,10 +16,6 @@ class Queue:
         from dbos.dbos import _get_or_create_dbos_registry
 
         registry = _get_or_create_dbos_registry()
-        if self.name in registry.queue_info_map:
-            raise DBOSInitializationError(
-                f"Failed to register queue {self.name}: a queue of this name already exists."
-            )
         registry.queue_info_map[self.name] = self
 
     def enqueue(

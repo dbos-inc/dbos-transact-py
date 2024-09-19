@@ -166,6 +166,7 @@ def _init_workflow(
     if temp_wf_type != "transaction" or queue is not None:
         # Synchronously record the status and inputs for workflows and single-step workflows
         # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
+        # TODO: Make this transactional (and with the queue step below)
         dbos._sys_db.update_workflow_status(status, False, ctx.in_recovery)
         dbos._sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
     else:
@@ -367,7 +368,7 @@ def _start_workflow(
     dbos: "DBOS",
     func: "Workflow[P, R]",
     queue_name: Optional[str],
-    submit_workflow: bool,
+    execute_workflow: bool,
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> "WorkflowHandle[R]":
@@ -424,7 +425,7 @@ def _start_workflow(
         queue=queue_name,
     )
 
-    if not submit_workflow:
+    if not execute_workflow:
         return _WorkflowHandlePolling(new_wf_id, dbos)
 
     if fself is not None:
