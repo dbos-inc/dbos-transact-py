@@ -1029,7 +1029,9 @@ class SystemDatabase:
                 .on_conflict_do_nothing()
             )
 
-    def dequeue(self, queue_name: str, concurrency: Optional[int]) -> List[str]:
+    def start_queued_workflows(
+        self, queue_name: str, concurrency: Optional[int]
+    ) -> List[str]:
         with self.engine.begin() as c:
             query = sa.select(SystemSchema.job_queue.c.workflow_uuid).where(
                 SystemSchema.job_queue.c.queue_name == queue_name
