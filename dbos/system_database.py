@@ -445,7 +445,7 @@ class SystemDatabase:
         if status == str(WorkflowStatusString.SUCCESS.value):
             return utils.deserialize(stat["output"])
         elif status == str(WorkflowStatusString.ERROR.value):
-            raise utils.deserialize(stat["error"])
+            raise utils.deserialize_exception(stat["error"])
         return None
 
     def get_workflow_info(
