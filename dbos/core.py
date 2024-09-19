@@ -570,7 +570,7 @@ def _transaction(
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "transaction")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
-        wrapper.__orig_func = temp_wf
+        wrapper.__orig_func = temp_wf  # type: ignore
 
         return cast(F, wrapper)
 
@@ -687,7 +687,7 @@ def _step(
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
-        wrapper.__orig_func = temp_wf
+        wrapper.__orig_func = temp_wf  # type: ignore
 
         return cast(F, wrapper)
 
