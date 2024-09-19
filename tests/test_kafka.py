@@ -43,9 +43,9 @@ def send_test_messages(server: str, topic: str) -> bool:
 
         producer = Producer({"bootstrap.servers": server, "error_cb": on_error})
 
-        for _ in range(NUM_EVENTS):
+        for i in range(NUM_EVENTS):
             producer.produce(
-                topic, key=f"test message key", value=f"test message value"
+                topic, key=f"test message key {i}", value=f"test message value {i}"
             )
 
         producer.poll(10)
@@ -78,8 +78,8 @@ def test_kafka(dbos: DBOS) -> None:
     def test_kafka_workflow(msg: KafkaMessage) -> None:
         nonlocal kafka_count
         kafka_count += 1
-        assert msg.key == b"test message key"
-        assert msg.value == b"test message value"
+        assert b"test message key" in msg.key
+        assert b"test message value" in msg.value
         print(msg)
         if kafka_count == 3:
             event.set()
