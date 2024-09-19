@@ -263,6 +263,7 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
                 return _start_workflow(
                     dbos,
                     wf_func,
+                    status["queue_name"],
                     dbos._registry.instance_info_map[iname],
                     *inputs["args"],
                     **inputs["kwargs"],
@@ -278,6 +279,7 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
                 return _start_workflow(
                     dbos,
                     wf_func,
+                    status["queue_name"],
                     dbos._registry.class_info_map[class_name],
                     *inputs["args"],
                     **inputs["kwargs"],
@@ -285,7 +287,11 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
         else:
             with SetWorkflowID(workflow_id):
                 return _start_workflow(
-                    dbos, wf_func, *inputs["args"], **inputs["kwargs"]
+                    dbos,
+                    wf_func,
+                    status["queue_name"],
+                    *inputs["args"],
+                    **inputs["kwargs"],
                 )
 
 
@@ -357,6 +363,7 @@ def _workflow(reg: "_DBOSRegistry") -> Callable[[F], F]:
 def _start_workflow(
     dbos: "DBOS",
     func: "Workflow[P, R]",
+    queue_name: Optional[str],
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> "WorkflowHandle[R]":
@@ -410,6 +417,7 @@ def _start_workflow(
         class_name=get_dbos_class_name(fi, func, gin_args),
         config_name=get_config_name(fi, func, gin_args),
         temp_wf_type=get_temp_workflow_type(func),
+        queue=queue_name,
     )
 
     if fself is not None:

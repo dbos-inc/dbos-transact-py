@@ -35,28 +35,28 @@ def test_simple_queue(dbos: DBOS) -> None:
     assert step_counter == 1
 
 
-# def test_one_at_a_time(dbos: DBOS) -> None:
-#     flag = False
-#     workflow_event = threading.Event()
-#     main_thread_event = threading.Event()
+def test_one_at_a_time(dbos: DBOS) -> None:
+    flag = False
+    workflow_event = threading.Event()
+    main_thread_event = threading.Event()
 
-#     @DBOS.workflow()
-#     def workflow_one() -> None:
-#         main_thread_event.set()
-#         workflow_event.wait()
+    @DBOS.workflow()
+    def workflow_one() -> None:
+        main_thread_event.set()
+        workflow_event.wait()
 
-#     @DBOS.workflow()
-#     def workflow_two() -> None:
-#         nonlocal flag
-#         flag = True
+    @DBOS.workflow()
+    def workflow_two() -> None:
+        nonlocal flag
+        flag = True
 
-#     queue = Queue("test_queue", 1)
-#     handle1 = queue.enqueue(workflow_one)
-#     handle2 = queue.enqueue(workflow_two)
+    queue = Queue("test_queue", 1)
+    handle1 = queue.enqueue(workflow_one)
+    handle2 = queue.enqueue(workflow_two)
 
-#     main_thread_event.wait()
-#     assert flag == False
-#     workflow_event.set()
-#     assert handle1.get_result() == None
-#     assert handle2.get_result() == None
-#     assert flag == False
+    main_thread_event.wait()
+    assert not flag
+    workflow_event.set()
+    assert handle1.get_result() == None
+    assert handle2.get_result() == None
+    assert flag
