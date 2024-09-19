@@ -1,5 +1,6 @@
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     ForeignKey,
     Index,
@@ -53,6 +54,7 @@ class SystemSchema:
             nullable=True,
             server_default=text("'0'::bigint"),
         ),
+        Column("was_queued", Boolean, nullable=False, server_default=text("False")),
         Index("workflow_status_created_at_index", "created_at"),
         Index("workflow_status_executor_id_index", "executor_id"),
     )

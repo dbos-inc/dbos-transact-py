@@ -87,6 +87,7 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
             "authenticated_user": None,
             "authenticated_roles": None,
             "assumed_role": None,
+            "was_queued": False,
         }
     )
 

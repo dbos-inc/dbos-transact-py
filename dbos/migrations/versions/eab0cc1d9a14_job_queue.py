@@ -40,6 +40,13 @@ def upgrade() -> None:
         ),
         schema="dbos",
     )
+    op.add_column(
+        "workflow_status",
+        sa.Column(
+            "was_queued", sa.Boolean(), server_default=sa.text("False"), nullable=False
+        ),
+        schema="dbos",
+    )
 
 
 def downgrade() -> None:

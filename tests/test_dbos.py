@@ -356,6 +356,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
             "authenticated_user": None,
             "authenticated_roles": None,
             "assumed_role": None,
+            "was_queued": False,
         }
     )
 
@@ -418,6 +419,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
             "authenticated_user": None,
             "authenticated_roles": None,
             "assumed_role": None,
+            "was_queued": False,
         }
     )
 
@@ -473,6 +475,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
             "authenticated_user": None,
             "authenticated_roles": None,
             "assumed_role": None,
+            "was_queued": False,
         }
     )
 

@@ -62,6 +62,7 @@ class WorkflowStatusInternal(TypedDict):
     authenticated_user: Optional[str]
     assumed_role: Optional[str]
     authenticated_roles: Optional[str]  # JSON list of roles.
+    was_queued: bool
 
 
 class RecordedResult(TypedDict):
@@ -248,6 +249,7 @@ class SystemDatabase:
             authenticated_user=status["authenticated_user"],
             authenticated_roles=status["authenticated_roles"],
             assumed_role=status["assumed_role"],
+            was_queued=status["was_queued"],
         )
         if replace:
             cmd = cmd.on_conflict_do_update(
@@ -321,6 +323,7 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.authenticated_user,
                     SystemSchema.workflow_status.c.authenticated_roles,
                     SystemSchema.workflow_status.c.assumed_role,
+                    SystemSchema.workflow_status.c.was_queued,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -341,6 +344,7 @@ class SystemDatabase:
                 "authenticated_user": row[6],
                 "authenticated_roles": row[7],
                 "assumed_role": row[8],
+                "was_queued": row[9],
             }
             return status
 
@@ -380,6 +384,7 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.authenticated_user,
                     SystemSchema.workflow_status.c.authenticated_roles,
                     SystemSchema.workflow_status.c.assumed_role,
+                    SystemSchema.workflow_status.c.was_queued,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -400,6 +405,7 @@ class SystemDatabase:
                 "authenticated_user": row[7],
                 "authenticated_roles": row[8],
                 "assumed_role": row[9],
+                "was_queued": row[10],
             }
             return status
 
