@@ -1,4 +1,5 @@
 import threading
+import time
 import uuid
 
 from dbos import DBOS, Queue, SetWorkflowID
@@ -58,6 +59,7 @@ def test_one_at_a_time(dbos: DBOS) -> None:
     handle2 = queue.enqueue(workflow_two)
 
     main_thread_event.wait()
+    time.sleep(2)  # Verify the other task isn't scheduled on subsequent poller ticks.
     assert not flag
     workflow_event.set()
     assert handle1.get_result() == None
