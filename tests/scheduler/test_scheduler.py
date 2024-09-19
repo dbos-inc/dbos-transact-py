@@ -16,7 +16,7 @@ def test_scheduled_workflow(dbos: DBOS) -> None:
         wf_counter += 1
 
     time.sleep(4)
-    assert wf_counter > 1 and wf_counter <= 4
+    assert wf_counter > 2 and wf_counter <= 4
 
 
 def test_scheduled_transaction(dbos: DBOS) -> None:
@@ -29,7 +29,7 @@ def test_scheduled_transaction(dbos: DBOS) -> None:
         txn_counter += 1
 
     time.sleep(4)
-    assert txn_counter > 1 and txn_counter <= 4
+    assert txn_counter > 2 and txn_counter <= 4
 
 
 def test_scheduled_workflow_exception(dbos: DBOS) -> None:
