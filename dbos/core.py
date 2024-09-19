@@ -298,10 +298,10 @@ def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
             "kwargs": kwargs,
         }
         ctx = get_local_dbos_context()
-        EnterWorkflowCtxMgr = (
+        enterWorkflowCtxMgr = (
             EnterDBOSChildWorkflow if ctx and ctx.is_workflow() else EnterDBOSWorkflow
         )
-        with EnterWorkflowCtxMgr(attributes), DBOSAssumeRole(rr):
+        with enterWorkflowCtxMgr(attributes), DBOSAssumeRole(rr):
             ctx = assert_current_dbos_context()  # Now the child ctx
             status = _init_workflow(
                 dbos,
