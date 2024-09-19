@@ -36,12 +36,15 @@ def test_simple_queue(dbos: DBOS) -> None:
 
 
 def test_one_at_a_time(dbos: DBOS) -> None:
+    wf_counter = 0
     flag = False
     workflow_event = threading.Event()
     main_thread_event = threading.Event()
 
     @DBOS.workflow()
     def workflow_one() -> None:
+        nonlocal wf_counter
+        wf_counter += 1
         main_thread_event.set()
         workflow_event.wait()
 
@@ -60,6 +63,7 @@ def test_one_at_a_time(dbos: DBOS) -> None:
     assert handle1.get_result() == None
     assert handle2.get_result() == None
     assert flag
+    assert wf_counter == 1
 
 
 def test_queue_step(dbos: DBOS) -> None:
