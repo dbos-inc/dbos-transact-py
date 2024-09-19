@@ -43,7 +43,8 @@ def upgrade() -> None:
     op.add_column(
         "workflow_status",
         sa.Column(
-            "was_queued", sa.Boolean(), server_default=sa.text("False"), nullable=False
+            "queue_name",
+            sa.Text(),
         ),
         schema="dbos",
     )
