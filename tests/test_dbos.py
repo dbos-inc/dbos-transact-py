@@ -879,3 +879,70 @@ def test_set_get_events(dbos: DBOS) -> None:
     with pytest.raises(Exception) as exc_info:
         dbos.set_event("key1", "value1")
     assert "set_event() must be called from within a workflow" in str(exc_info.value)
+
+
+def test_nonserializable_values(dbos: DBOS) -> None:
+    def invalid_return() -> str:
+        return "literal"
+
+    @DBOS.transaction(isolation_level="READ COMMITTED")
+    def test_ns_transaction(var2: str) -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        return invalid_return  #  type: ignore
+
+    @DBOS.step()
+    def test_ns_step(var: str) -> str:
+        return invalid_return  #  type: ignore
+
+    @DBOS.workflow()
+    def test_ns_wf(var: str) -> str:
+        return invalid_return  #  type: ignore
+
+    @DBOS.transaction(isolation_level="READ COMMITTED")
+    def test_reg_transaction(var2: str) -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        return var2
+
+    @DBOS.step()
+    def test_reg_step(var: str) -> str:
+        return var
+
+    @DBOS.workflow()
+    def test_reg_wf(var: str) -> str:
+        return test_reg_step(var) + test_reg_transaction(var)
+
+    @DBOS.workflow()
+    def test_ns_event(var: str) -> str:
+        DBOS.set_event("aaa", invalid_return)
+        return test_reg_step(var) + test_reg_transaction(var)
+
+    @DBOS.workflow()
+    def test_bad_wf1(var: str) -> str:
+        return test_reg_step(invalid_return) + test_reg_transaction(var)  # type: ignore
+
+    @DBOS.workflow()
+    def test_bad_wf2(var: str) -> str:
+        return test_reg_step(var) + test_reg_transaction(invalid_return)  # type: ignore
+
+    @DBOS.workflow()
+    def test_bad_wf3(var: str) -> str:
+        return test_ns_transaction(var)
+
+    @DBOS.workflow()
+    def test_bad_wf4(var: str) -> str:
+        return test_ns_step(var)
+
+    test_ns_transaction("h")
+    test_ns_step("f")
+    test_ns_wf("g")
+
+    wfh = DBOS.start_workflow(test_reg_wf, "a")
+    DBOS.send(wfh.workflow_id, invalid_return, "sss")
+    wfh.get_result()
+
+    test_ns_event("e")
+
+    test_bad_wf1("a")
+    test_bad_wf2("b")
+    test_bad_wf3("c")
+    test_bad_wf4("d")
