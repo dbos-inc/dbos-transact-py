@@ -1,10 +1,10 @@
 import threading
 import traceback
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Generator, NoReturn, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, NoReturn
 
 from confluent_kafka import Consumer, KafkaError, KafkaException
-from confluent_kafka import Message as CTypeMessage
+
+from dbos.queue import Queue
 
 if TYPE_CHECKING:
     from dbos.dbos import _DBOSRegistry
@@ -14,6 +14,8 @@ from .kafka_message import KafkaMessage
 from .logger import dbos_logger
 
 KafkaConsumerWorkflow = Callable[[KafkaMessage], None]
+
+kafka_queue: Queue
 
 
 def _kafka_consumer_loop(
@@ -71,7 +73,7 @@ def _kafka_consumer_loop(
                     f"kafka-unique-id-{msg.topic}-{msg.partition}-{msg.offset}"
                 ):
                     try:
-                        func(msg)
+                        kafka_queue.enqueue(func, msg)
                     except Exception as e:
                         dbos_logger.error(
                             f"Exception encountered in Kafka consumer: {traceback.format_exc()}"
@@ -85,6 +87,8 @@ def kafka_consumer(
     dbosreg: "_DBOSRegistry", config: dict[str, Any], topics: list[str]
 ) -> Callable[[KafkaConsumerWorkflow], KafkaConsumerWorkflow]:
     def decorator(func: KafkaConsumerWorkflow) -> KafkaConsumerWorkflow:
+        global kafka_queue
+        kafka_queue = Queue("_dbos_internal_queue")
         stop_event = threading.Event()
         dbosreg.register_poller(
             stop_event, _kafka_consumer_loop, func, config, topics, stop_event

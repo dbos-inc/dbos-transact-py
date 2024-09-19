@@ -1,5 +1,4 @@
 import threading
-import traceback
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable
 
@@ -9,7 +8,6 @@ if TYPE_CHECKING:
     from dbos.dbos import _DBOSRegistry
 
 from ..context import SetWorkflowID
-from ..logger import dbos_logger
 from .croniter import croniter  # type: ignore
 
 ScheduledWorkflow = Callable[[datetime, datetime], None]
@@ -35,7 +33,7 @@ def scheduled(
 ) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
     def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
         global scheduler_queue
-        scheduler_queue = Queue("_scheduler_queue")
+        scheduler_queue = Queue("_dbos_internal_queue")
         stop_event = threading.Event()
         dbosreg.register_poller(stop_event, scheduler_loop, func, cron, stop_event)
         return func
