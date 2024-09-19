@@ -75,6 +75,7 @@ def _kafka_consumer_loop(
                     f"kafka-unique-id-{msg.topic}-{msg.partition}-{msg.offset}"
                 ):
                     if in_order:
+                        assert msg.topic is not None
                         queue = in_order_kafka_queues[msg.topic]
                         queue.enqueue(func, msg)
                     else:
@@ -94,7 +95,7 @@ def kafka_consumer(
                     raise DBOSInitializationError(
                         f"Error: in-order processing is not supported for regular expression topic selectors ({topic})"
                     )
-                queue = Queue(f"_dbos_kafka_queue_topic_{topic}")
+                queue = Queue(f"_dbos_kafka_queue_topic_{topic}", concurrency=1)
                 in_order_kafka_queues[topic] = queue
         else:
             global kafka_queue
