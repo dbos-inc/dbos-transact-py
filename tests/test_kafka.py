@@ -1,7 +1,7 @@
 import random
 import threading
-import uuid
-from typing import Any, List, NoReturn
+import time
+from typing import NoReturn
 
 import pytest
 from confluent_kafka import KafkaError, Producer
@@ -78,8 +78,41 @@ def test_kafka(dbos: DBOS) -> None:
     def test_kafka_workflow(msg: KafkaMessage) -> None:
         nonlocal kafka_count
         kafka_count += 1
-        assert b"test message key" in msg.key
-        assert b"test message value" in msg.value
+        assert b"test message key" in msg.key  # type: ignore
+        assert b"test message value" in msg.value  # type: ignore
+        print(msg)
+        if kafka_count == 3:
+            event.set()
+
+    wait = event.wait(timeout=10)
+    assert wait
+    assert kafka_count == 3
+
+
+def test_kafka_in_order(dbos: DBOS) -> None:
+    event = threading.Event()
+    kafka_count = 0
+    server = "localhost:9092"
+    topic = f"dbos-kafka-{random.randrange(1_000_000_000)}"
+
+    if not send_test_messages(server, topic):
+        pytest.skip("Kafka not available")
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": "dbos-test",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+        in_order=True,
+    )
+    @DBOS.workflow()
+    def test_kafka_workflow(msg: KafkaMessage) -> None:
+        time.sleep(random.uniform(0, 2))
+        nonlocal kafka_count
+        kafka_count += 1
+        assert f"test message key {kafka_count - 1}".encode() == msg.key
         print(msg)
         if kafka_count == 3:
             event.set()
