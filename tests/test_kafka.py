@@ -31,6 +31,9 @@ from dbos import DBOS, KafkaMessage
 #         KAFKA_CFG_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
 
 
+NUM_EVENTS = 3
+
+
 def send_test_messages(server: str, topic: str) -> bool:
 
     try:
@@ -40,7 +43,10 @@ def send_test_messages(server: str, topic: str) -> bool:
 
         producer = Producer({"bootstrap.servers": server, "error_cb": on_error})
 
-        producer.produce(topic, key=f"test message key", value=f"test message value")
+        for _ in range(NUM_EVENTS):
+            producer.produce(
+                topic, key=f"test message key", value=f"test message value"
+            )
 
         producer.poll(10)
         producer.flush(10)
@@ -53,13 +59,12 @@ def send_test_messages(server: str, topic: str) -> bool:
 
 def test_kafka(dbos: DBOS) -> None:
     event = threading.Event()
+    kafka_count = 0
     server = "localhost:9092"
     topic = f"dbos-kafka-{random.randrange(1_000_000_000)}"
 
     if not send_test_messages(server, topic):
         pytest.skip("Kafka not available")
-
-    messages: List[KafkaMessage] = []
 
     @DBOS.kafka_consumer(
         {
@@ -71,10 +76,14 @@ def test_kafka(dbos: DBOS) -> None:
     )
     @DBOS.workflow()
     def test_kafka_workflow(msg: KafkaMessage) -> None:
+        nonlocal kafka_count
+        kafka_count += 1
+        assert msg.key == b"test message key"
+        assert msg.value == b"test message value"
         print(msg)
-        messages.append(msg)
-        event.set()
+        if kafka_count == 3:
+            event.set()
 
     wait = event.wait(timeout=10)
     assert wait
-    assert len(messages) > 0
+    assert kafka_count == 3
