@@ -834,10 +834,15 @@ class SystemDatabase:
 
             try:
                 c.execute(
-                    pg.insert(SystemSchema.workflow_events).values(
+                    pg.insert(SystemSchema.workflow_events)
+                    .values(
                         workflow_uuid=workflow_uuid,
                         key=key,
                         value=utils.serialize(message),
+                    )
+                    .on_conflict_do_update(
+                        index_elements=["workflow_uuid", "key"],
+                        set_={"value": utils.serialize(message)},
                     )
                 )
             except DBAPIError as dbapi_error:
