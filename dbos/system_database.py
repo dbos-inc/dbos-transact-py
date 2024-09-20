@@ -1,6 +1,5 @@
 import datetime
 import os
-import select
 import threading
 import time
 from enum import Enum
@@ -14,11 +13,7 @@ from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 
 import dbos.utils as utils
-from dbos.error import (
-    DBOSDuplicateWorkflowEventError,
-    DBOSNonExistentWorkflowError,
-    DBOSWorkflowConflictIDError,
-)
+from dbos.error import DBOSNonExistentWorkflowError, DBOSWorkflowConflictIDError
 
 from .dbos_config import ConfigFile
 from .logger import dbos_logger
@@ -832,23 +827,18 @@ class SystemDatabase:
             if recorded_output is not None:
                 return  # Already sent before
 
-            try:
-                c.execute(
-                    pg.insert(SystemSchema.workflow_events)
-                    .values(
-                        workflow_uuid=workflow_uuid,
-                        key=key,
-                        value=utils.serialize(message),
-                    )
-                    .on_conflict_do_update(
-                        index_elements=["workflow_uuid", "key"],
-                        set_={"value": utils.serialize(message)},
-                    )
+            c.execute(
+                pg.insert(SystemSchema.workflow_events)
+                .values(
+                    workflow_uuid=workflow_uuid,
+                    key=key,
+                    value=utils.serialize(message),
                 )
-            except DBAPIError as dbapi_error:
-                if dbapi_error.orig.sqlstate == "23505":  # type: ignore
-                    raise DBOSDuplicateWorkflowEventError(workflow_uuid, key)
-                raise
+                .on_conflict_do_update(
+                    index_elements=["workflow_uuid", "key"],
+                    set_={"value": utils.serialize(message)},
+                )
+            )
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
