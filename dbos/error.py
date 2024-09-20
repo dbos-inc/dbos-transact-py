@@ -32,7 +32,6 @@ class DBOSErrorCode(Enum):
     InitializationError = 3
     WorkflowFunctionNotFound = 4
     NonExistentWorkflowError = 5
-    DuplicateWorkflowEventError = 6
     MaxStepRetriesExceeded = 7
     NotAuthorized = 8
 
@@ -84,16 +83,6 @@ class DBOSNonExistentWorkflowError(DBOSException):
         super().__init__(
             f"Sent to non-existent destination workflow ID: {destination_id}",
             dbos_error_code=DBOSErrorCode.NonExistentWorkflowError.value,
-        )
-
-
-class DBOSDuplicateWorkflowEventError(DBOSException):
-    """Exception raised when a workflow attempts to set an event value more than once per key."""
-
-    def __init__(self, workflow_id: str, key: str):
-        super().__init__(
-            f"Workflow {workflow_id} has already emitted an event with key {key}",
-            dbos_error_code=DBOSErrorCode.DuplicateWorkflowEventError.value,
         )
 
 

@@ -1,7 +1,8 @@
 import datetime
+import threading
 import time
 import uuid
-from typing import Any, Optional
+from typing import Optional
 
 import pytest
 import sqlalchemy as sa
@@ -13,7 +14,6 @@ from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle, WorkflowStatus
 from dbos.context import assert_current_dbos_context, get_local_dbos_context
 from dbos.error import DBOSMaxStepRetriesExceeded
 from dbos.system_database import GetWorkflowsInput
-from tests.conftest import default_config
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -882,3 +882,23 @@ def test_set_get_events(dbos: DBOS) -> None:
     with pytest.raises(Exception) as exc_info:
         dbos.set_event("key1", "value1")
     assert "set_event() must be called from within a workflow" in str(exc_info.value)
+
+
+def test_multi_set_event(dbos: DBOS) -> None:
+    event = threading.Event()
+
+    wfid = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    def test_setevent_workflow() -> None:
+        assert DBOS.workflow_id == wfid
+        DBOS.set_event("key", "value1")
+        event.wait()
+        DBOS.set_event("key", "value2")
+
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(test_setevent_workflow)
+    assert DBOS.get_event(wfid, "key") == "value1"
+    event.set()
+    assert handle.get_result() == None
+    assert DBOS.get_event(wfid, "key") == "value2"

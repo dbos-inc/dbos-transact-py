@@ -18,7 +18,7 @@ from dbos import DBOS, DBOSContextEnsure
 
 # Private API because this is a unit test
 from dbos.context import assert_current_dbos_context
-from dbos.error import DBOSDuplicateWorkflowEventError, DBOSNotAuthorizedError
+from dbos.error import DBOSInitializationError, DBOSNotAuthorizedError
 from dbos.system_database import GetWorkflowsInput
 from dbos.tracer import dbos_tracer
 
@@ -54,7 +54,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     @app.get("/dbosinternalerror")
     def test_dbos_error_internal() -> None:
-        raise DBOSDuplicateWorkflowEventError("nosuchwf", "test")
+        raise DBOSInitializationError("oh no")
 
     @app.get("/open/{var1}")
     @DBOS.required_roles([])
