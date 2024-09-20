@@ -884,7 +884,7 @@ def test_set_get_events(dbos: DBOS) -> None:
     assert "set_event() must be called from within a workflow" in str(exc_info.value)
 
 
-def test_multi_set_event(dbos: DBOS):
+def test_multi_set_event(dbos: DBOS) -> None:
     event = threading.Event()
 
     wfid = str(uuid.uuid4())
