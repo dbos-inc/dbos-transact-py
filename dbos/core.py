@@ -4,17 +4,7 @@ import time
 import traceback
 from concurrent.futures import Future
 from functools import wraps
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Generic,
-    List,
-    Optional,
-    Tuple,
-    TypeVar,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
 
 from dbos.application_database import ApplicationDatabase, TransactionResultInternal
 
@@ -61,9 +51,9 @@ from dbos.roles import check_required_roles
 from dbos.system_database import (
     GetEventWorkflowContext,
     OperationResultInternal,
-    WorkflowInputs,
     WorkflowStatusInternal,
 )
+from dbos.utils import WorkflowInputs
 
 if TYPE_CHECKING:
     from dbos.dbos import DBOS, Workflow, WorkflowHandle, WorkflowStatus, _DBOSRegistry
@@ -160,10 +150,10 @@ def _init_workflow(
         # Synchronously record the status and inputs for workflows and single-step workflows
         # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
         dbos._sys_db.update_workflow_status(status, False, ctx.in_recovery)
-        dbos._sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
+        dbos._sys_db.update_workflow_inputs(wfid, utils.serialize_args(inputs))
     else:
         # Buffer the inputs for single-transaction workflows, but don't buffer the status
-        dbos._sys_db.buffer_workflow_inputs(wfid, utils.serialize(inputs))
+        dbos._sys_db.buffer_workflow_inputs(wfid, utils.serialize_args(inputs))
 
     return status
 

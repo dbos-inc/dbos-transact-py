@@ -1,13 +1,37 @@
-from typing import Any
+import types
+from typing import Any, Dict, Tuple, TypedDict
 
 import jsonpickle  # type: ignore
 
-jsonpickle.load_backend("simplejson", "dumps", "loads", ValueError)
+
+class WorkflowInputs(TypedDict):
+    args: Tuple[Any, ...]
+    kwargs: Dict[str, Any]
+
+
+# jsonpickle.load_backend("simplejson", "dumps", "loads", ValueError)
 # jsonpickle.set_preferred_backend('jsonpickle.simplejson')
+
+
+def validate_item(data: Any):
+    if isinstance(data, (types.FunctionType, types.MethodType)):
+        raise TypeError("Should not be a function")
 
 
 def serialize(data: Any) -> str:
     """Serialize an object to a JSON string using jsonpickle."""
+    validate_item(data)
+    encoded_data: str = jsonpickle.encode(data, unpicklable=False)
+    return encoded_data
+
+
+def serialize_args(data: WorkflowInputs) -> str:
+    """Serialize args to a JSON string using jsonpickle."""
+    arg: Any
+    for arg in data["args"]:
+        validate_item(arg)
+    for arg in data["kwargs"].values():
+        validate_item(arg)
     encoded_data: str = jsonpickle.encode(data, unpicklable=False)
     return encoded_data
 
@@ -21,6 +45,12 @@ def serialize_error(data: Exception) -> str:
 def deserialize(serialized_data: str) -> Any:
     """Deserialize a JSON string back to a Python object using jsonpickle."""
     return jsonpickle.decode(serialized_data)
+
+
+def deserialize_args(serialized_data: str) -> WorkflowInputs:
+    """Deserialize a JSON string back to a Python object list using jsonpickle."""
+    args: WorkflowInputs = jsonpickle.decode(serialized_data)
+    return args
 
 
 def deserialize_exception(serialized_data: str) -> Exception:

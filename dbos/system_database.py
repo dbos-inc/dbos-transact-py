@@ -4,7 +4,18 @@ import select
 import threading
 import time
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Sequence, Set, TypedDict, cast
+from typing import (
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    TypedDict,
+    cast,
+)
 
 import psycopg
 import sqlalchemy as sa
@@ -38,11 +49,6 @@ class WorkflowStatusString(Enum):
 WorkflowStatuses = Literal[
     "PENDING", "SUCCESS", "ERROR", "RETRIES_EXCEEDED", "CANCELLED"
 ]
-
-
-class WorkflowInputs(TypedDict):
-    args: Any
-    kwargs: Any
 
 
 class WorkflowStatusInternal(TypedDict):
@@ -130,7 +136,7 @@ class WorkflowInformation(TypedDict, total=False):
     # The role used to run this workflow.  Empty string if authorization is not required.
     authenticated_roles: List[str]
     # All roles the authenticated user has, if any.
-    input: Optional[WorkflowInputs]
+    input: Optional[utils.WorkflowInputs]
     output: Optional[str]
     error: Optional[str]
     request: Optional[str]
@@ -485,7 +491,7 @@ class SystemDatabase:
             self._exported_temp_txn_wf_status.discard(workflow_uuid)
             self._temp_txn_wf_ids.discard(workflow_uuid)
 
-    def get_workflow_inputs(self, workflow_uuid: str) -> Optional[WorkflowInputs]:
+    def get_workflow_inputs(self, workflow_uuid: str) -> Optional[utils.WorkflowInputs]:
         with self.engine.begin() as c:
             row = c.execute(
                 sa.select(SystemSchema.workflow_inputs.c.inputs).where(
@@ -494,7 +500,7 @@ class SystemDatabase:
             ).fetchone()
             if row is None:
                 return None
-            inputs: WorkflowInputs = utils.deserialize(row[0])
+            inputs: utils.WorkflowInputs = utils.deserialize_args(row[0])
             return inputs
 
     def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
