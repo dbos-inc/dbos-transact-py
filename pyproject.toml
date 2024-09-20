@@ -20,6 +20,7 @@ dependencies = [
     "psutil>=6.0.0",
     "tomlkit>=0.13.2",
     "psycopg>=3.2.1",
+    "sqlalchemy[asyncio]>=2.0.35",
 ]
 requires-python = ">=3.9"
 readme = "README.md"
