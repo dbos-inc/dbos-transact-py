@@ -352,25 +352,23 @@ class SystemDatabase:
             }
             return status
 
-    def get_workflow_status_within_wf(
+    async def get_workflow_status_within_wf(
         self, workflow_uuid: str, calling_wf: str, calling_wf_fn: int
     ) -> Optional[WorkflowStatusInternal]:
-        res = asyncio.run(self.check_operation_execution(calling_wf, calling_wf_fn))
+        res = await self.check_operation_execution(calling_wf, calling_wf_fn)
         if res is not None:
             if res["output"]:
                 resstat: WorkflowStatusInternal = utils.deserialize(res["output"])
                 return resstat
             return None
-        stat = asyncio.run(self.get_workflow_status(workflow_uuid))
-        asyncio.run(
-            self.record_operation_result(
-                {
-                    "workflow_uuid": calling_wf,
-                    "function_id": calling_wf_fn,
-                    "output": utils.serialize(stat),
-                    "error": None,
-                }
-            )
+        stat = await self.get_workflow_status(workflow_uuid)
+        await self.record_operation_result(
+            {
+                "workflow_uuid": calling_wf,
+                "function_id": calling_wf_fn,
+                "output": utils.serialize(stat),
+                "error": None,
+            }
         )
         return stat
 
