@@ -1,12 +1,11 @@
-import asyncio
 import datetime
 import time
-import uuid
 
 import pytest
 import sqlalchemy as sa
 from psycopg.errors import SerializationFailure
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import create_async_engine
 
 # Public API
 from dbos import DBOS, GetWorkflowsInput, SetWorkflowID
@@ -82,7 +81,8 @@ def test_notification_errors(dbos: DBOS) -> None:
     assert duration < 3.0
 
 
-def test_buffer_flush_errors(dbos: DBOS) -> None:
+@pytest.mark.asyncio
+async def test_buffer_flush_errors(dbos: DBOS) -> None:
     @DBOS.transaction()
     def test_transaction(var: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
@@ -96,12 +96,12 @@ def test_buffer_flush_errors(dbos: DBOS) -> None:
     assert res == "bob1"
 
     dbos._sys_db.wait_for_buffer_flush()
-    wfs = asyncio.run(dbos._sys_db.get_workflows(gwi))
+    wfs = await dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 1
 
     # Crash the system database connection and make sure the buffer flush works on time.
-    backup_engine = dbos._sys_db.engine
-    dbos._sys_db.engine = sa.create_engine(
+    backup_engine = dbos._sys_db.async_engine
+    dbos._sys_db.async_engine = create_async_engine(
         "postgresql+psycopg://fake:database@localhost/fake_db"
     )
 
@@ -112,8 +112,8 @@ def test_buffer_flush_errors(dbos: DBOS) -> None:
     time.sleep(2)
 
     # Switch back to the original good engine.
-    dbos._sys_db.engine = backup_engine
+    dbos._sys_db.async_engine = backup_engine
 
     dbos._sys_db.wait_for_buffer_flush()
-    wfs = asyncio.run(dbos._sys_db.get_workflows(gwi))
+    wfs = await dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 2

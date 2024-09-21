@@ -12,42 +12,43 @@ from dbos import DBOS, ConfigFile
 from dbos.schemas.system_database import SystemSchema
 
 
-def test_systemdb_migration(dbos: DBOS) -> None:
+@pytest.mark.asyncio
+async def test_systemdb_migration(dbos: DBOS) -> None:
     # Make sure all tables exist
-    with dbos._sys_db.engine.connect() as connection:
+    async with dbos._sys_db.async_engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
-        result = connection.execute(sql)
+        result = await connection.execute(sql)
         assert result.fetchall() == []
 
         sql = SystemSchema.workflow_inputs.select()
-        result = connection.execute(sql)
+        result = await connection.execute(sql)
         assert result.fetchall() == []
 
         sql = SystemSchema.operation_outputs.select()
-        result = connection.execute(sql)
+        result = await connection.execute(sql)
         assert result.fetchall() == []
 
         sql = SystemSchema.workflow_events.select()
-        result = connection.execute(sql)
+        result = await connection.execute(sql)
         assert result.fetchall() == []
 
         sql = SystemSchema.notifications.select()
-        result = connection.execute(sql)
+        result = await connection.execute(sql)
         assert result.fetchall() == []
 
         sql = SystemSchema.scheduler_state.select()
-        result = connection.execute(sql)
+        result = await connection.execute(sql)
         assert result.fetchall() == []
 
     # Test migrating down
     rollback_system_db(
-        sysdb_url=dbos._sys_db.engine.url.render_as_string(hide_password=False)
+        sysdb_url=dbos._sys_db.async_engine.url.render_as_string(hide_password=False)
     )
 
-    with dbos._sys_db.engine.connect() as connection:
+    async with dbos._sys_db.async_engine.connect() as connection:
         with pytest.raises(sa.exc.ProgrammingError) as exc_info:
             sql = SystemSchema.workflow_status.select()
-            result = connection.execute(sql)
+            result = await connection.execute(sql)
         assert "does not exist" in str(exc_info.value)
 
 
@@ -67,23 +68,31 @@ def test_custom_sysdb_name_migration(
     dbos = DBOS(config=config)
     DBOS.launch()
 
-    # Make sure all tables exist
-    with dbos._sys_db.engine.connect() as connection:
-        sql = SystemSchema.workflow_status.select()
-        result = connection.execute(sql)
-        assert result.fetchall() == []
-
-    # Test migrating down
-    rollback_system_db(
-        sysdb_url=dbos._sys_db.engine.url.render_as_string(hide_password=False)
+    engine = sa.create_engine(
+        dbos._sys_db.async_engine.url.render_as_string(hide_password=False)
     )
-
-    with dbos._sys_db.engine.connect() as connection:
-        with pytest.raises(sa.exc.ProgrammingError) as exc_info:
+    try:
+        # Make sure all tables exist
+        with engine.connect() as connection:
             sql = SystemSchema.workflow_status.select()
             result = connection.execute(sql)
-        assert "does not exist" in str(exc_info.value)
-    DBOS.destroy()
+            assert result.fetchall() == []
+
+        # Test migrating down
+        rollback_system_db(
+            sysdb_url=dbos._sys_db.async_engine.url.render_as_string(
+                hide_password=False
+            )
+        )
+
+        with engine.connect() as connection:
+            with pytest.raises(sa.exc.ProgrammingError) as exc_info:
+                sql = SystemSchema.workflow_status.select()
+                result = connection.execute(sql)
+            assert "does not exist" in str(exc_info.value)
+    finally:
+        engine.dispose()
+        DBOS.destroy()
 
 
 def rollback_system_db(sysdb_url: str) -> None:

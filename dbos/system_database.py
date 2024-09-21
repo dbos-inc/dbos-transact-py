@@ -206,9 +206,6 @@ class SystemDatabase:
         self._run_background_processes = True
 
         # Create a connection pool for the system database
-        self.engine = sa.create_engine(
-            system_db_url, pool_size=20, max_overflow=5, pool_timeout=30
-        )
         self.async_engine = create_async_engine(
             system_db_url, pool_size=20, max_overflow=5, pool_timeout=30
         )
@@ -219,7 +216,6 @@ class SystemDatabase:
         self._run_background_processes = False
         if self.notification_conn is not None:
             self.notification_conn.close()
-        self.engine.dispose()
         asyncio.run(self.async_engine.dispose())
 
     def wait_for_buffer_flush(self) -> None:
@@ -760,7 +756,7 @@ class SystemDatabase:
             try:
                 # since we're using the psycopg connection directly, we need a url without the "+pycopg" suffix
                 url = sa.URL.create(
-                    "postgresql", **self.engine.url.translate_connect_args()
+                    "postgresql", **self.async_engine.url.translate_connect_args()
                 )
                 # Listen to notifications
                 self.notification_conn = psycopg.connect(
