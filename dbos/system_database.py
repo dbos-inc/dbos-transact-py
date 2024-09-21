@@ -372,24 +372,28 @@ class SystemDatabase:
         )
         return stat
 
-    def get_workflow_status_w_outputs(
+    async def get_workflow_status_w_outputs(
         self, workflow_uuid: str
     ) -> Optional[WorkflowStatusInternal]:
-        with self.engine.begin() as c:
-            row = c.execute(
-                sa.select(
-                    SystemSchema.workflow_status.c.status,
-                    SystemSchema.workflow_status.c.name,
-                    SystemSchema.workflow_status.c.request,
-                    SystemSchema.workflow_status.c.output,
-                    SystemSchema.workflow_status.c.error,
-                    SystemSchema.workflow_status.c.config_name,
-                    SystemSchema.workflow_status.c.class_name,
-                    SystemSchema.workflow_status.c.authenticated_user,
-                    SystemSchema.workflow_status.c.authenticated_roles,
-                    SystemSchema.workflow_status.c.assumed_role,
-                    SystemSchema.workflow_status.c.queue_name,
-                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
+        async with self.async_engine.begin() as c:
+            row = (
+                await c.execute(
+                    sa.select(
+                        SystemSchema.workflow_status.c.status,
+                        SystemSchema.workflow_status.c.name,
+                        SystemSchema.workflow_status.c.request,
+                        SystemSchema.workflow_status.c.output,
+                        SystemSchema.workflow_status.c.error,
+                        SystemSchema.workflow_status.c.config_name,
+                        SystemSchema.workflow_status.c.class_name,
+                        SystemSchema.workflow_status.c.authenticated_user,
+                        SystemSchema.workflow_status.c.authenticated_roles,
+                        SystemSchema.workflow_status.c.assumed_role,
+                        SystemSchema.workflow_status.c.queue_name,
+                    ).where(
+                        SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
+                    )
+                )
             ).fetchone()
             if row is None:
                 return None
@@ -459,14 +463,14 @@ class SystemDatabase:
             raise utils.deserialize(stat["error"])
         return None
 
-    def get_workflow_info(
+    async def get_workflow_info(
         self, workflow_uuid: str, get_request: bool
     ) -> Optional[WorkflowInformation]:
-        stat = self.get_workflow_status_w_outputs(workflow_uuid)
+        stat = await self.get_workflow_status_w_outputs(workflow_uuid)
         if stat is None:
             return None
         info = cast(WorkflowInformation, stat)
-        input = self.get_workflow_inputs(workflow_uuid)
+        input = await self.get_workflow_inputs(workflow_uuid)
         if input is not None:
             info["input"] = input
         if not get_request:
@@ -496,11 +500,13 @@ class SystemDatabase:
             self._exported_temp_txn_wf_status.discard(workflow_uuid)
             self._temp_txn_wf_ids.discard(workflow_uuid)
 
-    def get_workflow_inputs(self, workflow_uuid: str) -> Optional[WorkflowInputs]:
-        with self.engine.begin() as c:
-            row = c.execute(
-                sa.select(SystemSchema.workflow_inputs.c.inputs).where(
-                    SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid
+    async def get_workflow_inputs(self, workflow_uuid: str) -> Optional[WorkflowInputs]:
+        async with self.async_engine.begin() as c:
+            row = (
+                await c.execute(
+                    sa.select(SystemSchema.workflow_inputs.c.inputs).where(
+                        SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid
+                    )
                 )
             ).fetchone()
             if row is None:

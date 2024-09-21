@@ -240,7 +240,7 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
     status = asyncio.run(dbos._sys_db.get_workflow_status(workflow_id))
     if not status:
         raise DBOSRecoveryError(workflow_id, "Workflow status not found")
-    inputs = dbos._sys_db.get_workflow_inputs(workflow_id)
+    inputs = asyncio.run(dbos._sys_db.get_workflow_inputs(workflow_id))
     if not inputs:
         raise DBOSRecoveryError(workflow_id, "Workflow inputs not found")
     wf_func = dbos._registry.workflow_info_map.get(status["name"], None)

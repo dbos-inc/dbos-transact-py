@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import threading
 import time
@@ -256,11 +257,11 @@ def test_temp_workflow(dbos: DBOS) -> None:
     wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 2
 
-    wfi1 = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    wfi1 = asyncio.run(dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False))
     assert wfi1
     assert wfi1["name"].startswith("<temp>")
 
-    wfi2 = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[1], False)
+    wfi2 = asyncio.run(dbos._sys_db.get_workflow_info(wfs.workflow_uuids[1], False))
     assert wfi2
     assert wfi2["name"].startswith("<temp>")
 
@@ -397,7 +398,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert len(wfs.workflow_uuids) == 1
     assert wfs.workflow_uuids[0] == wfuuid
 
-    wfi = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    wfi = asyncio.run(dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False))
     assert wfi
     assert wfi["name"].startswith("<temp>")
 
@@ -433,7 +434,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert wfs.workflow_uuids[0] == wfuuid
 
     dbos._sys_db.wait_for_buffer_flush()
-    wfi = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    wfi = asyncio.run(dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False))
     assert wfi
     assert wfi["name"].startswith("<temp>")
     assert wfi["status"] == "SUCCESS"
@@ -803,7 +804,7 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     assert wfs.workflow_uuids[1] == dest_uuid
     assert wfs.workflow_uuids[0] != dest_uuid
 
-    wfi = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    wfi = asyncio.run(dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False))
     assert wfi
     assert wfi["name"] == "<temp>.temp_send_workflow"
 
