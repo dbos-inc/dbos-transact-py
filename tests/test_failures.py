@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import time
 import uuid
@@ -95,7 +96,7 @@ def test_buffer_flush_errors(dbos: DBOS) -> None:
     assert res == "bob1"
 
     dbos._sys_db.wait_for_buffer_flush()
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = asyncio.run(dbos._sys_db.get_workflows(gwi))
     assert len(wfs.workflow_uuids) == 1
 
     # Crash the system database connection and make sure the buffer flush works on time.
@@ -114,5 +115,5 @@ def test_buffer_flush_errors(dbos: DBOS) -> None:
     dbos._sys_db.engine = backup_engine
 
     dbos._sys_db.wait_for_buffer_flush()
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = asyncio.run(dbos._sys_db.get_workflows(gwi))
     assert len(wfs.workflow_uuids) == 2

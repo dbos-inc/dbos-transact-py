@@ -254,7 +254,7 @@ def test_temp_workflow(dbos: DBOS) -> None:
 
     # Wait for buffers to flush
     dbos._sys_db.wait_for_buffer_flush()
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = asyncio.run(dbos._sys_db.get_workflows(gwi))
     assert len(wfs.workflow_uuids) == 2
 
     wfi1 = asyncio.run(dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False))
@@ -394,7 +394,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
         assert res == "bob1"
 
     dbos._sys_db.wait_for_buffer_flush()
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = asyncio.run(dbos._sys_db.get_workflows(gwi))
     assert len(wfs.workflow_uuids) == 1
     assert wfs.workflow_uuids[0] == wfuuid
 
@@ -429,7 +429,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == "bob1"
 
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = asyncio.run(dbos._sys_db.get_workflows(gwi))
     assert len(wfs.workflow_uuids) == 1
     assert wfs.workflow_uuids[0] == wfuuid
 
@@ -799,7 +799,7 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     dbos.send(dest_uuid, "testsend1", "testtopic")
     assert handle.get_result() == "testsend1"
 
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = asyncio.run(dbos._sys_db.get_workflows(gwi))
     assert len(wfs.workflow_uuids) == 2
     assert wfs.workflow_uuids[1] == dest_uuid
     assert wfs.workflow_uuids[0] != dest_uuid

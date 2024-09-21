@@ -514,7 +514,7 @@ class SystemDatabase:
             inputs: WorkflowInputs = utils.deserialize(row[0])
             return inputs
 
-    def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
+    async def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
         query = sa.select(SystemSchema.workflow_status.c.workflow_uuid).order_by(
             SystemSchema.workflow_status.c.created_at.desc()
         )
@@ -546,8 +546,8 @@ class SystemDatabase:
         if input.limit:
             query = query.limit(input.limit)
 
-        with self.engine.begin() as c:
-            rows = c.execute(query)
+        async with self.async_engine.begin() as c:
+            rows = await c.execute(query)
         workflow_uuids = [row[0] for row in rows]
 
         return GetWorkflowsOutput(workflow_uuids)

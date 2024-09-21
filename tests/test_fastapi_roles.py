@@ -1,3 +1,4 @@
+import asyncio
 from typing import Awaitable, Callable, List, Optional, Tuple
 
 import jwt
@@ -141,7 +142,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     dbos._sys_db.wait_for_buffer_flush()
     gwi = GetWorkflowsInput()
     gwi.authenticated_user = "user1"
-    wfl = dbos._sys_db.get_workflows(gwi)
+    wfl = asyncio.run(dbos._sys_db.get_workflows(gwi))
     assert len(wfl.workflow_uuids) == 1
     wfs = DBOS.get_workflow_status(wfl.workflow_uuids[0])
     assert wfs
@@ -151,7 +152,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     # Make sure predicate is actually applied
     gwi.authenticated_user = "user2"
-    wfl = dbos._sys_db.get_workflows(gwi)
+    wfl = asyncio.run(dbos._sys_db.get_workflows(gwi))
     assert len(wfl.workflow_uuids) == 0
 
     response = client.get("/error")
