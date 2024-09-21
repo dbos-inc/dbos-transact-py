@@ -250,7 +250,7 @@ def test_temp_workflow(dbos: DBOS) -> None:
 
     # Flush workflow inputs buffer shouldn't fail due to foreign key violation.
     # It should properly skip the transaction inputs.
-    dbos._sys_db._flush_workflow_inputs_buffer()
+    asyncio.run(dbos._sys_db._flush_workflow_inputs_buffer())
 
     # Wait for buffers to flush
     dbos._sys_db.wait_for_buffer_flush()

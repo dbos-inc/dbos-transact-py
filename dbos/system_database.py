@@ -478,8 +478,8 @@ class SystemDatabase:
 
         return info
 
-    def update_workflow_inputs(
-        self, workflow_uuid: str, inputs: str, conn: Optional[sa.Connection] = None
+    async def update_workflow_inputs(
+        self, workflow_uuid: str, inputs: str, conn: Optional[AsyncConnection] = None
     ) -> None:
         cmd = (
             pg.insert(SystemSchema.workflow_inputs)
@@ -490,10 +490,10 @@ class SystemDatabase:
             .on_conflict_do_nothing()
         )
         if conn is not None:
-            conn.execute(cmd)
+            await conn.execute(cmd)
         else:
-            with self.engine.begin() as c:
-                c.execute(cmd)
+            async with self.async_engine.begin() as c:
+                await c.execute(cmd)
 
         if workflow_uuid in self._temp_txn_wf_ids:
             # Clean up the single-transaction tracking sets
@@ -966,14 +966,14 @@ class SystemDatabase:
                     self._workflow_status_buffer.update(exported_status)
                     break
 
-    def _flush_workflow_inputs_buffer(self) -> None:
+    async def _flush_workflow_inputs_buffer(self) -> None:
         """Export the workflow inputs buffer to the database, up to the batch size."""
         if len(self._workflow_inputs_buffer) == 0:
             return
 
         # Record exported inputs so far, and add them back on errors.
         exported_inputs: Dict[str, str] = {}
-        with self.engine.begin() as c:
+        async with self.async_engine.begin() as c:
             exported = 0
             input_iter = iter(list(self._workflow_inputs_buffer))
             wf_id: Optional[str] = None
@@ -989,11 +989,11 @@ class SystemDatabase:
                     continue
                 exported_inputs[wf_id] = inputs
                 try:
-                    self.update_workflow_inputs(wf_id, inputs, conn=c)
+                    await self.update_workflow_inputs(wf_id, inputs, conn=c)
                     exported += 1
                 except Exception as e:
                     dbos_logger.error(f"Error while flushing inputs buffer: {e}")
-                    c.rollback()
+                    await c.rollback()
                     # Add the exported inputs back to the buffer, so they can be retried next time
                     self._workflow_inputs_buffer.update(exported_inputs)
                     break
@@ -1005,7 +1005,7 @@ class SystemDatabase:
                 self._is_flushing_status_buffer = True
                 # Must flush the status buffer first, as the inputs table has a foreign key constraint on the status table.
                 self._flush_workflow_status_buffer()
-                self._flush_workflow_inputs_buffer()
+                asyncio.run(self._flush_workflow_inputs_buffer())
                 self._is_flushing_status_buffer = False
                 if self._is_buffers_empty:
                     # Only sleep if both buffers are empty
