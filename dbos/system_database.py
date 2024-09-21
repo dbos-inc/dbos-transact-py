@@ -220,7 +220,7 @@ class SystemDatabase:
         if self.notification_conn is not None:
             self.notification_conn.close()
         self.engine.dispose()
-        # asyncio.run(self.async_engine.dispose())
+        asyncio.run(self.async_engine.dispose())
 
     def wait_for_buffer_flush(self) -> None:
         # Wait until the buffers are flushed.
