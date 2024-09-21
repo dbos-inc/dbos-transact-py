@@ -417,18 +417,23 @@ class SystemDatabase:
             }
             return status
 
-    def await_workflow_result_internal(self, workflow_uuid: str) -> dict[str, Any]:
+    async def await_workflow_result_internal(
+        self, workflow_uuid: str
+    ) -> dict[str, Any]:
         polling_interval_secs: float = 1.000
 
         while True:
-            with self.engine.begin() as c:
-                row = c.execute(
-                    sa.select(
-                        SystemSchema.workflow_status.c.status,
-                        SystemSchema.workflow_status.c.output,
-                        SystemSchema.workflow_status.c.error,
-                    ).where(
-                        SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
+            async with self.async_engine.begin() as c:
+                row = (
+                    await c.execute(
+                        sa.select(
+                            SystemSchema.workflow_status.c.status,
+                            SystemSchema.workflow_status.c.output,
+                            SystemSchema.workflow_status.c.error,
+                        ).where(
+                            SystemSchema.workflow_status.c.workflow_uuid
+                            == workflow_uuid
+                        )
                     )
                 ).fetchone()
                 if row is not None:
@@ -452,8 +457,8 @@ class SystemDatabase:
 
             time.sleep(polling_interval_secs)
 
-    def await_workflow_result(self, workflow_uuid: str) -> Any:
-        stat = self.await_workflow_result_internal(workflow_uuid)
+    async def await_workflow_result(self, workflow_uuid: str) -> Any:
+        stat = await self.await_workflow_result_internal(workflow_uuid)
         if not stat:
             return None
         status: str = stat["status"]

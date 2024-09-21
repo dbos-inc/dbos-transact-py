@@ -110,7 +110,7 @@ class _WorkflowHandlePolling(Generic[R]):
         return self.workflow_id
 
     def get_result(self) -> R:
-        res: R = self.dbos._sys_db.await_workflow_result(self.workflow_id)
+        res: R = asyncio.run(self.dbos._sys_db.await_workflow_result(self.workflow_id))
         return res
 
     def get_status(self) -> "WorkflowStatus":
