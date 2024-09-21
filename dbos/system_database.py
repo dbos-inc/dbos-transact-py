@@ -355,20 +355,22 @@ class SystemDatabase:
     def get_workflow_status_within_wf(
         self, workflow_uuid: str, calling_wf: str, calling_wf_fn: int
     ) -> Optional[WorkflowStatusInternal]:
-        res = self.check_operation_execution(calling_wf, calling_wf_fn)
+        res = asyncio.run(self.check_operation_execution(calling_wf, calling_wf_fn))
         if res is not None:
             if res["output"]:
                 resstat: WorkflowStatusInternal = utils.deserialize(res["output"])
                 return resstat
             return None
         stat = asyncio.run(self.get_workflow_status(workflow_uuid))
-        self.record_operation_result(
-            {
-                "workflow_uuid": calling_wf,
-                "function_id": calling_wf_fn,
-                "output": utils.serialize(stat),
-                "error": None,
-            }
+        asyncio.run(
+            self.record_operation_result(
+                {
+                    "workflow_uuid": calling_wf,
+                    "function_id": calling_wf_fn,
+                    "output": utils.serialize(stat),
+                    "error": None,
+                }
+            )
         )
         return stat
 
@@ -565,8 +567,8 @@ class SystemDatabase:
             ).fetchall()
             return [row[0] for row in rows]
 
-    def record_operation_result(
-        self, result: OperationResultInternal, conn: Optional[sa.Connection] = None
+    async def record_operation_result(
+        self, result: OperationResultInternal, conn: Optional[AsyncConnection] = None
     ) -> None:
         error = result["error"]
         output = result["output"]
@@ -579,17 +581,20 @@ class SystemDatabase:
         )
         try:
             if conn is not None:
-                conn.execute(sql)
+                await conn.execute(sql)
             else:
-                with self.engine.begin() as c:
-                    c.execute(sql)
+                async with self.async_engine.begin() as c:
+                    await c.execute(sql)
         except DBAPIError as dbapi_error:
             if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
             raise
 
-    def check_operation_execution(
-        self, workflow_uuid: str, function_id: int, conn: Optional[sa.Connection] = None
+    async def check_operation_execution(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        conn: Optional[AsyncConnection] = None,
     ) -> Optional[RecordedResult]:
         sql = sa.select(
             SystemSchema.operation_outputs.c.output,
@@ -602,10 +607,10 @@ class SystemDatabase:
         # If in a transaction, use the provided connection
         rows: Sequence[Any]
         if conn is not None:
-            rows = conn.execute(sql).all()
+            rows = (await conn.execute(sql)).all()
         else:
-            with self.engine.begin() as c:
-                rows = c.execute(sql).all()
+            async with self.async_engine.begin() as c:
+                rows = (await c.execute(sql)).all()
         if len(rows) == 0:
             return None
         result: RecordedResult = {
@@ -614,7 +619,7 @@ class SystemDatabase:
         }
         return result
 
-    def send(
+    async def send(
         self,
         workflow_uuid: str,
         function_id: int,
@@ -623,15 +628,15 @@ class SystemDatabase:
         topic: Optional[str] = None,
     ) -> None:
         topic = topic if topic is not None else dbos_null_topic
-        with self.engine.begin() as c:
-            recorded_output = self.check_operation_execution(
+        async with self.async_engine.begin() as c:
+            recorded_output = await self.check_operation_execution(
                 workflow_uuid, function_id, conn=c
             )
             if recorded_output is not None:
                 return  # Already sent before
 
             try:
-                c.execute(
+                await c.execute(
                     pg.insert(SystemSchema.notifications).values(
                         destination_uuid=destination_uuid,
                         topic=topic,
@@ -649,9 +654,9 @@ class SystemDatabase:
                 "output": None,
                 "error": None,
             }
-            self.record_operation_result(output, conn=c)
+            await self.record_operation_result(output, conn=c)
 
-    def recv(
+    async def recv(
         self,
         workflow_uuid: str,
         function_id: int,
@@ -662,7 +667,9 @@ class SystemDatabase:
         topic = topic if topic is not None else dbos_null_topic
 
         # First, check for previous executions.
-        recorded_output = self.check_operation_execution(workflow_uuid, function_id)
+        recorded_output = await self.check_operation_execution(
+            workflow_uuid, function_id
+        )
         if recorded_output is not None:
             if recorded_output["output"] is not None:
                 return utils.deserialize(recorded_output["output"])
@@ -678,20 +685,22 @@ class SystemDatabase:
 
         # Check if the key is already in the database. If not, wait for the notification.
         init_recv: Sequence[Any]
-        with self.engine.begin() as c:
-            init_recv = c.execute(
-                sa.select(
-                    SystemSchema.notifications.c.topic,
-                ).where(
-                    SystemSchema.notifications.c.destination_uuid == workflow_uuid,
-                    SystemSchema.notifications.c.topic == topic,
+        async with self.async_engine.begin() as c:
+            init_recv = (
+                await c.execute(
+                    sa.select(
+                        SystemSchema.notifications.c.topic,
+                    ).where(
+                        SystemSchema.notifications.c.destination_uuid == workflow_uuid,
+                        SystemSchema.notifications.c.topic == topic,
+                    )
                 )
             ).fetchall()
 
         if len(init_recv) == 0:
             # Wait for the notification
             # Support OAOO sleep
-            actual_timeout = self.sleep(
+            actual_timeout = await self.sleep(
                 workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
             )
             condition.wait(timeout=actual_timeout)
@@ -699,7 +708,7 @@ class SystemDatabase:
         self.notifications_map.pop(payload)
 
         # Transactionally consume and return the message if it's in the database, otherwise return null.
-        with self.engine.begin() as c:
+        async with self.async_engine.begin() as c:
             oldest_entry_cte = (
                 sa.select(
                     SystemSchema.notifications.c.destination_uuid,
@@ -726,11 +735,11 @@ class SystemDatabase:
                 )
                 .returning(SystemSchema.notifications.c.message)
             )
-            rows = c.execute(delete_stmt).fetchall()
+            rows = (await c.execute(delete_stmt)).fetchall()
             message: Any = None
             if len(rows) > 0:
                 message = utils.deserialize(rows[0][0])
-            self.record_operation_result(
+            await self.record_operation_result(
                 {
                     "workflow_uuid": workflow_uuid,
                     "function_id": function_id,
@@ -800,14 +809,16 @@ class SystemDatabase:
                 if self.notification_conn is not None:
                     self.notification_conn.close()
 
-    def sleep(
+    async def sleep(
         self,
         workflow_uuid: str,
         function_id: int,
         seconds: float,
         skip_sleep: bool = False,
     ) -> float:
-        recorded_output = self.check_operation_execution(workflow_uuid, function_id)
+        recorded_output = await self.check_operation_execution(
+            workflow_uuid, function_id
+        )
         end_time: float
         if recorded_output is not None:
             assert recorded_output["output"] is not None, "no recorded end time"
@@ -815,7 +826,7 @@ class SystemDatabase:
         else:
             end_time = time.time() + seconds
             try:
-                self.record_operation_result(
+                await self.record_operation_result(
                     {
                         "workflow_uuid": workflow_uuid,
                         "function_id": function_id,
@@ -830,21 +841,21 @@ class SystemDatabase:
             time.sleep(duration)
         return duration
 
-    def set_event(
+    async def set_event(
         self,
         workflow_uuid: str,
         function_id: int,
         key: str,
         message: Any,
     ) -> None:
-        with self.engine.begin() as c:
-            recorded_output = self.check_operation_execution(
+        async with self.async_engine.begin() as c:
+            recorded_output = await self.check_operation_execution(
                 workflow_uuid, function_id, conn=c
             )
             if recorded_output is not None:
                 return  # Already sent before
 
-            c.execute(
+            await c.execute(
                 pg.insert(SystemSchema.workflow_events)
                 .values(
                     workflow_uuid=workflow_uuid,
@@ -862,9 +873,9 @@ class SystemDatabase:
                 "output": None,
                 "error": None,
             }
-            self.record_operation_result(output, conn=c)
+            await self.record_operation_result(output, conn=c)
 
-    def get_event(
+    async def get_event(
         self,
         target_uuid: str,
         key: str,
@@ -879,7 +890,7 @@ class SystemDatabase:
         )
         # Check for previous executions only if it's in a workflow
         if caller_ctx is not None:
-            recorded_output = self.check_operation_execution(
+            recorded_output = await self.check_operation_execution(
                 caller_ctx["workflow_uuid"], caller_ctx["function_id"]
             )
             if recorded_output is not None:
@@ -895,8 +906,8 @@ class SystemDatabase:
 
         # Check if the key is already in the database. If not, wait for the notification.
         init_recv: Sequence[Any]
-        with self.engine.begin() as c:
-            init_recv = c.execute(get_sql).fetchall()
+        async with self.async_engine.begin() as c:
+            init_recv = (await c.execute(get_sql)).fetchall()
 
         value: Any = None
         if len(init_recv) > 0:
@@ -906,7 +917,7 @@ class SystemDatabase:
             actual_timeout = timeout_seconds
             if caller_ctx is not None:
                 # Support OAOO sleep for workflows
-                actual_timeout = self.sleep(
+                actual_timeout = await self.sleep(
                     caller_ctx["workflow_uuid"],
                     caller_ctx["timeout_function_id"],
                     timeout_seconds,
@@ -915,8 +926,8 @@ class SystemDatabase:
             condition.wait(timeout=actual_timeout)
 
             # Read the value from the database
-            with self.engine.begin() as c:
-                final_recv = c.execute(get_sql).fetchall()
+            async with self.async_engine.begin() as c:
+                final_recv = (await c.execute(get_sql)).fetchall()
                 if len(final_recv) > 0:
                     value = utils.deserialize(final_recv[0][0])
         condition.release()
@@ -924,7 +935,7 @@ class SystemDatabase:
 
         # Record the output if it's in a workflow
         if caller_ctx is not None:
-            self.record_operation_result(
+            await self.record_operation_result(
                 {
                     "workflow_uuid": caller_ctx["workflow_uuid"],
                     "function_id": caller_ctx["function_id"],

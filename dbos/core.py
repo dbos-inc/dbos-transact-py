@@ -595,8 +595,10 @@ def _step(
                     "output": None,
                     "error": None,
                 }
-                recorded_output = dbos._sys_db.check_operation_execution(
-                    ctx.workflow_id, ctx.function_id
+                recorded_output = asyncio.run(
+                    dbos._sys_db.check_operation_execution(
+                        ctx.workflow_id, ctx.function_id
+                    )
                 )
                 if recorded_output:
                     if recorded_output["error"] is not None:
@@ -642,7 +644,7 @@ def _step(
                 step_output["error"] = (
                     utils.serialize(error) if error is not None else None
                 )
-                dbos._sys_db.record_operation_result(step_output)
+                asyncio.run(dbos._sys_db.record_operation_result(step_output))
 
                 if error is not None:
                     raise error
@@ -692,12 +694,14 @@ def _send(
             "name": "send",
         }
         with EnterDBOSStep(attributes) as ctx:
-            dbos._sys_db.send(
-                ctx.workflow_id,
-                ctx.curr_step_function_id,
-                destination_id,
-                message,
-                topic,
+            asyncio.run(
+                dbos._sys_db.send(
+                    ctx.workflow_id,
+                    ctx.curr_step_function_id,
+                    destination_id,
+                    message,
+                    topic,
+                )
             )
 
     ctx = get_local_dbos_context()
@@ -723,12 +727,14 @@ def _recv(
         with EnterDBOSStep(attributes) as ctx:
             ctx.function_id += 1  # Reserve for the sleep
             timeout_function_id = ctx.function_id
-            return dbos._sys_db.recv(
-                ctx.workflow_id,
-                ctx.curr_step_function_id,
-                timeout_function_id,
-                topic,
-                timeout_seconds,
+            return asyncio.run(
+                dbos._sys_db.recv(
+                    ctx.workflow_id,
+                    ctx.curr_step_function_id,
+                    timeout_function_id,
+                    topic,
+                    timeout_seconds,
+                )
             )
     else:
         # Cannot call it from outside of a workflow
@@ -746,8 +752,10 @@ def _set_event(dbos: "DBOS", key: str, value: Any) -> None:
             "name": "set_event",
         }
         with EnterDBOSStep(attributes) as ctx:
-            dbos._sys_db.set_event(
-                ctx.workflow_id, ctx.curr_step_function_id, key, value
+            asyncio.run(
+                dbos._sys_db.set_event(
+                    ctx.workflow_id, ctx.curr_step_function_id, key, value
+                )
             )
     else:
         # Cannot call it from outside of a workflow
@@ -774,7 +782,9 @@ def _get_event(
                 "function_id": ctx.curr_step_function_id,
                 "timeout_function_id": timeout_function_id,
             }
-            return dbos._sys_db.get_event(workflow_id, key, timeout_seconds, caller_ctx)
+            return asyncio.run(
+                dbos._sys_db.get_event(workflow_id, key, timeout_seconds, caller_ctx)
+            )
     else:
         # Directly call it outside of a workflow
-        return dbos._sys_db.get_event(workflow_id, key, timeout_seconds)
+        return asyncio.run(dbos._sys_db.get_event(workflow_id, key, timeout_seconds))
