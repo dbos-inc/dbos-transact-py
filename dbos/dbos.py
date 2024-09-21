@@ -532,7 +532,9 @@ class DBOS:
                 workflow_id, ctx.workflow_id, ctx.function_id
             )
         else:
-            stat = _get_dbos_instance()._sys_db.get_workflow_status(workflow_id)
+            stat = asyncio.run(
+                _get_dbos_instance()._sys_db.get_workflow_status(workflow_id)
+            )
         if stat is None:
             return None
 

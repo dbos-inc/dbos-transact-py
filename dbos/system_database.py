@@ -282,13 +282,13 @@ class SystemDatabase:
         if status["workflow_uuid"] in self._temp_txn_wf_ids:
             self._exported_temp_txn_wf_status.add(status["workflow_uuid"])
 
-    def set_workflow_status(
+    async def set_workflow_status(
         self,
         workflow_uuid: str,
         status: WorkflowStatusString,
         reset_recovery_attempts: bool,
     ) -> None:
-        with self.engine.begin() as c:
+        async with self.async_engine.begin() as c:
             stmt = (
                 sa.update(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid)
@@ -296,7 +296,7 @@ class SystemDatabase:
                     status=status,
                 )
             )
-            c.execute(stmt)
+            await c.execute(stmt)
 
             if reset_recovery_attempts:
                 stmt = (
@@ -306,25 +306,29 @@ class SystemDatabase:
                     )
                     .values(recovery_attempts=reset_recovery_attempts)
                 )
-                c.execute(stmt)
+                await c.execute(stmt)
 
-    def get_workflow_status(
+    async def get_workflow_status(
         self, workflow_uuid: str
     ) -> Optional[WorkflowStatusInternal]:
-        with self.engine.begin() as c:
-            row = c.execute(
-                sa.select(
-                    SystemSchema.workflow_status.c.status,
-                    SystemSchema.workflow_status.c.name,
-                    SystemSchema.workflow_status.c.request,
-                    SystemSchema.workflow_status.c.recovery_attempts,
-                    SystemSchema.workflow_status.c.config_name,
-                    SystemSchema.workflow_status.c.class_name,
-                    SystemSchema.workflow_status.c.authenticated_user,
-                    SystemSchema.workflow_status.c.authenticated_roles,
-                    SystemSchema.workflow_status.c.assumed_role,
-                    SystemSchema.workflow_status.c.queue_name,
-                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
+        async with self.async_engine.begin() as c:
+            row = (
+                await c.execute(
+                    sa.select(
+                        SystemSchema.workflow_status.c.status,
+                        SystemSchema.workflow_status.c.name,
+                        SystemSchema.workflow_status.c.request,
+                        SystemSchema.workflow_status.c.recovery_attempts,
+                        SystemSchema.workflow_status.c.config_name,
+                        SystemSchema.workflow_status.c.class_name,
+                        SystemSchema.workflow_status.c.authenticated_user,
+                        SystemSchema.workflow_status.c.authenticated_roles,
+                        SystemSchema.workflow_status.c.assumed_role,
+                        SystemSchema.workflow_status.c.queue_name,
+                    ).where(
+                        SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
+                    )
+                )
             ).fetchone()
             if row is None:
                 return None
@@ -357,7 +361,7 @@ class SystemDatabase:
                 resstat: WorkflowStatusInternal = utils.deserialize(res["output"])
                 return resstat
             return None
-        stat = self.get_workflow_status(workflow_uuid)
+        stat = asyncio.run(self.get_workflow_status(workflow_uuid))
         self.record_operation_result(
             {
                 "workflow_uuid": calling_wf,
