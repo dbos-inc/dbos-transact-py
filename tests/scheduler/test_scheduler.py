@@ -1,3 +1,4 @@
+import asyncio
 import time
 from datetime import datetime
 
@@ -83,25 +84,27 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
         event.set()
 
     dbos._sys_db.wait_for_buffer_flush()
-    dbos._sys_db.update_workflow_status(
-        {
-            "workflow_uuid": workflow_id,
-            "status": "PENDING",
-            "name": test_workflow.__qualname__,
-            "class_name": None,
-            "config_name": None,
-            "output": None,
-            "error": None,
-            "executor_id": None,
-            "app_id": None,
-            "app_version": None,
-            "request": None,
-            "recovery_attempts": None,
-            "authenticated_user": None,
-            "authenticated_roles": None,
-            "assumed_role": None,
-            "queue_name": None,
-        }
+    asyncio.run(
+        dbos._sys_db.update_workflow_status(
+            {
+                "workflow_uuid": workflow_id,
+                "status": "PENDING",
+                "name": test_workflow.__qualname__,
+                "class_name": None,
+                "config_name": None,
+                "output": None,
+                "error": None,
+                "executor_id": None,
+                "app_id": None,
+                "app_version": None,
+                "request": None,
+                "recovery_attempts": None,
+                "authenticated_user": None,
+                "authenticated_roles": None,
+                "assumed_role": None,
+                "queue_name": None,
+            }
+        )
     )
 
     workflow_handles = DBOS.recover_pending_workflows()

@@ -168,7 +168,7 @@ def _init_workflow(
         # Synchronously record the status and inputs for workflows and single-step workflows
         # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
         # TODO: Make this transactional (and with the queue step below)
-        dbos._sys_db.update_workflow_status(status, False, ctx.in_recovery)
+        asyncio.run(dbos._sys_db.update_workflow_status(status, False, ctx.in_recovery))
         asyncio.run(dbos._sys_db.update_workflow_inputs(wfid, utils.serialize(inputs)))
     else:
         # Buffer the inputs for single-transaction workflows, but don't buffer the status
@@ -207,7 +207,7 @@ def _execute_workflow(
         status["error"] = utils.serialize(error)
         if status["queue_name"] is not None:
             asyncio.run(dbos._sys_db.remove_from_queue(status["workflow_uuid"]))
-        dbos._sys_db.update_workflow_status(status)
+        asyncio.run(dbos._sys_db.update_workflow_status(status))
         raise
 
     return output

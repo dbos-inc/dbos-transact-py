@@ -1,3 +1,4 @@
+import asyncio
 import os
 import time
 import uuid
@@ -78,25 +79,27 @@ def test_admin_recovery(dbos: DBOS) -> None:
 
     dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
-    dbos._sys_db.update_workflow_status(
-        {
-            "workflow_uuid": wfuuid,
-            "status": "PENDING",
-            "name": test_workflow.__qualname__,
-            "class_name": None,
-            "config_name": None,
-            "output": None,
-            "error": None,
-            "executor_id": None,
-            "app_id": None,
-            "app_version": None,
-            "request": None,
-            "recovery_attempts": None,
-            "authenticated_user": None,
-            "authenticated_roles": None,
-            "assumed_role": None,
-            "queue_name": None,
-        }
+    asyncio.run(
+        dbos._sys_db.update_workflow_status(
+            {
+                "workflow_uuid": wfuuid,
+                "status": "PENDING",
+                "name": test_workflow.__qualname__,
+                "class_name": None,
+                "config_name": None,
+                "output": None,
+                "error": None,
+                "executor_id": None,
+                "app_id": None,
+                "app_version": None,
+                "request": None,
+                "recovery_attempts": None,
+                "authenticated_user": None,
+                "authenticated_roles": None,
+                "assumed_role": None,
+                "queue_name": None,
+            }
+        )
     )
     status = dbos.get_workflow_status(wfuuid)
     assert (
