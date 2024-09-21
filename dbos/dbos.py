@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import atexit
 import json
 import os
@@ -348,7 +349,7 @@ class DBOS:
         self._admin_server_field = AdminServer(dbos=self)
 
         if not os.environ.get("DBOS__VMID"):
-            workflow_ids = self._sys_db.get_pending_workflows("local")
+            workflow_ids = asyncio.run(self._sys_db.get_pending_workflows("local"))
             self._executor.submit(_startup_recovery_thread, self, workflow_ids)
 
         # Listen to notifications

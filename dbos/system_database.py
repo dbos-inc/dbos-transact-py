@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import os
 import threading
@@ -11,6 +12,7 @@ import sqlalchemy.dialects.postgresql as pg
 from alembic import command
 from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 import dbos.utils as utils
 from dbos.error import DBOSNonExistentWorkflowError, DBOSWorkflowConflictIDError
@@ -177,11 +179,6 @@ class SystemDatabase:
             database=sysdb_name,
         )
 
-        # Create a connection pool for the system database
-        self.engine = sa.create_engine(
-            system_db_url, pool_size=20, max_overflow=5, pool_timeout=30
-        )
-
         # Run a schema migration for the system database
         migration_dir = os.path.join(
             os.path.dirname(os.path.realpath(__file__)), "migrations"
@@ -189,7 +186,7 @@ class SystemDatabase:
         alembic_cfg = Config()
         alembic_cfg.set_main_option("script_location", migration_dir)
         alembic_cfg.set_main_option(
-            "sqlalchemy.url", self.engine.url.render_as_string(hide_password=False)
+            "sqlalchemy.url", system_db_url.render_as_string(hide_password=False)
         )
         command.upgrade(alembic_cfg, "head")
 
@@ -208,6 +205,14 @@ class SystemDatabase:
         # Now we can run background processes
         self._run_background_processes = True
 
+        # Create a connection pool for the system database
+        self.engine = sa.create_engine(
+            system_db_url, pool_size=20, max_overflow=5, pool_timeout=30
+        )
+        self.async_engine = create_async_engine(
+            system_db_url, pool_size=20, max_overflow=5, pool_timeout=30
+        )
+
     # Destroy the pool when finished
     def destroy(self) -> None:
         self.wait_for_buffer_flush()
@@ -215,6 +220,7 @@ class SystemDatabase:
         if self.notification_conn is not None:
             self.notification_conn.close()
         self.engine.dispose()
+        # asyncio.run(self.async_engine.dispose())
 
     def wait_for_buffer_flush(self) -> None:
         # Wait until the buffers are flushed.
@@ -292,8 +298,7 @@ class SystemDatabase:
             )
             c.execute(stmt)
 
-        if reset_recovery_attempts:
-            with self.engine.begin() as c:
+            if reset_recovery_attempts:
                 stmt = (
                     sa.update(SystemSchema.workflow_status)
                     .where(
@@ -537,13 +542,15 @@ class SystemDatabase:
 
         return GetWorkflowsOutput(workflow_uuids)
 
-    def get_pending_workflows(self, executor_id: str) -> list[str]:
-        with self.engine.begin() as c:
-            rows = c.execute(
-                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
-                    SystemSchema.workflow_status.c.status
-                    == WorkflowStatusString.PENDING.value,
-                    SystemSchema.workflow_status.c.executor_id == executor_id,
+    async def get_pending_workflows(self, executor_id: str) -> list[str]:
+        async with self.async_engine.begin() as c:
+            rows = (
+                await c.execute(
+                    sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                        SystemSchema.workflow_status.c.status
+                        == WorkflowStatusString.PENDING.value,
+                        SystemSchema.workflow_status.c.executor_id == executor_id,
+                    )
                 )
             ).fetchall()
             return [row[0] for row in rows]
@@ -1013,9 +1020,9 @@ class SystemDatabase:
             and len(self._workflow_inputs_buffer) == 0
         )
 
-    def enqueue(self, workflow_id: str, queue_name: str) -> None:
-        with self.engine.begin() as c:
-            c.execute(
+    async def enqueue(self, workflow_id: str, queue_name: str) -> None:
+        async with self.async_engine.begin() as c:
+            await c.execute(
                 pg.insert(SystemSchema.job_queue)
                 .values(
                     workflow_uuid=workflow_id,
@@ -1024,10 +1031,10 @@ class SystemDatabase:
                 .on_conflict_do_nothing()
             )
 
-    def start_queued_workflows(
+    async def start_queued_workflows(
         self, queue_name: str, concurrency: Optional[int]
     ) -> List[str]:
-        with self.engine.begin() as c:
+        async with self.async_engine.begin() as c:
             query = sa.select(SystemSchema.job_queue.c.workflow_uuid).where(
                 SystemSchema.job_queue.c.queue_name == queue_name
             )
@@ -1035,11 +1042,11 @@ class SystemDatabase:
                 query = query.order_by(
                     SystemSchema.job_queue.c.created_at_epoch_ms.asc()
                 ).limit(concurrency)
-            rows = c.execute(query).fetchall()
+            rows = (await c.execute(query)).fetchall()
             dequeued_ids: List[str] = [row[0] for row in rows]
             ret_ids = []
             for id in dequeued_ids:
-                result = c.execute(
+                result = await c.execute(
                     SystemSchema.workflow_status.update()
                     .where(SystemSchema.workflow_status.c.workflow_uuid == id)
                     .where(
@@ -1052,9 +1059,9 @@ class SystemDatabase:
                     ret_ids.append(id)
             return ret_ids
 
-    def remove_from_queue(self, workflow_id: str) -> None:
-        with self.engine.begin() as c:
-            c.execute(
+    async def remove_from_queue(self, workflow_id: str) -> None:
+        async with self.async_engine.begin() as c:
+            await c.execute(
                 sa.delete(SystemSchema.job_queue).where(
                     SystemSchema.job_queue.c.workflow_uuid == workflow_id
                 )
