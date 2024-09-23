@@ -193,7 +193,7 @@ def _execute_workflow(
         return output
     except Exception as error:
         status["status"] = "ERROR"
-        status["error"] = utils.serialize_error(error)
+        status["error"] = utils.serialize_exception(error)
         if status["queue_name"] is not None:
             dbos._sys_db.remove_from_queue(status["workflow_uuid"])
         dbos._sys_db.update_workflow_status(status)
@@ -519,7 +519,7 @@ def _transaction(
                         except Exception as error:
                             # Don't record the error if it was already recorded
                             if not has_recorded_error:
-                                txn_output["error"] = utils.serialize_error(error)
+                                txn_output["error"] = utils.serialize_exception(error)
                                 dbos._app_db.record_transaction_error(txn_output)
                             raise
             return output
@@ -633,7 +633,7 @@ def _step(
                                 )
 
                 step_output["error"] = (
-                    utils.serialize_error(error) if error is not None else None
+                    utils.serialize_exception(error) if error is not None else None
                 )
                 dbos._sys_db.record_operation_result(step_output)
 

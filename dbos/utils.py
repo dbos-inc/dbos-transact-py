@@ -36,7 +36,7 @@ def serialize_args(data: WorkflowInputs) -> str:
     return encoded_data
 
 
-def serialize_error(data: Exception) -> str:
+def serialize_exception(data: Exception) -> str:
     """Serialize an Exception object to a JSON string using jsonpickle."""
     encoded_data: str = jsonpickle.encode(data, unpicklable=True)
     return encoded_data
