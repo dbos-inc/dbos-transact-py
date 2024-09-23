@@ -1,7 +1,7 @@
 import random
 import threading
-import uuid
-from typing import Any, List, NoReturn
+import time
+from typing import NoReturn
 
 import pytest
 from confluent_kafka import KafkaError, Producer
@@ -31,6 +31,9 @@ from dbos import DBOS, KafkaMessage
 #         KAFKA_CFG_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
 
 
+NUM_EVENTS = 3
+
+
 def send_test_messages(server: str, topic: str) -> bool:
 
     try:
@@ -40,7 +43,10 @@ def send_test_messages(server: str, topic: str) -> bool:
 
         producer = Producer({"bootstrap.servers": server, "error_cb": on_error})
 
-        producer.produce(topic, key=f"test message key", value=f"test message value")
+        for i in range(NUM_EVENTS):
+            producer.produce(
+                topic, key=f"test message key {i}", value=f"test message value {i}"
+            )
 
         producer.poll(10)
         producer.flush(10)
@@ -53,13 +59,12 @@ def send_test_messages(server: str, topic: str) -> bool:
 
 def test_kafka(dbos: DBOS) -> None:
     event = threading.Event()
+    kafka_count = 0
     server = "localhost:9092"
     topic = f"dbos-kafka-{random.randrange(1_000_000_000)}"
 
     if not send_test_messages(server, topic):
         pytest.skip("Kafka not available")
-
-    messages: List[KafkaMessage] = []
 
     @DBOS.kafka_consumer(
         {
@@ -71,10 +76,47 @@ def test_kafka(dbos: DBOS) -> None:
     )
     @DBOS.workflow()
     def test_kafka_workflow(msg: KafkaMessage) -> None:
+        nonlocal kafka_count
+        kafka_count += 1
+        assert b"test message key" in msg.key  # type: ignore
+        assert b"test message value" in msg.value  # type: ignore
         print(msg)
-        messages.append(msg)
-        event.set()
+        if kafka_count == 3:
+            event.set()
 
     wait = event.wait(timeout=10)
     assert wait
-    assert len(messages) > 0
+    assert kafka_count == 3
+
+
+def test_kafka_in_order(dbos: DBOS) -> None:
+    event = threading.Event()
+    kafka_count = 0
+    server = "localhost:9092"
+    topic = f"dbos-kafka-{random.randrange(1_000_000_000)}"
+
+    if not send_test_messages(server, topic):
+        pytest.skip("Kafka not available")
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": "dbos-test",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+        in_order=True,
+    )
+    @DBOS.workflow()
+    def test_kafka_workflow(msg: KafkaMessage) -> None:
+        time.sleep(random.uniform(0, 2))
+        nonlocal kafka_count
+        kafka_count += 1
+        assert f"test message key {kafka_count - 1}".encode() == msg.key
+        print(msg)
+        if kafka_count == 3:
+            event.set()
+
+    wait = event.wait(timeout=10)
+    assert wait
+    assert kafka_count == 3

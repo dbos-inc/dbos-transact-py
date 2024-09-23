@@ -52,6 +52,7 @@ from dbos.system_database import (
     GetEventWorkflowContext,
     OperationResultInternal,
     WorkflowStatusInternal,
+    WorkflowStatusString,
 )
 from dbos.utils import WorkflowInputs
 
@@ -116,6 +117,7 @@ def _init_workflow(
     class_name: Optional[str],
     config_name: Optional[str],
     temp_wf_type: Optional[str],
+    queue: Optional[str] = None,
 ) -> WorkflowStatusInternal:
     wfid = (
         ctx.workflow_id
@@ -124,7 +126,11 @@ def _init_workflow(
     )
     status: WorkflowStatusInternal = {
         "workflow_uuid": wfid,
-        "status": "PENDING",
+        "status": (
+            WorkflowStatusString.PENDING.value
+            if queue is None
+            else WorkflowStatusString.ENQUEUED.value
+        ),
         "name": wf_name,
         "class_name": class_name,
         "config_name": config_name,
@@ -140,20 +146,25 @@ def _init_workflow(
             json.dumps(ctx.authenticated_roles) if ctx.authenticated_roles else None
         ),
         "assumed_role": ctx.assumed_role,
+        "queue_name": queue,
     }
 
     # If we have a class name, the first arg is the instance and do not serialize
     if class_name is not None:
         inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
 
-    if temp_wf_type != "transaction":
+    if temp_wf_type != "transaction" or queue is not None:
         # Synchronously record the status and inputs for workflows and single-step workflows
         # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
+        # TODO: Make this transactional (and with the queue step below)
         dbos._sys_db.update_workflow_status(status, False, ctx.in_recovery)
         dbos._sys_db.update_workflow_inputs(wfid, utils.serialize_args(inputs))
     else:
         # Buffer the inputs for single-transaction workflows, but don't buffer the status
         dbos._sys_db.buffer_workflow_inputs(wfid, utils.serialize_args(inputs))
+
+    if queue is not None:
+        dbos._sys_db.enqueue(wfid, queue)
 
     return status
 
@@ -169,6 +180,8 @@ def _execute_workflow(
         output = func(*args, **kwargs)
         status["status"] = "SUCCESS"
         status["output"] = utils.serialize(output)
+        if status["queue_name"] is not None:
+            dbos._sys_db.remove_from_queue(status["workflow_uuid"])
         dbos._sys_db.buffer_workflow_status(status)
     except DBOSWorkflowConflictIDError:
         # Retrieve the workflow handle and wait for the result.
@@ -181,6 +194,8 @@ def _execute_workflow(
     except Exception as error:
         status["status"] = "ERROR"
         status["error"] = utils.serialize_error(error)
+        if status["queue_name"] is not None:
+            dbos._sys_db.remove_from_queue(status["workflow_uuid"])
         dbos._sys_db.update_workflow_status(status)
         raise
 
@@ -239,6 +254,8 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
                 return _start_workflow(
                     dbos,
                     wf_func,
+                    status["queue_name"],
+                    True,
                     dbos._registry.instance_info_map[iname],
                     *inputs["args"],
                     **inputs["kwargs"],
@@ -254,6 +271,8 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
                 return _start_workflow(
                     dbos,
                     wf_func,
+                    status["queue_name"],
+                    True,
                     dbos._registry.class_info_map[class_name],
                     *inputs["args"],
                     **inputs["kwargs"],
@@ -261,7 +280,12 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
         else:
             with SetWorkflowID(workflow_id):
                 return _start_workflow(
-                    dbos, wf_func, *inputs["args"], **inputs["kwargs"]
+                    dbos,
+                    wf_func,
+                    status["queue_name"],
+                    True,
+                    *inputs["args"],
+                    **inputs["kwargs"],
                 )
 
 
@@ -288,34 +312,22 @@ def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
             "kwargs": kwargs,
         }
         ctx = get_local_dbos_context()
-        if ctx and ctx.is_workflow():
-            with EnterDBOSChildWorkflow(attributes), DBOSAssumeRole(rr):
-                ctx = assert_current_dbos_context()  # Now the child ctx
-                status = _init_workflow(
-                    dbos,
-                    ctx,
-                    inputs=inputs,
-                    wf_name=get_dbos_func_name(func),
-                    class_name=get_dbos_class_name(fi, func, args),
-                    config_name=get_config_name(fi, func, args),
-                    temp_wf_type=get_temp_workflow_type(func),
-                )
+        enterWorkflowCtxMgr = (
+            EnterDBOSChildWorkflow if ctx and ctx.is_workflow() else EnterDBOSWorkflow
+        )
+        with enterWorkflowCtxMgr(attributes), DBOSAssumeRole(rr):
+            ctx = assert_current_dbos_context()  # Now the child ctx
+            status = _init_workflow(
+                dbos,
+                ctx,
+                inputs=inputs,
+                wf_name=get_dbos_func_name(func),
+                class_name=get_dbos_class_name(fi, func, args),
+                config_name=get_config_name(fi, func, args),
+                temp_wf_type=get_temp_workflow_type(func),
+            )
 
-                return _execute_workflow(dbos, status, func, *args, **kwargs)
-        else:
-            with EnterDBOSWorkflow(attributes), DBOSAssumeRole(rr):
-                ctx = assert_current_dbos_context()
-                status = _init_workflow(
-                    dbos,
-                    ctx,
-                    inputs=inputs,
-                    wf_name=get_dbos_func_name(func),
-                    class_name=get_dbos_class_name(fi, func, args),
-                    config_name=get_config_name(fi, func, args),
-                    temp_wf_type=get_temp_workflow_type(func),
-                )
-
-                return _execute_workflow(dbos, status, func, *args, **kwargs)
+            return _execute_workflow(dbos, status, func, *args, **kwargs)
 
     wrapped_func = cast(F, wrapper)
     return wrapped_func
@@ -333,6 +345,8 @@ def _workflow(reg: "_DBOSRegistry") -> Callable[[F], F]:
 def _start_workflow(
     dbos: "DBOS",
     func: "Workflow[P, R]",
+    queue_name: Optional[str],
+    execute_workflow: bool,
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> "WorkflowHandle[R]":
@@ -386,7 +400,11 @@ def _start_workflow(
         class_name=get_dbos_class_name(fi, func, gin_args),
         config_name=get_config_name(fi, func, gin_args),
         temp_wf_type=get_temp_workflow_type(func),
+        queue=queue_name,
     )
+
+    if not execute_workflow:
+        return _WorkflowHandlePolling(new_wf_id, dbos)
 
     if fself is not None:
         future = dbos._executor.submit(
@@ -533,6 +551,7 @@ def _transaction(
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "transaction")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+        wrapper.__orig_func = temp_wf  # type: ignore
 
         return cast(F, wrapper)
 
@@ -651,6 +670,7 @@ def _step(
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+        wrapper.__orig_func = temp_wf  # type: ignore
 
         return cast(F, wrapper)
 

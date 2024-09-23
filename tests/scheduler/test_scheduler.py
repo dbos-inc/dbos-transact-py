@@ -9,14 +9,27 @@ from dbos import DBOS
 def test_scheduled_workflow(dbos: DBOS) -> None:
     wf_counter: int = 0
 
-    @DBOS.scheduled("*/2 * * * * *")
+    @DBOS.scheduled("* * * * * *")
     @DBOS.workflow()
     def test_workflow(scheduled: datetime, actual: datetime) -> None:
         nonlocal wf_counter
         wf_counter += 1
 
     time.sleep(4)
-    assert wf_counter > 1 and wf_counter <= 3
+    assert wf_counter > 2 and wf_counter <= 4
+
+
+def test_scheduled_transaction(dbos: DBOS) -> None:
+    txn_counter: int = 0
+
+    @DBOS.scheduled("* * * * * *")
+    @DBOS.transaction()
+    def test_transaction(scheduled: datetime, actual: datetime) -> None:
+        nonlocal txn_counter
+        txn_counter += 1
+
+    time.sleep(4)
+    assert txn_counter > 2 and txn_counter <= 4
 
 
 def test_scheduled_workflow_exception(dbos: DBOS) -> None:
@@ -29,7 +42,7 @@ def test_scheduled_workflow_exception(dbos: DBOS) -> None:
         wf_counter += 1
         raise Exception("error")
 
-    time.sleep(2)
+    time.sleep(3)
     assert wf_counter >= 1 and wf_counter <= 3
 
 
@@ -52,7 +65,7 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
         nonlocal txn_counter
         txn_counter += 1
 
-    time.sleep(2)
+    time.sleep(3)
     assert wf_counter >= 1 and wf_counter <= 3
     max_tries = 10
     for i in range(max_tries):
@@ -87,6 +100,7 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
             "authenticated_user": None,
             "authenticated_roles": None,
             "assumed_role": None,
+            "queue_name": None,
         }
     )
 

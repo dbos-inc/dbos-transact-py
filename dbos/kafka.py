@@ -1,19 +1,22 @@
 import threading
-import traceback
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Generator, NoReturn, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, NoReturn
 
 from confluent_kafka import Consumer, KafkaError, KafkaException
-from confluent_kafka import Message as CTypeMessage
+
+from dbos.queue import Queue
 
 if TYPE_CHECKING:
     from dbos.dbos import _DBOSRegistry
 
 from .context import SetWorkflowID
+from .error import DBOSInitializationError
 from .kafka_message import KafkaMessage
 from .logger import dbos_logger
 
 KafkaConsumerWorkflow = Callable[[KafkaMessage], None]
+
+kafka_queue: Queue
+in_order_kafka_queues: dict[str, Queue] = {}
 
 
 def _kafka_consumer_loop(
@@ -21,6 +24,7 @@ def _kafka_consumer_loop(
     config: dict[str, Any],
     topics: list[str],
     stop_event: threading.Event,
+    in_order: bool,
 ) -> None:
 
     def on_error(err: KafkaError) -> NoReturn:
@@ -70,24 +74,35 @@ def _kafka_consumer_loop(
                 with SetWorkflowID(
                     f"kafka-unique-id-{msg.topic}-{msg.partition}-{msg.offset}"
                 ):
-                    try:
-                        func(msg)
-                    except Exception as e:
-                        dbos_logger.error(
-                            f"Exception encountered in Kafka consumer: {traceback.format_exc()}"
-                        )
+                    if in_order:
+                        assert msg.topic is not None
+                        queue = in_order_kafka_queues[msg.topic]
+                        queue.enqueue(func, msg)
+                    else:
+                        kafka_queue.enqueue(func, msg)
 
     finally:
         consumer.close()
 
 
 def kafka_consumer(
-    dbosreg: "_DBOSRegistry", config: dict[str, Any], topics: list[str]
+    dbosreg: "_DBOSRegistry", config: dict[str, Any], topics: list[str], in_order: bool
 ) -> Callable[[KafkaConsumerWorkflow], KafkaConsumerWorkflow]:
     def decorator(func: KafkaConsumerWorkflow) -> KafkaConsumerWorkflow:
+        if in_order:
+            for topic in topics:
+                if topic.startswith("^"):
+                    raise DBOSInitializationError(
+                        f"Error: in-order processing is not supported for regular expression topic selectors ({topic})"
+                    )
+                queue = Queue(f"_dbos_kafka_queue_topic_{topic}", concurrency=1)
+                in_order_kafka_queues[topic] = queue
+        else:
+            global kafka_queue
+            kafka_queue = Queue("_dbos_internal_queue")
         stop_event = threading.Event()
         dbosreg.register_poller(
-            stop_event, _kafka_consumer_loop, func, config, topics, stop_event
+            stop_event, _kafka_consumer_loop, func, config, topics, stop_event, in_order
         )
         return func
 

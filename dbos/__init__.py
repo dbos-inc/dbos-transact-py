@@ -3,6 +3,7 @@ from .context import DBOSContextEnsure, SetWorkflowID
 from .dbos import DBOS, DBOSConfiguredInstance, WorkflowHandle, WorkflowStatus
 from .dbos_config import ConfigFile, get_dbos_database_url, load_config
 from .kafka_message import KafkaMessage
+from .queue import Queue
 from .system_database import GetWorkflowsInput, WorkflowStatusString
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "load_config",
     "get_dbos_database_url",
     "error",
+    "Queue",
 ]

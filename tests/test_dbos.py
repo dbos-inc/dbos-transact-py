@@ -1,7 +1,8 @@
 import datetime
+import threading
 import time
 import uuid
-from typing import Any, Optional
+from typing import Optional
 
 import pytest
 import sqlalchemy as sa
@@ -13,7 +14,6 @@ from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle, WorkflowStatus
 from dbos.context import assert_current_dbos_context, get_local_dbos_context
 from dbos.error import DBOSMaxStepRetriesExceeded
 from dbos.system_database import GetWorkflowsInput
-from tests.conftest import default_config
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -356,6 +356,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
             "authenticated_user": None,
             "authenticated_roles": None,
             "assumed_role": None,
+            "queue_name": None,
         }
     )
 
@@ -418,6 +419,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
             "authenticated_user": None,
             "authenticated_roles": None,
             "assumed_role": None,
+            "queue_name": None,
         }
     )
 
@@ -473,6 +475,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
             "authenticated_user": None,
             "authenticated_roles": None,
             "assumed_role": None,
+            "queue_name": None,
         }
     )
 
@@ -932,17 +935,55 @@ def test_nonserializable_values(dbos: DBOS) -> None:
     def test_bad_wf4(var: str) -> str:
         return test_ns_step(var)
 
-    test_ns_transaction("h")
-    test_ns_step("f")
-    test_ns_wf("g")
+    with pytest.raises(Exception) as exc_info:
+        test_ns_transaction("h")
+    assert "data item should not be a function" in str(exc_info.value)
+    with pytest.raises(Exception) as exc_info:
+        test_ns_step("f")
+    assert "data item should not be a function" in str(exc_info.value)
+    with pytest.raises(Exception) as exc_info:
+        test_ns_wf("g")
+    assert "data item should not be a function" in str(exc_info.value)
 
     wfh = DBOS.start_workflow(test_reg_wf, "a")
-    DBOS.send(wfh.workflow_id, invalid_return, "sss")
+    with pytest.raises(Exception) as exc_info:
+        DBOS.send(wfh.workflow_id, invalid_return, "sss")
+    assert "data item should not be a function" in str(exc_info.value)
     wfh.get_result()
 
-    test_ns_event("e")
+    with pytest.raises(Exception) as exc_info:
+        test_ns_event("e")
+    assert "data item should not be a function" in str(exc_info.value)
 
-    test_bad_wf1("a")
-    test_bad_wf2("b")
-    test_bad_wf3("c")
-    test_bad_wf4("d")
+    with pytest.raises(Exception) as exc_info:
+        test_bad_wf1("a")
+    assert "data item should not be a function" in str(exc_info.value)
+    with pytest.raises(Exception) as exc_info:
+        test_bad_wf2("b")
+    assert "data item should not be a function" in str(exc_info.value)
+    with pytest.raises(Exception) as exc_info:
+        test_bad_wf3("c")
+    assert "data item should not be a function" in str(exc_info.value)
+    with pytest.raises(Exception) as exc_info:
+        test_bad_wf4("d")
+    assert "data item should not be a function" in str(exc_info.value)
+
+
+def test_multi_set_event(dbos: DBOS) -> None:
+    event = threading.Event()
+
+    wfid = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    def test_setevent_workflow() -> None:
+        assert DBOS.workflow_id == wfid
+        DBOS.set_event("key", "value1")
+        event.wait()
+        DBOS.set_event("key", "value2")
+
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(test_setevent_workflow)
+    assert DBOS.get_event(wfid, "key") == "value1"
+    event.set()
+    assert handle.get_result() == None
+    assert DBOS.get_event(wfid, "key") == "value2"

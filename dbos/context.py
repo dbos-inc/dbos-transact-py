@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from contextlib import AbstractContextManager
 from contextvars import ContextVar
 from enum import Enum
 from types import TracebackType
@@ -344,7 +345,7 @@ class SetWorkflowRecovery:
         return False  # Did not handle
 
 
-class EnterDBOSWorkflow:
+class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
     def __init__(self, attributes: TracedAttributes) -> None:
         self.created_ctx = False
         self.attributes = attributes
@@ -377,7 +378,7 @@ class EnterDBOSWorkflow:
         return False  # Did not handle
 
 
-class EnterDBOSChildWorkflow:
+class EnterDBOSChildWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
     def __init__(self, attributes: TracedAttributes) -> None:
         self.parent_ctx: Optional[DBOSContext] = None
         self.child_ctx: Optional[DBOSContext] = None

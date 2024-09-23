@@ -13,9 +13,9 @@ class WorkflowInputs(TypedDict):
 # jsonpickle.set_preferred_backend('jsonpickle.simplejson')
 
 
-def validate_item(data: Any):
+def validate_item(data: Any) -> None:
     if isinstance(data, (types.FunctionType, types.MethodType)):
-        raise TypeError("Should not be a function")
+        raise TypeError("Serialized data item should not be a function")
 
 
 def serialize(data: Any) -> str:
