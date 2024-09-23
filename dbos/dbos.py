@@ -525,37 +525,36 @@ class DBOS:
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
         """Return the status of a workflow execution."""
-        with asyncio.Runner() as runner:
-            ctx = get_local_dbos_context()
-            if ctx and ctx.is_within_workflow():
-                ctx.function_id += 1
-                stat = runner.run(
-                    _get_dbos_instance()._sys_db.get_workflow_status_within_wf(
-                        workflow_id, ctx.workflow_id, ctx.function_id
-                    )
+        ctx = get_local_dbos_context()
+        if ctx and ctx.is_within_workflow():
+            ctx.function_id += 1
+            stat = asyncio.run(
+                _get_dbos_instance()._sys_db.get_workflow_status_within_wf(
+                    workflow_id, ctx.workflow_id, ctx.function_id
                 )
-            else:
-                stat = runner.run(
-                    _get_dbos_instance()._sys_db.get_workflow_status(workflow_id)
-                )
-            if stat is None:
-                return None
-
-            return WorkflowStatus(
-                workflow_id=workflow_id,
-                status=stat["status"],
-                name=stat["name"],
-                recovery_attempts=stat["recovery_attempts"],
-                class_name=stat["class_name"],
-                config_name=stat["config_name"],
-                authenticated_user=stat["authenticated_user"],
-                assumed_role=stat["assumed_role"],
-                authenticated_roles=(
-                    json.loads(stat["authenticated_roles"])
-                    if stat["authenticated_roles"] is not None
-                    else None
-                ),
             )
+        else:
+            stat = asyncio.run(
+                _get_dbos_instance()._sys_db.get_workflow_status(workflow_id)
+            )
+        if stat is None:
+            return None
+
+        return WorkflowStatus(
+            workflow_id=workflow_id,
+            status=stat["status"],
+            name=stat["name"],
+            recovery_attempts=stat["recovery_attempts"],
+            class_name=stat["class_name"],
+            config_name=stat["config_name"],
+            authenticated_user=stat["authenticated_user"],
+            assumed_role=stat["assumed_role"],
+            authenticated_roles=(
+                json.loads(stat["authenticated_roles"])
+                if stat["authenticated_roles"] is not None
+                else None
+            ),
+        )
 
     @classmethod
     def retrieve_workflow(

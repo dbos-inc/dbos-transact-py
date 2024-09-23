@@ -4,7 +4,6 @@ import time
 from typing import TYPE_CHECKING, Optional
 
 from dbos.core import P, R, _execute_workflow_id, _start_workflow
-from dbos.error import DBOSInitializationError
 
 if TYPE_CHECKING:
     from dbos.dbos import DBOS, Workflow, WorkflowHandle
@@ -29,12 +28,11 @@ class Queue:
 
 
 def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
-    with asyncio.Runner() as runner:
-        while not stop_event.is_set():
-            time.sleep(1)
-            for queue_name, queue in dbos._registry.queue_info_map.items():
-                wf_ids = runner.run(
-                    dbos._sys_db.start_queued_workflows(queue_name, queue.concurrency)
-                )
-                for id in wf_ids:
-                    _execute_workflow_id(dbos, id)
+    while not stop_event.is_set():
+        time.sleep(1)
+        for queue_name, queue in dbos._registry.queue_info_map.items():
+            wf_ids = asyncio.run(
+                dbos._sys_db.start_queued_workflows(queue_name, queue.concurrency)
+            )
+            for id in wf_ids:
+                _execute_workflow_id(dbos, id)
