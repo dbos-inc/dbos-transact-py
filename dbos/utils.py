@@ -21,7 +21,7 @@ def validate_item(data: Any) -> None:
 def serialize(data: Any) -> str:
     """Serialize an object to a JSON string using jsonpickle."""
     validate_item(data)
-    encoded_data: str = jsonpickle.encode(data, unpicklable=False)
+    encoded_data: str = jsonpickle.encode(data, unpicklable=True)
     return encoded_data
 
 
@@ -32,7 +32,7 @@ def serialize_args(data: WorkflowInputs) -> str:
         validate_item(arg)
     for arg in data["kwargs"].values():
         validate_item(arg)
-    encoded_data: str = jsonpickle.encode(data, unpicklable=False)
+    encoded_data: str = jsonpickle.encode(data, unpicklable=True)
     return encoded_data
 
 
