@@ -38,6 +38,7 @@ from dbos.error import (
     DBOSWorkflowFunctionNotFoundError,
 )
 from dbos.registrations import (
+    DEFAULT_MAX_RECOVERY_ATTEMPTS,
     get_config_name,
     get_dbos_class_name,
     get_dbos_func_name,
@@ -49,7 +50,6 @@ from dbos.registrations import (
 )
 from dbos.roles import check_required_roles
 from dbos.system_database import (
-    DEFAULT_MAX_RECOVERY_ATTEMPTS,
     GetEventWorkflowContext,
     OperationResultInternal,
     WorkflowStatusInternal,
@@ -301,6 +301,7 @@ def _workflow_wrapper(
     func.__orig_func = func  # type: ignore
 
     fi = get_or_create_func_info(func)
+    fi.max_recovery_attempts = max_recovery_attempts
 
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -410,6 +411,7 @@ def _start_workflow(
         config_name=get_config_name(fi, func, gin_args),
         temp_wf_type=get_temp_workflow_type(func),
         queue=queue_name,
+        max_recovery_attempts=fi.max_recovery_attempts,
     )
 
     if not execute_workflow:

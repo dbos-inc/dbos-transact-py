@@ -122,11 +122,11 @@ def test_buffer_flush_errors(dbos: DBOS) -> None:
 
 def test_dead_letter_queue(dbos: DBOS) -> None:
     event = threading.Event()
-    max_recovery_attempts = 50
+    max_recovery_attempts = 20
     recovery_count = 0
 
     @DBOS.workflow(max_recovery_attempts=max_recovery_attempts)
-    def dead_letter_workflow():
+    def dead_letter_workflow() -> None:
         nonlocal recovery_count
         recovery_count += 1
         event.wait()

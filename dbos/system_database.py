@@ -29,6 +29,7 @@ from dbos.error import (
     DBOSNonExistentWorkflowError,
     DBOSWorkflowConflictIDError,
 )
+from dbos.registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 
 from .dbos_config import ConfigFile
 from .logger import dbos_logger
@@ -49,8 +50,6 @@ class WorkflowStatusString(Enum):
 WorkflowStatuses = Literal[
     "PENDING", "SUCCESS", "ERROR", "RETRIES_EXCEEDED", "CANCELLED", "ENQUEUED"
 ]
-
-DEFAULT_MAX_RECOVERY_ATTEMPTS = 50
 
 
 class WorkflowStatusInternal(TypedDict):
@@ -286,7 +285,6 @@ class SystemDatabase:
         else:
             with self.engine.begin() as c:
                 results = c.execute(cmd)
-
         if in_recovery:
             row = results.fetchone()
             if row is not None:

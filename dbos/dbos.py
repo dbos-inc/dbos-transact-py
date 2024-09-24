@@ -42,6 +42,7 @@ from dbos.decorators import classproperty
 from dbos.queue import Queue, queue_thread
 from dbos.recovery import _recover_pending_workflows, _startup_recovery_thread
 from dbos.registrations import (
+    DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
     get_or_create_class_info,
     set_dbos_func_name,
@@ -79,7 +80,7 @@ from dbos.error import DBOSException, DBOSNonExistentWorkflowError
 from .application_database import ApplicationDatabase
 from .dbos_config import ConfigFile, load_config, set_env_vars
 from .logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
-from .system_database import DEFAULT_MAX_RECOVERY_ATTEMPTS, SystemDatabase
+from .system_database import SystemDatabase
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
