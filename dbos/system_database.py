@@ -4,7 +4,18 @@ import os
 import threading
 import time
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Sequence, Set, TypedDict, cast
+from typing import (
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    TypedDict,
+    cast,
+)
 
 import psycopg
 import sqlalchemy as sa
@@ -36,11 +47,6 @@ class WorkflowStatusString(Enum):
 WorkflowStatuses = Literal[
     "PENDING", "SUCCESS", "ERROR", "RETRIES_EXCEEDED", "CANCELLED", "ENQUEUED"
 ]
-
-
-class WorkflowInputs(TypedDict):
-    args: Any
-    kwargs: Any
 
 
 class WorkflowStatusInternal(TypedDict):
@@ -129,7 +135,7 @@ class WorkflowInformation(TypedDict, total=False):
     # The role used to run this workflow.  Empty string if authorization is not required.
     authenticated_roles: List[str]
     # All roles the authenticated user has, if any.
-    input: Optional[WorkflowInputs]
+    input: Optional[utils.WorkflowInputs]
     output: Optional[str]
     error: Optional[str]
     request: Optional[str]
@@ -461,7 +467,7 @@ class SystemDatabase:
         if status == str(WorkflowStatusString.SUCCESS.value):
             return utils.deserialize(stat["output"])
         elif status == str(WorkflowStatusString.ERROR.value):
-            raise utils.deserialize(stat["error"])
+            raise utils.deserialize_exception(stat["error"])
         return None
 
     async def get_workflow_info(
@@ -501,7 +507,9 @@ class SystemDatabase:
             self._exported_temp_txn_wf_status.discard(workflow_uuid)
             self._temp_txn_wf_ids.discard(workflow_uuid)
 
-    async def get_workflow_inputs(self, workflow_uuid: str) -> Optional[WorkflowInputs]:
+    async def get_workflow_inputs(
+        self, workflow_uuid: str
+    ) -> Optional[utils.WorkflowInputs]:
         async with self.async_engine.begin() as c:
             row = (
                 await c.execute(
@@ -512,7 +520,7 @@ class SystemDatabase:
             ).fetchone()
             if row is None:
                 return None
-            inputs: WorkflowInputs = utils.deserialize(row[0])
+            inputs: utils.WorkflowInputs = utils.deserialize_args(row[0])
             return inputs
 
     async def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:

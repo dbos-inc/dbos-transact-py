@@ -891,6 +891,91 @@ def test_set_get_events(dbos: DBOS) -> None:
     assert "set_event() must be called from within a workflow" in str(exc_info.value)
 
 
+def test_nonserializable_values(dbos: DBOS) -> None:
+    def invalid_return() -> str:
+        return "literal"
+
+    @DBOS.transaction(isolation_level="READ COMMITTED")
+    def test_ns_transaction(var2: str) -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        return invalid_return  #  type: ignore
+
+    @DBOS.step()
+    def test_ns_step(var: str) -> str:
+        return invalid_return  #  type: ignore
+
+    @DBOS.workflow()
+    def test_ns_wf(var: str) -> str:
+        return invalid_return  #  type: ignore
+
+    @DBOS.transaction(isolation_level="READ COMMITTED")
+    def test_reg_transaction(var2: str) -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        return var2
+
+    @DBOS.step()
+    def test_reg_step(var: str) -> str:
+        return var
+
+    @DBOS.workflow()
+    def test_reg_wf(var: str) -> str:
+        return test_reg_step(var) + test_reg_transaction(var)
+
+    @DBOS.workflow()
+    def test_ns_event(var: str) -> str:
+        DBOS.set_event("aaa", invalid_return)
+        return test_reg_step(var) + test_reg_transaction(var)
+
+    @DBOS.workflow()
+    def test_bad_wf1(var: str) -> str:
+        return test_reg_step(invalid_return) + test_reg_transaction(var)  # type: ignore
+
+    @DBOS.workflow()
+    def test_bad_wf2(var: str) -> str:
+        return test_reg_step(var) + test_reg_transaction(invalid_return)  # type: ignore
+
+    @DBOS.workflow()
+    def test_bad_wf3(var: str) -> str:
+        return test_ns_transaction(var)
+
+    @DBOS.workflow()
+    def test_bad_wf4(var: str) -> str:
+        return test_ns_step(var)
+
+    with pytest.raises(Exception) as exc_info:
+        test_ns_transaction("h")
+    assert "data item should not be a function" in str(exc_info.value)
+    with pytest.raises(Exception) as exc_info:
+        test_ns_step("f")
+    assert "data item should not be a function" in str(exc_info.value)
+    with pytest.raises(Exception) as exc_info:
+        test_ns_wf("g")
+    assert "data item should not be a function" in str(exc_info.value)
+
+    wfh = DBOS.start_workflow(test_reg_wf, "a")
+    with pytest.raises(Exception) as exc_info:
+        DBOS.send(wfh.workflow_id, invalid_return, "sss")
+    assert "data item should not be a function" in str(exc_info.value)
+    wfh.get_result()
+
+    with pytest.raises(Exception) as exc_info:
+        test_ns_event("e")
+    assert "data item should not be a function" in str(exc_info.value)
+
+    with pytest.raises(Exception) as exc_info:
+        test_bad_wf1("a")
+    assert "data item should not be a function" in str(exc_info.value)
+    with pytest.raises(Exception) as exc_info:
+        test_bad_wf2("b")
+    assert "data item should not be a function" in str(exc_info.value)
+    with pytest.raises(Exception) as exc_info:
+        test_bad_wf3("c")
+    assert "data item should not be a function" in str(exc_info.value)
+    with pytest.raises(Exception) as exc_info:
+        test_bad_wf4("d")
+    assert "data item should not be a function" in str(exc_info.value)
+
+
 def test_multi_set_event(dbos: DBOS) -> None:
     event = threading.Event()
 
