@@ -49,6 +49,7 @@ from dbos.registrations import (
 )
 from dbos.roles import check_required_roles
 from dbos.system_database import (
+    DEFAULT_MAX_RECOVERY_ATTEMPTS,
     GetEventWorkflowContext,
     OperationResultInternal,
     WorkflowStatusInternal,
@@ -118,6 +119,7 @@ def _init_workflow(
     config_name: Optional[str],
     temp_wf_type: Optional[str],
     queue: Optional[str] = None,
+    max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
 ) -> WorkflowStatusInternal:
     wfid = (
         ctx.workflow_id
@@ -289,7 +291,11 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
                 )
 
 
-def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
+def _workflow_wrapper(
+    dbosreg: "_DBOSRegistry",
+    func: F,
+    max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
+) -> F:
     func.__orig_func = func  # type: ignore
 
     fi = get_or_create_func_info(func)
@@ -325,6 +331,7 @@ def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
                 class_name=get_dbos_class_name(fi, func, args),
                 config_name=get_config_name(fi, func, args),
                 temp_wf_type=get_temp_workflow_type(func),
+                max_recovery_attempts=max_recovery_attempts,
             )
 
             return _execute_workflow(dbos, status, func, *args, **kwargs)
@@ -333,9 +340,9 @@ def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
     return wrapped_func
 
 
-def _workflow(reg: "_DBOSRegistry") -> Callable[[F], F]:
+def _workflow(reg: "_DBOSRegistry", max_recovery_attempts: int) -> Callable[[F], F]:
     def _workflow_decorator(func: F) -> F:
-        wrapped_func = _workflow_wrapper(reg, func)
+        wrapped_func = _workflow_wrapper(reg, func, max_recovery_attempts)
         reg.register_wf_function(func.__qualname__, wrapped_func)
         return wrapped_func
 

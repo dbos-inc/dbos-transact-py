@@ -24,7 +24,11 @@ from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 
 import dbos.utils as utils
-from dbos.error import DBOSNonExistentWorkflowError, DBOSWorkflowConflictIDError
+from dbos.error import (
+    DBOSDeadLetterQueueError,
+    DBOSNonExistentWorkflowError,
+    DBOSWorkflowConflictIDError,
+)
 
 from .dbos_config import ConfigFile
 from .logger import dbos_logger
@@ -45,6 +49,8 @@ class WorkflowStatusString(Enum):
 WorkflowStatuses = Literal[
     "PENDING", "SUCCESS", "ERROR", "RETRIES_EXCEEDED", "CANCELLED", "ENQUEUED"
 ]
+
+DEFAULT_MAX_RECOVERY_ATTEMPTS = 50
 
 
 class WorkflowStatusInternal(TypedDict):
@@ -234,6 +240,7 @@ class SystemDatabase:
         replace: bool = True,
         in_recovery: bool = False,
         conn: Optional[sa.Connection] = None,
+        max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
     ) -> None:
         cmd = pg.insert(SystemSchema.workflow_status).values(
             workflow_uuid=status["workflow_uuid"],
@@ -283,6 +290,19 @@ class SystemDatabase:
             row = results.fetchone()
             if row is not None:
                 recovery_attempts: int = row[0]
+                if recovery_attempts >= max_recovery_attempts:
+                    sa.update(SystemSchema.workflow_status).where(
+                        SystemSchema.workflow_status.c.workflow_uuid
+                        == status["workflow_uuid"]
+                    ).where(
+                        SystemSchema.workflow_status.c.status
+                        == WorkflowStatusString.PENDING.value
+                    ).values(
+                        status=WorkflowStatusString.RETRIES_EXCEEDED.value,
+                    )
+                    raise DBOSDeadLetterQueueError(
+                        status["workflow_uuid"], max_recovery_attempts
+                    )
 
         # Record we have exported status for this single-transaction workflow
         if status["workflow_uuid"] in self._temp_txn_wf_ids:
