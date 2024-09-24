@@ -9,6 +9,8 @@ from sqlalchemy.exc import OperationalError
 
 # Public API
 from dbos import DBOS, GetWorkflowsInput, SetWorkflowID
+from dbos.error import DBOSDeadLetterQueueError, DBOSErrorCode, DBOSException
+from dbos.system_database import WorkflowStatusString
 
 
 def test_transaction_errors(dbos: DBOS) -> None:
@@ -135,6 +137,11 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
         DBOS.recover_pending_workflows()
         assert recovery_count == i + 2
 
+    with pytest.raises(Exception) as exc_info:
+        DBOS.recover_pending_workflows()
+    assert exc_info.errisinstance(DBOSDeadLetterQueueError)
+    assert handle.get_status().status == WorkflowStatusString.RETRIES_EXCEEDED.value
+
     with SetWorkflowID(handle.get_workflow_id()):
         DBOS.start_workflow(dead_letter_workflow)
     assert recovery_count == max_recovery_attempts + 2
@@ -142,4 +149,4 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     event.set()
     assert handle.get_result() == None
     dbos._sys_db.wait_for_buffer_flush()
-    assert handle.get_status().status == "SUCCESS"
+    assert handle.get_status().status == WorkflowStatusString.SUCCESS.value

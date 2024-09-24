@@ -292,15 +292,21 @@ class SystemDatabase:
             if row is not None:
                 recovery_attempts: int = row[0]
                 if recovery_attempts > max_recovery_attempts:
-                    sa.update(SystemSchema.workflow_status).where(
-                        SystemSchema.workflow_status.c.workflow_uuid
-                        == status["workflow_uuid"]
-                    ).where(
-                        SystemSchema.workflow_status.c.status
-                        == WorkflowStatusString.PENDING.value
-                    ).values(
-                        status=WorkflowStatusString.RETRIES_EXCEEDED.value,
-                    )
+                    with self.engine.begin() as c:
+                        c.execute(
+                            sa.update(SystemSchema.workflow_status)
+                            .where(
+                                SystemSchema.workflow_status.c.workflow_uuid
+                                == status["workflow_uuid"]
+                            )
+                            .where(
+                                SystemSchema.workflow_status.c.status
+                                == WorkflowStatusString.PENDING.value
+                            )
+                            .values(
+                                status=WorkflowStatusString.RETRIES_EXCEEDED.value,
+                            )
+                        )
                     raise DBOSDeadLetterQueueError(
                         status["workflow_uuid"], max_recovery_attempts
                     )
