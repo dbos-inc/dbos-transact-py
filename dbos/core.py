@@ -4,17 +4,7 @@ import time
 import traceback
 from concurrent.futures import Future
 from functools import wraps
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Generic,
-    List,
-    Optional,
-    Tuple,
-    TypeVar,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
 
 from dbos.application_database import ApplicationDatabase, TransactionResultInternal
 
@@ -61,10 +51,10 @@ from dbos.roles import check_required_roles
 from dbos.system_database import (
     GetEventWorkflowContext,
     OperationResultInternal,
-    WorkflowInputs,
     WorkflowStatusInternal,
     WorkflowStatusString,
 )
+from dbos.utils import WorkflowInputs
 
 if TYPE_CHECKING:
     from dbos.dbos import DBOS, Workflow, WorkflowHandle, WorkflowStatus, _DBOSRegistry
@@ -168,10 +158,10 @@ def _init_workflow(
         # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
         # TODO: Make this transactional (and with the queue step below)
         dbos._sys_db.update_workflow_status(status, False, ctx.in_recovery)
-        dbos._sys_db.update_workflow_inputs(wfid, utils.serialize(inputs))
+        dbos._sys_db.update_workflow_inputs(wfid, utils.serialize_args(inputs))
     else:
         # Buffer the inputs for single-transaction workflows, but don't buffer the status
-        dbos._sys_db.buffer_workflow_inputs(wfid, utils.serialize(inputs))
+        dbos._sys_db.buffer_workflow_inputs(wfid, utils.serialize_args(inputs))
 
     if queue is not None:
         dbos._sys_db.enqueue(wfid, queue)
@@ -203,7 +193,7 @@ def _execute_workflow(
         return output
     except Exception as error:
         status["status"] = "ERROR"
-        status["error"] = utils.serialize(error)
+        status["error"] = utils.serialize_exception(error)
         if status["queue_name"] is not None:
             dbos._sys_db.remove_from_queue(status["workflow_uuid"])
         dbos._sys_db.update_workflow_status(status)
@@ -488,8 +478,10 @@ def _transaction(
                                 )
                                 if recorded_output:
                                     if recorded_output["error"]:
-                                        deserialized_error = utils.deserialize(
-                                            recorded_output["error"]
+                                        deserialized_error = (
+                                            utils.deserialize_exception(
+                                                recorded_output["error"]
+                                            )
                                         )
                                         has_recorded_error = True
                                         raise deserialized_error
@@ -527,7 +519,7 @@ def _transaction(
                         except Exception as error:
                             # Don't record the error if it was already recorded
                             if not has_recorded_error:
-                                txn_output["error"] = utils.serialize(error)
+                                txn_output["error"] = utils.serialize_exception(error)
                                 dbos._app_db.record_transaction_error(txn_output)
                             raise
             return output
@@ -599,7 +591,9 @@ def _step(
                 )
                 if recorded_output:
                     if recorded_output["error"] is not None:
-                        deserialized_error = utils.deserialize(recorded_output["error"])
+                        deserialized_error = utils.deserialize_exception(
+                            recorded_output["error"]
+                        )
                         raise deserialized_error
                     elif recorded_output["output"] is not None:
                         return utils.deserialize(recorded_output["output"])
@@ -639,7 +633,7 @@ def _step(
                                 )
 
                 step_output["error"] = (
-                    utils.serialize(error) if error is not None else None
+                    utils.serialize_exception(error) if error is not None else None
                 )
                 dbos._sys_db.record_operation_result(step_output)
 
