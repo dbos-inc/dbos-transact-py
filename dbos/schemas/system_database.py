@@ -142,8 +142,8 @@ class SystemSchema:
         Column("last_run_time", BigInteger, nullable=False),
     )
 
-    job_queue = Table(
-        "job_queue",
+    workflow_queue = Table(
+        "workflow_queue",
         metadata_obj,
         Column(
             "workflow_uuid",

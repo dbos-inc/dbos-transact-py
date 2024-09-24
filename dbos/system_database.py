@@ -1022,7 +1022,7 @@ class SystemDatabase:
     def enqueue(self, workflow_id: str, queue_name: str) -> None:
         with self.engine.begin() as c:
             c.execute(
-                pg.insert(SystemSchema.job_queue)
+                pg.insert(SystemSchema.workflow_queue)
                 .values(
                     workflow_uuid=workflow_id,
                     queue_name=queue_name,
@@ -1034,12 +1034,12 @@ class SystemDatabase:
         self, queue_name: str, concurrency: Optional[int]
     ) -> List[str]:
         with self.engine.begin() as c:
-            query = sa.select(SystemSchema.job_queue.c.workflow_uuid).where(
-                SystemSchema.job_queue.c.queue_name == queue_name
+            query = sa.select(SystemSchema.workflow_queue.c.workflow_uuid).where(
+                SystemSchema.workflow_queue.c.queue_name == queue_name
             )
             if concurrency is not None:
                 query = query.order_by(
-                    SystemSchema.job_queue.c.created_at_epoch_ms.asc()
+                    SystemSchema.workflow_queue.c.created_at_epoch_ms.asc()
                 ).limit(concurrency)
             rows = c.execute(query).fetchall()
             dequeued_ids: List[str] = [row[0] for row in rows]
@@ -1061,7 +1061,7 @@ class SystemDatabase:
     def remove_from_queue(self, workflow_id: str) -> None:
         with self.engine.begin() as c:
             c.execute(
-                sa.delete(SystemSchema.job_queue).where(
-                    SystemSchema.job_queue.c.workflow_uuid == workflow_id
+                sa.delete(SystemSchema.workflow_queue).where(
+                    SystemSchema.workflow_queue.c.workflow_uuid == workflow_id
                 )
             )
