@@ -583,7 +583,13 @@ class DBOS:
         This function is to be called from within a workflow.
         `recv` will return the message sent on `topic`, waiting if necessary.
         """
-        return _recv(_get_dbos_instance(), topic, timeout_seconds)
+        return asyncio.run(_recv(_get_dbos_instance(), topic, timeout_seconds))
+
+    @classmethod
+    async def recv_async(
+        cls, topic: Optional[str] = None, timeout_seconds: float = 60
+    ) -> Any:
+        return await _recv(_get_dbos_instance(), topic, timeout_seconds)
 
     @classmethod
     def sleep(cls, seconds: float) -> None:
@@ -607,6 +613,18 @@ class DBOS:
             )
 
     @classmethod
+    async def sleep_async(cls, seconds: float) -> None:
+        attributes: TracedAttributes = {
+            "name": "sleep",
+        }
+        if seconds <= 0:
+            return
+        with EnterDBOSStep(attributes) as ctx:
+            await _get_dbos_instance()._sys_db.sleep(
+                ctx.workflow_id, ctx.curr_step_function_id, seconds
+            )
+
+    @classmethod
     def set_event(cls, key: str, value: Any) -> None:
         """
         Set a workflow event.
@@ -623,7 +641,11 @@ class DBOS:
             value(Any): A serializable value to associate with the key
 
         """
-        return _set_event(_get_dbos_instance(), key, value)
+        asyncio.run(_set_event(_get_dbos_instance(), key, value))
+
+    @classmethod
+    async def set_event_async(cls, key: str, value: Any) -> None:
+        await _set_event(_get_dbos_instance(), key, value)
 
     @classmethod
     def get_event(cls, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:
@@ -638,7 +660,15 @@ class DBOS:
             timeout_seconds(float): The amount of time to wait, in case `set_event` has not yet been called byt the workflow
 
         """
-        return _get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
+        return asyncio.run(
+            _get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
+        )
+
+    @classmethod
+    async def get_event_async(
+        cls, workflow_id: str, key: str, timeout_seconds: float = 60
+    ) -> Any:
+        return await _get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
 
     @classmethod
     def execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:

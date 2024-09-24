@@ -682,6 +682,7 @@ def _step(
     return decorator
 
 
+# can't convert send to async until WF infra is converted to async
 def _send(
     dbos: "DBOS", destination_id: str, message: Any, topic: Optional[str] = None
 ) -> None:
@@ -710,7 +711,7 @@ def _send(
         wffn(destination_id, message, topic)
 
 
-def _recv(
+async def _recv(
     dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60
 ) -> Any:
     cur_ctx = get_local_dbos_context()
@@ -723,21 +724,19 @@ def _recv(
         with EnterDBOSStep(attributes) as ctx:
             ctx.function_id += 1  # Reserve for the sleep
             timeout_function_id = ctx.function_id
-            return asyncio.run(
-                dbos._sys_db.recv(
-                    ctx.workflow_id,
-                    ctx.curr_step_function_id,
-                    timeout_function_id,
-                    topic,
-                    timeout_seconds,
-                )
+            return await dbos._sys_db.recv(
+                ctx.workflow_id,
+                ctx.curr_step_function_id,
+                timeout_function_id,
+                topic,
+                timeout_seconds,
             )
     else:
         # Cannot call it from outside of a workflow
         raise DBOSException("recv() must be called from within a workflow")
 
 
-def _set_event(dbos: "DBOS", key: str, value: Any) -> None:
+async def _set_event(dbos: "DBOS", key: str, value: Any) -> None:
     cur_ctx = get_local_dbos_context()
     if cur_ctx is not None:
         # Must call it within a workflow
@@ -748,17 +747,15 @@ def _set_event(dbos: "DBOS", key: str, value: Any) -> None:
             "name": "set_event",
         }
         with EnterDBOSStep(attributes) as ctx:
-            asyncio.run(
-                dbos._sys_db.set_event(
-                    ctx.workflow_id, ctx.curr_step_function_id, key, value
-                )
+            await dbos._sys_db.set_event(
+                ctx.workflow_id, ctx.curr_step_function_id, key, value
             )
     else:
         # Cannot call it from outside of a workflow
         raise DBOSException("set_event() must be called from within a workflow")
 
 
-def _get_event(
+async def _get_event(
     dbos: "DBOS", workflow_id: str, key: str, timeout_seconds: float = 60
 ) -> Any:
     cur_ctx = get_local_dbos_context()
@@ -778,9 +775,9 @@ def _get_event(
                 "function_id": ctx.curr_step_function_id,
                 "timeout_function_id": timeout_function_id,
             }
-            return asyncio.run(
-                dbos._sys_db.get_event(workflow_id, key, timeout_seconds, caller_ctx)
+            return await dbos._sys_db.get_event(
+                workflow_id, key, timeout_seconds, caller_ctx
             )
     else:
         # Directly call it outside of a workflow
-        return asyncio.run(dbos._sys_db.get_event(workflow_id, key, timeout_seconds))
+        return await dbos._sys_db.get_event(workflow_id, key, timeout_seconds)
