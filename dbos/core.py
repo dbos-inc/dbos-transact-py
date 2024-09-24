@@ -110,7 +110,7 @@ class _WorkflowHandlePolling(Generic[R]):
         return stat
 
 
-def _init_workflow(
+async def _init_workflow(
     dbos: "DBOS",
     ctx: DBOSContext,
     inputs: WorkflowInputs,
@@ -158,16 +158,14 @@ def _init_workflow(
         # Synchronously record the status and inputs for workflows and single-step workflows
         # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
         # TODO: Make this transactional (and with the queue step below)
-        asyncio.run(dbos._sys_db.update_workflow_status(status, False, ctx.in_recovery))
-        asyncio.run(
-            dbos._sys_db.update_workflow_inputs(wfid, utils.serialize_args(inputs))
-        )
+        await dbos._sys_db.update_workflow_status(status, False, ctx.in_recovery)
+        await dbos._sys_db.update_workflow_inputs(wfid, utils.serialize_args(inputs))
     else:
         # Buffer the inputs for single-transaction workflows, but don't buffer the status
         dbos._sys_db.buffer_workflow_inputs(wfid, utils.serialize_args(inputs))
 
     if queue is not None:
-        asyncio.run(dbos._sys_db.enqueue(wfid, queue))
+        await dbos._sys_db.enqueue(wfid, queue)
 
     return status
 
@@ -320,14 +318,16 @@ def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
         )
         with enterWorkflowCtxMgr(attributes), DBOSAssumeRole(rr):
             ctx = assert_current_dbos_context()  # Now the child ctx
-            status = _init_workflow(
-                dbos,
-                ctx,
-                inputs=inputs,
-                wf_name=get_dbos_func_name(func),
-                class_name=get_dbos_class_name(fi, func, args),
-                config_name=get_config_name(fi, func, args),
-                temp_wf_type=get_temp_workflow_type(func),
+            status = asyncio.run(
+                _init_workflow(
+                    dbos,
+                    ctx,
+                    inputs=inputs,
+                    wf_name=get_dbos_func_name(func),
+                    class_name=get_dbos_class_name(fi, func, args),
+                    config_name=get_config_name(fi, func, args),
+                    temp_wf_type=get_temp_workflow_type(func),
+                )
             )
 
             return _execute_workflow(dbos, status, func, *args, **kwargs)
@@ -395,15 +395,17 @@ def _start_workflow(
     if fself is not None:
         gin_args = (fself,)
 
-    status = _init_workflow(
-        dbos,
-        new_wf_ctx,
-        inputs=inputs,
-        wf_name=get_dbos_func_name(func),
-        class_name=get_dbos_class_name(fi, func, gin_args),
-        config_name=get_config_name(fi, func, gin_args),
-        temp_wf_type=get_temp_workflow_type(func),
-        queue=queue_name,
+    status = asyncio.run(
+        _init_workflow(
+            dbos,
+            new_wf_ctx,
+            inputs=inputs,
+            wf_name=get_dbos_func_name(func),
+            class_name=get_dbos_class_name(fi, func, gin_args),
+            config_name=get_config_name(fi, func, gin_args),
+            temp_wf_type=get_temp_workflow_type(func),
+            queue=queue_name,
+        )
     )
 
     if not execute_workflow:

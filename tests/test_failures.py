@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import time
 
@@ -81,8 +82,7 @@ def test_notification_errors(dbos: DBOS) -> None:
     assert duration < 3.0
 
 
-@pytest.mark.asyncio
-async def test_buffer_flush_errors(dbos: DBOS) -> None:
+def test_buffer_flush_errors(dbos: DBOS) -> None:
     @DBOS.transaction()
     def test_transaction(var: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
@@ -96,7 +96,7 @@ async def test_buffer_flush_errors(dbos: DBOS) -> None:
     assert res == "bob1"
 
     dbos._sys_db.wait_for_buffer_flush()
-    wfs = await dbos._sys_db.get_workflows(gwi)
+    wfs = asyncio.run(dbos._sys_db.get_workflows(gwi))
     assert len(wfs.workflow_uuids) == 1
 
     # Crash the system database connection and make sure the buffer flush works on time.
@@ -115,5 +115,5 @@ async def test_buffer_flush_errors(dbos: DBOS) -> None:
     dbos._sys_db.async_engine = backup_engine
 
     dbos._sys_db.wait_for_buffer_flush()
-    wfs = await dbos._sys_db.get_workflows(gwi)
+    wfs = asyncio.run(dbos._sys_db.get_workflows(gwi))
     assert len(wfs.workflow_uuids) == 2
