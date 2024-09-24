@@ -271,12 +271,18 @@ class SystemDatabase:
             )
         else:
             cmd = cmd.on_conflict_do_nothing()
+        cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts)  # type: ignore
 
         if conn is not None:
-            conn.execute(cmd)
+            results = conn.execute(cmd)
         else:
             with self.engine.begin() as c:
-                c.execute(cmd)
+                results = c.execute(cmd)
+
+        if in_recovery:
+            row = results.fetchone()
+            if row is not None:
+                recovery_attempts: int = row[0]
 
         # Record we have exported status for this single-transaction workflow
         if status["workflow_uuid"] in self._temp_txn_wf_ids:
