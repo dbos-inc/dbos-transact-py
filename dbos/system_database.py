@@ -239,6 +239,7 @@ class SystemDatabase:
         status: WorkflowStatusInternal,
         replace: bool = True,
         in_recovery: bool = False,
+        *,
         conn: Optional[sa.Connection] = None,
         max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
     ) -> None:
@@ -290,7 +291,7 @@ class SystemDatabase:
             row = results.fetchone()
             if row is not None:
                 recovery_attempts: int = row[0]
-                if recovery_attempts >= max_recovery_attempts:
+                if recovery_attempts > max_recovery_attempts:
                     sa.update(SystemSchema.workflow_status).where(
                         SystemSchema.workflow_status.c.workflow_uuid
                         == status["workflow_uuid"]

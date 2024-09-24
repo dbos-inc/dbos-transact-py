@@ -402,7 +402,7 @@ class DBOS:
     # Decorators for DBOS functionality
     @classmethod
     def workflow(
-        cls, max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS
+        cls, *, max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS
     ) -> Callable[[F], F]:
         """Decorate a function for use as a DBOS workflow."""
         return _workflow(_get_or_create_dbos_registry(), max_recovery_attempts)
