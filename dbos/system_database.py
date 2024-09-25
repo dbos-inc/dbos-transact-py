@@ -1034,17 +1034,16 @@ class SystemDatabase:
         self, queue_name: str, concurrency: Optional[int]
     ) -> List[str]:
         with self.engine.begin() as c:
-            query = (
-                sa.select(SystemSchema.job_queue.c.workflow_uuid)
-                .where(SystemSchema.job_queue.c.queue_name == queue_name)
-                .where(SystemSchema.job_queue.c.started_at_epoch_ms == None)
-            )
+            query = sa.select(
+                SystemSchema.job_queue.c.workflow_uuid,
+                SystemSchema.job_queue.c.started_at_epoch_ms,
+            ).where(SystemSchema.job_queue.c.queue_name == queue_name)
             if concurrency is not None:
                 query = query.order_by(
                     SystemSchema.job_queue.c.created_at_epoch_ms.asc()
                 ).limit(concurrency)
             rows = c.execute(query).fetchall()
-            dequeued_ids: List[str] = [row[0] for row in rows]
+            dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
             ret_ids = []
             for id in dequeued_ids:
                 result = c.execute(
