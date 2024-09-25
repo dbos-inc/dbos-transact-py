@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import threading
 import time
 
 import pytest
@@ -10,6 +11,8 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 # Public API
 from dbos import DBOS, GetWorkflowsInput, SetWorkflowID
+from dbos.error import DBOSDeadLetterQueueError, DBOSErrorCode, DBOSException
+from dbos.system_database import WorkflowStatusString
 
 
 def test_transaction_errors(dbos: DBOS) -> None:
@@ -117,3 +120,35 @@ def test_buffer_flush_errors(dbos: DBOS) -> None:
     dbos._sys_db.wait_for_buffer_flush()
     wfs = asyncio.run(dbos._sys_db.get_workflows(gwi))
     assert len(wfs.workflow_uuids) == 2
+
+
+def test_dead_letter_queue(dbos: DBOS) -> None:
+    event = threading.Event()
+    max_recovery_attempts = 20
+    recovery_count = 0
+
+    @DBOS.workflow(max_recovery_attempts=max_recovery_attempts)
+    def dead_letter_workflow() -> None:
+        nonlocal recovery_count
+        recovery_count += 1
+        event.wait()
+
+    handle = DBOS.start_workflow(dead_letter_workflow)
+
+    for i in range(max_recovery_attempts):
+        DBOS.recover_pending_workflows()
+        assert recovery_count == i + 2
+
+    with pytest.raises(Exception) as exc_info:
+        DBOS.recover_pending_workflows()
+    assert exc_info.errisinstance(DBOSDeadLetterQueueError)
+    assert handle.get_status().status == WorkflowStatusString.RETRIES_EXCEEDED.value
+
+    with SetWorkflowID(handle.get_workflow_id()):
+        DBOS.start_workflow(dead_letter_workflow)
+    assert recovery_count == max_recovery_attempts + 2
+
+    event.set()
+    assert handle.get_result() == None
+    dbos._sys_db.wait_for_buffer_flush()
+    assert handle.get_status().status == WorkflowStatusString.SUCCESS.value

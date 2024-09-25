@@ -42,7 +42,13 @@ from dbos.core import (
 from dbos.decorators import classproperty
 from dbos.queue import Queue, queue_thread
 from dbos.recovery import _recover_pending_workflows, _startup_recovery_thread
-from dbos.registrations import DBOSClassInfo, get_or_create_class_info
+from dbos.registrations import (
+    DEFAULT_MAX_RECOVERY_ATTEMPTS,
+    DBOSClassInfo,
+    get_or_create_class_info,
+    set_dbos_func_name,
+    set_temp_workflow_type,
+)
 from dbos.roles import default_required_roles, required_roles
 from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled
 
@@ -388,9 +394,11 @@ class DBOS:
 
     # Decorators for DBOS functionality
     @classmethod
-    def workflow(cls) -> Callable[[F], F]:
+    def workflow(
+        cls, *, max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS
+    ) -> Callable[[F], F]:
         """Decorate a function for use as a DBOS workflow."""
-        return _workflow(_get_or_create_dbos_registry())
+        return _workflow(_get_or_create_dbos_registry(), max_recovery_attempts)
 
     @classmethod
     def transaction(

@@ -49,6 +49,7 @@ from dbos.error import (
     DBOSWorkflowFunctionNotFoundError,
 )
 from dbos.registrations import (
+    DEFAULT_MAX_RECOVERY_ATTEMPTS,
     get_config_name,
     get_dbos_class_name,
     get_dbos_func_name,
@@ -129,6 +130,7 @@ async def _init_workflow(
     config_name: Optional[str],
     temp_wf_type: Optional[str],
     queue: Optional[str] = None,
+    max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
 ) -> WorkflowStatusInternal:
     wfid = (
         ctx.workflow_id
@@ -168,7 +170,9 @@ async def _init_workflow(
         # Synchronously record the status and inputs for workflows and single-step workflows
         # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
         # TODO: Make this transactional (and with the queue step below)
-        await dbos._sys_db.update_workflow_status(status, False, ctx.in_recovery)
+        await dbos._sys_db.update_workflow_status(
+            status, False, ctx.in_recovery, max_recovery_attempts=max_recovery_attempts
+        )
         await dbos._sys_db.update_workflow_inputs(wfid, utils.serialize_args(inputs))
     else:
         # Buffer the inputs for single-transaction workflows, but don't buffer the status
@@ -333,10 +337,15 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
                 )
 
 
-def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
+def _workflow_wrapper(
+    dbosreg: "_DBOSRegistry",
+    func: F,
+    max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
+) -> F:
     func.__orig_func = func  # type: ignore
 
     fi = get_or_create_func_info(func)
+    fi.max_recovery_attempts = max_recovery_attempts
 
     # @wraps(func)
     def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -405,6 +414,7 @@ def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
                 class_name=get_dbos_class_name(fi, func, args),
                 config_name=get_config_name(fi, func, args),
                 temp_wf_type=get_temp_workflow_type(func),
+                max_recovery_attempts=max_recovery_attempts,
             )
 
             return await _execute_workflow_async(dbos, status, func, *args, **kwargs)
@@ -416,9 +426,9 @@ def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
     return wrapped_func
 
 
-def _workflow(reg: "_DBOSRegistry") -> Callable[[F], F]:
+def _workflow(reg: "_DBOSRegistry", max_recovery_attempts: int) -> Callable[[F], F]:
     def _workflow_decorator(func: F) -> F:
-        wrapped_func = _workflow_wrapper(reg, func)
+        wrapped_func = _workflow_wrapper(reg, func, max_recovery_attempts)
         reg.register_wf_function(func.__qualname__, wrapped_func)
         return wrapped_func
 
@@ -485,6 +495,7 @@ def _start_workflow(
             config_name=get_config_name(fi, func, gin_args),
             temp_wf_type=get_temp_workflow_type(func),
             queue=queue_name,
+            max_recovery_attempts=fi.max_recovery_attempts,
         )
     )
 
