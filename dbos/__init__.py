@@ -1,5 +1,5 @@
 from . import error as error
-from .context import DBOSContextEnsure, SetWorkflowID
+from .context import DBOSContextEnsure, DBOSContextSetAuth, SetWorkflowID
 from .dbos import DBOS, DBOSConfiguredInstance, WorkflowHandle, WorkflowStatus
 from .dbos_config import ConfigFile, get_dbos_database_url, load_config
 from .kafka_message import KafkaMessage
@@ -11,6 +11,7 @@ __all__ = [
     "DBOS",
     "DBOSConfiguredInstance",
     "DBOSContextEnsure",
+    "DBOSContextSetAuth",
     "GetWorkflowsInput",
     "KafkaMessage",
     "SetWorkflowID",
