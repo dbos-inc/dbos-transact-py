@@ -31,6 +31,7 @@ from dbos.core import (
     _execute_workflow_id,
     _get_event,
     _recv,
+    _register_send_wf,
     _send,
     _set_event,
     _start_workflow,
@@ -290,16 +291,7 @@ class DBOS:
 
             setup_flask_middleware(self.flask)
 
-        # Register send_stub as a workflow
-        def send_temp_workflow(
-            destination_id: str, message: Any, topic: Optional[str]
-        ) -> None:
-            self.send(destination_id, message, topic)
-
-        temp_send_wf = _workflow_wrapper(self._registry, send_temp_workflow)
-        set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
-        set_temp_workflow_type(send_temp_workflow, "send")
-        self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
+        _register_send_wf(self, self._registry)
 
         for handler in dbos_logger.handlers:
             handler.flush()
