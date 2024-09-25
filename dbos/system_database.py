@@ -1034,8 +1034,10 @@ class SystemDatabase:
         self, queue_name: str, concurrency: Optional[int]
     ) -> List[str]:
         with self.engine.begin() as c:
-            query = sa.select(SystemSchema.job_queue.c.workflow_uuid).where(
-                SystemSchema.job_queue.c.queue_name == queue_name
+            query = (
+                sa.select(SystemSchema.job_queue.c.workflow_uuid)
+                .where(SystemSchema.job_queue.c.queue_name == queue_name)
+                .where(SystemSchema.job_queue.c.started_at_epoch_ms == None)
             )
             if concurrency is not None:
                 query = query.order_by(
@@ -1055,6 +1057,11 @@ class SystemDatabase:
                     .values(status=WorkflowStatusString.PENDING.value)
                 )
                 if result.rowcount > 0:
+                    c.execute(
+                        SystemSchema.job_queue.update()
+                        .where(SystemSchema.job_queue.c.workflow_uuid == id)
+                        .values(started_at_epoch_ms=int(time.time() * 1000))
+                    )
                     ret_ids.append(id)
             return ret_ids
 

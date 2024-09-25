@@ -218,7 +218,7 @@ def _execute_workflow_wthread(
         with EnterDBOSWorkflow(attributes):
             try:
                 return _execute_workflow(dbos, status, func, *args, **kwargs)
-            except Exception as e:
+            except Exception:
                 dbos.logger.error(
                     f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
                 )
