@@ -990,7 +990,7 @@ def test_multi_set_event(dbos: DBOS) -> None:
     assert DBOS.get_event(wfid, "key") == "value2"
 
 
-def test_dbos_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
+def test_debug_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
     wfid = str(uuid.uuid4())
     dest_wfid = str(uuid.uuid4())
 
@@ -1017,6 +1017,7 @@ def test_dbos_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
         msg_value = dbos.recv(topic="test_topic")
         return ", ".join([event_value, msg_value])
 
+    original_propagate = logging.getLogger("dbos").propagate
     caplog.set_level(logging.DEBUG, "dbos")
     logging.getLogger("dbos").propagate = True
 
@@ -1064,3 +1065,6 @@ def test_dbos_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
     assert result4 == result2
     assert "Replaying get_event" in caplog.text
     assert "Replaying recv" in caplog.text
+
+    # Reset logging
+    logging.getLogger("dbos").propagate = original_propagate
