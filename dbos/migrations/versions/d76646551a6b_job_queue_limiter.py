@@ -27,7 +27,16 @@ def upgrade() -> None:
         ),
         schema="dbos",
     )
+    op.add_column(
+        "job_queue",
+        sa.Column(
+            "completed_at_epoch_ms",
+            sa.BigInteger(),
+        ),
+        schema="dbos",
+    )
 
 
 def downgrade() -> None:
     op.drop_column("job_queue", "started_at_epoch_ms", schema="dbos")
+    op.drop_column("job_queue", "completed_at_epoch_ms", schema="dbos")

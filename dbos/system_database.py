@@ -4,6 +4,7 @@ import threading
 import time
 from enum import Enum
 from typing import (
+    TYPE_CHECKING,
     Any,
     Dict,
     List,
@@ -29,6 +30,9 @@ from dbos.error import DBOSNonExistentWorkflowError, DBOSWorkflowConflictIDError
 from .dbos_config import ConfigFile
 from .logger import dbos_logger
 from .schemas.system_database import SystemSchema
+
+if TYPE_CHECKING:
+    from .queue import Queue
 
 
 class WorkflowStatusString(Enum):
@@ -1064,10 +1068,17 @@ class SystemDatabase:
                     ret_ids.append(id)
             return ret_ids
 
-    def remove_from_queue(self, workflow_id: str) -> None:
+    def remove_from_queue(self, workflow_id: str, queue: "Queue") -> None:
         with self.engine.begin() as c:
-            c.execute(
-                sa.delete(SystemSchema.job_queue).where(
-                    SystemSchema.job_queue.c.workflow_uuid == workflow_id
+            if queue.limiter is None:
+                c.execute(
+                    sa.delete(SystemSchema.job_queue).where(
+                        SystemSchema.job_queue.c.workflow_uuid == workflow_id
+                    )
                 )
-            )
+            else:
+                c.execute(
+                    sa.update(SystemSchema.job_queue)
+                    .where(SystemSchema.job_queue.c.workflow_uuid == workflow_id)
+                    .values(completed_at_epoch_ms=int(time.time() * 1000))
+                )

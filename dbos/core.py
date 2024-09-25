@@ -181,7 +181,8 @@ def _execute_workflow(
         status["status"] = "SUCCESS"
         status["output"] = utils.serialize(output)
         if status["queue_name"] is not None:
-            dbos._sys_db.remove_from_queue(status["workflow_uuid"])
+            queue = dbos._registry.queue_info_map[status["queue_name"]]
+            dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
         dbos._sys_db.buffer_workflow_status(status)
     except DBOSWorkflowConflictIDError:
         # Retrieve the workflow handle and wait for the result.
@@ -195,7 +196,8 @@ def _execute_workflow(
         status["status"] = "ERROR"
         status["error"] = utils.serialize_exception(error)
         if status["queue_name"] is not None:
-            dbos._sys_db.remove_from_queue(status["workflow_uuid"])
+            queue = dbos._registry.queue_info_map[status["queue_name"]]
+            dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
         dbos._sys_db.update_workflow_status(status)
         raise
 

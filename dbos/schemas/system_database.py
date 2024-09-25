@@ -165,4 +165,8 @@ class SystemSchema:
             "started_at_epoch_ms",
             BigInteger(),
         ),
+        Column(
+            "completed_at_epoch_ms",
+            BigInteger(),
+        ),
     )

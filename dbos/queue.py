@@ -1,7 +1,9 @@
 import threading
 import time
 import traceback
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, TypedDict
+
+from pydantic import BaseModel
 
 from dbos.core import P, R, _execute_workflow_id, _start_workflow
 
@@ -9,10 +11,21 @@ if TYPE_CHECKING:
     from dbos.dbos import DBOS, Workflow, WorkflowHandle
 
 
+class Limiter(TypedDict):
+    max: int
+    duration: int
+
+
 class Queue:
-    def __init__(self, name: str, concurrency: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        name: str,
+        concurrency: Optional[int] = None,
+        limiter: Optional[Limiter] = None,
+    ) -> None:
         self.name = name
         self.concurrency = concurrency
+        self.limiter = limiter
         from dbos.dbos import _get_or_create_dbos_registry
 
         registry = _get_or_create_dbos_registry()
