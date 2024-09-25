@@ -25,6 +25,13 @@ To run unit tests:
 pdm run pytest
 ```
 
+NOTE: The tests need a Postgres database running on localhost:5432. To start one, run:
+
+```bash
+export PGPASSWORD=dbos
+python3 dbos/templates/hello/start_postgres_docker.py
+```
+
 To check types:
 
 ```

@@ -327,6 +327,9 @@ def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
                 temp_wf_type=get_temp_workflow_type(func),
             )
 
+            dbos.logger.debug(
+                f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
+            )
             return _execute_workflow(dbos, status, func, *args, **kwargs)
 
     wrapped_func = cast(F, wrapper)
@@ -477,6 +480,9 @@ def _transaction(
                                     )
                                 )
                                 if recorded_output:
+                                    dbos.logger.debug(
+                                        f"Replaying transaction, id: {ctx.function_id}, name: {attributes['name']}"
+                                    )
                                     if recorded_output["error"]:
                                         deserialized_error = (
                                             utils.deserialize_exception(
@@ -493,6 +499,11 @@ def _transaction(
                                         raise Exception(
                                             "Output and error are both None"
                                         )
+                                else:
+                                    dbos.logger.debug(
+                                        f"Running transaction, id: {ctx.function_id}, name: {attributes['name']}"
+                                    )
+
                                 output = func(*args, **kwargs)
                                 txn_output["output"] = utils.serialize(output)
                                 assert (
@@ -590,6 +601,9 @@ def _step(
                     ctx.workflow_id, ctx.function_id
                 )
                 if recorded_output:
+                    dbos.logger.debug(
+                        f"Replaying step, id: {ctx.function_id}, name: {attributes['name']}"
+                    )
                     if recorded_output["error"] is not None:
                         deserialized_error = utils.deserialize_exception(
                             recorded_output["error"]
@@ -599,6 +613,11 @@ def _step(
                         return utils.deserialize(recorded_output["output"])
                     else:
                         raise Exception("Output and error are both None")
+                else:
+                    dbos.logger.debug(
+                        f"Running step, id: {ctx.function_id}, name: {attributes['name']}"
+                    )
+
                 output = None
                 error = None
                 local_max_attempts = max_attempts if retries_allowed else 1
