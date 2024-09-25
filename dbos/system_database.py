@@ -1047,7 +1047,7 @@ class SystemDatabase:
                         > start_time_ms - queue.limiter["duration"] * 1000
                     )
                 )
-                num_recent_queries = c.execute(query).fetchone()[0]
+                num_recent_queries = c.execute(query).fetchone()[0]  # type: ignore
                 num_executable_queries = queue.limiter["max"] - num_recent_queries
             query = (
                 sa.select(
