@@ -1,8 +1,8 @@
 """job_queue_limiter
 
-Revision ID: 9d68c43d3e0b
-Revises: eab0cc1d9a14
-Create Date: 2024-09-25 13:28:19.683860
+Revision ID: d76646551a6b
+Revises: 50f3227f0b4b
+Create Date: 2024-09-25 14:48:10.218015
 
 """
 
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "9d68c43d3e0b"
-down_revision: Union[str, None] = "eab0cc1d9a14"
+revision: str = "d76646551a6b"
+down_revision: Union[str, None] = "50f3227f0b4b"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
