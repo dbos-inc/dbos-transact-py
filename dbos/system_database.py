@@ -1056,11 +1056,10 @@ class SystemDatabase:
                 )
                 .where(SystemSchema.job_queue.c.queue_name == queue.name)
                 .where(SystemSchema.job_queue.c.completed_at_epoch_ms == None)
+                .order_by(SystemSchema.job_queue.c.created_at_epoch_ms.asc())
             )
             if queue.concurrency is not None:
-                query = query.order_by(
-                    SystemSchema.job_queue.c.created_at_epoch_ms.asc()
-                ).limit(queue.concurrency)
+                query = query.limit(queue.concurrency)
             rows = c.execute(query).fetchall()
             dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
             ret_ids = []
