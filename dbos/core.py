@@ -728,10 +728,83 @@ def _step(
                     raise error
                 return output
 
+        async def invoke_step_async(*args: Any, **kwargs: Any) -> Any:
+            if dbosreg.dbos is None:
+                raise DBOSException(
+                    f"Function {func.__name__} invoked before DBOS initialized"
+                )
+            dbos = dbosreg.dbos
+
+            attributes: TracedAttributes = {
+                "name": func.__name__,
+                "operationType": OperationType.STEP.value,
+            }
+            with EnterDBOSStep(attributes) as ctx:
+                step_output: OperationResultInternal = {
+                    "workflow_uuid": ctx.workflow_id,
+                    "function_id": ctx.function_id,
+                    "output": None,
+                    "error": None,
+                }
+                recorded_output = await dbos._sys_db.check_operation_execution(
+                    ctx.workflow_id, ctx.function_id
+                )
+                if recorded_output:
+                    if recorded_output["error"] is not None:
+                        deserialized_error = utils.deserialize_exception(
+                            recorded_output["error"]
+                        )
+                        raise deserialized_error
+                    elif recorded_output["output"] is not None:
+                        return utils.deserialize(recorded_output["output"])
+                    else:
+                        raise Exception("Output and error are both None")
+                output = None
+                error = None
+                local_max_attempts = max_attempts if retries_allowed else 1
+                max_retry_interval_seconds: float = 3600  # 1 Hour
+                local_interval_seconds = interval_seconds
+                for attempt in range(1, local_max_attempts + 1):
+                    try:
+                        output = await func(*args, **kwargs)
+                        step_output["output"] = utils.serialize(output)
+                        error = None
+                        break
+                    except Exception as err:
+                        error = err
+                        if retries_allowed:
+                            dbos.logger.warning(
+                                f"Step being automatically retried. (attempt {attempt} of {local_max_attempts}). {traceback.format_exc()}"
+                            )
+                            ctx.get_current_span().add_event(
+                                f"Step attempt {attempt} failed",
+                                {
+                                    "error": str(error),
+                                    "retryIntervalSeconds": local_interval_seconds,
+                                },
+                            )
+                            if attempt == local_max_attempts:
+                                error = DBOSMaxStepRetriesExceeded()
+                            else:
+                                time.sleep(local_interval_seconds)
+                                local_interval_seconds = min(
+                                    local_interval_seconds * backoff_rate,
+                                    max_retry_interval_seconds,
+                                )
+
+                step_output["error"] = (
+                    utils.serialize_exception(error) if error is not None else None
+                )
+                await dbos._sys_db.record_operation_result(step_output)
+
+                if error is not None:
+                    raise error
+                return output
+
         fi = get_or_create_func_info(func)
 
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
+        # @wraps(func)
+        def wrapper_sync(*args: Any, **kwargs: Any) -> Any:
             rr: Optional[str] = check_required_roles(func, fi)
             # Entering step is allowed:
             #  In a step already, just call the original function directly.
@@ -750,13 +823,41 @@ def _step(
                 assert tempwf
                 return tempwf(*args, **kwargs)
 
+        async def wrapper_async(*args: Any, **kwargs: Any) -> Any:
+            rr: Optional[str] = check_required_roles(func, fi)
+            # Entering step is allowed:
+            #  In a step already, just call the original function directly.
+            #  In a workflow (that is not in a step already)
+            #  Not in a workflow (we will start the single op workflow)
+            ctx = get_local_dbos_context()
+            if ctx and ctx.is_step():
+                # Call the original function directly
+                return await func(*args, **kwargs)
+            if ctx and ctx.is_within_workflow():
+                assert ctx.is_workflow(), "Steps must be called from within workflows"
+                with DBOSAssumeRole(rr):
+                    return await invoke_step_async(*args, **kwargs)
+            else:
+                tempwf = dbosreg.workflow_info_map.get("<temp>." + func.__qualname__)
+                assert tempwf
+                return await tempwf(*args, **kwargs)
+
         def temp_wf(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
 
-        wrapped_wf = _workflow_wrapper(dbosreg, temp_wf)
+        async def temp_wf_async(*args: Any, **kwargs: Any) -> Any:
+            return await wrapper_async(*args, **kwargs)
+
+        wrapped_wf = _workflow_wrapper(
+            dbosreg, temp_wf_async if asyncio.iscoroutinefunction(func) else temp_wf
+        )
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+
+        wrapper = wraps(func)(
+            wrapper_async if asyncio.iscoroutinefunction(func) else wrapper_sync
+        )
         wrapper.__orig_func = temp_wf  # type: ignore
 
         return cast(F, wrapper)
