@@ -1034,18 +1034,21 @@ class SystemDatabase:
                 .on_conflict_do_nothing()
             )
 
-    def start_queued_workflows(
-        self, queue_name: str, concurrency: Optional[int]
-    ) -> List[str]:
+    def start_queued_workflows(self, queue: "Queue") -> List[str]:
+        start_time = int(time.time() * 1000)
         with self.engine.begin() as c:
-            query = sa.select(
-                SystemSchema.job_queue.c.workflow_uuid,
-                SystemSchema.job_queue.c.started_at_epoch_ms,
-            ).where(SystemSchema.job_queue.c.queue_name == queue_name)
-            if concurrency is not None:
+            query = (
+                sa.select(
+                    SystemSchema.job_queue.c.workflow_uuid,
+                    SystemSchema.job_queue.c.started_at_epoch_ms,
+                )
+                .where(SystemSchema.job_queue.c.queue_name == queue.name)
+                .where(SystemSchema.job_queue.c.completed_at_epoch_ms == None)
+            )
+            if queue.concurrency is not None:
                 query = query.order_by(
                     SystemSchema.job_queue.c.created_at_epoch_ms.asc()
-                ).limit(concurrency)
+                ).limit(queue.concurrency)
             rows = c.execute(query).fetchall()
             dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
             ret_ids = []
@@ -1063,15 +1066,24 @@ class SystemDatabase:
                     c.execute(
                         SystemSchema.job_queue.update()
                         .where(SystemSchema.job_queue.c.workflow_uuid == id)
-                        .values(started_at_epoch_ms=int(time.time() * 1000))
+                        .values(started_at_epoch_ms=start_time)
                     )
                     ret_ids.append(id)
+            if queue.limiter is not None:
+                c.execute(
+                    sa.delete(SystemSchema.job_queue)
+                    .where(SystemSchema.job_queue.c.completed_at_epoch_ms != None)
+                    .where(
+                        SystemSchema.job_queue.c.started_at_epoch_ms
+                        < start_time - queue.limiter["duration"] * 1000
+                    )
+                )
             return ret_ids
 
     def remove_from_queue(self, workflow_id: str, queue: "Queue") -> None:
         with self.engine.begin() as c:
             if queue.limiter is None:
-                c.execute(
+                bob = c.execute(
                     sa.delete(SystemSchema.job_queue).where(
                         SystemSchema.job_queue.c.workflow_uuid == workflow_id
                     )

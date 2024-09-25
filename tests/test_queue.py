@@ -68,6 +68,38 @@ def test_one_at_a_time(dbos: DBOS) -> None:
     assert wf_counter == 1
 
 
+def test_one_at_a_time_with_limiter(dbos: DBOS) -> None:
+    wf_counter = 0
+    flag = False
+    workflow_event = threading.Event()
+    main_thread_event = threading.Event()
+
+    @DBOS.workflow()
+    def workflow_one() -> None:
+        nonlocal wf_counter
+        wf_counter += 1
+        main_thread_event.set()
+        workflow_event.wait()
+
+    @DBOS.workflow()
+    def workflow_two() -> None:
+        nonlocal flag
+        flag = True
+
+    queue = Queue("test_queue", concurrency=1, limiter={"max": 1, "duration": 1})
+    handle1 = queue.enqueue(workflow_one)
+    handle2 = queue.enqueue(workflow_two)
+
+    main_thread_event.wait()
+    time.sleep(2)  # Verify the other task isn't scheduled on subsequent poller ticks.
+    assert not flag
+    workflow_event.set()
+    assert handle1.get_result() == None
+    assert handle2.get_result() == None
+    assert flag
+    assert wf_counter == 1
+
+
 def test_queue_step(dbos: DBOS) -> None:
     step_counter: int = 0
     wfid = str(uuid.uuid4())
