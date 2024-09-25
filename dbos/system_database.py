@@ -1083,7 +1083,7 @@ class SystemDatabase:
     def remove_from_queue(self, workflow_id: str, queue: "Queue") -> None:
         with self.engine.begin() as c:
             if queue.limiter is None:
-                bob = c.execute(
+                c.execute(
                     sa.delete(SystemSchema.job_queue).where(
                         SystemSchema.job_queue.c.workflow_uuid == workflow_id
                     )
