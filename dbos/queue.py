@@ -1,6 +1,7 @@
 import asyncio
 import threading
 import time
+import traceback
 from typing import TYPE_CHECKING, Optional
 
 from dbos.core import P, R, _execute_workflow_id, _start_workflow
@@ -31,8 +32,13 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     while not stop_event.is_set():
         time.sleep(1)
         for queue_name, queue in dbos._registry.queue_info_map.items():
-            wf_ids = asyncio.run(
-                dbos._sys_db.start_queued_workflows(queue_name, queue.concurrency)
-            )
-            for id in wf_ids:
-                _execute_workflow_id(dbos, id)
+            try:
+                wf_ids = asyncio.run(
+                    dbos._sys_db.start_queued_workflows(queue_name, queue.concurrency)
+                )
+                for id in wf_ids:
+                    _execute_workflow_id(dbos, id)
+            except Exception:
+                dbos.logger.warning(
+                    f"Exception encountered in queue thread: {traceback.format_exc()}"
+                )
