@@ -180,7 +180,7 @@ async def _init_workflow(
     return status
 
 
-def _execute_workflow(
+def _execute_workflow_sync(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
     func: "Workflow[P, R]",
@@ -261,7 +261,7 @@ def _execute_workflow_wthread(
     with DBOSContextSwap(ctx):
         with EnterDBOSWorkflow(attributes):
             try:
-                return _execute_workflow(dbos, status, func, *args, **kwargs)
+                return _execute_workflow_sync(dbos, status, func, *args, **kwargs)
             except Exception as e:
                 dbos.logger.error(
                     f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
@@ -373,7 +373,7 @@ def _workflow_wrapper(dbosreg: "_DBOSRegistry", func: F) -> F:
                 )
             )
 
-            return _execute_workflow(dbos, status, func, *args, **kwargs)
+            return _execute_workflow_sync(dbos, status, func, *args, **kwargs)
 
     async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
         if dbosreg.dbos is None:
@@ -979,10 +979,10 @@ def _step(
 
 
 def _register_send_wf(dbos: "DBOS", registry: "_DBOSRegistry") -> None:
-    def send_temp_workflow(
+    async def send_temp_workflow(
         destination_id: str, message: Any, topic: Optional[str]
     ) -> None:
-        dbos.send(destination_id, message, topic)
+        await dbos.send_async(destination_id, message, topic)
 
     temp_send_wf = _workflow_wrapper(registry, send_temp_workflow)
     set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
@@ -990,8 +990,7 @@ def _register_send_wf(dbos: "DBOS", registry: "_DBOSRegistry") -> None:
     registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
 
 
-# can't convert send to async until WF infra is converted to async
-def _send(
+async def _send(
     dbos: "DBOS", destination_id: str, message: Any, topic: Optional[str] = None
 ) -> None:
     async def do_send(destination_id: str, message: Any, topic: Optional[str]) -> None:
@@ -1010,11 +1009,11 @@ def _send(
     ctx = get_local_dbos_context()
     if ctx and ctx.is_within_workflow():
         assert ctx.is_workflow(), "send() must be called from within a workflow"
-        return asyncio.run(do_send(destination_id, message, topic))
+        return await do_send(destination_id, message, topic)
     else:
         wffn = dbos._registry.workflow_info_map.get(TEMP_SEND_WF_NAME)
         assert wffn
-        wffn(destination_id, message, topic)
+        await wffn(destination_id, message, topic)
 
 
 async def _recv(

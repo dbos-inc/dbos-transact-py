@@ -27,7 +27,6 @@ from opentelemetry.trace import Span
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dbos.core import (
-    TEMP_SEND_WF_NAME,
     _execute_workflow_id,
     _get_event,
     _recv,
@@ -38,18 +37,12 @@ from dbos.core import (
     _step,
     _transaction,
     _workflow,
-    _workflow_wrapper,
     _WorkflowHandlePolling,
 )
 from dbos.decorators import classproperty
 from dbos.queue import Queue, queue_thread
 from dbos.recovery import _recover_pending_workflows, _startup_recovery_thread
-from dbos.registrations import (
-    DBOSClassInfo,
-    get_or_create_class_info,
-    set_dbos_func_name,
-    set_temp_workflow_type,
-)
+from dbos.registrations import DBOSClassInfo, get_or_create_class_info
 from dbos.roles import default_required_roles, required_roles
 from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled
 
@@ -566,7 +559,14 @@ class DBOS:
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
         """Send a message to a workflow execution."""
-        return _send(_get_dbos_instance(), destination_id, message, topic)
+        return asyncio.run(_send(_get_dbos_instance(), destination_id, message, topic))
+
+    @classmethod
+    async def send_async(
+        cls, destination_id: str, message: Any, topic: Optional[str] = None
+    ) -> None:
+        """Send a message to a workflow execution."""
+        return await _send(_get_dbos_instance(), destination_id, message, topic)
 
     @classmethod
     def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
