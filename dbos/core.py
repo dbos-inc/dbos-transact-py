@@ -519,7 +519,7 @@ def _transaction(
     dbosreg: "_DBOSRegistry", isolation_level: "IsolationLevel" = "SERIALIZABLE"
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
-        def invoke_tx(*args: Any, **kwargs: Any) -> Any:
+        def invoke_tx_sync(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:
                 raise DBOSException(
                     f"Function {func.__name__} invoked before DBOS initialized"
@@ -609,10 +609,99 @@ def _transaction(
                             raise
             return output
 
+        async def invoke_tx_async(*args: Any, **kwargs: Any) -> Any:
+            if dbosreg.dbos is None:
+                raise DBOSException(
+                    f"Function {func.__name__} invoked before DBOS initialized"
+                )
+            dbos = dbosreg.dbos
+            async with dbos._app_db.async_sessionmaker() as session:
+                attributes: TracedAttributes = {
+                    "name": func.__name__,
+                    "operationType": OperationType.TRANSACTION.value,
+                }
+                with EnterDBOSTransaction(session, attributes=attributes) as ctx:
+                    txn_output: TransactionResultInternal = {
+                        "workflow_uuid": ctx.workflow_id,
+                        "function_id": ctx.function_id,
+                        "output": None,
+                        "error": None,
+                        "txn_snapshot": "",  # TODO: add actual snapshot
+                        "executor_id": None,
+                        "txn_id": None,
+                    }
+                    retry_wait_seconds = 0.001
+                    backoff_factor = 1.5
+                    max_retry_wait_seconds = 2.0
+                    while True:
+                        has_recorded_error = False
+                        try:
+                            async with session.begin():
+                                # This must be the first statement in the transaction!
+                                await session.connection(
+                                    execution_options={
+                                        "isolation_level": isolation_level
+                                    }
+                                )
+                                # Check recorded output for OAOO
+                                recorded_output = await ApplicationDatabase.check_transaction_execution_async(
+                                    session,
+                                    ctx.workflow_id,
+                                    ctx.function_id,
+                                )
+                                if recorded_output:
+                                    if recorded_output["error"]:
+                                        deserialized_error = (
+                                            utils.deserialize_exception(
+                                                recorded_output["error"]
+                                            )
+                                        )
+                                        has_recorded_error = True
+                                        raise deserialized_error
+                                    elif recorded_output["output"]:
+                                        return utils.deserialize(
+                                            recorded_output["output"]
+                                        )
+                                    else:
+                                        raise Exception(
+                                            "Output and error are both None"
+                                        )
+                                output = await func(*args, **kwargs)
+                                txn_output["output"] = utils.serialize(output)
+                                assert (
+                                    ctx.async_sql_session is not None
+                                ), "Cannot find a database connection"
+                                await ApplicationDatabase.record_transaction_output_async(
+                                    ctx.async_sql_session, txn_output
+                                )
+                                break
+                        except DBAPIError as dbapi_error:
+                            if dbapi_error.orig.sqlstate == "40001":  # type: ignore
+                                # Retry on serialization failure
+                                ctx.get_current_span().add_event(
+                                    "Transaction Serialization Failure",
+                                    {"retry_wait_seconds": retry_wait_seconds},
+                                )
+                                time.sleep(retry_wait_seconds)
+                                retry_wait_seconds = min(
+                                    retry_wait_seconds * backoff_factor,
+                                    max_retry_wait_seconds,
+                                )
+                                continue
+                            raise
+                        except Exception as error:
+                            # Don't record the error if it was already recorded
+                            if not has_recorded_error:
+                                txn_output["error"] = utils.serialize_exception(error)
+                                await dbos._app_db.record_transaction_error_async(
+                                    txn_output
+                                )
+                            raise
+            return output
+
         fi = get_or_create_func_info(func)
 
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
+        def wrapper_sync(*args: Any, **kwargs: Any) -> Any:
             rr: Optional[str] = check_required_roles(func, fi)
             # Entering transaction is allowed:
             #  In a workflow (that is not in a step already)
@@ -623,14 +712,40 @@ def _transaction(
                     ctx.is_workflow()
                 ), "Transactions must be called from within workflows"
                 with DBOSAssumeRole(rr):
-                    return invoke_tx(*args, **kwargs)
+                    return invoke_tx_sync(*args, **kwargs)
             else:
                 tempwf = dbosreg.workflow_info_map.get("<temp>." + func.__qualname__)
                 assert tempwf
                 return tempwf(*args, **kwargs)
 
-        def temp_wf(*args: Any, **kwargs: Any) -> Any:
-            return wrapper(*args, **kwargs)
+        async def wrapper_async(*args: Any, **kwargs: Any) -> Any:
+            rr: Optional[str] = check_required_roles(func, fi)
+            # Entering transaction is allowed:
+            #  In a workflow (that is not in a step already)
+            #  Not in a workflow (we will start the single op workflow)
+            ctx = get_local_dbos_context()
+            if ctx and ctx.is_within_workflow():
+                assert (
+                    ctx.is_workflow()
+                ), "Transactions must be called from within workflows"
+                with DBOSAssumeRole(rr):
+                    return await invoke_tx_async(*args, **kwargs)
+            else:
+                tempwf = dbosreg.workflow_info_map.get("<temp>." + func.__qualname__)
+                assert tempwf
+                return await tempwf(*args, **kwargs)
+
+        wrapper = wraps(func)(
+            wrapper_async if asyncio.iscoroutinefunction(func) else wrapper_sync
+        )
+
+        def temp_wf_sync(*args: Any, **kwargs: Any) -> Any:
+            return wrapper_sync(*args, **kwargs)
+
+        async def temp_wf_async(*args: Any, **kwargs: Any) -> Any:
+            return await wrapper_async(*args, **kwargs)
+
+        temp_wf = temp_wf_async if asyncio.iscoroutinefunction(func) else temp_wf_sync
 
         wrapped_wf = _workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
@@ -653,7 +768,7 @@ def _step(
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
 
-        def invoke_step(*args: Any, **kwargs: Any) -> Any:
+        def invoke_step_sync(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:
                 raise DBOSException(
                     f"Function {func.__name__} invoked before DBOS initialized"
@@ -803,7 +918,6 @@ def _step(
 
         fi = get_or_create_func_info(func)
 
-        # @wraps(func)
         def wrapper_sync(*args: Any, **kwargs: Any) -> Any:
             rr: Optional[str] = check_required_roles(func, fi)
             # Entering step is allowed:
@@ -817,7 +931,7 @@ def _step(
             if ctx and ctx.is_within_workflow():
                 assert ctx.is_workflow(), "Steps must be called from within workflows"
                 with DBOSAssumeRole(rr):
-                    return invoke_step(*args, **kwargs)
+                    return invoke_step_sync(*args, **kwargs)
             else:
                 tempwf = dbosreg.workflow_info_map.get("<temp>." + func.__qualname__)
                 assert tempwf
@@ -842,22 +956,21 @@ def _step(
                 assert tempwf
                 return await tempwf(*args, **kwargs)
 
-        def temp_wf(*args: Any, **kwargs: Any) -> Any:
+        wrapper = wraps(func)(
+            wrapper_async if asyncio.iscoroutinefunction(func) else wrapper_sync
+        )
+
+        def temp_wf_sync(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
 
         async def temp_wf_async(*args: Any, **kwargs: Any) -> Any:
             return await wrapper_async(*args, **kwargs)
 
-        wrapped_wf = _workflow_wrapper(
-            dbosreg, temp_wf_async if asyncio.iscoroutinefunction(func) else temp_wf
-        )
+        temp_wf = temp_wf_async if asyncio.iscoroutinefunction(func) else temp_wf_sync
+        wrapped_wf = _workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
-
-        wrapper = wraps(func)(
-            wrapper_async if asyncio.iscoroutinefunction(func) else wrapper_sync
-        )
         wrapper.__orig_func = temp_wf  # type: ignore
 
         return cast(F, wrapper)
