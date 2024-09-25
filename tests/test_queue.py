@@ -86,7 +86,7 @@ def test_one_at_a_time_with_limiter(dbos: DBOS) -> None:
         nonlocal flag
         flag = True
 
-    queue = Queue("test_queue", concurrency=1, limiter={"max": 1, "duration": 1})
+    queue = Queue("test_queue", concurrency=1, limiter={"max": 10, "duration": 1})
     handle1 = queue.enqueue(workflow_one)
     handle2 = queue.enqueue(workflow_two)
 
