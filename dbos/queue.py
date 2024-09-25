@@ -42,8 +42,9 @@ class Queue:
 
 def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     while not stop_event.is_set():
-        time.sleep(1)
-        for queue_name, queue in dbos._registry.queue_info_map.items():
+        if stop_event.wait(timeout=1):
+            return
+        for _, queue in dbos._registry.queue_info_map.items():
             try:
                 wf_ids = dbos._sys_db.start_queued_workflows(queue)
                 for id in wf_ids:

@@ -1035,8 +1035,20 @@ class SystemDatabase:
             )
 
     def start_queued_workflows(self, queue: "Queue") -> List[str]:
-        start_time = int(time.time() * 1000)
+        start_time_ms = int(time.time() * 1000)
         with self.engine.begin() as c:
+            if queue.limiter is not None:
+                query = (
+                    sa.select(sa.func.count())
+                    .select_from(SystemSchema.job_queue)
+                    .where(SystemSchema.job_queue.c.started_at_epoch_ms.isnot(None))
+                    .where(
+                        SystemSchema.job_queue.c.started_at_epoch_ms
+                        > start_time_ms - queue.limiter["duration"] * 1000
+                    )
+                )
+                num_recent_queries = c.execute(query).fetchone()[0]
+                num_executable_queries = queue.limiter["max"] - num_recent_queries
             query = (
                 sa.select(
                     SystemSchema.job_queue.c.workflow_uuid,
@@ -1066,16 +1078,19 @@ class SystemDatabase:
                     c.execute(
                         SystemSchema.job_queue.update()
                         .where(SystemSchema.job_queue.c.workflow_uuid == id)
-                        .values(started_at_epoch_ms=start_time)
+                        .values(started_at_epoch_ms=start_time_ms)
                     )
                     ret_ids.append(id)
+                    if queue.limiter is not None:
+                        if len(ret_ids) >= num_executable_queries:
+                            break
             if queue.limiter is not None:
                 c.execute(
                     sa.delete(SystemSchema.job_queue)
                     .where(SystemSchema.job_queue.c.completed_at_epoch_ms != None)
                     .where(
                         SystemSchema.job_queue.c.started_at_epoch_ms
-                        < start_time - queue.limiter["duration"] * 1000
+                        < start_time_ms - queue.limiter["duration"] * 1000
                     )
                 )
             return ret_ids
