@@ -178,9 +178,9 @@ def test_limiter(dbos: DBOS) -> None:
     handles: list[WorkflowHandle[float]] = []
     times: list[float] = []
 
-    # Launch a number of tasks equal to three times the max.
-    # This should lead to three "waves" of the max tasks being
-    # executed simultaneously, followed by a wait of the duration,
+    # Launch a number of tasks equal to three times the limit.
+    # This should lead to three "waves" of the limit tasks being
+    # executed simultaneously, followed by a wait of the period,
     # followed by the next wave.
     num_waves = 3
     for _ in range(limit * num_waves):
@@ -194,7 +194,7 @@ def test_limiter(dbos: DBOS) -> None:
         for i in range(wave * limit, (wave + 1) * limit - 1):
             assert times[i + 1] - times[i] < 0.1
 
-    # Verify that the gap between "waves" is ~equal to the duration
+    # Verify that the gap between "waves" is ~equal to the period
     for wave in range(num_waves - 1):
         assert times[limit * wave] - times[limit * wave - 1] < period + 0.1
 
