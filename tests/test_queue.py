@@ -69,6 +69,39 @@ def test_one_at_a_time(dbos: DBOS) -> None:
     assert wf_counter == 1
 
 
+def test_queue_childwf(dbos: DBOS) -> None:
+    queue = Queue("child_queue", 3)
+
+    @DBOS.workflow()
+    def test_child_wf(val: str) -> str:
+        DBOS.recv("release", 30)
+        return val + "d"
+
+    @DBOS.workflow()
+    def test_workflow(var1: str, var2: str) -> str:
+        wfh1 = queue.enqueue(test_child_wf, var1)
+        wfh2 = queue.enqueue(test_child_wf, var2)
+        wfh3 = queue.enqueue(test_child_wf, var1)
+        wfh4 = queue.enqueue(test_child_wf, var2)
+
+        DBOS.sleep(1)
+        assert wfh4.get_status().status == "ENQUEUED"
+
+        DBOS.send(wfh1.get_workflow_id(), "go", "release")
+        DBOS.send(wfh2.get_workflow_id(), "go", "release")
+        DBOS.send(wfh3.get_workflow_id(), "go", "release")
+        DBOS.send(wfh4.get_workflow_id(), "go", "release")
+
+        return (
+            wfh1.get_result()
+            + wfh2.get_result()
+            + wfh3.get_result()
+            + wfh4.get_result()
+        )
+
+    assert test_workflow("a", "b") == "adbdadbd"
+
+
 def test_queue_step(dbos: DBOS) -> None:
     step_counter: int = 0
     wfid = str(uuid.uuid4())
