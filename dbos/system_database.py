@@ -1037,7 +1037,7 @@ class SystemDatabase:
     def start_queued_workflows(self, queue: "Queue") -> List[str]:
         start_time_ms = int(time.time() * 1000)
         if queue.limiter is not None:
-            limiter_duration_ms = int(queue.limiter["duration"] * 1000)
+            limiter_duration_ms = int(queue.limiter["period"] * 1000)
         with self.engine.begin() as c:
             # Execute with snapshot isolation to ensure multiple workers respect limits
             c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
@@ -1054,7 +1054,7 @@ class SystemDatabase:
                     )
                 )
                 num_recent_queries = c.execute(query).fetchone()[0]  # type: ignore
-                if num_recent_queries >= queue.limiter["max"]:
+                if num_recent_queries >= queue.limiter["limit"]:
                     return []
 
             # Select not-yet-completed functions in the queue ordered by the
@@ -1081,9 +1081,9 @@ class SystemDatabase:
             for id in dequeued_ids:
 
                 # If we have a limiter, stop starting functions when the number
-                # of functions started in the duration exceeds the maximum.
+                # of functions started this period exceeds the limit.
                 if queue.limiter is not None:
-                    if len(ret_ids) + num_recent_queries >= queue.limiter["max"]:
+                    if len(ret_ids) + num_recent_queries >= queue.limiter["limit"]:
                         break
 
                 # To start a function, first set its status to PENDING
@@ -1106,7 +1106,7 @@ class SystemDatabase:
                 ret_ids.append(id)
 
             # If we have a limiter, garbage-collect all completed functions started
-            # before the duration. If there's no limiter, there's no need--they were
+            # before the period. If there's no limiter, there's no need--they were
             # deleted on completion.
             if queue.limiter is not None:
                 c.execute(

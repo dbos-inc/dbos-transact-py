@@ -108,7 +108,7 @@ def test_one_at_a_time_with_limiter(dbos: DBOS) -> None:
         nonlocal flag
         flag = True
 
-    queue = Queue("test_queue", concurrency=1, limiter={"max": 10, "duration": 1})
+    queue = Queue("test_queue", concurrency=1, limiter={"limit": 10, "period": 1})
     handle1 = queue.enqueue(workflow_one)
     handle2 = queue.enqueue(workflow_two)
 
@@ -171,9 +171,9 @@ def test_limiter(dbos: DBOS) -> None:
         assert var1 == "abc" and var2 == "123"
         return time.time()
 
-    max = 5
-    duration = 2
-    queue = Queue("test_queue", limiter={"max": max, "duration": duration})
+    limit = 5
+    period = 2
+    queue = Queue("test_queue", limiter={"limit": limit, "period": period})
 
     handles: list[WorkflowHandle[float]] = []
     times: list[float] = []
@@ -183,7 +183,7 @@ def test_limiter(dbos: DBOS) -> None:
     # executed simultaneously, followed by a wait of the duration,
     # followed by the next wave.
     num_waves = 3
-    for _ in range(max * num_waves):
+    for _ in range(limit * num_waves):
         h = queue.enqueue(test_workflow, "abc", "123")
         handles.append(h)
     for h in handles:
@@ -191,12 +191,12 @@ def test_limiter(dbos: DBOS) -> None:
 
     # Verify that each "wave" of tasks started at the ~same time.
     for wave in range(num_waves):
-        for i in range(wave * max, (wave + 1) * max - 1):
+        for i in range(wave * limit, (wave + 1) * limit - 1):
             assert times[i + 1] - times[i] < 0.1
 
     # Verify that the gap between "waves" is ~equal to the duration
     for wave in range(num_waves - 1):
-        assert times[max * wave] - times[max * wave - 1] < duration + 0.1
+        assert times[limit * wave] - times[limit * wave - 1] < period + 0.1
 
     # Verify all workflows get the SUCCESS status eventually
     dbos._sys_db.wait_for_buffer_flush()

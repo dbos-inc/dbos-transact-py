@@ -1,9 +1,6 @@
 import threading
-import time
 import traceback
 from typing import TYPE_CHECKING, Optional, TypedDict
-
-from pydantic import BaseModel
 
 from dbos.core import P, R, _execute_workflow_id, _start_workflow
 
@@ -11,13 +8,13 @@ if TYPE_CHECKING:
     from dbos.dbos import DBOS, Workflow, WorkflowHandle
 
 
-# Rate-limit the maximum number of functions from this queue
-# that can be started in a given duration. If the max is 5
-# and the duration is 10, no more than 5 functions can be
+# Limit the maximum number of functions from this queue
+# that can be started in a given period. If the limit is 5
+# and the period is 10, no more than 5 functions can be
 # started per 10 seconds.
 class Limiter(TypedDict):
-    max: int
-    duration: float
+    limit: int
+    period: float
 
 
 class Queue:
