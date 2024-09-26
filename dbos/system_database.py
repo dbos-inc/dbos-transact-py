@@ -1037,12 +1037,12 @@ class SystemDatabase:
     def start_queued_workflows(self, queue: "Queue") -> List[str]:
         start_time_ms = int(time.time() * 1000)
         if queue.limiter is not None:
-            limiter_duration_ms = int(queue.limiter["period"] * 1000)
+            limiter_period_ms = int(queue.limiter["period"] * 1000)
         with self.engine.begin() as c:
             # Execute with snapshot isolation to ensure multiple workers respect limits
             c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
 
-            # If there is a limiter, compute how many functions have started in its duration.
+            # If there is a limiter, compute how many functions have started in its period.
             if queue.limiter is not None:
                 query = (
                     sa.select(sa.func.count())
@@ -1050,7 +1050,7 @@ class SystemDatabase:
                     .where(SystemSchema.job_queue.c.started_at_epoch_ms.isnot(None))
                     .where(
                         SystemSchema.job_queue.c.started_at_epoch_ms
-                        > start_time_ms - limiter_duration_ms
+                        > start_time_ms - limiter_period_ms
                     )
                 )
                 num_recent_queries = c.execute(query).fetchone()[0]  # type: ignore
@@ -1114,7 +1114,7 @@ class SystemDatabase:
                     .where(SystemSchema.job_queue.c.completed_at_epoch_ms != None)
                     .where(
                         SystemSchema.job_queue.c.started_at_epoch_ms
-                        < start_time_ms - limiter_duration_ms
+                        < start_time_ms - limiter_period_ms
                     )
                 )
 
