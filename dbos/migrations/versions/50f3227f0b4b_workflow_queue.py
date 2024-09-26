@@ -1,8 +1,8 @@
 """workflow_queue
 
-Revision ID: eab0cc1d9a15
-Revises: eab0cc1d9a14
-Create Date: 2024-09-24 12:00:00.0
+Revision ID: 50f3227f0b4c
+Revises: 50f3227f0b4b
+Create Date: 2024-09-26 12:00:00.0
 
 """
 
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "eab0cc1d9a15"
-down_revision: Union[str, None] = "eab0cc1d9a14"
+revision: str = "50f3227f0b4c"
+down_revision: Union[str, None] = "50f3227f0b4b"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

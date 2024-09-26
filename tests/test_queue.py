@@ -56,6 +56,7 @@ def test_one_at_a_time(dbos: DBOS) -> None:
 
     queue = Queue("test_queue", 1)
     handle1 = queue.enqueue(workflow_one)
+    assert handle1.get_status().queue_name == "test_queue"
     handle2 = queue.enqueue(workflow_two)
 
     main_thread_event.wait()
