@@ -1054,6 +1054,8 @@ class SystemDatabase:
                     )
                 )
                 num_recent_queries = c.execute(query).fetchone()[0]  # type: ignore
+                if num_recent_queries >= queue.limiter["max"]:
+                    return []
 
             # Select not-yet-completed functions in the queue ordered by the
             # time at which they were enqueued.
