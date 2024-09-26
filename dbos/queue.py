@@ -11,9 +11,13 @@ if TYPE_CHECKING:
     from dbos.dbos import DBOS, Workflow, WorkflowHandle
 
 
+# Rate-limit the maximum number of functions from this queue
+# that can be started in a given duration. If the max is 5
+# and the duration is 10, no more than 5 functions can be
+# started per 10 seconds.
 class Limiter(TypedDict):
     max: int
-    duration: int
+    duration: float
 
 
 class Queue:
