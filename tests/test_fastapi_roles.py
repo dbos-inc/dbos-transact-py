@@ -14,7 +14,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 # Public API
-from dbos import DBOS, DBOSContextEnsure
+from dbos import DBOS, DBOSContextSetAuth
 
 # Private API because this is a unit test
 from dbos.context import assert_current_dbos_context
@@ -38,15 +38,9 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     async def authMiddleware(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        with DBOSContextEnsure():
-            prev_user = DBOS.authenticated_user
-            prev_roles = DBOS.authenticated_roles
-            DBOS.set_authentication("user1", ["user", "engineer"])
-            try:
-                response = await call_next(request)
-                return response
-            finally:
-                DBOS.set_authentication(prev_user, prev_roles)
+        with DBOSContextSetAuth("user1", ["user", "engineer"]):
+            response = await call_next(request)
+            return response
 
     @app.get("/dboserror")
     def test_dbos_error() -> None:
@@ -238,15 +232,9 @@ def test_jwt_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         except Exception as e:
             pass
 
-        with DBOSContextEnsure():
-            prev_user = DBOS.authenticated_user
-            prev_roles = DBOS.authenticated_roles
-            DBOS.set_authentication(user, roles)
-            try:
-                response = await call_next(request)
-                return response
-            finally:
-                DBOS.set_authentication(prev_user, prev_roles)
+        with DBOSContextSetAuth(user, roles):
+            response = await call_next(request)
+            return response
 
     @app.get("/open/{var1}")
     @DBOS.required_roles([])

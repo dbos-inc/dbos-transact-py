@@ -492,6 +492,39 @@ class EnterDBOSHandler:
         return False  # Did not handle
 
 
+class DBOSContextSetAuth(DBOSContextEnsure):
+    def __init__(self, user: Optional[str], roles: Optional[List[str]]) -> None:
+        self.created_ctx = False
+        self.user = user
+        self.roles = roles
+        self.prev_user: Optional[str] = None
+        self.prev_roles: Optional[List[str]] = None
+
+    def __enter__(self) -> DBOSContext:
+        ctx = get_local_dbos_context()
+        if ctx is None:
+            self.created_ctx = True
+            set_local_dbos_context(DBOSContext())
+        ctx = assert_current_dbos_context()
+        self.prev_user = ctx.authenticated_user
+        self.prev_roles = ctx.authenticated_roles
+        ctx.set_authentication(self.user, self.roles)
+        return ctx
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        ctx = assert_current_dbos_context()
+        ctx.set_authentication(self.prev_user, self.prev_roles)
+        # Clean up the basic context if we created it
+        if self.created_ctx:
+            clear_local_dbos_context()
+        return False  # Did not handle
+
+
 class DBOSAssumeRole:
     def __init__(self, assume_role: Optional[str]) -> None:
         self.prior_role: Optional[str] = None

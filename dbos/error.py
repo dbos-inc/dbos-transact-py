@@ -32,6 +32,7 @@ class DBOSErrorCode(Enum):
     InitializationError = 3
     WorkflowFunctionNotFound = 4
     NonExistentWorkflowError = 5
+    DeadLetterQueueError = 6
     MaxStepRetriesExceeded = 7
     NotAuthorized = 8
 
@@ -83,6 +84,16 @@ class DBOSNonExistentWorkflowError(DBOSException):
         super().__init__(
             f"Sent to non-existent destination workflow ID: {destination_id}",
             dbos_error_code=DBOSErrorCode.NonExistentWorkflowError.value,
+        )
+
+
+class DBOSDeadLetterQueueError(DBOSException):
+    """Exception raised when a workflow database record does not exist for a given ID."""
+
+    def __init__(self, wf_id: str, max_retries: int):
+        super().__init__(
+            f"Workflow {wf_id} has been moved to the dead-letter queue after exceeding the maximum of ${max_retries} retries",
+            dbos_error_code=DBOSErrorCode.DeadLetterQueueError.value,
         )
 
 

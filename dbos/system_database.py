@@ -24,7 +24,12 @@ from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 
 import dbos.utils as utils
-from dbos.error import DBOSNonExistentWorkflowError, DBOSWorkflowConflictIDError
+from dbos.error import (
+    DBOSDeadLetterQueueError,
+    DBOSNonExistentWorkflowError,
+    DBOSWorkflowConflictIDError,
+)
+from dbos.registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 
 from .dbos_config import ConfigFile
 from .logger import dbos_logger
@@ -233,7 +238,9 @@ class SystemDatabase:
         status: WorkflowStatusInternal,
         replace: bool = True,
         in_recovery: bool = False,
+        *,
         conn: Optional[sa.Connection] = None,
+        max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
     ) -> None:
         cmd = pg.insert(SystemSchema.workflow_status).values(
             workflow_uuid=status["workflow_uuid"],
@@ -271,12 +278,36 @@ class SystemDatabase:
             )
         else:
             cmd = cmd.on_conflict_do_nothing()
+        cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts)  # type: ignore
 
         if conn is not None:
-            conn.execute(cmd)
+            results = conn.execute(cmd)
         else:
             with self.engine.begin() as c:
-                c.execute(cmd)
+                results = c.execute(cmd)
+        if in_recovery:
+            row = results.fetchone()
+            if row is not None:
+                recovery_attempts: int = row[0]
+                if recovery_attempts > max_recovery_attempts:
+                    with self.engine.begin() as c:
+                        c.execute(
+                            sa.update(SystemSchema.workflow_status)
+                            .where(
+                                SystemSchema.workflow_status.c.workflow_uuid
+                                == status["workflow_uuid"]
+                            )
+                            .where(
+                                SystemSchema.workflow_status.c.status
+                                == WorkflowStatusString.PENDING.value
+                            )
+                            .values(
+                                status=WorkflowStatusString.RETRIES_EXCEEDED.value,
+                            )
+                        )
+                    raise DBOSDeadLetterQueueError(
+                        status["workflow_uuid"], max_recovery_attempts
+                    )
 
         # Record we have exported status for this single-transaction workflow
         if status["workflow_uuid"] in self._temp_txn_wf_ids:

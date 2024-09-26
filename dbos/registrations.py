@@ -3,6 +3,8 @@ from enum import Enum
 from types import FunctionType
 from typing import Any, Callable, List, Literal, Optional, Tuple, Type, cast
 
+DEFAULT_MAX_RECOVERY_ATTEMPTS = 50
+
 
 def get_dbos_func_name(f: Any) -> str:
     if hasattr(f, "dbos_function_name"):
@@ -47,6 +49,7 @@ class DBOSFuncInfo:
         self.class_info: Optional[DBOSClassInfo] = None
         self.func_type: DBOSFuncType = DBOSFuncType.Unknown
         self.required_roles: Optional[List[str]] = None
+        self.max_recovery_attempts = DEFAULT_MAX_RECOVERY_ATTEMPTS
 
 
 def get_or_create_class_info(cls: Type[Any]) -> DBOSClassInfo:
