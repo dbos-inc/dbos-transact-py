@@ -10,6 +10,22 @@ from dbos.schemas.system_database import SystemSchema
 from dbos.system_database import WorkflowStatusString
 
 
+def queue_entries_are_cleaned_up(dbos: DBOS):
+    max_tries = 10
+    success = False
+    for i in range(max_tries):
+        with dbos._sys_db.engine.begin() as c:
+            query = sa.select(sa.func.count()).select_from(SystemSchema.job_queue)
+            row = c.execute(query).fetchone()
+            assert row is not None
+            count = row[0]
+            if count == 0:
+                success = True
+                break
+        time.sleep(1)
+    return success
+
+
 def test_simple_queue(dbos: DBOS) -> None:
     wf_counter: int = 0
     step_counter: int = 0
@@ -71,6 +87,7 @@ def test_one_at_a_time(dbos: DBOS) -> None:
     assert handle2.get_result() == None
     assert flag
     assert wf_counter == 1
+    assert queue_entries_are_cleaned_up(dbos)
 
 
 def test_one_at_a_time_with_limiter(dbos: DBOS) -> None:
@@ -187,16 +204,4 @@ def test_limiter(dbos: DBOS) -> None:
         assert h.get_status().status == WorkflowStatusString.SUCCESS.value
 
     # Verify all queue entries eventually get cleaned up.
-    max_tries = 10
-    success = False
-    for i in range(max_tries):
-        with dbos._sys_db.engine.begin() as c:
-            query = sa.select(sa.func.count()).select_from(SystemSchema.job_queue)
-            row = c.execute(query).fetchone()
-            assert row is not None
-            count = row[0]
-            if count == 0:
-                success = True
-                break
-        time.sleep(1)
-    assert success, f"{count} queue entries were not cleaned up"
+    assert queue_entries_are_cleaned_up(dbos)
