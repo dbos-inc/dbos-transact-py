@@ -1,7 +1,6 @@
 import threading
-import time
 import traceback
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, TypedDict
 
 from dbos.core import P, R, _execute_workflow_id, _start_workflow
 
@@ -9,10 +8,25 @@ if TYPE_CHECKING:
     from dbos.dbos import DBOS, Workflow, WorkflowHandle
 
 
+# Limit the maximum number of functions from this queue
+# that can be started in a given period. If the limit is 5
+# and the period is 10, no more than 5 functions can be
+# started per 10 seconds.
+class Limiter(TypedDict):
+    limit: int
+    period: float
+
+
 class Queue:
-    def __init__(self, name: str, concurrency: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        name: str,
+        concurrency: Optional[int] = None,
+        limiter: Optional[Limiter] = None,
+    ) -> None:
         self.name = name
         self.concurrency = concurrency
+        self.limiter = limiter
         from dbos.dbos import _get_or_create_dbos_registry
 
         registry = _get_or_create_dbos_registry()
@@ -29,12 +43,11 @@ class Queue:
 
 def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     while not stop_event.is_set():
-        time.sleep(1)
-        for queue_name, queue in dbos._registry.queue_info_map.items():
+        if stop_event.wait(timeout=1):
+            return
+        for _, queue in dbos._registry.queue_info_map.items():
             try:
-                wf_ids = dbos._sys_db.start_queued_workflows(
-                    queue_name, queue.concurrency
-                )
+                wf_ids = dbos._sys_db.start_queued_workflows(queue)
                 for id in wf_ids:
                     _execute_workflow_id(dbos, id)
             except Exception:

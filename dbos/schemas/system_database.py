@@ -161,4 +161,12 @@ class SystemSchema:
             nullable=False,
             server_default=text("(EXTRACT(epoch FROM now()) * 1000::numeric)::bigint"),
         ),
+        Column(
+            "started_at_epoch_ms",
+            BigInteger(),
+        ),
+        Column(
+            "completed_at_epoch_ms",
+            BigInteger(),
+        ),
     )

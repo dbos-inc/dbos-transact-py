@@ -4,6 +4,7 @@ import threading
 import time
 from enum import Enum
 from typing import (
+    TYPE_CHECKING,
     Any,
     Dict,
     List,
@@ -34,6 +35,9 @@ from dbos.registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from .dbos_config import ConfigFile
 from .logger import dbos_logger
 from .schemas.system_database import SystemSchema
+
+if TYPE_CHECKING:
+    from .queue import Queue
 
 
 class WorkflowStatusString(Enum):
@@ -1083,22 +1087,60 @@ class SystemDatabase:
                 .on_conflict_do_nothing()
             )
 
-    def start_queued_workflows(
-        self, queue_name: str, concurrency: Optional[int]
-    ) -> List[str]:
+    def start_queued_workflows(self, queue: "Queue") -> List[str]:
+        start_time_ms = int(time.time() * 1000)
+        if queue.limiter is not None:
+            limiter_period_ms = int(queue.limiter["period"] * 1000)
         with self.engine.begin() as c:
-            query = sa.select(SystemSchema.job_queue.c.workflow_uuid).where(
-                SystemSchema.job_queue.c.queue_name == queue_name
+            # Execute with snapshot isolation to ensure multiple workers respect limits
+            c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
+
+            # If there is a limiter, compute how many functions have started in its period.
+            if queue.limiter is not None:
+                query = (
+                    sa.select(sa.func.count())
+                    .select_from(SystemSchema.job_queue)
+                    .where(SystemSchema.job_queue.c.started_at_epoch_ms.isnot(None))
+                    .where(
+                        SystemSchema.job_queue.c.started_at_epoch_ms
+                        > start_time_ms - limiter_period_ms
+                    )
+                )
+                num_recent_queries = c.execute(query).fetchone()[0]  # type: ignore
+                if num_recent_queries >= queue.limiter["limit"]:
+                    return []
+
+            # Select not-yet-completed functions in the queue ordered by the
+            # time at which they were enqueued.
+            # If there is a concurrency limit N, select only the N most recent
+            # functions, else select all of them.
+            query = (
+                sa.select(
+                    SystemSchema.job_queue.c.workflow_uuid,
+                    SystemSchema.job_queue.c.started_at_epoch_ms,
+                )
+                .where(SystemSchema.job_queue.c.queue_name == queue.name)
+                .where(SystemSchema.job_queue.c.completed_at_epoch_ms == None)
+                .order_by(SystemSchema.job_queue.c.created_at_epoch_ms.asc())
             )
-            if concurrency is not None:
-                query = query.order_by(
-                    SystemSchema.job_queue.c.created_at_epoch_ms.asc()
-                ).limit(concurrency)
+            if queue.concurrency is not None:
+                query = query.limit(queue.concurrency)
+
+            # From the functions retrieved, get the workflow IDs of the functions
+            # that have not yet been started so we can start them.
             rows = c.execute(query).fetchall()
-            dequeued_ids: List[str] = [row[0] for row in rows]
-            ret_ids = []
+            dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
+            ret_ids: list[str] = []
             for id in dequeued_ids:
-                result = c.execute(
+
+                # If we have a limiter, stop starting functions when the number
+                # of functions started this period exceeds the limit.
+                if queue.limiter is not None:
+                    if len(ret_ids) + num_recent_queries >= queue.limiter["limit"]:
+                        break
+
+                # To start a function, first set its status to PENDING
+                c.execute(
                     SystemSchema.workflow_status.update()
                     .where(SystemSchema.workflow_status.c.workflow_uuid == id)
                     .where(
@@ -1107,14 +1149,42 @@ class SystemDatabase:
                     )
                     .values(status=WorkflowStatusString.PENDING.value)
                 )
-                if result.rowcount > 0:
-                    ret_ids.append(id)
+
+                # Then give it a start time
+                c.execute(
+                    SystemSchema.job_queue.update()
+                    .where(SystemSchema.job_queue.c.workflow_uuid == id)
+                    .values(started_at_epoch_ms=start_time_ms)
+                )
+                ret_ids.append(id)
+
+            # If we have a limiter, garbage-collect all completed functions started
+            # before the period. If there's no limiter, there's no need--they were
+            # deleted on completion.
+            if queue.limiter is not None:
+                c.execute(
+                    sa.delete(SystemSchema.job_queue)
+                    .where(SystemSchema.job_queue.c.completed_at_epoch_ms != None)
+                    .where(
+                        SystemSchema.job_queue.c.started_at_epoch_ms
+                        < start_time_ms - limiter_period_ms
+                    )
+                )
+
+            # Return the IDs of all functions we started
             return ret_ids
 
-    def remove_from_queue(self, workflow_id: str) -> None:
+    def remove_from_queue(self, workflow_id: str, queue: "Queue") -> None:
         with self.engine.begin() as c:
-            c.execute(
-                sa.delete(SystemSchema.job_queue).where(
-                    SystemSchema.job_queue.c.workflow_uuid == workflow_id
+            if queue.limiter is None:
+                c.execute(
+                    sa.delete(SystemSchema.job_queue).where(
+                        SystemSchema.job_queue.c.workflow_uuid == workflow_id
+                    )
                 )
-            )
+            else:
+                c.execute(
+                    sa.update(SystemSchema.job_queue)
+                    .where(SystemSchema.job_queue.c.workflow_uuid == workflow_id)
+                    .values(completed_at_epoch_ms=int(time.time() * 1000))
+                )
