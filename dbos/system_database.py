@@ -1037,7 +1037,10 @@ class SystemDatabase:
     def start_queued_workflows(self, queue: "Queue") -> List[str]:
         start_time_ms = int(time.time() * 1000)
         with self.engine.begin() as c:
+            # Execute with snapshot isolation to ensure multiple workers respect limits
             c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
+
+            # If there is a limiter, compute how many functions have started in its duration.
             if queue.limiter is not None:
                 query = (
                     sa.select(sa.func.count())
@@ -1049,7 +1052,11 @@ class SystemDatabase:
                     )
                 )
                 num_recent_queries = c.execute(query).fetchone()[0]  # type: ignore
-                num_executable_queries = queue.limiter["max"] - num_recent_queries
+
+            # Select not-yet-completed functions in the queue ordered by the
+            # time at which they were enqueued.
+            # If there is a concurrency limit N, select only the N most recent
+            # functions, else select all of them.
             query = (
                 sa.select(
                     SystemSchema.job_queue.c.workflow_uuid,
@@ -1061,11 +1068,16 @@ class SystemDatabase:
             )
             if queue.concurrency is not None:
                 query = query.limit(queue.concurrency)
+
+            # From the functions retrieved, get the workflow IDs of the functions
+            # that have not yet been started so we can start them.
             rows = c.execute(query).fetchall()
             dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
             ret_ids = []
             for id in dequeued_ids:
-                result = c.execute(
+
+                # To start a function, first set its status to PENDING
+                c.execute(
                     SystemSchema.workflow_status.update()
                     .where(SystemSchema.workflow_status.c.workflow_uuid == id)
                     .where(
@@ -1074,16 +1086,24 @@ class SystemDatabase:
                     )
                     .values(status=WorkflowStatusString.PENDING.value)
                 )
-                if result.rowcount > 0:
-                    c.execute(
-                        SystemSchema.job_queue.update()
-                        .where(SystemSchema.job_queue.c.workflow_uuid == id)
-                        .values(started_at_epoch_ms=start_time_ms)
-                    )
-                    ret_ids.append(id)
-                    if queue.limiter is not None:
-                        if len(ret_ids) >= num_executable_queries:
-                            break
+
+                # Then give it a start time
+                c.execute(
+                    SystemSchema.job_queue.update()
+                    .where(SystemSchema.job_queue.c.workflow_uuid == id)
+                    .values(started_at_epoch_ms=start_time_ms)
+                )
+                ret_ids.append(id)
+
+                # If we have a limiter, stop starting functions when the number
+                # of functions started in the duration exceeds the maximum.
+                if queue.limiter is not None:
+                    if len(ret_ids) + num_recent_queries >= queue.limiter["max"]:
+                        break
+
+            # If we have a limiter, garbage-collect all completed functions started
+            # before the duration. If there's no limiter, there's no need--they were
+            # deleted on completion.
             if queue.limiter is not None:
                 c.execute(
                     sa.delete(SystemSchema.job_queue)
@@ -1093,6 +1113,8 @@ class SystemDatabase:
                         < start_time_ms - queue.limiter["duration"] * 1000
                     )
                 )
+
+            # Return the IDs of all functions we started
             return ret_ids
 
     def remove_from_queue(self, workflow_id: str, queue: "Queue") -> None:
