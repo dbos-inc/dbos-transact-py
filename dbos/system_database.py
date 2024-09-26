@@ -1037,6 +1037,7 @@ class SystemDatabase:
     def start_queued_workflows(self, queue: "Queue") -> List[str]:
         start_time_ms = int(time.time() * 1000)
         with self.engine.begin() as c:
+            c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
             if queue.limiter is not None:
                 query = (
                     sa.select(sa.func.count())
