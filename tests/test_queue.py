@@ -2,7 +2,12 @@ import threading
 import time
 import uuid
 
+import sqlalchemy as sa
+
 from dbos import DBOS, Queue, SetWorkflowID
+from dbos.dbos import WorkflowHandle
+from dbos.schemas.system_database import SystemSchema
+from dbos.system_database import WorkflowStatusString
 
 
 def test_simple_queue(dbos: DBOS) -> None:
@@ -153,7 +158,8 @@ def test_limiter(dbos: DBOS) -> None:
     duration = 2
     queue = Queue("test_queue", limiter={"max": max, "duration": duration})
 
-    handles, times = [], []
+    handles: list[WorkflowHandle] = []
+    times: list[float] = []
 
     # Launch a number of tasks equal to three times the max.
     # This should lead to three "waves" of the max tasks being
@@ -174,3 +180,23 @@ def test_limiter(dbos: DBOS) -> None:
     # Verify that the gap between "waves" is ~equal to the duration
     for wave in range(num_waves - 1):
         assert times[max * wave + 1] - times[max * wave] < 0.1
+
+    # Verify all workflows get the SUCCESS status eventually
+    dbos._sys_db.wait_for_buffer_flush()
+    for h in handles:
+        assert h.get_status().status == WorkflowStatusString.SUCCESS.value
+
+    # Verify all queue entries eventually get cleaned up.
+    max_tries = 10
+    success = False
+    for i in range(max_tries):
+        with dbos._sys_db.engine.begin() as c:
+            query = sa.select(sa.func.count()).select_from(SystemSchema.job_queue)
+            row = c.execute(query).fetchone()
+            assert row is not None
+            count = row[0]
+            if count == 0:
+                success = True
+                break
+        time.sleep(1)
+    assert success, f"{count} queue entries were not cleaned up"
