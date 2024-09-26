@@ -143,20 +143,34 @@ def test_queue_transaction(dbos: DBOS) -> None:
 
 
 def test_limiter(dbos: DBOS) -> None:
-    wf_counter: int = 0
 
     @DBOS.workflow()
     def test_workflow(var1: str, var2: str) -> str:
-        nonlocal wf_counter
-        wf_counter += 1
-        return var1 + var2
+        assert var1 == "abc" and var2 == "123"
+        return time.time()
 
-    queue = Queue("test_queue", limiter={"max": 1, "duration": 2})
+    max = 5
+    duration = 2
+    queue = Queue("test_queue", limiter={"max": max, "duration": duration})
 
-    h1 = queue.enqueue(test_workflow, "abc", "123")
-    h2 = queue.enqueue(test_workflow, "abc", "123")
+    handles, times = [], []
 
-    assert h1.get_result() == "abc123"
-    assert wf_counter == 1
-    assert h2.get_result() == "abc123"
-    assert wf_counter == 2
+    # Launch a number of tasks equal to three times the max.
+    # This should lead to three "waves" of the max tasks being
+    # executed simultaneously, followed by a wait of the duration,
+    # followed by the next wave.
+    num_waves = 3
+    for _ in range(max * num_waves):
+        h = queue.enqueue(test_workflow, "abc", "123")
+        handles.append(h)
+    for h in handles:
+        times.append(h.get_result())
+
+    # Verify that each "wave" of tasks started at the ~same time.
+    for wave in range(num_waves):
+        for i in range(wave * max, (wave + 1) * max - 1):
+            assert times[i + 1] - times[i] < 0.1
+
+    # Verify that the gap between "waves" is ~equal to the duration
+    for wave in range(num_waves - 1):
+        assert times[max * wave + 1] - times[max * wave] < 0.1

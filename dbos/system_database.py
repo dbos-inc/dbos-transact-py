@@ -1076,6 +1076,12 @@ class SystemDatabase:
             ret_ids = []
             for id in dequeued_ids:
 
+                # If we have a limiter, stop starting functions when the number
+                # of functions started in the duration exceeds the maximum.
+                if queue.limiter is not None:
+                    if len(ret_ids) + num_recent_queries >= queue.limiter["max"]:
+                        break
+
                 # To start a function, first set its status to PENDING
                 c.execute(
                     SystemSchema.workflow_status.update()
@@ -1094,12 +1100,6 @@ class SystemDatabase:
                     .values(started_at_epoch_ms=start_time_ms)
                 )
                 ret_ids.append(id)
-
-                # If we have a limiter, stop starting functions when the number
-                # of functions started in the duration exceeds the maximum.
-                if queue.limiter is not None:
-                    if len(ret_ids) + num_recent_queries >= queue.limiter["max"]:
-                        break
 
             # If we have a limiter, garbage-collect all completed functions started
             # before the duration. If there's no limiter, there's no need--they were
