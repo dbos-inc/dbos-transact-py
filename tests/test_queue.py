@@ -10,7 +10,7 @@ from dbos.schemas.system_database import SystemSchema
 from dbos.system_database import WorkflowStatusString
 
 
-def queue_entries_are_cleaned_up(dbos: DBOS):
+def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
     max_tries = 10
     success = False
     for i in range(max_tries):
@@ -167,7 +167,7 @@ def test_queue_transaction(dbos: DBOS) -> None:
 def test_limiter(dbos: DBOS) -> None:
 
     @DBOS.workflow()
-    def test_workflow(var1: str, var2: str) -> str:
+    def test_workflow(var1: str, var2: str) -> float:
         assert var1 == "abc" and var2 == "123"
         return time.time()
 
@@ -175,7 +175,7 @@ def test_limiter(dbos: DBOS) -> None:
     duration = 2
     queue = Queue("test_queue", limiter={"max": max, "duration": duration})
 
-    handles: list[WorkflowHandle] = []
+    handles: list[WorkflowHandle[float]] = []
     times: list[float] = []
 
     # Launch a number of tasks equal to three times the max.

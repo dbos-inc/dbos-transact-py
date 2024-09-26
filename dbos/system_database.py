@@ -1073,7 +1073,7 @@ class SystemDatabase:
             # that have not yet been started so we can start them.
             rows = c.execute(query).fetchall()
             dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
-            ret_ids = []
+            ret_ids: list[str] = []
             for id in dequeued_ids:
 
                 # If we have a limiter, stop starting functions when the number
