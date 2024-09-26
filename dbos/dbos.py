@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import threading
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from logging import Logger
@@ -378,7 +379,7 @@ class DBOS:
                 handler.flush()
             add_otlp_to_all_loggers()
         except Exception:
-            dbos_logger.exception("DBOS failed to launch")
+            dbos_logger.error(f"DBOS failed to launch: {traceback.format_exc()}")
             raise
 
     def _destroy(self) -> None:
