@@ -995,15 +995,15 @@ def test_debug_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
     dest_wfid = str(uuid.uuid4())
 
     @DBOS.step()
-    def step_function(message):
+    def step_function(message: str) -> str:
         return f"Step: {message}"
 
     @DBOS.transaction()
-    def transaction_function(message):
+    def transaction_function(message: str) -> str:
         return f"Transaction: {message}"
 
     @DBOS.workflow()
-    def test_workflow():
+    def test_workflow() -> str:
         dbos.set_event("test_event", "event_value")
         step_result = step_function("Hello")
         transaction_result = transaction_function("World")
@@ -1012,7 +1012,7 @@ def test_debug_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
         return ", ".join([step_result, transaction_result])
 
     @DBOS.workflow()
-    def test_workflow_dest():
+    def test_workflow_dest() -> str:
         event_value = dbos.get_event(wfid, "test_event")
         msg_value = dbos.recv(topic="test_topic")
         return ", ".join([event_value, msg_value])
