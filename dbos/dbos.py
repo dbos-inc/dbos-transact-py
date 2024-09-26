@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import threading
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from logging import Logger
@@ -331,43 +332,47 @@ class DBOS:
             _dbos_global_instance._launch()
 
     def _launch(self) -> None:
-        if self._launched:
-            dbos_logger.warning(f"DBOS was already launched")
-            return
-        self._launched = True
-        self._executor_field = ThreadPoolExecutor(max_workers=64)
-        self._sys_db_field = SystemDatabase(self.config)
-        self._app_db_field = ApplicationDatabase(self.config)
-        self._admin_server_field = AdminServer(dbos=self)
+        try:
+            if self._launched:
+                dbos_logger.warning(f"DBOS was already launched")
+                return
+            self._launched = True
+            self._executor_field = ThreadPoolExecutor(max_workers=64)
+            self._sys_db_field = SystemDatabase(self.config)
+            self._app_db_field = ApplicationDatabase(self.config)
+            self._admin_server_field = AdminServer(dbos=self)
 
-        if not os.environ.get("DBOS__VMID"):
-            workflow_ids = asyncio.run(self._sys_db.get_pending_workflows("local"))
-            self._executor.submit(_startup_recovery_thread, self, workflow_ids)
+            if not os.environ.get("DBOS__VMID"):
+                workflow_ids = asyncio.run(self._sys_db.get_pending_workflows("local"))
+                self._executor.submit(_startup_recovery_thread, self, workflow_ids)
 
-        # Listen to notifications
-        self._executor.submit(self._sys_db._notification_listener)
+            # Listen to notifications
+            self._executor.submit(self._sys_db._notification_listener)
 
-        # Start flush workflow buffers thread
-        self._executor.submit(self._sys_db.flush_workflow_buffers)
+            # Start flush workflow buffers thread
+            self._executor.submit(self._sys_db.flush_workflow_buffers)
 
-        # Start the queue thread
-        evt = threading.Event()
-        self.stop_events.append(evt)
-        self._executor.submit(queue_thread, evt, self)
-
-        # Grab any pollers that were deferred and start them
-        for evt, func, args, kwargs in self._registry.pollers:
+            # Start the queue thread
+            evt = threading.Event()
             self.stop_events.append(evt)
-            self._executor.submit(func, *args, **kwargs)
-        self._registry.pollers = []
+            self._executor.submit(queue_thread, evt, self)
 
-        dbos_logger.info("DBOS launched")
+            # Grab any pollers that were deferred and start them
+            for evt, func, args, kwargs in self._registry.pollers:
+                self.stop_events.append(evt)
+                self._executor.submit(func, *args, **kwargs)
+            self._registry.pollers = []
 
-        # Flush handlers and add OTLP to all loggers if enabled
-        # to enable their export in DBOS Cloud
-        for handler in dbos_logger.handlers:
-            handler.flush()
-        add_otlp_to_all_loggers()
+            dbos_logger.info("DBOS launched")
+
+            # Flush handlers and add OTLP to all loggers if enabled
+            # to enable their export in DBOS Cloud
+            for handler in dbos_logger.handlers:
+                handler.flush()
+            add_otlp_to_all_loggers()
+        except Exception:
+            dbos_logger.error(f"DBOS failed to launch: {traceback.format_exc()}")
+            raise
 
     def _destroy(self) -> None:
         self._initialized = False

@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import logging
 import threading
 import time
 import uuid
@@ -994,3 +995,83 @@ def test_multi_set_event(dbos: DBOS) -> None:
     event.set()
     assert handle.get_result() == None
     assert DBOS.get_event(wfid, "key") == "value2"
+
+
+def test_debug_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
+    wfid = str(uuid.uuid4())
+    dest_wfid = str(uuid.uuid4())
+
+    @DBOS.step()
+    def step_function(message: str) -> str:
+        return f"Step: {message}"
+
+    @DBOS.transaction()
+    def transaction_function(message: str) -> str:
+        return f"Transaction: {message}"
+
+    @DBOS.workflow()
+    def test_workflow() -> str:
+        dbos.set_event("test_event", "event_value")
+        step_result = step_function("Hello")
+        transaction_result = transaction_function("World")
+        dbos.send(dest_wfid, "test_message", topic="test_topic")
+        dbos.sleep(1)
+        return ", ".join([step_result, transaction_result])
+
+    @DBOS.workflow()
+    def test_workflow_dest() -> str:
+        event_value = dbos.get_event(wfid, "test_event")
+        msg_value = dbos.recv(topic="test_topic")
+        return ", ".join([event_value, msg_value])
+
+    original_propagate = logging.getLogger("dbos").propagate
+    caplog.set_level(logging.DEBUG, "dbos")
+    logging.getLogger("dbos").propagate = True
+
+    # First run
+    with SetWorkflowID(dest_wfid):
+        dest_handle = dbos.start_workflow(test_workflow_dest)
+
+    with SetWorkflowID(wfid):
+        result1 = test_workflow()
+
+    assert result1 == "Step: Hello, Transaction: World"
+    assert "Running step" in caplog.text and "name: step_function" in caplog.text
+    assert (
+        "Running transaction" in caplog.text
+        and "name: transaction_function" in caplog.text
+    )
+    assert "Running sleep" in caplog.text
+    assert "Running set_event" in caplog.text
+    assert "Running send" in caplog.text
+
+    result2 = dest_handle.get_result()
+    assert result2 == "event_value, test_message"
+    assert "Running get_event" in caplog.text
+    assert "Running recv" in caplog.text
+    caplog.clear()
+
+    # Second run
+    with SetWorkflowID(dest_wfid):
+        dest_handle_2 = dbos.start_workflow(test_workflow_dest)
+
+    with SetWorkflowID(wfid):
+        result3 = test_workflow()
+
+    assert result3 == result1
+    assert "Replaying step" in caplog.text and "name: step_function" in caplog.text
+    assert (
+        "Replaying transaction" in caplog.text
+        and "name: transaction_function" in caplog.text
+    )
+    assert "Replaying sleep" in caplog.text
+    assert "Replaying set_event" in caplog.text
+    assert "Replaying send" in caplog.text
+
+    result4 = dest_handle_2.get_result()
+    assert result4 == result2
+    assert "Replaying get_event" in caplog.text
+    assert "Replaying recv" in caplog.text
+
+    # Reset logging
+    logging.getLogger("dbos").propagate = original_propagate

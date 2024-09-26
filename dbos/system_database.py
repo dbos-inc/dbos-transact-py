@@ -671,7 +671,14 @@ class SystemDatabase:
                 workflow_uuid, function_id, conn=c
             )
             if recorded_output is not None:
+                dbos_logger.debug(
+                    f"Replaying send, id: {function_id}, destination_uuid: {destination_uuid}, topic: {topic}"
+                )
                 return  # Already sent before
+            else:
+                dbos_logger.debug(
+                    f"Running send, id: {function_id}, destination_uuid: {destination_uuid}, topic: {topic}"
+                )
 
             try:
                 await c.execute(
@@ -709,10 +716,13 @@ class SystemDatabase:
             workflow_uuid, function_id
         )
         if recorded_output is not None:
+            dbos_logger.debug(f"Replaying recv, id: {function_id}, topic: {topic}")
             if recorded_output["output"] is not None:
                 return utils.deserialize(recorded_output["output"])
             else:
                 raise Exception("No output recorded in the last recv")
+        else:
+            dbos_logger.debug(f"Running recv, id: {function_id}, topic: {topic}")
 
         # Insert a condition to the notifications map, so the listener can notify it when a message is received.
         payload = f"{workflow_uuid}::{topic}"
@@ -859,9 +869,11 @@ class SystemDatabase:
         )
         end_time: float
         if recorded_output is not None:
+            dbos_logger.debug(f"Replaying sleep, id: {function_id}, seconds: {seconds}")
             assert recorded_output["output"] is not None, "no recorded end time"
             end_time = utils.deserialize(recorded_output["output"])
         else:
+            dbos_logger.debug(f"Running sleep, id: {function_id}, seconds: {seconds}")
             end_time = time.time() + seconds
             try:
                 await self.record_operation_result(
@@ -891,7 +903,10 @@ class SystemDatabase:
                 workflow_uuid, function_id, conn=c
             )
             if recorded_output is not None:
+                dbos_logger.debug(f"Replaying set_event, id: {function_id}, key: {key}")
                 return  # Already sent before
+            else:
+                dbos_logger.debug(f"Running set_event, id: {function_id}, key: {key}")
 
             await c.execute(
                 pg.insert(SystemSchema.workflow_events)
@@ -932,10 +947,17 @@ class SystemDatabase:
                 caller_ctx["workflow_uuid"], caller_ctx["function_id"]
             )
             if recorded_output is not None:
+                dbos_logger.debug(
+                    f"Replaying get_event, id: {caller_ctx['function_id']}, key: {key}"
+                )
                 if recorded_output["output"] is not None:
                     return utils.deserialize(recorded_output["output"])
                 else:
                     raise Exception("No output recorded in the last get_event")
+            else:
+                dbos_logger.debug(
+                    f"Running get_event, id: {caller_ctx['function_id']}, key: {key}"
+                )
 
         payload = f"{target_uuid}::{key}"
         condition = threading.Condition()
