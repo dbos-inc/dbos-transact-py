@@ -550,6 +550,7 @@ class DBOS:
             recovery_attempts=stat["recovery_attempts"],
             class_name=stat["class_name"],
             config_name=stat["config_name"],
+            queue_name=stat["queue_name"],
             authenticated_user=stat["authenticated_user"],
             assumed_role=stat["assumed_role"],
             authenticated_roles=(
@@ -756,6 +757,7 @@ class WorkflowStatus:
         name(str): The workflow function name
         class_name(str): For member functions, the name of the class containing the workflow function
         config_name(str): For instance member functions, the name of the class instance for the execution
+        queue_name(str): For workflows that are or were queued, the queue name
         authenticated_user(str): The user who invoked the workflow
         assumed_role(str): The access role used by the user to allow access to the workflow function
         authenticated_roles(List[str]): List of all access roles available to the authenticated user
@@ -768,6 +770,7 @@ class WorkflowStatus:
     name: str
     class_name: Optional[str]
     config_name: Optional[str]
+    queue_name: Optional[str]
     authenticated_user: Optional[str]
     assumed_role: Optional[str]
     authenticated_roles: Optional[List[str]]

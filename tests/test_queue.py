@@ -15,7 +15,7 @@ def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
     success = False
     for i in range(max_tries):
         with dbos._sys_db.engine.begin() as c:
-            query = sa.select(sa.func.count()).select_from(SystemSchema.job_queue)
+            query = sa.select(sa.func.count()).select_from(SystemSchema.workflow_queue)
             row = c.execute(query).fetchone()
             assert row is not None
             count = row[0]
@@ -77,6 +77,7 @@ def test_one_at_a_time(dbos: DBOS) -> None:
 
     queue = Queue("test_queue", 1)
     handle1 = queue.enqueue(workflow_one)
+    assert handle1.get_status().queue_name == "test_queue"
     handle2 = queue.enqueue(workflow_two)
 
     main_thread_event.wait()
@@ -120,6 +121,39 @@ def test_one_at_a_time_with_limiter(dbos: DBOS) -> None:
     assert handle2.get_result() == None
     assert flag
     assert wf_counter == 1
+
+
+def test_queue_childwf(dbos: DBOS) -> None:
+    queue = Queue("child_queue", 3)
+
+    @DBOS.workflow()
+    def test_child_wf(val: str) -> str:
+        DBOS.recv("release", 30)
+        return val + "d"
+
+    @DBOS.workflow()
+    def test_workflow(var1: str, var2: str) -> str:
+        wfh1 = queue.enqueue(test_child_wf, var1)
+        wfh2 = queue.enqueue(test_child_wf, var2)
+        wfh3 = queue.enqueue(test_child_wf, var1)
+        wfh4 = queue.enqueue(test_child_wf, var2)
+
+        DBOS.sleep(1)
+        assert wfh4.get_status().status == "ENQUEUED"
+
+        DBOS.send(wfh1.get_workflow_id(), "go", "release")
+        DBOS.send(wfh2.get_workflow_id(), "go", "release")
+        DBOS.send(wfh3.get_workflow_id(), "go", "release")
+        DBOS.send(wfh4.get_workflow_id(), "go", "release")
+
+        return (
+            wfh1.get_result()
+            + wfh2.get_result()
+            + wfh3.get_result()
+            + wfh4.get_result()
+        )
+
+    assert test_workflow("a", "b") == "adbdadbd"
 
 
 def test_queue_step(dbos: DBOS) -> None:

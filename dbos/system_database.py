@@ -983,7 +983,7 @@ class SystemDatabase:
         return value
 
     def _flush_workflow_status_buffer(self) -> None:
-        """Export the workflow status buffer to the database, up to the batch size"""
+        """Export the workflow status buffer to the database, up to the batch size."""
         if len(self._workflow_status_buffer) == 0:
             return
 
@@ -1079,7 +1079,7 @@ class SystemDatabase:
     def enqueue(self, workflow_id: str, queue_name: str) -> None:
         with self.engine.begin() as c:
             c.execute(
-                pg.insert(SystemSchema.job_queue)
+                pg.insert(SystemSchema.workflow_queue)
                 .values(
                     workflow_uuid=workflow_id,
                     queue_name=queue_name,
@@ -1099,10 +1099,12 @@ class SystemDatabase:
             if queue.limiter is not None:
                 query = (
                     sa.select(sa.func.count())
-                    .select_from(SystemSchema.job_queue)
-                    .where(SystemSchema.job_queue.c.started_at_epoch_ms.isnot(None))
+                    .select_from(SystemSchema.workflow_queue)
                     .where(
-                        SystemSchema.job_queue.c.started_at_epoch_ms
+                        SystemSchema.workflow_queue.c.started_at_epoch_ms.isnot(None)
+                    )
+                    .where(
+                        SystemSchema.workflow_queue.c.started_at_epoch_ms
                         > start_time_ms - limiter_period_ms
                     )
                 )
@@ -1116,12 +1118,12 @@ class SystemDatabase:
             # functions, else select all of them.
             query = (
                 sa.select(
-                    SystemSchema.job_queue.c.workflow_uuid,
-                    SystemSchema.job_queue.c.started_at_epoch_ms,
+                    SystemSchema.workflow_queue.c.workflow_uuid,
+                    SystemSchema.workflow_queue.c.started_at_epoch_ms,
                 )
-                .where(SystemSchema.job_queue.c.queue_name == queue.name)
-                .where(SystemSchema.job_queue.c.completed_at_epoch_ms == None)
-                .order_by(SystemSchema.job_queue.c.created_at_epoch_ms.asc())
+                .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
+                .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms == None)
+                .order_by(SystemSchema.workflow_queue.c.created_at_epoch_ms.asc())
             )
             if queue.concurrency is not None:
                 query = query.limit(queue.concurrency)
@@ -1152,8 +1154,8 @@ class SystemDatabase:
 
                 # Then give it a start time
                 c.execute(
-                    SystemSchema.job_queue.update()
-                    .where(SystemSchema.job_queue.c.workflow_uuid == id)
+                    SystemSchema.workflow_queue.update()
+                    .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
                     .values(started_at_epoch_ms=start_time_ms)
                 )
                 ret_ids.append(id)
@@ -1163,10 +1165,10 @@ class SystemDatabase:
             # deleted on completion.
             if queue.limiter is not None:
                 c.execute(
-                    sa.delete(SystemSchema.job_queue)
-                    .where(SystemSchema.job_queue.c.completed_at_epoch_ms != None)
+                    sa.delete(SystemSchema.workflow_queue)
+                    .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms != None)
                     .where(
-                        SystemSchema.job_queue.c.started_at_epoch_ms
+                        SystemSchema.workflow_queue.c.started_at_epoch_ms
                         < start_time_ms - limiter_period_ms
                     )
                 )
@@ -1178,13 +1180,13 @@ class SystemDatabase:
         with self.engine.begin() as c:
             if queue.limiter is None:
                 c.execute(
-                    sa.delete(SystemSchema.job_queue).where(
-                        SystemSchema.job_queue.c.workflow_uuid == workflow_id
+                    sa.delete(SystemSchema.workflow_queue).where(
+                        SystemSchema.workflow_queue.c.workflow_uuid == workflow_id
                     )
                 )
             else:
                 c.execute(
-                    sa.update(SystemSchema.job_queue)
-                    .where(SystemSchema.job_queue.c.workflow_uuid == workflow_id)
+                    sa.update(SystemSchema.workflow_queue)
+                    .where(SystemSchema.workflow_queue.c.workflow_uuid == workflow_id)
                     .values(completed_at_epoch_ms=int(time.time() * 1000))
                 )

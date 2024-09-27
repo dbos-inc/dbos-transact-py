@@ -1,4 +1,5 @@
-"""fix_job_queue
+"""
+Fix job queue PK.
 
 Revision ID: 50f3227f0b4b
 Revises: eab0cc1d9a14
