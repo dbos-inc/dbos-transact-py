@@ -13,6 +13,7 @@ class Address(NamedTuple):
 class Request:
     """
     Serializable HTTP Request object.
+
     Attributes:
         base_url(str): Base of URL requested, as in application code
         client(Optional[Address]): HTTP Client

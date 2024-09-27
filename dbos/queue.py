@@ -9,21 +9,31 @@ if TYPE_CHECKING:
     from dbos.dbos import DBOS, Workflow, WorkflowHandle
 
 
-# Limit the maximum number of functions from this queue
-# that can be started in a given period. If the limit is 5
-# and the period is 10, no more than 5 functions can be
-# started per 10 seconds.
-class Limiter(TypedDict):
+class QueueRateLimit(TypedDict):
+    """
+    Limit the maximum number of workflows from this queue that can be started in a given period.
+
+    If the limit is 5 and the period is 10, no more than 5 functions can be
+    started per 10 seconds.
+    """
+
     limit: int
     period: float
 
 
 class Queue:
+    """
+    Workflow queue.
+
+    Workflow queues allow workflows to be started at a later time, based on concurrency and
+    rate limits.
+    """
+
     def __init__(
         self,
         name: str,
         concurrency: Optional[int] = None,
-        limiter: Optional[Limiter] = None,
+        limiter: Optional[QueueRateLimit] = None,
     ) -> None:
         self.name = name
         self.concurrency = concurrency

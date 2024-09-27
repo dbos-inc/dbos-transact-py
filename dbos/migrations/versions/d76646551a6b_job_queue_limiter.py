@@ -1,4 +1,5 @@
-"""job_queue_limiter
+"""
+Adjust workflow queue to add columns for rate limiter.
 
 Revision ID: d76646551a6b
 Revises: 50f3227f0b4b
