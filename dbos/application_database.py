@@ -84,6 +84,10 @@ class ApplicationDatabase:
         self.engine.dispose()
         asyncio.run(self.async_engine.dispose())
 
+    async def destroy_async(self) -> None:
+        self.engine.dispose()
+        await self.async_engine.dispose()
+
     @staticmethod
     def record_transaction_output(
         session: Session, output: TransactionResultInternal

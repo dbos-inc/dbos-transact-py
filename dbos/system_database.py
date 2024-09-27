@@ -233,6 +233,13 @@ class SystemDatabase:
             self.notification_conn.close()
         asyncio.run(self.async_engine.dispose())
 
+    async def destroy_async(self) -> None:
+        self.wait_for_buffer_flush()
+        self._run_background_processes = False
+        if self.notification_conn is not None:
+            self.notification_conn.close()
+        await self.async_engine.dispose()
+
     def wait_for_buffer_flush(self) -> None:
         # Wait until the buffers are flushed.
         while self._is_flushing_status_buffer or not self._is_buffers_empty:
