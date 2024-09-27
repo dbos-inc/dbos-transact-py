@@ -196,7 +196,8 @@ def _execute_workflow_sync(
         status["status"] = "SUCCESS"
         status["output"] = utils.serialize(output)
         if status["queue_name"] is not None:
-            asyncio.run(dbos._sys_db.remove_from_queue(status["workflow_uuid"]))
+            queue = dbos._registry.queue_info_map[status["queue_name"]]
+            asyncio.run(dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue))
         dbos._sys_db.buffer_workflow_status(status)
     except DBOSWorkflowConflictIDError:
         # Retrieve the workflow handle and wait for the result.
@@ -210,7 +211,8 @@ def _execute_workflow_sync(
         status["status"] = "ERROR"
         status["error"] = utils.serialize_exception(error)
         if status["queue_name"] is not None:
-            asyncio.run(dbos._sys_db.remove_from_queue(status["workflow_uuid"]))
+            queue = dbos._registry.queue_info_map[status["queue_name"]]
+            asyncio.run(dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue))
         asyncio.run(dbos._sys_db.update_workflow_status(status))
         raise
 
@@ -229,7 +231,8 @@ async def _execute_workflow_async(
         status["status"] = "SUCCESS"
         status["output"] = utils.serialize(output)
         if status["queue_name"] is not None:
-            await dbos._sys_db.remove_from_queue(status["workflow_uuid"])
+            queue = dbos._registry.queue_info_map[status["queue_name"]]
+            await dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
         dbos._sys_db.buffer_workflow_status(status)
     except DBOSWorkflowConflictIDError:
         # Retrieve the workflow handle and wait for the result.
@@ -243,7 +246,8 @@ async def _execute_workflow_async(
         status["status"] = "ERROR"
         status["error"] = utils.serialize_exception(error)
         if status["queue_name"] is not None:
-            await dbos._sys_db.remove_from_queue(status["workflow_uuid"])
+            queue = dbos._registry.queue_info_map[status["queue_name"]]
+            await dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
         await dbos._sys_db.update_workflow_status(status)
         raise
 
@@ -266,7 +270,7 @@ def _execute_workflow_wthread(
         with EnterDBOSWorkflow(attributes):
             try:
                 return _execute_workflow_sync(dbos, status, func, *args, **kwargs)
-            except Exception as e:
+            except Exception:
                 dbos.logger.error(
                     f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
                 )
