@@ -1,4 +1,5 @@
-"""job_queue
+"""
+Add workflow queue table.
 
 Revision ID: eab0cc1d9a14
 Revises: a3b18ad34abe

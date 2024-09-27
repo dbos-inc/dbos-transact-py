@@ -983,7 +983,7 @@ class SystemDatabase:
         return value
 
     def _flush_workflow_status_buffer(self) -> None:
-        """Export the workflow status buffer to the database, up to the batch size"""
+        """Export the workflow status buffer to the database, up to the batch size."""
         if len(self._workflow_status_buffer) == 0:
             return
 
