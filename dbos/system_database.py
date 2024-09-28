@@ -231,7 +231,7 @@ class SystemDatabase:
         self._run_background_processes = False
         if self.notification_conn is not None:
             self.notification_conn.close()
-        asyncio.run(self.async_engine.dispose())
+        asyncio.run(self.async_engine.dispose())  # asyncio run ok
 
     async def destroy_async(self) -> None:
         self.wait_for_buffer_flush()
@@ -1086,8 +1086,25 @@ class SystemDatabase:
             try:
                 self._is_flushing_status_buffer = True
                 # Must flush the status buffer first, as the inputs table has a foreign key constraint on the status table.
-                asyncio.run(self._flush_workflow_status_buffer())
-                asyncio.run(self._flush_workflow_inputs_buffer())
+                asyncio.run(self._flush_workflow_status_buffer())  # asyncio run ok
+                asyncio.run(self._flush_workflow_inputs_buffer())  # asyncio run ok
+                self._is_flushing_status_buffer = False
+                if self._is_buffers_empty:
+                    # Only sleep if both buffers are empty
+                    time.sleep(buffer_flush_interval_secs)
+            except Exception as e:
+                dbos_logger.error(f"Error while flushing buffers: {e}")
+                time.sleep(buffer_flush_interval_secs)
+                # Will retry next time
+
+    async def flush_workflow_buffers_async(self) -> None:
+        """Flush the workflow status and inputs buffers periodically, via a background thread."""
+        while self._run_background_processes:
+            try:
+                self._is_flushing_status_buffer = True
+                # Must flush the status buffer first, as the inputs table has a foreign key constraint on the status table.
+                await self._flush_workflow_status_buffer()
+                await self._flush_workflow_inputs_buffer()
                 self._is_flushing_status_buffer = False
                 if self._is_buffers_empty:
                     # Only sleep if both buffers are empty

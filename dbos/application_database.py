@@ -82,7 +82,7 @@ class ApplicationDatabase:
 
     def destroy(self) -> None:
         self.engine.dispose()
-        asyncio.run(self.async_engine.dispose())
+        asyncio.run(self.async_engine.dispose())  # asyncio run ok
 
     async def destroy_async(self) -> None:
         self.engine.dispose()

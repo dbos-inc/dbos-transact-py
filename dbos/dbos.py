@@ -29,12 +29,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dbos.core import (
     _execute_workflow_id,
+    _execute_workflow_id_async,
     _get_event,
     _recv,
     _register_send_wf,
     _send,
     _set_event,
     _start_workflow,
+    _start_workflow_async,
     _step,
     _transaction,
     _workflow,
@@ -343,7 +345,9 @@ class DBOS:
             self._admin_server_field = AdminServer(dbos=self)
 
             if not os.environ.get("DBOS__VMID"):
-                workflow_ids = asyncio.run(self._sys_db.get_pending_workflows("local"))
+                workflow_ids = asyncio.run(
+                    self._sys_db.get_pending_workflows("local")
+                )  # asyncio run ok
                 self._executor.submit(_startup_recovery_thread, self, workflow_ids)
 
             # Listen to notifications
@@ -584,20 +588,65 @@ class DBOS:
         return _start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs)
 
     @classmethod
+    async def start_workflow_async(
+        cls,
+        func: Workflow[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> WorkflowHandle[R]:
+        """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
+        return await _start_workflow_async(
+            _get_dbos_instance(), func, None, True, *args, **kwargs
+        )
+
+    @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
         """Return the status of a workflow execution."""
         ctx = get_local_dbos_context()
         if ctx and ctx.is_within_workflow():
             ctx.function_id += 1
-            stat = asyncio.run(
+            stat = asyncio.run(  # asyncio run ok
                 _get_dbos_instance()._sys_db.get_workflow_status_within_wf(
                     workflow_id, ctx.workflow_id, ctx.function_id
                 )
             )
         else:
-            stat = asyncio.run(
+            stat = asyncio.run(  # asyncio run ok
                 _get_dbos_instance()._sys_db.get_workflow_status(workflow_id)
             )
+        if stat is None:
+            return None
+
+        return WorkflowStatus(
+            workflow_id=workflow_id,
+            status=stat["status"],
+            name=stat["name"],
+            recovery_attempts=stat["recovery_attempts"],
+            class_name=stat["class_name"],
+            config_name=stat["config_name"],
+            queue_name=stat["queue_name"],
+            authenticated_user=stat["authenticated_user"],
+            assumed_role=stat["assumed_role"],
+            authenticated_roles=(
+                json.loads(stat["authenticated_roles"])
+                if stat["authenticated_roles"] is not None
+                else None
+            ),
+        )
+
+    @classmethod
+    async def get_workflow_status_async(
+        cls, workflow_id: str
+    ) -> Optional[WorkflowStatus]:
+        """Return the status of a workflow execution."""
+        ctx = get_local_dbos_context()
+        if ctx and ctx.is_within_workflow():
+            ctx.function_id += 1
+            stat = await _get_dbos_instance()._sys_db.get_workflow_status_within_wf(
+                workflow_id, ctx.workflow_id, ctx.function_id
+            )
+        else:
+            stat = await _get_dbos_instance()._sys_db.get_workflow_status(workflow_id)
         if stat is None:
             return None
 
@@ -631,11 +680,25 @@ class DBOS:
         return _WorkflowHandlePolling(workflow_id, dbos)
 
     @classmethod
+    async def retrieve_workflow_async(
+        cls, workflow_id: str, existing_workflow: bool = True
+    ) -> WorkflowHandle[R]:
+        """Return a `WorkflowHandle` for a workflow execution."""
+        dbos = _get_dbos_instance()
+        if existing_workflow:
+            stat = await dbos.get_workflow_status_async(workflow_id)
+            if stat is None:
+                raise DBOSNonExistentWorkflowError(workflow_id)
+        return _WorkflowHandlePolling(workflow_id, dbos)
+
+    @classmethod
     def send(
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
         """Send a message to a workflow execution."""
-        return asyncio.run(_send(_get_dbos_instance(), destination_id, message, topic))
+        return asyncio.run(
+            _send(_get_dbos_instance(), destination_id, message, topic)
+        )  # asyncio run ok
 
     @classmethod
     async def send_async(
@@ -652,7 +715,9 @@ class DBOS:
         This function is to be called from within a workflow.
         `recv` will return the message sent on `topic`, waiting if necessary.
         """
-        return asyncio.run(_recv(_get_dbos_instance(), topic, timeout_seconds))
+        return asyncio.run(
+            _recv(_get_dbos_instance(), topic, timeout_seconds)
+        )  # asyncio run ok
 
     @classmethod
     async def recv_async(
@@ -675,7 +740,7 @@ class DBOS:
         if seconds <= 0:
             return
         with EnterDBOSStep(attributes) as ctx:
-            asyncio.run(
+            asyncio.run(  # asyncio run ok
                 _get_dbos_instance()._sys_db.sleep(
                     ctx.workflow_id, ctx.curr_step_function_id, seconds
                 )
@@ -710,7 +775,7 @@ class DBOS:
             value(Any): A serializable value to associate with the key
 
         """
-        asyncio.run(_set_event(_get_dbos_instance(), key, value))
+        asyncio.run(_set_event(_get_dbos_instance(), key, value))  # asyncio run ok
 
     @classmethod
     async def set_event_async(cls, key: str, value: Any) -> None:
@@ -729,7 +794,7 @@ class DBOS:
             timeout_seconds(float): The amount of time to wait, in case `set_event` has not yet been called byt the workflow
 
         """
-        return asyncio.run(
+        return asyncio.run(  # asyncio run ok
             _get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
         )
 
@@ -743,6 +808,11 @@ class DBOS:
     def execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Execute a workflow by ID (for recovery)."""
         return _execute_workflow_id(_get_dbos_instance(), workflow_id)
+
+    @classmethod
+    async def execute_workflow_id_async(cls, workflow_id: str) -> WorkflowHandle[Any]:
+        """Execute a workflow by ID (for recovery)."""
+        return await _execute_workflow_id_async(_get_dbos_instance(), workflow_id)
 
     @classmethod
     def recover_pending_workflows(
