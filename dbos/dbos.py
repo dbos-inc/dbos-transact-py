@@ -681,17 +681,7 @@ class DBOS:
         as the `DBOS.sleep`s are durable and completed sleeps will be skipped during recovery.
         """
 
-        attributes: TracedAttributes = {
-            "name": "sleep",
-        }
-        if seconds <= 0:
-            return
-        with EnterDBOSStep(attributes) as ctx:
-            asyncio.run(  # asyncio run ok
-                _get_dbos_instance()._sys_db.sleep(
-                    ctx.workflow_id, ctx.curr_step_function_id, seconds
-                )
-            )
+        asyncio.run(DBOS.sleep_async(seconds))  # asyncio run ok
 
     @classmethod
     async def sleep_async(cls, seconds: float) -> None:
