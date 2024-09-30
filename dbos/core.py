@@ -197,9 +197,9 @@ def _execute_workflow_sync(
         status["output"] = utils.serialize(output)
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
-            asyncio.run(
+            asyncio.run(  # asyncio run ok
                 dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-            )  # asyncio run ok
+            )
         dbos._sys_db.buffer_workflow_status(status)
     except DBOSWorkflowConflictIDError:
         # Retrieve the workflow handle and wait for the result.
@@ -214,9 +214,9 @@ def _execute_workflow_sync(
         status["error"] = utils.serialize_exception(error)
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
-            asyncio.run(
+            asyncio.run(  # asyncio run ok
                 dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-            )  # asyncio run ok
+            )
         asyncio.run(dbos._sys_db.update_workflow_status(status))  # asyncio run ok
         raise
 
@@ -282,14 +282,14 @@ def _execute_workflow_wthread(
 
 
 def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]":
-    status = asyncio.run(
+    status = asyncio.run(  # asyncio run ok
         dbos._sys_db.get_workflow_status(workflow_id)
-    )  # asyncio run ok
+    )
     if not status:
         raise DBOSRecoveryError(workflow_id, "Workflow status not found")
-    inputs = asyncio.run(
+    inputs = asyncio.run(  # asyncio run ok
         dbos._sys_db.get_workflow_inputs(workflow_id)
-    )  # asyncio run ok
+    )
     if not inputs:
         raise DBOSRecoveryError(workflow_id, "Workflow inputs not found")
     wf_func = dbos._registry.workflow_info_map.get(status["name"], None)
@@ -1034,9 +1034,9 @@ def _step(
                 step_output["error"] = (
                     utils.serialize_exception(error) if error is not None else None
                 )
-                asyncio.run(
+                asyncio.run(  # asyncio run ok
                     dbos._sys_db.record_operation_result(step_output)
-                )  # asyncio run ok
+                )
 
                 if error is not None:
                     raise error

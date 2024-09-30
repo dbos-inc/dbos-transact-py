@@ -696,9 +696,9 @@ class DBOS:
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
         """Send a message to a workflow execution."""
-        return asyncio.run(
+        return asyncio.run(  # asyncio run ok
             _send(_get_dbos_instance(), destination_id, message, topic)
-        )  # asyncio run ok
+        )
 
     @classmethod
     async def send_async(
@@ -715,9 +715,9 @@ class DBOS:
         This function is to be called from within a workflow.
         `recv` will return the message sent on `topic`, waiting if necessary.
         """
-        return asyncio.run(
+        return asyncio.run(  # asyncio run ok
             _recv(_get_dbos_instance(), topic, timeout_seconds)
-        )  # asyncio run ok
+        )
 
     @classmethod
     async def recv_async(
