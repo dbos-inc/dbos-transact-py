@@ -2,6 +2,7 @@ import threading
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable
 
+from dbos.logger import dbos_logger
 from dbos.queue import Queue
 
 if TYPE_CHECKING:
@@ -18,7 +19,12 @@ scheduler_queue: Queue
 def scheduler_loop(
     func: ScheduledWorkflow, cron: str, stop_event: threading.Event
 ) -> None:
-    iter = croniter(cron, datetime.now(timezone.utc), second_at_beginning=True)
+    try:
+        iter = croniter(cron, datetime.now(timezone.utc), second_at_beginning=True)
+    except Exception as e:
+        dbos_logger.error(
+            f'Cannot run scheduled function {func.__name__}. Invalid crontab "{cron}"'
+        )
     while not stop_event.is_set():
         nextExecTime = iter.get_next(datetime)
         sleepTime = nextExecTime - datetime.now(timezone.utc)
