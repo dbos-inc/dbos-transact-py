@@ -121,6 +121,7 @@ def test_one_at_a_time_with_limiter(dbos: DBOS) -> None:
     assert handle2.get_result() == None
     assert flag
     assert wf_counter == 1
+    assert queue_entries_are_cleaned_up(dbos)
 
 
 def test_queue_childwf(dbos: DBOS) -> None:
