@@ -81,7 +81,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
 
-class _WorkflowHandleFuture(WorkflowHandle[R]):
+class _WorkflowHandleFuture(Generic[R]):
 
     def __init__(self, workflow_id: str, future: Future[R], dbos: "DBOS"):
         self.workflow_id = workflow_id
@@ -101,7 +101,7 @@ class _WorkflowHandleFuture(WorkflowHandle[R]):
         return stat
 
 
-class _WorkflowHandlePolling(WorkflowHandle[R]):
+class _WorkflowHandlePolling(Generic[R]):
 
     def __init__(self, workflow_id: str, dbos: "DBOS"):
         self.workflow_id = workflow_id
