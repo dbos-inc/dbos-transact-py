@@ -81,8 +81,7 @@ class ApplicationDatabase:
         ApplicationSchema.metadata_obj.create_all(self.engine)
 
     def destroy(self) -> None:
-        self.engine.dispose()
-        asyncio.run(self.async_engine.dispose())  # asyncio run ok
+        asyncio.run(self.destroy_async())  # asyncio run ok
 
     async def destroy_async(self) -> None:
         self.engine.dispose()
@@ -135,27 +134,7 @@ class ApplicationDatabase:
             raise
 
     def record_transaction_error(self, output: TransactionResultInternal) -> None:
-        try:
-            with self.engine.begin() as conn:
-                conn.execute(
-                    pg.insert(ApplicationSchema.transaction_outputs).values(
-                        workflow_uuid=output["workflow_uuid"],
-                        function_id=output["function_id"],
-                        output=None,
-                        error=output["error"],
-                        txn_id=sa.text(
-                            "(select pg_current_xact_id_if_assigned()::text)"
-                        ),
-                        txn_snapshot=output["txn_snapshot"],
-                        executor_id=(
-                            output["executor_id"] if output["executor_id"] else None
-                        ),
-                    )
-                )
-        except DBAPIError as dbapi_error:
-            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
-                raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
-            raise
+        asyncio.run(self.record_transaction_error_async(output))  # asyncio run ok
 
     async def record_transaction_error_async(
         self, output: TransactionResultInternal

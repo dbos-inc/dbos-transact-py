@@ -333,50 +333,13 @@ class DBOS:
         if _dbos_global_instance is not None:
             _dbos_global_instance._launch()
 
+    @classmethod
+    async def launch_async(cls) -> None:
+        if _dbos_global_instance is not None:
+            await _dbos_global_instance._launch_async()
+
     def _launch(self) -> None:
-        try:
-            if self._launched:
-                dbos_logger.warning(f"DBOS was already launched")
-                return
-            self._launched = True
-            self._executor_field = ThreadPoolExecutor(max_workers=64)
-            self._sys_db_field = SystemDatabase(self.config)
-            self._app_db_field = ApplicationDatabase(self.config)
-            self._admin_server_field = AdminServer(dbos=self)
-
-            if not os.environ.get("DBOS__VMID"):
-                workflow_ids = asyncio.run(
-                    self._sys_db.get_pending_workflows("local")
-                )  # asyncio run ok
-                self._executor.submit(_startup_recovery_thread, self, workflow_ids)
-
-            # Listen to notifications
-            self._executor.submit(self._sys_db._notification_listener)
-
-            # Start flush workflow buffers thread
-            self._executor.submit(self._sys_db.flush_workflow_buffers)
-
-            # Start the queue thread
-            evt = threading.Event()
-            self.stop_events.append(evt)
-            self._executor.submit(queue_thread, evt, self)
-
-            # Grab any pollers that were deferred and start them
-            for evt, func, args, kwargs in self._registry.pollers:
-                self.stop_events.append(evt)
-                self._executor.submit(func, *args, **kwargs)
-            self._registry.pollers = []
-
-            dbos_logger.info("DBOS launched")
-
-            # Flush handlers and add OTLP to all loggers if enabled
-            # to enable their export in DBOS Cloud
-            for handler in dbos_logger.handlers:
-                handler.flush()
-            add_otlp_to_all_loggers()
-        except Exception:
-            dbos_logger.error(f"DBOS failed to launch: {traceback.format_exc()}")
-            raise
+        asyncio.run(self._launch_async())  # asyncio run ok
 
     async def _launch_async(self) -> None:
         try:
@@ -422,23 +385,7 @@ class DBOS:
             raise
 
     def _destroy(self) -> None:
-        self._initialized = False
-        for event in self.stop_events:
-            event.set()
-        if self._sys_db_field is not None:
-            self._sys_db_field.destroy()
-            self._sys_db_field = None
-        if self._app_db_field is not None:
-            self._app_db_field.destroy()
-            self._app_db_field = None
-        if self._admin_server_field is not None:
-            self._admin_server_field.stop()
-            self._admin_server_field = None
-        # CB - This needs work, some things ought to stop before DBs are tossed out,
-        #  on the other hand it hangs to move it
-        if self._executor_field is not None:
-            self._executor_field.shutdown(cancel_futures=True)
-            self._executor_field = None
+        asyncio.run(self._destroy_async())  # asyncio run ok
 
     async def _destroy_async(self) -> None:
         self._initialized = False
