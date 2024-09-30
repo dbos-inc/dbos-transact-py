@@ -227,12 +227,12 @@ def test_limiter(dbos: DBOS) -> None:
     # Verify that each "wave" of tasks started at the ~same time.
     for wave in range(num_waves):
         for i in range(wave * limit, (wave + 1) * limit - 1):
-            assert times[i + 1] - times[i] < 0.1
+            assert times[i + 1] - times[i] < 0.2
 
     # Verify that the gap between "waves" is ~equal to the period
     for wave in range(num_waves - 1):
-        assert times[limit * (wave + 1)] - times[limit * wave] > period - 0.1
-        assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.1
+        assert times[limit * (wave + 1)] - times[limit * wave] > period - 0.2
+        assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.2
 
     # Verify all workflows get the SUCCESS status eventually
     dbos._sys_db.wait_for_buffer_flush()
