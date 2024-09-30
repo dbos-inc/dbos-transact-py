@@ -231,7 +231,8 @@ def test_limiter(dbos: DBOS) -> None:
 
     # Verify that the gap between "waves" is ~equal to the period
     for wave in range(num_waves - 1):
-        assert times[limit * wave] - times[limit * wave - 1] < period + 0.1
+        assert times[limit * (wave + 1)] - times[limit * wave] > period - 0.1
+        assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.1
 
     # Verify all workflows get the SUCCESS status eventually
     dbos._sys_db.wait_for_buffer_flush()
