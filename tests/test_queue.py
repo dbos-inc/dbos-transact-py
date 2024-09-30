@@ -268,7 +268,7 @@ def test_multiple_queues(dbos: DBOS) -> None:
     handle2 = concurrency_queue.enqueue(workflow_two)
 
     @DBOS.workflow()
-    def test_workflow(var1: str, var2: str) -> float:
+    def limited_workflow(var1: str, var2: str) -> float:
         assert var1 == "abc" and var2 == "123"
         return time.time()
 
@@ -287,7 +287,7 @@ def test_multiple_queues(dbos: DBOS) -> None:
     # followed by the next wave.
     num_waves = 3
     for _ in range(limit * num_waves):
-        h = limiter_queue.enqueue(test_workflow, "abc", "123")
+        h = limiter_queue.enqueue(limited_workflow, "abc", "123")
         handles.append(h)
     for h in handles:
         times.append(h.get_result())
@@ -307,6 +307,10 @@ def test_multiple_queues(dbos: DBOS) -> None:
     for h in handles:
         assert h.get_status().status == WorkflowStatusString.SUCCESS.value
 
+    # Verify that during all this time, the second task
+    # was not launched on the concurrency-limited queue.
+    # Then, finish the first task and verify the second
+    # task runs on schedule.
     assert not flag
     workflow_event.set()
     assert handle1.get_result() == None
