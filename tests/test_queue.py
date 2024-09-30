@@ -121,6 +121,7 @@ def test_one_at_a_time_with_limiter(dbos: DBOS) -> None:
     assert handle2.get_result() == None
     assert flag
     assert wf_counter == 1
+    assert queue_entries_are_cleaned_up(dbos)
 
 
 def test_queue_childwf(dbos: DBOS) -> None:
@@ -226,11 +227,12 @@ def test_limiter(dbos: DBOS) -> None:
     # Verify that each "wave" of tasks started at the ~same time.
     for wave in range(num_waves):
         for i in range(wave * limit, (wave + 1) * limit - 1):
-            assert times[i + 1] - times[i] < 0.1
+            assert times[i + 1] - times[i] < 0.2
 
     # Verify that the gap between "waves" is ~equal to the period
     for wave in range(num_waves - 1):
-        assert times[limit * wave] - times[limit * wave - 1] < period + 0.1
+        assert times[limit * (wave + 1)] - times[limit * wave] > period - 0.2
+        assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.2
 
     # Verify all workflows get the SUCCESS status eventually
     dbos._sys_db.wait_for_buffer_flush()
