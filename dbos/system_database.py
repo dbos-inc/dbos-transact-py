@@ -1153,6 +1153,7 @@ class SystemDatabase:
                 query = (
                     sa.select(sa.func.count())
                     .select_from(SystemSchema.workflow_queue)
+                    .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
                     .where(
                         SystemSchema.workflow_queue.c.started_at_epoch_ms.isnot(None)
                     )
@@ -1220,6 +1221,7 @@ class SystemDatabase:
                 await c.execute(
                     sa.delete(SystemSchema.workflow_queue)
                     .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms != None)
+                    .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
                     .where(
                         SystemSchema.workflow_queue.c.started_at_epoch_ms
                         < start_time_ms - limiter_period_ms

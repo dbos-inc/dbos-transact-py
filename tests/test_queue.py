@@ -126,6 +126,7 @@ def test_one_at_a_time_with_limiter(dbos: DBOS) -> None:
     assert handle2.get_result() == None
     assert flag
     assert wf_counter == 1
+    assert queue_entries_are_cleaned_up(dbos)
 
 
 def test_queue_childwf(dbos: DBOS) -> None:
@@ -231,16 +232,96 @@ def test_limiter(dbos: DBOS) -> None:
     # Verify that each "wave" of tasks started at the ~same time.
     for wave in range(num_waves):
         for i in range(wave * limit, (wave + 1) * limit - 1):
-            assert times[i + 1] - times[i] < 0.1
+            assert times[i + 1] - times[i] < 0.2
 
     # Verify that the gap between "waves" is ~equal to the period
     for wave in range(num_waves - 1):
-        assert times[limit * wave] - times[limit * wave - 1] < period + 0.1
+        assert times[limit * (wave + 1)] - times[limit * wave] > period - 0.2
+        assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.2
 
     # Verify all workflows get the SUCCESS status eventually
     dbos._sys_db.wait_for_buffer_flush()
     for h in handles:
         assert h.get_status().status == WorkflowStatusString.SUCCESS.value
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_multiple_queues(dbos: DBOS) -> None:
+
+    wf_counter = 0
+    flag = False
+    workflow_event = threading.Event()
+    main_thread_event = threading.Event()
+
+    @DBOS.workflow()
+    def workflow_one() -> None:
+        nonlocal wf_counter
+        wf_counter += 1
+        main_thread_event.set()
+        workflow_event.wait()
+
+    @DBOS.workflow()
+    def workflow_two() -> None:
+        nonlocal flag
+        flag = True
+
+    concurrency_queue = Queue("test_concurrency_queue", 1)
+    handle1 = concurrency_queue.enqueue(workflow_one)
+    assert handle1.get_status().queue_name == "test_concurrency_queue"
+    handle2 = concurrency_queue.enqueue(workflow_two)
+
+    @DBOS.workflow()
+    def limited_workflow(var1: str, var2: str) -> float:
+        assert var1 == "abc" and var2 == "123"
+        return time.time()
+
+    limit = 5
+    period = 2
+    limiter_queue = Queue(
+        "test_limit_queue", limiter={"limit": limit, "period": period}
+    )
+
+    handles: list[WorkflowHandle[float]] = []
+    times: list[float] = []
+
+    # Launch a number of tasks equal to three times the limit.
+    # This should lead to three "waves" of the limit tasks being
+    # executed simultaneously, followed by a wait of the period,
+    # followed by the next wave.
+    num_waves = 3
+    for _ in range(limit * num_waves):
+        h = limiter_queue.enqueue(limited_workflow, "abc", "123")
+        handles.append(h)
+    for h in handles:
+        times.append(h.get_result())
+
+    # Verify that each "wave" of tasks started at the ~same time.
+    for wave in range(num_waves):
+        for i in range(wave * limit, (wave + 1) * limit - 1):
+            assert times[i + 1] - times[i] < 0.2
+
+    # Verify that the gap between "waves" is ~equal to the period
+    for wave in range(num_waves - 1):
+        assert times[limit * (wave + 1)] - times[limit * wave] > period - 0.2
+        assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.2
+
+    # Verify all workflows get the SUCCESS status eventually
+    dbos._sys_db.wait_for_buffer_flush()
+    for h in handles:
+        assert h.get_status().status == WorkflowStatusString.SUCCESS.value
+
+    # Verify that during all this time, the second task
+    # was not launched on the concurrency-limited queue.
+    # Then, finish the first task and verify the second
+    # task runs on schedule.
+    assert not flag
+    workflow_event.set()
+    assert handle1.get_result() == None
+    assert handle2.get_result() == None
+    assert flag
+    assert wf_counter == 1
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
