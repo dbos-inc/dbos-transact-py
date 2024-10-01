@@ -583,9 +583,11 @@ def _start_workflow(
     if not execute_workflow:
         return _WorkflowHandlePolling(new_wf_id, dbos)
 
-    submitArgs = (dbos, status, func, new_wf_ctx)
-    if fself is not None:
-        submitArgs += (fself,)
+    submitArgs = (
+        (dbos, status, func, new_wf_ctx, fself)
+        if fself is not None
+        else (dbos, status, func, new_wf_ctx)
+    )
 
     future = dbos._executor.submit(
         cast(Callable[..., R], _execute_workflow_wthread),
