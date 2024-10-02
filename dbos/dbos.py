@@ -29,14 +29,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dbos.core import (
     _execute_workflow_id,
-    _execute_workflow_id_async,
     _get_event,
     _recv,
     _register_send_wf,
     _send,
     _set_event,
     _start_workflow,
-    _start_workflow_async,
     _step,
     _transaction,
     _workflow,
@@ -535,18 +533,6 @@ class DBOS:
         return _start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs)
 
     @classmethod
-    async def start_workflow_async(
-        cls,
-        func: Workflow[P, R],
-        *args: P.args,
-        **kwargs: P.kwargs,
-    ) -> WorkflowHandle[R]:
-        """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
-        return await _start_workflow_async(
-            _get_dbos_instance(), func, None, True, *args, **kwargs
-        )
-
-    @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
         """Return the status of a workflow execution."""
         ctx = get_local_dbos_context()
@@ -745,11 +731,6 @@ class DBOS:
     def execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Execute a workflow by ID (for recovery)."""
         return _execute_workflow_id(_get_dbos_instance(), workflow_id)
-
-    @classmethod
-    async def execute_workflow_id_async(cls, workflow_id: str) -> WorkflowHandle[Any]:
-        """Execute a workflow by ID (for recovery)."""
-        return await _execute_workflow_id_async(_get_dbos_instance(), workflow_id)
 
     @classmethod
     def recover_pending_workflows(

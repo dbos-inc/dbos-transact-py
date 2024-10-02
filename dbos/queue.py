@@ -3,14 +3,7 @@ import threading
 import traceback
 from typing import TYPE_CHECKING, Optional, TypedDict
 
-from dbos.core import (
-    P,
-    R,
-    _execute_workflow_id,
-    _execute_workflow_id_async,
-    _start_workflow,
-    _start_workflow_async,
-)
+from dbos.core import P, R, _execute_workflow_id, _start_workflow
 
 if TYPE_CHECKING:
     from dbos.dbos import DBOS, Workflow, WorkflowHandle
@@ -58,16 +51,6 @@ class Queue:
         dbos = _get_dbos_instance()
         return _start_workflow(dbos, func, self.name, False, *args, **kwargs)
 
-    async def enqueue_async(
-        self, func: "Workflow[P, R]", *args: P.args, **kwargs: P.kwargs
-    ) -> "WorkflowHandle[R]":
-        from dbos.dbos import _get_dbos_instance
-
-        dbos = _get_dbos_instance()
-        return await _start_workflow_async(
-            dbos, func, self.name, False, *args, **kwargs
-        )
-
 
 def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     while not stop_event.is_set():
@@ -80,21 +63,6 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                 )  # asyncio run ok
                 for id in wf_ids:
                     _execute_workflow_id(dbos, id)
-            except Exception:
-                dbos.logger.warning(
-                    f"Exception encountered in queue thread: {traceback.format_exc()}"
-                )
-
-
-async def queue_thread_async(stop_event: threading.Event, dbos: "DBOS") -> None:
-    while not stop_event.is_set():
-        if stop_event.wait(timeout=1):
-            return
-        for _, queue in dbos._registry.queue_info_map.items():
-            try:
-                wf_ids = await dbos._sys_db.start_queued_workflows(queue)
-                for id in wf_ids:
-                    await _execute_workflow_id_async(dbos, id)
             except Exception:
                 dbos.logger.warning(
                     f"Exception encountered in queue thread: {traceback.format_exc()}"

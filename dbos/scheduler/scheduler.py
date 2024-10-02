@@ -34,21 +34,6 @@ def scheduler_loop(
             scheduler_queue.enqueue(func, nextExecTime, datetime.now(timezone.utc))
 
 
-async def scheduler_loop_async(
-    func: ScheduledWorkflow, cron: str, stop_event: threading.Event
-) -> None:
-    iter = croniter(cron, datetime.now(timezone.utc), second_at_beginning=True)
-    while not stop_event.is_set():
-        nextExecTime = iter.get_next(datetime)
-        sleepTime = nextExecTime - datetime.now(timezone.utc)
-        if stop_event.wait(timeout=sleepTime.total_seconds()):
-            return
-        with SetWorkflowID(f"sched-{func.__qualname__}-{nextExecTime.isoformat()}"):
-            await scheduler_queue.enqueue_async(
-                func, nextExecTime, datetime.now(timezone.utc)
-            )
-
-
 def scheduled(
     dbosreg: "_DBOSRegistry", cron: str
 ) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
