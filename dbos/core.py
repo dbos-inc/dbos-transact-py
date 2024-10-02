@@ -84,6 +84,13 @@ F = TypeVar("F", bound=Callable[..., Any])
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
 
+async def get_status_async(dbos: "DBOS", workflow_id: str) -> "WorkflowStatus":
+    stat = await dbos.get_workflow_status_async(workflow_id)
+    if stat is None:
+        raise DBOSNonExistentWorkflowError(workflow_id)
+    return stat
+
+
 class _WorkflowHandleFuture(Generic[R]):
 
     def __init__(self, workflow_id: str, future: Future[R], dbos: "DBOS"):
@@ -97,11 +104,16 @@ class _WorkflowHandleFuture(Generic[R]):
     def get_result(self) -> R:
         return self.future.result()
 
+    async def get_result_async(self) -> R:
+        return await asyncio.wrap_future(self.future)
+
     def get_status(self) -> "WorkflowStatus":
-        stat = self.dbos.get_workflow_status(self.workflow_id)
-        if stat is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_id)
-        return stat
+        return asyncio.run(  # asyncio run ok
+            get_status_async(self.dbos, self.workflow_id)
+        )
+
+    async def get_status_async(self) -> "WorkflowStatus":
+        return await get_status_async(self.dbos, self.workflow_id)
 
 
 class _WorkflowHandlePolling(Generic[R]):
@@ -114,14 +126,19 @@ class _WorkflowHandlePolling(Generic[R]):
         return self.workflow_id
 
     def get_result(self) -> R:
-        res: R = asyncio.run(self.dbos._sys_db.await_workflow_result(self.workflow_id))
+        return asyncio.run(self.get_result_async())  # asyncio run ok
+
+    async def get_result_async(self) -> R:
+        res: R = await self.dbos._sys_db.await_workflow_result(self.workflow_id)
         return res
 
     def get_status(self) -> "WorkflowStatus":
-        stat = self.dbos.get_workflow_status(self.workflow_id)
-        if stat is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_id)
-        return stat
+        return asyncio.run(  # asyncio run ok
+            get_status_async(self.dbos, self.workflow_id)
+        )
+
+    async def get_status_async(self) -> "WorkflowStatus":
+        return await get_status_async(self.dbos, self.workflow_id)
 
 
 async def _init_workflow(

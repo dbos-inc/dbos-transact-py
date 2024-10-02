@@ -534,37 +534,8 @@ class DBOS:
 
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
-        """Return the status of a workflow execution."""
-        ctx = get_local_dbos_context()
-        if ctx and ctx.is_within_workflow():
-            ctx.function_id += 1
-            stat = asyncio.run(  # asyncio run ok
-                _get_dbos_instance()._sys_db.get_workflow_status_within_wf(
-                    workflow_id, ctx.workflow_id, ctx.function_id
-                )
-            )
-        else:
-            stat = asyncio.run(  # asyncio run ok
-                _get_dbos_instance()._sys_db.get_workflow_status(workflow_id)
-            )
-        if stat is None:
-            return None
-
-        return WorkflowStatus(
-            workflow_id=workflow_id,
-            status=stat["status"],
-            name=stat["name"],
-            recovery_attempts=stat["recovery_attempts"],
-            class_name=stat["class_name"],
-            config_name=stat["config_name"],
-            queue_name=stat["queue_name"],
-            authenticated_user=stat["authenticated_user"],
-            assumed_role=stat["assumed_role"],
-            authenticated_roles=(
-                json.loads(stat["authenticated_roles"])
-                if stat["authenticated_roles"] is not None
-                else None
-            ),
+        return asyncio.run(  # asyncio run ok
+            DBOS.get_workflow_status_async(workflow_id)
         )
 
     @classmethod
@@ -895,7 +866,15 @@ class WorkflowHandle(Generic[R], Protocol):
         """Return the result of the workflow function invocation, waiting if necessary."""
         ...
 
+    async def get_result_async(self) -> R:
+        """Return the result of the workflow function invocation, waiting if necessary."""
+        ...
+
     def get_status(self) -> WorkflowStatus:
+        """Return the current workflow function invocation status as `WorkflowStatus`."""
+        ...
+
+    async def get_status_async(self) -> WorkflowStatus:
         """Return the current workflow function invocation status as `WorkflowStatus`."""
         ...
 
