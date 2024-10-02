@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import sys
 import time
@@ -8,12 +9,14 @@ from functools import wraps
 from typing import (
     TYPE_CHECKING,
     Any,
+    Awaitable,
     Callable,
     Coroutine,
     Generic,
     Optional,
     Tuple,
     TypeVar,
+    Union,
     cast,
 )
 
@@ -226,12 +229,16 @@ def _execute_workflow_sync(
 async def _execute_workflow_async(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
-    func: "Workflow[P, Coroutine[Any, Any, R]]",
+    func: "Workflow[P, R]",
     *args: Any,
     **kwargs: Any,
 ) -> R:
     try:
-        output: R = await func(*args, **kwargs)
+        output: R = await (
+            func(*args, **kwargs)
+            if inspect.iscoroutinefunction(func)
+            else asyncio.to_thread(func, *args, **kwargs)
+        )
         status["status"] = "SUCCESS"
         status["output"] = utils.serialize(output)
         if status["queue_name"] is not None:
