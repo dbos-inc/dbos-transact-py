@@ -524,15 +524,15 @@ def _start_workflow(
     if not execute_workflow:
         return _WorkflowHandlePolling(new_wf_id, dbos)
 
-    submitArgs = (
-        (dbos, status, func, new_wf_ctx, fself)
+    submit_args = (
+        (dbos, status, func, new_wf_ctx, fself) + args
         if fself is not None
-        else (dbos, status, func, new_wf_ctx)
+        else (dbos, status, func, new_wf_ctx) + args
     )
 
     future = dbos._executor.submit(
         cast(Callable[..., R], _execute_workflow_wthread),
-        *(submitArgs + args),
+        *submit_args,
         **kwargs,
     )
     return _WorkflowHandleFuture(new_wf_id, future, dbos)
