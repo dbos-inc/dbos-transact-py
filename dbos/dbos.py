@@ -406,8 +406,8 @@ class DBOS:
         self._initialized = False
         for event in self.stop_events:
             event.set()
-        for event in self.async_stop_events:
-            event.set()
+        for aevent in self.async_stop_events:
+            aevent.set()
         if self._sys_db_field is not None:
             await self._sys_db_field.destroy_async()
             self._sys_db_field = None

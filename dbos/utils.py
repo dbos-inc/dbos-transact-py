@@ -1,8 +1,8 @@
 import asyncio
 import types
-from typing import Any, Awaitable, Dict, Tuple, TypedDict, TypeVar
+from typing import Any, Coroutine, Dict, Tuple, TypedDict, TypeVar
 
-import jsonpickle
+import jsonpickle  # type: ignore
 
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
@@ -58,9 +58,9 @@ def deserialize_exception(serialized_data: str) -> Exception:
     return upo
 
 
-def run_coroutine(coro: Awaitable[R]) -> R:
+def run_coroutine(coro: Coroutine[Any, Any, R]) -> R:
     try:
         loop = asyncio.get_running_loop()
-        return asyncio.run_coroutine_threadsafe(coro, loop)
+        return asyncio.run_coroutine_threadsafe(coro, loop).result()
     except RuntimeError:
         return asyncio.run(coro)

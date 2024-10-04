@@ -1115,7 +1115,7 @@ class SystemDatabase:
                     await asyncio.sleep(buffer_flush_interval_secs)
             except Exception as e:
                 dbos_logger.error(f"Error while flushing buffers: {e}")
-                await asyncio.time.sleep(buffer_flush_interval_secs)
+                await asyncio.sleep(buffer_flush_interval_secs)
                 # Will retry next time
 
     def buffer_workflow_status(self, status: WorkflowStatusInternal) -> None:
