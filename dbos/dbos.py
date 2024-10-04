@@ -47,11 +47,10 @@ from dbos.registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
     get_or_create_class_info,
-    set_dbos_func_name,
-    set_temp_workflow_type,
 )
 from dbos.roles import default_required_roles, required_roles
 from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled
+from dbos.utils import run_coroutine
 
 from .tracer import dbos_tracer
 
@@ -88,6 +87,8 @@ from .system_database import SystemDatabase
 # There are cases where the parameters P and return value R should be separate
 #   Such as for start_workflow, which will return WorkflowHandle[R]
 #   In those cases, use something like Workflow[P,R]
+
+# these are duped in core.py
 F = TypeVar("F", bound=Callable[..., Any])
 
 P = ParamSpec("P")  # A generic type for workflow parameters
@@ -275,6 +276,7 @@ class DBOS:
         self._registry.dbos = self
         self._admin_server_field: Optional[AdminServer] = None
         self.stop_events: List[threading.Event] = []
+        self.async_stop_events: List[asyncio.Event] = []
         self.fastapi: Optional["FastAPI"] = fastapi
         self.flask: Optional["Flask"] = flask
         self._executor_field: Optional[ThreadPoolExecutor] = None
@@ -337,7 +339,7 @@ class DBOS:
             await _dbos_global_instance._launch_async()
 
     def _launch(self) -> None:
-        asyncio.run(self._launch_async())  # asyncio run ok
+        run_coroutine(self._launch_async())
 
     async def _launch_async(self) -> None:
         try:
@@ -350,20 +352,35 @@ class DBOS:
             self._app_db_field = ApplicationDatabase(self.config)
             self._admin_server_field = AdminServer(dbos=self)
 
+            def run_event_loop(loop: asyncio.AbstractEventLoop) -> None:
+                asyncio.set_event_loop(loop)
+                loop.run_forever()
+
+            self._loop = asyncio.new_event_loop()
+            self._daemon = threading.Thread(
+                target=run_event_loop, args=(self._loop,), daemon=True
+            )
+            self._daemon.start()
+
             if not os.environ.get("DBOS__VMID"):
                 workflow_ids = await self._sys_db.get_pending_workflows("local")
                 self._executor.submit(_startup_recovery_thread, self, workflow_ids)
 
             # Listen to notifications
             self._executor.submit(self._sys_db._notification_listener)
+            # asyncio.run_coroutine_threadsafe(self._sys_db._notification_listener_async(), self._loop)
 
             # Start flush workflow buffers thread
             self._executor.submit(self._sys_db.flush_workflow_buffers)
+            # asyncio.run_coroutine_threadsafe(self._sys_db.flush_workflow_buffers_async(), self._loop)
 
             # Start the queue thread
             evt = threading.Event()
             self.stop_events.append(evt)
             self._executor.submit(queue_thread, evt, self)
+            # evt = asyncio.Event()
+            # self.async_stop_events.append(evt)
+            # asyncio.run_coroutine_threadsafe(queue_thread_async(evt, self), self._loop)
 
             # Grab any pollers that were deferred and start them
             for evt, func, args, kwargs in self._registry.pollers:
@@ -383,11 +400,13 @@ class DBOS:
             raise
 
     def _destroy(self) -> None:
-        asyncio.run(self._destroy_async())  # asyncio run ok
+        run_coroutine(self._destroy_async())
 
     async def _destroy_async(self) -> None:
         self._initialized = False
         for event in self.stop_events:
+            event.set()
+        for event in self.async_stop_events:
             event.set()
         if self._sys_db_field is not None:
             await self._sys_db_field.destroy_async()
@@ -534,9 +553,7 @@ class DBOS:
 
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
-        return asyncio.run(  # asyncio run ok
-            DBOS.get_workflow_status_async(workflow_id)
-        )
+        return run_coroutine(DBOS.get_workflow_status_async(workflow_id))
 
     @classmethod
     async def get_workflow_status_async(
@@ -600,7 +617,7 @@ class DBOS:
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
         """Send a message to a workflow execution."""
-        return asyncio.run(  # asyncio run ok
+        return run_coroutine(
             _send(_get_dbos_instance(), destination_id, message, topic)
         )
 
@@ -619,9 +636,7 @@ class DBOS:
         This function is to be called from within a workflow.
         `recv` will return the message sent on `topic`, waiting if necessary.
         """
-        return asyncio.run(  # asyncio run ok
-            _recv(_get_dbos_instance(), topic, timeout_seconds)
-        )
+        return run_coroutine(_recv(_get_dbos_instance(), topic, timeout_seconds))
 
     @classmethod
     async def recv_async(
@@ -638,7 +653,7 @@ class DBOS:
         as the `DBOS.sleep`s are durable and completed sleeps will be skipped during recovery.
         """
 
-        asyncio.run(DBOS.sleep_async(seconds))  # asyncio run ok
+        run_coroutine(DBOS.sleep_async(seconds))
 
     @classmethod
     async def sleep_async(cls, seconds: float) -> None:
@@ -669,7 +684,7 @@ class DBOS:
             value(Any): A serializable value to associate with the key
 
         """
-        asyncio.run(_set_event(_get_dbos_instance(), key, value))  # asyncio run ok
+        run_coroutine(_set_event(_get_dbos_instance(), key, value))
 
     @classmethod
     async def set_event_async(cls, key: str, value: Any) -> None:
@@ -688,7 +703,7 @@ class DBOS:
             timeout_seconds(float): The amount of time to wait, in case `set_event` has not yet been called byt the workflow
 
         """
-        return asyncio.run(  # asyncio run ok
+        return run_coroutine(
             _get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
         )
 

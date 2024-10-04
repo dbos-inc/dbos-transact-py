@@ -11,12 +11,10 @@ from typing import (
     Any,
     Awaitable,
     Callable,
-    Coroutine,
     Generic,
     Optional,
     Tuple,
     TypeVar,
-    Union,
     cast,
 )
 
@@ -69,7 +67,7 @@ from dbos.system_database import (
     WorkflowStatusInternal,
     WorkflowStatusString,
 )
-from dbos.utils import WorkflowInputs
+from dbos.utils import WorkflowInputs, run_coroutine
 
 if TYPE_CHECKING:
     from dbos.dbos import DBOS, Workflow, WorkflowHandle, WorkflowStatus, _DBOSRegistry
@@ -77,6 +75,7 @@ if TYPE_CHECKING:
 
 from sqlalchemy.exc import DBAPIError
 
+# these are duped in dbos.py
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 F = TypeVar("F", bound=Callable[..., Any])
@@ -108,9 +107,7 @@ class _WorkflowHandleFuture(Generic[R]):
         return await asyncio.wrap_future(self.future)
 
     def get_status(self) -> "WorkflowStatus":
-        return asyncio.run(  # asyncio run ok
-            get_status_async(self.dbos, self.workflow_id)
-        )
+        return run_coroutine(get_status_async(self.dbos, self.workflow_id))
 
     async def get_status_async(self) -> "WorkflowStatus":
         return await get_status_async(self.dbos, self.workflow_id)
@@ -126,16 +123,14 @@ class _WorkflowHandlePolling(Generic[R]):
         return self.workflow_id
 
     def get_result(self) -> R:
-        return asyncio.run(self.get_result_async())  # asyncio run ok
+        return run_coroutine(self.get_result_async())
 
     async def get_result_async(self) -> R:
         res: R = await self.dbos._sys_db.await_workflow_result(self.workflow_id)
         return res
 
     def get_status(self) -> "WorkflowStatus":
-        return asyncio.run(  # asyncio run ok
-            get_status_async(self.dbos, self.workflow_id)
-        )
+        return run_coroutine(get_status_async(self.dbos, self.workflow_id))
 
     async def get_status_async(self) -> "WorkflowStatus":
         return await get_status_async(self.dbos, self.workflow_id)
@@ -217,7 +212,7 @@ def _execute_workflow_sync(
         status["output"] = utils.serialize(output)
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
-            asyncio.run(  # asyncio run ok
+            run_coroutine(
                 dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
             )
         dbos._sys_db.buffer_workflow_status(status)
@@ -234,10 +229,10 @@ def _execute_workflow_sync(
         status["error"] = utils.serialize_exception(error)
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
-            asyncio.run(  # asyncio run ok
+            run_coroutine(
                 dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
             )
-        asyncio.run(dbos._sys_db.update_workflow_status(status))  # asyncio run ok
+        run_coroutine(dbos._sys_db.update_workflow_status(status))
         raise
 
     return output
@@ -306,14 +301,10 @@ def _execute_workflow_wthread(
 
 
 def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]":
-    status = asyncio.run(  # asyncio run ok
-        dbos._sys_db.get_workflow_status(workflow_id)
-    )
+    status = run_coroutine(dbos._sys_db.get_workflow_status(workflow_id))
     if not status:
         raise DBOSRecoveryError(workflow_id, "Workflow status not found")
-    inputs = asyncio.run(  # asyncio run ok
-        dbos._sys_db.get_workflow_inputs(workflow_id)
-    )
+    inputs = run_coroutine(dbos._sys_db.get_workflow_inputs(workflow_id))
     if not inputs:
         raise DBOSRecoveryError(workflow_id, "Workflow inputs not found")
     wf_func = dbos._registry.workflow_info_map.get(status["name"], None)
@@ -406,7 +397,7 @@ def _workflow_wrapper(
         )
         with enterWorkflowCtxMgr(attributes), DBOSAssumeRole(rr):
             ctx = assert_current_dbos_context()  # Now the child ctx
-            status = asyncio.run(  # asyncio run ok
+            status = run_coroutine(
                 _init_workflow(
                     dbos,
                     ctx,
@@ -524,7 +515,7 @@ def _start_workflow(
     if fself is not None:
         gin_args = (fself,)
 
-    status = asyncio.run(  # asyncio run ok
+    status = run_coroutine(
         _init_workflow(
             dbos,
             new_wf_ctx,
@@ -834,7 +825,7 @@ def _step(
                     "output": None,
                     "error": None,
                 }
-                recorded_output = asyncio.run(  # asyncio run ok
+                recorded_output = run_coroutine(
                     dbos._sys_db.check_operation_execution(
                         ctx.workflow_id, ctx.function_id
                     )
@@ -893,9 +884,7 @@ def _step(
                 step_output["error"] = (
                     utils.serialize_exception(error) if error is not None else None
                 )
-                asyncio.run(  # asyncio run ok
-                    dbos._sys_db.record_operation_result(step_output)
-                )
+                run_coroutine(dbos._sys_db.record_operation_result(step_output))
 
                 if error is not None:
                     raise error

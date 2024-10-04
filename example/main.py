@@ -95,7 +95,7 @@ DBOS(fastapi=app, config=config)
 
 @app.get("/greeting/{name}")
 @DBOS.transaction()
-def example_transaction(name: str) -> str:
+async def example_transaction(name: str) -> str:
     query = dbos_hello.insert().values(name=name).returning(dbos_hello.c.greet_count)
     greet_count = DBOS.sql_session.execute(query).scalar_one()
     greeting = f"Greetings, {name}! You have been greeted {greet_count} times."

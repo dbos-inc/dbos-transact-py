@@ -4,6 +4,7 @@ import traceback
 from typing import TYPE_CHECKING, Optional, TypedDict
 
 from dbos.core import P, R, _execute_workflow_id, _start_workflow
+from dbos.utils import run_coroutine
 
 if TYPE_CHECKING:
     from dbos.dbos import DBOS, Workflow, WorkflowHandle
@@ -58,9 +59,29 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
             return
         for _, queue in dbos._registry.queue_info_map.items():
             try:
-                wf_ids = asyncio.run(
-                    dbos._sys_db.start_queued_workflows(queue)
-                )  # asyncio run ok
+                wf_ids = run_coroutine(dbos._sys_db.start_queued_workflows(queue))
+                for id in wf_ids:
+                    _execute_workflow_id(dbos, id)
+            except Exception:
+                dbos.logger.warning(
+                    f"Exception encountered in queue thread: {traceback.format_exc()}"
+                )
+
+
+async def wait(event: asyncio.Event, timeout: float) -> bool:
+    try:
+        return await asyncio.wait_for(event.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        return False
+
+
+async def queue_thread_async(stop_event: asyncio.Event, dbos: "DBOS") -> None:
+    while not stop_event.is_set():
+        if await wait(stop_event, 1):
+            return
+        for _, queue in dbos._registry.queue_info_map.items():
+            try:
+                wf_ids = await dbos._sys_db.start_queued_workflows(queue)
                 for id in wf_ids:
                     _execute_workflow_id(dbos, id)
             except Exception:

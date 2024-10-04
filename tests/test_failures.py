@@ -62,7 +62,7 @@ def test_notification_errors(dbos: DBOS) -> None:
     # Crash the notification connection and make sure send/recv works on time.
     while dbos._sys_db.notification_conn is None:
         time.sleep(1)
-    dbos._sys_db.notification_conn.close()
+    asyncio.run(dbos._sys_db.notification_conn.close())
     assert dbos._sys_db.notification_conn.closed == 1
 
     # Wait for the connection to be re-established

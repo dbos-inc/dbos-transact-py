@@ -205,7 +205,7 @@ class SystemDatabase:
         )
         command.upgrade(alembic_cfg, "head")
 
-        self.notification_conn: Optional[psycopg.connection.Connection] = None
+        self.notification_conn: Optional[psycopg.AsyncConnection] = None
         self.notifications_map: Dict[str, threading.Condition] = {}
         self.workflow_events_map: Dict[str, threading.Condition] = {}
 
@@ -227,17 +227,13 @@ class SystemDatabase:
 
     # Destroy the pool when finished
     def destroy(self) -> None:
-        self.wait_for_buffer_flush()
-        self._run_background_processes = False
-        if self.notification_conn is not None:
-            self.notification_conn.close()
-        asyncio.run(self.async_engine.dispose())  # asyncio run ok
+        utils.run_coroutine(self.destroy_async())
 
     async def destroy_async(self) -> None:
         self.wait_for_buffer_flush()
         self._run_background_processes = False
         if self.notification_conn is not None:
-            self.notification_conn.close()
+            await self.notification_conn.close()
         await self.async_engine.dispose()
 
     def wait_for_buffer_flush(self) -> None:
@@ -811,24 +807,29 @@ class SystemDatabase:
             )
         return message
 
-    def _notification_listener(self) -> None:
+    async def _notification_listener_async(self) -> None:
         while self._run_background_processes:
             try:
                 # since we're using the psycopg connection directly, we need a url without the "+pycopg" suffix
                 url = sa.URL.create(
                     "postgresql", **self.async_engine.url.translate_connect_args()
                 )
+
                 # Listen to notifications
-                self.notification_conn = psycopg.connect(
+                self.notification_conn = await psycopg.AsyncConnection.connect(
                     url.render_as_string(hide_password=False), autocommit=True
                 )
 
-                self.notification_conn.execute("LISTEN dbos_notifications_channel")
-                self.notification_conn.execute("LISTEN dbos_workflow_events_channel")
+                await self.notification_conn.execute(
+                    "LISTEN dbos_notifications_channel"
+                )
+                await self.notification_conn.execute(
+                    "LISTEN dbos_workflow_events_channel"
+                )
 
                 while self._run_background_processes:
                     gen = self.notification_conn.notifies(timeout=60)
-                    for notify in gen:
+                    async for notify in gen:
                         channel = notify.channel
                         dbos_logger.debug(
                             f"Received notification on channel: {channel}, payload: {notify.payload}"
@@ -862,11 +863,14 @@ class SystemDatabase:
             except Exception as e:
                 if self._run_background_processes:
                     dbos_logger.error(f"Notification listener error: {e}")
-                    time.sleep(1)
+                    await asyncio.sleep(1)
                     # Then the loop will try to reconnect and restart the listener
             finally:
                 if self.notification_conn is not None:
-                    self.notification_conn.close()
+                    await self.notification_conn.close()
+
+    def _notification_listener(self) -> None:
+        utils.run_coroutine(self._notification_listener_async())
 
     async def sleep(
         self,
@@ -1086,8 +1090,8 @@ class SystemDatabase:
             try:
                 self._is_flushing_status_buffer = True
                 # Must flush the status buffer first, as the inputs table has a foreign key constraint on the status table.
-                asyncio.run(self._flush_workflow_status_buffer())  # asyncio run ok
-                asyncio.run(self._flush_workflow_inputs_buffer())  # asyncio run ok
+                utils.run_coroutine(self._flush_workflow_status_buffer())
+                utils.run_coroutine(self._flush_workflow_inputs_buffer())
                 self._is_flushing_status_buffer = False
                 if self._is_buffers_empty:
                     # Only sleep if both buffers are empty
@@ -1108,10 +1112,10 @@ class SystemDatabase:
                 self._is_flushing_status_buffer = False
                 if self._is_buffers_empty:
                     # Only sleep if both buffers are empty
-                    time.sleep(buffer_flush_interval_secs)
+                    await asyncio.sleep(buffer_flush_interval_secs)
             except Exception as e:
                 dbos_logger.error(f"Error while flushing buffers: {e}")
-                time.sleep(buffer_flush_interval_secs)
+                await asyncio.time.sleep(buffer_flush_interval_secs)
                 # Will retry next time
 
     def buffer_workflow_status(self, status: WorkflowStatusInternal) -> None:
