@@ -31,6 +31,6 @@ class ApplicationSchema:
             nullable=False,
             server_default=text("(EXTRACT(epoch FROM now()) * 1000::numeric)::bigint"),
         ),
-        Index("workflow_status_created_at_index", "created_at"),
+        Index("transaction_outputs_created_at_index", "created_at"),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
     )
