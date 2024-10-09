@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import atexit
 import json
 import os
@@ -24,19 +25,19 @@ from typing import (
 )
 
 from opentelemetry.trace import Span
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from dbos.core import (
-    TEMP_SEND_WF_NAME,
     _execute_workflow_id,
     _get_event,
     _recv,
+    _register_send_wf,
     _send,
     _set_event,
     _start_workflow,
     _step,
     _transaction,
     _workflow,
-    _workflow_wrapper,
     _WorkflowHandlePolling,
 )
 from dbos.decorators import classproperty
@@ -46,11 +47,10 @@ from dbos.registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
     get_or_create_class_info,
-    set_dbos_func_name,
-    set_temp_workflow_type,
 )
 from dbos.roles import default_required_roles, required_roles
 from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled
+from dbos.utils import run_coroutine
 
 from .tracer import dbos_tracer
 
@@ -87,6 +87,8 @@ from .system_database import SystemDatabase
 # There are cases where the parameters P and return value R should be separate
 #   Such as for start_workflow, which will return WorkflowHandle[R]
 #   In those cases, use something like Workflow[P,R]
+
+# these are duped in core.py
 F = TypeVar("F", bound=Callable[..., Any])
 
 P = ParamSpec("P")  # A generic type for workflow parameters
@@ -274,6 +276,7 @@ class DBOS:
         self._registry.dbos = self
         self._admin_server_field: Optional[AdminServer] = None
         self.stop_events: List[threading.Event] = []
+        self.async_stop_events: List[asyncio.Event] = []
         self.fastapi: Optional["FastAPI"] = fastapi
         self.flask: Optional["Flask"] = flask
         self._executor_field: Optional[ThreadPoolExecutor] = None
@@ -290,16 +293,7 @@ class DBOS:
 
             setup_flask_middleware(self.flask)
 
-        # Register send_stub as a workflow
-        def send_temp_workflow(
-            destination_id: str, message: Any, topic: Optional[str]
-        ) -> None:
-            self.send(destination_id, message, topic)
-
-        temp_send_wf = _workflow_wrapper(self._registry, send_temp_workflow)
-        set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
-        set_temp_workflow_type(send_temp_workflow, "send")
-        self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
+        _register_send_wf(self, self._registry)
 
         for handler in dbos_logger.handlers:
             handler.flush()
@@ -339,7 +333,15 @@ class DBOS:
         if _dbos_global_instance is not None:
             _dbos_global_instance._launch()
 
+    @classmethod
+    async def launch_async(cls) -> None:
+        if _dbos_global_instance is not None:
+            await _dbos_global_instance._launch_async()
+
     def _launch(self) -> None:
+        run_coroutine(self._launch_async())
+
+    async def _launch_async(self) -> None:
         try:
             if self._launched:
                 dbos_logger.warning(f"DBOS was already launched")
@@ -353,20 +355,35 @@ class DBOS:
                 admin_port = 3001
             self._admin_server_field = AdminServer(dbos=self, port=admin_port)
 
+            def run_event_loop(loop: asyncio.AbstractEventLoop) -> None:
+                asyncio.set_event_loop(loop)
+                loop.run_forever()
+
+            self._loop = asyncio.new_event_loop()
+            self._daemon = threading.Thread(
+                target=run_event_loop, args=(self._loop,), daemon=True
+            )
+            self._daemon.start()
+
             if not os.environ.get("DBOS__VMID"):
-                workflow_ids = self._sys_db.get_pending_workflows("local")
+                workflow_ids = await self._sys_db.get_pending_workflows("local")
                 self._executor.submit(_startup_recovery_thread, self, workflow_ids)
 
             # Listen to notifications
             self._executor.submit(self._sys_db._notification_listener)
+            # asyncio.run_coroutine_threadsafe(self._sys_db._notification_listener_async(), self._loop)
 
             # Start flush workflow buffers thread
             self._executor.submit(self._sys_db.flush_workflow_buffers)
+            # asyncio.run_coroutine_threadsafe(self._sys_db.flush_workflow_buffers_async(), self._loop)
 
             # Start the queue thread
             evt = threading.Event()
             self.stop_events.append(evt)
             self._executor.submit(queue_thread, evt, self)
+            # evt = asyncio.Event()
+            # self.async_stop_events.append(evt)
+            # asyncio.run_coroutine_threadsafe(queue_thread_async(evt, self), self._loop)
 
             # Grab any pollers that were deferred and start them
             for evt, func, args, kwargs in self._registry.pollers:
@@ -386,14 +403,19 @@ class DBOS:
             raise
 
     def _destroy(self) -> None:
+        run_coroutine(self._destroy_async())
+
+    async def _destroy_async(self) -> None:
         self._initialized = False
         for event in self.stop_events:
             event.set()
+        for aevent in self.async_stop_events:
+            aevent.set()
         if self._sys_db_field is not None:
-            self._sys_db_field.destroy()
+            await self._sys_db_field.destroy_async()
             self._sys_db_field = None
         if self._app_db_field is not None:
-            self._app_db_field.destroy()
+            await self._app_db_field.destroy_async()
             self._app_db_field = None
         if self._admin_server_field is not None:
             self._admin_server_field.stop()
@@ -534,15 +556,21 @@ class DBOS:
 
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
+        return run_coroutine(DBOS.get_workflow_status_async(workflow_id))
+
+    @classmethod
+    async def get_workflow_status_async(
+        cls, workflow_id: str
+    ) -> Optional[WorkflowStatus]:
         """Return the status of a workflow execution."""
         ctx = get_local_dbos_context()
         if ctx and ctx.is_within_workflow():
             ctx.function_id += 1
-            stat = _get_dbos_instance()._sys_db.get_workflow_status_within_wf(
+            stat = await _get_dbos_instance()._sys_db.get_workflow_status_within_wf(
                 workflow_id, ctx.workflow_id, ctx.function_id
             )
         else:
-            stat = _get_dbos_instance()._sys_db.get_workflow_status(workflow_id)
+            stat = await _get_dbos_instance()._sys_db.get_workflow_status(workflow_id)
         if stat is None:
             return None
 
@@ -576,11 +604,32 @@ class DBOS:
         return _WorkflowHandlePolling(workflow_id, dbos)
 
     @classmethod
+    async def retrieve_workflow_async(
+        cls, workflow_id: str, existing_workflow: bool = True
+    ) -> WorkflowHandle[R]:
+        """Return a `WorkflowHandle` for a workflow execution."""
+        dbos = _get_dbos_instance()
+        if existing_workflow:
+            stat = await dbos.get_workflow_status_async(workflow_id)
+            if stat is None:
+                raise DBOSNonExistentWorkflowError(workflow_id)
+        return _WorkflowHandlePolling(workflow_id, dbos)
+
+    @classmethod
     def send(
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
         """Send a message to a workflow execution."""
-        return _send(_get_dbos_instance(), destination_id, message, topic)
+        return run_coroutine(
+            _send(_get_dbos_instance(), destination_id, message, topic)
+        )
+
+    @classmethod
+    async def send_async(
+        cls, destination_id: str, message: Any, topic: Optional[str] = None
+    ) -> None:
+        """Send a message to a workflow execution."""
+        return await _send(_get_dbos_instance(), destination_id, message, topic)
 
     @classmethod
     def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
@@ -590,7 +639,13 @@ class DBOS:
         This function is to be called from within a workflow.
         `recv` will return the message sent on `topic`, waiting if necessary.
         """
-        return _recv(_get_dbos_instance(), topic, timeout_seconds)
+        return run_coroutine(_recv(_get_dbos_instance(), topic, timeout_seconds))
+
+    @classmethod
+    async def recv_async(
+        cls, topic: Optional[str] = None, timeout_seconds: float = 60
+    ) -> Any:
+        return await _recv(_get_dbos_instance(), topic, timeout_seconds)
 
     @classmethod
     def sleep(cls, seconds: float) -> None:
@@ -601,13 +656,17 @@ class DBOS:
         as the `DBOS.sleep`s are durable and completed sleeps will be skipped during recovery.
         """
 
+        run_coroutine(DBOS.sleep_async(seconds))
+
+    @classmethod
+    async def sleep_async(cls, seconds: float) -> None:
         attributes: TracedAttributes = {
             "name": "sleep",
         }
         if seconds <= 0:
             return
         with EnterDBOSStep(attributes) as ctx:
-            _get_dbos_instance()._sys_db.sleep(
+            await _get_dbos_instance()._sys_db.sleep(
                 ctx.workflow_id, ctx.curr_step_function_id, seconds
             )
 
@@ -628,7 +687,11 @@ class DBOS:
             value(Any): A serializable value to associate with the key
 
         """
-        return _set_event(_get_dbos_instance(), key, value)
+        run_coroutine(_set_event(_get_dbos_instance(), key, value))
+
+    @classmethod
+    async def set_event_async(cls, key: str, value: Any) -> None:
+        await _set_event(_get_dbos_instance(), key, value)
 
     @classmethod
     def get_event(cls, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:
@@ -643,7 +706,15 @@ class DBOS:
             timeout_seconds(float): The amount of time to wait, in case `set_event` has not yet been called byt the workflow
 
         """
-        return _get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
+        return run_coroutine(
+            _get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
+        )
+
+    @classmethod
+    async def get_event_async(
+        cls, workflow_id: str, key: str, timeout_seconds: float = 60
+    ) -> Any:
+        return await _get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
 
     @classmethod
     def execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
@@ -681,6 +752,15 @@ class DBOS:
         ctx = assert_current_dbos_context()
         assert ctx.is_transaction(), "db is only available within a transaction."
         rv = ctx.sql_session
+        assert rv
+        return rv
+
+    @classproperty
+    def async_sql_session(cls) -> AsyncSession:
+        """Return the SQLAlchemy `Session` for the current context, which must be within a transaction function."""
+        ctx = assert_current_dbos_context()
+        assert ctx.is_transaction(), "db is only available within a transaction."
+        rv = ctx.async_sql_session
         assert rv
         return rv
 
@@ -804,7 +884,15 @@ class WorkflowHandle(Generic[R], Protocol):
         """Return the result of the workflow function invocation, waiting if necessary."""
         ...
 
+    async def get_result_async(self) -> R:
+        """Return the result of the workflow function invocation, waiting if necessary."""
+        ...
+
     def get_status(self) -> WorkflowStatus:
+        """Return the current workflow function invocation status as `WorkflowStatus`."""
+        ...
+
+    async def get_status_async(self) -> WorkflowStatus:
         """Return the current workflow function invocation status as `WorkflowStatus`."""
         ...
 

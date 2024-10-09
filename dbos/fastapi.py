@@ -65,10 +65,10 @@ class LifespanMiddleware:
             while True:
                 message = await receive()
                 if message["type"] == "lifespan.startup":
-                    self.dbos._launch()
+                    await self.dbos._launch_async()
                     await send({"type": "lifespan.startup.complete"})
                 elif message["type"] == "lifespan.shutdown":
-                    self.dbos._destroy()
+                    await self.dbos._destroy_async()
                     await send({"type": "lifespan.shutdown.complete"})
                     break
         else:

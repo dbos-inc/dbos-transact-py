@@ -1,3 +1,4 @@
+import asyncio
 import os
 import threading
 import time
@@ -7,6 +8,7 @@ from typing import TYPE_CHECKING, Any, List
 from dbos.context import SetWorkflowRecovery
 from dbos.core import _execute_workflow_id
 from dbos.error import DBOSWorkflowFunctionNotFoundError
+from dbos.utils import run_coroutine
 
 if TYPE_CHECKING:
     from dbos.dbos import DBOS, WorkflowHandle
@@ -41,7 +43,7 @@ def _recover_pending_workflows(
                 f"Skip local recovery because it's running in a VM: {os.environ.get('DBOS__VMID')}"
             )
         dbos.logger.debug(f"Recovering pending workflows for executor: {executor_id}")
-        workflow_ids = dbos._sys_db.get_pending_workflows(executor_id)
+        workflow_ids = run_coroutine(dbos._sys_db.get_pending_workflows(executor_id))
         dbos.logger.debug(f"Pending workflows: {workflow_ids}")
 
         for workflowID in workflow_ids:

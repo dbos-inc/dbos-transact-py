@@ -1,12 +1,15 @@
-from typing import Optional, TypedDict, cast
+import asyncio
+from typing import Optional, TypedDict
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from dbos.error import DBOSWorkflowConflictIDError
 from dbos.schemas.application_database import ApplicationSchema
+from dbos.utils import run_coroutine
 
 from .dbos_config import ConfigFile
 
@@ -65,6 +68,10 @@ class ApplicationDatabase:
             app_db_url, pool_size=20, max_overflow=5, pool_timeout=30
         )
         self.sessionmaker = sessionmaker(bind=self.engine)
+        self.async_engine = create_async_engine(
+            app_db_url, pool_size=20, max_overflow=5, pool_timeout=30
+        )
+        self.async_sessionmaker = async_sessionmaker(self.async_engine)
 
         # Create the dbos schema and transaction_outputs table in the application database
         with self.engine.begin() as conn:
@@ -75,7 +82,11 @@ class ApplicationDatabase:
         ApplicationSchema.metadata_obj.create_all(self.engine)
 
     def destroy(self) -> None:
+        run_coroutine(self.destroy_async())
+
+    async def destroy_async(self) -> None:
         self.engine.dispose()
+        await self.async_engine.dispose()
 
     @staticmethod
     def record_transaction_output(
@@ -100,10 +111,38 @@ class ApplicationDatabase:
                 raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
             raise
 
-    def record_transaction_error(self, output: TransactionResultInternal) -> None:
+    @staticmethod
+    async def record_transaction_output_async(
+        session: AsyncSession, output: TransactionResultInternal
+    ) -> None:
         try:
-            with self.engine.begin() as conn:
-                conn.execute(
+            await session.execute(
+                pg.insert(ApplicationSchema.transaction_outputs).values(
+                    workflow_uuid=output["workflow_uuid"],
+                    function_id=output["function_id"],
+                    output=output["output"],
+                    error=None,
+                    txn_id=sa.text("(select pg_current_xact_id_if_assigned()::text)"),
+                    txn_snapshot=output["txn_snapshot"],
+                    executor_id=(
+                        output["executor_id"] if output["executor_id"] else None
+                    ),
+                )
+            )
+        except DBAPIError as dbapi_error:
+            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
+                raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
+            raise
+
+    def record_transaction_error(self, output: TransactionResultInternal) -> None:
+        run_coroutine(self.record_transaction_error_async(output))
+
+    async def record_transaction_error_async(
+        self, output: TransactionResultInternal
+    ) -> None:
+        try:
+            async with self.async_engine.begin() as conn:
+                await conn.execute(
                     pg.insert(ApplicationSchema.transaction_outputs).values(
                         workflow_uuid=output["workflow_uuid"],
                         function_id=output["function_id"],
@@ -134,6 +173,30 @@ class ApplicationDatabase:
             ).where(
                 ApplicationSchema.transaction_outputs.c.workflow_uuid == workflow_uuid,
                 ApplicationSchema.transaction_outputs.c.function_id == function_id,
+            )
+        ).all()
+        if len(rows) == 0:
+            return None
+        result: RecordedResult = {
+            "output": rows[0][0],
+            "error": rows[0][1],
+        }
+        return result
+
+    @staticmethod
+    async def check_transaction_execution_async(
+        session: AsyncSession, workflow_uuid: str, function_id: int
+    ) -> Optional[RecordedResult]:
+        rows = (
+            await session.execute(
+                sa.select(
+                    ApplicationSchema.transaction_outputs.c.output,
+                    ApplicationSchema.transaction_outputs.c.error,
+                ).where(
+                    ApplicationSchema.transaction_outputs.c.workflow_uuid
+                    == workflow_uuid,
+                    ApplicationSchema.transaction_outputs.c.function_id == function_id,
+                )
             )
         ).all()
         if len(rows) == 0:

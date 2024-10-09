@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import time
 import uuid
@@ -10,13 +11,13 @@ from dbos.schemas.system_database import SystemSchema
 from dbos.system_database import WorkflowStatusString
 
 
-def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
+async def queue_entries_are_cleaned_up_async(dbos: DBOS) -> bool:
     max_tries = 10
     success = False
     for i in range(max_tries):
-        with dbos._sys_db.engine.begin() as c:
+        async with dbos._sys_db.async_engine.begin() as c:
             query = sa.select(sa.func.count()).select_from(SystemSchema.workflow_queue)
-            row = c.execute(query).fetchone()
+            row = (await c.execute(query)).fetchone()
             assert row is not None
             count = row[0]
             if count == 0:
@@ -24,6 +25,10 @@ def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
                 break
         time.sleep(1)
     return success
+
+
+def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
+    return asyncio.run(queue_entries_are_cleaned_up_async(dbos))
 
 
 def test_simple_queue(dbos: DBOS) -> None:

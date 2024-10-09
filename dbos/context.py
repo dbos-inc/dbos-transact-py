@@ -10,6 +10,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, List, Literal, Optional, Type, TypedDict
 
 from opentelemetry.trace import Span, Status, StatusCode
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from .logger import dbos_logger
@@ -67,6 +68,7 @@ class DBOSContext:
         self.curr_step_function_id: int = -1
         self.curr_tx_function_id: int = -1
         self.sql_session: Optional[Session] = None
+        self.async_sql_session: Optional[AsyncSession] = None
         self.spans: list[Span] = []
 
         self.authenticated_user: Optional[str] = None
@@ -122,7 +124,7 @@ class DBOSContext:
         )
 
     def is_transaction(self) -> bool:
-        return self.sql_session is not None
+        return (self.sql_session is not None) or (self.async_sql_session is not None)
 
     def is_step(self) -> bool:
         return self.curr_step_function_id >= 0
@@ -146,8 +148,16 @@ class DBOSContext:
         self.curr_tx_function_id = fid
         self._start_span(attributes)
 
+    def start_async_transaction(
+        self, ses: AsyncSession, fid: int, attributes: TracedAttributes
+    ) -> None:
+        self.async_sql_session = ses
+        self.curr_tx_function_id = fid
+        self._start_span(attributes)
+
     def end_transaction(self, exc_value: Optional[BaseException]) -> None:
         self.sql_session = None
+        self.async_sql_session = None
         self.curr_tx_function_id = -1
         self._end_span(exc_value)
 
@@ -440,7 +450,9 @@ class EnterDBOSStep:
 
 
 class EnterDBOSTransaction:
-    def __init__(self, sqls: Session, attributes: TracedAttributes) -> None:
+    def __init__(
+        self, sqls: Session | AsyncSession, attributes: TracedAttributes
+    ) -> None:
         self.sqls = sqls
         self.attributes = attributes
 
@@ -448,7 +460,15 @@ class EnterDBOSTransaction:
         ctx = assert_current_dbos_context()
         assert ctx.is_workflow()
         ctx.function_id += 1
-        ctx.start_transaction(self.sqls, ctx.function_id, attributes=self.attributes)
+        if isinstance(self.sqls, Session):
+            ctx.start_transaction(
+                self.sqls, ctx.function_id, attributes=self.attributes
+            )
+        else:
+            assert isinstance(self.sqls, AsyncSession)
+            ctx.start_async_transaction(
+                self.sqls, ctx.function_id, attributes=self.attributes
+            )
         return ctx
 
     def __exit__(

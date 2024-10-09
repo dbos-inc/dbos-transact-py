@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import os
 import threading
@@ -23,6 +24,7 @@ import sqlalchemy.dialects.postgresql as pg
 from alembic import command
 from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 import dbos.utils as utils
 from dbos.error import (
@@ -192,11 +194,6 @@ class SystemDatabase:
             database=sysdb_name,
         )
 
-        # Create a connection pool for the system database
-        self.engine = sa.create_engine(
-            system_db_url, pool_size=20, max_overflow=5, pool_timeout=30
-        )
-
         # Run a schema migration for the system database
         migration_dir = os.path.join(
             os.path.dirname(os.path.realpath(__file__)), "migrations"
@@ -204,11 +201,11 @@ class SystemDatabase:
         alembic_cfg = Config()
         alembic_cfg.set_main_option("script_location", migration_dir)
         alembic_cfg.set_main_option(
-            "sqlalchemy.url", self.engine.url.render_as_string(hide_password=False)
+            "sqlalchemy.url", system_db_url.render_as_string(hide_password=False)
         )
         command.upgrade(alembic_cfg, "head")
 
-        self.notification_conn: Optional[psycopg.connection.Connection] = None
+        self.notification_conn: Optional[psycopg.AsyncConnection] = None
         self.notifications_map: Dict[str, threading.Condition] = {}
         self.workflow_events_map: Dict[str, threading.Condition] = {}
 
@@ -223,13 +220,21 @@ class SystemDatabase:
         # Now we can run background processes
         self._run_background_processes = True
 
+        # Create a connection pool for the system database
+        self.async_engine = create_async_engine(
+            system_db_url, pool_size=20, max_overflow=5, pool_timeout=30
+        )
+
     # Destroy the pool when finished
     def destroy(self) -> None:
+        utils.run_coroutine(self.destroy_async())
+
+    async def destroy_async(self) -> None:
         self.wait_for_buffer_flush()
         self._run_background_processes = False
         if self.notification_conn is not None:
-            self.notification_conn.close()
-        self.engine.dispose()
+            await self.notification_conn.close()
+        await self.async_engine.dispose()
 
     def wait_for_buffer_flush(self) -> None:
         # Wait until the buffers are flushed.
@@ -237,13 +242,13 @@ class SystemDatabase:
             dbos_logger.debug("Waiting for system buffers to be exported")
             time.sleep(1)
 
-    def update_workflow_status(
+    async def update_workflow_status(
         self,
         status: WorkflowStatusInternal,
         replace: bool = True,
         in_recovery: bool = False,
         *,
-        conn: Optional[sa.Connection] = None,
+        conn: Optional[AsyncConnection] = None,
         max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
     ) -> None:
         cmd = pg.insert(SystemSchema.workflow_status).values(
@@ -285,17 +290,17 @@ class SystemDatabase:
         cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts)  # type: ignore
 
         if conn is not None:
-            results = conn.execute(cmd)
+            results = await conn.execute(cmd)
         else:
-            with self.engine.begin() as c:
-                results = c.execute(cmd)
+            async with self.async_engine.begin() as c:
+                results = await c.execute(cmd)
         if in_recovery:
             row = results.fetchone()
             if row is not None:
                 recovery_attempts: int = row[0]
                 if recovery_attempts > max_recovery_attempts:
-                    with self.engine.begin() as c:
-                        c.execute(
+                    async with self.async_engine.begin() as c:
+                        await c.execute(
                             sa.update(SystemSchema.workflow_status)
                             .where(
                                 SystemSchema.workflow_status.c.workflow_uuid
@@ -317,13 +322,13 @@ class SystemDatabase:
         if status["workflow_uuid"] in self._temp_txn_wf_ids:
             self._exported_temp_txn_wf_status.add(status["workflow_uuid"])
 
-    def set_workflow_status(
+    async def set_workflow_status(
         self,
         workflow_uuid: str,
         status: WorkflowStatusString,
         reset_recovery_attempts: bool,
     ) -> None:
-        with self.engine.begin() as c:
+        async with self.async_engine.begin() as c:
             stmt = (
                 sa.update(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid)
@@ -331,10 +336,9 @@ class SystemDatabase:
                     status=status,
                 )
             )
-            c.execute(stmt)
+            await c.execute(stmt)
 
-        if reset_recovery_attempts:
-            with self.engine.begin() as c:
+            if reset_recovery_attempts:
                 stmt = (
                     sa.update(SystemSchema.workflow_status)
                     .where(
@@ -342,25 +346,29 @@ class SystemDatabase:
                     )
                     .values(recovery_attempts=reset_recovery_attempts)
                 )
-                c.execute(stmt)
+                await c.execute(stmt)
 
-    def get_workflow_status(
+    async def get_workflow_status(
         self, workflow_uuid: str
     ) -> Optional[WorkflowStatusInternal]:
-        with self.engine.begin() as c:
-            row = c.execute(
-                sa.select(
-                    SystemSchema.workflow_status.c.status,
-                    SystemSchema.workflow_status.c.name,
-                    SystemSchema.workflow_status.c.request,
-                    SystemSchema.workflow_status.c.recovery_attempts,
-                    SystemSchema.workflow_status.c.config_name,
-                    SystemSchema.workflow_status.c.class_name,
-                    SystemSchema.workflow_status.c.authenticated_user,
-                    SystemSchema.workflow_status.c.authenticated_roles,
-                    SystemSchema.workflow_status.c.assumed_role,
-                    SystemSchema.workflow_status.c.queue_name,
-                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
+        async with self.async_engine.begin() as c:
+            row = (
+                await c.execute(
+                    sa.select(
+                        SystemSchema.workflow_status.c.status,
+                        SystemSchema.workflow_status.c.name,
+                        SystemSchema.workflow_status.c.request,
+                        SystemSchema.workflow_status.c.recovery_attempts,
+                        SystemSchema.workflow_status.c.config_name,
+                        SystemSchema.workflow_status.c.class_name,
+                        SystemSchema.workflow_status.c.authenticated_user,
+                        SystemSchema.workflow_status.c.authenticated_roles,
+                        SystemSchema.workflow_status.c.assumed_role,
+                        SystemSchema.workflow_status.c.queue_name,
+                    ).where(
+                        SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
+                    )
+                )
             ).fetchone()
             if row is None:
                 return None
@@ -384,17 +392,17 @@ class SystemDatabase:
             }
             return status
 
-    def get_workflow_status_within_wf(
+    async def get_workflow_status_within_wf(
         self, workflow_uuid: str, calling_wf: str, calling_wf_fn: int
     ) -> Optional[WorkflowStatusInternal]:
-        res = self.check_operation_execution(calling_wf, calling_wf_fn)
+        res = await self.check_operation_execution(calling_wf, calling_wf_fn)
         if res is not None:
             if res["output"]:
                 resstat: WorkflowStatusInternal = utils.deserialize(res["output"])
                 return resstat
             return None
-        stat = self.get_workflow_status(workflow_uuid)
-        self.record_operation_result(
+        stat = await self.get_workflow_status(workflow_uuid)
+        await self.record_operation_result(
             {
                 "workflow_uuid": calling_wf,
                 "function_id": calling_wf_fn,
@@ -404,24 +412,28 @@ class SystemDatabase:
         )
         return stat
 
-    def get_workflow_status_w_outputs(
+    async def get_workflow_status_w_outputs(
         self, workflow_uuid: str
     ) -> Optional[WorkflowStatusInternal]:
-        with self.engine.begin() as c:
-            row = c.execute(
-                sa.select(
-                    SystemSchema.workflow_status.c.status,
-                    SystemSchema.workflow_status.c.name,
-                    SystemSchema.workflow_status.c.request,
-                    SystemSchema.workflow_status.c.output,
-                    SystemSchema.workflow_status.c.error,
-                    SystemSchema.workflow_status.c.config_name,
-                    SystemSchema.workflow_status.c.class_name,
-                    SystemSchema.workflow_status.c.authenticated_user,
-                    SystemSchema.workflow_status.c.authenticated_roles,
-                    SystemSchema.workflow_status.c.assumed_role,
-                    SystemSchema.workflow_status.c.queue_name,
-                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
+        async with self.async_engine.begin() as c:
+            row = (
+                await c.execute(
+                    sa.select(
+                        SystemSchema.workflow_status.c.status,
+                        SystemSchema.workflow_status.c.name,
+                        SystemSchema.workflow_status.c.request,
+                        SystemSchema.workflow_status.c.output,
+                        SystemSchema.workflow_status.c.error,
+                        SystemSchema.workflow_status.c.config_name,
+                        SystemSchema.workflow_status.c.class_name,
+                        SystemSchema.workflow_status.c.authenticated_user,
+                        SystemSchema.workflow_status.c.authenticated_roles,
+                        SystemSchema.workflow_status.c.assumed_role,
+                        SystemSchema.workflow_status.c.queue_name,
+                    ).where(
+                        SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
+                    )
+                )
             ).fetchone()
             if row is None:
                 return None
@@ -445,18 +457,23 @@ class SystemDatabase:
             }
             return status
 
-    def await_workflow_result_internal(self, workflow_uuid: str) -> dict[str, Any]:
+    async def await_workflow_result_internal(
+        self, workflow_uuid: str
+    ) -> dict[str, Any]:
         polling_interval_secs: float = 1.000
 
         while True:
-            with self.engine.begin() as c:
-                row = c.execute(
-                    sa.select(
-                        SystemSchema.workflow_status.c.status,
-                        SystemSchema.workflow_status.c.output,
-                        SystemSchema.workflow_status.c.error,
-                    ).where(
-                        SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
+            async with self.async_engine.begin() as c:
+                row = (
+                    await c.execute(
+                        sa.select(
+                            SystemSchema.workflow_status.c.status,
+                            SystemSchema.workflow_status.c.output,
+                            SystemSchema.workflow_status.c.error,
+                        ).where(
+                            SystemSchema.workflow_status.c.workflow_uuid
+                            == workflow_uuid
+                        )
                     )
                 ).fetchone()
                 if row is not None:
@@ -480,8 +497,8 @@ class SystemDatabase:
 
             time.sleep(polling_interval_secs)
 
-    def await_workflow_result(self, workflow_uuid: str) -> Any:
-        stat = self.await_workflow_result_internal(workflow_uuid)
+    async def await_workflow_result(self, workflow_uuid: str) -> Any:
+        stat = await self.await_workflow_result_internal(workflow_uuid)
         if not stat:
             return None
         status: str = stat["status"]
@@ -491,14 +508,14 @@ class SystemDatabase:
             raise utils.deserialize_exception(stat["error"])
         return None
 
-    def get_workflow_info(
+    async def get_workflow_info(
         self, workflow_uuid: str, get_request: bool
     ) -> Optional[WorkflowInformation]:
-        stat = self.get_workflow_status_w_outputs(workflow_uuid)
+        stat = await self.get_workflow_status_w_outputs(workflow_uuid)
         if stat is None:
             return None
         info = cast(WorkflowInformation, stat)
-        input = self.get_workflow_inputs(workflow_uuid)
+        input = await self.get_workflow_inputs(workflow_uuid)
         if input is not None:
             info["input"] = input
         if not get_request:
@@ -506,8 +523,8 @@ class SystemDatabase:
 
         return info
 
-    def update_workflow_inputs(
-        self, workflow_uuid: str, inputs: str, conn: Optional[sa.Connection] = None
+    async def update_workflow_inputs(
+        self, workflow_uuid: str, inputs: str, conn: Optional[AsyncConnection] = None
     ) -> None:
         cmd = (
             pg.insert(SystemSchema.workflow_inputs)
@@ -518,21 +535,25 @@ class SystemDatabase:
             .on_conflict_do_nothing()
         )
         if conn is not None:
-            conn.execute(cmd)
+            await conn.execute(cmd)
         else:
-            with self.engine.begin() as c:
-                c.execute(cmd)
+            async with self.async_engine.begin() as c:
+                await c.execute(cmd)
 
         if workflow_uuid in self._temp_txn_wf_ids:
             # Clean up the single-transaction tracking sets
             self._exported_temp_txn_wf_status.discard(workflow_uuid)
             self._temp_txn_wf_ids.discard(workflow_uuid)
 
-    def get_workflow_inputs(self, workflow_uuid: str) -> Optional[utils.WorkflowInputs]:
-        with self.engine.begin() as c:
-            row = c.execute(
-                sa.select(SystemSchema.workflow_inputs.c.inputs).where(
-                    SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid
+    async def get_workflow_inputs(
+        self, workflow_uuid: str
+    ) -> Optional[utils.WorkflowInputs]:
+        async with self.async_engine.begin() as c:
+            row = (
+                await c.execute(
+                    sa.select(SystemSchema.workflow_inputs.c.inputs).where(
+                        SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid
+                    )
                 )
             ).fetchone()
             if row is None:
@@ -540,7 +561,7 @@ class SystemDatabase:
             inputs: utils.WorkflowInputs = utils.deserialize_args(row[0])
             return inputs
 
-    def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
+    async def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
         query = sa.select(SystemSchema.workflow_status.c.workflow_uuid).order_by(
             SystemSchema.workflow_status.c.created_at.desc()
         )
@@ -572,25 +593,27 @@ class SystemDatabase:
         if input.limit:
             query = query.limit(input.limit)
 
-        with self.engine.begin() as c:
-            rows = c.execute(query)
+        async with self.async_engine.begin() as c:
+            rows = await c.execute(query)
         workflow_uuids = [row[0] for row in rows]
 
         return GetWorkflowsOutput(workflow_uuids)
 
-    def get_pending_workflows(self, executor_id: str) -> list[str]:
-        with self.engine.begin() as c:
-            rows = c.execute(
-                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
-                    SystemSchema.workflow_status.c.status
-                    == WorkflowStatusString.PENDING.value,
-                    SystemSchema.workflow_status.c.executor_id == executor_id,
+    async def get_pending_workflows(self, executor_id: str) -> list[str]:
+        async with self.async_engine.begin() as c:
+            rows = (
+                await c.execute(
+                    sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                        SystemSchema.workflow_status.c.status
+                        == WorkflowStatusString.PENDING.value,
+                        SystemSchema.workflow_status.c.executor_id == executor_id,
+                    )
                 )
             ).fetchall()
             return [row[0] for row in rows]
 
-    def record_operation_result(
-        self, result: OperationResultInternal, conn: Optional[sa.Connection] = None
+    async def record_operation_result(
+        self, result: OperationResultInternal, conn: Optional[AsyncConnection] = None
     ) -> None:
         error = result["error"]
         output = result["output"]
@@ -603,17 +626,20 @@ class SystemDatabase:
         )
         try:
             if conn is not None:
-                conn.execute(sql)
+                await conn.execute(sql)
             else:
-                with self.engine.begin() as c:
-                    c.execute(sql)
+                async with self.async_engine.begin() as c:
+                    await c.execute(sql)
         except DBAPIError as dbapi_error:
             if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
             raise
 
-    def check_operation_execution(
-        self, workflow_uuid: str, function_id: int, conn: Optional[sa.Connection] = None
+    async def check_operation_execution(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        conn: Optional[AsyncConnection] = None,
     ) -> Optional[RecordedResult]:
         sql = sa.select(
             SystemSchema.operation_outputs.c.output,
@@ -626,10 +652,10 @@ class SystemDatabase:
         # If in a transaction, use the provided connection
         rows: Sequence[Any]
         if conn is not None:
-            rows = conn.execute(sql).all()
+            rows = (await conn.execute(sql)).all()
         else:
-            with self.engine.begin() as c:
-                rows = c.execute(sql).all()
+            async with self.async_engine.begin() as c:
+                rows = (await c.execute(sql)).all()
         if len(rows) == 0:
             return None
         result: RecordedResult = {
@@ -638,7 +664,7 @@ class SystemDatabase:
         }
         return result
 
-    def send(
+    async def send(
         self,
         workflow_uuid: str,
         function_id: int,
@@ -647,8 +673,8 @@ class SystemDatabase:
         topic: Optional[str] = None,
     ) -> None:
         topic = topic if topic is not None else dbos_null_topic
-        with self.engine.begin() as c:
-            recorded_output = self.check_operation_execution(
+        async with self.async_engine.begin() as c:
+            recorded_output = await self.check_operation_execution(
                 workflow_uuid, function_id, conn=c
             )
             if recorded_output is not None:
@@ -662,7 +688,7 @@ class SystemDatabase:
                 )
 
             try:
-                c.execute(
+                await c.execute(
                     pg.insert(SystemSchema.notifications).values(
                         destination_uuid=destination_uuid,
                         topic=topic,
@@ -680,9 +706,9 @@ class SystemDatabase:
                 "output": None,
                 "error": None,
             }
-            self.record_operation_result(output, conn=c)
+            await self.record_operation_result(output, conn=c)
 
-    def recv(
+    async def recv(
         self,
         workflow_uuid: str,
         function_id: int,
@@ -693,7 +719,9 @@ class SystemDatabase:
         topic = topic if topic is not None else dbos_null_topic
 
         # First, check for previous executions.
-        recorded_output = self.check_operation_execution(workflow_uuid, function_id)
+        recorded_output = await self.check_operation_execution(
+            workflow_uuid, function_id
+        )
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying recv, id: {function_id}, topic: {topic}")
             if recorded_output["output"] is not None:
@@ -712,20 +740,22 @@ class SystemDatabase:
 
         # Check if the key is already in the database. If not, wait for the notification.
         init_recv: Sequence[Any]
-        with self.engine.begin() as c:
-            init_recv = c.execute(
-                sa.select(
-                    SystemSchema.notifications.c.topic,
-                ).where(
-                    SystemSchema.notifications.c.destination_uuid == workflow_uuid,
-                    SystemSchema.notifications.c.topic == topic,
+        async with self.async_engine.begin() as c:
+            init_recv = (
+                await c.execute(
+                    sa.select(
+                        SystemSchema.notifications.c.topic,
+                    ).where(
+                        SystemSchema.notifications.c.destination_uuid == workflow_uuid,
+                        SystemSchema.notifications.c.topic == topic,
+                    )
                 )
             ).fetchall()
 
         if len(init_recv) == 0:
             # Wait for the notification
             # Support OAOO sleep
-            actual_timeout = self.sleep(
+            actual_timeout = await self.sleep(
                 workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
             )
             condition.wait(timeout=actual_timeout)
@@ -733,7 +763,7 @@ class SystemDatabase:
         self.notifications_map.pop(payload)
 
         # Transactionally consume and return the message if it's in the database, otherwise return null.
-        with self.engine.begin() as c:
+        async with self.async_engine.begin() as c:
             oldest_entry_cte = (
                 sa.select(
                     SystemSchema.notifications.c.destination_uuid,
@@ -760,11 +790,11 @@ class SystemDatabase:
                 )
                 .returning(SystemSchema.notifications.c.message)
             )
-            rows = c.execute(delete_stmt).fetchall()
+            rows = (await c.execute(delete_stmt)).fetchall()
             message: Any = None
             if len(rows) > 0:
                 message = utils.deserialize(rows[0][0])
-            self.record_operation_result(
+            await self.record_operation_result(
                 {
                     "workflow_uuid": workflow_uuid,
                     "function_id": function_id,
@@ -777,24 +807,29 @@ class SystemDatabase:
             )
         return message
 
-    def _notification_listener(self) -> None:
+    async def _notification_listener_async(self) -> None:
         while self._run_background_processes:
             try:
                 # since we're using the psycopg connection directly, we need a url without the "+pycopg" suffix
                 url = sa.URL.create(
-                    "postgresql", **self.engine.url.translate_connect_args()
+                    "postgresql", **self.async_engine.url.translate_connect_args()
                 )
+
                 # Listen to notifications
-                self.notification_conn = psycopg.connect(
+                self.notification_conn = await psycopg.AsyncConnection.connect(
                     url.render_as_string(hide_password=False), autocommit=True
                 )
 
-                self.notification_conn.execute("LISTEN dbos_notifications_channel")
-                self.notification_conn.execute("LISTEN dbos_workflow_events_channel")
+                await self.notification_conn.execute(
+                    "LISTEN dbos_notifications_channel"
+                )
+                await self.notification_conn.execute(
+                    "LISTEN dbos_workflow_events_channel"
+                )
 
                 while self._run_background_processes:
                     gen = self.notification_conn.notifies(timeout=60)
-                    for notify in gen:
+                    async for notify in gen:
                         channel = notify.channel
                         dbos_logger.debug(
                             f"Received notification on channel: {channel}, payload: {notify.payload}"
@@ -828,20 +863,25 @@ class SystemDatabase:
             except Exception as e:
                 if self._run_background_processes:
                     dbos_logger.error(f"Notification listener error: {e}")
-                    time.sleep(1)
+                    await asyncio.sleep(1)
                     # Then the loop will try to reconnect and restart the listener
             finally:
                 if self.notification_conn is not None:
-                    self.notification_conn.close()
+                    await self.notification_conn.close()
 
-    def sleep(
+    def _notification_listener(self) -> None:
+        utils.run_coroutine(self._notification_listener_async())
+
+    async def sleep(
         self,
         workflow_uuid: str,
         function_id: int,
         seconds: float,
         skip_sleep: bool = False,
     ) -> float:
-        recorded_output = self.check_operation_execution(workflow_uuid, function_id)
+        recorded_output = await self.check_operation_execution(
+            workflow_uuid, function_id
+        )
         end_time: float
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying sleep, id: {function_id}, seconds: {seconds}")
@@ -851,7 +891,7 @@ class SystemDatabase:
             dbos_logger.debug(f"Running sleep, id: {function_id}, seconds: {seconds}")
             end_time = time.time() + seconds
             try:
-                self.record_operation_result(
+                await self.record_operation_result(
                     {
                         "workflow_uuid": workflow_uuid,
                         "function_id": function_id,
@@ -866,15 +906,15 @@ class SystemDatabase:
             time.sleep(duration)
         return duration
 
-    def set_event(
+    async def set_event(
         self,
         workflow_uuid: str,
         function_id: int,
         key: str,
         message: Any,
     ) -> None:
-        with self.engine.begin() as c:
-            recorded_output = self.check_operation_execution(
+        async with self.async_engine.begin() as c:
+            recorded_output = await self.check_operation_execution(
                 workflow_uuid, function_id, conn=c
             )
             if recorded_output is not None:
@@ -883,7 +923,7 @@ class SystemDatabase:
             else:
                 dbos_logger.debug(f"Running set_event, id: {function_id}, key: {key}")
 
-            c.execute(
+            await c.execute(
                 pg.insert(SystemSchema.workflow_events)
                 .values(
                     workflow_uuid=workflow_uuid,
@@ -901,9 +941,9 @@ class SystemDatabase:
                 "output": None,
                 "error": None,
             }
-            self.record_operation_result(output, conn=c)
+            await self.record_operation_result(output, conn=c)
 
-    def get_event(
+    async def get_event(
         self,
         target_uuid: str,
         key: str,
@@ -918,7 +958,7 @@ class SystemDatabase:
         )
         # Check for previous executions only if it's in a workflow
         if caller_ctx is not None:
-            recorded_output = self.check_operation_execution(
+            recorded_output = await self.check_operation_execution(
                 caller_ctx["workflow_uuid"], caller_ctx["function_id"]
             )
             if recorded_output is not None:
@@ -941,8 +981,8 @@ class SystemDatabase:
 
         # Check if the key is already in the database. If not, wait for the notification.
         init_recv: Sequence[Any]
-        with self.engine.begin() as c:
-            init_recv = c.execute(get_sql).fetchall()
+        async with self.async_engine.begin() as c:
+            init_recv = (await c.execute(get_sql)).fetchall()
 
         value: Any = None
         if len(init_recv) > 0:
@@ -952,7 +992,7 @@ class SystemDatabase:
             actual_timeout = timeout_seconds
             if caller_ctx is not None:
                 # Support OAOO sleep for workflows
-                actual_timeout = self.sleep(
+                actual_timeout = await self.sleep(
                     caller_ctx["workflow_uuid"],
                     caller_ctx["timeout_function_id"],
                     timeout_seconds,
@@ -961,8 +1001,8 @@ class SystemDatabase:
             condition.wait(timeout=actual_timeout)
 
             # Read the value from the database
-            with self.engine.begin() as c:
-                final_recv = c.execute(get_sql).fetchall()
+            async with self.async_engine.begin() as c:
+                final_recv = (await c.execute(get_sql)).fetchall()
                 if len(final_recv) > 0:
                     value = utils.deserialize(final_recv[0][0])
         condition.release()
@@ -970,7 +1010,7 @@ class SystemDatabase:
 
         # Record the output if it's in a workflow
         if caller_ctx is not None:
-            self.record_operation_result(
+            await self.record_operation_result(
                 {
                     "workflow_uuid": caller_ctx["workflow_uuid"],
                     "function_id": caller_ctx["function_id"],
@@ -982,14 +1022,14 @@ class SystemDatabase:
             )
         return value
 
-    def _flush_workflow_status_buffer(self) -> None:
+    async def _flush_workflow_status_buffer(self) -> None:
         """Export the workflow status buffer to the database, up to the batch size."""
         if len(self._workflow_status_buffer) == 0:
             return
 
         # Record the exported status so far, and add them back on errors.
         exported_status: Dict[str, WorkflowStatusInternal] = {}
-        with self.engine.begin() as c:
+        async with self.async_engine.begin() as c:
             exported = 0
             status_iter = iter(list(self._workflow_status_buffer))
             wf_id: Optional[str] = None
@@ -1003,23 +1043,23 @@ class SystemDatabase:
                     continue
                 exported_status[wf_id] = status
                 try:
-                    self.update_workflow_status(status, conn=c)
+                    await self.update_workflow_status(status, conn=c)
                     exported += 1
                 except Exception as e:
                     dbos_logger.error(f"Error while flushing status buffer: {e}")
-                    c.rollback()
+                    await c.rollback()
                     # Add the exported status back to the buffer, so they can be retried next time
                     self._workflow_status_buffer.update(exported_status)
                     break
 
-    def _flush_workflow_inputs_buffer(self) -> None:
+    async def _flush_workflow_inputs_buffer(self) -> None:
         """Export the workflow inputs buffer to the database, up to the batch size."""
         if len(self._workflow_inputs_buffer) == 0:
             return
 
         # Record exported inputs so far, and add them back on errors.
         exported_inputs: Dict[str, str] = {}
-        with self.engine.begin() as c:
+        async with self.async_engine.begin() as c:
             exported = 0
             input_iter = iter(list(self._workflow_inputs_buffer))
             wf_id: Optional[str] = None
@@ -1035,11 +1075,11 @@ class SystemDatabase:
                     continue
                 exported_inputs[wf_id] = inputs
                 try:
-                    self.update_workflow_inputs(wf_id, inputs, conn=c)
+                    await self.update_workflow_inputs(wf_id, inputs, conn=c)
                     exported += 1
                 except Exception as e:
                     dbos_logger.error(f"Error while flushing inputs buffer: {e}")
-                    c.rollback()
+                    await c.rollback()
                     # Add the exported inputs back to the buffer, so they can be retried next time
                     self._workflow_inputs_buffer.update(exported_inputs)
                     break
@@ -1050,8 +1090,8 @@ class SystemDatabase:
             try:
                 self._is_flushing_status_buffer = True
                 # Must flush the status buffer first, as the inputs table has a foreign key constraint on the status table.
-                self._flush_workflow_status_buffer()
-                self._flush_workflow_inputs_buffer()
+                utils.run_coroutine(self._flush_workflow_status_buffer())
+                utils.run_coroutine(self._flush_workflow_inputs_buffer())
                 self._is_flushing_status_buffer = False
                 if self._is_buffers_empty:
                     # Only sleep if both buffers are empty
@@ -1059,6 +1099,23 @@ class SystemDatabase:
             except Exception as e:
                 dbos_logger.error(f"Error while flushing buffers: {e}")
                 time.sleep(buffer_flush_interval_secs)
+                # Will retry next time
+
+    async def flush_workflow_buffers_async(self) -> None:
+        """Flush the workflow status and inputs buffers periodically, via a background thread."""
+        while self._run_background_processes:
+            try:
+                self._is_flushing_status_buffer = True
+                # Must flush the status buffer first, as the inputs table has a foreign key constraint on the status table.
+                await self._flush_workflow_status_buffer()
+                await self._flush_workflow_inputs_buffer()
+                self._is_flushing_status_buffer = False
+                if self._is_buffers_empty:
+                    # Only sleep if both buffers are empty
+                    await asyncio.sleep(buffer_flush_interval_secs)
+            except Exception as e:
+                dbos_logger.error(f"Error while flushing buffers: {e}")
+                await asyncio.sleep(buffer_flush_interval_secs)
                 # Will retry next time
 
     def buffer_workflow_status(self, status: WorkflowStatusInternal) -> None:
@@ -1076,9 +1133,9 @@ class SystemDatabase:
             and len(self._workflow_inputs_buffer) == 0
         )
 
-    def enqueue(self, workflow_id: str, queue_name: str) -> None:
-        with self.engine.begin() as c:
-            c.execute(
+    async def enqueue(self, workflow_id: str, queue_name: str) -> None:
+        async with self.async_engine.begin() as c:
+            await c.execute(
                 pg.insert(SystemSchema.workflow_queue)
                 .values(
                     workflow_uuid=workflow_id,
@@ -1087,13 +1144,13 @@ class SystemDatabase:
                 .on_conflict_do_nothing()
             )
 
-    def start_queued_workflows(self, queue: "Queue") -> List[str]:
+    async def start_queued_workflows(self, queue: "Queue") -> List[str]:
         start_time_ms = int(time.time() * 1000)
         if queue.limiter is not None:
             limiter_period_ms = int(queue.limiter["period"] * 1000)
-        with self.engine.begin() as c:
+        async with self.async_engine.begin() as c:
             # Execute with snapshot isolation to ensure multiple workers respect limits
-            c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
+            await c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
 
             # If there is a limiter, compute how many functions have started in its period.
             if queue.limiter is not None:
@@ -1109,7 +1166,7 @@ class SystemDatabase:
                         > start_time_ms - limiter_period_ms
                     )
                 )
-                num_recent_queries = c.execute(query).fetchone()[0]  # type: ignore
+                num_recent_queries = (await c.execute(query)).fetchone()[0]  # type: ignore
                 if num_recent_queries >= queue.limiter["limit"]:
                     return []
 
@@ -1131,7 +1188,7 @@ class SystemDatabase:
 
             # From the functions retrieved, get the workflow IDs of the functions
             # that have not yet been started so we can start them.
-            rows = c.execute(query).fetchall()
+            rows = (await c.execute(query)).fetchall()
             dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
             ret_ids: list[str] = []
             for id in dequeued_ids:
@@ -1143,7 +1200,7 @@ class SystemDatabase:
                         break
 
                 # To start a function, first set its status to PENDING
-                c.execute(
+                await c.execute(
                     SystemSchema.workflow_status.update()
                     .where(SystemSchema.workflow_status.c.workflow_uuid == id)
                     .where(
@@ -1154,7 +1211,7 @@ class SystemDatabase:
                 )
 
                 # Then give it a start time
-                c.execute(
+                await c.execute(
                     SystemSchema.workflow_queue.update()
                     .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
                     .values(started_at_epoch_ms=start_time_ms)
@@ -1165,7 +1222,7 @@ class SystemDatabase:
             # before the period. If there's no limiter, there's no need--they were
             # deleted on completion.
             if queue.limiter is not None:
-                c.execute(
+                await c.execute(
                     sa.delete(SystemSchema.workflow_queue)
                     .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms != None)
                     .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
@@ -1178,16 +1235,16 @@ class SystemDatabase:
             # Return the IDs of all functions we started
             return ret_ids
 
-    def remove_from_queue(self, workflow_id: str, queue: "Queue") -> None:
-        with self.engine.begin() as c:
+    async def remove_from_queue(self, workflow_id: str, queue: "Queue") -> None:
+        async with self.async_engine.begin() as c:
             if queue.limiter is None:
-                c.execute(
+                await c.execute(
                     sa.delete(SystemSchema.workflow_queue).where(
                         SystemSchema.workflow_queue.c.workflow_uuid == workflow_id
                     )
                 )
             else:
-                c.execute(
+                await c.execute(
                     sa.update(SystemSchema.workflow_queue)
                     .where(SystemSchema.workflow_queue.c.workflow_uuid == workflow_id)
                     .values(completed_at_epoch_ms=int(time.time() * 1000))

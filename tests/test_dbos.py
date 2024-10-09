@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import logging
 import threading
@@ -250,18 +251,18 @@ def test_temp_workflow(dbos: DBOS) -> None:
 
     # Flush workflow inputs buffer shouldn't fail due to foreign key violation.
     # It should properly skip the transaction inputs.
-    dbos._sys_db._flush_workflow_inputs_buffer()
+    asyncio.run(dbos._sys_db._flush_workflow_inputs_buffer())
 
     # Wait for buffers to flush
     dbos._sys_db.wait_for_buffer_flush()
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = asyncio.run(dbos._sys_db.get_workflows(gwi))
     assert len(wfs.workflow_uuids) == 2
 
-    wfi1 = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    wfi1 = asyncio.run(dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False))
     assert wfi1
     assert wfi1["name"].startswith("<temp>")
 
-    wfi2 = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[1], False)
+    wfi2 = asyncio.run(dbos._sys_db.get_workflow_info(wfs.workflow_uuids[1], False))
     assert wfi2
     assert wfi2["name"].startswith("<temp>")
 
@@ -340,25 +341,27 @@ def test_recovery_workflow(dbos: DBOS) -> None:
 
     dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
-    dbos._sys_db.update_workflow_status(
-        {
-            "workflow_uuid": wfuuid,
-            "status": "PENDING",
-            "name": test_workflow.__qualname__,
-            "class_name": None,
-            "config_name": None,
-            "output": None,
-            "error": None,
-            "executor_id": None,
-            "app_id": None,
-            "app_version": None,
-            "request": None,
-            "recovery_attempts": None,
-            "authenticated_user": None,
-            "authenticated_roles": None,
-            "assumed_role": None,
-            "queue_name": None,
-        }
+    asyncio.run(
+        dbos._sys_db.update_workflow_status(
+            {
+                "workflow_uuid": wfuuid,
+                "status": "PENDING",
+                "name": test_workflow.__qualname__,
+                "class_name": None,
+                "config_name": None,
+                "output": None,
+                "error": None,
+                "executor_id": None,
+                "app_id": None,
+                "app_version": None,
+                "request": None,
+                "recovery_attempts": None,
+                "authenticated_user": None,
+                "authenticated_roles": None,
+                "assumed_role": None,
+                "queue_name": None,
+            }
+        )
     )
 
     # Recovery should execute the workflow again but skip the transaction
@@ -394,34 +397,36 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
         assert res == "bob1"
 
     dbos._sys_db.wait_for_buffer_flush()
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = asyncio.run(dbos._sys_db.get_workflows(gwi))
     assert len(wfs.workflow_uuids) == 1
     assert wfs.workflow_uuids[0] == wfuuid
 
-    wfi = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    wfi = asyncio.run(dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False))
     assert wfi
     assert wfi["name"].startswith("<temp>")
 
     # Change the workflow status to pending
-    dbos._sys_db.update_workflow_status(
-        {
-            "workflow_uuid": wfuuid,
-            "status": "PENDING",
-            "name": wfi["name"],
-            "class_name": None,
-            "config_name": None,
-            "output": None,
-            "error": None,
-            "executor_id": None,
-            "app_id": None,
-            "app_version": None,
-            "request": None,
-            "recovery_attempts": None,
-            "authenticated_user": None,
-            "authenticated_roles": None,
-            "assumed_role": None,
-            "queue_name": None,
-        }
+    asyncio.run(
+        dbos._sys_db.update_workflow_status(
+            {
+                "workflow_uuid": wfuuid,
+                "status": "PENDING",
+                "name": wfi["name"],
+                "class_name": None,
+                "config_name": None,
+                "output": None,
+                "error": None,
+                "executor_id": None,
+                "app_id": None,
+                "app_version": None,
+                "request": None,
+                "recovery_attempts": None,
+                "authenticated_user": None,
+                "authenticated_roles": None,
+                "assumed_role": None,
+                "queue_name": None,
+            }
+        )
     )
 
     # Recovery should execute the workflow again but skip the transaction
@@ -429,12 +434,12 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == "bob1"
 
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = asyncio.run(dbos._sys_db.get_workflows(gwi))
     assert len(wfs.workflow_uuids) == 1
     assert wfs.workflow_uuids[0] == wfuuid
 
     dbos._sys_db.wait_for_buffer_flush()
-    wfi = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    wfi = asyncio.run(dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False))
     assert wfi
     assert wfi["name"].startswith("<temp>")
     assert wfi["status"] == "SUCCESS"
@@ -459,25 +464,27 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
 
     dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
-    dbos._sys_db.update_workflow_status(
-        {
-            "workflow_uuid": wfuuid,
-            "status": "PENDING",
-            "name": test_workflow.__qualname__,
-            "class_name": None,
-            "config_name": None,
-            "output": None,
-            "error": None,
-            "executor_id": None,
-            "app_id": None,
-            "app_version": None,
-            "request": None,
-            "recovery_attempts": None,
-            "authenticated_user": None,
-            "authenticated_roles": None,
-            "assumed_role": None,
-            "queue_name": None,
-        }
+    asyncio.run(
+        dbos._sys_db.update_workflow_status(
+            {
+                "workflow_uuid": wfuuid,
+                "status": "PENDING",
+                "name": test_workflow.__qualname__,
+                "class_name": None,
+                "config_name": None,
+                "output": None,
+                "error": None,
+                "executor_id": None,
+                "app_id": None,
+                "app_version": None,
+                "request": None,
+                "recovery_attempts": None,
+                "authenticated_user": None,
+                "authenticated_roles": None,
+                "assumed_role": None,
+                "queue_name": None,
+            }
+        )
     )
 
     dbos._destroy()  # Unusual pattern - reusing the memory
@@ -799,12 +806,12 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     dbos.send(dest_uuid, "testsend1", "testtopic")
     assert handle.get_result() == "testsend1"
 
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = asyncio.run(dbos._sys_db.get_workflows(gwi))
     assert len(wfs.workflow_uuids) == 2
     assert wfs.workflow_uuids[1] == dest_uuid
     assert wfs.workflow_uuids[0] != dest_uuid
 
-    wfi = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    wfi = asyncio.run(dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False))
     assert wfi
     assert wfi["name"] == "<temp>.temp_send_workflow"
 
