@@ -350,7 +350,10 @@ class DBOS:
             self._executor_field = ThreadPoolExecutor(max_workers=64)
             self._sys_db_field = SystemDatabase(self.config)
             self._app_db_field = ApplicationDatabase(self.config)
-            self._admin_server_field = AdminServer(dbos=self)
+            admin_port = self.config["runtimeConfig"].get("admin_port")
+            if admin_port is None:
+                admin_port = 3001
+            self._admin_server_field = AdminServer(dbos=self, port=admin_port)
 
             def run_event_loop(loop: asyncio.AbstractEventLoop) -> None:
                 asyncio.set_event_loop(loop)

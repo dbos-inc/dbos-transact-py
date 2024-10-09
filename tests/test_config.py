@@ -32,6 +32,7 @@ def test_valid_config(mocker):
         runtimeConfig:
             start:
                 - "python3 main.py"
+            admin_port: 8001
         database:
           hostname: 'some host'
           port: 1234

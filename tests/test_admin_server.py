@@ -126,3 +126,39 @@ def test_admin_recovery(dbos: DBOS) -> None:
             time.sleep(1)
             print(f"Attempt {attempt + 1} failed. Retrying in 1 second...")
     assert succeeded, "Workflow did not recover"
+
+
+def test_admin_diff_port(cleanup_test_databases: None) -> None:
+    # Initialize singleton
+    DBOS.destroy()  # In case of other tests leaving it
+
+    config_string = """name: test-app
+language: python
+database:
+  hostname: localhost
+  port: 5432
+  username: postgres
+  password: ${PGPASSWORD}
+  app_db_name: dbostestpy
+runtimeConfig:
+  start:
+    - python3 main.py
+  admin_port: 8001
+"""
+    # Write the config to a text file for the moment
+    with open("dbos-config.yaml", "w") as file:
+        file.write(config_string)
+
+    try:
+        # Initialize DBOS
+        DBOS()
+        DBOS.launch()
+
+        # Test GET /dbos-healthz
+        response = requests.get("http://localhost:8001/dbos-healthz", timeout=5)
+        assert response.status_code == 200
+        assert response.text == "healthy"
+    finally:
+        # Clean up after the test
+        DBOS.destroy()
+        os.remove("dbos-config.yaml")
