@@ -4,7 +4,6 @@ import traceback
 from typing import TYPE_CHECKING, Optional, TypedDict
 
 from dbos.core import P, R, _execute_workflow_id, _start_workflow
-from dbos.utils import run_coroutine
 
 if TYPE_CHECKING:
     from dbos.dbos import DBOS, Workflow, WorkflowHandle
@@ -59,7 +58,7 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
             return
         for _, queue in dbos._registry.queue_info_map.items():
             try:
-                wf_ids = run_coroutine(dbos._sys_db.start_queued_workflows(queue))
+                wf_ids = asyncio.run(dbos._sys_db.start_queued_workflows(queue))
                 for id in wf_ids:
                     _execute_workflow_id(dbos, id)
             except Exception:

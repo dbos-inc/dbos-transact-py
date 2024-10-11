@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from dbos.error import DBOSWorkflowConflictIDError
 from dbos.schemas.application_database import ApplicationSchema
-from dbos.utils import run_coroutine
 
 from .dbos_config import ConfigFile
 
@@ -82,7 +81,7 @@ class ApplicationDatabase:
         ApplicationSchema.metadata_obj.create_all(self.engine)
 
     def destroy(self) -> None:
-        run_coroutine(self.destroy_async())
+        asyncio.run(self.destroy_async())
 
     async def destroy_async(self) -> None:
         self.engine.dispose()
@@ -135,7 +134,7 @@ class ApplicationDatabase:
             raise
 
     def record_transaction_error(self, output: TransactionResultInternal) -> None:
-        run_coroutine(self.record_transaction_error_async(output))
+        asyncio.run(self.record_transaction_error_async(output))
 
     async def record_transaction_error_async(
         self, output: TransactionResultInternal

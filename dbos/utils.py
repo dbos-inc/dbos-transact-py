@@ -56,11 +56,3 @@ def deserialize_exception(serialized_data: str) -> Exception:
     """Deserialize JSON string back to a Python Exception using jsonpickle."""
     upo: Exception = jsonpickle.decode(serialized_data)
     return upo
-
-
-def run_coroutine(coro: Coroutine[Any, Any, R]) -> R:
-    try:
-        loop = asyncio.get_running_loop()
-        return asyncio.run_coroutine_threadsafe(coro, loop).result()
-    except RuntimeError:
-        return asyncio.run(coro)

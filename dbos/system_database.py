@@ -227,7 +227,7 @@ class SystemDatabase:
 
     # Destroy the pool when finished
     def destroy(self) -> None:
-        utils.run_coroutine(self.destroy_async())
+        asyncio.run(self.destroy_async())
 
     async def destroy_async(self) -> None:
         self.wait_for_buffer_flush()
@@ -870,7 +870,7 @@ class SystemDatabase:
                     await self.notification_conn.close()
 
     def _notification_listener(self) -> None:
-        utils.run_coroutine(self._notification_listener_async())
+        asyncio.run(self._notification_listener_async())
 
     async def sleep(
         self,
@@ -1090,8 +1090,8 @@ class SystemDatabase:
             try:
                 self._is_flushing_status_buffer = True
                 # Must flush the status buffer first, as the inputs table has a foreign key constraint on the status table.
-                utils.run_coroutine(self._flush_workflow_status_buffer())
-                utils.run_coroutine(self._flush_workflow_inputs_buffer())
+                asyncio.run(self._flush_workflow_status_buffer())
+                asyncio.run(self._flush_workflow_inputs_buffer())
                 self._is_flushing_status_buffer = False
                 if self._is_buffers_empty:
                     # Only sleep if both buffers are empty
