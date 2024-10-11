@@ -1,362 +1,53 @@
 import asyncio
-import inspect
-import json
-import sys
 import time
 import traceback
-from concurrent.futures import Future
 from functools import wraps
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Awaitable,
-    Callable,
-    Generic,
-    Optional,
-    Tuple,
-    TypeVar,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar, cast
 
-from dbos.application_database import ApplicationDatabase, TransactionResultInternal
-
-if sys.version_info < (3, 10):
-    from typing_extensions import ParamSpec
-else:
-    from typing import ParamSpec
-
-from dbos import utils
-from dbos.context import (
+from .. import utils
+from ..application_database import ApplicationDatabase, TransactionResultInternal
+from ..context import (
     DBOSAssumeRole,
-    DBOSContext,
-    DBOSContextEnsure,
-    DBOSContextSwap,
     EnterDBOSChildWorkflow,
     EnterDBOSStep,
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
     OperationType,
-    SetWorkflowID,
     TracedAttributes,
     assert_current_dbos_context,
     get_local_dbos_context,
 )
-from dbos.error import (
-    DBOSException,
-    DBOSMaxStepRetriesExceeded,
-    DBOSNonExistentWorkflowError,
-    DBOSRecoveryError,
-    DBOSWorkflowConflictIDError,
-    DBOSWorkflowFunctionNotFoundError,
-)
-from dbos.registrations import (
+from ..error import DBOSException, DBOSMaxStepRetriesExceeded
+from ..registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     get_config_name,
     get_dbos_class_name,
     get_dbos_func_name,
-    get_func_info,
     get_or_create_func_info,
     get_temp_workflow_type,
     set_dbos_func_name,
     set_temp_workflow_type,
 )
-from dbos.roles import check_required_roles
-from dbos.system_database import (
-    GetEventWorkflowContext,
-    OperationResultInternal,
-    WorkflowStatusInternal,
-    WorkflowStatusString,
-)
+from ..roles import check_required_roles
+from ..system_database import OperationResultInternal
+from .workflow import execute_workflow_async, execute_workflow_sync, init_workflow
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS, Workflow, WorkflowHandle, WorkflowStatus, _DBOSRegistry
-    from dbos.dbos import IsolationLevel
+    from ..dbos import _DBOSRegistry, IsolationLevel
 
 from sqlalchemy.exc import DBAPIError
 
 # these are duped in dbos.py
-P = ParamSpec("P")  # A generic type for workflow parameters
-R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 F = TypeVar("F", bound=Callable[..., Any])
 
-TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
+def workflow(reg: "_DBOSRegistry", max_recovery_attempts: int) -> Callable[[F], F]:
+    def _workflow_decorator(func: F) -> F:
+        wrapped_func = _workflow_wrapper(reg, func, max_recovery_attempts)
+        reg.register_wf_function(func.__qualname__, wrapped_func)
+        return wrapped_func
 
-async def get_status_async(dbos: "DBOS", workflow_id: str) -> "WorkflowStatus":
-    stat = await dbos.get_workflow_status_async(workflow_id)
-    if stat is None:
-        raise DBOSNonExistentWorkflowError(workflow_id)
-    return stat
-
-
-class _WorkflowHandleFuture(Generic[R]):
-
-    def __init__(self, workflow_id: str, future: Future[R], dbos: "DBOS"):
-        self.workflow_id = workflow_id
-        self.future = future
-        self.dbos = dbos
-
-    def get_workflow_id(self) -> str:
-        return self.workflow_id
-
-    def get_result(self) -> R:
-        return self.future.result()
-
-    async def get_result_async(self) -> R:
-        return await asyncio.wrap_future(self.future)
-
-    def get_status(self) -> "WorkflowStatus":
-        return asyncio.run(get_status_async(self.dbos, self.workflow_id))
-
-    async def get_status_async(self) -> "WorkflowStatus":
-        return await get_status_async(self.dbos, self.workflow_id)
-
-
-class _WorkflowHandlePolling(Generic[R]):
-
-    def __init__(self, workflow_id: str, dbos: "DBOS"):
-        self.workflow_id = workflow_id
-        self.dbos = dbos
-
-    def get_workflow_id(self) -> str:
-        return self.workflow_id
-
-    def get_result(self) -> R:
-        return asyncio.run(self.get_result_async())
-
-    async def get_result_async(self) -> R:
-        res: R = await self.dbos._sys_db.await_workflow_result(self.workflow_id)
-        return res
-
-    def get_status(self) -> "WorkflowStatus":
-        return asyncio.run(get_status_async(self.dbos, self.workflow_id))
-
-    async def get_status_async(self) -> "WorkflowStatus":
-        return await get_status_async(self.dbos, self.workflow_id)
-
-
-async def _init_workflow(
-    dbos: "DBOS",
-    ctx: DBOSContext,
-    inputs: utils.WorkflowInputs,
-    wf_name: str,
-    class_name: Optional[str],
-    config_name: Optional[str],
-    temp_wf_type: Optional[str],
-    queue: Optional[str] = None,
-    max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
-) -> WorkflowStatusInternal:
-    wfid = (
-        ctx.workflow_id
-        if len(ctx.workflow_id) > 0
-        else ctx.id_assigned_for_next_workflow
-    )
-    status: WorkflowStatusInternal = {
-        "workflow_uuid": wfid,
-        "status": (
-            WorkflowStatusString.PENDING.value
-            if queue is None
-            else WorkflowStatusString.ENQUEUED.value
-        ),
-        "name": wf_name,
-        "class_name": class_name,
-        "config_name": config_name,
-        "output": None,
-        "error": None,
-        "app_id": ctx.app_id,
-        "app_version": ctx.app_version,
-        "executor_id": ctx.executor_id,
-        "request": (utils.serialize(ctx.request) if ctx.request is not None else None),
-        "recovery_attempts": None,
-        "authenticated_user": ctx.authenticated_user,
-        "authenticated_roles": (
-            json.dumps(ctx.authenticated_roles) if ctx.authenticated_roles else None
-        ),
-        "assumed_role": ctx.assumed_role,
-        "queue_name": queue,
-    }
-
-    # If we have a class name, the first arg is the instance and do not serialize
-    if class_name is not None:
-        inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
-
-    if temp_wf_type != "transaction" or queue is not None:
-        # Synchronously record the status and inputs for workflows and single-step workflows
-        # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
-        # TODO: Make this transactional (and with the queue step below)
-        await dbos._sys_db.update_workflow_status(
-            status, False, ctx.in_recovery, max_recovery_attempts=max_recovery_attempts
-        )
-        await dbos._sys_db.update_workflow_inputs(wfid, utils.serialize_args(inputs))
-    else:
-        # Buffer the inputs for single-transaction workflows, but don't buffer the status
-        dbos._sys_db.buffer_workflow_inputs(wfid, utils.serialize_args(inputs))
-
-    if queue is not None:
-        await dbos._sys_db.enqueue(wfid, queue)
-
-    return status
-
-
-def _execute_workflow_sync(
-    dbos: "DBOS",
-    status: WorkflowStatusInternal,
-    func: "Workflow[P, R]",
-    *args: Any,
-    **kwargs: Any,
-) -> R:
-    try:
-        output = func(*args, **kwargs)
-        status["status"] = "SUCCESS"
-        status["output"] = utils.serialize(output)
-        if status["queue_name"] is not None:
-            queue = dbos._registry.queue_info_map[status["queue_name"]]
-            asyncio.run(dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue))
-        dbos._sys_db.buffer_workflow_status(status)
-    except DBOSWorkflowConflictIDError:
-        # Retrieve the workflow handle and wait for the result.
-        # Must use existing_workflow=False because workflow status might not be set yet for single transaction workflows.
-        wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(
-            status["workflow_uuid"], existing_workflow=False
-        )
-        output = wf_handle.get_result()
-        return output
-    except Exception as error:
-        status["status"] = "ERROR"
-        status["error"] = utils.serialize_exception(error)
-        if status["queue_name"] is not None:
-            queue = dbos._registry.queue_info_map[status["queue_name"]]
-            asyncio.run(dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue))
-        asyncio.run(dbos._sys_db.update_workflow_status(status))
-        raise
-
-    return output
-
-
-async def _execute_workflow_async(
-    dbos: "DBOS",
-    status: WorkflowStatusInternal,
-    func: "Workflow[P, R]",
-    *args: Any,
-    **kwargs: Any,
-) -> R:
-    try:
-        output: R = await (
-            func(*args, **kwargs)
-            if inspect.iscoroutinefunction(func)
-            else asyncio.to_thread(func, *args, **kwargs)
-        )
-        status["status"] = "SUCCESS"
-        status["output"] = utils.serialize(output)
-        if status["queue_name"] is not None:
-            queue = dbos._registry.queue_info_map[status["queue_name"]]
-            await dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-        dbos._sys_db.buffer_workflow_status(status)
-    except DBOSWorkflowConflictIDError:
-        # Retrieve the workflow handle and wait for the result.
-        # Must use existing_workflow=False because workflow status might not be set yet for single transaction workflows.
-        wf_handle: "WorkflowHandle[R]" = await dbos.retrieve_workflow_async(
-            status["workflow_uuid"], existing_workflow=False
-        )
-        output = wf_handle.get_result()
-        return output
-    except Exception as error:
-        status["status"] = "ERROR"
-        status["error"] = utils.serialize_exception(error)
-        if status["queue_name"] is not None:
-            queue = dbos._registry.queue_info_map[status["queue_name"]]
-            await dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-        await dbos._sys_db.update_workflow_status(status)
-        raise
-
-    return output
-
-
-def _execute_workflow_wthread(
-    dbos: "DBOS",
-    status: WorkflowStatusInternal,
-    func: "Workflow[P, R]",
-    ctx: DBOSContext,
-    *args: Any,
-    **kwargs: Any,
-) -> R:
-    attributes: TracedAttributes = {
-        "name": func.__name__,
-        "operationType": OperationType.WORKFLOW.value,
-    }
-    with DBOSContextSwap(ctx):
-        with EnterDBOSWorkflow(attributes):
-            try:
-                return _execute_workflow_sync(dbos, status, func, *args, **kwargs)
-            except Exception:
-                dbos.logger.error(
-                    f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
-                )
-                raise
-
-
-def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]":
-    status = asyncio.run(dbos._sys_db.get_workflow_status(workflow_id))
-    if not status:
-        raise DBOSRecoveryError(workflow_id, "Workflow status not found")
-    inputs = asyncio.run(dbos._sys_db.get_workflow_inputs(workflow_id))
-    if not inputs:
-        raise DBOSRecoveryError(workflow_id, "Workflow inputs not found")
-    wf_func = dbos._registry.workflow_info_map.get(status["name"], None)
-    if not wf_func:
-        raise DBOSWorkflowFunctionNotFoundError(
-            workflow_id, "Workflow function not found"
-        )
-    with DBOSContextEnsure():
-        ctx = assert_current_dbos_context()
-        request = status["request"]
-        ctx.request = utils.deserialize(request) if request is not None else None
-        if status["config_name"] is not None:
-            config_name = status["config_name"]
-            class_name = status["class_name"]
-            iname = f"{class_name}/{config_name}"
-            if iname not in dbos._registry.instance_info_map:
-                raise DBOSWorkflowFunctionNotFoundError(
-                    workflow_id,
-                    f"Cannot execute workflow because instance '{iname}' is not registered",
-                )
-            with SetWorkflowID(workflow_id):
-                return _start_workflow(
-                    dbos,
-                    wf_func,
-                    status["queue_name"],
-                    True,
-                    dbos._registry.instance_info_map[iname],
-                    *inputs["args"],
-                    **inputs["kwargs"],
-                )
-        elif status["class_name"] is not None:
-            class_name = status["class_name"]
-            if class_name not in dbos._registry.class_info_map:
-                raise DBOSWorkflowFunctionNotFoundError(
-                    workflow_id,
-                    f"Cannot execute workflow because class '{class_name}' is not registered",
-                )
-            with SetWorkflowID(workflow_id):
-                return _start_workflow(
-                    dbos,
-                    wf_func,
-                    status["queue_name"],
-                    True,
-                    dbos._registry.class_info_map[class_name],
-                    *inputs["args"],
-                    **inputs["kwargs"],
-                )
-        else:
-            with SetWorkflowID(workflow_id):
-                return _start_workflow(
-                    dbos,
-                    wf_func,
-                    status["queue_name"],
-                    True,
-                    *inputs["args"],
-                    **inputs["kwargs"],
-                )
+    return _workflow_decorator
 
 
 def _workflow_wrapper(
@@ -393,7 +84,7 @@ def _workflow_wrapper(
         with enterWorkflowCtxMgr(attributes), DBOSAssumeRole(rr):
             ctx = assert_current_dbos_context()  # Now the child ctx
             status = asyncio.run(
-                _init_workflow(
+                init_workflow(
                     dbos,
                     ctx,
                     inputs=inputs,
@@ -404,7 +95,7 @@ def _workflow_wrapper(
                 )
             )
 
-            return _execute_workflow_sync(dbos, status, func, *args, **kwargs)
+            return execute_workflow_sync(dbos, status, func, *args, **kwargs)
 
     async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
         if dbosreg.dbos is None:
@@ -428,7 +119,7 @@ def _workflow_wrapper(
         )
         with enterWorkflowCtxMgr(attributes), DBOSAssumeRole(rr):
             ctx = assert_current_dbos_context()  # Now the child ctx
-            status = await _init_workflow(
+            status = await init_workflow(
                 dbos,
                 ctx,
                 inputs=inputs,
@@ -442,7 +133,7 @@ def _workflow_wrapper(
             dbos.logger.debug(
                 f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
             )
-            return await _execute_workflow_async(dbos, status, func, *args, **kwargs)
+            return await execute_workflow_async(dbos, status, func, *args, **kwargs)
 
     wrapper = wraps(func)(
         async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
@@ -451,97 +142,7 @@ def _workflow_wrapper(
     return wrapped_func
 
 
-def _workflow(reg: "_DBOSRegistry", max_recovery_attempts: int) -> Callable[[F], F]:
-    def _workflow_decorator(func: F) -> F:
-        wrapped_func = _workflow_wrapper(reg, func, max_recovery_attempts)
-        reg.register_wf_function(func.__qualname__, wrapped_func)
-        return wrapped_func
-
-    return _workflow_decorator
-
-
-def _start_workflow(
-    dbos: "DBOS",
-    func: "Workflow[P, R]",
-    queue_name: Optional[str],
-    execute_workflow: bool,
-    *args: P.args,
-    **kwargs: P.kwargs,
-) -> "WorkflowHandle[R]":
-    fself: Optional[object] = None
-    if hasattr(func, "__self__"):
-        fself = func.__self__
-
-    fi = get_func_info(func)
-    if fi is None:
-        raise DBOSWorkflowFunctionNotFoundError(
-            "<NONE>", f"start_workflow: function {func.__name__} is not registered"
-        )
-
-    func = cast("Workflow[P, R]", func.__orig_func)  # type: ignore
-
-    inputs: utils.WorkflowInputs = {
-        "args": args,
-        "kwargs": kwargs,
-    }
-
-    # Sequence of events for starting a workflow:
-    #   First - is there a WF already running?
-    #      (and not in step as that is an error)
-    #   Assign an ID to the workflow, if it doesn't have an app-assigned one
-    #      If this is a root workflow, assign a new ID
-    #      If this is a child workflow, assign parent wf id with call# suffix
-    #   Make a (system) DB record for the workflow
-    #   Pass the new context to a worker thread that will run the wf function
-    cur_ctx = get_local_dbos_context()
-    if cur_ctx is not None and cur_ctx.is_within_workflow():
-        assert cur_ctx.is_workflow()  # Not in a step
-        cur_ctx.function_id += 1
-        if len(cur_ctx.id_assigned_for_next_workflow) == 0:
-            cur_ctx.id_assigned_for_next_workflow = (
-                cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
-            )
-
-    new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
-    new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
-    new_wf_id = new_wf_ctx.id_assigned_for_next_workflow
-
-    gin_args: Tuple[Any, ...] = args
-    if fself is not None:
-        gin_args = (fself,)
-
-    status = asyncio.run(
-        _init_workflow(
-            dbos,
-            new_wf_ctx,
-            inputs=inputs,
-            wf_name=get_dbos_func_name(func),
-            class_name=get_dbos_class_name(fi, func, gin_args),
-            config_name=get_config_name(fi, func, gin_args),
-            temp_wf_type=get_temp_workflow_type(func),
-            queue=queue_name,
-            max_recovery_attempts=fi.max_recovery_attempts,
-        )
-    )
-
-    if not execute_workflow:
-        return _WorkflowHandlePolling(new_wf_id, dbos)
-
-    submit_args = (
-        (dbos, status, func, new_wf_ctx, fself) + args
-        if fself is not None
-        else (dbos, status, func, new_wf_ctx) + args
-    )
-
-    future = dbos._executor.submit(
-        cast(Callable[..., R], _execute_workflow_wthread),
-        *submit_args,
-        **kwargs,
-    )
-    return _WorkflowHandleFuture(new_wf_id, future, dbos)
-
-
-def _transaction(
+def transaction(
     dbosreg: "_DBOSRegistry", isolation_level: "IsolationLevel" = "SERIALIZABLE"
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
@@ -792,7 +393,7 @@ def _transaction(
     return decorator
 
 
-def _step(
+def step(
     dbosreg: "_DBOSRegistry",
     *,
     retries_allowed: bool = False,
@@ -1018,113 +619,3 @@ def _step(
         return cast(F, wrapper)
 
     return decorator
-
-
-def _register_send_wf(dbos: "DBOS", registry: "_DBOSRegistry") -> None:
-    async def send_temp_workflow(
-        destination_id: str, message: Any, topic: Optional[str]
-    ) -> None:
-        await dbos.send_async(destination_id, message, topic)
-
-    temp_send_wf = _workflow_wrapper(registry, send_temp_workflow)
-    set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
-    set_temp_workflow_type(send_temp_workflow, "send")
-    registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
-
-
-async def _send(
-    dbos: "DBOS", destination_id: str, message: Any, topic: Optional[str] = None
-) -> None:
-    async def do_send(destination_id: str, message: Any, topic: Optional[str]) -> None:
-        attributes: TracedAttributes = {
-            "name": "send",
-        }
-        with EnterDBOSStep(attributes) as ctx:
-            await dbos._sys_db.send(
-                ctx.workflow_id,
-                ctx.curr_step_function_id,
-                destination_id,
-                message,
-                topic,
-            )
-
-    ctx = get_local_dbos_context()
-    if ctx and ctx.is_within_workflow():
-        assert ctx.is_workflow(), "send() must be called from within a workflow"
-        return await do_send(destination_id, message, topic)
-    else:
-        wffn = dbos._registry.workflow_info_map.get(TEMP_SEND_WF_NAME)
-        assert wffn
-        await wffn(destination_id, message, topic)
-
-
-async def _recv(
-    dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60
-) -> Any:
-    cur_ctx = get_local_dbos_context()
-    if cur_ctx is not None:
-        # Must call it within a workflow
-        assert cur_ctx.is_workflow(), "recv() must be called from within a workflow"
-        attributes: TracedAttributes = {
-            "name": "recv",
-        }
-        with EnterDBOSStep(attributes) as ctx:
-            ctx.function_id += 1  # Reserve for the sleep
-            timeout_function_id = ctx.function_id
-            return await dbos._sys_db.recv(
-                ctx.workflow_id,
-                ctx.curr_step_function_id,
-                timeout_function_id,
-                topic,
-                timeout_seconds,
-            )
-    else:
-        # Cannot call it from outside of a workflow
-        raise DBOSException("recv() must be called from within a workflow")
-
-
-async def _set_event(dbos: "DBOS", key: str, value: Any) -> None:
-    cur_ctx = get_local_dbos_context()
-    if cur_ctx is not None:
-        # Must call it within a workflow
-        assert (
-            cur_ctx.is_workflow()
-        ), "set_event() must be called from within a workflow"
-        attributes: TracedAttributes = {
-            "name": "set_event",
-        }
-        with EnterDBOSStep(attributes) as ctx:
-            await dbos._sys_db.set_event(
-                ctx.workflow_id, ctx.curr_step_function_id, key, value
-            )
-    else:
-        # Cannot call it from outside of a workflow
-        raise DBOSException("set_event() must be called from within a workflow")
-
-
-async def _get_event(
-    dbos: "DBOS", workflow_id: str, key: str, timeout_seconds: float = 60
-) -> Any:
-    cur_ctx = get_local_dbos_context()
-    if cur_ctx is not None and cur_ctx.is_within_workflow():
-        # Call it within a workflow
-        assert (
-            cur_ctx.is_workflow()
-        ), "get_event() must be called from within a workflow"
-        attributes: TracedAttributes = {
-            "name": "get_event",
-        }
-        with EnterDBOSStep(attributes) as ctx:
-            ctx.function_id += 1
-            timeout_function_id = ctx.function_id
-            caller_ctx: GetEventWorkflowContext = {
-                "workflow_uuid": ctx.workflow_id,
-                "function_id": ctx.curr_step_function_id,
-                "timeout_function_id": timeout_function_id,
-            }
-            return await dbos._sys_db.get_event(
-                workflow_id, key, timeout_seconds, caller_ctx
-            )
-    else:
-        # Directly call it outside of a workflow
-        return await dbos._sys_db.get_event(workflow_id, key, timeout_seconds)

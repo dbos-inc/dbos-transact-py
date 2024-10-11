@@ -27,18 +27,18 @@ from typing import (
 from opentelemetry.trace import Span
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dbos.core import (
-    _execute_workflow_id,
-    _get_event,
-    _recv,
-    _register_send_wf,
-    _send,
-    _set_event,
-    _start_workflow,
-    _step,
-    _transaction,
-    _workflow,
-    _WorkflowHandlePolling,
+from dbos._core.context_ops import (
+    get_event,
+    receive,
+    register_send_workflow,
+    send,
+    set_event,
+)
+from dbos._core.decorator_ops import step, transaction, workflow
+from dbos._core.workflow import (
+    WorkflowHandlePolling,
+    execute_workflow_id,
+    start_workflow,
 )
 from dbos.decorators import classproperty
 from dbos.queue import Queue, queue_thread
@@ -292,7 +292,7 @@ class DBOS:
 
             setup_flask_middleware(self.flask)
 
-        _register_send_wf(self, self._registry)
+        register_send_workflow(self, self._registry)
 
         for handler in dbos_logger.handlers:
             handler.flush()
@@ -435,7 +435,7 @@ class DBOS:
         cls, *, max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS
     ) -> Callable[[F], F]:
         """Decorate a function for use as a DBOS workflow."""
-        return _workflow(_get_or_create_dbos_registry(), max_recovery_attempts)
+        return workflow(_get_or_create_dbos_registry(), max_recovery_attempts)
 
     @classmethod
     def transaction(
@@ -448,7 +448,7 @@ class DBOS:
             isolation_level(IsolationLevel): Transaction isolation level
 
         """
-        return _transaction(_get_or_create_dbos_registry(), isolation_level)
+        return transaction(_get_or_create_dbos_registry(), isolation_level)
 
     @classmethod
     def step(
@@ -470,7 +470,7 @@ class DBOS:
 
         """
 
-        return _step(
+        return step(
             _get_or_create_dbos_registry(),
             retries_allowed=retries_allowed,
             interval_seconds=interval_seconds,
@@ -551,7 +551,7 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
-        return _start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs)
+        return start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs)
 
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
@@ -600,7 +600,7 @@ class DBOS:
             stat = dbos.get_workflow_status(workflow_id)
             if stat is None:
                 raise DBOSNonExistentWorkflowError(workflow_id)
-        return _WorkflowHandlePolling(workflow_id, dbos)
+        return WorkflowHandlePolling(workflow_id, dbos)
 
     @classmethod
     async def retrieve_workflow_async(
@@ -612,21 +612,21 @@ class DBOS:
             stat = await dbos.get_workflow_status_async(workflow_id)
             if stat is None:
                 raise DBOSNonExistentWorkflowError(workflow_id)
-        return _WorkflowHandlePolling(workflow_id, dbos)
+        return WorkflowHandlePolling(workflow_id, dbos)
 
     @classmethod
     def send(
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
         """Send a message to a workflow execution."""
-        return asyncio.run(_send(_get_dbos_instance(), destination_id, message, topic))
+        return asyncio.run(send(_get_dbos_instance(), destination_id, message, topic))
 
     @classmethod
     async def send_async(
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
         """Send a message to a workflow execution."""
-        return await _send(_get_dbos_instance(), destination_id, message, topic)
+        return await send(_get_dbos_instance(), destination_id, message, topic)
 
     @classmethod
     def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
@@ -636,13 +636,13 @@ class DBOS:
         This function is to be called from within a workflow.
         `recv` will return the message sent on `topic`, waiting if necessary.
         """
-        return asyncio.run(_recv(_get_dbos_instance(), topic, timeout_seconds))
+        return asyncio.run(receive(_get_dbos_instance(), topic, timeout_seconds))
 
     @classmethod
     async def recv_async(
         cls, topic: Optional[str] = None, timeout_seconds: float = 60
     ) -> Any:
-        return await _recv(_get_dbos_instance(), topic, timeout_seconds)
+        return await receive(_get_dbos_instance(), topic, timeout_seconds)
 
     @classmethod
     def sleep(cls, seconds: float) -> None:
@@ -684,11 +684,11 @@ class DBOS:
             value(Any): A serializable value to associate with the key
 
         """
-        asyncio.run(_set_event(_get_dbos_instance(), key, value))
+        asyncio.run(set_event(_get_dbos_instance(), key, value))
 
     @classmethod
     async def set_event_async(cls, key: str, value: Any) -> None:
-        await _set_event(_get_dbos_instance(), key, value)
+        await set_event(_get_dbos_instance(), key, value)
 
     @classmethod
     def get_event(cls, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:
@@ -704,19 +704,19 @@ class DBOS:
 
         """
         return asyncio.run(
-            _get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
+            get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
         )
 
     @classmethod
     async def get_event_async(
         cls, workflow_id: str, key: str, timeout_seconds: float = 60
     ) -> Any:
-        return await _get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
+        return await get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
 
     @classmethod
     def execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Execute a workflow by ID (for recovery)."""
-        return _execute_workflow_id(_get_dbos_instance(), workflow_id)
+        return execute_workflow_id(_get_dbos_instance(), workflow_id)
 
     @classmethod
     def recover_pending_workflows(

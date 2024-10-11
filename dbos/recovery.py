@@ -5,8 +5,8 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Any, List
 
+from dbos._core.workflow import execute_workflow_id
 from dbos.context import SetWorkflowRecovery
-from dbos.core import _execute_workflow_id
 from dbos.error import DBOSWorkflowFunctionNotFoundError
 
 if TYPE_CHECKING:
@@ -21,7 +21,7 @@ def _startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
         try:
             for workflowID in list(workflow_ids):
                 with SetWorkflowRecovery():
-                    _execute_workflow_id(dbos, workflowID)
+                    execute_workflow_id(dbos, workflowID)
                 workflow_ids.remove(workflowID)
         except DBOSWorkflowFunctionNotFoundError:
             time.sleep(1)
@@ -47,7 +47,7 @@ def _recover_pending_workflows(
 
         for workflowID in workflow_ids:
             with SetWorkflowRecovery():
-                handle = _execute_workflow_id(dbos, workflowID)
+                handle = execute_workflow_id(dbos, workflowID)
             workflow_handles.append(handle)
 
     dbos.logger.info("Recovered pending workflows")

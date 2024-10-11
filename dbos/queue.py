@@ -3,7 +3,7 @@ import threading
 import traceback
 from typing import TYPE_CHECKING, Optional, TypedDict
 
-from dbos.core import P, R, _execute_workflow_id, _start_workflow
+from dbos._core.workflow import P, R, execute_workflow_id, start_workflow
 
 if TYPE_CHECKING:
     from dbos.dbos import DBOS, Workflow, WorkflowHandle
@@ -49,7 +49,7 @@ class Queue:
         from dbos.dbos import _get_dbos_instance
 
         dbos = _get_dbos_instance()
-        return _start_workflow(dbos, func, self.name, False, *args, **kwargs)
+        return start_workflow(dbos, func, self.name, False, *args, **kwargs)
 
 
 def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
@@ -60,7 +60,7 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
             try:
                 wf_ids = asyncio.run(dbos._sys_db.start_queued_workflows(queue))
                 for id in wf_ids:
-                    _execute_workflow_id(dbos, id)
+                    execute_workflow_id(dbos, id)
             except Exception:
                 dbos.logger.warning(
                     f"Exception encountered in queue thread: {traceback.format_exc()}"
@@ -82,7 +82,7 @@ async def queue_thread_async(stop_event: asyncio.Event, dbos: "DBOS") -> None:
             try:
                 wf_ids = await dbos._sys_db.start_queued_workflows(queue)
                 for id in wf_ids:
-                    _execute_workflow_id(dbos, id)
+                    execute_workflow_id(dbos, id)
             except Exception:
                 dbos.logger.warning(
                     f"Exception encountered in queue thread: {traceback.format_exc()}"
