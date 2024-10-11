@@ -59,6 +59,10 @@
             "type": "string",
             "description": "If using SSL/TLS to securely connect to a database, path to an SSL root certificate file"
           },
+          "local_suffix": {
+            "type": "boolean",
+            "description": "Whether to suffix app_db_name with '_local'. Set to true when doing local development using a DBOS Cloud database."
+          },
           "app_db_client": {
             "type": "string",
             "description": "Specify the database client to use to connect to the application database",
