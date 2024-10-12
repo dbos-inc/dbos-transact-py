@@ -4,7 +4,6 @@ import traceback
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar, cast
 
-from .. import utils
 from ..application_database import ApplicationDatabase, TransactionResultInternal
 from ..context import (
     DBOSAssumeRole,
@@ -29,6 +28,7 @@ from ..registrations import (
     set_temp_workflow_type,
 )
 from ..roles import check_required_roles
+from . import serialization
 from .types import OperationResultInternal, WorkflowInputs
 from .workflow import execute_workflow_async, execute_workflow_sync, init_workflow
 
@@ -194,14 +194,14 @@ def transaction(
                                     )
                                     if recorded_output["error"]:
                                         deserialized_error = (
-                                            utils.deserialize_exception(
+                                            serialization.deserialize_exception(
                                                 recorded_output["error"]
                                             )
                                         )
                                         has_recorded_error = True
                                         raise deserialized_error
                                     elif recorded_output["output"]:
-                                        return utils.deserialize(
+                                        return serialization.deserialize(
                                             recorded_output["output"]
                                         )
                                     else:
@@ -214,7 +214,7 @@ def transaction(
                                     )
 
                                 output = func(*args, **kwargs)
-                                txn_output["output"] = utils.serialize(output)
+                                txn_output["output"] = serialization.serialize(output)
                                 assert (
                                     ctx.sql_session is not None
                                 ), "Cannot find a database connection"
@@ -239,7 +239,9 @@ def transaction(
                         except Exception as error:
                             # Don't record the error if it was already recorded
                             if not has_recorded_error:
-                                txn_output["error"] = utils.serialize_exception(error)
+                                txn_output["error"] = serialization.serialize_exception(
+                                    error
+                                )
                                 dbos._app_db.record_transaction_error(txn_output)
                             raise
             return output
@@ -287,14 +289,14 @@ def transaction(
                                 if recorded_output:
                                     if recorded_output["error"]:
                                         deserialized_error = (
-                                            utils.deserialize_exception(
+                                            serialization.deserialize_exception(
                                                 recorded_output["error"]
                                             )
                                         )
                                         has_recorded_error = True
                                         raise deserialized_error
                                     elif recorded_output["output"]:
-                                        return utils.deserialize(
+                                        return serialization.deserialize(
                                             recorded_output["output"]
                                         )
                                     else:
@@ -302,7 +304,7 @@ def transaction(
                                             "Output and error are both None"
                                         )
                                 output = await func(*args, **kwargs)
-                                txn_output["output"] = utils.serialize(output)
+                                txn_output["output"] = serialization.serialize(output)
                                 assert (
                                     ctx.async_sql_session is not None
                                 ), "Cannot find a database connection"
@@ -327,7 +329,9 @@ def transaction(
                         except Exception as error:
                             # Don't record the error if it was already recorded
                             if not has_recorded_error:
-                                txn_output["error"] = utils.serialize_exception(error)
+                                txn_output["error"] = serialization.serialize_exception(
+                                    error
+                                )
                                 await dbos._app_db.record_transaction_error_async(
                                     txn_output
                                 )
@@ -431,12 +435,12 @@ def step(
                         f"Replaying step, id: {ctx.function_id}, name: {attributes['name']}"
                     )
                     if recorded_output["error"] is not None:
-                        deserialized_error = utils.deserialize_exception(
+                        deserialized_error = serialization.deserialize_exception(
                             recorded_output["error"]
                         )
                         raise deserialized_error
                     elif recorded_output["output"] is not None:
-                        return utils.deserialize(recorded_output["output"])
+                        return serialization.deserialize(recorded_output["output"])
                     else:
                         raise Exception("Output and error are both None")
                 else:
@@ -452,7 +456,7 @@ def step(
                 for attempt in range(1, local_max_attempts + 1):
                     try:
                         output = func(*args, **kwargs)
-                        step_output["output"] = utils.serialize(output)
+                        step_output["output"] = serialization.serialize(output)
                         error = None
                         break
                     except Exception as err:
@@ -478,7 +482,9 @@ def step(
                                 )
 
                 step_output["error"] = (
-                    utils.serialize_exception(error) if error is not None else None
+                    serialization.serialize_exception(error)
+                    if error is not None
+                    else None
                 )
                 asyncio.run(dbos._sys_db.record_operation_result(step_output))
 
@@ -509,12 +515,12 @@ def step(
                 )
                 if recorded_output:
                     if recorded_output["error"] is not None:
-                        deserialized_error = utils.deserialize_exception(
+                        deserialized_error = serialization.deserialize_exception(
                             recorded_output["error"]
                         )
                         raise deserialized_error
                     elif recorded_output["output"] is not None:
-                        return utils.deserialize(recorded_output["output"])
+                        return serialization.deserialize(recorded_output["output"])
                     else:
                         raise Exception("Output and error are both None")
                 output = None
@@ -525,7 +531,7 @@ def step(
                 for attempt in range(1, local_max_attempts + 1):
                     try:
                         output = await func(*args, **kwargs)
-                        step_output["output"] = utils.serialize(output)
+                        step_output["output"] = serialization.serialize(output)
                         error = None
                         break
                     except Exception as err:
@@ -551,7 +557,9 @@ def step(
                                 )
 
                 step_output["error"] = (
-                    utils.serialize_exception(error) if error is not None else None
+                    serialization.serialize_exception(error)
+                    if error is not None
+                    else None
                 )
                 await dbos._sys_db.record_operation_result(step_output)
 

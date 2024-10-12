@@ -13,7 +13,6 @@ from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
-from .. import utils
 from ..dbos_config import ConfigFile
 from ..error import (
     DBOSDeadLetterQueueError,
@@ -24,6 +23,7 @@ from ..logger import dbos_logger
 from ..registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from ..schemas.system_database import SystemSchema
 from ..types import GetWorkflowsInput, WorkflowStatusString
+from . import serialization
 from .types import (
     GetEventWorkflowContext,
     GetWorkflowsOutput,
@@ -286,7 +286,9 @@ class SystemDatabase:
         res = await self.check_operation_execution(calling_wf, calling_wf_fn)
         if res is not None:
             if res["output"]:
-                resstat: WorkflowStatusInternal = utils.deserialize(res["output"])
+                resstat: WorkflowStatusInternal = serialization.deserialize(
+                    res["output"]
+                )
                 return resstat
             return None
         stat = await self.get_workflow_status(workflow_uuid)
@@ -294,7 +296,7 @@ class SystemDatabase:
             {
                 "workflow_uuid": calling_wf,
                 "function_id": calling_wf_fn,
-                "output": utils.serialize(stat),
+                "output": serialization.serialize(stat),
                 "error": None,
             }
         )
@@ -391,9 +393,9 @@ class SystemDatabase:
             return None
         status: str = stat["status"]
         if status == str(WorkflowStatusString.SUCCESS.value):
-            return utils.deserialize(stat["output"])
+            return serialization.deserialize(stat["output"])
         elif status == str(WorkflowStatusString.ERROR.value):
-            raise utils.deserialize_exception(stat["error"])
+            raise serialization.deserialize_exception(stat["error"])
         return None
 
     async def get_workflow_info(
@@ -444,7 +446,7 @@ class SystemDatabase:
             ).fetchone()
             if row is None:
                 return None
-            inputs: WorkflowInputs = utils.deserialize_args(row[0])
+            inputs: WorkflowInputs = serialization.deserialize_args(row[0])
             return inputs
 
     async def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
@@ -578,7 +580,7 @@ class SystemDatabase:
                     pg.insert(SystemSchema.notifications).values(
                         destination_uuid=destination_uuid,
                         topic=topic,
-                        message=utils.serialize(message),
+                        message=serialization.serialize(message),
                     )
                 )
             except DBAPIError as dbapi_error:
@@ -611,7 +613,7 @@ class SystemDatabase:
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying recv, id: {function_id}, topic: {topic}")
             if recorded_output["output"] is not None:
-                return utils.deserialize(recorded_output["output"])
+                return serialization.deserialize(recorded_output["output"])
             else:
                 raise Exception("No output recorded in the last recv")
         else:
@@ -679,12 +681,12 @@ class SystemDatabase:
             rows = (await c.execute(delete_stmt)).fetchall()
             message: Any = None
             if len(rows) > 0:
-                message = utils.deserialize(rows[0][0])
+                message = serialization.deserialize(rows[0][0])
             await self.record_operation_result(
                 {
                     "workflow_uuid": workflow_uuid,
                     "function_id": function_id,
-                    "output": utils.serialize(
+                    "output": serialization.serialize(
                         message
                     ),  # None will be serialized to 'null'
                     "error": None,
@@ -772,7 +774,7 @@ class SystemDatabase:
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying sleep, id: {function_id}, seconds: {seconds}")
             assert recorded_output["output"] is not None, "no recorded end time"
-            end_time = utils.deserialize(recorded_output["output"])
+            end_time = serialization.deserialize(recorded_output["output"])
         else:
             dbos_logger.debug(f"Running sleep, id: {function_id}, seconds: {seconds}")
             end_time = time.time() + seconds
@@ -781,7 +783,7 @@ class SystemDatabase:
                     {
                         "workflow_uuid": workflow_uuid,
                         "function_id": function_id,
-                        "output": utils.serialize(end_time),
+                        "output": serialization.serialize(end_time),
                         "error": None,
                     }
                 )
@@ -814,11 +816,11 @@ class SystemDatabase:
                 .values(
                     workflow_uuid=workflow_uuid,
                     key=key,
-                    value=utils.serialize(message),
+                    value=serialization.serialize(message),
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key"],
-                    set_={"value": utils.serialize(message)},
+                    set_={"value": serialization.serialize(message)},
                 )
             )
             output: OperationResultInternal = {
@@ -852,7 +854,7 @@ class SystemDatabase:
                     f"Replaying get_event, id: {caller_ctx['function_id']}, key: {key}"
                 )
                 if recorded_output["output"] is not None:
-                    return utils.deserialize(recorded_output["output"])
+                    return serialization.deserialize(recorded_output["output"])
                 else:
                     raise Exception("No output recorded in the last get_event")
             else:
@@ -872,7 +874,7 @@ class SystemDatabase:
 
         value: Any = None
         if len(init_recv) > 0:
-            value = utils.deserialize(init_recv[0][0])
+            value = serialization.deserialize(init_recv[0][0])
         else:
             # Wait for the notification
             actual_timeout = timeout_seconds
@@ -890,7 +892,7 @@ class SystemDatabase:
             async with self.async_engine.begin() as c:
                 final_recv = (await c.execute(get_sql)).fetchall()
                 if len(final_recv) > 0:
-                    value = utils.deserialize(final_recv[0][0])
+                    value = serialization.deserialize(final_recv[0][0])
         condition.release()
         self.workflow_events_map.pop(payload)
 
@@ -900,7 +902,7 @@ class SystemDatabase:
                 {
                     "workflow_uuid": caller_ctx["workflow_uuid"],
                     "function_id": caller_ctx["function_id"],
-                    "output": utils.serialize(
+                    "output": serialization.serialize(
                         value
                     ),  # None will be serialized to 'null'
                     "error": None,

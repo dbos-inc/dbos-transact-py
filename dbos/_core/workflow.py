@@ -9,13 +9,13 @@ from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeV
 from dbos._core.types import WorkflowInputs, WorkflowStatusInternal
 
 from ..types import WorkflowStatusString
+from . import serialization
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec
 else:
     from typing import ParamSpec
 
-from .. import utils
 from ..context import (
     DBOSContext,
     DBOSContextEnsure,
@@ -136,7 +136,9 @@ async def init_workflow(
         "app_id": ctx.app_id,
         "app_version": ctx.app_version,
         "executor_id": ctx.executor_id,
-        "request": (utils.serialize(ctx.request) if ctx.request is not None else None),
+        "request": (
+            serialization.serialize(ctx.request) if ctx.request is not None else None
+        ),
         "recovery_attempts": None,
         "authenticated_user": ctx.authenticated_user,
         "authenticated_roles": (
@@ -157,10 +159,12 @@ async def init_workflow(
         await dbos._sys_db.update_workflow_status(
             status, False, ctx.in_recovery, max_recovery_attempts=max_recovery_attempts
         )
-        await dbos._sys_db.update_workflow_inputs(wfid, utils.serialize_args(inputs))
+        await dbos._sys_db.update_workflow_inputs(
+            wfid, serialization.serialize_args(inputs)
+        )
     else:
         # Buffer the inputs for single-transaction workflows, but don't buffer the status
-        dbos._sys_db.buffer_workflow_inputs(wfid, utils.serialize_args(inputs))
+        dbos._sys_db.buffer_workflow_inputs(wfid, serialization.serialize_args(inputs))
 
     if queue is not None:
         await dbos._sys_db.enqueue(wfid, queue)
@@ -178,7 +182,7 @@ def execute_workflow_sync(
     try:
         output = func(*args, **kwargs)
         status["status"] = "SUCCESS"
-        status["output"] = utils.serialize(output)
+        status["output"] = serialization.serialize(output)
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
             asyncio.run(dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue))
@@ -193,7 +197,7 @@ def execute_workflow_sync(
         return output
     except Exception as error:
         status["status"] = "ERROR"
-        status["error"] = utils.serialize_exception(error)
+        status["error"] = serialization.serialize_exception(error)
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
             asyncio.run(dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue))
@@ -217,7 +221,7 @@ async def execute_workflow_async(
             else asyncio.to_thread(func, *args, **kwargs)
         )
         status["status"] = "SUCCESS"
-        status["output"] = utils.serialize(output)
+        status["output"] = serialization.serialize(output)
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
             await dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
@@ -232,7 +236,7 @@ async def execute_workflow_async(
         return output
     except Exception as error:
         status["status"] = "ERROR"
-        status["error"] = utils.serialize_exception(error)
+        status["error"] = serialization.serialize_exception(error)
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
             await dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
@@ -280,7 +284,9 @@ def execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]"
     with DBOSContextEnsure():
         ctx = assert_current_dbos_context()
         request = status["request"]
-        ctx.request = utils.deserialize(request) if request is not None else None
+        ctx.request = (
+            serialization.deserialize(request) if request is not None else None
+        )
         if status["config_name"] is not None:
             config_name = status["config_name"]
             class_name = status["class_name"]
