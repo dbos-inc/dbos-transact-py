@@ -4,7 +4,7 @@ from ..context import EnterDBOSStep, TracedAttributes, get_local_dbos_context
 from ..error import DBOSException
 from ..registrations import set_dbos_func_name, set_temp_workflow_type
 from ..system_database import GetEventWorkflowContext
-from .decorator_ops import _workflow_wrapper
+from .decorator_ops import workflow_wrapper
 
 if TYPE_CHECKING:
     from ..dbos import DBOS, _DBOSRegistry
@@ -19,7 +19,7 @@ def register_send_workflow(dbos: "DBOS", registry: "_DBOSRegistry") -> None:
     ) -> None:
         await dbos.send_async(destination_id, message, topic)
 
-    temp_send_wf = _workflow_wrapper(registry, send_temp_workflow)
+    temp_send_wf = workflow_wrapper(registry, send_temp_workflow)
     set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
     set_temp_workflow_type(send_temp_workflow, "send")
     registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)

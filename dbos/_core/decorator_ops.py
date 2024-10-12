@@ -43,14 +43,14 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 def workflow(reg: "_DBOSRegistry", max_recovery_attempts: int) -> Callable[[F], F]:
     def _workflow_decorator(func: F) -> F:
-        wrapped_func = _workflow_wrapper(reg, func, max_recovery_attempts)
+        wrapped_func = workflow_wrapper(reg, func, max_recovery_attempts)
         reg.register_wf_function(func.__qualname__, wrapped_func)
         return wrapped_func
 
     return _workflow_decorator
 
 
-def _workflow_wrapper(
+def workflow_wrapper(
     dbosreg: "_DBOSRegistry",
     func: F,
     max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
@@ -382,7 +382,7 @@ def transaction(
 
         temp_wf = temp_wf_async if asyncio.iscoroutinefunction(func) else temp_wf_sync
 
-        wrapped_wf = _workflow_wrapper(dbosreg, temp_wf)
+        wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "transaction")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
@@ -610,7 +610,7 @@ def step(
             return await wrapper_async(*args, **kwargs)
 
         temp_wf = temp_wf_async if asyncio.iscoroutinefunction(func) else temp_wf_sync
-        wrapped_wf = _workflow_wrapper(dbosreg, temp_wf)
+        wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
