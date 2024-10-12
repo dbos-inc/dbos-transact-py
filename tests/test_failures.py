@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 # Public API
 from dbos import DBOS, GetWorkflowsInput, SetWorkflowID
 from dbos.error import DBOSDeadLetterQueueError, DBOSErrorCode, DBOSException
-from dbos.system_database import WorkflowStatusString
+from dbos.types import WorkflowStatusString
 
 
 def test_transaction_errors(dbos: DBOS) -> None:

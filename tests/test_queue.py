@@ -8,7 +8,7 @@ import sqlalchemy as sa
 from dbos import DBOS, Queue, SetWorkflowID
 from dbos.dbos import WorkflowHandle
 from dbos.schemas.system_database import SystemSchema
-from dbos.system_database import WorkflowStatusString
+from dbos.types import WorkflowStatusString
 
 
 async def queue_entries_are_cleaned_up_async(dbos: DBOS) -> bool:

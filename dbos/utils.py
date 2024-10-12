@@ -1,15 +1,11 @@
-import asyncio
 import types
-from typing import Any, Coroutine, Dict, Tuple, TypedDict, TypeVar
+from typing import Any, TypeVar
 
 import jsonpickle  # type: ignore
 
+from ._core.types import WorkflowInputs
+
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
-
-
-class WorkflowInputs(TypedDict):
-    args: Tuple[Any, ...]
-    kwargs: Dict[str, Any]
 
 
 def validate_item(data: Any) -> None:

@@ -29,7 +29,7 @@ from ..registrations import (
     set_temp_workflow_type,
 )
 from ..roles import check_required_roles
-from ..system_database import OperationResultInternal
+from .types import OperationResultInternal, WorkflowInputs
 from .workflow import execute_workflow_async, execute_workflow_sync, init_workflow
 
 if TYPE_CHECKING:
@@ -73,7 +73,7 @@ def workflow_wrapper(
             "name": func.__name__,
             "operationType": OperationType.WORKFLOW.value,
         }
-        inputs: utils.WorkflowInputs = {
+        inputs: WorkflowInputs = {
             "args": args,
             "kwargs": kwargs,
         }
@@ -109,7 +109,7 @@ def workflow_wrapper(
             "name": func.__name__,
             "operationType": OperationType.WORKFLOW.value,
         }
-        inputs: utils.WorkflowInputs = {
+        inputs: WorkflowInputs = {
             "args": args,
             "kwargs": kwargs,
         }

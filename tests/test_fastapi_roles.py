@@ -20,8 +20,8 @@ from dbos import DBOS, DBOSContextSetAuth
 # Private API because this is a unit test
 from dbos.context import assert_current_dbos_context
 from dbos.error import DBOSInitializationError, DBOSNotAuthorizedError
-from dbos.system_database import GetWorkflowsInput
 from dbos.tracer import dbos_tracer
+from dbos.types import GetWorkflowsInput
 
 
 @pytest.mark.order(1)

@@ -6,6 +6,10 @@ import traceback
 from concurrent.futures import Future
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
 
+from dbos._core.types import WorkflowInputs, WorkflowStatusInternal
+
+from ..types import WorkflowStatusString
+
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec
 else:
@@ -37,7 +41,6 @@ from ..registrations import (
     get_func_info,
     get_temp_workflow_type,
 )
-from ..system_database import WorkflowStatusInternal, WorkflowStatusString
 
 if TYPE_CHECKING:
     from ..dbos import DBOS, Workflow, WorkflowHandle, WorkflowStatus
@@ -105,7 +108,7 @@ class WorkflowHandlePolling(Generic[R]):
 async def init_workflow(
     dbos: "DBOS",
     ctx: DBOSContext,
-    inputs: utils.WorkflowInputs,
+    inputs: WorkflowInputs,
     wf_name: str,
     class_name: Optional[str],
     config_name: Optional[str],
@@ -346,7 +349,7 @@ def start_workflow(
 
     func = cast("Workflow[P, R]", func.__orig_func)  # type: ignore
 
-    inputs: utils.WorkflowInputs = {
+    inputs: WorkflowInputs = {
         "args": args,
         "kwargs": kwargs,
     }
