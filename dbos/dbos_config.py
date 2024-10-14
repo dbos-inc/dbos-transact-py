@@ -2,7 +2,7 @@ import json
 import os
 import re
 from importlib import resources
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict, cast
 
 import yaml
 from jsonschema import ValidationError, validate
@@ -14,6 +14,7 @@ from dbos.logger import dbos_logger
 
 class RuntimeConfig(TypedDict, total=False):
     start: List[str]
+    admin_port: Optional[int]
 
 
 class DatabaseConfig(TypedDict, total=False):
@@ -26,6 +27,7 @@ class DatabaseConfig(TypedDict, total=False):
     sys_db_name: Optional[str]
     ssl: Optional[bool]
     ssl_ca: Optional[str]
+    local_suffix: Optional[bool]
     app_db_client: Optional[str]
     migrate: Optional[List[str]]
     rollback: Optional[List[str]]
@@ -162,6 +164,11 @@ def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
 
     if "runtimeConfig" not in data or "start" not in data["runtimeConfig"]:
         raise DBOSInitializationError(f"dbos-config.yaml must specify a start command")
+
+    data = cast(ConfigFile, data)
+
+    if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
+        data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"
 
     # Return data as ConfigFile type
     return data  # type: ignore
