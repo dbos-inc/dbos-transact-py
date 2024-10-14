@@ -197,3 +197,37 @@ def test_config_no_start(mocker):
         load_config(mock_filename)
 
     assert "start command" in str(exc_info.value)
+
+
+def test_local_config(mocker):
+    mock_config = """
+        name: "some app"
+        language: "python"
+        runtimeConfig:
+            start:
+                - "python3 main.py"
+            admin_port: 8001
+        database:
+          hostname: 'some host'
+          port: 1234
+          username: 'some user'
+          password: ${PGPASSWORD}
+          app_db_name: 'some_db'
+          connectionTimeoutMillis: 3000
+          local_suffix: true
+    """
+    os.environ["BARBAR"] = "FOOFOO"
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
+    )
+
+    configFile = load_config(mock_filename)
+    assert configFile["name"] == "some app"
+    assert configFile["database"]["local_suffix"] == True
+    assert configFile["language"] == "python"
+    assert configFile["database"]["hostname"] == "some host"
+    assert configFile["database"]["port"] == 1234
+    assert configFile["database"]["username"] == "some user"
+    assert configFile["database"]["password"] == os.environ["PGPASSWORD"]
+    assert configFile["database"]["app_db_name"] == "some_db_local"
+    assert configFile["database"]["connectionTimeoutMillis"] == 3000
