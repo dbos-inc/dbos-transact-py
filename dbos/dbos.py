@@ -569,7 +569,9 @@ class DBOS:
                 workflow_id, ctx.workflow_id, ctx.function_id
             )
         else:
-            stat = await _get_dbos_instance()._sys_db.get_workflow_status(workflow_id)
+            stat = await _get_dbos_instance()._sys_db.get_workflow_status_async(
+                workflow_id
+            )
         if stat is None:
             return None
 
