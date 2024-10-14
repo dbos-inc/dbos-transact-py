@@ -368,7 +368,29 @@ class SystemDatabase:
         async with self.async_engine.begin() as c:
             return await c.run_sync(self._get_workflow_status, workflow_uuid)
 
-    async def get_workflow_status_within_wf(
+    def get_workflow_status_within_wf_sync(
+        self, workflow_uuid: str, calling_wf: str, calling_wf_fn: int
+    ) -> Optional[WorkflowStatusInternal]:
+        res = self.check_operation_execution_sync(calling_wf, calling_wf_fn)
+        if res is not None:
+            if res["output"]:
+                resstat: WorkflowStatusInternal = serialization.deserialize(
+                    res["output"]
+                )
+                return resstat
+            return None
+        stat = self.get_workflow_status_sync(workflow_uuid)
+        self.record_operation_result_sync(
+            {
+                "workflow_uuid": calling_wf,
+                "function_id": calling_wf_fn,
+                "output": serialization.serialize(stat),
+                "error": None,
+            }
+        )
+        return stat
+
+    async def get_workflow_status_within_wf_async(
         self, workflow_uuid: str, calling_wf: str, calling_wf_fn: int
     ) -> Optional[WorkflowStatusInternal]:
         res = await self.check_operation_execution_async(calling_wf, calling_wf_fn)
@@ -390,50 +412,59 @@ class SystemDatabase:
         )
         return stat
 
-    async def get_workflow_status_w_outputs(
+    def _get_workflow_status_w_outputs(
+        self, conn: sa.Connection, workflow_uuid: str
+    ) -> Optional[WorkflowStatusInternal]:
+        row = (
+            conn.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.status,
+                    SystemSchema.workflow_status.c.name,
+                    SystemSchema.workflow_status.c.request,
+                    SystemSchema.workflow_status.c.output,
+                    SystemSchema.workflow_status.c.error,
+                    SystemSchema.workflow_status.c.config_name,
+                    SystemSchema.workflow_status.c.class_name,
+                    SystemSchema.workflow_status.c.authenticated_user,
+                    SystemSchema.workflow_status.c.authenticated_roles,
+                    SystemSchema.workflow_status.c.assumed_role,
+                    SystemSchema.workflow_status.c.queue_name,
+                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
+            )
+        ).fetchone()
+        if row is None:
+            return None
+        status: WorkflowStatusInternal = {
+            "workflow_uuid": workflow_uuid,
+            "status": row[0],
+            "name": row[1],
+            "config_name": row[5],
+            "class_name": row[6],
+            "output": row[3],
+            "error": row[4],
+            "app_id": None,
+            "app_version": None,
+            "executor_id": None,
+            "request": row[2],
+            "recovery_attempts": None,
+            "authenticated_user": row[7],
+            "authenticated_roles": row[8],
+            "assumed_role": row[9],
+            "queue_name": row[10],
+        }
+        return status
+
+    async def get_workflow_status_w_outputs_async(
         self, workflow_uuid: str
     ) -> Optional[WorkflowStatusInternal]:
         async with self.async_engine.begin() as c:
-            row = (
-                await c.execute(
-                    sa.select(
-                        SystemSchema.workflow_status.c.status,
-                        SystemSchema.workflow_status.c.name,
-                        SystemSchema.workflow_status.c.request,
-                        SystemSchema.workflow_status.c.output,
-                        SystemSchema.workflow_status.c.error,
-                        SystemSchema.workflow_status.c.config_name,
-                        SystemSchema.workflow_status.c.class_name,
-                        SystemSchema.workflow_status.c.authenticated_user,
-                        SystemSchema.workflow_status.c.authenticated_roles,
-                        SystemSchema.workflow_status.c.assumed_role,
-                        SystemSchema.workflow_status.c.queue_name,
-                    ).where(
-                        SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
-                    )
-                )
-            ).fetchone()
-            if row is None:
-                return None
-            status: WorkflowStatusInternal = {
-                "workflow_uuid": workflow_uuid,
-                "status": row[0],
-                "name": row[1],
-                "config_name": row[5],
-                "class_name": row[6],
-                "output": row[3],
-                "error": row[4],
-                "app_id": None,
-                "app_version": None,
-                "executor_id": None,
-                "request": row[2],
-                "recovery_attempts": None,
-                "authenticated_user": row[7],
-                "authenticated_roles": row[8],
-                "assumed_role": row[9],
-                "queue_name": row[10],
-            }
-            return status
+            return await c.run_sync(self._get_workflow_status_w_outputs, workflow_uuid)
+
+    def get_workflow_status_w_outputs_sync(
+        self, workflow_uuid: str
+    ) -> Optional[WorkflowStatusInternal]:
+        with self.sync_engine.begin() as c:
+            return self._get_workflow_status_w_outputs(c, workflow_uuid)
 
     async def await_workflow_result_internal(
         self, workflow_uuid: str
@@ -473,7 +504,7 @@ class SystemDatabase:
                 else:
                     pass  # CB: I guess we're assuming the WF will show up eventually.
 
-            time.sleep(polling_interval_secs)
+            await asyncio.sleep(polling_interval_secs)
 
     async def await_workflow_result(self, workflow_uuid: str) -> Any:
         stat = await self.await_workflow_result_internal(workflow_uuid)
@@ -489,7 +520,7 @@ class SystemDatabase:
     async def get_workflow_info(
         self, workflow_uuid: str, get_request: bool
     ) -> Optional[WorkflowInformation]:
-        stat = await self.get_workflow_status_w_outputs(workflow_uuid)
+        stat = await self.get_workflow_status_w_outputs_async(workflow_uuid)
         if stat is None:
             return None
         info = cast(WorkflowInformation, stat)

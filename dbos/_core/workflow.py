@@ -59,6 +59,13 @@ async def _get_status_async(dbos: "DBOS", workflow_id: str) -> "WorkflowStatus":
     return stat
 
 
+def _get_status_sync(dbos: "DBOS", workflow_id: str) -> "WorkflowStatus":
+    stat = dbos.get_workflow_status(workflow_id)
+    if stat is None:
+        raise DBOSNonExistentWorkflowError(workflow_id)
+    return stat
+
+
 class WorkflowHandleFuture(Generic[R]):
 
     def __init__(self, workflow_id: str, future: Future[R], dbos: "DBOS"):
@@ -76,7 +83,7 @@ class WorkflowHandleFuture(Generic[R]):
         return await asyncio.wrap_future(self.future)
 
     def get_status(self) -> "WorkflowStatus":
-        return asyncio.run(_get_status_async(self.dbos, self.workflow_id))
+        return _get_status_sync(self.dbos, self.workflow_id)
 
     async def get_status_async(self) -> "WorkflowStatus":
         return await _get_status_async(self.dbos, self.workflow_id)
@@ -99,7 +106,7 @@ class WorkflowHandlePolling(Generic[R]):
         return res
 
     def get_status(self) -> "WorkflowStatus":
-        return asyncio.run(_get_status_async(self.dbos, self.workflow_id))
+        return _get_status_sync(self.dbos, self.workflow_id)
 
     async def get_status_async(self) -> "WorkflowStatus":
         return await _get_status_async(self.dbos, self.workflow_id)

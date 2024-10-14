@@ -565,8 +565,10 @@ class DBOS:
         ctx = get_local_dbos_context()
         if ctx and ctx.is_within_workflow():
             ctx.function_id += 1
-            stat = await _get_dbos_instance()._sys_db.get_workflow_status_within_wf(
-                workflow_id, ctx.workflow_id, ctx.function_id
+            stat = (
+                await _get_dbos_instance()._sys_db.get_workflow_status_within_wf_async(
+                    workflow_id, ctx.workflow_id, ctx.function_id
+                )
             )
         else:
             stat = await _get_dbos_instance()._sys_db.get_workflow_status_async(
