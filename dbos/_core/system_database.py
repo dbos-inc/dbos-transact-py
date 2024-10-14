@@ -466,7 +466,7 @@ class SystemDatabase:
         with self.sync_engine.begin() as c:
             return self._get_workflow_status_w_outputs(c, workflow_uuid)
 
-    async def await_workflow_result_internal(
+    async def await_workflow_result_internal_async(
         self, workflow_uuid: str
     ) -> dict[str, Any]:
         polling_interval_secs: float = 1.000
@@ -506,8 +506,57 @@ class SystemDatabase:
 
             await asyncio.sleep(polling_interval_secs)
 
-    async def await_workflow_result(self, workflow_uuid: str) -> Any:
-        stat = await self.await_workflow_result_internal(workflow_uuid)
+    def await_workflow_result_internal_sync(self, workflow_uuid: str) -> dict[str, Any]:
+        polling_interval_secs: float = 1.000
+
+        while True:
+            with self.sync_engine.begin() as c:
+                row = (
+                    c.execute(
+                        sa.select(
+                            SystemSchema.workflow_status.c.status,
+                            SystemSchema.workflow_status.c.output,
+                            SystemSchema.workflow_status.c.error,
+                        ).where(
+                            SystemSchema.workflow_status.c.workflow_uuid
+                            == workflow_uuid
+                        )
+                    )
+                ).fetchone()
+                if row is not None:
+                    status = row[0]
+                    if status == str(WorkflowStatusString.SUCCESS.value):
+                        return {
+                            "status": status,
+                            "output": row[1],
+                            "workflow_uuid": workflow_uuid,
+                        }
+
+                    elif status == str(WorkflowStatusString.ERROR.value):
+                        return {
+                            "status": status,
+                            "error": row[2],
+                            "workflow_uuid": workflow_uuid,
+                        }
+
+                else:
+                    pass  # CB: I guess we're assuming the WF will show up eventually.
+
+            time.sleep(polling_interval_secs)
+
+    async def await_workflow_result_async(self, workflow_uuid: str) -> Any:
+        stat = await self.await_workflow_result_internal_async(workflow_uuid)
+        if not stat:
+            return None
+        status: str = stat["status"]
+        if status == str(WorkflowStatusString.SUCCESS.value):
+            return serialization.deserialize(stat["output"])
+        elif status == str(WorkflowStatusString.ERROR.value):
+            raise serialization.deserialize_exception(stat["error"])
+        return None
+
+    def await_workflow_result_sync(self, workflow_uuid: str) -> Any:
+        stat = self.await_workflow_result_internal_sync(workflow_uuid)
         if not stat:
             return None
         status: str = stat["status"]
@@ -568,7 +617,9 @@ class SystemDatabase:
             inputs: WorkflowInputs = serialization.deserialize_args(row[0])
             return inputs
 
-    async def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
+    def _get_workflows(
+        self, conn: sa.Connection, input: GetWorkflowsInput
+    ) -> GetWorkflowsOutput:
         query = sa.select(SystemSchema.workflow_status.c.workflow_uuid).order_by(
             SystemSchema.workflow_status.c.created_at.desc()
         )
@@ -600,11 +651,18 @@ class SystemDatabase:
         if input.limit:
             query = query.limit(input.limit)
 
-        async with self.async_engine.begin() as c:
-            rows = await c.execute(query)
+        rows = conn.execute(query)
         workflow_uuids = [row[0] for row in rows]
 
         return GetWorkflowsOutput(workflow_uuids)
+
+    async def get_workflows_async(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
+        async with self.async_engine.begin() as c:
+            return await c.run_sync(self._get_workflows, input)
+
+    def get_workflows_sync(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
+        with self.sync_engine.begin() as c:
+            return self._get_workflows(c, input)
 
     def _get_pending_workflows(
         self, conn: sa.Connection, executor_id: str
