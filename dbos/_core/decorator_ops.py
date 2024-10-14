@@ -425,10 +425,8 @@ def step(
                     "output": None,
                     "error": None,
                 }
-                recorded_output = asyncio.run(
-                    dbos._sys_db.check_operation_execution(
-                        ctx.workflow_id, ctx.function_id
-                    )
+                recorded_output = dbos._sys_db.check_operation_execution_sync(
+                    ctx.workflow_id, ctx.function_id
                 )
                 if recorded_output:
                     dbos.logger.debug(
@@ -486,7 +484,7 @@ def step(
                     if error is not None
                     else None
                 )
-                asyncio.run(dbos._sys_db.record_operation_result(step_output))
+                dbos._sys_db.record_operation_result_sync(step_output)
 
                 if error is not None:
                     raise error
@@ -510,7 +508,7 @@ def step(
                     "output": None,
                     "error": None,
                 }
-                recorded_output = await dbos._sys_db.check_operation_execution(
+                recorded_output = await dbos._sys_db.check_operation_execution_async(
                     ctx.workflow_id, ctx.function_id
                 )
                 if recorded_output:
@@ -561,7 +559,7 @@ def step(
                     if error is not None
                     else None
                 )
-                await dbos._sys_db.record_operation_result(step_output)
+                await dbos._sys_db.record_operation_result_async(step_output)
 
                 if error is not None:
                     raise error

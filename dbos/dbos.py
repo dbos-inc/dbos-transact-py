@@ -365,7 +365,7 @@ class DBOS:
             self._daemon.start()
 
             if not os.environ.get("DBOS__VMID"):
-                workflow_ids = await self._sys_db.get_pending_workflows("local")
+                workflow_ids = await self._sys_db.get_pending_workflows_async("local")
                 self._executor.submit(_startup_recovery_thread, self, workflow_ids)
 
             # Listen to notifications
