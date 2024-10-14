@@ -79,8 +79,8 @@ def test_endpoint_recovery(dbos_flask: Tuple[DBOS, Flask]) -> None:
 
     dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
-    asyncio.run(
-        dbos._sys_db.update_workflow_status(
+    (
+        dbos._sys_db.update_workflow_status_sync(
             {
                 "workflow_uuid": wfuuid,
                 "status": "PENDING",

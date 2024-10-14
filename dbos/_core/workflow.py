@@ -156,7 +156,7 @@ async def init_workflow(
         # Synchronously record the status and inputs for workflows and single-step workflows
         # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
         # TODO: Make this transactional (and with the queue step below)
-        await dbos._sys_db.update_workflow_status(
+        await dbos._sys_db.update_workflow_status_async(
             status, False, ctx.in_recovery, max_recovery_attempts=max_recovery_attempts
         )
         await dbos._sys_db.update_workflow_inputs(
@@ -201,7 +201,7 @@ def execute_workflow_sync(
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
             asyncio.run(dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue))
-        asyncio.run(dbos._sys_db.update_workflow_status(status))
+        dbos._sys_db.update_workflow_status_sync(status)
         raise
 
     return output
@@ -240,7 +240,7 @@ async def execute_workflow_async(
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
             await dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-        await dbos._sys_db.update_workflow_status(status)
+        await dbos._sys_db.update_workflow_status_async(status)
         raise
 
     return output

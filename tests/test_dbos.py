@@ -341,8 +341,8 @@ def test_recovery_workflow(dbos: DBOS) -> None:
 
     dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
-    asyncio.run(
-        dbos._sys_db.update_workflow_status(
+    (
+        dbos._sys_db.update_workflow_status_sync(
             {
                 "workflow_uuid": wfuuid,
                 "status": "PENDING",
@@ -406,8 +406,8 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert wfi["name"].startswith("<temp>")
 
     # Change the workflow status to pending
-    asyncio.run(
-        dbos._sys_db.update_workflow_status(
+    (
+        dbos._sys_db.update_workflow_status_sync(
             {
                 "workflow_uuid": wfuuid,
                 "status": "PENDING",
@@ -464,8 +464,8 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
 
     dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
-    asyncio.run(
-        dbos._sys_db.update_workflow_status(
+    (
+        dbos._sys_db.update_workflow_status_sync(
             {
                 "workflow_uuid": wfuuid,
                 "status": "PENDING",

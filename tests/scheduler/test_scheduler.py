@@ -84,8 +84,8 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
         event.set()
 
     dbos._sys_db.wait_for_buffer_flush()
-    asyncio.run(
-        dbos._sys_db.update_workflow_status(
+    (
+        dbos._sys_db.update_workflow_status_sync(
             {
                 "workflow_uuid": workflow_id,
                 "status": "PENDING",

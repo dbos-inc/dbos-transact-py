@@ -3,7 +3,7 @@ import datetime
 import os
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Set, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Set, Tuple, cast
 
 import psycopg
 import sqlalchemy as sa
@@ -12,6 +12,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
+from sqlalchemy.sql import dml
 
 from ..dbos_config import ConfigFile
 from ..error import (
@@ -109,6 +110,9 @@ class SystemDatabase:
         self._run_background_processes = True
 
         # Create a connection pool for the system database
+        self.sync_engine = sa.create_engine(
+            system_db_url, pool_size=20, max_overflow=5, pool_timeout=30
+        )
         self.async_engine = create_async_engine(
             system_db_url, pool_size=20, max_overflow=5, pool_timeout=30
         )
@@ -122,6 +126,7 @@ class SystemDatabase:
         self._run_background_processes = False
         if self.notification_conn is not None:
             await self.notification_conn.close()
+        self.sync_engine.dispose()
         await self.async_engine.dispose()
 
     def wait_for_buffer_flush(self) -> None:
@@ -130,15 +135,12 @@ class SystemDatabase:
             dbos_logger.debug("Waiting for system buffers to be exported")
             time.sleep(1)
 
-    async def update_workflow_status(
+    def _get_update_workflow_status_cmd(
         self,
         status: WorkflowStatusInternal,
         replace: bool = True,
         in_recovery: bool = False,
-        *,
-        conn: Optional[AsyncConnection] = None,
-        max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
-    ) -> None:
+    ) -> dml.ReturningInsert[Tuple[Any,]]:
         cmd = pg.insert(SystemSchema.workflow_status).values(
             workflow_uuid=status["workflow_uuid"],
             status=status["status"],
@@ -176,6 +178,63 @@ class SystemDatabase:
         else:
             cmd = cmd.on_conflict_do_nothing()
         cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts)  # type: ignore
+        return cmd
+
+    def update_workflow_status_sync(
+        self,
+        status: WorkflowStatusInternal,
+        replace: bool = True,
+        in_recovery: bool = False,
+        *,
+        conn: Optional[sa.Connection] = None,
+        max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
+    ) -> None:
+        cmd = self._get_update_workflow_status_cmd(status, replace, in_recovery)
+
+        if conn is not None:
+            results = conn.execute(cmd)
+        else:
+            with self.sync_engine.begin() as c:
+                results = c.execute(cmd)
+
+        if in_recovery:
+            row = results.fetchone()
+            if row is not None:
+                recovery_attempts: int = row[0]
+                if recovery_attempts > max_recovery_attempts:
+                    with self.sync_engine.begin() as c:
+                        c.execute(
+                            sa.update(SystemSchema.workflow_status)
+                            .where(
+                                SystemSchema.workflow_status.c.workflow_uuid
+                                == status["workflow_uuid"]
+                            )
+                            .where(
+                                SystemSchema.workflow_status.c.status
+                                == WorkflowStatusString.PENDING.value
+                            )
+                            .values(
+                                status=WorkflowStatusString.RETRIES_EXCEEDED.value,
+                            )
+                        )
+                    raise DBOSDeadLetterQueueError(
+                        status["workflow_uuid"], max_recovery_attempts
+                    )
+
+        # Record we have exported status for this single-transaction workflow
+        if status["workflow_uuid"] in self._temp_txn_wf_ids:
+            self._exported_temp_txn_wf_status.add(status["workflow_uuid"])
+
+    async def update_workflow_status_async(
+        self,
+        status: WorkflowStatusInternal,
+        replace: bool = True,
+        in_recovery: bool = False,
+        *,
+        conn: Optional[AsyncConnection] = None,
+        max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
+    ) -> None:
+        cmd = self._get_update_workflow_status_cmd(status, replace, in_recovery)
 
         if conn is not None:
             results = await conn.execute(cmd)
@@ -931,7 +990,7 @@ class SystemDatabase:
                     continue
                 exported_status[wf_id] = status
                 try:
-                    await self.update_workflow_status(status, conn=c)
+                    await self.update_workflow_status_async(status, conn=c)
                     exported += 1
                 except Exception as e:
                     dbos_logger.error(f"Error while flushing status buffer: {e}")
