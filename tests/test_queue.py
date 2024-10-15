@@ -23,12 +23,24 @@ async def queue_entries_are_cleaned_up_async(dbos: DBOS) -> bool:
             if count == 0:
                 success = True
                 break
-        time.sleep(1)
+        await asyncio.sleep(1)
     return success
 
 
 def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
-    return asyncio.run(queue_entries_are_cleaned_up_async(dbos))
+    max_tries = 10
+    success = False
+    for i in range(max_tries):
+        with dbos._sys_db.sync_engine.begin() as c:
+            query = sa.select(sa.func.count()).select_from(SystemSchema.workflow_queue)
+            row = (c.execute(query)).fetchone()
+            assert row is not None
+            count = row[0]
+            if count == 0:
+                success = True
+                break
+        time.sleep(1)
+    return success
 
 
 def test_simple_queue(dbos: DBOS) -> None:
