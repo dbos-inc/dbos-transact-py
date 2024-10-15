@@ -1532,119 +1532,141 @@ class SystemDatabase:
             and len(self._workflow_inputs_buffer) == 0
         )
 
-    async def enqueue(self, workflow_id: str, queue_name: str) -> None:
-        async with self.async_engine.begin() as c:
-            await c.execute(
-                pg.insert(SystemSchema.workflow_queue)
-                .values(
-                    workflow_uuid=workflow_id,
-                    queue_name=queue_name,
-                )
-                .on_conflict_do_nothing()
+    def _enqueue(self, conn: sa.Connection, workflow_id: str, queue_name: str) -> None:
+        conn.execute(
+            pg.insert(SystemSchema.workflow_queue)
+            .values(
+                workflow_uuid=workflow_id,
+                queue_name=queue_name,
             )
+            .on_conflict_do_nothing()
+        )
 
-    async def start_queued_workflows(self, queue: "Queue") -> List[str]:
+    def enqueue_sync(self, workflow_id: str, queue_name: str) -> None:
+        with self.sync_engine.begin() as c:
+            self._enqueue(c, workflow_id, queue_name)
+
+    async def enqueue_async(self, workflow_id: str, queue_name: str) -> None:
+        async with self.async_engine.begin() as c:
+            await c.run_sync(self._enqueue, workflow_id, queue_name)
+
+    def _start_queued_workflows(self, conn: sa.Connection, queue: "Queue") -> List[str]:
         start_time_ms = int(time.time() * 1000)
         if queue.limiter is not None:
             limiter_period_ms = int(queue.limiter["period"] * 1000)
-        async with self.async_engine.begin() as c:
-            # Execute with snapshot isolation to ensure multiple workers respect limits
-            await c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
 
-            # If there is a limiter, compute how many functions have started in its period.
-            if queue.limiter is not None:
-                query = (
-                    sa.select(sa.func.count())
-                    .select_from(SystemSchema.workflow_queue)
-                    .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
-                    .where(
-                        SystemSchema.workflow_queue.c.started_at_epoch_ms.isnot(None)
-                    )
-                    .where(
-                        SystemSchema.workflow_queue.c.started_at_epoch_ms
-                        > start_time_ms - limiter_period_ms
-                    )
-                )
-                num_recent_queries = (await c.execute(query)).fetchone()[0]  # type: ignore
-                if num_recent_queries >= queue.limiter["limit"]:
-                    return []
+        # Execute with snapshot isolation to ensure multiple workers respect limits
+        conn.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
 
-            # Select not-yet-completed functions in the queue ordered by the
-            # time at which they were enqueued.
-            # If there is a concurrency limit N, select only the N most recent
-            # functions, else select all of them.
+        # If there is a limiter, compute how many functions have started in its period.
+        if queue.limiter is not None:
             query = (
-                sa.select(
-                    SystemSchema.workflow_queue.c.workflow_uuid,
-                    SystemSchema.workflow_queue.c.started_at_epoch_ms,
-                )
+                sa.select(sa.func.count())
+                .select_from(SystemSchema.workflow_queue)
                 .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
-                .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms == None)
-                .order_by(SystemSchema.workflow_queue.c.created_at_epoch_ms.asc())
+                .where(SystemSchema.workflow_queue.c.started_at_epoch_ms.isnot(None))
+                .where(
+                    SystemSchema.workflow_queue.c.started_at_epoch_ms
+                    > start_time_ms - limiter_period_ms
+                )
             )
-            if queue.concurrency is not None:
-                query = query.limit(queue.concurrency)
+            num_recent_queries = (conn.execute(query)).fetchone()[0]  # type: ignore
+            if num_recent_queries >= queue.limiter["limit"]:
+                return []
 
-            # From the functions retrieved, get the workflow IDs of the functions
-            # that have not yet been started so we can start them.
-            rows = (await c.execute(query)).fetchall()
-            dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
-            ret_ids: list[str] = []
-            for id in dequeued_ids:
+        # Select not-yet-completed functions in the queue ordered by the
+        # time at which they were enqueued.
+        # If there is a concurrency limit N, select only the N most recent
+        # functions, else select all of them.
+        query = (
+            sa.select(
+                SystemSchema.workflow_queue.c.workflow_uuid,
+                SystemSchema.workflow_queue.c.started_at_epoch_ms,
+            )
+            .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
+            .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms == None)
+            .order_by(SystemSchema.workflow_queue.c.created_at_epoch_ms.asc())
+        )
+        if queue.concurrency is not None:
+            query = query.limit(queue.concurrency)
 
-                # If we have a limiter, stop starting functions when the number
-                # of functions started this period exceeds the limit.
-                if queue.limiter is not None:
-                    if len(ret_ids) + num_recent_queries >= queue.limiter["limit"]:
-                        break
+        # From the functions retrieved, get the workflow IDs of the functions
+        # that have not yet been started so we can start them.
+        rows = (conn.execute(query)).fetchall()
+        dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
+        ret_ids: list[str] = []
+        for id in dequeued_ids:
 
-                # To start a function, first set its status to PENDING
-                await c.execute(
-                    SystemSchema.workflow_status.update()
-                    .where(SystemSchema.workflow_status.c.workflow_uuid == id)
-                    .where(
-                        SystemSchema.workflow_status.c.status
-                        == WorkflowStatusString.ENQUEUED.value
-                    )
-                    .values(status=WorkflowStatusString.PENDING.value)
-                )
-
-                # Then give it a start time
-                await c.execute(
-                    SystemSchema.workflow_queue.update()
-                    .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
-                    .values(started_at_epoch_ms=start_time_ms)
-                )
-                ret_ids.append(id)
-
-            # If we have a limiter, garbage-collect all completed functions started
-            # before the period. If there's no limiter, there's no need--they were
-            # deleted on completion.
+            # If we have a limiter, stop starting functions when the number
+            # of functions started this period exceeds the limit.
             if queue.limiter is not None:
-                await c.execute(
-                    sa.delete(SystemSchema.workflow_queue)
-                    .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms != None)
-                    .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
-                    .where(
-                        SystemSchema.workflow_queue.c.started_at_epoch_ms
-                        < start_time_ms - limiter_period_ms
-                    )
+                if len(ret_ids) + num_recent_queries >= queue.limiter["limit"]:
+                    break
+
+            # To start a function, first set its status to PENDING
+            conn.execute(
+                SystemSchema.workflow_status.update()
+                .where(SystemSchema.workflow_status.c.workflow_uuid == id)
+                .where(
+                    SystemSchema.workflow_status.c.status
+                    == WorkflowStatusString.ENQUEUED.value
                 )
+                .values(status=WorkflowStatusString.PENDING.value)
+            )
 
-            # Return the IDs of all functions we started
-            return ret_ids
+            # Then give it a start time
+            conn.execute(
+                SystemSchema.workflow_queue.update()
+                .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
+                .values(started_at_epoch_ms=start_time_ms)
+            )
+            ret_ids.append(id)
 
-    async def remove_from_queue(self, workflow_id: str, queue: "Queue") -> None:
+        # If we have a limiter, garbage-collect all completed functions started
+        # before the period. If there's no limiter, there's no need--they were
+        # deleted on completion.
+        if queue.limiter is not None:
+            conn.execute(
+                sa.delete(SystemSchema.workflow_queue)
+                .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms != None)
+                .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
+                .where(
+                    SystemSchema.workflow_queue.c.started_at_epoch_ms
+                    < start_time_ms - limiter_period_ms
+                )
+            )
+
+        # Return the IDs of all functions we started
+        return ret_ids
+
+    def start_queued_workflows_sync(self, queue: "Queue") -> List[str]:
+        with self.sync_engine.begin() as c:
+            return self._start_queued_workflows(c, queue)
+
+    async def start_queued_workflows_async(self, queue: "Queue") -> List[str]:
         async with self.async_engine.begin() as c:
-            if queue.limiter is None:
-                await c.execute(
-                    sa.delete(SystemSchema.workflow_queue).where(
-                        SystemSchema.workflow_queue.c.workflow_uuid == workflow_id
-                    )
+            return await c.run_sync(self._start_queued_workflows, queue)
+
+    def _remove_from_queue(
+        self, conn: sa.Connection, workflow_id: str, queue: "Queue"
+    ) -> None:
+        if queue.limiter is None:
+            conn.execute(
+                sa.delete(SystemSchema.workflow_queue).where(
+                    SystemSchema.workflow_queue.c.workflow_uuid == workflow_id
                 )
-            else:
-                await c.execute(
-                    sa.update(SystemSchema.workflow_queue)
-                    .where(SystemSchema.workflow_queue.c.workflow_uuid == workflow_id)
-                    .values(completed_at_epoch_ms=int(time.time() * 1000))
-                )
+            )
+        else:
+            conn.execute(
+                sa.update(SystemSchema.workflow_queue)
+                .where(SystemSchema.workflow_queue.c.workflow_uuid == workflow_id)
+                .values(completed_at_epoch_ms=int(time.time() * 1000))
+            )
+
+    def remove_from_queue_sync(self, workflow_id: str, queue: "Queue") -> None:
+        with self.sync_engine.begin() as c:
+            self._remove_from_queue(c, workflow_id, queue)
+
+    async def remove_from_queue_async(self, workflow_id: str, queue: "Queue") -> None:
+        async with self.async_engine.begin() as c:
+            await c.run_sync(self._remove_from_queue, workflow_id, queue)

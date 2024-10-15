@@ -58,7 +58,7 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
             return
         for _, queue in dbos._registry.queue_info_map.items():
             try:
-                wf_ids = asyncio.run(dbos._sys_db.start_queued_workflows(queue))
+                wf_ids = dbos._sys_db.start_queued_workflows_sync(queue)
                 for id in wf_ids:
                     execute_workflow_id(dbos, id)
             except Exception:
@@ -80,7 +80,7 @@ async def queue_thread_async(stop_event: asyncio.Event, dbos: "DBOS") -> None:
             return
         for _, queue in dbos._registry.queue_info_map.items():
             try:
-                wf_ids = await dbos._sys_db.start_queued_workflows(queue)
+                wf_ids = await dbos._sys_db.start_queued_workflows_async(queue)
                 for id in wf_ids:
                     execute_workflow_id(dbos, id)
             except Exception:

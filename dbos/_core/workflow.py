@@ -175,7 +175,7 @@ async def init_workflow(
         dbos._sys_db.buffer_workflow_inputs(wfid, serialization.serialize_args(inputs))
 
     if queue is not None:
-        await dbos._sys_db.enqueue(wfid, queue)
+        await dbos._sys_db.enqueue_async(wfid, queue)
 
     return status
 
@@ -193,7 +193,7 @@ def execute_workflow_sync(
         status["output"] = serialization.serialize(output)
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
-            asyncio.run(dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue))
+            dbos._sys_db.remove_from_queue_sync(status["workflow_uuid"], queue)
         dbos._sys_db.buffer_workflow_status(status)
     except DBOSWorkflowConflictIDError:
         # Retrieve the workflow handle and wait for the result.
@@ -208,7 +208,7 @@ def execute_workflow_sync(
         status["error"] = serialization.serialize_exception(error)
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
-            asyncio.run(dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue))
+            dbos._sys_db.remove_from_queue_sync(status["workflow_uuid"], queue)
         dbos._sys_db.update_workflow_status_sync(status)
         raise
 
@@ -232,7 +232,7 @@ async def execute_workflow_async(
         status["output"] = serialization.serialize(output)
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
-            await dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
+            await dbos._sys_db.remove_from_queue_async(status["workflow_uuid"], queue)
         dbos._sys_db.buffer_workflow_status(status)
     except DBOSWorkflowConflictIDError:
         # Retrieve the workflow handle and wait for the result.
@@ -247,7 +247,7 @@ async def execute_workflow_async(
         status["error"] = serialization.serialize_exception(error)
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
-            await dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
+            await dbos._sys_db.remove_from_queue_async(status["workflow_uuid"], queue)
         await dbos._sys_db.update_workflow_status_async(status)
         raise
 
