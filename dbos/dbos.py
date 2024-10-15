@@ -360,33 +360,35 @@ class DBOS:
 
             # Listen to notifications
             notification_listener_thread = threading.Thread(
-                target=self._sys_db._notification_listener
+                target=self._sys_db._notification_listener,
+                daemon=True,
             )
-            notification_listener_thread.daemon = True
             notification_listener_thread.start()
             self._background_threads.append(notification_listener_thread)
 
             # Start flush workflow buffers thread
             flush_workflow_buffers_thread = threading.Thread(
-                target=self._sys_db.flush_workflow_buffers
+                target=self._sys_db.flush_workflow_buffers,
+                daemon=True,
             )
-            flush_workflow_buffers_thread.daemon = True
             flush_workflow_buffers_thread.start()
             self._background_threads.append(flush_workflow_buffers_thread)
 
             # Start the queue thread
             evt = threading.Event()
             self.stop_events.append(evt)
-            bg_queue_thread = threading.Thread(target=queue_thread, args=(evt, self))
-            bg_queue_thread.daemon = True
+            bg_queue_thread = threading.Thread(
+                target=queue_thread, args=(evt, self), daemon=True
+            )
             bg_queue_thread.start()
             self._background_threads.append(bg_queue_thread)
 
             # Grab any pollers that were deferred and start them
             for evt, func, args, kwargs in self._registry.pollers:
                 self.stop_events.append(evt)
-                poller_thread = threading.Thread(target=func, args=args, kwargs=kwargs)
-                poller_thread.daemon = True
+                poller_thread = threading.Thread(
+                    target=func, args=args, kwargs=kwargs, daemon=True
+                )
                 poller_thread.start()
                 self._background_threads.append(poller_thread)
             self._registry.pollers = []
