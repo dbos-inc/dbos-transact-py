@@ -94,7 +94,7 @@ class SystemDatabase:
         )
         command.upgrade(alembic_cfg, "head")
 
-        self.notification_conn: Optional[psycopg.AsyncConnection] = None
+        self.notification_conn: Optional[psycopg.Connection] = None
         self.notifications_map: Dict[str, threading.Condition] = {}
         self.workflow_events_map: Dict[str, threading.Condition] = {}
 
@@ -125,7 +125,7 @@ class SystemDatabase:
         self.wait_for_buffer_flush()
         self._run_background_processes = False
         if self.notification_conn is not None:
-            await self.notification_conn.close()
+            self.notification_conn.close()
         self.sync_engine.dispose()
         await self.async_engine.dispose()
 
@@ -1080,7 +1080,7 @@ class SystemDatabase:
             )
         return message
 
-    async def _notification_listener_async(self) -> None:
+    def notification_listener_sync(self) -> None:
         while self._run_background_processes:
             try:
                 # since we're using the psycopg connection directly, we need a url without the "+pycopg" suffix
@@ -1089,20 +1089,16 @@ class SystemDatabase:
                 )
 
                 # Listen to notifications
-                self.notification_conn = await psycopg.AsyncConnection.connect(
+                self.notification_conn = psycopg.connect(
                     url.render_as_string(hide_password=False), autocommit=True
                 )
 
-                await self.notification_conn.execute(
-                    "LISTEN dbos_notifications_channel"
-                )
-                await self.notification_conn.execute(
-                    "LISTEN dbos_workflow_events_channel"
-                )
+                self.notification_conn.execute("LISTEN dbos_notifications_channel")
+                self.notification_conn.execute("LISTEN dbos_workflow_events_channel")
 
                 while self._run_background_processes:
                     gen = self.notification_conn.notifies(timeout=60)
-                    async for notify in gen:
+                    for notify in gen:
                         channel = notify.channel
                         dbos_logger.debug(
                             f"Received notification on channel: {channel}, payload: {notify.payload}"
@@ -1136,14 +1132,11 @@ class SystemDatabase:
             except Exception as e:
                 if self._run_background_processes:
                     dbos_logger.error(f"Notification listener error: {e}")
-                    await asyncio.sleep(1)
+                    time.sleep(1)
                     # Then the loop will try to reconnect and restart the listener
             finally:
                 if self.notification_conn is not None:
-                    await self.notification_conn.close()
-
-    def _notification_listener(self) -> None:
-        asyncio.run(self._notification_listener_async())
+                    self.notification_conn.close()
 
     def sleep_sync(
         self,

@@ -369,7 +369,7 @@ class DBOS:
                 self._executor.submit(_startup_recovery_thread, self, workflow_ids)
 
             # Listen to notifications
-            self._executor.submit(self._sys_db._notification_listener)
+            self._executor.submit(self._sys_db.notification_listener_sync)
             # asyncio.asyncio.run_threadsafe(self._sys_db._notification_listener_async(), self._loop)
 
             # Start flush workflow buffers thread
