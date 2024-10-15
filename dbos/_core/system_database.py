@@ -566,14 +566,29 @@ class SystemDatabase:
             raise serialization.deserialize_exception(stat["error"])
         return None
 
-    async def get_workflow_info(
+    async def get_workflow_info_async(
         self, workflow_uuid: str, get_request: bool
     ) -> Optional[WorkflowInformation]:
         stat = await self.get_workflow_status_w_outputs_async(workflow_uuid)
         if stat is None:
             return None
         info = cast(WorkflowInformation, stat)
-        input = await self.get_workflow_inputs(workflow_uuid)
+        input = await self.get_workflow_inputs_async(workflow_uuid)
+        if input is not None:
+            info["input"] = input
+        if not get_request:
+            info.pop("request", None)
+
+        return info
+
+    def get_workflow_info_sync(
+        self, workflow_uuid: str, get_request: bool
+    ) -> Optional[WorkflowInformation]:
+        stat = self.get_workflow_status_w_outputs_sync(workflow_uuid)
+        if stat is None:
+            return None
+        info = cast(WorkflowInformation, stat)
+        input = self.get_workflow_inputs_sync(workflow_uuid)
         if input is not None:
             info["input"] = input
         if not get_request:
@@ -603,19 +618,31 @@ class SystemDatabase:
             self._exported_temp_txn_wf_status.discard(workflow_uuid)
             self._temp_txn_wf_ids.discard(workflow_uuid)
 
-    async def get_workflow_inputs(self, workflow_uuid: str) -> Optional[WorkflowInputs]:
-        async with self.async_engine.begin() as c:
-            row = (
-                await c.execute(
-                    sa.select(SystemSchema.workflow_inputs.c.inputs).where(
-                        SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid
-                    )
+    def _get_workflow_inputs(
+        self, conn: sa.Connection, workflow_uuid: str
+    ) -> Optional[WorkflowInputs]:
+
+        row = (
+            conn.execute(
+                sa.select(SystemSchema.workflow_inputs.c.inputs).where(
+                    SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid
                 )
-            ).fetchone()
-            if row is None:
-                return None
-            inputs: WorkflowInputs = serialization.deserialize_args(row[0])
-            return inputs
+            )
+        ).fetchone()
+        if row is None:
+            return None
+        inputs: WorkflowInputs = serialization.deserialize_args(row[0])
+        return inputs
+
+    async def get_workflow_inputs_async(
+        self, workflow_uuid: str
+    ) -> Optional[WorkflowInputs]:
+        async with self.async_engine.begin() as c:
+            return await c.run_sync(self._get_workflow_inputs, workflow_uuid)
+
+    def get_workflow_inputs_sync(self, workflow_uuid: str) -> Optional[WorkflowInputs]:
+        with self.sync_engine.begin() as c:
+            return self._get_workflow_inputs(c, workflow_uuid)
 
     def _get_workflows(
         self, conn: sa.Connection, input: GetWorkflowsInput
