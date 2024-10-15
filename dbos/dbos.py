@@ -28,11 +28,14 @@ from opentelemetry.trace import Span
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dbos._core.context_ops import (
-    get_event,
-    receive,
+    get_event_async,
+    get_event_sync,
+    receive_async,
+    receive_sync,
     register_send_workflow,
     send,
-    set_event,
+    set_event_async,
+    set_event_sync,
 )
 from dbos._core.decorator_ops import step, transaction, workflow
 from dbos._core.workflow import (
@@ -667,13 +670,13 @@ class DBOS:
         This function is to be called from within a workflow.
         `recv` will return the message sent on `topic`, waiting if necessary.
         """
-        return asyncio.run(receive(_get_dbos_instance(), topic, timeout_seconds))
+        return receive_sync(_get_dbos_instance(), topic, timeout_seconds)
 
     @classmethod
     async def recv_async(
         cls, topic: Optional[str] = None, timeout_seconds: float = 60
     ) -> Any:
-        return await receive(_get_dbos_instance(), topic, timeout_seconds)
+        return await receive_async(_get_dbos_instance(), topic, timeout_seconds)
 
     @classmethod
     def sleep(cls, seconds: float) -> None:
@@ -728,11 +731,11 @@ class DBOS:
             value(Any): A serializable value to associate with the key
 
         """
-        asyncio.run(set_event(_get_dbos_instance(), key, value))
+        set_event_sync(_get_dbos_instance(), key, value)
 
     @classmethod
     async def set_event_async(cls, key: str, value: Any) -> None:
-        await set_event(_get_dbos_instance(), key, value)
+        await set_event_async(_get_dbos_instance(), key, value)
 
     @classmethod
     def get_event(cls, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:
@@ -747,15 +750,15 @@ class DBOS:
             timeout_seconds(float): The amount of time to wait, in case `set_event` has not yet been called byt the workflow
 
         """
-        return asyncio.run(
-            get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
-        )
+        return get_event_sync(_get_dbos_instance(), workflow_id, key, timeout_seconds)
 
     @classmethod
     async def get_event_async(
         cls, workflow_id: str, key: str, timeout_seconds: float = 60
     ) -> Any:
-        return await get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
+        return await get_event_async(
+            _get_dbos_instance(), workflow_id, key, timeout_seconds
+        )
 
     @classmethod
     def execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:

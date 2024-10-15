@@ -30,7 +30,12 @@ from ..registrations import (
 from ..roles import check_required_roles
 from . import serialization
 from .types import OperationResultInternal, WorkflowInputs
-from .workflow import execute_workflow_async, execute_workflow_sync, init_workflow
+from .workflow import (
+    execute_workflow_async,
+    execute_workflow_sync,
+    init_workflow_async,
+    init_workflow_sync,
+)
 
 if TYPE_CHECKING:
     from ..dbos import _DBOSRegistry, IsolationLevel
@@ -83,16 +88,14 @@ def workflow_wrapper(
         )
         with enterWorkflowCtxMgr(attributes), DBOSAssumeRole(rr):
             ctx = assert_current_dbos_context()  # Now the child ctx
-            status = asyncio.run(
-                init_workflow(
-                    dbos,
-                    ctx,
-                    inputs=inputs,
-                    wf_name=get_dbos_func_name(func),
-                    class_name=get_dbos_class_name(fi, func, args),
-                    config_name=get_config_name(fi, func, args),
-                    temp_wf_type=get_temp_workflow_type(func),
-                )
+            status = init_workflow_sync(
+                dbos,
+                ctx,
+                inputs=inputs,
+                wf_name=get_dbos_func_name(func),
+                class_name=get_dbos_class_name(fi, func, args),
+                config_name=get_config_name(fi, func, args),
+                temp_wf_type=get_temp_workflow_type(func),
             )
 
             return execute_workflow_sync(dbos, status, func, *args, **kwargs)
@@ -119,7 +122,7 @@ def workflow_wrapper(
         )
         with enterWorkflowCtxMgr(attributes), DBOSAssumeRole(rr):
             ctx = assert_current_dbos_context()  # Now the child ctx
-            status = await init_workflow(
+            status = await init_workflow_async(
                 dbos,
                 ctx,
                 inputs=inputs,

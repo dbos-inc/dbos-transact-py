@@ -51,7 +51,32 @@ async def send(
         await wffn(destination_id, message, topic)
 
 
-async def receive(
+def receive_sync(
+    dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60
+) -> Any:
+    cur_ctx = get_local_dbos_context()
+    if cur_ctx is not None:
+        # Must call it within a workflow
+        assert cur_ctx.is_workflow(), "recv() must be called from within a workflow"
+        attributes: TracedAttributes = {
+            "name": "recv",
+        }
+        with EnterDBOSStep(attributes) as ctx:
+            ctx.function_id += 1  # Reserve for the sleep
+            timeout_function_id = ctx.function_id
+            return dbos._sys_db.recv_sync(
+                ctx.workflow_id,
+                ctx.curr_step_function_id,
+                timeout_function_id,
+                topic,
+                timeout_seconds,
+            )
+    else:
+        # Cannot call it from outside of a workflow
+        raise DBOSException("recv() must be called from within a workflow")
+
+
+async def receive_async(
     dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60
 ) -> Any:
     cur_ctx = get_local_dbos_context()
@@ -76,7 +101,26 @@ async def receive(
         raise DBOSException("recv() must be called from within a workflow")
 
 
-async def set_event(dbos: "DBOS", key: str, value: Any) -> None:
+def set_event_sync(dbos: "DBOS", key: str, value: Any) -> None:
+    cur_ctx = get_local_dbos_context()
+    if cur_ctx is not None:
+        # Must call it within a workflow
+        assert (
+            cur_ctx.is_workflow()
+        ), "set_event() must be called from within a workflow"
+        attributes: TracedAttributes = {
+            "name": "set_event",
+        }
+        with EnterDBOSStep(attributes) as ctx:
+            dbos._sys_db.set_event_sync(
+                ctx.workflow_id, ctx.curr_step_function_id, key, value
+            )
+    else:
+        # Cannot call it from outside of a workflow
+        raise DBOSException("set_event() must be called from within a workflow")
+
+
+async def set_event_async(dbos: "DBOS", key: str, value: Any) -> None:
     cur_ctx = get_local_dbos_context()
     if cur_ctx is not None:
         # Must call it within a workflow
@@ -95,7 +139,35 @@ async def set_event(dbos: "DBOS", key: str, value: Any) -> None:
         raise DBOSException("set_event() must be called from within a workflow")
 
 
-async def get_event(
+def get_event_sync(
+    dbos: "DBOS", workflow_id: str, key: str, timeout_seconds: float = 60
+) -> Any:
+    cur_ctx = get_local_dbos_context()
+    if cur_ctx is not None and cur_ctx.is_within_workflow():
+        # Call it within a workflow
+        assert (
+            cur_ctx.is_workflow()
+        ), "get_event() must be called from within a workflow"
+        attributes: TracedAttributes = {
+            "name": "get_event",
+        }
+        with EnterDBOSStep(attributes) as ctx:
+            ctx.function_id += 1
+            timeout_function_id = ctx.function_id
+            caller_ctx: GetEventWorkflowContext = {
+                "workflow_uuid": ctx.workflow_id,
+                "function_id": ctx.curr_step_function_id,
+                "timeout_function_id": timeout_function_id,
+            }
+            return dbos._sys_db.get_event_sync(
+                workflow_id, key, timeout_seconds, caller_ctx
+            )
+    else:
+        # Directly call it outside of a workflow
+        return dbos._sys_db.get_event_sync(workflow_id, key, timeout_seconds)
+
+
+async def get_event_async(
     dbos: "DBOS", workflow_id: str, key: str, timeout_seconds: float = 60
 ) -> Any:
     cur_ctx = get_local_dbos_context()

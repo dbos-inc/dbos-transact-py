@@ -113,7 +113,74 @@ class WorkflowHandlePolling(Generic[R]):
         return await _get_status_async(self.dbos, self.workflow_id)
 
 
-async def init_workflow(
+def init_workflow_sync(
+    dbos: "DBOS",
+    ctx: DBOSContext,
+    inputs: WorkflowInputs,
+    wf_name: str,
+    class_name: Optional[str],
+    config_name: Optional[str],
+    temp_wf_type: Optional[str],
+    queue: Optional[str] = None,
+    max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
+) -> WorkflowStatusInternal:
+    wfid = (
+        ctx.workflow_id
+        if len(ctx.workflow_id) > 0
+        else ctx.id_assigned_for_next_workflow
+    )
+    status: WorkflowStatusInternal = {
+        "workflow_uuid": wfid,
+        "status": (
+            WorkflowStatusString.PENDING.value
+            if queue is None
+            else WorkflowStatusString.ENQUEUED.value
+        ),
+        "name": wf_name,
+        "class_name": class_name,
+        "config_name": config_name,
+        "output": None,
+        "error": None,
+        "app_id": ctx.app_id,
+        "app_version": ctx.app_version,
+        "executor_id": ctx.executor_id,
+        "request": (
+            serialization.serialize(ctx.request) if ctx.request is not None else None
+        ),
+        "recovery_attempts": None,
+        "authenticated_user": ctx.authenticated_user,
+        "authenticated_roles": (
+            json.dumps(ctx.authenticated_roles) if ctx.authenticated_roles else None
+        ),
+        "assumed_role": ctx.assumed_role,
+        "queue_name": queue,
+    }
+
+    # If we have a class name, the first arg is the instance and do not serialize
+    if class_name is not None:
+        inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
+
+    if temp_wf_type != "transaction" or queue is not None:
+        # Synchronously record the status and inputs for workflows and single-step workflows
+        # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
+        # TODO: Make this transactional (and with the queue step below)
+        dbos._sys_db.update_workflow_status_sync(
+            status, False, ctx.in_recovery, max_recovery_attempts=max_recovery_attempts
+        )
+        dbos._sys_db.update_workflow_inputs_sync(
+            wfid, serialization.serialize_args(inputs)
+        )
+    else:
+        # Buffer the inputs for single-transaction workflows, but don't buffer the status
+        dbos._sys_db.buffer_workflow_inputs(wfid, serialization.serialize_args(inputs))
+
+    if queue is not None:
+        dbos._sys_db.enqueue_sync(wfid, queue)
+
+    return status
+
+
+async def init_workflow_async(
     dbos: "DBOS",
     ctx: DBOSContext,
     inputs: WorkflowInputs,
@@ -393,18 +460,16 @@ def start_workflow(
     if fself is not None:
         gin_args = (fself,)
 
-    status = asyncio.run(
-        init_workflow(
-            dbos,
-            new_wf_ctx,
-            inputs=inputs,
-            wf_name=get_dbos_func_name(func),
-            class_name=get_dbos_class_name(fi, func, gin_args),
-            config_name=get_config_name(fi, func, gin_args),
-            temp_wf_type=get_temp_workflow_type(func),
-            queue=queue_name,
-            max_recovery_attempts=fi.max_recovery_attempts,
-        )
+    status = init_workflow_sync(
+        dbos,
+        new_wf_ctx,
+        inputs=inputs,
+        wf_name=get_dbos_func_name(func),
+        class_name=get_dbos_class_name(fi, func, gin_args),
+        config_name=get_config_name(fi, func, gin_args),
+        temp_wf_type=get_temp_workflow_type(func),
+        queue=queue_name,
+        max_recovery_attempts=fi.max_recovery_attempts,
     )
 
     if not execute_workflow:
