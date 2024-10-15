@@ -277,6 +277,7 @@ class DBOS:
         self.fastapi: Optional["FastAPI"] = fastapi
         self.flask: Optional["Flask"] = flask
         self._executor_field: Optional[ThreadPoolExecutor] = None
+        self._background_threads: List[threading.Thread] = []
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
@@ -358,20 +359,36 @@ class DBOS:
                 self._executor.submit(_startup_recovery_thread, self, workflow_ids)
 
             # Listen to notifications
-            self._executor.submit(self._sys_db._notification_listener)
+            notification_listener_thread = threading.Thread(
+                target=self._sys_db._notification_listener
+            )
+            notification_listener_thread.daemon = True
+            notification_listener_thread.start()
+            self._background_threads.append(notification_listener_thread)
 
             # Start flush workflow buffers thread
-            self._executor.submit(self._sys_db.flush_workflow_buffers)
+            flush_workflow_buffers_thread = threading.Thread(
+                target=self._sys_db.flush_workflow_buffers
+            )
+            flush_workflow_buffers_thread.daemon = True
+            flush_workflow_buffers_thread.start()
+            self._background_threads.append(flush_workflow_buffers_thread)
 
             # Start the queue thread
             evt = threading.Event()
             self.stop_events.append(evt)
-            self._executor.submit(queue_thread, evt, self)
+            bg_queue_thread = threading.Thread(target=queue_thread, args=(evt, self))
+            bg_queue_thread.daemon = True
+            bg_queue_thread.start()
+            self._background_threads.append(bg_queue_thread)
 
             # Grab any pollers that were deferred and start them
             for evt, func, args, kwargs in self._registry.pollers:
                 self.stop_events.append(evt)
-                self._executor.submit(func, *args, **kwargs)
+                poller_thread = threading.Thread(target=func, args=args, kwargs=kwargs)
+                poller_thread.daemon = True
+                poller_thread.start()
+                self._background_threads.append(poller_thread)
             self._registry.pollers = []
 
             dbos_logger.info("DBOS launched")
@@ -403,6 +420,8 @@ class DBOS:
         if self._executor_field is not None:
             self._executor_field.shutdown(cancel_futures=True)
             self._executor_field = None
+        for bg_thread in self._background_threads:
+            bg_thread.join()
 
     @classmethod
     def register_instance(cls, inst: object) -> None:
@@ -846,6 +865,8 @@ def log_exit_info() -> None:
         print("DBOS exiting; DBOS exists but launch() was not called")
         dbos_logger.warning("DBOS exiting; DBOS exists but launch() was not called")
         return
+    # If we get here, we're exiting normally
+    _dbos_global_instance.destroy()
 
 
 # Register the exit hook
