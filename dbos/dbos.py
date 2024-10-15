@@ -851,7 +851,7 @@ class DBOSConfiguredInstance:
 
 # Apps that import DBOS probably don't exit.  If they do, let's see if
 #   it looks like startup was abandoned or a call was forgotten...
-def log_exit_info() -> None:
+def dbos_exit_hook() -> None:
     if _dbos_global_registry is None:
         # Probably used as or for a support module
         return
@@ -870,4 +870,4 @@ def log_exit_info() -> None:
 
 
 # Register the exit hook
-atexit.register(log_exit_info)
+atexit.register(dbos_exit_hook)
