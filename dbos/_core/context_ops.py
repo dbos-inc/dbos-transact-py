@@ -1,3 +1,4 @@
+import asyncio
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..context import EnterDBOSStep, TracedAttributes, get_local_dbos_context
@@ -14,10 +15,10 @@ TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
 
 def register_send_workflow(dbos: "DBOS", registry: "_DBOSRegistry") -> None:
-    async def send_temp_workflow(
+    def send_temp_workflow(
         destination_id: str, message: Any, topic: Optional[str]
     ) -> None:
-        await dbos.send_async(destination_id, message, topic)
+        dbos.send(destination_id, message, topic)
 
     temp_send_wf = workflow_wrapper(registry, send_temp_workflow)
     set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
@@ -25,7 +26,33 @@ def register_send_workflow(dbos: "DBOS", registry: "_DBOSRegistry") -> None:
     registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
 
 
-async def send(
+def send_sync(
+    dbos: "DBOS", destination_id: str, message: Any, topic: Optional[str] = None
+) -> None:
+    def do_send(destination_id: str, message: Any, topic: Optional[str]) -> None:
+        attributes: TracedAttributes = {
+            "name": "send",
+        }
+        with EnterDBOSStep(attributes) as ctx:
+            dbos._sys_db.send_sync(
+                ctx.workflow_id,
+                ctx.curr_step_function_id,
+                destination_id,
+                message,
+                topic,
+            )
+
+    ctx = get_local_dbos_context()
+    if ctx and ctx.is_within_workflow():
+        assert ctx.is_workflow(), "send() must be called from within a workflow"
+        return do_send(destination_id, message, topic)
+    else:
+        wffn = dbos._registry.workflow_info_map.get(TEMP_SEND_WF_NAME)
+        assert wffn
+        wffn(destination_id, message, topic)
+
+
+async def send_async(
     dbos: "DBOS", destination_id: str, message: Any, topic: Optional[str] = None
 ) -> None:
     async def do_send(destination_id: str, message: Any, topic: Optional[str]) -> None:
@@ -48,7 +75,7 @@ async def send(
     else:
         wffn = dbos._registry.workflow_info_map.get(TEMP_SEND_WF_NAME)
         assert wffn
-        await wffn(destination_id, message, topic)
+        await asyncio.to_thread(wffn, destination_id, message, topic)
 
 
 def receive_sync(

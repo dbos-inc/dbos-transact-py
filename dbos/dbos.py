@@ -33,7 +33,8 @@ from dbos._core.context_ops import (
     receive_async,
     receive_sync,
     register_send_workflow,
-    send,
+    send_async,
+    send_sync,
     set_event_async,
     set_event_sync,
 )
@@ -653,14 +654,14 @@ class DBOS:
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
         """Send a message to a workflow execution."""
-        return asyncio.run(send(_get_dbos_instance(), destination_id, message, topic))
+        return send_sync(_get_dbos_instance(), destination_id, message, topic)
 
     @classmethod
     async def send_async(
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
         """Send a message to a workflow execution."""
-        return await send(_get_dbos_instance(), destination_id, message, topic)
+        return await send_async(_get_dbos_instance(), destination_id, message, topic)
 
     @classmethod
     def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
