@@ -373,7 +373,7 @@ class DBOS:
             # asyncio.asyncio.run_threadsafe(self._sys_db._notification_listener_async(), self._loop)
 
             # Start flush workflow buffers thread
-            self._executor.submit(self._sys_db.flush_workflow_buffers)
+            self._executor.submit(self._sys_db.flush_workflow_buffers_sync)
             # asyncio.asyncio.run_threadsafe(self._sys_db.flush_workflow_buffers_async(), self._loop)
 
             # Start the queue thread

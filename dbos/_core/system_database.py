@@ -1421,7 +1421,7 @@ class SystemDatabase:
             )
         return value
 
-    async def _flush_workflow_status_buffer(self) -> None:
+    async def _flush_workflow_status_buffer_async(self) -> None:
         """Export the workflow status buffer to the database, up to the batch size."""
         if len(self._workflow_status_buffer) == 0:
             return
@@ -1451,7 +1451,37 @@ class SystemDatabase:
                     self._workflow_status_buffer.update(exported_status)
                     break
 
-    async def _flush_workflow_inputs_buffer(self) -> None:
+    def _flush_workflow_status_buffer_sync(self) -> None:
+        """Export the workflow status buffer to the database, up to the batch size."""
+        if len(self._workflow_status_buffer) == 0:
+            return
+
+        # Record the exported status so far, and add them back on errors.
+        exported_status: Dict[str, WorkflowStatusInternal] = {}
+        with self.sync_engine.begin() as c:
+            exported = 0
+            status_iter = iter(list(self._workflow_status_buffer))
+            wf_id: Optional[str] = None
+            while (
+                exported < _buffer_flush_batch_size
+                and (wf_id := next(status_iter, None)) is not None
+            ):
+                # Pop the first key in the buffer (FIFO)
+                status = self._workflow_status_buffer.pop(wf_id, None)
+                if status is None:
+                    continue
+                exported_status[wf_id] = status
+                try:
+                    self.update_workflow_status_sync(status, conn=c)
+                    exported += 1
+                except Exception as e:
+                    dbos_logger.error(f"Error while flushing status buffer: {e}")
+                    c.rollback()
+                    # Add the exported status back to the buffer, so they can be retried next time
+                    self._workflow_status_buffer.update(exported_status)
+                    break
+
+    async def _flush_workflow_inputs_buffer_async(self) -> None:
         """Export the workflow inputs buffer to the database, up to the batch size."""
         if len(self._workflow_inputs_buffer) == 0:
             return
@@ -1483,14 +1513,46 @@ class SystemDatabase:
                     self._workflow_inputs_buffer.update(exported_inputs)
                     break
 
-    def flush_workflow_buffers(self) -> None:
+    def _flush_workflow_inputs_buffer_sync(self) -> None:
+        """Export the workflow inputs buffer to the database, up to the batch size."""
+        if len(self._workflow_inputs_buffer) == 0:
+            return
+
+        # Record exported inputs so far, and add them back on errors.
+        exported_inputs: Dict[str, str] = {}
+        with self.sync_engine.begin() as c:
+            exported = 0
+            input_iter = iter(list(self._workflow_inputs_buffer))
+            wf_id: Optional[str] = None
+            while (
+                exported < _buffer_flush_batch_size
+                and (wf_id := next(input_iter, None)) is not None
+            ):
+                if wf_id not in self._exported_temp_txn_wf_status:
+                    # Skip exporting inputs if the status has not been exported yet
+                    continue
+                inputs = self._workflow_inputs_buffer.pop(wf_id, None)
+                if inputs is None:
+                    continue
+                exported_inputs[wf_id] = inputs
+                try:
+                    self.update_workflow_inputs_sync(wf_id, inputs, conn=c)
+                    exported += 1
+                except Exception as e:
+                    dbos_logger.error(f"Error while flushing inputs buffer: {e}")
+                    c.rollback()
+                    # Add the exported inputs back to the buffer, so they can be retried next time
+                    self._workflow_inputs_buffer.update(exported_inputs)
+                    break
+
+    def flush_workflow_buffers_sync(self) -> None:
         """Flush the workflow status and inputs buffers periodically, via a background thread."""
         while self._run_background_processes:
             try:
                 self._is_flushing_status_buffer = True
                 # Must flush the status buffer first, as the inputs table has a foreign key constraint on the status table.
-                asyncio.run(self._flush_workflow_status_buffer())
-                asyncio.run(self._flush_workflow_inputs_buffer())
+                self._flush_workflow_status_buffer_sync()
+                self._flush_workflow_inputs_buffer_sync()
                 self._is_flushing_status_buffer = False
                 if self._is_buffers_empty:
                     # Only sleep if both buffers are empty
@@ -1506,8 +1568,8 @@ class SystemDatabase:
             try:
                 self._is_flushing_status_buffer = True
                 # Must flush the status buffer first, as the inputs table has a foreign key constraint on the status table.
-                await self._flush_workflow_status_buffer()
-                await self._flush_workflow_inputs_buffer()
+                await self._flush_workflow_status_buffer_async()
+                await self._flush_workflow_inputs_buffer_async()
                 self._is_flushing_status_buffer = False
                 if self._is_buffers_empty:
                     # Only sleep if both buffers are empty
