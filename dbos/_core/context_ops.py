@@ -33,7 +33,7 @@ async def send(
             "name": "send",
         }
         with EnterDBOSStep(attributes) as ctx:
-            await dbos._sys_db.send(
+            await dbos._sys_db.send_async(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
                 destination_id,
@@ -64,7 +64,7 @@ async def receive(
         with EnterDBOSStep(attributes) as ctx:
             ctx.function_id += 1  # Reserve for the sleep
             timeout_function_id = ctx.function_id
-            return await dbos._sys_db.recv(
+            return await dbos._sys_db.recv_async(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
                 timeout_function_id,
@@ -87,7 +87,7 @@ async def set_event(dbos: "DBOS", key: str, value: Any) -> None:
             "name": "set_event",
         }
         with EnterDBOSStep(attributes) as ctx:
-            await dbos._sys_db.set_event(
+            await dbos._sys_db.set_event_async(
                 ctx.workflow_id, ctx.curr_step_function_id, key, value
             )
     else:
@@ -115,9 +115,9 @@ async def get_event(
                 "function_id": ctx.curr_step_function_id,
                 "timeout_function_id": timeout_function_id,
             }
-            return await dbos._sys_db.get_event(
+            return await dbos._sys_db.get_event_async(
                 workflow_id, key, timeout_seconds, caller_ctx
             )
     else:
         # Directly call it outside of a workflow
-        return await dbos._sys_db.get_event(workflow_id, key, timeout_seconds)
+        return await dbos._sys_db.get_event_async(workflow_id, key, timeout_seconds)

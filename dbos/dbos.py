@@ -694,7 +694,7 @@ class DBOS:
         if seconds <= 0:
             return
         with EnterDBOSStep(attributes) as ctx:
-            await _get_dbos_instance()._sys_db.sleep(
+            await _get_dbos_instance()._sys_db.sleep_async(
                 ctx.workflow_id, ctx.curr_step_function_id, seconds
             )
 

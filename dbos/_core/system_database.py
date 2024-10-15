@@ -814,8 +814,9 @@ class SystemDatabase:
             with self.sync_engine.begin() as c:
                 return self._check_operation_execution(c, workflow_uuid, function_id)
 
-    async def send(
+    def _send(
         self,
+        conn: sa.Connection,
         workflow_uuid: str,
         function_id: int,
         destination_uuid: str,
@@ -823,42 +824,164 @@ class SystemDatabase:
         topic: Optional[str] = None,
     ) -> None:
         topic = topic if topic is not None else _dbos_null_topic
-        async with self.async_engine.begin() as c:
-            recorded_output = await self.check_operation_execution_async(
-                workflow_uuid, function_id, conn=c
+        recorded_output = self.check_operation_execution_sync(
+            workflow_uuid, function_id, conn=conn
+        )
+        if recorded_output is not None:
+            dbos_logger.debug(
+                f"Replaying send, id: {function_id}, destination_uuid: {destination_uuid}, topic: {topic}"
             )
-            if recorded_output is not None:
-                dbos_logger.debug(
-                    f"Replaying send, id: {function_id}, destination_uuid: {destination_uuid}, topic: {topic}"
-                )
-                return  # Already sent before
-            else:
-                dbos_logger.debug(
-                    f"Running send, id: {function_id}, destination_uuid: {destination_uuid}, topic: {topic}"
-                )
+            return  # Already sent before
+        else:
+            dbos_logger.debug(
+                f"Running send, id: {function_id}, destination_uuid: {destination_uuid}, topic: {topic}"
+            )
 
-            try:
-                await c.execute(
-                    pg.insert(SystemSchema.notifications).values(
-                        destination_uuid=destination_uuid,
-                        topic=topic,
-                        message=serialization.serialize(message),
+        try:
+            conn.execute(
+                pg.insert(SystemSchema.notifications).values(
+                    destination_uuid=destination_uuid,
+                    topic=topic,
+                    message=serialization.serialize(message),
+                )
+            )
+        except DBAPIError as dbapi_error:
+            # Foreign key violation
+            if dbapi_error.orig.sqlstate == "23503":  # type: ignore
+                raise DBOSNonExistentWorkflowError(destination_uuid)
+            raise
+        output: OperationResultInternal = {
+            "workflow_uuid": workflow_uuid,
+            "function_id": function_id,
+            "output": None,
+            "error": None,
+        }
+        self.record_operation_result_sync(output, conn=conn)
+
+    def send_sync(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        destination_uuid: str,
+        message: Any,
+        topic: Optional[str] = None,
+    ) -> None:
+        with self.sync_engine.begin() as c:
+            self._send(c, workflow_uuid, function_id, destination_uuid, message, topic)
+
+    async def send_async(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        destination_uuid: str,
+        message: Any,
+        topic: Optional[str] = None,
+    ) -> None:
+        async with self.async_engine.begin() as c:
+            await c.run_sync(
+                self._send, workflow_uuid, function_id, destination_uuid, message, topic
+            )
+
+    def recv_sync(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        timeout_function_id: int,
+        topic: Optional[str],
+        timeout_seconds: float = 60,
+    ) -> Any:
+        topic = topic if topic is not None else _dbos_null_topic
+
+        # First, check for previous executions.
+        recorded_output = self.check_operation_execution_sync(
+            workflow_uuid, function_id
+        )
+        if recorded_output is not None:
+            dbos_logger.debug(f"Replaying recv, id: {function_id}, topic: {topic}")
+            if recorded_output["output"] is not None:
+                return serialization.deserialize(recorded_output["output"])
+            else:
+                raise Exception("No output recorded in the last recv")
+        else:
+            dbos_logger.debug(f"Running recv, id: {function_id}, topic: {topic}")
+
+        # Insert a condition to the notifications map, so the listener can notify it when a message is received.
+        payload = f"{workflow_uuid}::{topic}"
+        condition = threading.Condition()
+        # Must acquire first before adding to the map. Otherwise, the notification listener may notify it before the condition is acquired and waited.
+        condition.acquire()
+        self.notifications_map[payload] = condition
+
+        # Check if the key is already in the database. If not, wait for the notification.
+        init_recv: Sequence[Any]
+        with self.sync_engine.begin() as c:
+            init_recv = (
+                c.execute(
+                    sa.select(
+                        SystemSchema.notifications.c.topic,
+                    ).where(
+                        SystemSchema.notifications.c.destination_uuid == workflow_uuid,
+                        SystemSchema.notifications.c.topic == topic,
                     )
                 )
-            except DBAPIError as dbapi_error:
-                # Foreign key violation
-                if dbapi_error.orig.sqlstate == "23503":  # type: ignore
-                    raise DBOSNonExistentWorkflowError(destination_uuid)
-                raise
-            output: OperationResultInternal = {
-                "workflow_uuid": workflow_uuid,
-                "function_id": function_id,
-                "output": None,
-                "error": None,
-            }
-            await self.record_operation_result_async(output, conn=c)
+            ).fetchall()
 
-    async def recv(
+        if len(init_recv) == 0:
+            # Wait for the notification
+            # Support OAOO sleep
+            actual_timeout = self.sleep_sync(
+                workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
+            )
+            condition.wait(timeout=actual_timeout)
+        condition.release()
+        self.notifications_map.pop(payload)
+
+        # Transactionally consume and return the message if it's in the database, otherwise return null.
+        with self.sync_engine.begin() as c:
+            oldest_entry_cte = (
+                sa.select(
+                    SystemSchema.notifications.c.destination_uuid,
+                    SystemSchema.notifications.c.topic,
+                    SystemSchema.notifications.c.message,
+                    SystemSchema.notifications.c.created_at_epoch_ms,
+                )
+                .where(
+                    SystemSchema.notifications.c.destination_uuid == workflow_uuid,
+                    SystemSchema.notifications.c.topic == topic,
+                )
+                .order_by(SystemSchema.notifications.c.created_at_epoch_ms.asc())
+                .limit(1)
+                .cte("oldest_entry")
+            )
+            delete_stmt = (
+                sa.delete(SystemSchema.notifications)
+                .where(
+                    SystemSchema.notifications.c.destination_uuid
+                    == oldest_entry_cte.c.destination_uuid,
+                    SystemSchema.notifications.c.topic == oldest_entry_cte.c.topic,
+                    SystemSchema.notifications.c.created_at_epoch_ms
+                    == oldest_entry_cte.c.created_at_epoch_ms,
+                )
+                .returning(SystemSchema.notifications.c.message)
+            )
+            rows = (c.execute(delete_stmt)).fetchall()
+            message: Any = None
+            if len(rows) > 0:
+                message = serialization.deserialize(rows[0][0])
+            self.record_operation_result_sync(
+                {
+                    "workflow_uuid": workflow_uuid,
+                    "function_id": function_id,
+                    "output": serialization.serialize(
+                        message
+                    ),  # None will be serialized to 'null'
+                    "error": None,
+                },
+                conn=c,
+            )
+        return message
+
+    async def recv_async(
         self,
         workflow_uuid: str,
         function_id: int,
@@ -905,7 +1028,7 @@ class SystemDatabase:
         if len(init_recv) == 0:
             # Wait for the notification
             # Support OAOO sleep
-            actual_timeout = await self.sleep(
+            actual_timeout = await self.sleep_async(
                 workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
             )
             condition.wait(timeout=actual_timeout)
@@ -1022,7 +1145,41 @@ class SystemDatabase:
     def _notification_listener(self) -> None:
         asyncio.run(self._notification_listener_async())
 
-    async def sleep(
+    def sleep_sync(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        seconds: float,
+        skip_sleep: bool = False,
+    ) -> float:
+        recorded_output = self.check_operation_execution_sync(
+            workflow_uuid, function_id
+        )
+        end_time: float
+        if recorded_output is not None:
+            dbos_logger.debug(f"Replaying sleep, id: {function_id}, seconds: {seconds}")
+            assert recorded_output["output"] is not None, "no recorded end time"
+            end_time = serialization.deserialize(recorded_output["output"])
+        else:
+            dbos_logger.debug(f"Running sleep, id: {function_id}, seconds: {seconds}")
+            end_time = time.time() + seconds
+            try:
+                self.record_operation_result_sync(
+                    {
+                        "workflow_uuid": workflow_uuid,
+                        "function_id": function_id,
+                        "output": serialization.serialize(end_time),
+                        "error": None,
+                    }
+                )
+            except DBOSWorkflowConflictIDError:
+                pass
+        duration = max(0, end_time - time.time())
+        if not skip_sleep:
+            time.sleep(duration)
+        return duration
+
+    async def sleep_async(
         self,
         workflow_uuid: str,
         function_id: int,
@@ -1053,10 +1210,57 @@ class SystemDatabase:
                 pass
         duration = max(0, end_time - time.time())
         if not skip_sleep:
-            time.sleep(duration)
+            await asyncio.sleep(duration)
         return duration
 
-    async def set_event(
+    def _set_event(
+        self,
+        conn: sa.Connection,
+        workflow_uuid: str,
+        function_id: int,
+        key: str,
+        message: Any,
+    ) -> None:
+        recorded_output = self.check_operation_execution_sync(
+            workflow_uuid, function_id, conn=conn
+        )
+        if recorded_output is not None:
+            dbos_logger.debug(f"Replaying set_event, id: {function_id}, key: {key}")
+            return  # Already sent before
+        else:
+            dbos_logger.debug(f"Running set_event, id: {function_id}, key: {key}")
+
+        conn.execute(
+            pg.insert(SystemSchema.workflow_events)
+            .values(
+                workflow_uuid=workflow_uuid,
+                key=key,
+                value=serialization.serialize(message),
+            )
+            .on_conflict_do_update(
+                index_elements=["workflow_uuid", "key"],
+                set_={"value": serialization.serialize(message)},
+            )
+        )
+        output: OperationResultInternal = {
+            "workflow_uuid": workflow_uuid,
+            "function_id": function_id,
+            "output": None,
+            "error": None,
+        }
+        self.record_operation_result_sync(output, conn=conn)
+
+    def set_event_sync(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        key: str,
+        message: Any,
+    ) -> None:
+        with self.sync_engine.begin() as c:
+            self._set_event(c, workflow_uuid, function_id, key, message)
+
+    async def set_event_async(
         self,
         workflow_uuid: str,
         function_id: int,
@@ -1064,36 +1268,88 @@ class SystemDatabase:
         message: Any,
     ) -> None:
         async with self.async_engine.begin() as c:
-            recorded_output = await self.check_operation_execution_async(
-                workflow_uuid, function_id, conn=c
+            await c.run_sync(self._set_event, workflow_uuid, function_id, key, message)
+
+    def get_event_sync(
+        self,
+        target_uuid: str,
+        key: str,
+        timeout_seconds: float = 60,
+        caller_ctx: Optional[GetEventWorkflowContext] = None,
+    ) -> Any:
+        get_sql = sa.select(
+            SystemSchema.workflow_events.c.value,
+        ).where(
+            SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
+            SystemSchema.workflow_events.c.key == key,
+        )
+        # Check for previous executions only if it's in a workflow
+        if caller_ctx is not None:
+            recorded_output = self.check_operation_execution_sync(
+                caller_ctx["workflow_uuid"], caller_ctx["function_id"]
             )
             if recorded_output is not None:
-                dbos_logger.debug(f"Replaying set_event, id: {function_id}, key: {key}")
-                return  # Already sent before
+                dbos_logger.debug(
+                    f"Replaying get_event, id: {caller_ctx['function_id']}, key: {key}"
+                )
+                if recorded_output["output"] is not None:
+                    return serialization.deserialize(recorded_output["output"])
+                else:
+                    raise Exception("No output recorded in the last get_event")
             else:
-                dbos_logger.debug(f"Running set_event, id: {function_id}, key: {key}")
+                dbos_logger.debug(
+                    f"Running get_event, id: {caller_ctx['function_id']}, key: {key}"
+                )
 
-            await c.execute(
-                pg.insert(SystemSchema.workflow_events)
-                .values(
-                    workflow_uuid=workflow_uuid,
-                    key=key,
-                    value=serialization.serialize(message),
+        payload = f"{target_uuid}::{key}"
+        condition = threading.Condition()
+        self.workflow_events_map[payload] = condition
+        condition.acquire()
+
+        # Check if the key is already in the database. If not, wait for the notification.
+        init_recv: Sequence[Any]
+        with self.sync_engine.begin() as c:
+            init_recv = (c.execute(get_sql)).fetchall()
+
+        value: Any = None
+        if len(init_recv) > 0:
+            value = serialization.deserialize(init_recv[0][0])
+        else:
+            # Wait for the notification
+            actual_timeout = timeout_seconds
+            if caller_ctx is not None:
+                # Support OAOO sleep for workflows
+                actual_timeout = self.sleep_sync(
+                    caller_ctx["workflow_uuid"],
+                    caller_ctx["timeout_function_id"],
+                    timeout_seconds,
+                    skip_sleep=True,
                 )
-                .on_conflict_do_update(
-                    index_elements=["workflow_uuid", "key"],
-                    set_={"value": serialization.serialize(message)},
-                )
+            condition.wait(timeout=actual_timeout)
+
+            # Read the value from the database
+            with self.sync_engine.begin() as c:
+                final_recv = (c.execute(get_sql)).fetchall()
+                if len(final_recv) > 0:
+                    value = serialization.deserialize(final_recv[0][0])
+        condition.release()
+        self.workflow_events_map.pop(payload)
+
+        # Record the output if it's in a workflow
+        if caller_ctx is not None:
+            self.record_operation_result_sync(
+                {
+                    "workflow_uuid": caller_ctx["workflow_uuid"],
+                    "function_id": caller_ctx["function_id"],
+                    "output": serialization.serialize(
+                        value
+                    ),  # None will be serialized to 'null'
+                    "error": None,
+                }
             )
-            output: OperationResultInternal = {
-                "workflow_uuid": workflow_uuid,
-                "function_id": function_id,
-                "output": None,
-                "error": None,
-            }
-            await self.record_operation_result_async(output, conn=c)
+        return value
 
-    async def get_event(
+    async def get_event_async(
         self,
         target_uuid: str,
         key: str,
@@ -1142,7 +1398,7 @@ class SystemDatabase:
             actual_timeout = timeout_seconds
             if caller_ctx is not None:
                 # Support OAOO sleep for workflows
-                actual_timeout = await self.sleep(
+                actual_timeout = await self.sleep_async(
                     caller_ctx["workflow_uuid"],
                     caller_ctx["timeout_function_id"],
                     timeout_seconds,
