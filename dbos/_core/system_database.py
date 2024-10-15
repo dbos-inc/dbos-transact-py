@@ -596,8 +596,8 @@ class SystemDatabase:
 
         return info
 
-    async def update_workflow_inputs(
-        self, workflow_uuid: str, inputs: str, conn: Optional[AsyncConnection] = None
+    def _update_workflow_inputs(
+        self, conn: sa.Connection, workflow_uuid: str, inputs: str
     ) -> None:
         cmd = (
             pg.insert(SystemSchema.workflow_inputs)
@@ -607,16 +607,29 @@ class SystemDatabase:
             )
             .on_conflict_do_nothing()
         )
-        if conn is not None:
-            await conn.execute(cmd)
-        else:
-            async with self.async_engine.begin() as c:
-                await c.execute(cmd)
-
+        conn.execute(cmd)
         if workflow_uuid in self._temp_txn_wf_ids:
             # Clean up the single-transaction tracking sets
             self._exported_temp_txn_wf_status.discard(workflow_uuid)
             self._temp_txn_wf_ids.discard(workflow_uuid)
+
+    def update_workflow_inputs_sync(
+        self, workflow_uuid: str, inputs: str, conn: Optional[sa.Connection] = None
+    ) -> None:
+        if conn is not None:
+            self._update_workflow_inputs(conn, workflow_uuid, inputs)
+        else:
+            with self.sync_engine.begin() as c:
+                self._update_workflow_inputs(c, workflow_uuid, inputs)
+
+    async def update_workflow_inputs_async(
+        self, workflow_uuid: str, inputs: str, conn: Optional[AsyncConnection] = None
+    ) -> None:
+        if conn is not None:
+            await conn.run_sync(self._update_workflow_inputs, workflow_uuid, inputs)
+        else:
+            async with self.async_engine.begin() as c:
+                await c.run_sync(self._update_workflow_inputs, workflow_uuid, inputs)
 
     def _get_workflow_inputs(
         self, conn: sa.Connection, workflow_uuid: str
@@ -1212,7 +1225,7 @@ class SystemDatabase:
                     continue
                 exported_inputs[wf_id] = inputs
                 try:
-                    await self.update_workflow_inputs(wf_id, inputs, conn=c)
+                    await self.update_workflow_inputs_async(wf_id, inputs, conn=c)
                     exported += 1
                 except Exception as e:
                     dbos_logger.error(f"Error while flushing inputs buffer: {e}")

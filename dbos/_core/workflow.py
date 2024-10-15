@@ -167,7 +167,7 @@ async def init_workflow(
         await dbos._sys_db.update_workflow_status_async(
             status, False, ctx.in_recovery, max_recovery_attempts=max_recovery_attempts
         )
-        await dbos._sys_db.update_workflow_inputs(
+        await dbos._sys_db.update_workflow_inputs_async(
             wfid, serialization.serialize_args(inputs)
         )
     else:

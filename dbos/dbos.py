@@ -555,7 +555,34 @@ class DBOS:
 
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
-        return asyncio.run(DBOS.get_workflow_status_async(workflow_id))
+        """Return the status of a workflow execution."""
+        ctx = get_local_dbos_context()
+        if ctx and ctx.is_within_workflow():
+            ctx.function_id += 1
+            stat = _get_dbos_instance()._sys_db.get_workflow_status_within_wf_sync(
+                workflow_id, ctx.workflow_id, ctx.function_id
+            )
+        else:
+            stat = _get_dbos_instance()._sys_db.get_workflow_status_sync(workflow_id)
+        if stat is None:
+            return None
+
+        return WorkflowStatus(
+            workflow_id=workflow_id,
+            status=stat["status"],
+            name=stat["name"],
+            recovery_attempts=stat["recovery_attempts"],
+            class_name=stat["class_name"],
+            config_name=stat["config_name"],
+            queue_name=stat["queue_name"],
+            authenticated_user=stat["authenticated_user"],
+            assumed_role=stat["assumed_role"],
+            authenticated_roles=(
+                json.loads(stat["authenticated_roles"])
+                if stat["authenticated_roles"] is not None
+                else None
+            ),
+        )
 
     @classmethod
     async def get_workflow_status_async(
