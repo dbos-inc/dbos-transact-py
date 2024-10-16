@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from ..dbos_config import ConfigFile
 from ..error import DBOSWorkflowConflictIDError
-from ..schemas.application_database import ApplicationSchema
+from .schemas.application_database import ApplicationSchema
 from .types import RecordedResult, TransactionResultInternal
 
 

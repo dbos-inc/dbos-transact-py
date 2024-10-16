@@ -9,7 +9,7 @@ from alembic.config import Config
 from dbos import DBOS, ConfigFile
 
 # Private API because this is a unit test
-from dbos.schemas.system_database import SystemSchema
+from dbos._core.schemas.system_database import SystemSchema
 
 
 @pytest.mark.asyncio

@@ -6,8 +6,8 @@ import uuid
 import sqlalchemy as sa
 
 from dbos import DBOS, Queue, SetWorkflowID
+from dbos._core.schemas.system_database import SystemSchema
 from dbos.dbos import WorkflowHandle
-from dbos.schemas.system_database import SystemSchema
 from dbos.types import WorkflowStatusString
 
 

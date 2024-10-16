@@ -22,9 +22,9 @@ from ..error import (
 )
 from ..logger import dbos_logger
 from ..registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
-from ..schemas.system_database import SystemSchema
 from ..types import GetWorkflowsInput, WorkflowStatusString
 from . import serialization
+from .schemas.system_database import SystemSchema
 from .types import (
     GetEventWorkflowContext,
     GetWorkflowsOutput,
@@ -85,7 +85,7 @@ class SystemDatabase:
 
         # Run a schema migration for the system database
         migration_dir = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), "..", "migrations"
+            os.path.dirname(os.path.realpath(__file__)), "migrations"
         )
         alembic_cfg = Config()
         alembic_cfg.set_main_option("script_location", migration_dir)
