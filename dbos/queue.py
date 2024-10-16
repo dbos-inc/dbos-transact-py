@@ -35,7 +35,7 @@ class Queue:
         self.name = name
         self.concurrency = concurrency
         self.limiter = limiter
-        from dbos.dbos import _get_or_create_dbos_registry
+        from .dbos import _get_or_create_dbos_registry
 
         registry = _get_or_create_dbos_registry()
         registry.queue_info_map[self.name] = self
@@ -43,7 +43,7 @@ class Queue:
     def enqueue(
         self, func: "Workflow[P, R]", *args: P.args, **kwargs: P.kwargs
     ) -> "WorkflowHandle[R]":
-        from dbos.dbos import _get_dbos_instance
+        from .dbos import _get_dbos_instance
 
         dbos = _get_dbos_instance()
         return start_workflow(dbos, func, self.name, False, *args, **kwargs)

@@ -2,10 +2,10 @@ import threading
 import traceback
 from typing import TYPE_CHECKING
 
-from dbos._core.workflow import execute_workflow_id
+from .workflow import execute_workflow_id
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS
+    from ..dbos import DBOS
 
 
 def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:

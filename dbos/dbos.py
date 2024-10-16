@@ -27,7 +27,7 @@ from typing import (
 from opentelemetry.trace import Span
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dbos._core.context_ops import (
+from ._core.context_ops import (
     get_event_async,
     get_event_sync,
     receive_async,
@@ -38,50 +38,37 @@ from dbos._core.context_ops import (
     set_event_async,
     set_event_sync,
 )
-from dbos._core.decorator_ops import step, transaction, workflow
-from dbos._core.recovery import recover_pending_workflows, startup_recovery_thread
-from dbos._core.registrations import (
+from ._core.decorator_ops import step, transaction, workflow
+from ._core.queue_thread import queue_thread
+from ._core.recovery import recover_pending_workflows, startup_recovery_thread
+from ._core.registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
     get_or_create_class_info,
 )
-from dbos._core.roles import default_required_roles, required_roles
-from dbos._core.scheduler import ScheduledWorkflow, scheduled
-from dbos._core.workflow import (
-    WorkflowHandlePolling,
-    execute_workflow_id,
-    start_workflow,
-)
-from dbos.classproperty import classproperty
-from dbos.queue import Queue
-
-from ._core.queue_thread import queue_thread
+from ._core.roles import default_required_roles, required_roles
+from ._core.scheduler import ScheduledWorkflow, scheduled
 from ._core.tracer import dbos_tracer
+from ._core.workflow import WorkflowHandlePolling, execute_workflow_id, start_workflow
+from .classproperty import classproperty
+from .queue import Queue
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
-    from dbos._core.kafka import KafkaConsumerWorkflow
+    from ._core.kafka import KafkaConsumerWorkflow
     from ._core.request import Request
     from flask import Flask
 
 from sqlalchemy.orm import Session
 
-from dbos._core.request import Request
+from ._core.request import Request
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec, TypeAlias
 else:
     from typing import ParamSpec, TypeAlias
 
-from dbos._core.admin_sever import AdminServer
-from dbos.context import (
-    EnterDBOSStep,
-    TracedAttributes,
-    assert_current_dbos_context,
-    get_local_dbos_context,
-)
-from dbos.error import DBOSException, DBOSNonExistentWorkflowError
-
+from ._core.admin_sever import AdminServer
 from ._core.application_database import ApplicationDatabase
 from ._core.logger import (
     add_otlp_to_all_loggers,
@@ -90,7 +77,14 @@ from ._core.logger import (
     init_logger,
 )
 from ._core.system_database import SystemDatabase
+from .context import (
+    EnterDBOSStep,
+    TracedAttributes,
+    assert_current_dbos_context,
+    get_local_dbos_context,
+)
 from .dbos_config import ConfigFile, load_config, set_env_vars
+from .error import DBOSException, DBOSNonExistentWorkflowError
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
@@ -293,13 +287,13 @@ class DBOS:
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
-            from dbos._core.fastapi import setup_fastapi_middleware
+            from ._core.fastapi import setup_fastapi_middleware
 
             setup_fastapi_middleware(self.fastapi, _get_dbos_instance())
 
         # If using Flask, set up middleware
         if self.flask is not None:
-            from dbos._core.flask import setup_flask_middleware
+            from ._core.flask import setup_flask_middleware
 
             setup_flask_middleware(self.flask)
 
@@ -559,7 +553,7 @@ class DBOS:
     ) -> Callable[[KafkaConsumerWorkflow], KafkaConsumerWorkflow]:
         """Decorate a function to be used as a Kafka consumer."""
         try:
-            from dbos._core.kafka import kafka_consumer
+            from ._core.kafka import kafka_consumer
 
             return kafka_consumer(
                 _get_or_create_dbos_registry(), config, topics, in_order

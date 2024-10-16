@@ -15,9 +15,9 @@ from rich import print
 from rich.prompt import Prompt
 from typing_extensions import Annotated
 
-from dbos import load_config
-from dbos._core.application_database import ApplicationDatabase
-from dbos._core.system_database import SystemDatabase
+from . import load_config
+from ._core.application_database import ApplicationDatabase
+from ._core.system_database import SystemDatabase
 
 app = typer.Typer()
 
