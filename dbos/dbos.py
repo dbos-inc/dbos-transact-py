@@ -51,7 +51,7 @@ from dbos._core.workflow import (
     execute_workflow_id,
     start_workflow,
 )
-from dbos.decorators import classproperty
+from dbos.classproperty import classproperty
 from dbos.queue import Queue, queue_thread
 from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled
 
