@@ -53,8 +53,9 @@ from dbos._core.workflow import (
     start_workflow,
 )
 from dbos.classproperty import classproperty
-from dbos.queue import Queue, queue_thread
+from dbos.queue import Queue
 
+from ._core.queue_thread import queue_thread
 from ._core.tracer import dbos_tracer
 
 if TYPE_CHECKING:
