@@ -3,8 +3,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from ..context import EnterDBOSStep, TracedAttributes, get_local_dbos_context
 from ..error import DBOSException
-from ..registrations import set_dbos_func_name, set_temp_workflow_type
 from .decorator_ops import workflow_wrapper
+from .registrations import set_dbos_func_name, set_temp_workflow_type
 from .types import GetEventWorkflowContext
 
 if TYPE_CHECKING:

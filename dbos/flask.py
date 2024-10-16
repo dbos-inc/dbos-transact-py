@@ -13,7 +13,7 @@ from dbos.context import (
     assert_current_dbos_context,
 )
 
-from .request import Address, Request, request_id_header
+from ._core.request import Address, Request, request_id_header
 
 
 class FlaskMiddleware:

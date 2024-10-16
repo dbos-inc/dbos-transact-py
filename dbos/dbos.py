@@ -40,6 +40,12 @@ from dbos._core.context_ops import (
 )
 from dbos._core.decorator_ops import step, transaction, workflow
 from dbos._core.recovery import recover_pending_workflows, startup_recovery_thread
+from dbos._core.registrations import (
+    DEFAULT_MAX_RECOVERY_ATTEMPTS,
+    DBOSClassInfo,
+    get_or_create_class_info,
+)
+from dbos._core.roles import default_required_roles, required_roles
 from dbos._core.workflow import (
     WorkflowHandlePolling,
     execute_workflow_id,
@@ -47,12 +53,6 @@ from dbos._core.workflow import (
 )
 from dbos.decorators import classproperty
 from dbos.queue import Queue, queue_thread
-from dbos.registrations import (
-    DEFAULT_MAX_RECOVERY_ATTEMPTS,
-    DBOSClassInfo,
-    get_or_create_class_info,
-)
-from dbos.roles import default_required_roles, required_roles
 from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled
 
 from ._core.tracer import dbos_tracer
@@ -60,12 +60,12 @@ from ._core.tracer import dbos_tracer
 if TYPE_CHECKING:
     from fastapi import FastAPI
     from dbos.kafka import KafkaConsumerWorkflow
-    from .request import Request
+    from ._core.request import Request
     from flask import Flask
 
 from sqlalchemy.orm import Session
 
-from dbos.request import Request
+from dbos._core.request import Request
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec, TypeAlias

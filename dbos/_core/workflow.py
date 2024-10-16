@@ -32,7 +32,7 @@ from ..error import (
     DBOSWorkflowConflictIDError,
     DBOSWorkflowFunctionNotFoundError,
 )
-from ..registrations import (
+from .registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     get_config_name,
     get_dbos_class_name,
