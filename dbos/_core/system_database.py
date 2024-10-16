@@ -20,9 +20,9 @@ from ..error import (
     DBOSNonExistentWorkflowError,
     DBOSWorkflowConflictIDError,
 )
-from ..logger import dbos_logger
 from ..types import GetWorkflowsInput, WorkflowStatusString
 from . import serialization
+from .logger import dbos_logger
 from .registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from .schemas.system_database import SystemSchema
 from .types import (

@@ -59,7 +59,7 @@ from ._core.tracer import dbos_tracer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
-    from dbos.kafka import KafkaConsumerWorkflow
+    from dbos._core.kafka import KafkaConsumerWorkflow
     from ._core.request import Request
     from flask import Flask
 
@@ -82,9 +82,14 @@ from dbos.context import (
 from dbos.error import DBOSException, DBOSNonExistentWorkflowError
 
 from ._core.application_database import ApplicationDatabase
+from ._core.logger import (
+    add_otlp_to_all_loggers,
+    config_logger,
+    dbos_logger,
+    init_logger,
+)
 from ._core.system_database import SystemDatabase
 from .dbos_config import ConfigFile, load_config, set_env_vars
-from .logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
@@ -287,13 +292,13 @@ class DBOS:
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
-            from dbos.fastapi import setup_fastapi_middleware
+            from dbos._core.fastapi import setup_fastapi_middleware
 
             setup_fastapi_middleware(self.fastapi, _get_dbos_instance())
 
         # If using Flask, set up middleware
         if self.flask is not None:
-            from dbos.flask import setup_flask_middleware
+            from dbos._core.flask import setup_flask_middleware
 
             setup_flask_middleware(self.flask)
 
@@ -553,7 +558,7 @@ class DBOS:
     ) -> Callable[[KafkaConsumerWorkflow], KafkaConsumerWorkflow]:
         """Decorate a function to be used as a Kafka consumer."""
         try:
-            from dbos.kafka import kafka_consumer
+            from dbos._core.kafka import kafka_consumer
 
             return kafka_consumer(
                 _get_or_create_dbos_registry(), config, topics, in_order

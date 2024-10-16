@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, List, TypedDict
 
 import psutil
 
-from ..logger import dbos_logger
+from .logger import dbos_logger
 from .recovery import recover_pending_workflows
 
 if TYPE_CHECKING:
