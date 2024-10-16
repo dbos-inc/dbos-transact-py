@@ -7,25 +7,10 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from dbos.error import DBOSWorkflowConflictIDError
-from dbos.schemas.application_database import ApplicationSchema
-
-from .dbos_config import ConfigFile
-
-
-class TransactionResultInternal(TypedDict):
-    workflow_uuid: str
-    function_id: int
-    output: Optional[str]  # JSON (jsonpickle)
-    error: Optional[str]  # JSON (jsonpickle)
-    txn_id: Optional[str]
-    txn_snapshot: str
-    executor_id: Optional[str]
-
-
-class RecordedResult(TypedDict):
-    output: Optional[str]  # JSON (jsonpickle)
-    error: Optional[str]  # JSON (jsonpickle)
+from ..dbos_config import ConfigFile
+from ..error import DBOSWorkflowConflictIDError
+from ..schemas.application_database import ApplicationSchema
+from .types import RecordedResult, TransactionResultInternal
 
 
 class ApplicationDatabase:

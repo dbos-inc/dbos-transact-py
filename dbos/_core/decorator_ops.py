@@ -4,7 +4,6 @@ import traceback
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar, cast
 
-from ..application_database import ApplicationDatabase, TransactionResultInternal
 from ..context import (
     DBOSAssumeRole,
     EnterDBOSChildWorkflow,
@@ -29,7 +28,8 @@ from ..registrations import (
 )
 from ..roles import check_required_roles
 from . import serialization
-from .types import OperationResultInternal, WorkflowInputs
+from .application_database import ApplicationDatabase
+from .types import OperationResultInternal, TransactionResultInternal, WorkflowInputs
 from .workflow import (
     execute_workflow_async,
     execute_workflow_sync,

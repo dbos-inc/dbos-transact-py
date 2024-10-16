@@ -3,6 +3,16 @@ from typing import Any, Dict, List, Optional, Tuple, TypedDict
 from ..types import WorkflowStatuses
 
 
+class TransactionResultInternal(TypedDict):
+    workflow_uuid: str
+    function_id: int
+    output: Optional[str]  # JSON (jsonpickle)
+    error: Optional[str]  # JSON (jsonpickle)
+    txn_id: Optional[str]
+    txn_snapshot: str
+    executor_id: Optional[str]
+
+
 class WorkflowStatusInternal(TypedDict):
     workflow_uuid: str
     status: WorkflowStatuses
