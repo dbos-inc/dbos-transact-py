@@ -55,7 +55,7 @@ from dbos.registrations import (
 from dbos.roles import default_required_roles, required_roles
 from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled
 
-from .tracer import dbos_tracer
+from ._core.tracer import dbos_tracer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI

@@ -7,10 +7,10 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from opentelemetry.trace import Span
 
-from dbos.dbos_config import ConfigFile
+from ..dbos_config import ConfigFile
 
 if TYPE_CHECKING:
-    from .context import TracedAttributes
+    from ..context import TracedAttributes
 
 
 class DBOSTracer:

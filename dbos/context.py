@@ -13,9 +13,9 @@ from opentelemetry.trace import Span, Status, StatusCode
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from ._core.tracer import dbos_tracer
 from .logger import dbos_logger
 from .request import Request
-from .tracer import dbos_tracer
 
 
 # These are used to tag OTel traces
