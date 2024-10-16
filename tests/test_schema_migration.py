@@ -99,6 +99,7 @@ def rollback_system_db(sysdb_url: str) -> None:
     migration_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
         "dbos",
+        "_core",
         "migrations",
     )
     alembic_cfg = Config()
