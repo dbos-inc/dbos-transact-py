@@ -39,6 +39,7 @@ from dbos._core.context_ops import (
     set_event_sync,
 )
 from dbos._core.decorator_ops import step, transaction, workflow
+from dbos._core.recovery import recover_pending_workflows, startup_recovery_thread
 from dbos._core.workflow import (
     WorkflowHandlePolling,
     execute_workflow_id,
@@ -46,7 +47,6 @@ from dbos._core.workflow import (
 )
 from dbos.decorators import classproperty
 from dbos.queue import Queue, queue_thread
-from dbos.recovery import _recover_pending_workflows, _startup_recovery_thread
 from dbos.registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
@@ -371,7 +371,7 @@ class DBOS:
 
             if not os.environ.get("DBOS__VMID"):
                 workflow_ids = await self._sys_db.get_pending_workflows_async("local")
-                self._executor.submit(_startup_recovery_thread, self, workflow_ids)
+                self._executor.submit(startup_recovery_thread, self, workflow_ids)
 
             # Listen to notifications
             notification_listener_thread = threading.Thread(
@@ -787,7 +787,7 @@ class DBOS:
         cls, executor_ids: List[str] = ["local"]
     ) -> List[WorkflowHandle[Any]]:
         """Find all PENDING workflows and execute them."""
-        return _recover_pending_workflows(_get_dbos_instance(), executor_ids)
+        return recover_pending_workflows(_get_dbos_instance(), executor_ids)
 
     @classproperty
     def logger(cls) -> Logger:

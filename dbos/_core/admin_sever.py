@@ -10,10 +10,10 @@ import psutil
 
 from dbos._core.recovery import recover_pending_workflows
 
-from .logger import dbos_logger
+from ..logger import dbos_logger
 
 if TYPE_CHECKING:
-    from .dbos import DBOS
+    from ..dbos import DBOS
 
 health_check_path = "/dbos-healthz"
 workflow_recovery_path = "/dbos-workflow-recovery"
