@@ -1,5 +1,5 @@
 import asyncio
-from typing import Optional, TypedDict
+from typing import Optional
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg

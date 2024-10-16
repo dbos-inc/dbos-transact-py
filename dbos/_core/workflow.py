@@ -6,10 +6,9 @@ import traceback
 from concurrent.futures import Future
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
 
-from dbos._core.types import WorkflowInputs, WorkflowStatusInternal
-
 from ..types import WorkflowStatusString
 from . import serialization
+from .types import WorkflowInputs, WorkflowStatusInternal
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec
