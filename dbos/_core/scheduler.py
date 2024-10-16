@@ -2,11 +2,11 @@ import threading
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable
 
-from dbos._core.logger import dbos_logger
-from dbos.queue import Queue
+from ..queue import Queue
+from .logger import dbos_logger
 
 if TYPE_CHECKING:
-    from dbos.dbos import _DBOSRegistry
+    from ..dbos import _DBOSRegistry
 
 from ..context import SetWorkflowID
 from .croniter import croniter  # type: ignore

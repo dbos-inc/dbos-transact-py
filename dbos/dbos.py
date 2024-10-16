@@ -46,6 +46,7 @@ from dbos._core.registrations import (
     get_or_create_class_info,
 )
 from dbos._core.roles import default_required_roles, required_roles
+from dbos._core.scheduler import ScheduledWorkflow, scheduled
 from dbos._core.workflow import (
     WorkflowHandlePolling,
     execute_workflow_id,
@@ -53,7 +54,6 @@ from dbos._core.workflow import (
 )
 from dbos.classproperty import classproperty
 from dbos.queue import Queue, queue_thread
-from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled
 
 from ._core.tracer import dbos_tracer
 
