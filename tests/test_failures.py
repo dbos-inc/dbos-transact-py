@@ -1,4 +1,3 @@
-import asyncio
 import datetime
 import threading
 import time
@@ -11,7 +10,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 # Public API
 from dbos import DBOS, GetWorkflowsInput, SetWorkflowID
-from dbos.error import DBOSDeadLetterQueueError, DBOSErrorCode, DBOSException
+from dbos.error import DBOSDeadLetterQueueError
 from dbos.types import WorkflowStatusString
 
 

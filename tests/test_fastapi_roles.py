@@ -1,4 +1,3 @@
-import asyncio
 from typing import Awaitable, Callable, List, Optional, Tuple
 
 import jwt
