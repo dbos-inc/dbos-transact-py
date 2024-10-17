@@ -5,16 +5,16 @@ import uuid
 import sqlalchemy as sa
 
 from dbos import DBOS, Queue, SetWorkflowID
+from dbos._core.schemas.system_database import SystemSchema
 from dbos.dbos import WorkflowHandle
-from dbos.schemas.system_database import SystemSchema
-from dbos.system_database import WorkflowStatusString
+from dbos.types import WorkflowStatusString
 
 
 def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
     max_tries = 10
     success = False
     for i in range(max_tries):
-        with dbos._sys_db.engine.begin() as c:
+        with dbos._sys_db.sync_engine.begin() as c:
             query = sa.select(sa.func.count()).select_from(SystemSchema.workflow_queue)
             row = c.execute(query).fetchone()
             assert row is not None

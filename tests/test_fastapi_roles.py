@@ -15,12 +15,12 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 # Public API
 from dbos import DBOS, DBOSContextSetAuth
+from dbos._core.tracer import dbos_tracer
 
 # Private API because this is a unit test
 from dbos.context import assert_current_dbos_context
 from dbos.error import DBOSInitializationError, DBOSNotAuthorizedError
-from dbos.system_database import GetWorkflowsInput
-from dbos.tracer import dbos_tracer
+from dbos.types import GetWorkflowsInput
 
 
 @pytest.mark.order(1)
@@ -135,7 +135,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     dbos._sys_db.wait_for_buffer_flush()
     gwi = GetWorkflowsInput()
     gwi.authenticated_user = "user1"
-    wfl = dbos._sys_db.get_workflows(gwi)
+    wfl = dbos._sys_db.get_workflows_sync(gwi)
     assert len(wfl.workflow_uuids) == 1
     wfs = DBOS.get_workflow_status(wfl.workflow_uuids[0])
     assert wfs
@@ -145,7 +145,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     # Make sure predicate is actually applied
     gwi.authenticated_user = "user2"
-    wfl = dbos._sys_db.get_workflows(gwi)
+    wfl = dbos._sys_db.get_workflows_sync(gwi)
     assert len(wfl.workflow_uuids) == 0
 
     response = client.get("/error")

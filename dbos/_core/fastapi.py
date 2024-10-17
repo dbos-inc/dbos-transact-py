@@ -6,16 +6,15 @@ from fastapi import Request as FastAPIRequest
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from dbos import DBOS
-from dbos.error import DBOSException
-
-from .context import (
+from .. import DBOS
+from ..context import (
     EnterDBOSHandler,
     OperationType,
     SetWorkflowID,
     TracedAttributes,
     assert_current_dbos_context,
 )
+from ..error import DBOSException
 from .request import Address, Request, request_id_header
 
 
@@ -65,10 +64,10 @@ class LifespanMiddleware:
             while True:
                 message = await receive()
                 if message["type"] == "lifespan.startup":
-                    self.dbos._launch()
+                    await self.dbos._launch_async()
                     await send({"type": "lifespan.startup.complete"})
                 elif message["type"] == "lifespan.shutdown":
-                    self.dbos._destroy()
+                    await self.dbos._destroy_async()
                     await send({"type": "lifespan.shutdown.complete"})
                     break
         else:

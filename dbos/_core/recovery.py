@@ -1,18 +1,19 @@
+import asyncio
 import os
 import threading
 import time
 import traceback
 from typing import TYPE_CHECKING, Any, List
 
-from dbos.context import SetWorkflowRecovery
-from dbos.core import _execute_workflow_id
-from dbos.error import DBOSWorkflowFunctionNotFoundError
+from ..context import SetWorkflowRecovery
+from ..error import DBOSWorkflowFunctionNotFoundError
+from .workflow import execute_workflow_id
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS, WorkflowHandle
+    from ..dbos import DBOS, WorkflowHandle
 
 
-def _startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
+def startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
     """Attempt to recover local pending workflows on startup using a background thread."""
     stop_event = threading.Event()
     dbos.stop_events.append(stop_event)
@@ -20,7 +21,7 @@ def _startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
         try:
             for workflowID in list(workflow_ids):
                 with SetWorkflowRecovery():
-                    _execute_workflow_id(dbos, workflowID)
+                    execute_workflow_id(dbos, workflowID)
                 workflow_ids.remove(workflowID)
         except DBOSWorkflowFunctionNotFoundError:
             time.sleep(1)
@@ -31,7 +32,7 @@ def _startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
             raise e
 
 
-def _recover_pending_workflows(
+def recover_pending_workflows(
     dbos: "DBOS", executor_ids: List[str] = ["local"]
 ) -> List["WorkflowHandle[Any]"]:
     workflow_handles: List["WorkflowHandle[Any]"] = []
@@ -41,12 +42,12 @@ def _recover_pending_workflows(
                 f"Skip local recovery because it's running in a VM: {os.environ.get('DBOS__VMID')}"
             )
         dbos.logger.debug(f"Recovering pending workflows for executor: {executor_id}")
-        workflow_ids = dbos._sys_db.get_pending_workflows(executor_id)
+        workflow_ids = dbos._sys_db.get_pending_workflows_sync(executor_id)
         dbos.logger.debug(f"Pending workflows: {workflow_ids}")
 
         for workflowID in workflow_ids:
             with SetWorkflowRecovery():
-                handle = _execute_workflow_id(dbos, workflowID)
+                handle = execute_workflow_id(dbos, workflowID)
             workflow_handles.append(handle)
 
     dbos.logger.info("Recovered pending workflows")

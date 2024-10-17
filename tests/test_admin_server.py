@@ -78,7 +78,7 @@ def test_admin_recovery(dbos: DBOS) -> None:
 
     dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
-    dbos._sys_db.update_workflow_status(
+    dbos._sys_db.update_workflow_status_sync(
         {
             "workflow_uuid": wfuuid,
             "status": "PENDING",
