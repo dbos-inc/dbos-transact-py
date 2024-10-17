@@ -48,6 +48,10 @@ def test_admin_endpoints(dbos: DBOS) -> None:
     response = requests.post("http://localhost:3001/stuff", timeout=5)
     assert response.status_code == 404
 
+    response = requests.get("http://localhost:3001/deactivate", timeout=5)
+    assert response.status_code == 200
+
+
 
 def test_admin_recovery(dbos: DBOS) -> None:
     os.environ["DBOS__VMID"] = "testexecutor"
