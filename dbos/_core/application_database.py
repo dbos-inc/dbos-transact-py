@@ -48,32 +48,32 @@ class ApplicationDatabase:
             port=config["database"]["port"],
             database=app_db_name,
         )
-        self.engine = sa.create_engine(
+        self.sync_engine = sa.create_engine(
             app_db_url, pool_size=20, max_overflow=5, pool_timeout=30
         )
-        self.sessionmaker = sessionmaker(bind=self.engine)
+        self.sessionmaker = sessionmaker(bind=self.sync_engine)
         self.async_engine = create_async_engine(
             app_db_url, pool_size=20, max_overflow=5, pool_timeout=30
         )
         self.async_sessionmaker = async_sessionmaker(self.async_engine)
 
         # Create the dbos schema and transaction_outputs table in the application database
-        with self.engine.begin() as conn:
+        with self.sync_engine.begin() as conn:
             schema_creation_query = sa.text(
                 f"CREATE SCHEMA IF NOT EXISTS {ApplicationSchema.schema}"
             )
             conn.execute(schema_creation_query)
-        ApplicationSchema.metadata_obj.create_all(self.engine)
+        ApplicationSchema.metadata_obj.create_all(self.sync_engine)
 
     def destroy(self) -> None:
         asyncio.run(self.destroy_async())
 
     async def destroy_async(self) -> None:
-        self.engine.dispose()
+        self.sync_engine.dispose()
         await self.async_engine.dispose()
 
     @staticmethod
-    def record_transaction_output(
+    def record_transaction_output_sync(
         session: Session, output: TransactionResultInternal
     ) -> None:
         try:
@@ -99,7 +99,9 @@ class ApplicationDatabase:
     async def record_transaction_output_async(
         session: AsyncSession, output: TransactionResultInternal
     ) -> None:
-        await session.run_sync(ApplicationDatabase.record_transaction_output, output)
+        await session.run_sync(
+            ApplicationDatabase.record_transaction_output_sync, output
+        )
 
     @staticmethod
     def _record_transaction_error(
@@ -124,8 +126,8 @@ class ApplicationDatabase:
                 raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
             raise
 
-    def record_transaction_error(self, output: TransactionResultInternal) -> None:
-        with self.engine.begin() as conn:
+    def record_transaction_error_sync(self, output: TransactionResultInternal) -> None:
+        with self.sync_engine.begin() as conn:
             ApplicationDatabase._record_transaction_error(conn, output)
 
     async def record_transaction_error_async(
@@ -135,7 +137,7 @@ class ApplicationDatabase:
             await conn.run_sync(ApplicationDatabase._record_transaction_error, output)
 
     @staticmethod
-    def check_transaction_execution(
+    def check_transaction_execution_sync(
         session: Session, workflow_uuid: str, function_id: int
     ) -> Optional[RecordedResult]:
         rows = session.execute(
@@ -160,5 +162,7 @@ class ApplicationDatabase:
         session: AsyncSession, workflow_uuid: str, function_id: int
     ) -> Optional[RecordedResult]:
         return await session.run_sync(
-            ApplicationDatabase.check_transaction_execution, workflow_uuid, function_id
+            ApplicationDatabase.check_transaction_execution_sync,
+            workflow_uuid,
+            function_id,
         )

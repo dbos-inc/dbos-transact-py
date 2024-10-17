@@ -184,12 +184,10 @@ def transaction(
                                     }
                                 )
                                 # Check recorded output for OAOO
-                                recorded_output = (
-                                    ApplicationDatabase.check_transaction_execution(
-                                        session,
-                                        ctx.workflow_id,
-                                        ctx.function_id,
-                                    )
+                                recorded_output = ApplicationDatabase.check_transaction_execution_sync(
+                                    session,
+                                    ctx.workflow_id,
+                                    ctx.function_id,
                                 )
                                 if recorded_output:
                                     dbos.logger.debug(
@@ -221,7 +219,7 @@ def transaction(
                                 assert (
                                     ctx.sql_session is not None
                                 ), "Cannot find a database connection"
-                                ApplicationDatabase.record_transaction_output(
+                                ApplicationDatabase.record_transaction_output_sync(
                                     ctx.sql_session, txn_output
                                 )
                                 break
@@ -245,7 +243,7 @@ def transaction(
                                 txn_output["error"] = serialization.serialize_exception(
                                     error
                                 )
-                                dbos._app_db.record_transaction_error(txn_output)
+                                dbos._app_db.record_transaction_error_sync(txn_output)
                             raise
             return output
 
