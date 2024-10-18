@@ -793,7 +793,7 @@ class SystemDatabase:
                 self.notification_conn.execute("LISTEN dbos_workflow_events_channel")
 
                 while self._run_background_processes:
-                    gen = self.notification_conn.notifies(timeout=60)
+                    gen = self.notification_conn.notifies()
                     for notify in gen:
                         channel = notify.channel
                         dbos_logger.debug(
