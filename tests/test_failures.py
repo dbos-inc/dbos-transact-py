@@ -97,7 +97,7 @@ def test_buffer_flush_errors(dbos: DBOS) -> None:
     res = test_transaction("bob")
     assert res == "bob1"
 
-    dbos._sys_db.wait_for_buffer_flush()
+    dbos._sys_db.wait_for_buffer_flush_sync()
     wfs = dbos._sys_db.get_workflows_sync(gwi)
     assert len(wfs.workflow_uuids) == 1
 
@@ -116,7 +116,7 @@ def test_buffer_flush_errors(dbos: DBOS) -> None:
     # Switch back to the original good engine.
     dbos._sys_db.async_engine = backup_engine
 
-    dbos._sys_db.wait_for_buffer_flush()
+    dbos._sys_db.wait_for_buffer_flush_sync()
     wfs = dbos._sys_db.get_workflows_sync(gwi)
     assert len(wfs.workflow_uuids) == 2
 
@@ -149,5 +149,5 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
 
     event.set()
     assert handle.get_result() == None
-    dbos._sys_db.wait_for_buffer_flush()
+    dbos._sys_db.wait_for_buffer_flush_sync()
     assert handle.get_status().status == WorkflowStatusString.SUCCESS.value

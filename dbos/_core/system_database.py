@@ -119,21 +119,35 @@ class SystemDatabase:
 
     # Destroy the pool when finished
     def destroy(self) -> None:
-        asyncio.run(self.destroy_async())
+        self.wait_for_buffer_flush_sync()
+        self._run_background_processes = False
+        if self.notification_conn is not None:
+            self.notification_conn.close()
+        self.sync_engine.dispose()
+        # As per the SQLAlchemy docs, the AsyncEngine.sync_engine field is public so it can be used as an event target
+        # However, under the hood, AsyncEngine calls sync_engine.dispose in a greenlit, so it is likely OK to
+        # call it directly for sync disposal
+        self.async_engine.sync_engine.dispose()
 
     async def destroy_async(self) -> None:
-        self.wait_for_buffer_flush()
+        await self.wait_for_buffer_flush_async()
         self._run_background_processes = False
         if self.notification_conn is not None:
             self.notification_conn.close()
         self.sync_engine.dispose()
         await self.async_engine.dispose()
 
-    def wait_for_buffer_flush(self) -> None:
+    def wait_for_buffer_flush_sync(self) -> None:
         # Wait until the buffers are flushed.
         while self._is_flushing_status_buffer or not self._is_buffers_empty:
             dbos_logger.debug("Waiting for system buffers to be exported")
             time.sleep(1)
+
+    async def wait_for_buffer_flush_async(self) -> None:
+        # Wait until the buffers are flushed.
+        while self._is_flushing_status_buffer or not self._is_buffers_empty:
+            dbos_logger.debug("Waiting for system buffers to be exported")
+            await asyncio.sleep(1)
 
     def _get_update_workflow_status_cmd(
         self,

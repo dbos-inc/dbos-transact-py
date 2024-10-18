@@ -66,7 +66,11 @@ class ApplicationDatabase:
         ApplicationSchema.metadata_obj.create_all(self.sync_engine)
 
     def destroy(self) -> None:
-        asyncio.run(self.destroy_async())
+        self.sync_engine.dispose()
+        # As per the SQLAlchemy docs, the AsyncEngine.sync_engine field is public so it can be used as an event target
+        # However, under the hood, AsyncEngine calls sync_engine.dispose in a greenlit, so it is likely OK to
+        # call it directly for sync disposal
+        self.async_engine.sync_engine.dispose()
 
     async def destroy_async(self) -> None:
         self.sync_engine.dispose()

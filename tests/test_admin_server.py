@@ -76,7 +76,7 @@ def test_admin_recovery(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") == "bob1bob"
 
-    dbos._sys_db.wait_for_buffer_flush()
+    dbos._sys_db.wait_for_buffer_flush_sync()
     # Change the workflow status to pending
     dbos._sys_db.update_workflow_status_sync(
         {

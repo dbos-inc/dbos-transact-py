@@ -419,21 +419,14 @@ class DBOS:
             dbos_logger.error(f"DBOS failed to launch: {traceback.format_exc()}")
             raise
 
-    def _destroy(self) -> None:
-        asyncio.run(self._destroy_async())
-
-    async def _destroy_async(self) -> None:
+    def _destroy_events(self) -> None:
         self._initialized = False
         for event in self.stop_events:
             event.set()
         for aevent in self.async_stop_events:
             aevent.set()
-        if self._sys_db_field is not None:
-            await self._sys_db_field.destroy_async()
-            self._sys_db_field = None
-        if self._app_db_field is not None:
-            await self._app_db_field.destroy_async()
-            self._app_db_field = None
+
+    def _destroy_remaining(self) -> None:
         if self._admin_server_field is not None:
             self._admin_server_field.stop()
             self._admin_server_field = None
@@ -444,6 +437,26 @@ class DBOS:
             self._executor_field = None
         for bg_thread in self._background_threads:
             bg_thread.join()
+
+    def _destroy(self) -> None:
+        self._destroy_events()
+        if self._sys_db_field is not None:
+            self._sys_db_field.destroy()
+            self._sys_db_field = None
+        if self._app_db_field is not None:
+            self._app_db_field.destroy()
+            self._app_db_field = None
+        self._destroy_remaining()
+
+    async def _destroy_async(self) -> None:
+        self._destroy_events()
+        if self._sys_db_field is not None:
+            await self._sys_db_field.destroy_async()
+            self._sys_db_field = None
+        if self._app_db_field is not None:
+            await self._app_db_field.destroy_async()
+            self._app_db_field = None
+        self._destroy_remaining()
 
     @classmethod
     def register_instance(cls, inst: object) -> None:

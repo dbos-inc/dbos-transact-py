@@ -132,7 +132,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert span.attributes["authenticatedUserRoles"] == '["user", "engineer"]'
 
     # Verify that there is one workflow for this user.
-    dbos._sys_db.wait_for_buffer_flush()
+    dbos._sys_db.wait_for_buffer_flush_sync()
     gwi = GetWorkflowsInput()
     gwi.authenticated_user = "user1"
     wfl = dbos._sys_db.get_workflows_sync(gwi)
