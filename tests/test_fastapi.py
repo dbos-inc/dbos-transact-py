@@ -111,9 +111,9 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert response.json().get("id1") == wfuuid
     assert response.json().get("id2") != wfuuid
 
-    dbos._sys_db.wait_for_buffer_flush()
+    dbos._sys_db.wait_for_buffer_flush_sync()
     # Change the workflow status to pending
-    dbos._sys_db.update_workflow_status(
+    dbos._sys_db.update_workflow_status_sync(
         {
             "workflow_uuid": wfuuid,
             "status": "PENDING",

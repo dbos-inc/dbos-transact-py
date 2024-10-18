@@ -1,29 +1,16 @@
-from typing import Optional, TypedDict, cast
+import asyncio
+from typing import Optional
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from dbos.error import DBOSWorkflowConflictIDError
-from dbos.schemas.application_database import ApplicationSchema
-
-from .dbos_config import ConfigFile
-
-
-class TransactionResultInternal(TypedDict):
-    workflow_uuid: str
-    function_id: int
-    output: Optional[str]  # JSON (jsonpickle)
-    error: Optional[str]  # JSON (jsonpickle)
-    txn_id: Optional[str]
-    txn_snapshot: str
-    executor_id: Optional[str]
-
-
-class RecordedResult(TypedDict):
-    output: Optional[str]  # JSON (jsonpickle)
-    error: Optional[str]  # JSON (jsonpickle)
+from ..dbos_config import ConfigFile
+from ..error import DBOSWorkflowConflictIDError
+from .schemas.application_database import ApplicationSchema
+from .types import RecordedResult, TransactionResultInternal
 
 
 class ApplicationDatabase:
@@ -61,24 +48,36 @@ class ApplicationDatabase:
             port=config["database"]["port"],
             database=app_db_name,
         )
-        self.engine = sa.create_engine(
+        self.sync_engine = sa.create_engine(
             app_db_url, pool_size=20, max_overflow=5, pool_timeout=30
         )
-        self.sessionmaker = sessionmaker(bind=self.engine)
+        self.sessionmaker = sessionmaker(bind=self.sync_engine)
+        self.async_engine = create_async_engine(
+            app_db_url, pool_size=20, max_overflow=5, pool_timeout=30
+        )
+        self.async_sessionmaker = async_sessionmaker(self.async_engine)
 
         # Create the dbos schema and transaction_outputs table in the application database
-        with self.engine.begin() as conn:
+        with self.sync_engine.begin() as conn:
             schema_creation_query = sa.text(
                 f"CREATE SCHEMA IF NOT EXISTS {ApplicationSchema.schema}"
             )
             conn.execute(schema_creation_query)
-        ApplicationSchema.metadata_obj.create_all(self.engine)
+        ApplicationSchema.metadata_obj.create_all(self.sync_engine)
 
     def destroy(self) -> None:
-        self.engine.dispose()
+        self.sync_engine.dispose()
+        # As per the SQLAlchemy docs, the AsyncEngine.sync_engine field is public so it can be used as an event target
+        # However, under the hood, AsyncEngine calls sync_engine.dispose in a greenlit, so it is likely OK to
+        # call it directly for sync disposal
+        self.async_engine.sync_engine.dispose()
+
+    async def destroy_async(self) -> None:
+        self.sync_engine.dispose()
+        await self.async_engine.dispose()
 
     @staticmethod
-    def record_transaction_output(
+    def record_transaction_output_sync(
         session: Session, output: TransactionResultInternal
     ) -> None:
         try:
@@ -100,31 +99,49 @@ class ApplicationDatabase:
                 raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
             raise
 
-    def record_transaction_error(self, output: TransactionResultInternal) -> None:
+    @staticmethod
+    async def record_transaction_output_async(
+        session: AsyncSession, output: TransactionResultInternal
+    ) -> None:
+        await session.run_sync(
+            ApplicationDatabase.record_transaction_output_sync, output
+        )
+
+    @staticmethod
+    def _record_transaction_error(
+        conn: sa.Connection, output: TransactionResultInternal
+    ) -> None:
         try:
-            with self.engine.begin() as conn:
-                conn.execute(
-                    pg.insert(ApplicationSchema.transaction_outputs).values(
-                        workflow_uuid=output["workflow_uuid"],
-                        function_id=output["function_id"],
-                        output=None,
-                        error=output["error"],
-                        txn_id=sa.text(
-                            "(select pg_current_xact_id_if_assigned()::text)"
-                        ),
-                        txn_snapshot=output["txn_snapshot"],
-                        executor_id=(
-                            output["executor_id"] if output["executor_id"] else None
-                        ),
-                    )
+            conn.execute(
+                pg.insert(ApplicationSchema.transaction_outputs).values(
+                    workflow_uuid=output["workflow_uuid"],
+                    function_id=output["function_id"],
+                    output=None,
+                    error=output["error"],
+                    txn_id=sa.text("(select pg_current_xact_id_if_assigned()::text)"),
+                    txn_snapshot=output["txn_snapshot"],
+                    executor_id=(
+                        output["executor_id"] if output["executor_id"] else None
+                    ),
                 )
+            )
         except DBAPIError as dbapi_error:
             if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
             raise
 
+    def record_transaction_error_sync(self, output: TransactionResultInternal) -> None:
+        with self.sync_engine.begin() as conn:
+            ApplicationDatabase._record_transaction_error(conn, output)
+
+    async def record_transaction_error_async(
+        self, output: TransactionResultInternal
+    ) -> None:
+        async with self.async_engine.begin() as conn:
+            await conn.run_sync(ApplicationDatabase._record_transaction_error, output)
+
     @staticmethod
-    def check_transaction_execution(
+    def check_transaction_execution_sync(
         session: Session, workflow_uuid: str, function_id: int
     ) -> Optional[RecordedResult]:
         rows = session.execute(
@@ -143,3 +160,13 @@ class ApplicationDatabase:
             "error": rows[0][1],
         }
         return result
+
+    @staticmethod
+    async def check_transaction_execution_async(
+        session: AsyncSession, workflow_uuid: str, function_id: int
+    ) -> Optional[RecordedResult]:
+        return await session.run_sync(
+            ApplicationDatabase.check_transaction_execution_sync,
+            workflow_uuid,
+            function_id,
+        )

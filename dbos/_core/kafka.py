@@ -3,14 +3,14 @@ from typing import TYPE_CHECKING, Any, Callable, NoReturn
 
 from confluent_kafka import Consumer, KafkaError, KafkaException
 
-from dbos.queue import Queue
+from ..queue import Queue
 
 if TYPE_CHECKING:
-    from dbos.dbos import _DBOSRegistry
+    from ..dbos import _DBOSRegistry
 
-from .context import SetWorkflowID
-from .error import DBOSInitializationError
-from .kafka_message import KafkaMessage
+from ..context import SetWorkflowID
+from ..error import DBOSInitializationError
+from ..kafka_message import KafkaMessage
 from .logger import dbos_logger
 
 KafkaConsumerWorkflow = Callable[[KafkaMessage], None]

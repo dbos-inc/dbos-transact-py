@@ -1,0 +1,1669 @@
+import asyncio
+import datetime
+import os
+import threading
+import time
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Set, Tuple, cast
+
+import psycopg
+import sqlalchemy as sa
+import sqlalchemy.dialects.postgresql as pg
+from alembic import command
+from alembic.config import Config
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
+from sqlalchemy.sql import dml
+
+from ..dbos_config import ConfigFile
+from ..error import (
+    DBOSDeadLetterQueueError,
+    DBOSNonExistentWorkflowError,
+    DBOSWorkflowConflictIDError,
+)
+from ..types import GetWorkflowsInput, WorkflowStatusString
+from . import serialization
+from .logger import dbos_logger
+from .registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
+from .schemas.system_database import SystemSchema
+from .types import (
+    GetEventWorkflowContext,
+    GetWorkflowsOutput,
+    OperationResultInternal,
+    RecordedResult,
+    WorkflowInformation,
+    WorkflowInputs,
+    WorkflowStatusInternal,
+)
+
+if TYPE_CHECKING:
+    from ..queue import Queue
+
+
+_dbos_null_topic = "__null__topic__"
+_buffer_flush_batch_size = 100
+_buffer_flush_interval_secs = 1.0
+
+
+class SystemDatabase:
+
+    def __init__(self, config: ConfigFile):
+        self.config = config
+
+        sysdb_name = (
+            config["database"]["sys_db_name"]
+            if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]
+            else config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
+        )
+
+        # If the system database does not already exist, create it
+        postgres_db_url = sa.URL.create(
+            "postgresql+psycopg",
+            username=config["database"]["username"],
+            password=config["database"]["password"],
+            host=config["database"]["hostname"],
+            port=config["database"]["port"],
+            database="postgres",
+        )
+        engine = sa.create_engine(postgres_db_url)
+        with engine.connect() as conn:
+            conn.execution_options(isolation_level="AUTOCOMMIT")
+            if not conn.execute(
+                sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
+                parameters={"db_name": sysdb_name},
+            ).scalar():
+                conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
+        engine.dispose()
+
+        system_db_url = sa.URL.create(
+            "postgresql+psycopg",
+            username=config["database"]["username"],
+            password=config["database"]["password"],
+            host=config["database"]["hostname"],
+            port=config["database"]["port"],
+            database=sysdb_name,
+        )
+
+        # Run a schema migration for the system database
+        migration_dir = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)), "migrations"
+        )
+        alembic_cfg = Config()
+        alembic_cfg.set_main_option("script_location", migration_dir)
+        alembic_cfg.set_main_option(
+            "sqlalchemy.url", system_db_url.render_as_string(hide_password=False)
+        )
+        command.upgrade(alembic_cfg, "head")
+
+        self.notification_conn: Optional[psycopg.Connection] = None
+        self.notifications_map: Dict[str, threading.Condition] = {}
+        self.workflow_events_map: Dict[str, threading.Condition] = {}
+
+        # Initialize the workflow status and inputs buffers
+        self._workflow_status_buffer: Dict[str, WorkflowStatusInternal] = {}
+        self._workflow_inputs_buffer: Dict[str, str] = {}
+        # Two sets for tracking which single-transaction workflows have been exported to the status table
+        self._exported_temp_txn_wf_status: Set[str] = set()
+        self._temp_txn_wf_ids: Set[str] = set()
+        self._is_flushing_status_buffer = False
+
+        # Now we can run background processes
+        self._run_background_processes = True
+
+        # Create a connection pool for the system database
+        self.sync_engine = sa.create_engine(
+            system_db_url, pool_size=20, max_overflow=5, pool_timeout=30
+        )
+        self.async_engine = create_async_engine(
+            system_db_url, pool_size=20, max_overflow=5, pool_timeout=30
+        )
+
+    # Destroy the pool when finished
+    def destroy(self) -> None:
+        self.wait_for_buffer_flush_sync()
+        self._run_background_processes = False
+        if self.notification_conn is not None:
+            self.notification_conn.close()
+        self.sync_engine.dispose()
+        # As per the SQLAlchemy docs, the AsyncEngine.sync_engine field is public so it can be used as an event target
+        # However, under the hood, AsyncEngine calls sync_engine.dispose in a greenlit, so it is likely OK to
+        # call it directly for sync disposal
+        self.async_engine.sync_engine.dispose()
+
+    async def destroy_async(self) -> None:
+        await self.wait_for_buffer_flush_async()
+        self._run_background_processes = False
+        if self.notification_conn is not None:
+            self.notification_conn.close()
+        self.sync_engine.dispose()
+        await self.async_engine.dispose()
+
+    def wait_for_buffer_flush_sync(self) -> None:
+        # Wait until the buffers are flushed.
+        while self._is_flushing_status_buffer or not self._is_buffers_empty:
+            dbos_logger.debug("Waiting for system buffers to be exported")
+            time.sleep(1)
+
+    async def wait_for_buffer_flush_async(self) -> None:
+        # Wait until the buffers are flushed.
+        while self._is_flushing_status_buffer or not self._is_buffers_empty:
+            dbos_logger.debug("Waiting for system buffers to be exported")
+            await asyncio.sleep(1)
+
+    def _get_update_workflow_status_cmd(
+        self,
+        status: WorkflowStatusInternal,
+        replace: bool = True,
+        in_recovery: bool = False,
+    ) -> dml.ReturningInsert[tuple[Any,]]:
+        cmd = pg.insert(SystemSchema.workflow_status).values(
+            workflow_uuid=status["workflow_uuid"],
+            status=status["status"],
+            name=status["name"],
+            class_name=status["class_name"],
+            config_name=status["config_name"],
+            output=status["output"],
+            error=status["error"],
+            executor_id=status["executor_id"],
+            application_version=status["app_version"],
+            application_id=status["app_id"],
+            request=status["request"],
+            authenticated_user=status["authenticated_user"],
+            authenticated_roles=status["authenticated_roles"],
+            assumed_role=status["assumed_role"],
+            queue_name=status["queue_name"],
+        )
+        if replace:
+            cmd = cmd.on_conflict_do_update(
+                index_elements=["workflow_uuid"],
+                set_=dict(
+                    status=status["status"],
+                    output=status["output"],
+                    error=status["error"],
+                ),
+            )
+        elif in_recovery:
+            cmd = cmd.on_conflict_do_update(
+                index_elements=["workflow_uuid"],
+                set_=dict(
+                    recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
+                    + 1,
+                ),
+            )
+        else:
+            cmd = cmd.on_conflict_do_nothing()
+        return cmd.returning(SystemSchema.workflow_status.c.recovery_attempts)
+
+    def update_workflow_status_sync(
+        self,
+        status: WorkflowStatusInternal,
+        replace: bool = True,
+        in_recovery: bool = False,
+        *,
+        conn: Optional[sa.Connection] = None,
+        max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
+    ) -> None:
+        cmd = self._get_update_workflow_status_cmd(status, replace, in_recovery)
+
+        if conn is not None:
+            results = conn.execute(cmd)
+        else:
+            with self.sync_engine.begin() as c:
+                results = c.execute(cmd)
+
+        if in_recovery:
+            row = results.fetchone()
+            if row is not None:
+                recovery_attempts: int = row[0]
+                if recovery_attempts > max_recovery_attempts:
+                    with self.sync_engine.begin() as c:
+                        c.execute(
+                            sa.update(SystemSchema.workflow_status)
+                            .where(
+                                SystemSchema.workflow_status.c.workflow_uuid
+                                == status["workflow_uuid"]
+                            )
+                            .where(
+                                SystemSchema.workflow_status.c.status
+                                == WorkflowStatusString.PENDING.value
+                            )
+                            .values(
+                                status=WorkflowStatusString.RETRIES_EXCEEDED.value,
+                            )
+                        )
+                    raise DBOSDeadLetterQueueError(
+                        status["workflow_uuid"], max_recovery_attempts
+                    )
+
+        # Record we have exported status for this single-transaction workflow
+        if status["workflow_uuid"] in self._temp_txn_wf_ids:
+            self._exported_temp_txn_wf_status.add(status["workflow_uuid"])
+
+    async def update_workflow_status_async(
+        self,
+        status: WorkflowStatusInternal,
+        replace: bool = True,
+        in_recovery: bool = False,
+        *,
+        conn: Optional[AsyncConnection] = None,
+        max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
+    ) -> None:
+        cmd = self._get_update_workflow_status_cmd(status, replace, in_recovery)
+
+        if conn is not None:
+            results = await conn.execute(cmd)
+        else:
+            async with self.async_engine.begin() as c:
+                results = await c.execute(cmd)
+        if in_recovery:
+            row = results.fetchone()
+            if row is not None:
+                recovery_attempts: int = row[0]
+                if recovery_attempts > max_recovery_attempts:
+                    async with self.async_engine.begin() as c:
+                        await c.execute(
+                            sa.update(SystemSchema.workflow_status)
+                            .where(
+                                SystemSchema.workflow_status.c.workflow_uuid
+                                == status["workflow_uuid"]
+                            )
+                            .where(
+                                SystemSchema.workflow_status.c.status
+                                == WorkflowStatusString.PENDING.value
+                            )
+                            .values(
+                                status=WorkflowStatusString.RETRIES_EXCEEDED.value,
+                            )
+                        )
+                    raise DBOSDeadLetterQueueError(
+                        status["workflow_uuid"], max_recovery_attempts
+                    )
+
+        # Record we have exported status for this single-transaction workflow
+        if status["workflow_uuid"] in self._temp_txn_wf_ids:
+            self._exported_temp_txn_wf_status.add(status["workflow_uuid"])
+
+    def _set_workflow_status(
+        self,
+        conn: sa.Connection,
+        workflow_uuid: str,
+        status: WorkflowStatusString,
+        reset_recovery_attempts: bool,
+    ) -> None:
+        stmt = (
+            sa.update(SystemSchema.workflow_status)
+            .where(SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid)
+            .values(
+                status=status,
+            )
+        )
+        conn.execute(stmt)
+
+        if reset_recovery_attempts:
+            stmt = (
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid)
+                .values(recovery_attempts=reset_recovery_attempts)
+            )
+            conn.execute(stmt)
+
+    def set_workflow_status_sync(
+        self,
+        workflow_uuid: str,
+        status: WorkflowStatusString,
+        reset_recovery_attempts: bool,
+    ) -> None:
+        with self.sync_engine.begin() as c:
+            self._set_workflow_status(c, workflow_uuid, status, reset_recovery_attempts)
+
+    async def set_workflow_status_async(
+        self,
+        workflow_uuid: str,
+        status: WorkflowStatusString,
+        reset_recovery_attempts: bool,
+    ) -> None:
+        async with self.async_engine.begin() as c:
+            await c.run_sync(
+                self._set_workflow_status,
+                workflow_uuid,
+                status,
+                reset_recovery_attempts,
+            )
+
+    def _get_workflow_status(
+        self, conn: sa.Connection, workflow_uuid: str
+    ) -> Optional[WorkflowStatusInternal]:
+        row = (
+            conn.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.status,
+                    SystemSchema.workflow_status.c.name,
+                    SystemSchema.workflow_status.c.request,
+                    SystemSchema.workflow_status.c.recovery_attempts,
+                    SystemSchema.workflow_status.c.config_name,
+                    SystemSchema.workflow_status.c.class_name,
+                    SystemSchema.workflow_status.c.authenticated_user,
+                    SystemSchema.workflow_status.c.authenticated_roles,
+                    SystemSchema.workflow_status.c.assumed_role,
+                    SystemSchema.workflow_status.c.queue_name,
+                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
+            )
+        ).fetchone()
+        if row is None:
+            return None
+        status: WorkflowStatusInternal = {
+            "workflow_uuid": workflow_uuid,
+            "status": row[0],
+            "name": row[1],
+            "class_name": row[5],
+            "config_name": row[4],
+            "output": None,
+            "error": None,
+            "app_id": None,
+            "app_version": None,
+            "executor_id": None,
+            "request": row[2],
+            "recovery_attempts": row[3],
+            "authenticated_user": row[6],
+            "authenticated_roles": row[7],
+            "assumed_role": row[8],
+            "queue_name": row[9],
+        }
+        return status
+
+    def get_workflow_status_sync(
+        self, workflow_uuid: str
+    ) -> Optional[WorkflowStatusInternal]:
+        with self.sync_engine.begin() as c:
+            return self._get_workflow_status(c, workflow_uuid)
+
+    async def get_workflow_status_async(
+        self, workflow_uuid: str
+    ) -> Optional[WorkflowStatusInternal]:
+        async with self.async_engine.begin() as c:
+            return await c.run_sync(self._get_workflow_status, workflow_uuid)
+
+    def get_workflow_status_within_wf_sync(
+        self, workflow_uuid: str, calling_wf: str, calling_wf_fn: int
+    ) -> Optional[WorkflowStatusInternal]:
+        res = self.check_operation_execution_sync(calling_wf, calling_wf_fn)
+        if res is not None:
+            if res["output"]:
+                resstat: WorkflowStatusInternal = serialization.deserialize(
+                    res["output"]
+                )
+                return resstat
+            return None
+        stat = self.get_workflow_status_sync(workflow_uuid)
+        self.record_operation_result_sync(
+            {
+                "workflow_uuid": calling_wf,
+                "function_id": calling_wf_fn,
+                "output": serialization.serialize(stat),
+                "error": None,
+            }
+        )
+        return stat
+
+    async def get_workflow_status_within_wf_async(
+        self, workflow_uuid: str, calling_wf: str, calling_wf_fn: int
+    ) -> Optional[WorkflowStatusInternal]:
+        res = await self.check_operation_execution_async(calling_wf, calling_wf_fn)
+        if res is not None:
+            if res["output"]:
+                resstat: WorkflowStatusInternal = serialization.deserialize(
+                    res["output"]
+                )
+                return resstat
+            return None
+        stat = await self.get_workflow_status_async(workflow_uuid)
+        await self.record_operation_result_async(
+            {
+                "workflow_uuid": calling_wf,
+                "function_id": calling_wf_fn,
+                "output": serialization.serialize(stat),
+                "error": None,
+            }
+        )
+        return stat
+
+    def _get_workflow_status_w_outputs(
+        self, conn: sa.Connection, workflow_uuid: str
+    ) -> Optional[WorkflowStatusInternal]:
+        row = (
+            conn.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.status,
+                    SystemSchema.workflow_status.c.name,
+                    SystemSchema.workflow_status.c.request,
+                    SystemSchema.workflow_status.c.output,
+                    SystemSchema.workflow_status.c.error,
+                    SystemSchema.workflow_status.c.config_name,
+                    SystemSchema.workflow_status.c.class_name,
+                    SystemSchema.workflow_status.c.authenticated_user,
+                    SystemSchema.workflow_status.c.authenticated_roles,
+                    SystemSchema.workflow_status.c.assumed_role,
+                    SystemSchema.workflow_status.c.queue_name,
+                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
+            )
+        ).fetchone()
+        if row is None:
+            return None
+        status: WorkflowStatusInternal = {
+            "workflow_uuid": workflow_uuid,
+            "status": row[0],
+            "name": row[1],
+            "config_name": row[5],
+            "class_name": row[6],
+            "output": row[3],
+            "error": row[4],
+            "app_id": None,
+            "app_version": None,
+            "executor_id": None,
+            "request": row[2],
+            "recovery_attempts": None,
+            "authenticated_user": row[7],
+            "authenticated_roles": row[8],
+            "assumed_role": row[9],
+            "queue_name": row[10],
+        }
+        return status
+
+    async def get_workflow_status_w_outputs_async(
+        self, workflow_uuid: str
+    ) -> Optional[WorkflowStatusInternal]:
+        async with self.async_engine.begin() as c:
+            return await c.run_sync(self._get_workflow_status_w_outputs, workflow_uuid)
+
+    def get_workflow_status_w_outputs_sync(
+        self, workflow_uuid: str
+    ) -> Optional[WorkflowStatusInternal]:
+        with self.sync_engine.begin() as c:
+            return self._get_workflow_status_w_outputs(c, workflow_uuid)
+
+    async def await_workflow_result_internal_async(
+        self, workflow_uuid: str
+    ) -> dict[str, Any]:
+        polling_interval_secs: float = 1.000
+
+        while True:
+            async with self.async_engine.begin() as c:
+                row = (
+                    await c.execute(
+                        sa.select(
+                            SystemSchema.workflow_status.c.status,
+                            SystemSchema.workflow_status.c.output,
+                            SystemSchema.workflow_status.c.error,
+                        ).where(
+                            SystemSchema.workflow_status.c.workflow_uuid
+                            == workflow_uuid
+                        )
+                    )
+                ).fetchone()
+                if row is not None:
+                    status = row[0]
+                    if status == str(WorkflowStatusString.SUCCESS.value):
+                        return {
+                            "status": status,
+                            "output": row[1],
+                            "workflow_uuid": workflow_uuid,
+                        }
+
+                    elif status == str(WorkflowStatusString.ERROR.value):
+                        return {
+                            "status": status,
+                            "error": row[2],
+                            "workflow_uuid": workflow_uuid,
+                        }
+
+                else:
+                    pass  # CB: I guess we're assuming the WF will show up eventually.
+
+            await asyncio.sleep(polling_interval_secs)
+
+    def await_workflow_result_internal_sync(self, workflow_uuid: str) -> dict[str, Any]:
+        polling_interval_secs: float = 1.000
+
+        while True:
+            with self.sync_engine.begin() as c:
+                row = (
+                    c.execute(
+                        sa.select(
+                            SystemSchema.workflow_status.c.status,
+                            SystemSchema.workflow_status.c.output,
+                            SystemSchema.workflow_status.c.error,
+                        ).where(
+                            SystemSchema.workflow_status.c.workflow_uuid
+                            == workflow_uuid
+                        )
+                    )
+                ).fetchone()
+                if row is not None:
+                    status = row[0]
+                    if status == str(WorkflowStatusString.SUCCESS.value):
+                        return {
+                            "status": status,
+                            "output": row[1],
+                            "workflow_uuid": workflow_uuid,
+                        }
+
+                    elif status == str(WorkflowStatusString.ERROR.value):
+                        return {
+                            "status": status,
+                            "error": row[2],
+                            "workflow_uuid": workflow_uuid,
+                        }
+
+                else:
+                    pass  # CB: I guess we're assuming the WF will show up eventually.
+
+            time.sleep(polling_interval_secs)
+
+    async def await_workflow_result_async(self, workflow_uuid: str) -> Any:
+        stat = await self.await_workflow_result_internal_async(workflow_uuid)
+        if not stat:
+            return None
+        status: str = stat["status"]
+        if status == str(WorkflowStatusString.SUCCESS.value):
+            return serialization.deserialize(stat["output"])
+        elif status == str(WorkflowStatusString.ERROR.value):
+            raise serialization.deserialize_exception(stat["error"])
+        return None
+
+    def await_workflow_result_sync(self, workflow_uuid: str) -> Any:
+        stat = self.await_workflow_result_internal_sync(workflow_uuid)
+        if not stat:
+            return None
+        status: str = stat["status"]
+        if status == str(WorkflowStatusString.SUCCESS.value):
+            return serialization.deserialize(stat["output"])
+        elif status == str(WorkflowStatusString.ERROR.value):
+            raise serialization.deserialize_exception(stat["error"])
+        return None
+
+    async def get_workflow_info_async(
+        self, workflow_uuid: str, get_request: bool
+    ) -> Optional[WorkflowInformation]:
+        stat = await self.get_workflow_status_w_outputs_async(workflow_uuid)
+        if stat is None:
+            return None
+        info = cast(WorkflowInformation, stat)
+        input = await self.get_workflow_inputs_async(workflow_uuid)
+        if input is not None:
+            info["input"] = input
+        if not get_request:
+            info.pop("request", None)
+
+        return info
+
+    def get_workflow_info_sync(
+        self, workflow_uuid: str, get_request: bool
+    ) -> Optional[WorkflowInformation]:
+        stat = self.get_workflow_status_w_outputs_sync(workflow_uuid)
+        if stat is None:
+            return None
+        info = cast(WorkflowInformation, stat)
+        input = self.get_workflow_inputs_sync(workflow_uuid)
+        if input is not None:
+            info["input"] = input
+        if not get_request:
+            info.pop("request", None)
+
+        return info
+
+    def _update_workflow_inputs(
+        self, conn: sa.Connection, workflow_uuid: str, inputs: str
+    ) -> None:
+        cmd = (
+            pg.insert(SystemSchema.workflow_inputs)
+            .values(
+                workflow_uuid=workflow_uuid,
+                inputs=inputs,
+            )
+            .on_conflict_do_nothing()
+        )
+        conn.execute(cmd)
+        if workflow_uuid in self._temp_txn_wf_ids:
+            # Clean up the single-transaction tracking sets
+            self._exported_temp_txn_wf_status.discard(workflow_uuid)
+            self._temp_txn_wf_ids.discard(workflow_uuid)
+
+    def update_workflow_inputs_sync(
+        self, workflow_uuid: str, inputs: str, conn: Optional[sa.Connection] = None
+    ) -> None:
+        if conn is not None:
+            self._update_workflow_inputs(conn, workflow_uuid, inputs)
+        else:
+            with self.sync_engine.begin() as c:
+                self._update_workflow_inputs(c, workflow_uuid, inputs)
+
+    async def update_workflow_inputs_async(
+        self, workflow_uuid: str, inputs: str, conn: Optional[AsyncConnection] = None
+    ) -> None:
+        if conn is not None:
+            await conn.run_sync(self._update_workflow_inputs, workflow_uuid, inputs)
+        else:
+            async with self.async_engine.begin() as c:
+                await c.run_sync(self._update_workflow_inputs, workflow_uuid, inputs)
+
+    def _get_workflow_inputs(
+        self, conn: sa.Connection, workflow_uuid: str
+    ) -> Optional[WorkflowInputs]:
+
+        row = (
+            conn.execute(
+                sa.select(SystemSchema.workflow_inputs.c.inputs).where(
+                    SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid
+                )
+            )
+        ).fetchone()
+        if row is None:
+            return None
+        inputs: WorkflowInputs = serialization.deserialize_args(row[0])
+        return inputs
+
+    async def get_workflow_inputs_async(
+        self, workflow_uuid: str
+    ) -> Optional[WorkflowInputs]:
+        async with self.async_engine.begin() as c:
+            return await c.run_sync(self._get_workflow_inputs, workflow_uuid)
+
+    def get_workflow_inputs_sync(self, workflow_uuid: str) -> Optional[WorkflowInputs]:
+        with self.sync_engine.begin() as c:
+            return self._get_workflow_inputs(c, workflow_uuid)
+
+    def _get_workflows(
+        self, conn: sa.Connection, input: GetWorkflowsInput
+    ) -> GetWorkflowsOutput:
+        query = sa.select(SystemSchema.workflow_status.c.workflow_uuid).order_by(
+            SystemSchema.workflow_status.c.created_at.desc()
+        )
+
+        if input.name:
+            query = query.where(SystemSchema.workflow_status.c.name == input.name)
+        if input.authenticated_user:
+            query = query.where(
+                SystemSchema.workflow_status.c.authenticated_user
+                == input.authenticated_user
+            )
+        if input.start_time:
+            query = query.where(
+                SystemSchema.workflow_status.c.created_at
+                >= datetime.datetime.fromisoformat(input.start_time).timestamp()
+            )
+        if input.end_time:
+            query = query.where(
+                SystemSchema.workflow_status.c.created_at
+                <= datetime.datetime.fromisoformat(input.end_time).timestamp()
+            )
+        if input.status:
+            query = query.where(SystemSchema.workflow_status.c.status == input.status)
+        if input.application_version:
+            query = query.where(
+                SystemSchema.workflow_status.c.application_version
+                == input.application_version
+            )
+        if input.limit:
+            query = query.limit(input.limit)
+
+        rows = conn.execute(query)
+        workflow_uuids = [row[0] for row in rows]
+
+        return GetWorkflowsOutput(workflow_uuids)
+
+    async def get_workflows_async(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
+        async with self.async_engine.begin() as c:
+            return await c.run_sync(self._get_workflows, input)
+
+    def get_workflows_sync(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
+        with self.sync_engine.begin() as c:
+            return self._get_workflows(c, input)
+
+    def _get_pending_workflows(
+        self, conn: sa.Connection, executor_id: str
+    ) -> list[str]:
+        rows = (
+            conn.execute(
+                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                    SystemSchema.workflow_status.c.status
+                    == WorkflowStatusString.PENDING.value,
+                    SystemSchema.workflow_status.c.executor_id == executor_id,
+                )
+            )
+        ).fetchall()
+        return [row[0] for row in rows]
+
+    def get_pending_workflows_sync(self, executor_id: str) -> list[str]:
+        with self.sync_engine.begin() as c:
+            return self._get_pending_workflows(c, executor_id)
+
+    async def get_pending_workflows_async(self, executor_id: str) -> list[str]:
+        async with self.async_engine.begin() as c:
+            return await c.run_sync(self._get_pending_workflows, executor_id)
+
+    def _record_operation_result(
+        self, conn: sa.Connection, result: OperationResultInternal
+    ) -> None:
+        error = result["error"]
+        output = result["output"]
+        assert error is None or output is None, "Only one of error or output can be set"
+        sql = pg.insert(SystemSchema.operation_outputs).values(
+            workflow_uuid=result["workflow_uuid"],
+            function_id=result["function_id"],
+            output=output,
+            error=error,
+        )
+        try:
+            conn.execute(sql)
+        except DBAPIError as dbapi_error:
+            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
+                raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+            raise
+
+    async def record_operation_result_async(
+        self, result: OperationResultInternal, conn: Optional[AsyncConnection] = None
+    ) -> None:
+        if conn is not None:
+            await conn.run_sync(self._record_operation_result, result)
+        else:
+            async with self.async_engine.begin() as c:
+                await c.run_sync(self._record_operation_result, result)
+
+    def record_operation_result_sync(
+        self, result: OperationResultInternal, conn: Optional[sa.Connection] = None
+    ) -> None:
+        if conn is not None:
+            self._record_operation_result(conn, result)
+        else:
+            with self.sync_engine.begin() as c:
+                self._record_operation_result(c, result)
+
+    def _check_operation_execution(
+        self,
+        conn: sa.Connection,
+        workflow_uuid: str,
+        function_id: int,
+    ) -> Optional[RecordedResult]:
+        sql = sa.select(
+            SystemSchema.operation_outputs.c.output,
+            SystemSchema.operation_outputs.c.error,
+        ).where(
+            SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
+            SystemSchema.operation_outputs.c.function_id == function_id,
+        )
+
+        rows = (conn.execute(sql)).all()
+        if len(rows) == 0:
+            return None
+        result: RecordedResult = {
+            "output": rows[0][0],
+            "error": rows[0][1],
+        }
+        return result
+
+    async def check_operation_execution_async(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        conn: Optional[AsyncConnection] = None,
+    ) -> Optional[RecordedResult]:
+        if conn is not None:
+            return await conn.run_sync(
+                self._check_operation_execution, workflow_uuid, function_id
+            )
+        else:
+            async with self.async_engine.begin() as c:
+                return await c.run_sync(
+                    self._check_operation_execution, workflow_uuid, function_id
+                )
+
+    def check_operation_execution_sync(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        conn: Optional[sa.Connection] = None,
+    ) -> Optional[RecordedResult]:
+        if conn is not None:
+            return self._check_operation_execution(conn, workflow_uuid, function_id)
+        else:
+            with self.sync_engine.begin() as c:
+                return self._check_operation_execution(c, workflow_uuid, function_id)
+
+    def _send(
+        self,
+        conn: sa.Connection,
+        workflow_uuid: str,
+        function_id: int,
+        destination_uuid: str,
+        message: Any,
+        topic: Optional[str] = None,
+    ) -> None:
+        topic = topic if topic is not None else _dbos_null_topic
+        recorded_output = self.check_operation_execution_sync(
+            workflow_uuid, function_id, conn=conn
+        )
+        if recorded_output is not None:
+            dbos_logger.debug(
+                f"Replaying send, id: {function_id}, destination_uuid: {destination_uuid}, topic: {topic}"
+            )
+            return  # Already sent before
+        else:
+            dbos_logger.debug(
+                f"Running send, id: {function_id}, destination_uuid: {destination_uuid}, topic: {topic}"
+            )
+
+        try:
+            conn.execute(
+                pg.insert(SystemSchema.notifications).values(
+                    destination_uuid=destination_uuid,
+                    topic=topic,
+                    message=serialization.serialize(message),
+                )
+            )
+        except DBAPIError as dbapi_error:
+            # Foreign key violation
+            if dbapi_error.orig.sqlstate == "23503":  # type: ignore
+                raise DBOSNonExistentWorkflowError(destination_uuid)
+            raise
+        output: OperationResultInternal = {
+            "workflow_uuid": workflow_uuid,
+            "function_id": function_id,
+            "output": None,
+            "error": None,
+        }
+        self.record_operation_result_sync(output, conn=conn)
+
+    def send_sync(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        destination_uuid: str,
+        message: Any,
+        topic: Optional[str] = None,
+    ) -> None:
+        with self.sync_engine.begin() as c:
+            self._send(c, workflow_uuid, function_id, destination_uuid, message, topic)
+
+    async def send_async(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        destination_uuid: str,
+        message: Any,
+        topic: Optional[str] = None,
+    ) -> None:
+        async with self.async_engine.begin() as c:
+            await c.run_sync(
+                self._send, workflow_uuid, function_id, destination_uuid, message, topic
+            )
+
+    def recv_sync(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        timeout_function_id: int,
+        topic: Optional[str],
+        timeout_seconds: float = 60,
+    ) -> Any:
+        topic = topic if topic is not None else _dbos_null_topic
+
+        # First, check for previous executions.
+        recorded_output = self.check_operation_execution_sync(
+            workflow_uuid, function_id
+        )
+        if recorded_output is not None:
+            dbos_logger.debug(f"Replaying recv, id: {function_id}, topic: {topic}")
+            if recorded_output["output"] is not None:
+                return serialization.deserialize(recorded_output["output"])
+            else:
+                raise Exception("No output recorded in the last recv")
+        else:
+            dbos_logger.debug(f"Running recv, id: {function_id}, topic: {topic}")
+
+        # Insert a condition to the notifications map, so the listener can notify it when a message is received.
+        payload = f"{workflow_uuid}::{topic}"
+        condition = threading.Condition()
+        # Must acquire first before adding to the map. Otherwise, the notification listener may notify it before the condition is acquired and waited.
+        condition.acquire()
+        self.notifications_map[payload] = condition
+
+        # Check if the key is already in the database. If not, wait for the notification.
+        init_recv: Sequence[Any]
+        with self.sync_engine.begin() as c:
+            init_recv = (
+                c.execute(
+                    sa.select(
+                        SystemSchema.notifications.c.topic,
+                    ).where(
+                        SystemSchema.notifications.c.destination_uuid == workflow_uuid,
+                        SystemSchema.notifications.c.topic == topic,
+                    )
+                )
+            ).fetchall()
+
+        if len(init_recv) == 0:
+            # Wait for the notification
+            # Support OAOO sleep
+            actual_timeout = self.sleep_sync(
+                workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
+            )
+            condition.wait(timeout=actual_timeout)
+        condition.release()
+        self.notifications_map.pop(payload)
+
+        # Transactionally consume and return the message if it's in the database, otherwise return null.
+        with self.sync_engine.begin() as c:
+            oldest_entry_cte = (
+                sa.select(
+                    SystemSchema.notifications.c.destination_uuid,
+                    SystemSchema.notifications.c.topic,
+                    SystemSchema.notifications.c.message,
+                    SystemSchema.notifications.c.created_at_epoch_ms,
+                )
+                .where(
+                    SystemSchema.notifications.c.destination_uuid == workflow_uuid,
+                    SystemSchema.notifications.c.topic == topic,
+                )
+                .order_by(SystemSchema.notifications.c.created_at_epoch_ms.asc())
+                .limit(1)
+                .cte("oldest_entry")
+            )
+            delete_stmt = (
+                sa.delete(SystemSchema.notifications)
+                .where(
+                    SystemSchema.notifications.c.destination_uuid
+                    == oldest_entry_cte.c.destination_uuid,
+                    SystemSchema.notifications.c.topic == oldest_entry_cte.c.topic,
+                    SystemSchema.notifications.c.created_at_epoch_ms
+                    == oldest_entry_cte.c.created_at_epoch_ms,
+                )
+                .returning(SystemSchema.notifications.c.message)
+            )
+            rows = (c.execute(delete_stmt)).fetchall()
+            message: Any = None
+            if len(rows) > 0:
+                message = serialization.deserialize(rows[0][0])
+            self.record_operation_result_sync(
+                {
+                    "workflow_uuid": workflow_uuid,
+                    "function_id": function_id,
+                    "output": serialization.serialize(
+                        message
+                    ),  # None will be serialized to 'null'
+                    "error": None,
+                },
+                conn=c,
+            )
+        return message
+
+    async def recv_async(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        timeout_function_id: int,
+        topic: Optional[str],
+        timeout_seconds: float = 60,
+    ) -> Any:
+        topic = topic if topic is not None else _dbos_null_topic
+
+        # First, check for previous executions.
+        recorded_output = await self.check_operation_execution_async(
+            workflow_uuid, function_id
+        )
+        if recorded_output is not None:
+            dbos_logger.debug(f"Replaying recv, id: {function_id}, topic: {topic}")
+            if recorded_output["output"] is not None:
+                return serialization.deserialize(recorded_output["output"])
+            else:
+                raise Exception("No output recorded in the last recv")
+        else:
+            dbos_logger.debug(f"Running recv, id: {function_id}, topic: {topic}")
+
+        # Insert a condition to the notifications map, so the listener can notify it when a message is received.
+        payload = f"{workflow_uuid}::{topic}"
+        condition = threading.Condition()
+        # Must acquire first before adding to the map. Otherwise, the notification listener may notify it before the condition is acquired and waited.
+        condition.acquire()
+        self.notifications_map[payload] = condition
+
+        # Check if the key is already in the database. If not, wait for the notification.
+        init_recv: Sequence[Any]
+        async with self.async_engine.begin() as c:
+            init_recv = (
+                await c.execute(
+                    sa.select(
+                        SystemSchema.notifications.c.topic,
+                    ).where(
+                        SystemSchema.notifications.c.destination_uuid == workflow_uuid,
+                        SystemSchema.notifications.c.topic == topic,
+                    )
+                )
+            ).fetchall()
+
+        if len(init_recv) == 0:
+            # Wait for the notification
+            # Support OAOO sleep
+            actual_timeout = await self.sleep_async(
+                workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
+            )
+            condition.wait(timeout=actual_timeout)
+        condition.release()
+        self.notifications_map.pop(payload)
+
+        # Transactionally consume and return the message if it's in the database, otherwise return null.
+        async with self.async_engine.begin() as c:
+            oldest_entry_cte = (
+                sa.select(
+                    SystemSchema.notifications.c.destination_uuid,
+                    SystemSchema.notifications.c.topic,
+                    SystemSchema.notifications.c.message,
+                    SystemSchema.notifications.c.created_at_epoch_ms,
+                )
+                .where(
+                    SystemSchema.notifications.c.destination_uuid == workflow_uuid,
+                    SystemSchema.notifications.c.topic == topic,
+                )
+                .order_by(SystemSchema.notifications.c.created_at_epoch_ms.asc())
+                .limit(1)
+                .cte("oldest_entry")
+            )
+            delete_stmt = (
+                sa.delete(SystemSchema.notifications)
+                .where(
+                    SystemSchema.notifications.c.destination_uuid
+                    == oldest_entry_cte.c.destination_uuid,
+                    SystemSchema.notifications.c.topic == oldest_entry_cte.c.topic,
+                    SystemSchema.notifications.c.created_at_epoch_ms
+                    == oldest_entry_cte.c.created_at_epoch_ms,
+                )
+                .returning(SystemSchema.notifications.c.message)
+            )
+            rows = (await c.execute(delete_stmt)).fetchall()
+            message: Any = None
+            if len(rows) > 0:
+                message = serialization.deserialize(rows[0][0])
+            await self.record_operation_result_async(
+                {
+                    "workflow_uuid": workflow_uuid,
+                    "function_id": function_id,
+                    "output": serialization.serialize(
+                        message
+                    ),  # None will be serialized to 'null'
+                    "error": None,
+                },
+                conn=c,
+            )
+        return message
+
+    def notification_listener_sync(self) -> None:
+        while self._run_background_processes:
+            try:
+                # since we're using the psycopg connection directly, we need a url without the "+pycopg" suffix
+                url = sa.URL.create(
+                    "postgresql", **self.async_engine.url.translate_connect_args()
+                )
+
+                # Listen to notifications
+                self.notification_conn = psycopg.connect(
+                    url.render_as_string(hide_password=False), autocommit=True
+                )
+
+                self.notification_conn.execute("LISTEN dbos_notifications_channel")
+                self.notification_conn.execute("LISTEN dbos_workflow_events_channel")
+
+                while self._run_background_processes:
+                    gen = self.notification_conn.notifies()
+                    for notify in gen:
+                        channel = notify.channel
+                        dbos_logger.debug(
+                            f"Received notification on channel: {channel}, payload: {notify.payload}"
+                        )
+                        if channel == "dbos_notifications_channel":
+                            if (
+                                notify.payload
+                                and notify.payload in self.notifications_map
+                            ):
+                                condition = self.notifications_map[notify.payload]
+                                condition.acquire()
+                                condition.notify_all()
+                                condition.release()
+                                dbos_logger.debug(
+                                    f"Signaled notifications condition for {notify.payload}"
+                                )
+                        elif channel == "dbos_workflow_events_channel":
+                            if (
+                                notify.payload
+                                and notify.payload in self.workflow_events_map
+                            ):
+                                condition = self.workflow_events_map[notify.payload]
+                                condition.acquire()
+                                condition.notify_all()
+                                condition.release()
+                                dbos_logger.debug(
+                                    f"Signaled workflow_events condition for {notify.payload}"
+                                )
+                        else:
+                            dbos_logger.error(f"Unknown channel: {channel}")
+            except Exception as e:
+                if self._run_background_processes:
+                    dbos_logger.error(f"Notification listener error: {e}")
+                    time.sleep(1)
+                    # Then the loop will try to reconnect and restart the listener
+            finally:
+                if self.notification_conn is not None:
+                    self.notification_conn.close()
+
+    def sleep_sync(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        seconds: float,
+        skip_sleep: bool = False,
+    ) -> float:
+        recorded_output = self.check_operation_execution_sync(
+            workflow_uuid, function_id
+        )
+        end_time: float
+        if recorded_output is not None:
+            dbos_logger.debug(f"Replaying sleep, id: {function_id}, seconds: {seconds}")
+            assert recorded_output["output"] is not None, "no recorded end time"
+            end_time = serialization.deserialize(recorded_output["output"])
+        else:
+            dbos_logger.debug(f"Running sleep, id: {function_id}, seconds: {seconds}")
+            end_time = time.time() + seconds
+            try:
+                self.record_operation_result_sync(
+                    {
+                        "workflow_uuid": workflow_uuid,
+                        "function_id": function_id,
+                        "output": serialization.serialize(end_time),
+                        "error": None,
+                    }
+                )
+            except DBOSWorkflowConflictIDError:
+                pass
+        duration = max(0, end_time - time.time())
+        if not skip_sleep:
+            time.sleep(duration)
+        return duration
+
+    async def sleep_async(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        seconds: float,
+        skip_sleep: bool = False,
+    ) -> float:
+        recorded_output = await self.check_operation_execution_async(
+            workflow_uuid, function_id
+        )
+        end_time: float
+        if recorded_output is not None:
+            dbos_logger.debug(f"Replaying sleep, id: {function_id}, seconds: {seconds}")
+            assert recorded_output["output"] is not None, "no recorded end time"
+            end_time = serialization.deserialize(recorded_output["output"])
+        else:
+            dbos_logger.debug(f"Running sleep, id: {function_id}, seconds: {seconds}")
+            end_time = time.time() + seconds
+            try:
+                await self.record_operation_result_async(
+                    {
+                        "workflow_uuid": workflow_uuid,
+                        "function_id": function_id,
+                        "output": serialization.serialize(end_time),
+                        "error": None,
+                    }
+                )
+            except DBOSWorkflowConflictIDError:
+                pass
+        duration = max(0, end_time - time.time())
+        if not skip_sleep:
+            await asyncio.sleep(duration)
+        return duration
+
+    def _set_event(
+        self,
+        conn: sa.Connection,
+        workflow_uuid: str,
+        function_id: int,
+        key: str,
+        message: Any,
+    ) -> None:
+        recorded_output = self.check_operation_execution_sync(
+            workflow_uuid, function_id, conn=conn
+        )
+        if recorded_output is not None:
+            dbos_logger.debug(f"Replaying set_event, id: {function_id}, key: {key}")
+            return  # Already sent before
+        else:
+            dbos_logger.debug(f"Running set_event, id: {function_id}, key: {key}")
+
+        conn.execute(
+            pg.insert(SystemSchema.workflow_events)
+            .values(
+                workflow_uuid=workflow_uuid,
+                key=key,
+                value=serialization.serialize(message),
+            )
+            .on_conflict_do_update(
+                index_elements=["workflow_uuid", "key"],
+                set_={"value": serialization.serialize(message)},
+            )
+        )
+        output: OperationResultInternal = {
+            "workflow_uuid": workflow_uuid,
+            "function_id": function_id,
+            "output": None,
+            "error": None,
+        }
+        self.record_operation_result_sync(output, conn=conn)
+
+    def set_event_sync(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        key: str,
+        message: Any,
+    ) -> None:
+        with self.sync_engine.begin() as c:
+            self._set_event(c, workflow_uuid, function_id, key, message)
+
+    async def set_event_async(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        key: str,
+        message: Any,
+    ) -> None:
+        async with self.async_engine.begin() as c:
+            await c.run_sync(self._set_event, workflow_uuid, function_id, key, message)
+
+    def get_event_sync(
+        self,
+        target_uuid: str,
+        key: str,
+        timeout_seconds: float = 60,
+        caller_ctx: Optional[GetEventWorkflowContext] = None,
+    ) -> Any:
+        get_sql = sa.select(
+            SystemSchema.workflow_events.c.value,
+        ).where(
+            SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
+            SystemSchema.workflow_events.c.key == key,
+        )
+        # Check for previous executions only if it's in a workflow
+        if caller_ctx is not None:
+            recorded_output = self.check_operation_execution_sync(
+                caller_ctx["workflow_uuid"], caller_ctx["function_id"]
+            )
+            if recorded_output is not None:
+                dbos_logger.debug(
+                    f"Replaying get_event, id: {caller_ctx['function_id']}, key: {key}"
+                )
+                if recorded_output["output"] is not None:
+                    return serialization.deserialize(recorded_output["output"])
+                else:
+                    raise Exception("No output recorded in the last get_event")
+            else:
+                dbos_logger.debug(
+                    f"Running get_event, id: {caller_ctx['function_id']}, key: {key}"
+                )
+
+        payload = f"{target_uuid}::{key}"
+        condition = threading.Condition()
+        self.workflow_events_map[payload] = condition
+        condition.acquire()
+
+        # Check if the key is already in the database. If not, wait for the notification.
+        init_recv: Sequence[Any]
+        with self.sync_engine.begin() as c:
+            init_recv = (c.execute(get_sql)).fetchall()
+
+        value: Any = None
+        if len(init_recv) > 0:
+            value = serialization.deserialize(init_recv[0][0])
+        else:
+            # Wait for the notification
+            actual_timeout = timeout_seconds
+            if caller_ctx is not None:
+                # Support OAOO sleep for workflows
+                actual_timeout = self.sleep_sync(
+                    caller_ctx["workflow_uuid"],
+                    caller_ctx["timeout_function_id"],
+                    timeout_seconds,
+                    skip_sleep=True,
+                )
+            condition.wait(timeout=actual_timeout)
+
+            # Read the value from the database
+            with self.sync_engine.begin() as c:
+                final_recv = (c.execute(get_sql)).fetchall()
+                if len(final_recv) > 0:
+                    value = serialization.deserialize(final_recv[0][0])
+        condition.release()
+        self.workflow_events_map.pop(payload)
+
+        # Record the output if it's in a workflow
+        if caller_ctx is not None:
+            self.record_operation_result_sync(
+                {
+                    "workflow_uuid": caller_ctx["workflow_uuid"],
+                    "function_id": caller_ctx["function_id"],
+                    "output": serialization.serialize(
+                        value
+                    ),  # None will be serialized to 'null'
+                    "error": None,
+                }
+            )
+        return value
+
+    async def get_event_async(
+        self,
+        target_uuid: str,
+        key: str,
+        timeout_seconds: float = 60,
+        caller_ctx: Optional[GetEventWorkflowContext] = None,
+    ) -> Any:
+        get_sql = sa.select(
+            SystemSchema.workflow_events.c.value,
+        ).where(
+            SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
+            SystemSchema.workflow_events.c.key == key,
+        )
+        # Check for previous executions only if it's in a workflow
+        if caller_ctx is not None:
+            recorded_output = await self.check_operation_execution_async(
+                caller_ctx["workflow_uuid"], caller_ctx["function_id"]
+            )
+            if recorded_output is not None:
+                dbos_logger.debug(
+                    f"Replaying get_event, id: {caller_ctx['function_id']}, key: {key}"
+                )
+                if recorded_output["output"] is not None:
+                    return serialization.deserialize(recorded_output["output"])
+                else:
+                    raise Exception("No output recorded in the last get_event")
+            else:
+                dbos_logger.debug(
+                    f"Running get_event, id: {caller_ctx['function_id']}, key: {key}"
+                )
+
+        payload = f"{target_uuid}::{key}"
+        condition = threading.Condition()
+        self.workflow_events_map[payload] = condition
+        condition.acquire()
+
+        # Check if the key is already in the database. If not, wait for the notification.
+        init_recv: Sequence[Any]
+        async with self.async_engine.begin() as c:
+            init_recv = (await c.execute(get_sql)).fetchall()
+
+        value: Any = None
+        if len(init_recv) > 0:
+            value = serialization.deserialize(init_recv[0][0])
+        else:
+            # Wait for the notification
+            actual_timeout = timeout_seconds
+            if caller_ctx is not None:
+                # Support OAOO sleep for workflows
+                actual_timeout = await self.sleep_async(
+                    caller_ctx["workflow_uuid"],
+                    caller_ctx["timeout_function_id"],
+                    timeout_seconds,
+                    skip_sleep=True,
+                )
+            condition.wait(timeout=actual_timeout)
+
+            # Read the value from the database
+            async with self.async_engine.begin() as c:
+                final_recv = (await c.execute(get_sql)).fetchall()
+                if len(final_recv) > 0:
+                    value = serialization.deserialize(final_recv[0][0])
+        condition.release()
+        self.workflow_events_map.pop(payload)
+
+        # Record the output if it's in a workflow
+        if caller_ctx is not None:
+            await self.record_operation_result_async(
+                {
+                    "workflow_uuid": caller_ctx["workflow_uuid"],
+                    "function_id": caller_ctx["function_id"],
+                    "output": serialization.serialize(
+                        value
+                    ),  # None will be serialized to 'null'
+                    "error": None,
+                }
+            )
+        return value
+
+    def _flush_workflow_status_buffer_sync(self) -> None:
+        """Export the workflow status buffer to the database, up to the batch size."""
+        if len(self._workflow_status_buffer) == 0:
+            return
+
+        # Record the exported status so far, and add them back on errors.
+        exported_status: Dict[str, WorkflowStatusInternal] = {}
+        with self.sync_engine.begin() as c:
+            exported = 0
+            status_iter = iter(list(self._workflow_status_buffer))
+            wf_id: Optional[str] = None
+            while (
+                exported < _buffer_flush_batch_size
+                and (wf_id := next(status_iter, None)) is not None
+            ):
+                # Pop the first key in the buffer (FIFO)
+                status = self._workflow_status_buffer.pop(wf_id, None)
+                if status is None:
+                    continue
+                exported_status[wf_id] = status
+                try:
+                    self.update_workflow_status_sync(status, conn=c)
+                    exported += 1
+                except Exception as e:
+                    dbos_logger.error(f"Error while flushing status buffer: {e}")
+                    c.rollback()
+                    # Add the exported status back to the buffer, so they can be retried next time
+                    self._workflow_status_buffer.update(exported_status)
+                    break
+
+    def _flush_workflow_inputs_buffer_sync(self) -> None:
+        """Export the workflow inputs buffer to the database, up to the batch size."""
+        if len(self._workflow_inputs_buffer) == 0:
+            return
+
+        # Record exported inputs so far, and add them back on errors.
+        exported_inputs: Dict[str, str] = {}
+        with self.sync_engine.begin() as c:
+            exported = 0
+            input_iter = iter(list(self._workflow_inputs_buffer))
+            wf_id: Optional[str] = None
+            while (
+                exported < _buffer_flush_batch_size
+                and (wf_id := next(input_iter, None)) is not None
+            ):
+                if wf_id not in self._exported_temp_txn_wf_status:
+                    # Skip exporting inputs if the status has not been exported yet
+                    continue
+                inputs = self._workflow_inputs_buffer.pop(wf_id, None)
+                if inputs is None:
+                    continue
+                exported_inputs[wf_id] = inputs
+                try:
+                    self.update_workflow_inputs_sync(wf_id, inputs, conn=c)
+                    exported += 1
+                except Exception as e:
+                    dbos_logger.error(f"Error while flushing inputs buffer: {e}")
+                    c.rollback()
+                    # Add the exported inputs back to the buffer, so they can be retried next time
+                    self._workflow_inputs_buffer.update(exported_inputs)
+                    break
+
+    def flush_workflow_buffers_sync(self) -> None:
+        """Flush the workflow status and inputs buffers periodically, via a background thread."""
+        while self._run_background_processes:
+            try:
+                self._is_flushing_status_buffer = True
+                # Must flush the status buffer first, as the inputs table has a foreign key constraint on the status table.
+                self._flush_workflow_status_buffer_sync()
+                self._flush_workflow_inputs_buffer_sync()
+                self._is_flushing_status_buffer = False
+                if self._is_buffers_empty:
+                    # Only sleep if both buffers are empty
+                    time.sleep(_buffer_flush_interval_secs)
+            except Exception as e:
+                dbos_logger.error(f"Error while flushing buffers: {e}")
+                time.sleep(_buffer_flush_interval_secs)
+                # Will retry next time
+
+    def buffer_workflow_status(self, status: WorkflowStatusInternal) -> None:
+        self._workflow_status_buffer[status["workflow_uuid"]] = status
+
+    def buffer_workflow_inputs(self, workflow_id: str, inputs: str) -> None:
+        # inputs is a serialized WorkflowInputs string
+        self._workflow_inputs_buffer[workflow_id] = inputs
+        self._temp_txn_wf_ids.add(workflow_id)
+
+    @property
+    def _is_buffers_empty(self) -> bool:
+        return (
+            len(self._workflow_status_buffer) == 0
+            and len(self._workflow_inputs_buffer) == 0
+        )
+
+    def _enqueue(self, conn: sa.Connection, workflow_id: str, queue_name: str) -> None:
+        conn.execute(
+            pg.insert(SystemSchema.workflow_queue)
+            .values(
+                workflow_uuid=workflow_id,
+                queue_name=queue_name,
+            )
+            .on_conflict_do_nothing()
+        )
+
+    def enqueue_sync(self, workflow_id: str, queue_name: str) -> None:
+        with self.sync_engine.begin() as c:
+            self._enqueue(c, workflow_id, queue_name)
+
+    async def enqueue_async(self, workflow_id: str, queue_name: str) -> None:
+        async with self.async_engine.begin() as c:
+            await c.run_sync(self._enqueue, workflow_id, queue_name)
+
+    def _start_queued_workflows(self, conn: sa.Connection, queue: "Queue") -> List[str]:
+        start_time_ms = int(time.time() * 1000)
+        if queue.limiter is not None:
+            limiter_period_ms = int(queue.limiter["period"] * 1000)
+
+        # Execute with snapshot isolation to ensure multiple workers respect limits
+        conn.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
+
+        # If there is a limiter, compute how many functions have started in its period.
+        if queue.limiter is not None:
+            query = (
+                sa.select(sa.func.count())
+                .select_from(SystemSchema.workflow_queue)
+                .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
+                .where(SystemSchema.workflow_queue.c.started_at_epoch_ms.isnot(None))
+                .where(
+                    SystemSchema.workflow_queue.c.started_at_epoch_ms
+                    > start_time_ms - limiter_period_ms
+                )
+            )
+            num_recent_queries = (conn.execute(query)).fetchone()[0]  # type: ignore
+            if num_recent_queries >= queue.limiter["limit"]:
+                return []
+
+        # Select not-yet-completed functions in the queue ordered by the
+        # time at which they were enqueued.
+        # If there is a concurrency limit N, select only the N most recent
+        # functions, else select all of them.
+        query = (
+            sa.select(
+                SystemSchema.workflow_queue.c.workflow_uuid,
+                SystemSchema.workflow_queue.c.started_at_epoch_ms,
+            )
+            .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
+            .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms == None)
+            .order_by(SystemSchema.workflow_queue.c.created_at_epoch_ms.asc())
+        )
+        if queue.concurrency is not None:
+            query = query.limit(queue.concurrency)
+
+        # From the functions retrieved, get the workflow IDs of the functions
+        # that have not yet been started so we can start them.
+        rows = (conn.execute(query)).fetchall()
+        dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
+        ret_ids: list[str] = []
+        for id in dequeued_ids:
+
+            # If we have a limiter, stop starting functions when the number
+            # of functions started this period exceeds the limit.
+            if queue.limiter is not None:
+                if len(ret_ids) + num_recent_queries >= queue.limiter["limit"]:
+                    break
+
+            # To start a function, first set its status to PENDING
+            conn.execute(
+                SystemSchema.workflow_status.update()
+                .where(SystemSchema.workflow_status.c.workflow_uuid == id)
+                .where(
+                    SystemSchema.workflow_status.c.status
+                    == WorkflowStatusString.ENQUEUED.value
+                )
+                .values(status=WorkflowStatusString.PENDING.value)
+            )
+
+            # Then give it a start time
+            conn.execute(
+                SystemSchema.workflow_queue.update()
+                .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
+                .values(started_at_epoch_ms=start_time_ms)
+            )
+            ret_ids.append(id)
+
+        # If we have a limiter, garbage-collect all completed functions started
+        # before the period. If there's no limiter, there's no need--they were
+        # deleted on completion.
+        if queue.limiter is not None:
+            conn.execute(
+                sa.delete(SystemSchema.workflow_queue)
+                .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms != None)
+                .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
+                .where(
+                    SystemSchema.workflow_queue.c.started_at_epoch_ms
+                    < start_time_ms - limiter_period_ms
+                )
+            )
+
+        # Return the IDs of all functions we started
+        return ret_ids
+
+    def start_queued_workflows_sync(self, queue: "Queue") -> List[str]:
+        with self.sync_engine.begin() as c:
+            return self._start_queued_workflows(c, queue)
+
+    async def start_queued_workflows_async(self, queue: "Queue") -> List[str]:
+        async with self.async_engine.begin() as c:
+            return await c.run_sync(self._start_queued_workflows, queue)
+
+    def _remove_from_queue(
+        self, conn: sa.Connection, workflow_id: str, queue: "Queue"
+    ) -> None:
+        if queue.limiter is None:
+            conn.execute(
+                sa.delete(SystemSchema.workflow_queue).where(
+                    SystemSchema.workflow_queue.c.workflow_uuid == workflow_id
+                )
+            )
+        else:
+            conn.execute(
+                sa.update(SystemSchema.workflow_queue)
+                .where(SystemSchema.workflow_queue.c.workflow_uuid == workflow_id)
+                .values(completed_at_epoch_ms=int(time.time() * 1000))
+            )
+
+    def remove_from_queue_sync(self, workflow_id: str, queue: "Queue") -> None:
+        with self.sync_engine.begin() as c:
+            self._remove_from_queue(c, workflow_id, queue)
+
+    async def remove_from_queue_async(self, workflow_id: str, queue: "Queue") -> None:
+        async with self.async_engine.begin() as c:
+            await c.run_sync(self._remove_from_queue, workflow_id, queue)

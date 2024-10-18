@@ -1,13 +1,13 @@
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Type, TypeVar, cast
 
-from dbos.error import DBOSNotAuthorizedError
+from ..error import DBOSNotAuthorizedError
 
 if TYPE_CHECKING:
-    from dbos.dbos import _DBOSRegistry
+    from ..dbos import _DBOSRegistry
 
-from dbos.context import DBOSAssumeRole, get_local_dbos_context
-from dbos.registrations import (
+from ..context import DBOSAssumeRole, get_local_dbos_context
+from .registrations import (
     DBOSFuncInfo,
     get_class_info_for_func,
     get_or_create_class_info,

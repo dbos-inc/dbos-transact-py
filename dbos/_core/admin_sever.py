@@ -8,12 +8,11 @@ from typing import TYPE_CHECKING, Any, List, TypedDict
 
 import psutil
 
-from dbos.recovery import _recover_pending_workflows
-
 from .logger import dbos_logger
+from .recovery import recover_pending_workflows
 
 if TYPE_CHECKING:
-    from .dbos import DBOS
+    from ..dbos import DBOS
 
 health_check_path = "/dbos-healthz"
 workflow_recovery_path = "/dbos-workflow-recovery"
@@ -79,7 +78,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         if self.path == workflow_recovery_path:
             executor_ids: List[str] = json.loads(post_data.decode("utf-8"))
             dbos_logger.info("Recovering workflows for executors: %s", executor_ids)
-            workflow_handles = _recover_pending_workflows(self.dbos, executor_ids)
+            workflow_handles = recover_pending_workflows(self.dbos, executor_ids)
             workflow_ids = [handle.workflow_id for handle in workflow_handles]
             self.send_response(200)
             self._end_headers()

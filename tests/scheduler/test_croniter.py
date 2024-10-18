@@ -28,7 +28,7 @@ from time import sleep
 import dateutil.tz
 import pytz
 
-from dbos.scheduler.croniter import (
+from dbos._core.croniter import (
     CroniterBadCronError,
     CroniterBadDateError,
     CroniterNotAlphaError,
