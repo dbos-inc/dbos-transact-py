@@ -19,7 +19,7 @@ dependencies = [
     "fastapi[standard]>=0.115.2",
     "psutil>=6.0.0",
     "tomlkit>=0.13.2",
-    "psycopg>=3.2.3",
+    "psycopg>=3.1",
     "sqlalchemy[asyncio]>=2.0.35",
 ]
 requires-python = ">=3.9"
