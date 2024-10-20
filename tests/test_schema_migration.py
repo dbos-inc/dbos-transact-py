@@ -1,4 +1,5 @@
 import os
+import re
 
 import pytest
 import sqlalchemy as sa
@@ -94,5 +95,10 @@ def rollback_system_db(sysdb_url: str) -> None:
     )
     alembic_cfg = Config()
     alembic_cfg.set_main_option("script_location", migration_dir)
-    alembic_cfg.set_main_option("sqlalchemy.url", sysdb_url)
+    escaped_conn_string = re.sub(
+        r"%(?=[0-9A-Fa-f]{2})",
+        "%%",
+        sysdb_url,
+    )
+    alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
     command.downgrade(alembic_cfg, "base")  # Rollback all migrations
