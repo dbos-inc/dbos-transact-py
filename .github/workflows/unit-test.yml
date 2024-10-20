@@ -29,7 +29,7 @@ jobs:
         image: sibedge/postgres-plv8
         env:
           # Specify the password for Postgres superuser.
-          POSTGRES_PASSWORD: dbos
+          POSTGRES_PASSWORD: a!b@c$d()e*_,/:;=?@ff[]22
         # Set health checks to wait until postgres has started
         options: >-
           --health-cmd pg_isready
@@ -91,4 +91,4 @@ jobs:
       run: pdm run pytest
       working-directory: ./
       env:
-        PGPASSWORD: dbos
+        PGPASSWORD: a!b@c$d()e*_,/:;=?@ff[]22

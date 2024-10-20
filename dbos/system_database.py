@@ -1,5 +1,6 @@
 import datetime
 import os
+import re
 import threading
 import time
 from enum import Enum
@@ -203,9 +204,13 @@ class SystemDatabase:
         )
         alembic_cfg = Config()
         alembic_cfg.set_main_option("script_location", migration_dir)
-        alembic_cfg.set_main_option(
-            "sqlalchemy.url", self.engine.url.render_as_string(hide_password=False)
+        # Alembic requires the % in URL-escaped parameters to itself be escaped to %%.
+        escaped_conn_string = re.sub(
+            r"%(?=[0-9A-Fa-f]{2})",
+            "%%",
+            self.engine.url.render_as_string(hide_password=False),
         )
+        alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
         command.upgrade(alembic_cfg, "head")
 
         self.notification_conn: Optional[psycopg.connection.Connection] = None
