@@ -167,11 +167,19 @@ def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
 
     data = cast(ConfigFile, data)
 
+    if "app_db_name" not in data["database"]:
+        data["database"]["app_db_name"] = app_name_to_db_name(data["name"])
+
     if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
         data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"
 
     # Return data as ConfigFile type
     return data  # type: ignore
+
+
+def app_name_to_db_name(app_name: str) -> str:
+    name = app_name.replace("-", "_")
+    return name if not name[0].isdigit() else f"_{name}"
 
 
 def set_env_vars(config: ConfigFile) -> None:

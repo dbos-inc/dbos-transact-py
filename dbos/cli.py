@@ -125,11 +125,9 @@ def copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
     dst_dir = path.abspath(".")
 
     package_name = project_name.replace("-", "_")
-    db_name = package_name if not package_name[0].isdigit() else f"_{package_name}"
     ctx = {
         "project_name": project_name,
         "package_name": package_name,
-        "db_name": db_name,
         "migration_command": "alembic upgrade head",
     }
 
