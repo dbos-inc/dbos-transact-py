@@ -91,4 +91,4 @@ jobs:
       run: pdm run pytest
       working-directory: ./
       env:
-        PGPASSWORD: d@+bos!!f%f+
+        PGPASSWORD: abc!!!
