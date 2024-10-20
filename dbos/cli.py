@@ -17,6 +17,7 @@ from typing_extensions import Annotated
 
 from dbos import load_config
 from dbos.application_database import ApplicationDatabase
+from dbos.dbos_config import is_valid_app_name
 from dbos.system_database import SystemDatabase
 
 app = typer.Typer()
@@ -163,14 +164,6 @@ def get_project_name() -> typing.Union[str, None]:
             pass
 
     return name
-
-
-def is_valid_app_name(name: str) -> bool:
-    name_len = len(name)
-    if name_len < 3 or name_len > 30:
-        return False
-    match = re.match("^[a-z0-9-_]+$", name)
-    return True if match != None else False
 
 
 @app.command()
