@@ -86,8 +86,7 @@
           "hostname",
           "port",
           "username",
-          "password",
-          "app_db_name"
+          "password"
         ]
       },
       "telemetry": {
