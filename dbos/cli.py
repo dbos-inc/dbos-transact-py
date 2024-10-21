@@ -17,6 +17,7 @@ from typing_extensions import Annotated
 
 from dbos import load_config
 from dbos.application_database import ApplicationDatabase
+from dbos.dbos_config import is_valid_app_name
 from dbos.system_database import SystemDatabase
 
 app = typer.Typer()
@@ -125,11 +126,9 @@ def copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
     dst_dir = path.abspath(".")
 
     package_name = project_name.replace("-", "_")
-    db_name = package_name if not package_name[0].isdigit() else f"_{package_name}"
     ctx = {
         "project_name": project_name,
         "package_name": package_name,
-        "db_name": db_name,
         "migration_command": "alembic upgrade head",
     }
 
@@ -165,14 +164,6 @@ def get_project_name() -> typing.Union[str, None]:
             pass
 
     return name
-
-
-def is_valid_app_name(name: str) -> bool:
-    name_len = len(name)
-    if name_len < 3 or name_len > 30:
-        return False
-    match = re.match("^[a-z0-9-_]+$", name)
-    return True if match != None else False
 
 
 @app.command()

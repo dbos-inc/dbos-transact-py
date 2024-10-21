@@ -167,11 +167,32 @@ def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
 
     data = cast(ConfigFile, data)
 
+    if not is_valid_app_name(data["name"]):
+        raise DBOSInitializationError(
+            f'Invalid app name {data["name"]}.  App names must be between 3 and 30 characters and contain only alphanumeric characters, dashes, and underscores.'
+        )
+
+    if "app_db_name" not in data["database"]:
+        data["database"]["app_db_name"] = app_name_to_db_name(data["name"])
+
     if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
         data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"
 
     # Return data as ConfigFile type
     return data  # type: ignore
+
+
+def is_valid_app_name(name: str) -> bool:
+    name_len = len(name)
+    if name_len < 3 or name_len > 30:
+        return False
+    match = re.match("^[a-z0-9-_]+$", name)
+    return True if match != None else False
+
+
+def app_name_to_db_name(app_name: str) -> str:
+    name = app_name.replace("-", "_")
+    return name if not name[0].isdigit() else f"_{name}"
 
 
 def set_env_vars(config: ConfigFile) -> None:
