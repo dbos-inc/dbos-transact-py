@@ -13,8 +13,8 @@ if sys.version_info < (3, 10):
 else:
     from typing import ParamSpec
 
-from dbos import utils
-from dbos.context import (
+from . import utils
+from .context import (
     DBOSAssumeRole,
     DBOSContext,
     DBOSContextEnsure,
@@ -29,7 +29,7 @@ from dbos.context import (
     assert_current_dbos_context,
     get_local_dbos_context,
 )
-from dbos.error import (
+from .error import (
     DBOSException,
     DBOSMaxStepRetriesExceeded,
     DBOSNonExistentWorkflowError,
@@ -37,7 +37,7 @@ from dbos.error import (
     DBOSWorkflowConflictIDError,
     DBOSWorkflowFunctionNotFoundError,
 )
-from dbos.registrations import (
+from .registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     get_config_name,
     get_dbos_class_name,
@@ -48,18 +48,18 @@ from dbos.registrations import (
     set_dbos_func_name,
     set_temp_workflow_type,
 )
-from dbos.roles import check_required_roles
-from dbos.system_database import (
+from .roles import check_required_roles
+from .system_database import (
     GetEventWorkflowContext,
     OperationResultInternal,
     WorkflowStatusInternal,
     WorkflowStatusString,
 )
-from dbos.utils import WorkflowInputs
+from .utils import WorkflowInputs
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS, Workflow, WorkflowHandle, WorkflowStatus, _DBOSRegistry
-    from dbos.dbos import IsolationLevel
+    from .dbos import DBOS, Workflow, WorkflowHandle, WorkflowStatus, _DBOSRegistry
+    from .dbos import IsolationLevel
 
 from sqlalchemy.exc import DBAPIError
 
@@ -70,7 +70,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
 
-class _WorkflowHandleFuture(Generic[R]):
+class WorkflowHandleFuture(Generic[R]):
 
     def __init__(self, workflow_id: str, future: Future[R], dbos: "DBOS"):
         self.workflow_id = workflow_id
@@ -90,7 +90,7 @@ class _WorkflowHandleFuture(Generic[R]):
         return stat
 
 
-class _WorkflowHandlePolling(Generic[R]):
+class WorkflowHandlePolling(Generic[R]):
 
     def __init__(self, workflow_id: str, dbos: "DBOS"):
         self.workflow_id = workflow_id
@@ -231,7 +231,7 @@ def _execute_workflow_wthread(
                 raise
 
 
-def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]":
+def execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]":
     status = dbos._sys_db.get_workflow_status(workflow_id)
     if not status:
         raise DBOSRecoveryError(workflow_id, "Workflow status not found")
@@ -257,7 +257,7 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
                     f"Cannot execute workflow because instance '{iname}' is not registered",
                 )
             with SetWorkflowID(workflow_id):
-                return _start_workflow(
+                return start_workflow(
                     dbos,
                     wf_func,
                     status["queue_name"],
@@ -274,7 +274,7 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
                     f"Cannot execute workflow because class '{class_name}' is not registered",
                 )
             with SetWorkflowID(workflow_id):
-                return _start_workflow(
+                return start_workflow(
                     dbos,
                     wf_func,
                     status["queue_name"],
@@ -285,7 +285,7 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
                 )
         else:
             with SetWorkflowID(workflow_id):
-                return _start_workflow(
+                return start_workflow(
                     dbos,
                     wf_func,
                     status["queue_name"],
@@ -295,7 +295,7 @@ def _execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]
                 )
 
 
-def _workflow_wrapper(
+def workflow_wrapper(
     dbosreg: "_DBOSRegistry",
     func: F,
     max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
@@ -348,16 +348,16 @@ def _workflow_wrapper(
     return wrapped_func
 
 
-def _workflow(reg: "_DBOSRegistry", max_recovery_attempts: int) -> Callable[[F], F]:
+def workflow(reg: "_DBOSRegistry", max_recovery_attempts: int) -> Callable[[F], F]:
     def _workflow_decorator(func: F) -> F:
-        wrapped_func = _workflow_wrapper(reg, func, max_recovery_attempts)
+        wrapped_func = workflow_wrapper(reg, func, max_recovery_attempts)
         reg.register_wf_function(func.__qualname__, wrapped_func)
         return wrapped_func
 
     return _workflow_decorator
 
 
-def _start_workflow(
+def start_workflow(
     dbos: "DBOS",
     func: "Workflow[P, R]",
     queue_name: Optional[str],
@@ -420,7 +420,7 @@ def _start_workflow(
     )
 
     if not execute_workflow:
-        return _WorkflowHandlePolling(new_wf_id, dbos)
+        return WorkflowHandlePolling(new_wf_id, dbos)
 
     if fself is not None:
         future = dbos._executor.submit(
@@ -443,10 +443,10 @@ def _start_workflow(
             *args,
             **kwargs,
         )
-    return _WorkflowHandleFuture(new_wf_id, future, dbos)
+    return WorkflowHandleFuture(new_wf_id, future, dbos)
 
 
-def _transaction(
+def transaction(
     dbosreg: "_DBOSRegistry", isolation_level: "IsolationLevel" = "SERIALIZABLE"
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
@@ -571,7 +571,7 @@ def _transaction(
         def temp_wf(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
 
-        wrapped_wf = _workflow_wrapper(dbosreg, temp_wf)
+        wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "transaction")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
@@ -582,7 +582,7 @@ def _transaction(
     return decorator
 
 
-def _step(
+def step(
     dbosreg: "_DBOSRegistry",
     *,
     retries_allowed: bool = False,
@@ -698,7 +698,7 @@ def _step(
         def temp_wf(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
 
-        wrapped_wf = _workflow_wrapper(dbosreg, temp_wf)
+        wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
@@ -709,7 +709,7 @@ def _step(
     return decorator
 
 
-def _send(
+def send(
     dbos: "DBOS", destination_id: str, message: Any, topic: Optional[str] = None
 ) -> None:
     def do_send(destination_id: str, message: Any, topic: Optional[str]) -> None:
@@ -735,9 +735,7 @@ def _send(
         wffn(destination_id, message, topic)
 
 
-def _recv(
-    dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60
-) -> Any:
+def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
     cur_ctx = get_local_dbos_context()
     if cur_ctx is not None:
         # Must call it within a workflow
@@ -760,7 +758,7 @@ def _recv(
         raise DBOSException("recv() must be called from within a workflow")
 
 
-def _set_event(dbos: "DBOS", key: str, value: Any) -> None:
+def set_event(dbos: "DBOS", key: str, value: Any) -> None:
     cur_ctx = get_local_dbos_context()
     if cur_ctx is not None:
         # Must call it within a workflow
@@ -779,7 +777,7 @@ def _set_event(dbos: "DBOS", key: str, value: Any) -> None:
         raise DBOSException("set_event() must be called from within a workflow")
 
 
-def _get_event(
+def get_event(
     dbos: "DBOS", workflow_id: str, key: str, timeout_seconds: float = 60
 ) -> Any:
     cur_ctx = get_local_dbos_context()
