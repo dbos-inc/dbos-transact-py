@@ -34,9 +34,9 @@ from dbos._core import (
     send,
     set_event,
     start_workflow,
-    step,
-    transaction,
-    workflow,
+    step_decorator_factory,
+    transaction_decorator_factory,
+    workflow_decorator_factory,
     workflow_interceptor,
 )
 from dbos.decorators import classproperty
@@ -435,7 +435,9 @@ class DBOS:
         cls, *, max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS
     ) -> Callable[[F], F]:
         """Decorate a function for use as a DBOS workflow."""
-        return workflow(_get_or_create_dbos_registry(), max_recovery_attempts)
+        return workflow_decorator_factory(
+            _get_or_create_dbos_registry(), max_recovery_attempts
+        )
 
     @classmethod
     def transaction(
@@ -448,7 +450,9 @@ class DBOS:
             isolation_level(IsolationLevel): Transaction isolation level
 
         """
-        return transaction(_get_or_create_dbos_registry(), isolation_level)
+        return transaction_decorator_factory(
+            _get_or_create_dbos_registry(), isolation_level
+        )
 
     @classmethod
     def step(
@@ -470,7 +474,7 @@ class DBOS:
 
         """
 
-        return step(
+        return step_decorator_factory(
             _get_or_create_dbos_registry(),
             retries_allowed=retries_allowed,
             interval_seconds=interval_seconds,

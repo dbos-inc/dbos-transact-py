@@ -348,7 +348,9 @@ def workflow_interceptor(
     return wrapped_func
 
 
-def workflow(reg: "_DBOSRegistry", max_recovery_attempts: int) -> Callable[[F], F]:
+def workflow_decorator_factory(
+    reg: "_DBOSRegistry", max_recovery_attempts: int
+) -> Callable[[F], F]:
     def _workflow_decorator(func: F) -> F:
         wrapped_func = workflow_interceptor(reg, func, max_recovery_attempts)
         reg.register_wf_function(func.__qualname__, wrapped_func)
@@ -433,7 +435,7 @@ def start_workflow(
     return WorkflowHandleFuture(new_wf_id, future, dbos)
 
 
-def transaction(
+def transaction_decorator_factory(
     dbosreg: "_DBOSRegistry", isolation_level: "IsolationLevel" = "SERIALIZABLE"
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
@@ -569,7 +571,7 @@ def transaction(
     return decorator
 
 
-def step(
+def step_decorator_factory(
     dbosreg: "_DBOSRegistry",
     *,
     retries_allowed: bool = False,
