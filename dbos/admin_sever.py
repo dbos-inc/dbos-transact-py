@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 health_check_path = "/dbos-healthz"
 workflow_recovery_path = "/dbos-workflow-recovery"
 perf_path = "/dbos-perf"
+deactivate_path = "/deactivate"
 
 
 class AdminServer:
@@ -66,6 +67,15 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self._end_headers()
             self.wfile.write(json.dumps(perf_util).encode("utf-8"))
+        elif self.path == deactivate_path:
+            dbos_logger.info("Deactivating DBOS")
+            # Stop all scheduled workflows, queues, and kafka loops
+            for event in self.dbos.stop_events: 
+                event.set()
+
+            self.send_response(200)
+            self._end_headers()
+            self.wfile.write("deactivated".encode("utf-8"))
         else:
             self.send_response(404)
             self._end_headers()
