@@ -37,7 +37,7 @@ from dbos._core import (
     step,
     transaction,
     workflow,
-    workflow_wrapper,
+    workflow_interceptor,
 )
 from dbos.decorators import classproperty
 from dbos.queue import Queue, queue_thread
@@ -297,7 +297,7 @@ class DBOS:
         ) -> None:
             self.send(destination_id, message, topic)
 
-        temp_send_wf = workflow_wrapper(self._registry, send_temp_workflow)
+        temp_send_wf = workflow_interceptor(self._registry, send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
         set_temp_workflow_type(send_temp_workflow, "send")
         self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)

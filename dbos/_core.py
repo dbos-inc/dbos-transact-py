@@ -295,7 +295,7 @@ def execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]"
                 )
 
 
-def workflow_wrapper(
+def workflow_interceptor(
     dbosreg: "_DBOSRegistry",
     func: F,
     max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
@@ -350,7 +350,7 @@ def workflow_wrapper(
 
 def workflow(reg: "_DBOSRegistry", max_recovery_attempts: int) -> Callable[[F], F]:
     def _workflow_decorator(func: F) -> F:
-        wrapped_func = workflow_wrapper(reg, func, max_recovery_attempts)
+        wrapped_func = workflow_interceptor(reg, func, max_recovery_attempts)
         reg.register_wf_function(func.__qualname__, wrapped_func)
         return wrapped_func
 
@@ -421,28 +421,15 @@ def start_workflow(
 
     if not execute_workflow:
         return WorkflowHandlePolling(new_wf_id, dbos)
-
+    fargs: Tuple[Any, ...] = (dbos, status, func, new_wf_ctx)
     if fself is not None:
-        future = dbos._executor.submit(
-            cast(Callable[..., R], _execute_workflow_wthread),
-            dbos,
-            status,
-            func,
-            new_wf_ctx,
-            fself,
-            *args,
-            **kwargs,
-        )
-    else:
-        future = dbos._executor.submit(
-            cast(Callable[..., R], _execute_workflow_wthread),
-            dbos,
-            status,
-            func,
-            new_wf_ctx,
-            *args,
-            **kwargs,
-        )
+        fargs += (fself,)
+    fargs += args
+    future = dbos._executor.submit(
+        cast(Callable[..., R], _execute_workflow_wthread),
+        *fargs,
+        **kwargs,
+    )
     return WorkflowHandleFuture(new_wf_id, future, dbos)
 
 
@@ -571,7 +558,7 @@ def transaction(
         def temp_wf(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
 
-        wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
+        wrapped_wf = workflow_interceptor(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "transaction")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
@@ -698,7 +685,7 @@ def step(
         def temp_wf(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
 
-        wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
+        wrapped_wf = workflow_interceptor(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
