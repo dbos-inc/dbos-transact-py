@@ -1,10 +1,23 @@
+import asyncio
+import inspect
 import json
 import sys
+import threading
 import time
 import traceback
 from concurrent.futures import Future
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Coroutine,
+    Generic,
+    Optional,
+    Tuple,
+    TypeVar,
+    cast,
+)
 
 from dbos.application_database import ApplicationDatabase, TransactionResultInternal
 
@@ -173,6 +186,27 @@ def _init_workflow(
     return status
 
 
+def run_event_loop(loop: asyncio.AbstractEventLoop) -> None:
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+
+daemonLoop = asyncio.new_event_loop()
+daemonThread = threading.Thread(target=run_event_loop, args=(daemonLoop,), daemon=True)
+daemonThread.start()
+
+T = TypeVar("T")
+
+
+def sync_await(coro: Coroutine[Any, Any, T]) -> T:
+    loop = asyncio.events._get_running_loop()
+    if loop is None:
+        return asyncio.run(coro)
+    else:
+        print("\033[96masyncio.run_coroutine_threadsafe\033[0m")
+        return asyncio.run_coroutine_threadsafe(coro, daemonLoop).result()
+
+
 def _execute_workflow(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
@@ -295,7 +329,7 @@ def execute_workflow_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]"
                 )
 
 
-def workflow_interceptor(
+def decorate_workflow(
     dbosreg: "_DBOSRegistry",
     func: F,
     max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
@@ -352,7 +386,7 @@ def workflow_decorator_factory(
     reg: "_DBOSRegistry", max_recovery_attempts: int
 ) -> Callable[[F], F]:
     def _workflow_decorator(func: F) -> F:
-        wrapped_func = workflow_interceptor(reg, func, max_recovery_attempts)
+        wrapped_func = decorate_workflow(reg, func, max_recovery_attempts)
         reg.register_wf_function(func.__qualname__, wrapped_func)
         return wrapped_func
 
@@ -560,7 +594,7 @@ def transaction_decorator_factory(
         def temp_wf(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
 
-        wrapped_wf = workflow_interceptor(dbosreg, temp_wf)
+        wrapped_wf = decorate_workflow(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "transaction")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
@@ -687,7 +721,7 @@ def step_decorator_factory(
         def temp_wf(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
 
-        wrapped_wf = workflow_interceptor(dbosreg, temp_wf)
+        wrapped_wf = decorate_workflow(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)

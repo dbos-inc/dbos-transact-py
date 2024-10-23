@@ -28,6 +28,7 @@ from opentelemetry.trace import Span
 from dbos._core import (
     TEMP_SEND_WF_NAME,
     WorkflowHandlePolling,
+    decorate_workflow,
     execute_workflow_id,
     get_event,
     recv,
@@ -37,7 +38,6 @@ from dbos._core import (
     step_decorator_factory,
     transaction_decorator_factory,
     workflow_decorator_factory,
-    workflow_interceptor,
 )
 from dbos.decorators import classproperty
 from dbos.queue import Queue, queue_thread
@@ -297,7 +297,7 @@ class DBOS:
         ) -> None:
             self.send(destination_id, message, topic)
 
-        temp_send_wf = workflow_interceptor(self._registry, send_temp_workflow)
+        temp_send_wf = decorate_workflow(self._registry, send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
         set_temp_workflow_type(send_temp_workflow, "send")
         self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
