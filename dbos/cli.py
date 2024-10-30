@@ -16,7 +16,7 @@ from rich.prompt import Prompt
 from typing_extensions import Annotated
 
 from dbos import load_config
-from dbos.application_database import ApplicationDatabase
+from dbos._app_db import ApplicationDatabase
 from dbos.dbos_config import is_valid_app_name
 from dbos.system_database import SystemDatabase
 

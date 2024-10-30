@@ -1,14 +1,13 @@
-from typing import Optional, TypedDict, cast
+from typing import Optional, TypedDict
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
-from dbos.error import DBOSWorkflowConflictIDError
-from dbos.schemas.application_database import ApplicationSchema
-
 from .dbos_config import ConfigFile
+from .error import DBOSWorkflowConflictIDError
+from .schemas.application_database import ApplicationSchema
 
 
 class TransactionResultInternal(TypedDict):

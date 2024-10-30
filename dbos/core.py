@@ -6,7 +6,7 @@ from concurrent.futures import Future
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
 
-from dbos.application_database import ApplicationDatabase, TransactionResultInternal
+from dbos._app_db import ApplicationDatabase, TransactionResultInternal
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec
