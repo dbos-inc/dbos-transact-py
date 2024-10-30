@@ -23,7 +23,7 @@ _deactivate_path = "/deactivate"
 class AdminServer:
     def __init__(self, dbos: DBOS, port: int = 3001) -> None:
         self.port = port
-        handler = partial(_AdminRequestHandler, dbos)
+        handler = partial(AdminRequestHandler, dbos)
         self.server = ThreadingHTTPServer(("0.0.0.0", port), handler)
         self.server_thread = threading.Thread(target=self.server.serve_forever)
         self.server_thread.daemon = True
@@ -38,7 +38,7 @@ class AdminServer:
         self.server_thread.join()
 
 
-class _AdminRequestHandler(BaseHTTPRequestHandler):
+class AdminRequestHandler(BaseHTTPRequestHandler):
     def __init__(self, dbos: DBOS, *args: Any, **kwargs: Any) -> None:
         self.dbos = dbos
         super().__init__(*args, **kwargs)
@@ -58,7 +58,7 @@ class _AdminRequestHandler(BaseHTTPRequestHandler):
         elif self.path == _perf_path:
             # Compares system CPU times elapsed since last call or module import, returning immediately (non blocking).
             cpu_percent = psutil.cpu_percent(interval=None) / 100.0
-            perf_util: _PerfUtilization = {
+            perf_util: PerfUtilization = {
                 "idle": 1.0 - cpu_percent,
                 "active": cpu_percent,
                 "utilization": cpu_percent,
@@ -102,7 +102,7 @@ class _AdminRequestHandler(BaseHTTPRequestHandler):
 
 
 # Be consistent with DBOS-TS response.
-class _PerfUtilization(TypedDict):
+class PerfUtilization(TypedDict):
     idle: float
     active: float
     utilization: float
