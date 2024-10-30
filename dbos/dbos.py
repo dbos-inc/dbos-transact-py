@@ -25,6 +25,7 @@ from typing import (
 
 from opentelemetry.trace import Span
 
+from ._classproperty import classproperty
 from ._core import (
     TEMP_SEND_WF_NAME,
     WorkflowHandlePolling,
@@ -39,7 +40,6 @@ from ._core import (
     start_workflow,
     workflow_wrapper,
 )
-from .decorators import classproperty
 from .queue import Queue, queue_thread
 from .recovery import _recover_pending_workflows, _startup_recovery_thread
 from .registrations import (

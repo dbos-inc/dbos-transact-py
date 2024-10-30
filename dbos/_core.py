@@ -13,7 +13,8 @@ if sys.version_info < (3, 10):
 else:
     from typing import ParamSpec
 
-from . import utils
+from . import _serialization
+from ._serialization import WorkflowInputs
 from .context import (
     DBOSAssumeRole,
     DBOSContext,
@@ -55,7 +56,6 @@ from .system_database import (
     WorkflowStatusInternal,
     WorkflowStatusString,
 )
-from .utils import WorkflowInputs
 
 if TYPE_CHECKING:
     from .dbos import (
@@ -147,7 +147,9 @@ def _init_workflow(
         "app_id": ctx.app_id,
         "app_version": ctx.app_version,
         "executor_id": ctx.executor_id,
-        "request": (utils.serialize(ctx.request) if ctx.request is not None else None),
+        "request": (
+            _serialization.serialize(ctx.request) if ctx.request is not None else None
+        ),
         "recovery_attempts": None,
         "authenticated_user": ctx.authenticated_user,
         "authenticated_roles": (
@@ -168,10 +170,10 @@ def _init_workflow(
         dbos._sys_db.update_workflow_status(
             status, False, ctx.in_recovery, max_recovery_attempts=max_recovery_attempts
         )
-        dbos._sys_db.update_workflow_inputs(wfid, utils.serialize_args(inputs))
+        dbos._sys_db.update_workflow_inputs(wfid, _serialization.serialize_args(inputs))
     else:
         # Buffer the inputs for single-transaction workflows, but don't buffer the status
-        dbos._sys_db.buffer_workflow_inputs(wfid, utils.serialize_args(inputs))
+        dbos._sys_db.buffer_workflow_inputs(wfid, _serialization.serialize_args(inputs))
 
     if queue is not None:
         dbos._sys_db.enqueue(wfid, queue)
@@ -189,7 +191,7 @@ def _execute_workflow(
     try:
         output = func(*args, **kwargs)
         status["status"] = "SUCCESS"
-        status["output"] = utils.serialize(output)
+        status["output"] = _serialization.serialize(output)
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
             dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
@@ -204,7 +206,7 @@ def _execute_workflow(
         return output
     except Exception as error:
         status["status"] = "ERROR"
-        status["error"] = utils.serialize_exception(error)
+        status["error"] = _serialization.serialize_exception(error)
         if status["queue_name"] is not None:
             queue = dbos._registry.queue_info_map[status["queue_name"]]
             dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
@@ -252,7 +254,9 @@ def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[An
     with DBOSContextEnsure():
         ctx = _assert_current_dbos_context()
         request = status["request"]
-        ctx.request = utils.deserialize(request) if request is not None else None
+        ctx.request = (
+            _serialization.deserialize(request) if request is not None else None
+        )
         if status["config_name"] is not None:
             config_name = status["config_name"]
             class_name = status["class_name"]
@@ -506,14 +510,14 @@ def decorate_transaction(
                                     )
                                     if recorded_output["error"]:
                                         deserialized_error = (
-                                            utils.deserialize_exception(
+                                            _serialization.deserialize_exception(
                                                 recorded_output["error"]
                                             )
                                         )
                                         has_recorded_error = True
                                         raise deserialized_error
                                     elif recorded_output["output"]:
-                                        return utils.deserialize(
+                                        return _serialization.deserialize(
                                             recorded_output["output"]
                                         )
                                     else:
@@ -526,7 +530,7 @@ def decorate_transaction(
                                     )
 
                                 output = func(*args, **kwargs)
-                                txn_output["output"] = utils.serialize(output)
+                                txn_output["output"] = _serialization.serialize(output)
                                 assert (
                                     ctx.sql_session is not None
                                 ), "Cannot find a database connection"
@@ -551,7 +555,9 @@ def decorate_transaction(
                         except Exception as error:
                             # Don't record the error if it was already recorded
                             if not has_recorded_error:
-                                txn_output["error"] = utils.serialize_exception(error)
+                                txn_output["error"] = (
+                                    _serialization.serialize_exception(error)
+                                )
                                 dbos._app_db.record_transaction_error(txn_output)
                             raise
             return output
@@ -626,12 +632,12 @@ def decorate_step(
                         f"Replaying step, id: {ctx.function_id}, name: {attributes['name']}"
                     )
                     if recorded_output["error"] is not None:
-                        deserialized_error = utils.deserialize_exception(
+                        deserialized_error = _serialization.deserialize_exception(
                             recorded_output["error"]
                         )
                         raise deserialized_error
                     elif recorded_output["output"] is not None:
-                        return utils.deserialize(recorded_output["output"])
+                        return _serialization.deserialize(recorded_output["output"])
                     else:
                         raise Exception("Output and error are both None")
                 else:
@@ -647,7 +653,7 @@ def decorate_step(
                 for attempt in range(1, local_max_attempts + 1):
                     try:
                         output = func(*args, **kwargs)
-                        step_output["output"] = utils.serialize(output)
+                        step_output["output"] = _serialization.serialize(output)
                         error = None
                         break
                     except Exception as err:
@@ -673,7 +679,9 @@ def decorate_step(
                                 )
 
                 step_output["error"] = (
-                    utils.serialize_exception(error) if error is not None else None
+                    _serialization.serialize_exception(error)
+                    if error is not None
+                    else None
                 )
                 dbos._sys_db.record_operation_result(step_output)
 
