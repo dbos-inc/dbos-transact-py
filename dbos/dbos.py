@@ -40,8 +40,8 @@ from ._core import (
     start_workflow,
     workflow_wrapper,
 )
+from ._recovery import recover_pending_workflows, startup_recovery_thread
 from .queue import Queue, _queue_thread
-from .recovery import _recover_pending_workflows, _startup_recovery_thread
 from .registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
@@ -355,7 +355,7 @@ class DBOS:
 
             if not os.environ.get("DBOS__VMID"):
                 workflow_ids = self._sys_db.get_pending_workflows("local")
-                self._executor.submit(_startup_recovery_thread, self, workflow_ids)
+                self._executor.submit(startup_recovery_thread, self, workflow_ids)
 
             # Listen to notifications
             notification_listener_thread = threading.Thread(
@@ -675,7 +675,7 @@ class DBOS:
         cls, executor_ids: List[str] = ["local"]
     ) -> List[WorkflowHandle[Any]]:
         """Find all PENDING workflows and execute them."""
-        return _recover_pending_workflows(_get_dbos_instance(), executor_ids)
+        return recover_pending_workflows(_get_dbos_instance(), executor_ids)
 
     @classproperty
     def logger(cls) -> Logger:

@@ -4,15 +4,15 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Any, List
 
-from dbos._core import execute_workflow_by_id
-from dbos.context import SetWorkflowRecovery
-from dbos.error import DBOSWorkflowFunctionNotFoundError
+from ._core import execute_workflow_by_id
+from .context import SetWorkflowRecovery
+from .error import DBOSWorkflowFunctionNotFoundError
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS, WorkflowHandle
+    from .dbos import DBOS, WorkflowHandle
 
 
-def _startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
+def startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
     """Attempt to recover local pending workflows on startup using a background thread."""
     stop_event = threading.Event()
     dbos.stop_events.append(stop_event)
@@ -31,7 +31,7 @@ def _startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
             raise e
 
 
-def _recover_pending_workflows(
+def recover_pending_workflows(
     dbos: "DBOS", executor_ids: List[str] = ["local"]
 ) -> List["WorkflowHandle[Any]"]:
     workflow_handles: List["WorkflowHandle[Any]"] = []
