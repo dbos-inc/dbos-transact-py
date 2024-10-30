@@ -49,9 +49,9 @@ from ._registrations import (
     set_temp_workflow_type,
 )
 from ._roles import default_required_roles, required_roles
+from ._tracer import dbos_tracer
 from .queue import Queue, _queue_thread
 from .scheduler.scheduler import ScheduledWorkflow, scheduled
-from .tracer import dbos_tracer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI

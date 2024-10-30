@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from ._logger import dbos_logger
 from ._request import Request
-from .tracer import dbos_tracer
+from ._tracer import dbos_tracer
 
 
 # These are used to tag OTel traces
