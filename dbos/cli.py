@@ -17,7 +17,7 @@ from typing_extensions import Annotated
 
 from . import load_config
 from ._app_db import ApplicationDatabase
-from .dbos_config import is_valid_app_name
+from .dbos_config import _is_valid_app_name
 from .system_database import SystemDatabase
 
 app = typer.Typer()
@@ -186,7 +186,7 @@ def init(
                 str, typer.prompt("What is your project's name?", _get_project_name())
             )
 
-        if not is_valid_app_name(project_name):
+        if not _is_valid_app_name(project_name):
             raise Exception(f"{project_name} is an invalid DBOS app name")
 
         templates_dir = _get_templates_directory()

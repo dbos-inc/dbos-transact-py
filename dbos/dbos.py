@@ -79,7 +79,7 @@ from dbos.context import (
 from dbos.error import DBOSException, DBOSNonExistentWorkflowError
 
 from ._app_db import ApplicationDatabase
-from .dbos_config import ConfigFile, load_config, set_env_vars
+from .dbos_config import ConfigFile, _set_env_vars, load_config
 from .logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
 from .system_database import SystemDatabase
 
@@ -263,7 +263,7 @@ class DBOS:
         if config is None:
             config = load_config()
         config_logger(config)
-        set_env_vars(config)
+        _set_env_vars(config)
         dbos_tracer.config(config)
         dbos_logger.info("Initializing DBOS")
         self.config: ConfigFile = config
