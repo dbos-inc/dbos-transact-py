@@ -3,13 +3,13 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable
 
 from ._logger import dbos_logger
-from .queue import Queue
+from ._queue import Queue
 
 if TYPE_CHECKING:
-    from .dbos import _DBOSRegistry
+    from ._dbos import _DBOSRegistry
 
+from ._context import SetWorkflowID
 from ._croniter import croniter  # type: ignore
-from .context import SetWorkflowID
 
 ScheduledWorkflow = Callable[[datetime, datetime], None]
 

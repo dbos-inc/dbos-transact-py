@@ -40,6 +40,7 @@ from ._core import (
     start_workflow,
     workflow_wrapper,
 )
+from ._queue import Queue, _queue_thread
 from ._recovery import recover_pending_workflows, startup_recovery_thread
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
@@ -51,7 +52,6 @@ from ._registrations import (
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
 from ._tracer import dbos_tracer
-from .queue import Queue, _queue_thread
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -69,18 +69,18 @@ else:
     from typing import ParamSpec, TypeAlias
 
 from dbos._admin_sever import AdminServer
-from dbos.context import (
+from dbos._context import (
     EnterDBOSStep,
     TracedAttributes,
     _assert_current_dbos_context,
     _get_local_dbos_context,
 )
-from dbos.error import DBOSException, DBOSNonExistentWorkflowError
+from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 
 from ._app_db import ApplicationDatabase
+from ._dbos_config import ConfigFile, _set_env_vars, load_config
 from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
-from .dbos_config import ConfigFile, _set_env_vars, load_config
-from .system_database import SystemDatabase
+from ._sys_db import SystemDatabase
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate

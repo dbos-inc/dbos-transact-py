@@ -15,12 +15,12 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 # Public API
 from dbos import DBOS, DBOSContextSetAuth
-from dbos._tracer import dbos_tracer
 
 # Private API because this is a unit test
-from dbos.context import _assert_current_dbos_context
-from dbos.error import DBOSInitializationError, DBOSNotAuthorizedError
-from dbos.system_database import GetWorkflowsInput
+from dbos._context import _assert_current_dbos_context
+from dbos._error import DBOSInitializationError, DBOSNotAuthorizedError
+from dbos._sys_db import GetWorkflowsInput
+from dbos._tracer import dbos_tracer
 
 
 @pytest.mark.order(1)

@@ -5,8 +5,8 @@ import sqlalchemy.dialects.postgresql as pg
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
-from .dbos_config import ConfigFile
-from .error import DBOSWorkflowConflictIDError
+from ._dbos_config import ConfigFile
+from ._error import DBOSWorkflowConflictIDError
 from .schemas.application_database import ApplicationSchema
 
 

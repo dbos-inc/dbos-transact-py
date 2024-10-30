@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Optional, TypedDict
 from ._core import P, R, execute_workflow_by_id, start_workflow
 
 if TYPE_CHECKING:
-    from .dbos import DBOS, Workflow, WorkflowHandle
+    from ._dbos import DBOS, Workflow, WorkflowHandle
 
 
 class QueueRateLimit(TypedDict):
@@ -37,7 +37,7 @@ class Queue:
         self.name = name
         self.concurrency = concurrency
         self.limiter = limiter
-        from dbos.dbos import _get_or_create_dbos_registry
+        from dbos._dbos import _get_or_create_dbos_registry
 
         registry = _get_or_create_dbos_registry()
         registry.queue_info_map[self.name] = self
@@ -45,7 +45,7 @@ class Queue:
     def enqueue(
         self, func: "Workflow[P, R]", *args: P.args, **kwargs: P.kwargs
     ) -> "WorkflowHandle[R]":
-        from dbos.dbos import _get_dbos_instance
+        from dbos._dbos import _get_dbos_instance
 
         dbos = _get_dbos_instance()
         return start_workflow(dbos, func, self.name, False, *args, **kwargs)

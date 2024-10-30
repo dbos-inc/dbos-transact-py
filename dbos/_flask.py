@@ -5,14 +5,14 @@ from urllib.parse import urlparse
 from flask import Flask, request
 from werkzeug.wrappers import Request as WRequest
 
-from ._request import Address, Request, request_id_header
-from .context import (
+from ._context import (
     EnterDBOSHandler,
     OperationType,
     SetWorkflowID,
     TracedAttributes,
     _assert_current_dbos_context,
 )
+from ._request import Address, Request, request_id_header
 
 
 class FlaskMiddleware:

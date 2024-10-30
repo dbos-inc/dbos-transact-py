@@ -1,18 +1,18 @@
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Type, TypeVar, cast
 
-from .error import DBOSNotAuthorizedError
+from ._error import DBOSNotAuthorizedError
 
 if TYPE_CHECKING:
-    from .dbos import _DBOSRegistry
+    from ._dbos import _DBOSRegistry
 
+from ._context import DBOSAssumeRole, _get_local_dbos_context
 from ._registrations import (
     DBOSFuncInfo,
     get_class_info_for_func,
     get_or_create_class_info,
     get_or_create_func_info,
 )
-from .context import DBOSAssumeRole, _get_local_dbos_context
 
 F = TypeVar("F", bound=Callable[..., Any])
 T = TypeVar("T")

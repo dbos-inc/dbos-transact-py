@@ -7,8 +7,8 @@ import pytest
 
 # Public API
 from dbos import load_config
-from dbos.dbos_config import _set_env_vars
-from dbos.error import DBOSInitializationError
+from dbos._dbos_config import _set_env_vars
+from dbos._error import DBOSInitializationError
 
 mock_filename = "test.yaml"
 original_open = __builtins__["open"]

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from dbos import DBOS
 
 # Private API because this is a unit test
-from dbos.context import _assert_current_dbos_context
+from dbos._context import _assert_current_dbos_context
 
 
 def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:

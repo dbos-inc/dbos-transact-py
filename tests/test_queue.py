@@ -5,9 +5,9 @@ import uuid
 import sqlalchemy as sa
 
 from dbos import DBOS, Queue, SetWorkflowID
-from dbos.dbos import WorkflowHandle
+from dbos._dbos import WorkflowHandle
+from dbos._sys_db import WorkflowStatusString
 from dbos.schemas.system_database import SystemSchema
-from dbos.system_database import WorkflowStatusString
 
 
 def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:

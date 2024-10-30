@@ -12,7 +12,7 @@ from ._logger import dbos_logger
 from ._recovery import recover_pending_workflows
 
 if TYPE_CHECKING:
-    from .dbos import DBOS
+    from ._dbos import DBOS
 
 _health_check_path = "/dbos-healthz"
 _workflow_recovery_path = "/dbos-workflow-recovery"

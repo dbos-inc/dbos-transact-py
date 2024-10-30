@@ -17,8 +17,8 @@ from typing_extensions import Annotated
 
 from . import load_config
 from ._app_db import ApplicationDatabase
-from .dbos_config import _is_valid_app_name
-from .system_database import SystemDatabase
+from ._dbos_config import _is_valid_app_name
+from ._sys_db import SystemDatabase
 
 app = typer.Typer()
 

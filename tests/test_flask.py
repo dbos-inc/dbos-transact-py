@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from flask import Flask, Response, jsonify
 
 from dbos import DBOS
-from dbos.context import _assert_current_dbos_context
+from dbos._context import _assert_current_dbos_context
 
 
 def test_flask_endpoint(dbos_flask: Tuple[DBOS, Flask]) -> None:

@@ -25,20 +25,19 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 
-import dbos._serialization as _serialization
-from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
-from dbos.error import (
+from . import _serialization
+from ._dbos_config import ConfigFile
+from ._error import (
     DBOSDeadLetterQueueError,
     DBOSNonExistentWorkflowError,
     DBOSWorkflowConflictIDError,
 )
-
 from ._logger import dbos_logger
-from .dbos_config import ConfigFile
+from ._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from .schemas.system_database import SystemSchema
 
 if TYPE_CHECKING:
-    from .queue import Queue
+    from ._queue import Queue
 
 
 class WorkflowStatusString(Enum):
@@ -149,9 +148,9 @@ class WorkflowInformation(TypedDict, total=False):
     request: Optional[str]
 
 
-dbos_null_topic = "__null__topic__"
-buffer_flush_batch_size = 100
-buffer_flush_interval_secs = 1.0
+_dbos_null_topic = "__null__topic__"
+_buffer_flush_batch_size = 100
+_buffer_flush_interval_secs = 1.0
 
 
 class SystemDatabase:
@@ -657,7 +656,7 @@ class SystemDatabase:
         message: Any,
         topic: Optional[str] = None,
     ) -> None:
-        topic = topic if topic is not None else dbos_null_topic
+        topic = topic if topic is not None else _dbos_null_topic
         with self.engine.begin() as c:
             recorded_output = self.check_operation_execution(
                 workflow_uuid, function_id, conn=c
@@ -701,7 +700,7 @@ class SystemDatabase:
         topic: Optional[str],
         timeout_seconds: float = 60,
     ) -> Any:
-        topic = topic if topic is not None else dbos_null_topic
+        topic = topic if topic is not None else _dbos_null_topic
 
         # First, check for previous executions.
         recorded_output = self.check_operation_execution(workflow_uuid, function_id)
@@ -1005,7 +1004,7 @@ class SystemDatabase:
             status_iter = iter(list(self._workflow_status_buffer))
             wf_id: Optional[str] = None
             while (
-                exported < buffer_flush_batch_size
+                exported < _buffer_flush_batch_size
                 and (wf_id := next(status_iter, None)) is not None
             ):
                 # Pop the first key in the buffer (FIFO)
@@ -1035,7 +1034,7 @@ class SystemDatabase:
             input_iter = iter(list(self._workflow_inputs_buffer))
             wf_id: Optional[str] = None
             while (
-                exported < buffer_flush_batch_size
+                exported < _buffer_flush_batch_size
                 and (wf_id := next(input_iter, None)) is not None
             ):
                 if wf_id not in self._exported_temp_txn_wf_status:
@@ -1066,10 +1065,10 @@ class SystemDatabase:
                 self._is_flushing_status_buffer = False
                 if self._is_buffers_empty:
                     # Only sleep if both buffers are empty
-                    time.sleep(buffer_flush_interval_secs)
+                    time.sleep(_buffer_flush_interval_secs)
             except Exception as e:
                 dbos_logger.error(f"Error while flushing buffers: {e}")
-                time.sleep(buffer_flush_interval_secs)
+                time.sleep(_buffer_flush_interval_secs)
                 # Will retry next time
 
     def buffer_workflow_status(self, status: WorkflowStatusInternal) -> None:

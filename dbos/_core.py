@@ -14,20 +14,7 @@ else:
     from typing import ParamSpec
 
 from . import _serialization
-from ._registrations import (
-    DEFAULT_MAX_RECOVERY_ATTEMPTS,
-    get_config_name,
-    get_dbos_class_name,
-    get_dbos_func_name,
-    get_func_info,
-    get_or_create_func_info,
-    get_temp_workflow_type,
-    set_dbos_func_name,
-    set_temp_workflow_type,
-)
-from ._roles import check_required_roles
-from ._serialization import WorkflowInputs
-from .context import (
+from ._context import (
     DBOSAssumeRole,
     DBOSContext,
     DBOSContextEnsure,
@@ -42,7 +29,7 @@ from .context import (
     _assert_current_dbos_context,
     _get_local_dbos_context,
 )
-from .error import (
+from ._error import (
     DBOSException,
     DBOSMaxStepRetriesExceeded,
     DBOSNonExistentWorkflowError,
@@ -50,7 +37,20 @@ from .error import (
     DBOSWorkflowConflictIDError,
     DBOSWorkflowFunctionNotFoundError,
 )
-from .system_database import (
+from ._registrations import (
+    DEFAULT_MAX_RECOVERY_ATTEMPTS,
+    get_config_name,
+    get_dbos_class_name,
+    get_dbos_func_name,
+    get_func_info,
+    get_or_create_func_info,
+    get_temp_workflow_type,
+    set_dbos_func_name,
+    set_temp_workflow_type,
+)
+from ._roles import check_required_roles
+from ._serialization import WorkflowInputs
+from ._sys_db import (
     GetEventWorkflowContext,
     OperationResultInternal,
     WorkflowStatusInternal,
@@ -58,7 +58,7 @@ from .system_database import (
 )
 
 if TYPE_CHECKING:
-    from .dbos import (
+    from ._dbos import (
         DBOS,
         Workflow,
         WorkflowHandle,

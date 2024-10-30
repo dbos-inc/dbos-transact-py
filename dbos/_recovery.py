@@ -4,12 +4,12 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Any, List
 
+from ._context import SetWorkflowRecovery
 from ._core import execute_workflow_by_id
-from .context import SetWorkflowRecovery
-from .error import DBOSWorkflowFunctionNotFoundError
+from ._error import DBOSWorkflowFunctionNotFoundError
 
 if TYPE_CHECKING:
-    from .dbos import DBOS, WorkflowHandle
+    from ._dbos import DBOS, WorkflowHandle
 
 
 def startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
