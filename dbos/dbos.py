@@ -25,19 +25,19 @@ from typing import (
 
 from opentelemetry.trace import Span
 
-from dbos.core import (
+from dbos._core import (
     TEMP_SEND_WF_NAME,
-    _execute_workflow_id,
-    _get_event,
-    _recv,
-    _send,
-    _set_event,
-    _start_workflow,
-    _step,
-    _transaction,
-    _workflow,
-    _workflow_wrapper,
-    _WorkflowHandlePolling,
+    WorkflowHandlePolling,
+    decorate_step,
+    decorate_transaction,
+    decorate_workflow,
+    execute_workflow_by_id,
+    get_event,
+    recv,
+    send,
+    set_event,
+    start_workflow,
+    workflow_wrapper,
 )
 from dbos.decorators import classproperty
 from dbos.queue import Queue, queue_thread
@@ -297,7 +297,7 @@ class DBOS:
         ) -> None:
             self.send(destination_id, message, topic)
 
-        temp_send_wf = _workflow_wrapper(self._registry, send_temp_workflow)
+        temp_send_wf = workflow_wrapper(self._registry, send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
         set_temp_workflow_type(send_temp_workflow, "send")
         self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
@@ -435,7 +435,7 @@ class DBOS:
         cls, *, max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS
     ) -> Callable[[F], F]:
         """Decorate a function for use as a DBOS workflow."""
-        return _workflow(_get_or_create_dbos_registry(), max_recovery_attempts)
+        return decorate_workflow(_get_or_create_dbos_registry(), max_recovery_attempts)
 
     @classmethod
     def transaction(
@@ -448,7 +448,7 @@ class DBOS:
             isolation_level(IsolationLevel): Transaction isolation level
 
         """
-        return _transaction(_get_or_create_dbos_registry(), isolation_level)
+        return decorate_transaction(_get_or_create_dbos_registry(), isolation_level)
 
     @classmethod
     def step(
@@ -470,7 +470,7 @@ class DBOS:
 
         """
 
-        return _step(
+        return decorate_step(
             _get_or_create_dbos_registry(),
             retries_allowed=retries_allowed,
             interval_seconds=interval_seconds,
@@ -551,7 +551,7 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
-        return _start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs)
+        return start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs)
 
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
@@ -594,14 +594,14 @@ class DBOS:
             stat = dbos.get_workflow_status(workflow_id)
             if stat is None:
                 raise DBOSNonExistentWorkflowError(workflow_id)
-        return _WorkflowHandlePolling(workflow_id, dbos)
+        return WorkflowHandlePolling(workflow_id, dbos)
 
     @classmethod
     def send(
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
         """Send a message to a workflow execution."""
-        return _send(_get_dbos_instance(), destination_id, message, topic)
+        return send(_get_dbos_instance(), destination_id, message, topic)
 
     @classmethod
     def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
@@ -611,7 +611,7 @@ class DBOS:
         This function is to be called from within a workflow.
         `recv` will return the message sent on `topic`, waiting if necessary.
         """
-        return _recv(_get_dbos_instance(), topic, timeout_seconds)
+        return recv(_get_dbos_instance(), topic, timeout_seconds)
 
     @classmethod
     def sleep(cls, seconds: float) -> None:
@@ -649,7 +649,7 @@ class DBOS:
             value(Any): A serializable value to associate with the key
 
         """
-        return _set_event(_get_dbos_instance(), key, value)
+        return set_event(_get_dbos_instance(), key, value)
 
     @classmethod
     def get_event(cls, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:
@@ -664,12 +664,12 @@ class DBOS:
             timeout_seconds(float): The amount of time to wait, in case `set_event` has not yet been called byt the workflow
 
         """
-        return _get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
+        return get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
 
     @classmethod
     def execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Execute a workflow by ID (for recovery)."""
-        return _execute_workflow_id(_get_dbos_instance(), workflow_id)
+        return execute_workflow_by_id(_get_dbos_instance(), workflow_id)
 
     @classmethod
     def recover_pending_workflows(
