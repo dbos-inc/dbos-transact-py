@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from dbos import DBOS
 
 # Private API because this is a unit test
-from dbos.context import assert_current_dbos_context
+from dbos.context import _assert_current_dbos_context
 
 
 def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
@@ -19,7 +19,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     @app.get("/endpoint/{var1}/{var2}")
     def test_endpoint(var1: str, var2: str) -> str:
         result = test_workflow(var1, var2)
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         assert not ctx.is_within_workflow()
         return result
 
@@ -57,7 +57,7 @@ def test_start_workflow(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     @app.get("/{var1}/{var2}")
     def test_endpoint(var1: str, var2: str) -> str:
         handle = dbos.start_workflow(test_workflow, var1, var2)
-        context = assert_current_dbos_context()
+        context = _assert_current_dbos_context()
         assert not context.is_within_workflow()
         return handle.get_result()
 

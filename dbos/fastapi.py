@@ -14,7 +14,7 @@ from .context import (
     OperationType,
     SetWorkflowID,
     TracedAttributes,
-    assert_current_dbos_context,
+    _assert_current_dbos_context,
 )
 from .request import Address, Request, request_id_header
 
@@ -93,7 +93,7 @@ def setup_fastapi_middleware(app: FastAPI, dbos: DBOS) -> None:
             "operationType": OperationType.HANDLER.value,
         }
         with EnterDBOSHandler(attributes):
-            ctx = assert_current_dbos_context()
+            ctx = _assert_current_dbos_context()
             ctx.request = make_request(request)
             workflow_id = request.headers.get("dbos-idempotency-key", "")
             with SetWorkflowID(workflow_id):

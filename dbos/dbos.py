@@ -73,8 +73,8 @@ from dbos._admin_sever import AdminServer
 from dbos.context import (
     EnterDBOSStep,
     TracedAttributes,
-    assert_current_dbos_context,
-    get_local_dbos_context,
+    _assert_current_dbos_context,
+    _get_local_dbos_context,
 )
 from dbos.error import DBOSException, DBOSNonExistentWorkflowError
 
@@ -556,7 +556,7 @@ class DBOS:
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
         """Return the status of a workflow execution."""
-        ctx = get_local_dbos_context()
+        ctx = _get_local_dbos_context()
         if ctx and ctx.is_within_workflow():
             ctx.function_id += 1
             stat = _get_dbos_instance()._sys_db.get_workflow_status_within_wf(
@@ -699,7 +699,7 @@ class DBOS:
     @classproperty
     def sql_session(cls) -> Session:
         """Return the SQLAlchemy `Session` for the current context, which must be within a transaction function."""
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         assert ctx.is_transaction(), "db is only available within a transaction."
         rv = ctx.sql_session
         assert rv
@@ -708,7 +708,7 @@ class DBOS:
     @classproperty
     def workflow_id(cls) -> str:
         """Return the workflow ID for the current context, which must be executing a workflow function."""
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         assert (
             ctx.is_within_workflow()
         ), "workflow_id is only available within a DBOS operation."
@@ -722,7 +722,7 @@ class DBOS:
         `parent_workflow_id` must be accessed from within a workflow function.
         """
 
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         assert (
             ctx.is_within_workflow()
         ), "parent_workflow_id is only available within a workflow."
@@ -731,31 +731,31 @@ class DBOS:
     @classproperty
     def span(cls) -> Span:
         """Return the tracing `Span` associated with the current context."""
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         return ctx.get_current_span()
 
     @classproperty
     def request(cls) -> Optional["Request"]:
         """Return the HTTP `Request`, if any, associated with the current context."""
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         return ctx.request
 
     @classproperty
     def authenticated_user(cls) -> Optional[str]:
         """Return the current authenticated user, if any, associated with the current context."""
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         return ctx.authenticated_user
 
     @classproperty
     def authenticated_roles(cls) -> Optional[List[str]]:
         """Return the roles granted to the current authenticated user, if any, associated with the current context."""
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         return ctx.authenticated_roles
 
     @classproperty
     def assumed_role(cls) -> Optional[str]:
         """Return the role currently assumed by the authenticated user, if any, associated with the current context."""
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         return ctx.assumed_role
 
     @classmethod
@@ -763,7 +763,7 @@ class DBOS:
         cls, authenticated_user: Optional[str], authenticated_roles: Optional[List[str]]
     ) -> None:
         """Set the current authenticated user and granted roles into the current context."""
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         ctx.authenticated_user = authenticated_user
         ctx.authenticated_roles = authenticated_roles
 

@@ -17,7 +17,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from dbos import DBOS, DBOSContextSetAuth
 
 # Private API because this is a unit test
-from dbos.context import assert_current_dbos_context
+from dbos.context import _assert_current_dbos_context
 from dbos.error import DBOSInitializationError, DBOSNotAuthorizedError
 from dbos.system_database import GetWorkflowsInput
 from dbos.tracer import dbos_tracer
@@ -55,7 +55,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     @DBOS.workflow()
     def test_open_endpoint(var1: str) -> str:
         result = var1
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         return result
 
     @app.get("/user/{var1}")
@@ -63,7 +63,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     @DBOS.workflow()
     def test_user_endpoint(var1: str) -> str:
         result = var1
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         assert ctx.assumed_role == "user"
         return result
 
@@ -72,7 +72,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     @DBOS.workflow()
     def test_engineer_endpoint(var1: str) -> str:
         result = var1
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         assert ctx.assumed_role == "engineer"
         return result
 
@@ -81,7 +81,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     @DBOS.workflow()
     def test_admin_endpoint(var1: str) -> str:
         result = var1
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         assert ctx.assumed_role == "admin"
         return result
 
@@ -89,7 +89,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     @DBOS.workflow()
     def test_admin_endpoint_nh(var1: str) -> str:
         result = var1
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         assert ctx.assumed_role == "admin"
         return result
 
@@ -241,7 +241,7 @@ def test_jwt_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     @DBOS.workflow()
     def test_open_endpoint(var1: str) -> str:
         result = var1
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         return result
 
     @app.get("/user/{var1}")
@@ -249,7 +249,7 @@ def test_jwt_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     @DBOS.workflow()
     def test_user_endpoint(var1: str) -> str:
         result = var1
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         assert ctx.assumed_role == "user"
         return result
 
@@ -258,7 +258,7 @@ def test_jwt_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     @DBOS.workflow()
     def test_engineer_endpoint(var1: str) -> str:
         result = var1
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         assert ctx.assumed_role == "engineer"
         return result
 
@@ -267,7 +267,7 @@ def test_jwt_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     @DBOS.workflow()
     def test_admin_endpoint(var1: str) -> str:
         result = var1
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         assert ctx.assumed_role == "admin"
         return result
 

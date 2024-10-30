@@ -7,13 +7,13 @@ import sqlalchemy as sa
 from dbos import DBOS, DBOSConfiguredInstance, SetWorkflowID
 
 # Private API used because this is a test
-from dbos.context import DBOSContextEnsure, assert_current_dbos_context
+from dbos.context import DBOSContextEnsure, _assert_current_dbos_context
 
 
 def test_required_roles(dbos: DBOS) -> None:
     @DBOS.required_roles(["user"])
     def tfunc(var: str) -> str:
-        assert assert_current_dbos_context().assumed_role == "user"
+        assert _assert_current_dbos_context().assumed_role == "user"
         return var
 
     with pytest.raises(Exception) as exc_info:
@@ -31,7 +31,7 @@ def test_required_roles(dbos: DBOS) -> None:
             == "DBOS Error 8: Function tfunc requires a role, but was called in a context without authentication information"
         )
 
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         ctx.authenticated_roles = ["a", "b", "c"]
 
         with pytest.raises(Exception) as exc_info:
@@ -53,59 +53,59 @@ def test_required_roles_class(dbos: DBOS) -> None:
 
         @DBOS.workflow()
         def test_func_user(self, var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "user"
+            assert _assert_current_dbos_context().assumed_role == "user"
             return var
 
         @DBOS.workflow()
         @DBOS.required_roles(["admin"])
         def test_func_admin(self, var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "admin"
+            assert _assert_current_dbos_context().assumed_role == "admin"
             return var
 
         @DBOS.required_roles(["admin"])
         @DBOS.workflow()
         def test_func_admin_r(self, var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "admin"
+            assert _assert_current_dbos_context().assumed_role == "admin"
             return var
 
         @classmethod
         @DBOS.workflow()
         def test_func_user_c(cls, var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "user"
+            assert _assert_current_dbos_context().assumed_role == "user"
             return var
 
         @classmethod
         @DBOS.workflow()
         @DBOS.required_roles(["admin"])
         def test_func_admin_c(cls, var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "admin"
+            assert _assert_current_dbos_context().assumed_role == "admin"
             return var
 
         @classmethod
         @DBOS.required_roles(["admin"])
         @DBOS.workflow()
         def test_func_admin_r_c(cls, var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "admin"
+            assert _assert_current_dbos_context().assumed_role == "admin"
             return var
 
         @staticmethod
         @DBOS.workflow()
         def test_func_user_s(var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "user"
+            assert _assert_current_dbos_context().assumed_role == "user"
             return var
 
         @staticmethod
         @DBOS.workflow()
         @DBOS.required_roles(["admin"])
         def test_func_admin_s(var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "admin"
+            assert _assert_current_dbos_context().assumed_role == "admin"
             return var
 
         @staticmethod
         @DBOS.required_roles(["admin"])
         @DBOS.workflow()
         def test_func_admin_r_s(var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "admin"
+            assert _assert_current_dbos_context().assumed_role == "admin"
             return var
 
     # This checks that the interception occurs in all methods
@@ -141,7 +141,7 @@ def test_required_roles_class(dbos: DBOS) -> None:
     assert "DBOS Error 8" in str(exc_info.value)
 
     with DBOSContextEnsure():
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         # Admin is allowed all
         ctx.authenticated_roles = ["user", "admin"]
 

@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle, WorkflowStatusString
 
 # Private API because this is a test
-from dbos.context import assert_current_dbos_context, get_local_dbos_context
+from dbos.context import _assert_current_dbos_context, _get_local_dbos_context
 from dbos.error import DBOSMaxStepRetriesExceeded
 from dbos.system_database import GetWorkflowsInput
 
@@ -241,10 +241,10 @@ def test_temp_workflow(dbos: DBOS) -> None:
     def call_step(var: str) -> str:
         return test_step(var)
 
-    assert get_local_dbos_context() is None
+    assert _get_local_dbos_context() is None
     res = test_transaction("var2")
     assert res == "var21"
-    assert get_local_dbos_context() is None
+    assert _get_local_dbos_context() is None
     res = test_step("var")
     assert res == "var"
 
@@ -525,17 +525,17 @@ def test_start_workflow(dbos: DBOS) -> None:
     wfuuid = str(uuid.uuid4())
     with SetWorkflowID(wfuuid):
         handle = dbos.start_workflow(test_workflow, "bob", "bob")
-        context = assert_current_dbos_context()
+        context = _assert_current_dbos_context()
         assert not context.is_within_workflow()
         assert handle.get_result() == "bob1bob"
     with SetWorkflowID(wfuuid):
         handle = dbos.start_workflow(test_workflow, "bob", "bob")
-        context = assert_current_dbos_context()
+        context = _assert_current_dbos_context()
         assert not context.is_within_workflow()
         assert handle.get_result() == "bob1bob"
     with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") == "bob1bob"
-        context = assert_current_dbos_context()
+        context = _assert_current_dbos_context()
         assert not context.is_within_workflow()
     assert txn_counter == 1
     assert wf_counter == 3

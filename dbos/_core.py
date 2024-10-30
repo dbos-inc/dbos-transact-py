@@ -26,8 +26,8 @@ from .context import (
     OperationType,
     SetWorkflowID,
     TracedAttributes,
-    assert_current_dbos_context,
-    get_local_dbos_context,
+    _assert_current_dbos_context,
+    _get_local_dbos_context,
 )
 from .error import (
     DBOSException,
@@ -250,7 +250,7 @@ def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[An
             workflow_id, "Workflow function not found"
         )
     with DBOSContextEnsure():
-        ctx = assert_current_dbos_context()
+        ctx = _assert_current_dbos_context()
         request = status["request"]
         ctx.request = utils.deserialize(request) if request is not None else None
         if status["config_name"] is not None:
@@ -334,7 +334,7 @@ def start_workflow(
     #      If this is a child workflow, assign parent wf id with call# suffix
     #   Make a (system) DB record for the workflow
     #   Pass the new context to a worker thread that will run the wf function
-    cur_ctx = get_local_dbos_context()
+    cur_ctx = _get_local_dbos_context()
     if cur_ctx is not None and cur_ctx.is_within_workflow():
         assert cur_ctx.is_workflow()  # Not in a step
         cur_ctx.function_id += 1
@@ -417,12 +417,12 @@ def workflow_wrapper(
             "args": args,
             "kwargs": kwargs,
         }
-        ctx = get_local_dbos_context()
+        ctx = _get_local_dbos_context()
         enterWorkflowCtxMgr = (
             EnterDBOSChildWorkflow if ctx and ctx.is_workflow() else EnterDBOSWorkflow
         )
         with enterWorkflowCtxMgr(attributes), DBOSAssumeRole(rr):
-            ctx = assert_current_dbos_context()  # Now the child ctx
+            ctx = _assert_current_dbos_context()  # Now the child ctx
             status = _init_workflow(
                 dbos,
                 ctx,
@@ -564,7 +564,7 @@ def decorate_transaction(
             # Entering transaction is allowed:
             #  In a workflow (that is not in a step already)
             #  Not in a workflow (we will start the single op workflow)
-            ctx = get_local_dbos_context()
+            ctx = _get_local_dbos_context()
             if ctx and ctx.is_within_workflow():
                 assert (
                     ctx.is_workflow()
@@ -690,7 +690,7 @@ def decorate_step(
             #  In a step already, just call the original function directly.
             #  In a workflow (that is not in a step already)
             #  Not in a workflow (we will start the single op workflow)
-            ctx = get_local_dbos_context()
+            ctx = _get_local_dbos_context()
             if ctx and ctx.is_step():
                 # Call the original function directly
                 return func(*args, **kwargs)
@@ -733,7 +733,7 @@ def send(
                 topic,
             )
 
-    ctx = get_local_dbos_context()
+    ctx = _get_local_dbos_context()
     if ctx and ctx.is_within_workflow():
         assert ctx.is_workflow(), "send() must be called from within a workflow"
         return do_send(destination_id, message, topic)
@@ -744,7 +744,7 @@ def send(
 
 
 def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
-    cur_ctx = get_local_dbos_context()
+    cur_ctx = _get_local_dbos_context()
     if cur_ctx is not None:
         # Must call it within a workflow
         assert cur_ctx.is_workflow(), "recv() must be called from within a workflow"
@@ -767,7 +767,7 @@ def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60)
 
 
 def set_event(dbos: "DBOS", key: str, value: Any) -> None:
-    cur_ctx = get_local_dbos_context()
+    cur_ctx = _get_local_dbos_context()
     if cur_ctx is not None:
         # Must call it within a workflow
         assert (
@@ -788,7 +788,7 @@ def set_event(dbos: "DBOS", key: str, value: Any) -> None:
 def get_event(
     dbos: "DBOS", workflow_id: str, key: str, timeout_seconds: float = 60
 ) -> Any:
-    cur_ctx = get_local_dbos_context()
+    cur_ctx = _get_local_dbos_context()
     if cur_ctx is not None and cur_ctx.is_within_workflow():
         # Call it within a workflow
         assert (
