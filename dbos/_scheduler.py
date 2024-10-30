@@ -2,14 +2,14 @@ import threading
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable
 
-from dbos._logger import dbos_logger
-from dbos.queue import Queue
+from ._logger import dbos_logger
+from .queue import Queue
 
 if TYPE_CHECKING:
-    from dbos.dbos import _DBOSRegistry
+    from .dbos import _DBOSRegistry
 
-from ..context import SetWorkflowID
-from .croniter import croniter  # type: ignore
+from ._croniter import croniter  # type: ignore
+from .context import SetWorkflowID
 
 ScheduledWorkflow = Callable[[datetime, datetime], None]
 
