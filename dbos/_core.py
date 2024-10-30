@@ -25,6 +25,7 @@ from ._registrations import (
     set_dbos_func_name,
     set_temp_workflow_type,
 )
+from ._roles import check_required_roles
 from ._serialization import WorkflowInputs
 from .context import (
     DBOSAssumeRole,
@@ -49,7 +50,6 @@ from .error import (
     DBOSWorkflowConflictIDError,
     DBOSWorkflowFunctionNotFoundError,
 )
-from .roles import check_required_roles
 from .system_database import (
     GetEventWorkflowContext,
     OperationResultInternal,

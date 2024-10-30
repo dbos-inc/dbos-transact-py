@@ -48,8 +48,8 @@ from ._registrations import (
     set_dbos_func_name,
     set_temp_workflow_type,
 )
+from ._roles import default_required_roles, required_roles
 from .queue import Queue, _queue_thread
-from .roles import default_required_roles, required_roles
 from .scheduler.scheduler import ScheduledWorkflow, scheduled
 from .tracer import dbos_tracer
 
