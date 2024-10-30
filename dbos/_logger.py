@@ -9,7 +9,7 @@ from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 
 if TYPE_CHECKING:
-    from dbos._dbos_config import ConfigFile
+    from ._dbos_config import ConfigFile
 
 dbos_logger = logging.getLogger("dbos")
 _otlp_handler, _otlp_transformer = None, None

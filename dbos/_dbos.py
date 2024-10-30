@@ -68,17 +68,16 @@ if sys.version_info < (3, 10):
 else:
     from typing import ParamSpec, TypeAlias
 
-from dbos._admin_sever import AdminServer
-from dbos._context import (
+from ._admin_sever import AdminServer
+from ._app_db import ApplicationDatabase
+from ._context import (
     EnterDBOSStep,
     TracedAttributes,
     _assert_current_dbos_context,
     _get_local_dbos_context,
 )
-from dbos._error import DBOSException, DBOSNonExistentWorkflowError
-
-from ._app_db import ApplicationDatabase
 from ._dbos_config import ConfigFile, _set_env_vars, load_config
+from ._error import DBOSException, DBOSNonExistentWorkflowError
 from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
 from ._sys_db import SystemDatabase
 
@@ -280,13 +279,13 @@ class DBOS:
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
-            from dbos._fastapi import setup_fastapi_middleware
+            from ._fastapi import setup_fastapi_middleware
 
             setup_fastapi_middleware(self.fastapi, _get_dbos_instance())
 
         # If using Flask, set up middleware
         if self.flask is not None:
-            from dbos._flask import setup_flask_middleware
+            from ._flask import setup_flask_middleware
 
             setup_flask_middleware(self.flask)
 
@@ -532,7 +531,7 @@ class DBOS:
     ) -> Callable[[_KafkaConsumerWorkflow], _KafkaConsumerWorkflow]:
         """Decorate a function to be used as a Kafka consumer."""
         try:
-            from dbos._kafka import kafka_consumer
+            from ._kafka import kafka_consumer
 
             return kafka_consumer(
                 _get_or_create_dbos_registry(), config, topics, in_order
