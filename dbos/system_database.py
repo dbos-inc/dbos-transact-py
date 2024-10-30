@@ -33,8 +33,8 @@ from dbos.error import (
 )
 from dbos.registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 
+from ._logger import dbos_logger
 from .dbos_config import ConfigFile
-from .logger import dbos_logger
 from .schemas.system_database import SystemSchema
 
 if TYPE_CHECKING:

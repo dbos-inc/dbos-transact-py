@@ -8,10 +8,10 @@ from .queue import Queue
 if TYPE_CHECKING:
     from .dbos import _DBOSRegistry
 
+from ._logger import dbos_logger
 from .context import SetWorkflowID
 from .error import DBOSInitializationError
 from .kafka_message import KafkaMessage
-from .logger import dbos_logger
 
 _KafkaConsumerWorkflow = Callable[[KafkaMessage], None]
 

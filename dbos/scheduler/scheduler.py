@@ -2,7 +2,7 @@ import threading
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable
 
-from dbos.logger import dbos_logger
+from dbos._logger import dbos_logger
 from dbos.queue import Queue
 
 if TYPE_CHECKING:

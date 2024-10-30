@@ -8,8 +8,8 @@ import yaml
 from jsonschema import ValidationError, validate
 from sqlalchemy import URL
 
+from ._logger import dbos_logger
 from .error import DBOSInitializationError
-from .logger import dbos_logger
 
 
 class RuntimeConfig(TypedDict, total=False):
