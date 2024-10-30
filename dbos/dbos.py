@@ -41,14 +41,14 @@ from ._core import (
     workflow_wrapper,
 )
 from ._recovery import recover_pending_workflows, startup_recovery_thread
-from .queue import Queue, _queue_thread
-from .registrations import (
+from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
     get_or_create_class_info,
     set_dbos_func_name,
     set_temp_workflow_type,
 )
+from .queue import Queue, _queue_thread
 from .roles import default_required_roles, required_roles
 from .scheduler.scheduler import ScheduledWorkflow, scheduled
 from .tracer import dbos_tracer

@@ -26,12 +26,12 @@ from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 
 import dbos._serialization as _serialization
+from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos.error import (
     DBOSDeadLetterQueueError,
     DBOSNonExistentWorkflowError,
     DBOSWorkflowConflictIDError,
 )
-from dbos.registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 
 from ._logger import dbos_logger
 from .dbos_config import ConfigFile
