@@ -34,7 +34,7 @@ from ._error import (
 )
 from ._logger import dbos_logger
 from ._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
-from .schemas.system_database import SystemSchema
+from ._schemas.system_database import SystemSchema
 
 if TYPE_CHECKING:
     from ._queue import Queue
@@ -199,7 +199,7 @@ class SystemDatabase:
 
         # Run a schema migration for the system database
         migration_dir = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), "migrations"
+            os.path.dirname(os.path.realpath(__file__)), "_migrations"
         )
         alembic_cfg = Config()
         alembic_cfg.set_main_option("script_location", migration_dir)

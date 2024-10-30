@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from ._dbos_config import ConfigFile
 from ._error import DBOSWorkflowConflictIDError
-from .schemas.application_database import ApplicationSchema
+from ._schemas.application_database import ApplicationSchema
 
 
 class TransactionResultInternal(TypedDict):
