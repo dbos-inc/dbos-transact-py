@@ -2,10 +2,10 @@ import threading
 import traceback
 from typing import TYPE_CHECKING, Optional, TypedDict
 
-from dbos._core import P, R, execute_workflow_by_id, start_workflow
+from ._core import P, R, execute_workflow_by_id, start_workflow
 
 if TYPE_CHECKING:
-    from dbos.dbos import DBOS, Workflow, WorkflowHandle
+    from .dbos import DBOS, Workflow, WorkflowHandle
 
 
 class QueueRateLimit(TypedDict):
@@ -51,7 +51,7 @@ class Queue:
         return start_workflow(dbos, func, self.name, False, *args, **kwargs)
 
 
-def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
+def _queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     while not stop_event.is_set():
         if stop_event.wait(timeout=1):
             return

@@ -40,7 +40,7 @@ from ._core import (
     start_workflow,
     workflow_wrapper,
 )
-from .queue import Queue, queue_thread
+from .queue import Queue, _queue_thread
 from .recovery import _recover_pending_workflows, _startup_recovery_thread
 from .registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
@@ -377,7 +377,7 @@ class DBOS:
             evt = threading.Event()
             self.stop_events.append(evt)
             bg_queue_thread = threading.Thread(
-                target=queue_thread, args=(evt, self), daemon=True
+                target=_queue_thread, args=(evt, self), daemon=True
             )
             bg_queue_thread.start()
             self._background_threads.append(bg_queue_thread)
