@@ -69,7 +69,7 @@ if sys.version_info < (3, 10):
 else:
     from typing import ParamSpec, TypeAlias
 
-from dbos.admin_sever import AdminServer
+from dbos._admin_sever import AdminServer
 from dbos.context import (
     EnterDBOSStep,
     TracedAttributes,
