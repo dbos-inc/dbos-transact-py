@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import DBOS
+from ._request import Address, Request, request_id_header
 from .context import (
     EnterDBOSHandler,
     OperationType,
@@ -15,7 +16,6 @@ from .context import (
     _assert_current_dbos_context,
 )
 from .error import DBOSException
-from .request import Address, Request, request_id_header
 
 
 def _get_or_generate_request_id(request: FastAPIRequest) -> str:

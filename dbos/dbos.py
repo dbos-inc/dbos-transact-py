@@ -56,12 +56,12 @@ from .tracer import dbos_tracer
 if TYPE_CHECKING:
     from fastapi import FastAPI
     from ._kafka import _KafkaConsumerWorkflow
-    from .request import Request
+    from ._request import Request
     from flask import Flask
 
 from sqlalchemy.orm import Session
 
-from .request import Request
+from ._request import Request
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec, TypeAlias
