@@ -25,7 +25,7 @@ from typing import (
 
 from opentelemetry.trace import Span
 
-from dbos._core import (
+from ._core import (
     TEMP_SEND_WF_NAME,
     WorkflowHandlePolling,
     decorate_step,
@@ -39,30 +39,29 @@ from dbos._core import (
     start_workflow,
     workflow_wrapper,
 )
-from dbos.decorators import classproperty
-from dbos.queue import Queue, queue_thread
-from dbos.recovery import _recover_pending_workflows, _startup_recovery_thread
-from dbos.registrations import (
+from .decorators import classproperty
+from .queue import Queue, queue_thread
+from .recovery import _recover_pending_workflows, _startup_recovery_thread
+from .registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
     get_or_create_class_info,
     set_dbos_func_name,
     set_temp_workflow_type,
 )
-from dbos.roles import default_required_roles, required_roles
-from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled
-
+from .roles import default_required_roles, required_roles
+from .scheduler.scheduler import ScheduledWorkflow, scheduled
 from .tracer import dbos_tracer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
-    from dbos.kafka import KafkaConsumerWorkflow
+    from .kafka import KafkaConsumerWorkflow
     from .request import Request
     from flask import Flask
 
 from sqlalchemy.orm import Session
 
-from dbos.request import Request
+from .request import Request
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec, TypeAlias
@@ -853,7 +852,7 @@ class DBOSConfiguredInstance:
 
 # Apps that import DBOS probably don't exit.  If they do, let's see if
 #   it looks like startup was abandoned or a call was forgotten...
-def dbos_exit_hook() -> None:
+def _dbos_exit_hook() -> None:
     if _dbos_global_registry is None:
         # Probably used as or for a support module
         return
@@ -872,4 +871,4 @@ def dbos_exit_hook() -> None:
 
 
 # Register the exit hook
-atexit.register(dbos_exit_hook)
+atexit.register(_dbos_exit_hook)
