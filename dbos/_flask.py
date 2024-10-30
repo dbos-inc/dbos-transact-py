@@ -5,14 +5,13 @@ from urllib.parse import urlparse
 from flask import Flask, request
 from werkzeug.wrappers import Request as WRequest
 
-from dbos.context import (
+from .context import (
     EnterDBOSHandler,
     OperationType,
     SetWorkflowID,
     TracedAttributes,
     _assert_current_dbos_context,
 )
-
 from .request import Address, Request, request_id_header
 
 
@@ -24,7 +23,7 @@ class FlaskMiddleware:
         request = WRequest(environ)
         attributes: TracedAttributes = {
             "name": urlparse(request.url).path,
-            "requestID": get_or_generate_request_id(request),
+            "requestID": _get_or_generate_request_id(request),
             "requestIP": (
                 request.remote_addr if request.remote_addr is not None else None
             ),
@@ -34,14 +33,14 @@ class FlaskMiddleware:
         }
         with EnterDBOSHandler(attributes):
             ctx = _assert_current_dbos_context()
-            ctx.request = make_request(request)
+            ctx.request = _make_request(request)
             workflow_id = request.headers.get("dbos-idempotency-key", "")
             with SetWorkflowID(workflow_id):
                 response = self.app(environ, start_response)
         return response
 
 
-def get_or_generate_request_id(request: WRequest) -> str:
+def _get_or_generate_request_id(request: WRequest) -> str:
     request_id = request.headers.get(request_id_header, None)
     if request_id is not None:
         return request_id
@@ -49,7 +48,7 @@ def get_or_generate_request_id(request: WRequest) -> str:
         return str(uuid.uuid4())
 
 
-def make_request(request: WRequest) -> Request:
+def _make_request(request: WRequest) -> Request:
     parsed_url = urlparse(request.url)
     base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
 

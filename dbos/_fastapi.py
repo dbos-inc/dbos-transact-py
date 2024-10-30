@@ -6,9 +6,7 @@ from fastapi import Request as FastAPIRequest
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from dbos import DBOS
-from dbos.error import DBOSException
-
+from . import DBOS
 from .context import (
     EnterDBOSHandler,
     OperationType,
@@ -16,10 +14,11 @@ from .context import (
     TracedAttributes,
     _assert_current_dbos_context,
 )
+from .error import DBOSException
 from .request import Address, Request, request_id_header
 
 
-def get_or_generate_request_id(request: FastAPIRequest) -> str:
+def _get_or_generate_request_id(request: FastAPIRequest) -> str:
     request_id = request.headers.get(request_id_header, None)
     if request_id is not None:
         return request_id
@@ -27,7 +26,7 @@ def get_or_generate_request_id(request: FastAPIRequest) -> str:
         return str(uuid.uuid4())
 
 
-def make_request(request: FastAPIRequest) -> Request:
+def _make_request(request: FastAPIRequest) -> Request:
     return Request(
         headers=request.headers,
         path_params=request.path_params,
@@ -40,7 +39,7 @@ def make_request(request: FastAPIRequest) -> Request:
     )
 
 
-async def dbos_error_handler(request: FastAPIRequest, gexc: Exception) -> JSONResponse:
+async def _dbos_error_handler(request: FastAPIRequest, gexc: Exception) -> JSONResponse:
     exc: DBOSException = cast(DBOSException, gexc)
     status_code = 500
     if exc.status_code is not None:
@@ -78,7 +77,7 @@ class LifespanMiddleware:
 def setup_fastapi_middleware(app: FastAPI, dbos: DBOS) -> None:
 
     app.add_middleware(LifespanMiddleware, dbos=dbos)
-    app.add_exception_handler(DBOSException, dbos_error_handler)
+    app.add_exception_handler(DBOSException, _dbos_error_handler)
 
     @app.middleware("http")
     async def dbos_fastapi_middleware(
@@ -86,7 +85,7 @@ def setup_fastapi_middleware(app: FastAPI, dbos: DBOS) -> None:
     ) -> Any:
         attributes: TracedAttributes = {
             "name": str(request.url.path),
-            "requestID": get_or_generate_request_id(request),
+            "requestID": _get_or_generate_request_id(request),
             "requestIP": request.client.host if request.client is not None else None,
             "requestURL": str(request.url),
             "requestMethod": request.method,
@@ -94,7 +93,7 @@ def setup_fastapi_middleware(app: FastAPI, dbos: DBOS) -> None:
         }
         with EnterDBOSHandler(attributes):
             ctx = _assert_current_dbos_context()
-            ctx.request = make_request(request)
+            ctx.request = _make_request(request)
             workflow_id = request.headers.get("dbos-idempotency-key", "")
             with SetWorkflowID(workflow_id):
                 response = await call_next(request)

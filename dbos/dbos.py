@@ -55,7 +55,7 @@ from .tracer import dbos_tracer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
-    from .kafka import KafkaConsumerWorkflow
+    from ._kafka import _KafkaConsumerWorkflow
     from .request import Request
     from flask import Flask
 
@@ -280,13 +280,13 @@ class DBOS:
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
-            from dbos.fastapi import setup_fastapi_middleware
+            from dbos._fastapi import setup_fastapi_middleware
 
             setup_fastapi_middleware(self.fastapi, _get_dbos_instance())
 
         # If using Flask, set up middleware
         if self.flask is not None:
-            from dbos.flask import setup_flask_middleware
+            from dbos._flask import setup_flask_middleware
 
             setup_flask_middleware(self.flask)
 
@@ -529,10 +529,10 @@ class DBOS:
         config: dict[str, Any],
         topics: list[str],
         in_order: bool = False,
-    ) -> Callable[[KafkaConsumerWorkflow], KafkaConsumerWorkflow]:
+    ) -> Callable[[_KafkaConsumerWorkflow], _KafkaConsumerWorkflow]:
         """Decorate a function to be used as a Kafka consumer."""
         try:
-            from dbos.kafka import kafka_consumer
+            from dbos._kafka import kafka_consumer
 
             return kafka_consumer(
                 _get_or_create_dbos_registry(), config, topics, in_order
