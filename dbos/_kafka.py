@@ -6,7 +6,7 @@ from confluent_kafka import Consumer, KafkaError, KafkaException
 from ._queue import Queue
 
 if TYPE_CHECKING:
-    from ._dbos import _DBOSRegistry
+    from ._dbos import DBOSRegistry
 
 from ._context import SetWorkflowID
 from ._error import DBOSInitializationError
@@ -86,7 +86,7 @@ def _kafka_consumer_loop(
 
 
 def kafka_consumer(
-    dbosreg: "_DBOSRegistry", config: dict[str, Any], topics: list[str], in_order: bool
+    dbosreg: "DBOSRegistry", config: dict[str, Any], topics: list[str], in_order: bool
 ) -> Callable[[_KafkaConsumerWorkflow], _KafkaConsumerWorkflow]:
     def decorator(func: _KafkaConsumerWorkflow) -> _KafkaConsumerWorkflow:
         if in_order:

@@ -110,7 +110,7 @@ IsolationLevel = Literal[
 ]
 
 _dbos_global_instance: Optional[DBOS] = None
-_dbos_global_registry: Optional[_DBOSRegistry] = None
+_dbos_global_registry: Optional[DBOSRegistry] = None
 
 
 def _get_dbos_instance() -> DBOS:
@@ -120,26 +120,26 @@ def _get_dbos_instance() -> DBOS:
     raise DBOSException("No DBOS was created yet")
 
 
-def _get_or_create_dbos_registry() -> _DBOSRegistry:
+def _get_or_create_dbos_registry() -> DBOSRegistry:
     # Currently get / init the global registry
     global _dbos_global_registry
     if _dbos_global_registry is None:
-        _dbos_global_registry = _DBOSRegistry()
+        _dbos_global_registry = DBOSRegistry()
     return _dbos_global_registry
 
 
-_RegisteredJob = Tuple[
+RegisteredJob = Tuple[
     threading.Event, Callable[..., Any], Tuple[Any, ...], dict[str, Any]
 ]
 
 
-class _DBOSRegistry:
+class DBOSRegistry:
     def __init__(self) -> None:
         self.workflow_info_map: dict[str, Workflow[..., Any]] = {}
         self.class_info_map: dict[str, type] = {}
         self.instance_info_map: dict[str, object] = {}
         self.queue_info_map: dict[str, Queue] = {}
-        self.pollers: list[_RegisteredJob] = []
+        self.pollers: list[RegisteredJob] = []
         self.dbos: Optional[DBOS] = None
         self.config: Optional[ConfigFile] = None
 
@@ -268,7 +268,7 @@ class DBOS:
         self._launched: bool = False
         self._sys_db_field: Optional[SystemDatabase] = None
         self._app_db_field: Optional[ApplicationDatabase] = None
-        self._registry: _DBOSRegistry = _get_or_create_dbos_registry()
+        self._registry: DBOSRegistry = _get_or_create_dbos_registry()
         self._registry.dbos = self
         self._admin_server_field: Optional[AdminServer] = None
         self.stop_events: List[threading.Event] = []

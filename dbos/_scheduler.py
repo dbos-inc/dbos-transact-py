@@ -6,7 +6,7 @@ from ._logger import dbos_logger
 from ._queue import Queue
 
 if TYPE_CHECKING:
-    from ._dbos import _DBOSRegistry
+    from ._dbos import DBOSRegistry
 
 from ._context import SetWorkflowID
 from ._croniter import croniter  # type: ignore
@@ -35,7 +35,7 @@ def scheduler_loop(
 
 
 def scheduled(
-    dbosreg: "_DBOSRegistry", cron: str
+    dbosreg: "DBOSRegistry", cron: str
 ) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
     def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
         global scheduler_queue

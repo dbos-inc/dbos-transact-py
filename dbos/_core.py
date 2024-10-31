@@ -63,7 +63,7 @@ if TYPE_CHECKING:
         Workflow,
         WorkflowHandle,
         WorkflowStatus,
-        _DBOSRegistry,
+        DBOSRegistry,
         IsolationLevel,
     )
 
@@ -395,7 +395,7 @@ def start_workflow(
 
 
 def workflow_wrapper(
-    dbosreg: "_DBOSRegistry",
+    dbosreg: "DBOSRegistry",
     func: F,
     max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
 ) -> F:
@@ -448,7 +448,7 @@ def workflow_wrapper(
 
 
 def decorate_workflow(
-    reg: "_DBOSRegistry", max_recovery_attempts: int
+    reg: "DBOSRegistry", max_recovery_attempts: int
 ) -> Callable[[F], F]:
     def _workflow_decorator(func: F) -> F:
         wrapped_func = workflow_wrapper(reg, func, max_recovery_attempts)
@@ -459,7 +459,7 @@ def decorate_workflow(
 
 
 def decorate_transaction(
-    dbosreg: "_DBOSRegistry", isolation_level: "IsolationLevel" = "SERIALIZABLE"
+    dbosreg: "DBOSRegistry", isolation_level: "IsolationLevel" = "SERIALIZABLE"
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
         def invoke_tx(*args: Any, **kwargs: Any) -> Any:
@@ -597,7 +597,7 @@ def decorate_transaction(
 
 
 def decorate_step(
-    dbosreg: "_DBOSRegistry",
+    dbosreg: "DBOSRegistry",
     *,
     retries_allowed: bool = False,
     interval_seconds: float = 1.0,
