@@ -10,7 +10,7 @@ import pytest
 from dbos import DBOS, SetWorkflowID, WorkflowHandle
 
 # Private API used because this is a test
-from dbos._context import DBOSContextEnsure, _assert_current_dbos_context
+from dbos._context import DBOSContextEnsure, assert_current_dbos_context
 from tests.conftest import default_config
 
 
@@ -59,7 +59,7 @@ def test_dbos_singleton(cleanup_test_databases: None) -> None:
             DBOSTestRoles.greetfunc("Nobody")
         assert "DBOS Error 8" in str(exc_info.value)
 
-        ctx = _assert_current_dbos_context()
+        ctx = assert_current_dbos_context()
         ctx.authenticated_roles = ["user", "admin"]
         res = inst.test_func_admin("admin")
         assert res == "myconfig:admin"

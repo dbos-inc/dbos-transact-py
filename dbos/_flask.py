@@ -10,7 +10,7 @@ from ._context import (
     OperationType,
     SetWorkflowID,
     TracedAttributes,
-    _assert_current_dbos_context,
+    assert_current_dbos_context,
 )
 from ._request import Address, Request, request_id_header
 
@@ -32,7 +32,7 @@ class FlaskMiddleware:
             "operationType": OperationType.HANDLER.value,
         }
         with EnterDBOSHandler(attributes):
-            ctx = _assert_current_dbos_context()
+            ctx = assert_current_dbos_context()
             ctx.request = _make_request(request)
             workflow_id = request.headers.get("dbos-idempotency-key", "")
             with SetWorkflowID(workflow_id):

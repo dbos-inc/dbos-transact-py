@@ -215,12 +215,12 @@ def _clear_local_dbos_context() -> None:
     _dbos_context_var.set(None)
 
 
-def _get_local_dbos_context() -> Optional[DBOSContext]:
+def get_local_dbos_context() -> Optional[DBOSContext]:
     return _dbos_context_var.get()
 
 
-def _assert_current_dbos_context() -> DBOSContext:
-    rv = _get_local_dbos_context()
+def assert_current_dbos_context() -> DBOSContext:
+    rv = get_local_dbos_context()
     assert rv, "No DBOS context found"
     return rv
 
@@ -236,11 +236,11 @@ class DBOSContextEnsure:
 
     def __enter__(self) -> DBOSContext:
         # Code to create a basic context
-        ctx = _get_local_dbos_context()
+        ctx = get_local_dbos_context()
         if ctx is None:
             self.created_ctx = True
             _set_local_dbos_context(DBOSContext())
-        return _assert_current_dbos_context()
+        return assert_current_dbos_context()
 
     def __exit__(
         self,
@@ -260,7 +260,7 @@ class DBOSContextSwap:
         self.prev_ctx: Optional[DBOSContext] = None
 
     def __enter__(self) -> DBOSContextSwap:
-        self.prev_ctx = _get_local_dbos_context()
+        self.prev_ctx = get_local_dbos_context()
         _set_local_dbos_context(self.next_ctx)
         return self
 
@@ -270,7 +270,7 @@ class DBOSContextSwap:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        assert _get_local_dbos_context() == self.next_ctx
+        assert get_local_dbos_context() == self.next_ctx
         _set_local_dbos_context(self.prev_ctx)
         return False  # Did not handle
 
@@ -298,11 +298,11 @@ class SetWorkflowID:
 
     def __enter__(self) -> SetWorkflowID:
         # Code to create a basic context
-        ctx = _get_local_dbos_context()
+        ctx = get_local_dbos_context()
         if ctx is None:
             self.created_ctx = True
             _set_local_dbos_context(DBOSContext())
-        _assert_current_dbos_context().id_assigned_for_next_workflow = self.wfid
+        assert_current_dbos_context().id_assigned_for_next_workflow = self.wfid
         return self
 
     def __exit__(
@@ -323,11 +323,11 @@ class SetWorkflowRecovery:
 
     def __enter__(self) -> SetWorkflowRecovery:
         # Code to create a basic context
-        ctx = _get_local_dbos_context()
+        ctx = get_local_dbos_context()
         if ctx is None:
             self.created_ctx = True
             _set_local_dbos_context(DBOSContext())
-        _assert_current_dbos_context().in_recovery = True
+        assert_current_dbos_context().in_recovery = True
 
         return self
 
@@ -337,8 +337,8 @@ class SetWorkflowRecovery:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        assert _assert_current_dbos_context().in_recovery == True
-        _assert_current_dbos_context().in_recovery = False
+        assert assert_current_dbos_context().in_recovery == True
+        assert_current_dbos_context().in_recovery = False
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()
@@ -352,7 +352,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
 
     def __enter__(self) -> DBOSContext:
         # Code to create a basic context
-        ctx = _get_local_dbos_context()
+        ctx = get_local_dbos_context()
         if ctx is None:
             self.created_ctx = True
             ctx = DBOSContext()
@@ -369,7 +369,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        ctx = _assert_current_dbos_context()
+        ctx = assert_current_dbos_context()
         assert ctx.is_within_workflow()
         ctx.end_workflow(exc_value)
         # Code to clean up the basic context if we created it
@@ -385,7 +385,7 @@ class EnterDBOSChildWorkflow(AbstractContextManager[DBOSContext, Literal[False]]
         self.attributes = attributes
 
     def __enter__(self) -> DBOSContext:
-        ctx = _assert_current_dbos_context()
+        ctx = assert_current_dbos_context()
         self.parent_ctx = ctx
         assert ctx.is_workflow()  # Is in a workflow and not in a step
         ctx.function_id += 1
@@ -404,7 +404,7 @@ class EnterDBOSChildWorkflow(AbstractContextManager[DBOSContext, Literal[False]]
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        ctx = _assert_current_dbos_context()
+        ctx = assert_current_dbos_context()
         assert ctx.is_within_workflow()
         ctx.end_workflow(exc_value)
         # Return to parent ctx
@@ -421,7 +421,7 @@ class EnterDBOSStep:
         self.attributes = attributes
 
     def __enter__(self) -> DBOSContext:
-        ctx = _assert_current_dbos_context()
+        ctx = assert_current_dbos_context()
         assert ctx.is_workflow()
         ctx.function_id += 1
         ctx.start_step(ctx.function_id, attributes=self.attributes)
@@ -433,7 +433,7 @@ class EnterDBOSStep:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        ctx = _assert_current_dbos_context()
+        ctx = assert_current_dbos_context()
         assert ctx.is_step()
         ctx.end_step(exc_value)
         return False  # Did not handle
@@ -445,7 +445,7 @@ class EnterDBOSTransaction:
         self.attributes = attributes
 
     def __enter__(self) -> DBOSContext:
-        ctx = _assert_current_dbos_context()
+        ctx = assert_current_dbos_context()
         assert ctx.is_workflow()
         ctx.function_id += 1
         ctx.start_transaction(self.sqls, ctx.function_id, attributes=self.attributes)
@@ -457,7 +457,7 @@ class EnterDBOSTransaction:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        ctx = _assert_current_dbos_context()
+        ctx = assert_current_dbos_context()
         assert ctx.is_transaction()
         ctx.end_transaction(exc_value)
         return False  # Did not handle
@@ -470,11 +470,11 @@ class EnterDBOSHandler:
 
     def __enter__(self) -> EnterDBOSHandler:
         # Code to create a basic context
-        ctx = _get_local_dbos_context()
+        ctx = get_local_dbos_context()
         if ctx is None:
             self.created_ctx = True
             _set_local_dbos_context(DBOSContext())
-        ctx = _assert_current_dbos_context()
+        ctx = assert_current_dbos_context()
         ctx.start_handler(self.attributes)
         return self
 
@@ -484,7 +484,7 @@ class EnterDBOSHandler:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        ctx = _assert_current_dbos_context()
+        ctx = assert_current_dbos_context()
         ctx.end_handler(exc_value)
         # Code to clean up the basic context if we created it
         if self.created_ctx:
@@ -501,11 +501,11 @@ class DBOSContextSetAuth(DBOSContextEnsure):
         self.prev_roles: Optional[List[str]] = None
 
     def __enter__(self) -> DBOSContext:
-        ctx = _get_local_dbos_context()
+        ctx = get_local_dbos_context()
         if ctx is None:
             self.created_ctx = True
             _set_local_dbos_context(DBOSContext())
-        ctx = _assert_current_dbos_context()
+        ctx = assert_current_dbos_context()
         self.prev_user = ctx.authenticated_user
         self.prev_roles = ctx.authenticated_roles
         ctx.set_authentication(self.user, self.roles)
@@ -517,7 +517,7 @@ class DBOSContextSetAuth(DBOSContextEnsure):
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        ctx = _assert_current_dbos_context()
+        ctx = assert_current_dbos_context()
         ctx.set_authentication(self.prev_user, self.prev_roles)
         # Clean up the basic context if we created it
         if self.created_ctx:
@@ -531,7 +531,7 @@ class DBOSAssumeRole:
         self.assume_role = assume_role
 
     def __enter__(self) -> DBOSAssumeRole:
-        ctx = _assert_current_dbos_context()
+        ctx = assert_current_dbos_context()
         self.prior_role = ctx.assumed_role
         if self.assume_role is not None:
             ctx.assumed_role = self.assume_role
@@ -543,7 +543,7 @@ class DBOSAssumeRole:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        ctx = _assert_current_dbos_context()
+        ctx = assert_current_dbos_context()
         if self.assume_role is not None:
             assert ctx.assumed_role == self.assume_role
         ctx.assumed_role = self.prior_role

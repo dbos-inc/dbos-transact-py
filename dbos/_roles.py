@@ -6,7 +6,7 @@ from ._error import DBOSNotAuthorizedError
 if TYPE_CHECKING:
     from ._dbos import _DBOSRegistry
 
-from ._context import DBOSAssumeRole, _get_local_dbos_context
+from ._context import DBOSAssumeRole, get_local_dbos_context
 from ._registrations import (
     DBOSFuncInfo,
     get_class_info_for_func,
@@ -33,7 +33,7 @@ def check_required_roles(
     if required_roles is None or len(required_roles) == 0:
         return None  # Nothing to check
 
-    ctx = _get_local_dbos_context()
+    ctx = get_local_dbos_context()
     if ctx is None or ctx.authenticated_roles is None:
         raise DBOSNotAuthorizedError(
             f"Function {func.__name__} requires a role, but was called in a context without authentication information"

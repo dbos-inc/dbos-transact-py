@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from dbos import DBOS, DBOSConfiguredInstance
 
 # Private API used because this is a test
-from dbos._context import _assert_current_dbos_context
+from dbos._context import assert_current_dbos_context
 
 
 @DBOS.dbos_class()

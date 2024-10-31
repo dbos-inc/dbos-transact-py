@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from flask import Flask, Response, jsonify
 
 from dbos import DBOS
-from dbos._context import _assert_current_dbos_context
+from dbos._context import assert_current_dbos_context
 
 
 def test_flask_endpoint(dbos_flask: Tuple[DBOS, Flask]) -> None:
@@ -13,7 +13,7 @@ def test_flask_endpoint(dbos_flask: Tuple[DBOS, Flask]) -> None:
 
     @app.route("/endpoint/<var1>/<var2>")
     def test_endpoint(var1: str, var2: str) -> Response:
-        ctx = _assert_current_dbos_context()
+        ctx = assert_current_dbos_context()
         assert not ctx.is_within_workflow()
         return test_workflow(var1, var2)
 
