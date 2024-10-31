@@ -24,6 +24,7 @@ from typing import (
 )
 
 from opentelemetry.trace import Span
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ._classproperty import classproperty
 from ._core import (
@@ -699,6 +700,17 @@ class DBOS:
         """Return the SQLAlchemy `Session` for the current context, which must be within a transaction function."""
         ctx = assert_current_dbos_context()
         assert ctx.is_transaction(), "db is only available within a transaction."
+        assert ctx.sql_session
+        rv = ctx.sql_session_sync
+        assert rv
+        return rv
+
+    @classproperty
+    def sql_session_async(cls) -> AsyncSession:
+        """Return the SQLAlchemy `Session` for the current context, which must be within a transaction function."""
+        ctx = assert_current_dbos_context()
+        assert ctx.is_transaction(), "db is only available within a transaction."
+        assert not ctx.sql_session_sync
         rv = ctx.sql_session
         assert rv
         return rv

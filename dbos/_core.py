@@ -20,6 +20,8 @@ from typing import (
     cast,
 )
 
+from sqlalchemy.orm import Session
+
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 from ._utils import run_coroutine
 
@@ -37,6 +39,7 @@ from ._context import (
     EnterDBOSChildWorkflow,
     EnterDBOSStep,
     EnterDBOSTransaction,
+    EnterDBOSTransactionSync,
     EnterDBOSWorkflow,
     OperationType,
     SetWorkflowID,
@@ -505,13 +508,13 @@ def decorate_transaction(
     dbosreg: "DBOSRegistry", isolation_level: "IsolationLevel" = "SERIALIZABLE"
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
-        def invoke_tx(*args: Any, **kwargs: Any) -> Any:
+        async def _invoke_tx(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:
                 raise DBOSException(
                     f"Function {func.__name__} invoked before DBOS initialized"
                 )
             dbos = dbosreg.dbos
-            with dbos._app_db.sessionmaker() as session:
+            async with dbos._app_db.async_sessionmaker() as session:
                 attributes: TracedAttributes = {
                     "name": func.__name__,
                     "operationType": OperationType.TRANSACTION.value,
@@ -532,20 +535,18 @@ def decorate_transaction(
                     while True:
                         has_recorded_error = False
                         try:
-                            with session.begin():
+                            async with session.begin():
                                 # This must be the first statement in the transaction!
-                                session.connection(
+                                await session.connection(
                                     execution_options={
                                         "isolation_level": isolation_level
                                     }
                                 )
                                 # Check recorded output for OAOO
-                                recorded_output = (
-                                    ApplicationDatabase.check_transaction_execution(
-                                        session,
-                                        ctx.workflow_id,
-                                        ctx.function_id,
-                                    )
+                                recorded_output = await ApplicationDatabase.check_transaction_execution_async(
+                                    session,
+                                    ctx.workflow_id,
+                                    ctx.function_id,
                                 )
                                 if recorded_output:
                                     dbos.logger.debug(
@@ -572,12 +573,21 @@ def decorate_transaction(
                                         f"Running transaction, id: {ctx.function_id}, name: {attributes['name']}"
                                     )
 
-                                output = func(*args, **kwargs)
+                                if iscoroutinefunction(func):
+                                    output = await func(*args, **kwargs)
+                                else:
+
+                                    def foo(session: Session) -> Any:
+                                        with EnterDBOSTransactionSync(session):
+                                            return func(*args, **kwargs)
+
+                                    output = await session.run_sync(foo)
+
                                 txn_output["output"] = _serialization.serialize(output)
                                 assert (
                                     ctx.sql_session is not None
                                 ), "Cannot find a database connection"
-                                ApplicationDatabase.record_transaction_output(
+                                await ApplicationDatabase.record_transaction_output_async(
                                     ctx.sql_session, txn_output
                                 )
                                 break
@@ -607,8 +617,7 @@ def decorate_transaction(
 
         fi = get_or_create_func_info(func)
 
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
+        async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
             rr: Optional[str] = check_required_roles(func, fi)
             # Entering transaction is allowed:
             #  In a workflow (that is not in a step already)
@@ -619,19 +628,31 @@ def decorate_transaction(
                     ctx.is_workflow()
                 ), "Transactions must be called from within workflows"
                 with DBOSAssumeRole(rr):
-                    return invoke_tx(*args, **kwargs)
+                    return await _invoke_tx(*args, **kwargs)
             else:
                 tempwf = dbosreg.workflow_info_map.get("<temp>." + func.__qualname__)
                 assert tempwf
                 return tempwf(*args, **kwargs)
 
-        def temp_wf(*args: Any, **kwargs: Any) -> Any:
-            return wrapper(*args, **kwargs)
+        def _sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            return run_coroutine(_async_wrapper(*args, **kwargs))
 
+        wrapper = wraps(func)(
+            _async_wrapper if asyncio.iscoroutinefunction(func) else _sync_wrapper
+        )
+
+        async def temp_wf_async(*args: Any, **kwargs: Any) -> Any:
+            return await _async_wrapper(*args, **kwargs)
+
+        def temp_wf_sync(*args: Any, **kwargs: Any) -> Any:
+            return _sync_wrapper(*args, **kwargs)
+
+        temp_wf = temp_wf_async if asyncio.iscoroutinefunction(func) else temp_wf_sync
         wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
-        set_temp_workflow_type(temp_wf, "transaction")
+        set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+
         wrapper.__orig_func = temp_wf  # type: ignore
 
         return cast(F, wrapper)

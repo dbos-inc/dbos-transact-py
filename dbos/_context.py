@@ -10,12 +10,7 @@ from types import TracebackType
 from typing import List, Literal, Optional, Type, TypedDict
 
 from opentelemetry.trace import Span, Status, StatusCode
-from sqlalchemy.ext.asyncio import (
-    AsyncConnection,
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from ._logger import dbos_logger
@@ -72,7 +67,9 @@ class DBOSContext:
 
         self.curr_step_function_id: int = -1
         self.curr_tx_function_id: int = -1
-        self.sql_session: Optional[Session] = None
+        self.sql_session: Optional[AsyncSession] = None
+        self.sql_session_sync: Optional[Session] = None
+
         self.spans: list[Span] = []
 
         self.authenticated_user: Optional[str] = None
@@ -146,7 +143,7 @@ class DBOSContext:
         self._end_span(exc_value)
 
     def start_transaction(
-        self, ses: Session, fid: int, attributes: TracedAttributes
+        self, ses: AsyncSession, fid: int, attributes: TracedAttributes
     ) -> None:
         self.sql_session = ses
         self.curr_tx_function_id = fid
@@ -156,6 +153,12 @@ class DBOSContext:
         self.sql_session = None
         self.curr_tx_function_id = -1
         self._end_span(exc_value)
+
+    def start_sync_transaction(self, ses: Session) -> None:
+        self.sql_session_sync = ses
+
+    def end_sync_transaction(self) -> None:
+        self.sql_session_sync = None
 
     def start_handler(self, attributes: TracedAttributes) -> None:
         self._start_span(attributes)
@@ -446,7 +449,7 @@ class EnterDBOSStep:
 
 
 class EnterDBOSTransaction:
-    def __init__(self, sqls: Session, attributes: TracedAttributes) -> None:
+    def __init__(self, sqls: AsyncSession, attributes: TracedAttributes) -> None:
         self.sqls = sqls
         self.attributes = attributes
 
@@ -466,6 +469,30 @@ class EnterDBOSTransaction:
         ctx = assert_current_dbos_context()
         assert ctx.is_transaction()
         ctx.end_transaction(exc_value)
+        return False  # Did not handle
+
+
+class EnterDBOSTransactionSync:
+    def __init__(self, sqls: Session) -> None:
+        self.sqls = sqls
+
+    def __enter__(self) -> DBOSContext:
+        ctx = assert_current_dbos_context()
+        assert ctx.is_transaction()
+        assert ctx.sql_session_sync is None
+        ctx.start_sync_transaction(self.sqls)
+        return ctx
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        ctx = assert_current_dbos_context()
+        assert ctx.is_transaction()
+        assert ctx.sql_session_sync is not None
+        ctx.end_sync_transaction()
         return False  # Did not handle
 
 
