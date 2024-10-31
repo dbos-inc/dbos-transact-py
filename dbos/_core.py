@@ -204,15 +204,18 @@ async def _init_workflow(
 async def _execute_workflow(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
-    func: "Workflow[P, Coroutine[Any, Any, R]]",
+    func: "Workflow[P, Union[R, Coroutine[Any, Any, R]]]",
     *args: Any,
     **kwargs: Any,
 ) -> R:
     try:
-        output: R = await (
-            func(*args, **kwargs)
-            if iscoroutinefunction(func)
-            else asyncio.to_thread(func, *args, **kwargs)
+        output: R = await cast(
+            Coroutine[Any, Any, R],
+            (
+                (func(*args, **kwargs))
+                if iscoroutinefunction(func)
+                else asyncio.to_thread(func, *args, **kwargs)
+            ),
         )
         status["status"] = "SUCCESS"
         status["output"] = _serialization.serialize(output)
@@ -422,7 +425,7 @@ def start_workflow(
     return WorkflowHandleFuture(new_wf_id, future, dbos)
 
 
-def _get_dbos(dbosreg: "DBOSRegistry") -> "DBOS":
+def _get_dbos(dbosreg: "DBOSRegistry", func: F) -> "DBOS":
     if dbosreg.dbos is None:
         raise DBOSException(f"Function {func.__name__} invoked before DBOS initialized")
     return dbosreg.dbos
@@ -439,12 +442,7 @@ def workflow_wrapper(
     fi.max_recovery_attempts = max_recovery_attempts
 
     async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
-        dbos = _get_dbos(dbosreg)
-        inputs: WorkflowInputs = {
-            "args": args,
-            "kwargs": kwargs,
-        }
-
+        dbos = _get_dbos(dbosreg, func)
         rr: Optional[str] = check_required_roles(func, fi)
         attributes: TracedAttributes = {
             "name": func.__name__,
