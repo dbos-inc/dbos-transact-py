@@ -201,10 +201,13 @@ async def _init_workflow(
 def _async_exec(
     func: "Workflow[P, Union[R, Coroutine[Any, Any, R]]]", *args: Any, **kwargs: Any
 ) -> Coroutine[Any, Any, R]:
-    return (
-        func(*args, **kwargs)
-        if iscoroutinefunction(func)
-        else asyncio.to_thread(func, *args, **kwargs)
+    return cast(
+        Coroutine[Any, Any, R],
+        (
+            func(*args, **kwargs)
+            if iscoroutinefunction(func)
+            else asyncio.to_thread(func, *args, **kwargs)
+        ),
     )
 
 

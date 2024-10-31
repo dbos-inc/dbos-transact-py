@@ -10,6 +10,12 @@ from types import TracebackType
 from typing import List, Literal, Optional, Type, TypedDict
 
 from opentelemetry.trace import Span, Status, StatusCode
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import Session
 
 from ._logger import dbos_logger
