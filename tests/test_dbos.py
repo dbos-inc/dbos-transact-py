@@ -46,7 +46,8 @@ def test_simple_workflow(dbos: DBOS) -> None:
         DBOS.logger.info("I'm test_step")
         return var
 
-    assert test_workflow("bob", "bob") == "bob1bob"
+    result = test_workflow("bob", "bob")
+    assert result == "bob1bob"
 
     # Test OAOO
     wfuuid = str(uuid.uuid4())

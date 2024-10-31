@@ -24,6 +24,7 @@ import sqlalchemy.dialects.postgresql as pg
 from alembic import command
 from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 from . import _serialization
 from ._dbos_config import ConfigFile
@@ -35,6 +36,7 @@ from ._error import (
 from ._logger import dbos_logger
 from ._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from ._schemas.system_database import SystemSchema
+from ._utils import run_coroutine
 
 if TYPE_CHECKING:
     from ._queue import Queue
@@ -192,11 +194,6 @@ class SystemDatabase:
             database=sysdb_name,
         )
 
-        # Create a connection pool for the system database
-        self.engine = sa.create_engine(
-            system_db_url, pool_size=20, max_overflow=5, pool_timeout=30
-        )
-
         # Run a schema migration for the system database
         migration_dir = os.path.join(
             os.path.dirname(os.path.realpath(__file__)), "_migrations"
@@ -207,7 +204,7 @@ class SystemDatabase:
         escaped_conn_string = re.sub(
             r"%(?=[0-9A-Fa-f]{2})",
             "%%",
-            self.engine.url.render_as_string(hide_password=False),
+            system_db_url.render_as_string(hide_password=False),
         )
         alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
         command.upgrade(alembic_cfg, "head")
@@ -224,22 +221,114 @@ class SystemDatabase:
         self._temp_txn_wf_ids: Set[str] = set()
         self._is_flushing_status_buffer = False
 
+        # Create a connection pool for the system database
+        self.engine = sa.create_engine(
+            system_db_url, pool_size=20, max_overflow=5, pool_timeout=30
+        )
+        self.async_engine = create_async_engine(
+            system_db_url, pool_size=20, max_overflow=5, pool_timeout=30
+        )
+
         # Now we can run background processes
         self._run_background_processes = True
 
     # Destroy the pool when finished
     def destroy(self) -> None:
+        run_coroutine(self.destroy_async())
+
+    async def destroy_async(self) -> None:
         self.wait_for_buffer_flush()
         self._run_background_processes = False
         if self.notification_conn is not None:
             self.notification_conn.close()
         self.engine.dispose()
+        await self.async_engine.dispose()
 
     def wait_for_buffer_flush(self) -> None:
         # Wait until the buffers are flushed.
         while self._is_flushing_status_buffer or not self._is_buffers_empty:
             dbos_logger.debug("Waiting for system buffers to be exported")
             time.sleep(1)
+
+    async def update_workflow_status_async(
+        self,
+        status: WorkflowStatusInternal,
+        replace: bool = True,
+        in_recovery: bool = False,
+        *,
+        conn: Optional[AsyncConnection] = None,
+        max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
+    ) -> None:
+        cmd = pg.insert(SystemSchema.workflow_status).values(
+            workflow_uuid=status["workflow_uuid"],
+            status=status["status"],
+            name=status["name"],
+            class_name=status["class_name"],
+            config_name=status["config_name"],
+            output=status["output"],
+            error=status["error"],
+            executor_id=status["executor_id"],
+            application_version=status["app_version"],
+            application_id=status["app_id"],
+            request=status["request"],
+            authenticated_user=status["authenticated_user"],
+            authenticated_roles=status["authenticated_roles"],
+            assumed_role=status["assumed_role"],
+            queue_name=status["queue_name"],
+        )
+        if replace:
+            cmd = cmd.on_conflict_do_update(
+                index_elements=["workflow_uuid"],
+                set_=dict(
+                    status=status["status"],
+                    output=status["output"],
+                    error=status["error"],
+                ),
+            )
+        elif in_recovery:
+            cmd = cmd.on_conflict_do_update(
+                index_elements=["workflow_uuid"],
+                set_=dict(
+                    recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
+                    + 1,
+                ),
+            )
+        else:
+            cmd = cmd.on_conflict_do_nothing()
+        cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts)  # type: ignore
+
+        if conn is not None:
+            results = await conn.execute(cmd)
+        else:
+            async with self.async_engine.begin() as c:
+                results = await c.execute(cmd)
+        if in_recovery:
+            row = results.fetchone()
+            if row is not None:
+                recovery_attempts: int = row[0]
+                if recovery_attempts > max_recovery_attempts:
+                    async with self.async_engine.begin() as c:
+                        await c.execute(
+                            sa.update(SystemSchema.workflow_status)
+                            .where(
+                                SystemSchema.workflow_status.c.workflow_uuid
+                                == status["workflow_uuid"]
+                            )
+                            .where(
+                                SystemSchema.workflow_status.c.status
+                                == WorkflowStatusString.PENDING.value
+                            )
+                            .values(
+                                status=WorkflowStatusString.RETRIES_EXCEEDED.value,
+                            )
+                        )
+                    raise DBOSDeadLetterQueueError(
+                        status["workflow_uuid"], max_recovery_attempts
+                    )
+
+        # Record we have exported status for this single-transaction workflow
+        if status["workflow_uuid"] in self._temp_txn_wf_ids:
+            self._exported_temp_txn_wf_status.add(status["workflow_uuid"])
 
     def update_workflow_status(
         self,
@@ -511,6 +600,28 @@ class SystemDatabase:
             info.pop("request", None)
 
         return info
+
+    async def update_workflow_inputs_async(
+        self, workflow_uuid: str, inputs: str, conn: Optional[AsyncConnection] = None
+    ) -> None:
+        cmd = (
+            pg.insert(SystemSchema.workflow_inputs)
+            .values(
+                workflow_uuid=workflow_uuid,
+                inputs=inputs,
+            )
+            .on_conflict_do_nothing()
+        )
+        if conn is not None:
+            await conn.execute(cmd)
+        else:
+            async with self.async_engine.begin() as c:
+                await c.execute(cmd)
+
+        if workflow_uuid in self._temp_txn_wf_ids:
+            # Clean up the single-transaction tracking sets
+            self._exported_temp_txn_wf_status.discard(workflow_uuid)
+            self._temp_txn_wf_ids.discard(workflow_uuid)
 
     def update_workflow_inputs(
         self, workflow_uuid: str, inputs: str, conn: Optional[sa.Connection] = None
@@ -1086,9 +1197,9 @@ class SystemDatabase:
             and len(self._workflow_inputs_buffer) == 0
         )
 
-    def enqueue(self, workflow_id: str, queue_name: str) -> None:
-        with self.engine.begin() as c:
-            c.execute(
+    async def enqueue(self, workflow_id: str, queue_name: str) -> None:
+        async with self.async_engine.begin() as c:
+            await c.execute(
                 pg.insert(SystemSchema.workflow_queue)
                 .values(
                     workflow_uuid=workflow_id,
