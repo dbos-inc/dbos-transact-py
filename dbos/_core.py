@@ -20,8 +20,6 @@ from typing import (
     cast,
 )
 
-from anyio.from_thread import start_blocking_portal
-
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 from ._utils import run_coroutine
 
@@ -56,7 +54,6 @@ from ._error import (
 )
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
-    DBOSFuncInfo,
     get_config_name,
     get_dbos_class_name,
     get_dbos_func_name,
@@ -201,6 +198,16 @@ async def _init_workflow(
     return status
 
 
+def _async_exec(
+    func: "Workflow[P, Union[R, Coroutine[Any, Any, R]]]", *args: Any, **kwargs: Any
+) -> Coroutine[Any, Any, R]:
+    return (
+        func(*args, **kwargs)
+        if iscoroutinefunction(func)
+        else asyncio.to_thread(func, *args, **kwargs)
+    )
+
+
 async def _execute_workflow(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
@@ -210,12 +217,7 @@ async def _execute_workflow(
 ) -> R:
     try:
         output: R = await cast(
-            Coroutine[Any, Any, R],
-            (
-                (func(*args, **kwargs))
-                if iscoroutinefunction(func)
-                else asyncio.to_thread(func, *args, **kwargs)
-            ),
+            Coroutine[Any, Any, R], _async_exec(func, *args, **kwargs)
         )
         status["status"] = "SUCCESS"
         status["output"] = _serialization.serialize(output)
@@ -441,7 +443,7 @@ def workflow_wrapper(
     fi = get_or_create_func_info(func)
     fi.max_recovery_attempts = max_recovery_attempts
 
-    async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
+    async def _invoke_async_wf(*args: Any, **kwargs: Any) -> Any:
         dbos = _get_dbos(dbosreg, func)
         rr: Optional[str] = check_required_roles(func, fi)
         attributes: TracedAttributes = {
@@ -474,13 +476,13 @@ def workflow_wrapper(
             )
             return await _execute_workflow(dbos, status, func, *args, **kwargs)
 
-    def _sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-        return run_coroutine(_async_wrapper(*args, **kwargs))
+    def _invoke_sync_wf(*args: Any, **kwargs: Any) -> Any:
+        return run_coroutine(_invoke_async_wf(*args, **kwargs))
 
     return cast(
         F,
         wraps(func)(
-            _async_wrapper if asyncio.iscoroutinefunction(func) else _sync_wrapper
+            _invoke_async_wf if asyncio.iscoroutinefunction(func) else _invoke_sync_wf
         ),
     )
 
@@ -644,12 +646,8 @@ def decorate_step(
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
 
-        def invoke_step(*args: Any, **kwargs: Any) -> Any:
-            if dbosreg.dbos is None:
-                raise DBOSException(
-                    f"Function {func.__name__} invoked before DBOS initialized"
-                )
-            dbos = dbosreg.dbos
+        async def _invoke_step(*args: Any, **kwargs: Any) -> Any:
+            dbos = _get_dbos(dbosreg, func)
 
             attributes: TracedAttributes = {
                 "name": func.__name__,
@@ -662,7 +660,7 @@ def decorate_step(
                     "output": None,
                     "error": None,
                 }
-                recorded_output = dbos._sys_db.check_operation_execution(
+                recorded_output = await dbos._sys_db.check_operation_execution_async(
                     ctx.workflow_id, ctx.function_id
                 )
                 if recorded_output:
@@ -690,7 +688,7 @@ def decorate_step(
                 local_interval_seconds = interval_seconds
                 for attempt in range(1, local_max_attempts + 1):
                     try:
-                        output = func(*args, **kwargs)
+                        output = await _async_exec(func, *args, **kwargs)
                         step_output["output"] = _serialization.serialize(output)
                         error = None
                         break
@@ -710,7 +708,7 @@ def decorate_step(
                             if attempt == local_max_attempts:
                                 error = DBOSMaxStepRetriesExceeded()
                             else:
-                                time.sleep(local_interval_seconds)
+                                await asyncio.sleep(local_interval_seconds)
                                 local_interval_seconds = min(
                                     local_interval_seconds * backoff_rate,
                                     max_retry_interval_seconds,
@@ -721,7 +719,7 @@ def decorate_step(
                     if error is not None
                     else None
                 )
-                dbos._sys_db.record_operation_result(step_output)
+                await dbos._sys_db.record_operation_result_async(step_output)
 
                 if error is not None:
                     raise error
@@ -729,8 +727,7 @@ def decorate_step(
 
         fi = get_or_create_func_info(func)
 
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
+        async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
             rr: Optional[str] = check_required_roles(func, fi)
             # Entering step is allowed:
             #  In a step already, just call the original function directly.
@@ -743,19 +740,31 @@ def decorate_step(
             if ctx and ctx.is_within_workflow():
                 assert ctx.is_workflow(), "Steps must be called from within workflows"
                 with DBOSAssumeRole(rr):
-                    return invoke_step(*args, **kwargs)
+                    return await _invoke_step(*args, **kwargs)
             else:
                 tempwf = dbosreg.workflow_info_map.get("<temp>." + func.__qualname__)
                 assert tempwf
-                return tempwf(*args, **kwargs)
+                return await _async_exec(tempwf, *args, **kwargs)
 
-        def temp_wf(*args: Any, **kwargs: Any) -> Any:
-            return wrapper(*args, **kwargs)
+        def _sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            return run_coroutine(_async_wrapper(*args, **kwargs))
 
+        wrapper = wraps(func)(
+            _async_wrapper if asyncio.iscoroutinefunction(func) else _sync_wrapper
+        )
+
+        async def temp_wf_async(*args: Any, **kwargs: Any) -> Any:
+            return await _async_wrapper(*args, **kwargs)
+
+        def temp_wf_sync(*args: Any, **kwargs: Any) -> Any:
+            return _sync_wrapper(*args, **kwargs)
+
+        temp_wf = temp_wf_async if asyncio.iscoroutinefunction(func) else temp_wf_sync
         wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+
         wrapper.__orig_func = temp_wf  # type: ignore
 
         return cast(F, wrapper)

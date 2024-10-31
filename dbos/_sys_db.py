@@ -733,6 +733,26 @@ class SystemDatabase:
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
             raise
 
+    async def record_operation_result_async(
+        self, result: OperationResultInternal  # , conn: Optional[sa.Connection] = None
+    ) -> None:
+        error = result["error"]
+        output = result["output"]
+        assert error is None or output is None, "Only one of error or output can be set"
+        sql = pg.insert(SystemSchema.operation_outputs).values(
+            workflow_uuid=result["workflow_uuid"],
+            function_id=result["function_id"],
+            output=output,
+            error=error,
+        )
+        try:
+            async with self.async_engine.begin() as c:
+                await c.execute(sql)
+        except DBAPIError as dbapi_error:
+            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
+                raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+            raise
+
     def check_operation_execution(
         self, workflow_uuid: str, function_id: int, conn: Optional[sa.Connection] = None
     ) -> Optional[RecordedResult]:
@@ -751,6 +771,34 @@ class SystemDatabase:
         else:
             with self.engine.begin() as c:
                 rows = c.execute(sql).all()
+        if len(rows) == 0:
+            return None
+        result: RecordedResult = {
+            "output": rows[0][0],
+            "error": rows[0][1],
+        }
+        return result
+
+    async def check_operation_execution_async(
+        self,
+        workflow_uuid: str,
+        function_id: int,  # , conn: Optional[sa.Connection] = None
+    ) -> Optional[RecordedResult]:
+        sql = sa.select(
+            SystemSchema.operation_outputs.c.output,
+            SystemSchema.operation_outputs.c.error,
+        ).where(
+            SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
+            SystemSchema.operation_outputs.c.function_id == function_id,
+        )
+
+        # If in a transaction, use the provided connection
+        rows: Sequence[Any]
+        # if conn is not None:
+        #     rows = conn.execute(sql).all()
+        # else:
+        async with self.async_engine.begin() as c:
+            rows = (await c.execute(sql)).all()
         if len(rows) == 0:
             return None
         result: RecordedResult = {
