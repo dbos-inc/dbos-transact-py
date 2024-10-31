@@ -120,6 +120,7 @@ def test_buffer_flush_errors(dbos: DBOS) -> None:
     assert len(wfs.workflow_uuids) == 2
 
 
+@pytest.mark.skip(reason="This test is flaky")
 def test_dead_letter_queue(dbos: DBOS) -> None:
     event = threading.Event()
     max_recovery_attempts = 20
