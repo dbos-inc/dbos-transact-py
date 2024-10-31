@@ -8,17 +8,16 @@ from typing import TYPE_CHECKING, Any, List, TypedDict
 
 import psutil
 
-from dbos.recovery import _recover_pending_workflows
-
-from .logger import dbos_logger
+from ._logger import dbos_logger
+from ._recovery import recover_pending_workflows
 
 if TYPE_CHECKING:
-    from .dbos import DBOS
+    from ._dbos import DBOS
 
-health_check_path = "/dbos-healthz"
-workflow_recovery_path = "/dbos-workflow-recovery"
-perf_path = "/dbos-perf"
-deactivate_path = "/deactivate"
+_health_check_path = "/dbos-healthz"
+_workflow_recovery_path = "/dbos-workflow-recovery"
+_perf_path = "/dbos-perf"
+_deactivate_path = "/deactivate"
 
 
 class AdminServer:
@@ -52,11 +51,11 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         self._end_headers()
 
     def do_GET(self) -> None:
-        if self.path == health_check_path:
+        if self.path == _health_check_path:
             self.send_response(200)
             self._end_headers()
             self.wfile.write("healthy".encode("utf-8"))
-        elif self.path == perf_path:
+        elif self.path == _perf_path:
             # Compares system CPU times elapsed since last call or module import, returning immediately (non blocking).
             cpu_percent = psutil.cpu_percent(interval=None) / 100.0
             perf_util: PerfUtilization = {
@@ -67,10 +66,10 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self._end_headers()
             self.wfile.write(json.dumps(perf_util).encode("utf-8"))
-        elif self.path == deactivate_path:
+        elif self.path == _deactivate_path:
             dbos_logger.info("Deactivating DBOS")
             # Stop all scheduled workflows, queues, and kafka loops
-            for event in self.dbos.stop_events: 
+            for event in self.dbos.stop_events:
                 event.set()
 
             self.send_response(200)
@@ -86,10 +85,10 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         )  # <--- Gets the size of data
         post_data = self.rfile.read(content_length)  # <--- Gets the data itself
 
-        if self.path == workflow_recovery_path:
+        if self.path == _workflow_recovery_path:
             executor_ids: List[str] = json.loads(post_data.decode("utf-8"))
             dbos_logger.info("Recovering workflows for executors: %s", executor_ids)
-            workflow_handles = _recover_pending_workflows(self.dbos, executor_ids)
+            workflow_handles = recover_pending_workflows(self.dbos, executor_ids)
             workflow_ids = [handle.workflow_id for handle in workflow_handles]
             self.send_response(200)
             self._end_headers()

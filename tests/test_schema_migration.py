@@ -10,7 +10,7 @@ from alembic.config import Config
 from dbos import DBOS, ConfigFile
 
 # Private API because this is a unit test
-from dbos.schemas.system_database import SystemSchema
+from dbos._schemas.system_database import SystemSchema
 
 
 def test_systemdb_migration(dbos: DBOS) -> None:
@@ -91,7 +91,7 @@ def rollback_system_db(sysdb_url: str) -> None:
     migration_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
         "dbos",
-        "migrations",
+        "_migrations",
     )
     alembic_cfg = Config()
     alembic_cfg.set_main_option("script_location", migration_dir)

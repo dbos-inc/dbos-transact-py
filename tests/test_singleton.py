@@ -10,7 +10,7 @@ import pytest
 from dbos import DBOS, SetWorkflowID, WorkflowHandle
 
 # Private API used because this is a test
-from dbos.context import DBOSContextEnsure, assert_current_dbos_context
+from dbos._context import DBOSContextEnsure, assert_current_dbos_context
 from tests.conftest import default_config
 
 

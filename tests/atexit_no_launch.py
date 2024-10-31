@@ -1,5 +1,5 @@
 from dbos import DBOS
-from dbos.dbos_config import ConfigFile
+from dbos._dbos_config import ConfigFile
 
 
 @DBOS.workflow()

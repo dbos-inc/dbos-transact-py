@@ -15,15 +15,15 @@ from rich import print
 from rich.prompt import Prompt
 from typing_extensions import Annotated
 
-from dbos import load_config
-from dbos.application_database import ApplicationDatabase
-from dbos.dbos_config import is_valid_app_name
-from dbos.system_database import SystemDatabase
+from . import load_config
+from ._app_db import ApplicationDatabase
+from ._dbos_config import _is_valid_app_name
+from ._sys_db import SystemDatabase
 
 app = typer.Typer()
 
 
-def on_windows() -> bool:
+def _on_windows() -> bool:
     return platform.system() == "Windows"
 
 
@@ -41,7 +41,7 @@ def start() -> None:
             command,
             shell=True,
             text=True,
-            preexec_fn=os.setsid if not on_windows() else None,
+            preexec_fn=os.setsid if not _on_windows() else None,
         )
 
         def signal_handler(signum: int, frame: Any) -> None:
@@ -70,20 +70,20 @@ def start() -> None:
 
         # Configure the single handler only on Unix-like systems.
         # TODO: Also kill the children on Windows.
-        if not on_windows():
+        if not _on_windows():
             signal.signal(signal.SIGINT, signal_handler)
             signal.signal(signal.SIGTERM, signal_handler)
         process.wait()
 
 
-def get_templates_directory() -> str:
+def _get_templates_directory() -> str:
     import dbos
 
     package_dir = path.abspath(path.dirname(dbos.__file__))
-    return path.join(package_dir, "templates")
+    return path.join(package_dir, "_templates")
 
 
-def copy_dbos_template(src: str, dst: str, ctx: dict[str, str]) -> None:
+def _copy_dbos_template(src: str, dst: str, ctx: dict[str, str]) -> None:
     with open(src, "r") as f:
         content = f.read()
 
@@ -94,7 +94,7 @@ def copy_dbos_template(src: str, dst: str, ctx: dict[str, str]) -> None:
         f.write(content)
 
 
-def copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]) -> None:
+def _copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]) -> None:
 
     for root, dirs, files in os.walk(src_dir, topdown=True):
         dirs[:] = [d for d in dirs if d != "__package"]
@@ -116,12 +116,12 @@ def copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]) -> None:
                 continue
 
             if ext == ".dbos":
-                copy_dbos_template(src, dst, ctx)
+                _copy_dbos_template(src, dst, ctx)
             else:
                 shutil.copy(src, dst)
 
 
-def copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
+def _copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
 
     dst_dir = path.abspath(".")
 
@@ -135,19 +135,19 @@ def copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
     if config_mode:
         ctx["package_name"] = "."
         ctx["migration_command"] = "echo 'No migrations specified'"
-        copy_dbos_template(
+        _copy_dbos_template(
             os.path.join(src_dir, "dbos-config.yaml.dbos"),
             os.path.join(dst_dir, "dbos-config.yaml"),
             ctx,
         )
     else:
-        copy_template_dir(src_dir, dst_dir, ctx)
-        copy_template_dir(
+        _copy_template_dir(src_dir, dst_dir, ctx)
+        _copy_template_dir(
             path.join(src_dir, "__package"), path.join(dst_dir, package_name), ctx
         )
 
 
-def get_project_name() -> typing.Union[str, None]:
+def _get_project_name() -> typing.Union[str, None]:
     name = None
     try:
         with open("pyproject.toml", "rb") as file:
@@ -183,13 +183,13 @@ def init(
     try:
         if project_name is None:
             project_name = typing.cast(
-                str, typer.prompt("What is your project's name?", get_project_name())
+                str, typer.prompt("What is your project's name?", _get_project_name())
             )
 
-        if not is_valid_app_name(project_name):
+        if not _is_valid_app_name(project_name):
             raise Exception(f"{project_name} is an invalid DBOS app name")
 
-        templates_dir = get_templates_directory()
+        templates_dir = _get_templates_directory()
         templates = [x.name for x in os.scandir(templates_dir) if x.is_dir()]
         if len(templates) == 0:
             raise Exception(f"no DBOS templates found in {templates_dir} ")
@@ -205,7 +205,7 @@ def init(
             if template not in templates:
                 raise Exception(f"template {template} not found in {templates_dir}")
 
-        copy_template(
+        _copy_template(
             path.join(templates_dir, template), project_name, config_mode=config
         )
     except Exception as e:

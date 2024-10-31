@@ -12,9 +12,9 @@ import sqlalchemy as sa
 from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle, WorkflowStatusString
 
 # Private API because this is a test
-from dbos.context import assert_current_dbos_context, get_local_dbos_context
-from dbos.error import DBOSMaxStepRetriesExceeded
-from dbos.system_database import GetWorkflowsInput
+from dbos._context import assert_current_dbos_context, get_local_dbos_context
+from dbos._error import DBOSMaxStepRetriesExceeded
+from dbos._sys_db import GetWorkflowsInput
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
