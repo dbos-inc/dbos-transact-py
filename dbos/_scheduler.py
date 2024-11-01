@@ -31,13 +31,23 @@ def scheduler_loop(
         if stop_event.wait(timeout=sleepTime.total_seconds()):
             return
         with SetWorkflowID(f"sched-{func.__qualname__}-{nextExecTime.isoformat()}"):
-            scheduler_queue.enqueue(func, nextExecTime, datetime.now(timezone.utc))
+            try:
+                scheduler_queue.enqueue(func, nextExecTime, datetime.now(timezone.utc))
+            except Exception as e:
+                dbos_logger.warning(f"Error scheduling workflow: ", e)
 
 
 def scheduled(
     dbosreg: "DBOSRegistry", cron: str
 ) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
     def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
+        try:
+            croniter(cron, datetime.now(timezone.utc), second_at_beginning=True)
+        except Exception as e:
+            raise ValueError(
+                f'Invalid crontab "{cron}" for scheduled function function {func.__name__}.'
+            )
+
         global scheduler_queue
         scheduler_queue = Queue("_dbos_internal_queue")
         stop_event = threading.Event()
