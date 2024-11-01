@@ -107,7 +107,6 @@ def test_scheduled_workflow(dbos: DBOS) -> None:
 def test_appdb_downtime(dbos: DBOS) -> None:
     wf_counter: int = 0
 
-    @staticmethod
     @DBOS.transaction()
     def test_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(text("SELECT 1")).fetchall()
