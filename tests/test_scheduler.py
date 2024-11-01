@@ -1,7 +1,8 @@
 import time
 from datetime import datetime
 
-# Private test API
+import pytest
+
 # Public API
 from dbos import DBOS
 
@@ -128,3 +129,14 @@ def test_long_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_workflow(scheduled: datetime, actual: datetime) -> None:
         pass
+
+
+def test_bad_schedule(dbos: DBOS) -> None:
+    code = """
+@DBOS.scheduled("*/invalid * * * * *")  # this is not a valid schedule
+def my_function():
+    pass
+"""
+    # Use exec to run the code and catch the expected exception
+    with pytest.raises(ValueError, match="Invalid crontab"):
+        exec(code)
