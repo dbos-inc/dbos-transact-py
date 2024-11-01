@@ -10,10 +10,20 @@ To install `pdm`, run:
 curl -sSL https://pdm-project.org/install-pdm.py | python3 -
 ```
 
-On Ubuntu, it may be necessary to do the following:
+`pdm` is installed in `~/.local/bin`. You might have to add this directory to 
+the `PATH` variable.
+
+On Ubuntu, it may be necessary to install the following for Python 3.10 before 
+installing `pdm`:
 
 ```
 apt install python3.10-venv
+```
+
+For Python 3.12 run instead:
+
+```
+apt install python3.12-venv
 ```
 
 #### Installing Python dependencies with `pdm`
@@ -30,7 +40,7 @@ pdm install
 pdm run pre-commit install
 ```
 
-#### Executing unit tests, checking types, table schema migrations
+#### Executing unit tests, checking types, manage system table schema migrations
 
 To run unit tests:
 
@@ -38,18 +48,42 @@ To run unit tests:
 pdm run pytest
 ```
 
-NOTE: The tests need a Postgres database running on localhost:5432. To start
+NOTE: The tests need a Postgres database running on `localhost:5432`. To start
 one, run:
 
 ```bash
 export PGPASSWORD=dbos
-python3 dbos/templates/hello/start_postgres_docker.py
+python3 dbos/_templates/hello/start_postgres_docker.py
 ```
+
+A successful test run results in the following output:
+
+```
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: Type google._upb._message.MessageMapContainer uses PyType_Spec with a metaclass that has custom tp_new. This is deprecated and will no longer be allowed in Python 3.14.
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: Type google._upb._message.ScalarMapContainer uses PyType_Spec with a metaclass that has custom tp_new. This is deprecated and will no longer be allowed in Python 3.14.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+============ 182 passed, 2 skipped, 2 warnings in 254.62s (0:04:14) ============
+```
+
+The two skipped test cases verify the interaction with Kafka and if Kafka is not available,
+the test cases are skipped.
 
 To check types:
 
 ```
 pdm run mypy .
+```
+
+A successful check of types results in (the number of files might be different depending
+on the changes in the project since this was written):
+
+```
+Success: no issues found in 64 source files
 ```
 
 We use alembic to manage system table schema migrations.
