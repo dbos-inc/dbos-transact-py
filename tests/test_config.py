@@ -7,8 +7,8 @@ import pytest
 
 # Public API
 from dbos import load_config
-from dbos.dbos_config import set_env_vars
-from dbos.error import DBOSInitializationError
+from dbos._dbos_config import _set_env_vars
+from dbos._error import DBOSInitializationError
 
 mock_filename = "test.yaml"
 original_open = __builtins__["open"]
@@ -62,7 +62,7 @@ def test_valid_config(mocker):
     assert configFile["env"]["foo"] == "FOOFOO"
     assert configFile["env"]["bob"] is None  # Unset environment variable
 
-    set_env_vars(configFile)
+    _set_env_vars(configFile)
     assert os.environ["bazbaz"] == "BAZBAZ"
     assert os.environ["foo"] == "FOOFOO"
     assert "bob" not in os.environ

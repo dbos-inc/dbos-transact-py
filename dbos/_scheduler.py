@@ -2,14 +2,14 @@ import threading
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable
 
-from dbos.logger import dbos_logger
-from dbos.queue import Queue
+from ._logger import dbos_logger
+from ._queue import Queue
 
 if TYPE_CHECKING:
-    from dbos.dbos import _DBOSRegistry
+    from ._dbos import DBOSRegistry
 
-from ..context import SetWorkflowID
-from .croniter import croniter  # type: ignore
+from ._context import SetWorkflowID
+from ._croniter import croniter  # type: ignore
 
 ScheduledWorkflow = Callable[[datetime, datetime], None]
 
@@ -35,7 +35,7 @@ def scheduler_loop(
 
 
 def scheduled(
-    dbosreg: "_DBOSRegistry", cron: str
+    dbosreg: "DBOSRegistry", cron: str
 ) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
     def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
         global scheduler_queue

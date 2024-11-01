@@ -9,8 +9,8 @@ from sqlalchemy.exc import OperationalError
 
 # Public API
 from dbos import DBOS, GetWorkflowsInput, SetWorkflowID
-from dbos.error import DBOSDeadLetterQueueError, DBOSErrorCode, DBOSException
-from dbos.system_database import WorkflowStatusString
+from dbos._error import DBOSDeadLetterQueueError, DBOSErrorCode, DBOSException
+from dbos._sys_db import WorkflowStatusString
 
 
 def test_transaction_errors(dbos: DBOS) -> None:

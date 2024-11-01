@@ -25,63 +25,61 @@ from typing import (
 
 from opentelemetry.trace import Span
 
-from dbos.core import (
+from ._classproperty import classproperty
+from ._core import (
     TEMP_SEND_WF_NAME,
-    _execute_workflow_id,
-    _get_event,
-    _recv,
-    _send,
-    _set_event,
-    _start_workflow,
-    _step,
-    _transaction,
-    _workflow,
-    _workflow_wrapper,
-    _WorkflowHandlePolling,
+    WorkflowHandlePolling,
+    decorate_step,
+    decorate_transaction,
+    decorate_workflow,
+    execute_workflow_by_id,
+    get_event,
+    recv,
+    send,
+    set_event,
+    start_workflow,
+    workflow_wrapper,
 )
-from dbos.decorators import classproperty
-from dbos.queue import Queue, queue_thread
-from dbos.recovery import _recover_pending_workflows, _startup_recovery_thread
-from dbos.registrations import (
+from ._queue import Queue, _queue_thread
+from ._recovery import recover_pending_workflows, startup_recovery_thread
+from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
     get_or_create_class_info,
     set_dbos_func_name,
     set_temp_workflow_type,
 )
-from dbos.roles import default_required_roles, required_roles
-from dbos.scheduler.scheduler import ScheduledWorkflow, scheduled
-
-from .tracer import dbos_tracer
+from ._roles import default_required_roles, required_roles
+from ._scheduler import ScheduledWorkflow, scheduled
+from ._tracer import dbos_tracer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
-    from dbos.kafka import KafkaConsumerWorkflow
-    from .request import Request
+    from ._kafka import _KafkaConsumerWorkflow
+    from ._request import Request
     from flask import Flask
 
 from sqlalchemy.orm import Session
 
-from dbos.request import Request
+from ._request import Request
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec, TypeAlias
 else:
     from typing import ParamSpec, TypeAlias
 
-from dbos.admin_sever import AdminServer
-from dbos.context import (
+from ._admin_sever import AdminServer
+from ._app_db import ApplicationDatabase
+from ._context import (
     EnterDBOSStep,
     TracedAttributes,
     assert_current_dbos_context,
     get_local_dbos_context,
 )
-from dbos.error import DBOSException, DBOSNonExistentWorkflowError
-
-from .application_database import ApplicationDatabase
-from .dbos_config import ConfigFile, load_config, set_env_vars
-from .logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
-from .system_database import SystemDatabase
+from ._dbos_config import ConfigFile, _set_env_vars, load_config
+from ._error import DBOSException, DBOSNonExistentWorkflowError
+from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
+from ._sys_db import SystemDatabase
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
@@ -112,7 +110,7 @@ IsolationLevel = Literal[
 ]
 
 _dbos_global_instance: Optional[DBOS] = None
-_dbos_global_registry: Optional[_DBOSRegistry] = None
+_dbos_global_registry: Optional[DBOSRegistry] = None
 
 
 def _get_dbos_instance() -> DBOS:
@@ -122,26 +120,26 @@ def _get_dbos_instance() -> DBOS:
     raise DBOSException("No DBOS was created yet")
 
 
-def _get_or_create_dbos_registry() -> _DBOSRegistry:
+def _get_or_create_dbos_registry() -> DBOSRegistry:
     # Currently get / init the global registry
     global _dbos_global_registry
     if _dbos_global_registry is None:
-        _dbos_global_registry = _DBOSRegistry()
+        _dbos_global_registry = DBOSRegistry()
     return _dbos_global_registry
 
 
-_RegisteredJob = Tuple[
+RegisteredJob = Tuple[
     threading.Event, Callable[..., Any], Tuple[Any, ...], dict[str, Any]
 ]
 
 
-class _DBOSRegistry:
+class DBOSRegistry:
     def __init__(self) -> None:
         self.workflow_info_map: dict[str, Workflow[..., Any]] = {}
         self.class_info_map: dict[str, type] = {}
         self.instance_info_map: dict[str, object] = {}
         self.queue_info_map: dict[str, Queue] = {}
-        self.pollers: list[_RegisteredJob] = []
+        self.pollers: list[RegisteredJob] = []
         self.dbos: Optional[DBOS] = None
         self.config: Optional[ConfigFile] = None
 
@@ -263,14 +261,14 @@ class DBOS:
         if config is None:
             config = load_config()
         config_logger(config)
-        set_env_vars(config)
+        _set_env_vars(config)
         dbos_tracer.config(config)
         dbos_logger.info("Initializing DBOS")
         self.config: ConfigFile = config
         self._launched: bool = False
         self._sys_db_field: Optional[SystemDatabase] = None
         self._app_db_field: Optional[ApplicationDatabase] = None
-        self._registry: _DBOSRegistry = _get_or_create_dbos_registry()
+        self._registry: DBOSRegistry = _get_or_create_dbos_registry()
         self._registry.dbos = self
         self._admin_server_field: Optional[AdminServer] = None
         self.stop_events: List[threading.Event] = []
@@ -281,13 +279,13 @@ class DBOS:
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
-            from dbos.fastapi import setup_fastapi_middleware
+            from ._fastapi import setup_fastapi_middleware
 
             setup_fastapi_middleware(self.fastapi, _get_dbos_instance())
 
         # If using Flask, set up middleware
         if self.flask is not None:
-            from dbos.flask import setup_flask_middleware
+            from ._flask import setup_flask_middleware
 
             setup_flask_middleware(self.flask)
 
@@ -297,7 +295,7 @@ class DBOS:
         ) -> None:
             self.send(destination_id, message, topic)
 
-        temp_send_wf = _workflow_wrapper(self._registry, send_temp_workflow)
+        temp_send_wf = workflow_wrapper(self._registry, send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
         set_temp_workflow_type(send_temp_workflow, "send")
         self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
@@ -356,7 +354,7 @@ class DBOS:
 
             if not os.environ.get("DBOS__VMID"):
                 workflow_ids = self._sys_db.get_pending_workflows("local")
-                self._executor.submit(_startup_recovery_thread, self, workflow_ids)
+                self._executor.submit(startup_recovery_thread, self, workflow_ids)
 
             # Listen to notifications
             notification_listener_thread = threading.Thread(
@@ -378,7 +376,7 @@ class DBOS:
             evt = threading.Event()
             self.stop_events.append(evt)
             bg_queue_thread = threading.Thread(
-                target=queue_thread, args=(evt, self), daemon=True
+                target=_queue_thread, args=(evt, self), daemon=True
             )
             bg_queue_thread.start()
             self._background_threads.append(bg_queue_thread)
@@ -435,7 +433,7 @@ class DBOS:
         cls, *, max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS
     ) -> Callable[[F], F]:
         """Decorate a function for use as a DBOS workflow."""
-        return _workflow(_get_or_create_dbos_registry(), max_recovery_attempts)
+        return decorate_workflow(_get_or_create_dbos_registry(), max_recovery_attempts)
 
     @classmethod
     def transaction(
@@ -448,7 +446,7 @@ class DBOS:
             isolation_level(IsolationLevel): Transaction isolation level
 
         """
-        return _transaction(_get_or_create_dbos_registry(), isolation_level)
+        return decorate_transaction(_get_or_create_dbos_registry(), isolation_level)
 
     @classmethod
     def step(
@@ -470,7 +468,7 @@ class DBOS:
 
         """
 
-        return _step(
+        return decorate_step(
             _get_or_create_dbos_registry(),
             retries_allowed=retries_allowed,
             interval_seconds=interval_seconds,
@@ -530,10 +528,10 @@ class DBOS:
         config: dict[str, Any],
         topics: list[str],
         in_order: bool = False,
-    ) -> Callable[[KafkaConsumerWorkflow], KafkaConsumerWorkflow]:
+    ) -> Callable[[_KafkaConsumerWorkflow], _KafkaConsumerWorkflow]:
         """Decorate a function to be used as a Kafka consumer."""
         try:
-            from dbos.kafka import kafka_consumer
+            from ._kafka import kafka_consumer
 
             return kafka_consumer(
                 _get_or_create_dbos_registry(), config, topics, in_order
@@ -551,7 +549,7 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
-        return _start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs)
+        return start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs)
 
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
@@ -594,14 +592,14 @@ class DBOS:
             stat = dbos.get_workflow_status(workflow_id)
             if stat is None:
                 raise DBOSNonExistentWorkflowError(workflow_id)
-        return _WorkflowHandlePolling(workflow_id, dbos)
+        return WorkflowHandlePolling(workflow_id, dbos)
 
     @classmethod
     def send(
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
         """Send a message to a workflow execution."""
-        return _send(_get_dbos_instance(), destination_id, message, topic)
+        return send(_get_dbos_instance(), destination_id, message, topic)
 
     @classmethod
     def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
@@ -611,7 +609,7 @@ class DBOS:
         This function is to be called from within a workflow.
         `recv` will return the message sent on `topic`, waiting if necessary.
         """
-        return _recv(_get_dbos_instance(), topic, timeout_seconds)
+        return recv(_get_dbos_instance(), topic, timeout_seconds)
 
     @classmethod
     def sleep(cls, seconds: float) -> None:
@@ -649,7 +647,7 @@ class DBOS:
             value(Any): A serializable value to associate with the key
 
         """
-        return _set_event(_get_dbos_instance(), key, value)
+        return set_event(_get_dbos_instance(), key, value)
 
     @classmethod
     def get_event(cls, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:
@@ -664,19 +662,19 @@ class DBOS:
             timeout_seconds(float): The amount of time to wait, in case `set_event` has not yet been called byt the workflow
 
         """
-        return _get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
+        return get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
 
     @classmethod
     def execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Execute a workflow by ID (for recovery)."""
-        return _execute_workflow_id(_get_dbos_instance(), workflow_id)
+        return execute_workflow_by_id(_get_dbos_instance(), workflow_id)
 
     @classmethod
     def recover_pending_workflows(
         cls, executor_ids: List[str] = ["local"]
     ) -> List[WorkflowHandle[Any]]:
         """Find all PENDING workflows and execute them."""
-        return _recover_pending_workflows(_get_dbos_instance(), executor_ids)
+        return recover_pending_workflows(_get_dbos_instance(), executor_ids)
 
     @classproperty
     def logger(cls) -> Logger:
@@ -853,7 +851,7 @@ class DBOSConfiguredInstance:
 
 # Apps that import DBOS probably don't exit.  If they do, let's see if
 #   it looks like startup was abandoned or a call was forgotten...
-def dbos_exit_hook() -> None:
+def _dbos_exit_hook() -> None:
     if _dbos_global_registry is None:
         # Probably used as or for a support module
         return
@@ -872,4 +870,4 @@ def dbos_exit_hook() -> None:
 
 
 # Register the exit hook
-atexit.register(dbos_exit_hook)
+atexit.register(_dbos_exit_hook)

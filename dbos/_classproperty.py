@@ -3,7 +3,7 @@ from typing import Any, Callable, Generic, Optional, TypeVar
 G = TypeVar("G")  # A generic type for ClassPropertyDescriptor getters
 
 
-class _ClassPropertyDescriptor(Generic[G]):
+class ClassPropertyDescriptor(Generic[G]):
     def __init__(self, fget: Callable[..., G]) -> None:
         self.fget = fget
 
@@ -15,5 +15,5 @@ class _ClassPropertyDescriptor(Generic[G]):
         return self.fget(objtype)
 
 
-def classproperty(func: Callable[..., G]) -> _ClassPropertyDescriptor[G]:
-    return _ClassPropertyDescriptor(func)
+def classproperty(func: Callable[..., G]) -> ClassPropertyDescriptor[G]:
+    return ClassPropertyDescriptor(func)

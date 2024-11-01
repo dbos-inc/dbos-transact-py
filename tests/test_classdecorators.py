@@ -7,7 +7,7 @@ import sqlalchemy as sa
 from dbos import DBOS, DBOSConfiguredInstance, SetWorkflowID
 
 # Private API used because this is a test
-from dbos.context import DBOSContextEnsure, assert_current_dbos_context
+from dbos._context import DBOSContextEnsure, assert_current_dbos_context
 
 
 def test_required_roles(dbos: DBOS) -> None:

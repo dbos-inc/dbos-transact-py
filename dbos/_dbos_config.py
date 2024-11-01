@@ -8,8 +8,8 @@ import yaml
 from jsonschema import ValidationError, validate
 from sqlalchemy import URL
 
-from dbos.error import DBOSInitializationError
-from dbos.logger import dbos_logger
+from ._error import DBOSInitializationError
+from ._logger import dbos_logger
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -74,7 +74,7 @@ class ConfigFile(TypedDict, total=False):
     application: Dict[str, Any]
 
 
-def substitute_env_vars(content: str) -> str:
+def _substitute_env_vars(content: str) -> str:
     regex = r"\$\{([^}]+)\}"  # Regex to match ${VAR_NAME} style placeholders
 
     def replace_func(match: re.Match[str]) -> str:
@@ -133,7 +133,7 @@ def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
 
     with open(config_file_path, "r") as file:
         content = file.read()
-        substituted_content = substitute_env_vars(content)
+        substituted_content = _substitute_env_vars(content)
         data = yaml.safe_load(substituted_content)
 
     # Load the JSON schema relative to the package root
@@ -167,13 +167,13 @@ def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
 
     data = cast(ConfigFile, data)
 
-    if not is_valid_app_name(data["name"]):
+    if not _is_valid_app_name(data["name"]):
         raise DBOSInitializationError(
             f'Invalid app name {data["name"]}.  App names must be between 3 and 30 characters and contain only alphanumeric characters, dashes, and underscores.'
         )
 
     if "app_db_name" not in data["database"]:
-        data["database"]["app_db_name"] = app_name_to_db_name(data["name"])
+        data["database"]["app_db_name"] = _app_name_to_db_name(data["name"])
 
     if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
         data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"
@@ -182,7 +182,7 @@ def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
     return data  # type: ignore
 
 
-def is_valid_app_name(name: str) -> bool:
+def _is_valid_app_name(name: str) -> bool:
     name_len = len(name)
     if name_len < 3 or name_len > 30:
         return False
@@ -190,12 +190,12 @@ def is_valid_app_name(name: str) -> bool:
     return True if match != None else False
 
 
-def app_name_to_db_name(app_name: str) -> str:
+def _app_name_to_db_name(app_name: str) -> str:
     name = app_name.replace("-", "_")
     return name if not name[0].isdigit() else f"_{name}"
 
 
-def set_env_vars(config: ConfigFile) -> None:
+def _set_env_vars(config: ConfigFile) -> None:
     for env, value in config.get("env", {}).items():
         if value is not None:
             os.environ[env] = value

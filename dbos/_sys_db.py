@@ -25,20 +25,19 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 
-import dbos.utils as utils
-from dbos.error import (
+from . import _serialization
+from ._dbos_config import ConfigFile
+from ._error import (
     DBOSDeadLetterQueueError,
     DBOSNonExistentWorkflowError,
     DBOSWorkflowConflictIDError,
 )
-from dbos.registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
-
-from .dbos_config import ConfigFile
-from .logger import dbos_logger
-from .schemas.system_database import SystemSchema
+from ._logger import dbos_logger
+from ._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
+from ._schemas.system_database import SystemSchema
 
 if TYPE_CHECKING:
-    from .queue import Queue
+    from ._queue import Queue
 
 
 class WorkflowStatusString(Enum):
@@ -143,15 +142,15 @@ class WorkflowInformation(TypedDict, total=False):
     # The role used to run this workflow.  Empty string if authorization is not required.
     authenticated_roles: List[str]
     # All roles the authenticated user has, if any.
-    input: Optional[utils.WorkflowInputs]
+    input: Optional[_serialization.WorkflowInputs]
     output: Optional[str]
     error: Optional[str]
     request: Optional[str]
 
 
-dbos_null_topic = "__null__topic__"
-buffer_flush_batch_size = 100
-buffer_flush_interval_secs = 1.0
+_dbos_null_topic = "__null__topic__"
+_buffer_flush_batch_size = 100
+_buffer_flush_interval_secs = 1.0
 
 
 class SystemDatabase:
@@ -200,7 +199,7 @@ class SystemDatabase:
 
         # Run a schema migration for the system database
         migration_dir = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), "migrations"
+            os.path.dirname(os.path.realpath(__file__)), "_migrations"
         )
         alembic_cfg = Config()
         alembic_cfg.set_main_option("script_location", migration_dir)
@@ -395,7 +394,9 @@ class SystemDatabase:
         res = self.check_operation_execution(calling_wf, calling_wf_fn)
         if res is not None:
             if res["output"]:
-                resstat: WorkflowStatusInternal = utils.deserialize(res["output"])
+                resstat: WorkflowStatusInternal = _serialization.deserialize(
+                    res["output"]
+                )
                 return resstat
             return None
         stat = self.get_workflow_status(workflow_uuid)
@@ -403,7 +404,7 @@ class SystemDatabase:
             {
                 "workflow_uuid": calling_wf,
                 "function_id": calling_wf_fn,
-                "output": utils.serialize(stat),
+                "output": _serialization.serialize(stat),
                 "error": None,
             }
         )
@@ -491,9 +492,9 @@ class SystemDatabase:
             return None
         status: str = stat["status"]
         if status == str(WorkflowStatusString.SUCCESS.value):
-            return utils.deserialize(stat["output"])
+            return _serialization.deserialize(stat["output"])
         elif status == str(WorkflowStatusString.ERROR.value):
-            raise utils.deserialize_exception(stat["error"])
+            raise _serialization.deserialize_exception(stat["error"])
         return None
 
     def get_workflow_info(
@@ -533,7 +534,9 @@ class SystemDatabase:
             self._exported_temp_txn_wf_status.discard(workflow_uuid)
             self._temp_txn_wf_ids.discard(workflow_uuid)
 
-    def get_workflow_inputs(self, workflow_uuid: str) -> Optional[utils.WorkflowInputs]:
+    def get_workflow_inputs(
+        self, workflow_uuid: str
+    ) -> Optional[_serialization.WorkflowInputs]:
         with self.engine.begin() as c:
             row = c.execute(
                 sa.select(SystemSchema.workflow_inputs.c.inputs).where(
@@ -542,7 +545,9 @@ class SystemDatabase:
             ).fetchone()
             if row is None:
                 return None
-            inputs: utils.WorkflowInputs = utils.deserialize_args(row[0])
+            inputs: _serialization.WorkflowInputs = _serialization.deserialize_args(
+                row[0]
+            )
             return inputs
 
     def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
@@ -651,7 +656,7 @@ class SystemDatabase:
         message: Any,
         topic: Optional[str] = None,
     ) -> None:
-        topic = topic if topic is not None else dbos_null_topic
+        topic = topic if topic is not None else _dbos_null_topic
         with self.engine.begin() as c:
             recorded_output = self.check_operation_execution(
                 workflow_uuid, function_id, conn=c
@@ -671,7 +676,7 @@ class SystemDatabase:
                     pg.insert(SystemSchema.notifications).values(
                         destination_uuid=destination_uuid,
                         topic=topic,
-                        message=utils.serialize(message),
+                        message=_serialization.serialize(message),
                     )
                 )
             except DBAPIError as dbapi_error:
@@ -695,14 +700,14 @@ class SystemDatabase:
         topic: Optional[str],
         timeout_seconds: float = 60,
     ) -> Any:
-        topic = topic if topic is not None else dbos_null_topic
+        topic = topic if topic is not None else _dbos_null_topic
 
         # First, check for previous executions.
         recorded_output = self.check_operation_execution(workflow_uuid, function_id)
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying recv, id: {function_id}, topic: {topic}")
             if recorded_output["output"] is not None:
-                return utils.deserialize(recorded_output["output"])
+                return _serialization.deserialize(recorded_output["output"])
             else:
                 raise Exception("No output recorded in the last recv")
         else:
@@ -768,12 +773,12 @@ class SystemDatabase:
             rows = c.execute(delete_stmt).fetchall()
             message: Any = None
             if len(rows) > 0:
-                message = utils.deserialize(rows[0][0])
+                message = _serialization.deserialize(rows[0][0])
             self.record_operation_result(
                 {
                     "workflow_uuid": workflow_uuid,
                     "function_id": function_id,
-                    "output": utils.serialize(
+                    "output": _serialization.serialize(
                         message
                     ),  # None will be serialized to 'null'
                     "error": None,
@@ -851,7 +856,7 @@ class SystemDatabase:
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying sleep, id: {function_id}, seconds: {seconds}")
             assert recorded_output["output"] is not None, "no recorded end time"
-            end_time = utils.deserialize(recorded_output["output"])
+            end_time = _serialization.deserialize(recorded_output["output"])
         else:
             dbos_logger.debug(f"Running sleep, id: {function_id}, seconds: {seconds}")
             end_time = time.time() + seconds
@@ -860,7 +865,7 @@ class SystemDatabase:
                     {
                         "workflow_uuid": workflow_uuid,
                         "function_id": function_id,
-                        "output": utils.serialize(end_time),
+                        "output": _serialization.serialize(end_time),
                         "error": None,
                     }
                 )
@@ -893,11 +898,11 @@ class SystemDatabase:
                 .values(
                     workflow_uuid=workflow_uuid,
                     key=key,
-                    value=utils.serialize(message),
+                    value=_serialization.serialize(message),
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key"],
-                    set_={"value": utils.serialize(message)},
+                    set_={"value": _serialization.serialize(message)},
                 )
             )
             output: OperationResultInternal = {
@@ -931,7 +936,7 @@ class SystemDatabase:
                     f"Replaying get_event, id: {caller_ctx['function_id']}, key: {key}"
                 )
                 if recorded_output["output"] is not None:
-                    return utils.deserialize(recorded_output["output"])
+                    return _serialization.deserialize(recorded_output["output"])
                 else:
                     raise Exception("No output recorded in the last get_event")
             else:
@@ -951,7 +956,7 @@ class SystemDatabase:
 
         value: Any = None
         if len(init_recv) > 0:
-            value = utils.deserialize(init_recv[0][0])
+            value = _serialization.deserialize(init_recv[0][0])
         else:
             # Wait for the notification
             actual_timeout = timeout_seconds
@@ -969,7 +974,7 @@ class SystemDatabase:
             with self.engine.begin() as c:
                 final_recv = c.execute(get_sql).fetchall()
                 if len(final_recv) > 0:
-                    value = utils.deserialize(final_recv[0][0])
+                    value = _serialization.deserialize(final_recv[0][0])
         condition.release()
         self.workflow_events_map.pop(payload)
 
@@ -979,7 +984,7 @@ class SystemDatabase:
                 {
                     "workflow_uuid": caller_ctx["workflow_uuid"],
                     "function_id": caller_ctx["function_id"],
-                    "output": utils.serialize(
+                    "output": _serialization.serialize(
                         value
                     ),  # None will be serialized to 'null'
                     "error": None,
@@ -999,7 +1004,7 @@ class SystemDatabase:
             status_iter = iter(list(self._workflow_status_buffer))
             wf_id: Optional[str] = None
             while (
-                exported < buffer_flush_batch_size
+                exported < _buffer_flush_batch_size
                 and (wf_id := next(status_iter, None)) is not None
             ):
                 # Pop the first key in the buffer (FIFO)
@@ -1029,7 +1034,7 @@ class SystemDatabase:
             input_iter = iter(list(self._workflow_inputs_buffer))
             wf_id: Optional[str] = None
             while (
-                exported < buffer_flush_batch_size
+                exported < _buffer_flush_batch_size
                 and (wf_id := next(input_iter, None)) is not None
             ):
                 if wf_id not in self._exported_temp_txn_wf_status:
@@ -1060,10 +1065,10 @@ class SystemDatabase:
                 self._is_flushing_status_buffer = False
                 if self._is_buffers_empty:
                     # Only sleep if both buffers are empty
-                    time.sleep(buffer_flush_interval_secs)
+                    time.sleep(_buffer_flush_interval_secs)
             except Exception as e:
                 dbos_logger.error(f"Error while flushing buffers: {e}")
-                time.sleep(buffer_flush_interval_secs)
+                time.sleep(_buffer_flush_interval_secs)
                 # Will retry next time
 
     def buffer_workflow_status(self, status: WorkflowStatusInternal) -> None:
