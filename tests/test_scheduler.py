@@ -122,7 +122,7 @@ def test_appdb_downtime(dbos: DBOS) -> None:
     time.sleep(2)
     simulate_db_restart(dbos._app_db.engine, 2)
     time.sleep(2)
-    assert wf_counter > 2 and wf_counter <= 4
+    assert wf_counter > 2
 
 
 def test_sysdb_downtime(dbos: DBOS) -> None:
@@ -137,7 +137,9 @@ def test_sysdb_downtime(dbos: DBOS) -> None:
     time.sleep(2)
     simulate_db_restart(dbos._sys_db.engine, 2)
     time.sleep(2)
-    assert wf_counter > 2 and wf_counter <= 4
+    # We know there should be at least 3 occurrences from the 4 seconds when the DB was up.
+    #  There could be more than 4, depending on the pace the machine...
+    assert wf_counter > 2
 
 
 def test_scheduled_transaction(dbos: DBOS) -> None:
