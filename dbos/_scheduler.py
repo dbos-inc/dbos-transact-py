@@ -41,6 +41,13 @@ def scheduled(
     dbosreg: "DBOSRegistry", cron: str
 ) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
     def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
+        try:
+            croniter(cron, datetime.now(timezone.utc), second_at_beginning=True)
+        except Exception as e:
+            raise ValueError(
+                f'Invalid crontab "{cron}" for scheduled function function {func.__name__}.'
+            )
+
         global scheduler_queue
         scheduler_queue = Queue("_dbos_internal_queue")
         stop_event = threading.Event()
