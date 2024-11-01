@@ -31,7 +31,10 @@ def scheduler_loop(
         if stop_event.wait(timeout=sleepTime.total_seconds()):
             return
         with SetWorkflowID(f"sched-{func.__qualname__}-{nextExecTime.isoformat()}"):
-            scheduler_queue.enqueue(func, nextExecTime, datetime.now(timezone.utc))
+            try:
+                scheduler_queue.enqueue(func, nextExecTime, datetime.now(timezone.utc))
+            except Exception as e:
+                dbos_logger.warning(f"Error scheduling workflow: ", e)
 
 
 def scheduled(
