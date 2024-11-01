@@ -11,7 +11,7 @@ from sqlalchemy import text
 from dbos import DBOS, SetWorkflowID
 
 
-@pytest.mark.skip(reason="Concurrency tests are not implemented yet")
+@pytest.mark.skip(reason="broken by asyncio")
 def test_concurrent_workflows(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_workflow() -> str:
@@ -32,7 +32,7 @@ def test_concurrent_workflows(dbos: DBOS) -> None:
             assert id == future.result()
 
 
-@pytest.mark.skip(reason="Concurrency tests are not implemented yet")
+@pytest.mark.skip(reason="broken by asyncio")
 def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
     condition = threading.Condition()
     step_count = 0

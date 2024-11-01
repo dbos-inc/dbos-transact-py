@@ -700,17 +700,19 @@ class DBOS:
         """Return the SQLAlchemy `Session` for the current context, which must be within a transaction function."""
         ctx = assert_current_dbos_context()
         assert ctx.is_transaction(), "db is only available within a transaction."
-        assert ctx.sql_session
+        assert ctx.sql_session, "db is only available within an sync transaction."
         rv = ctx.sql_session_sync
         assert rv
         return rv
 
     @classproperty
     def sql_session_async(cls) -> AsyncSession:
-        """Return the SQLAlchemy `Session` for the current context, which must be within a transaction function."""
+        """Return the SQLAlchemy `AsyncSession` for the current context, which must be within an async transaction function."""
         ctx = assert_current_dbos_context()
         assert ctx.is_transaction(), "db is only available within a transaction."
-        assert not ctx.sql_session_sync
+        assert (
+            not ctx.sql_session_sync
+        ), "db is only available within an async transaction."
         rv = ctx.sql_session
         assert rv
         return rv
