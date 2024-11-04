@@ -2087,22 +2087,7 @@ class SystemDatabase:
             # Return the IDs of all functions we started
             return ret_ids
 
-    def remove_from_queue(self, workflow_id: str, queue: "Queue") -> None:
-        with self.engine.begin() as c:
-            if queue.limiter is None:
-                c.execute(
-                    sa.delete(SystemSchema.workflow_queue).where(
-                        SystemSchema.workflow_queue.c.workflow_uuid == workflow_id
-                    )
-                )
-            else:
-                c.execute(
-                    sa.update(SystemSchema.workflow_queue)
-                    .where(SystemSchema.workflow_queue.c.workflow_uuid == workflow_id)
-                    .values(completed_at_epoch_ms=int(time.time() * 1000))
-                )
-
-    async def remove_from_queue_async(self, workflow_id: str, queue: "Queue") -> None:
+    async def remove_from_queue(self, workflow_id: str, queue: "Queue") -> None:
         async with self.async_engine.begin() as c:
             if queue.limiter is None:
                 await c.execute(
