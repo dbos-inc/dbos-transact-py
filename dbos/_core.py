@@ -514,7 +514,7 @@ def decorate_transaction(
                     f"Function {func.__name__} invoked before DBOS initialized"
                 )
             dbos = dbosreg.dbos
-            async with dbos._app_db.async_sessionmaker() as session:
+            async with dbos._app_db.sessionmaker() as session:
                 attributes: TracedAttributes = {
                     "name": func.__name__,
                     "operationType": OperationType.TRANSACTION.value,
@@ -543,7 +543,7 @@ def decorate_transaction(
                                     }
                                 )
                                 # Check recorded output for OAOO
-                                recorded_output = await ApplicationDatabase.check_transaction_execution_async(
+                                recorded_output = await ApplicationDatabase.check_transaction_execution(
                                     session,
                                     ctx.workflow_id,
                                     ctx.function_id,
@@ -587,7 +587,7 @@ def decorate_transaction(
                                 assert (
                                     ctx.sql_session is not None
                                 ), "Cannot find a database connection"
-                                await ApplicationDatabase.record_transaction_output_async(
+                                await ApplicationDatabase.record_transaction_output(
                                     ctx.sql_session, txn_output
                                 )
                                 break
@@ -598,7 +598,7 @@ def decorate_transaction(
                                     "Transaction Serialization Failure",
                                     {"retry_wait_seconds": retry_wait_seconds},
                                 )
-                                time.sleep(retry_wait_seconds)
+                                await asyncio.sleep(retry_wait_seconds)
                                 retry_wait_seconds = min(
                                     retry_wait_seconds * backoff_factor,
                                     max_retry_wait_seconds,
@@ -611,7 +611,7 @@ def decorate_transaction(
                                 txn_output["error"] = (
                                     _serialization.serialize_exception(error)
                                 )
-                                dbos._app_db.record_transaction_error(txn_output)
+                                await dbos._app_db.record_transaction_error(txn_output)
                             raise
             return output
 

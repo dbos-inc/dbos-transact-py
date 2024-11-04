@@ -411,7 +411,7 @@ class DBOS:
             self._sys_db_field.destroy()
             self._sys_db_field = None
         if self._app_db_field is not None:
-            self._app_db_field.destroy()
+            self._app_db_field.destroy_sync()
             self._app_db_field = None
         if self._admin_server_field is not None:
             self._admin_server_field.stop()

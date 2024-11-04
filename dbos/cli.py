@@ -236,7 +236,7 @@ def migrate() -> None:
         if sys_db:
             sys_db.destroy()
         if app_db:
-            app_db.destroy()
+            app_db.destroy_sync()
 
     # Next, run any custom migration commands specified in the configuration
     typer.echo("Executing migration commands from 'dbos-config.yaml'")

@@ -3,16 +3,18 @@ from datetime import datetime
 
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 # Public API
 from dbos import DBOS
 
 
-def simulate_db_restart(engine: Engine, downtime: float) -> None:
+async def simulate_db_restart(engine: AsyncEngine, downtime: float) -> None:
     # Get DB name
-    with engine.connect() as connection:
-        current_db = connection.execute(text("SELECT current_database()")).scalar()
+    async with engine.connect() as connection:
+        current_db = (
+            await connection.execute(text("SELECT current_database()"))
+        ).scalar()
 
     # Goal here is to disable connections to the DB for a while.
     #   Need a temp DB to do that and recover connectivity...
@@ -25,11 +27,10 @@ def simulate_db_restart(engine: Engine, downtime: float) -> None:
     temp_db_url = main_db_url.set(database=temp_db_name)
 
     try:
-        with engine.connect().execution_options(
-            isolation_level="AUTOCOMMIT"
-        ) as connection:
+        async with engine.connect() as connection:
+            await connection.execution_options(isolation_level="AUTOCOMMIT")
             # Create a temporary database
-            connection.execute(text(f"CREATE DATABASE {temp_db_name};"))
+            await connection.execute(text(f"CREATE DATABASE {temp_db_name};"))
             print(f"Temporary database '{temp_db_name}' created.")
     except Exception as e:
         print("Could not create temp db: ", e)
@@ -70,11 +71,11 @@ def simulate_db_restart(engine: Engine, downtime: float) -> None:
     temp_engine.dispose()
 
     try:
-        with engine.connect().execution_options(
-            isolation_level="AUTOCOMMIT"
-        ) as connection:
+        async with engine.connect() as connection:
+            await connection.execution_options(isolation_level="AUTOCOMMIT")
+
             # Clean up the temp DB
-            connection.execute(
+            await connection.execute(
                 text(
                     f"""
                 SELECT pg_terminate_backend(pid)
@@ -86,7 +87,7 @@ def simulate_db_restart(engine: Engine, downtime: float) -> None:
             )
 
             # Drop temporary database
-            connection.execute(text(f"DROP DATABASE {temp_db_name};"))
+            await connection.execute(text(f"DROP DATABASE {temp_db_name};"))
     except Exception as e:
         print(f"Could not clean up temp db {temp_db_name}: ", e)
 
@@ -104,7 +105,8 @@ def test_scheduled_workflow(dbos: DBOS) -> None:
     assert wf_counter > 2 and wf_counter <= 4
 
 
-def test_appdb_downtime(dbos: DBOS) -> None:
+@pytest.mark.asyncio
+async def test_appdb_downtime(dbos: DBOS) -> None:
     wf_counter: int = 0
 
     @DBOS.transaction()
@@ -120,12 +122,13 @@ def test_appdb_downtime(dbos: DBOS) -> None:
         wf_counter += 1
 
     time.sleep(2)
-    simulate_db_restart(dbos._app_db.engine, 2)
+    await simulate_db_restart(dbos._app_db.engine, 2)
     time.sleep(2)
     assert wf_counter > 2
 
 
-def test_sysdb_downtime(dbos: DBOS) -> None:
+@pytest.mark.asyncio
+async def test_sysdb_downtime(dbos: DBOS) -> None:
     wf_counter: int = 0
 
     @DBOS.scheduled("* * * * * *")
@@ -135,7 +138,7 @@ def test_sysdb_downtime(dbos: DBOS) -> None:
         wf_counter += 1
 
     time.sleep(2)
-    simulate_db_restart(dbos._sys_db.engine, 2)
+    await simulate_db_restart(dbos._sys_db.async_engine, 2)
     time.sleep(2)
     # We know there should be at least 3 occurrences from the 4 seconds when the DB was up.
     #  There could be more than 4, depending on the pace the machine...
