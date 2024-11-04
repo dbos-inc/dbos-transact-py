@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError
 from dbos import DBOS, GetWorkflowsInput, SetWorkflowID
 from dbos._error import DBOSDeadLetterQueueError, DBOSErrorCode, DBOSException
 from dbos._sys_db import WorkflowStatusString
+from tests.utils import wait_for_buffer_flush_sync
 
 
 def test_transaction_errors(dbos: DBOS) -> None:
@@ -96,7 +97,7 @@ def test_buffer_flush_errors(dbos: DBOS) -> None:
     res = test_transaction("bob")
     assert res == "bob1"
 
-    dbos._sys_db.wait_for_buffer_flush()
+    wait_for_buffer_flush_sync(dbos._sys_db)
     wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 1
 
@@ -115,7 +116,7 @@ def test_buffer_flush_errors(dbos: DBOS) -> None:
     # Switch back to the original good engine.
     dbos._sys_db.engine = backup_engine
 
-    dbos._sys_db.wait_for_buffer_flush()
+    wait_for_buffer_flush_sync(dbos._sys_db)
     wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 2
 
@@ -149,5 +150,5 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
 
     event.set()
     assert handle.get_result() == None
-    dbos._sys_db.wait_for_buffer_flush()
+    wait_for_buffer_flush_sync(dbos._sys_db)
     assert handle.get_status().status == WorkflowStatusString.SUCCESS.value

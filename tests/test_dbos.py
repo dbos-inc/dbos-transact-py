@@ -15,6 +15,7 @@ from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle, WorkflowStatus
 from dbos._context import assert_current_dbos_context, get_local_dbos_context
 from dbos._error import DBOSMaxStepRetriesExceeded
 from dbos._sys_db import GetWorkflowsInput
+from tests.utils import wait_for_buffer_flush_sync
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -254,7 +255,7 @@ def test_temp_workflow(dbos: DBOS) -> None:
     dbos._sys_db._flush_workflow_inputs_buffer()
 
     # Wait for buffers to flush
-    dbos._sys_db.wait_for_buffer_flush()
+    wait_for_buffer_flush_sync(dbos._sys_db)
     wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 2
 
@@ -339,7 +340,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") == "bob1bob"
 
-    dbos._sys_db.wait_for_buffer_flush()
+    wait_for_buffer_flush_sync(dbos._sys_db)
     # Change the workflow status to pending
     dbos._sys_db.update_workflow_status(
         {
@@ -394,7 +395,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
         res = test_transaction("bob")
         assert res == "bob1"
 
-    dbos._sys_db.wait_for_buffer_flush()
+    wait_for_buffer_flush_sync(dbos._sys_db)
     wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 1
     assert wfs.workflow_uuids[0] == wfuuid
@@ -434,7 +435,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert len(wfs.workflow_uuids) == 1
     assert wfs.workflow_uuids[0] == wfuuid
 
-    dbos._sys_db.wait_for_buffer_flush()
+    wait_for_buffer_flush_sync(dbos._sys_db)
     wfi = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
     assert wfi
     assert wfi["name"].startswith("<temp>")
@@ -458,7 +459,7 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow(test_var) == test_var
 
-    dbos._sys_db.wait_for_buffer_flush()
+    wait_for_buffer_flush_sync(dbos._sys_db)
     # Change the workflow status to pending
     dbos._sys_db.update_workflow_status(
         {
@@ -631,7 +632,7 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
         fstat1 = wfh.get_status()
         assert fstat1
         fres = wfh.get_result()
-        dbos._sys_db.wait_for_buffer_flush()  # Wait for status to export.
+        wait_for_buffer_flush_sync(dbos._sys_db)  # Wait for status to export.
         fstat2 = wfh.get_status()
         assert fstat2
         return fstat1.status + fres + fstat2.status

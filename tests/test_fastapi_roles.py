@@ -21,6 +21,7 @@ from dbos._context import assert_current_dbos_context
 from dbos._error import DBOSInitializationError, DBOSNotAuthorizedError
 from dbos._sys_db import GetWorkflowsInput
 from dbos._tracer import dbos_tracer
+from tests.utils import wait_for_buffer_flush_sync
 
 
 @pytest.mark.order(1)
@@ -132,7 +133,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert span.attributes["authenticatedUserRoles"] == '["user", "engineer"]'
 
     # Verify that there is one workflow for this user.
-    dbos._sys_db.wait_for_buffer_flush()
+    wait_for_buffer_flush_sync(dbos._sys_db)
     gwi = GetWorkflowsInput()
     gwi.authenticated_user = "user1"
     wfl = dbos._sys_db.get_workflows(gwi)

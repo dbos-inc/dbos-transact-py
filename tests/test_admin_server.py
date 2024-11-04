@@ -6,6 +6,7 @@ import requests
 
 # Public API
 from dbos import DBOS, SetWorkflowID
+from tests.utils import wait_for_buffer_flush_sync
 
 
 def test_admin_endpoints(dbos: DBOS) -> None:
@@ -55,7 +56,6 @@ def test_admin_endpoints(dbos: DBOS) -> None:
         assert event.is_set(), "Event is not set!"
 
 
-
 def test_admin_recovery(dbos: DBOS) -> None:
     os.environ["DBOS__VMID"] = "testexecutor"
     os.environ["DBOS__APPVERSION"] = "testversion"
@@ -83,7 +83,7 @@ def test_admin_recovery(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") == "bob1bob"
 
-    dbos._sys_db.wait_for_buffer_flush()
+    wait_for_buffer_flush_sync(dbos._sys_db)
     # Change the workflow status to pending
     dbos._sys_db.update_workflow_status(
         {

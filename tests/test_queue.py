@@ -8,6 +8,7 @@ from dbos import DBOS, Queue, SetWorkflowID
 from dbos._dbos import WorkflowHandle
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
+from tests.utils import wait_for_buffer_flush_sync
 
 
 def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
@@ -235,7 +236,7 @@ def test_limiter(dbos: DBOS) -> None:
         assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.2
 
     # Verify all workflows get the SUCCESS status eventually
-    dbos._sys_db.wait_for_buffer_flush()
+    wait_for_buffer_flush_sync(dbos._sys_db)
     for h in handles:
         assert h.get_status().status == WorkflowStatusString.SUCCESS.value
 
@@ -303,7 +304,7 @@ def test_multiple_queues(dbos: DBOS) -> None:
         assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.2
 
     # Verify all workflows get the SUCCESS status eventually
-    dbos._sys_db.wait_for_buffer_flush()
+    wait_for_buffer_flush_sync(dbos._sys_db)
     for h in handles:
         assert h.get_status().status == WorkflowStatusString.SUCCESS.value
 

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 # Public API
 from dbos import DBOS
+from tests.utils import wait_for_buffer_flush_sync
 
 
 async def simulate_db_restart(engine: AsyncEngine, downtime: float) -> None:
@@ -208,7 +209,7 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
     for event in dbos.stop_events:
         event.set()
 
-    dbos._sys_db.wait_for_buffer_flush()
+    wait_for_buffer_flush_sync(dbos._sys_db)
     dbos._sys_db.update_workflow_status(
         {
             "workflow_uuid": workflow_id,
