@@ -15,18 +15,18 @@ DBOS(fastapi=app)
 
 
 @DBOS.step()
-def hello_step():
+def hello_step() -> str:
     return "Hello"
 
 
 @DBOS.step()
-def world_step():
+def world_step() -> str:
     return "world"
 
 
 @app.get("/hello")
 @DBOS.workflow()
-def hello_world():
+def hello_world() -> str:
     hello = hello_step()
     world = world_step()
     return f"{hello}, {world}!"
