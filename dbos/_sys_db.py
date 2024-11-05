@@ -713,13 +713,6 @@ class SystemDatabase:
         else:
             dbos_logger.debug(f"Running recv, id: {function_id}, topic: {topic}")
 
-        # Insert a condition to the notifications map, so the listener can notify it when a message is received.
-        payload = f"{workflow_uuid}::{topic}"
-        condition = threading.Condition()
-        # Must acquire first before adding to the map. Otherwise, the notification listener may notify it before the condition is acquired and waited.
-        condition.acquire()
-        self.notifications_map[payload] = condition
-
         # Check if the key is already in the database. If not, wait for the notification.
         init_recv: Sequence[Any]
         with self.engine.begin() as c:
@@ -733,14 +726,20 @@ class SystemDatabase:
             ).fetchall()
 
         if len(init_recv) == 0:
-            # Wait for the notification
-            # Support OAOO sleep
-            actual_timeout = self.sleep(
-                workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
-            )
-            condition.wait(timeout=actual_timeout)
-        condition.release()
-        self.notifications_map.pop(payload)
+            # Insert a condition to the notifications map, so the listener can notify it when a message is received.
+            payload = f"{workflow_uuid}::{topic}"
+            condition = threading.Condition()
+            # Must acquire first before adding to the map. Otherwise, the notification listener may notify it before the condition is acquired and waited.
+            with condition:
+                self.notifications_map[payload] = condition
+
+                # Wait for the notification
+                # Support OAOO sleep
+                actual_timeout = self.sleep(
+                    workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
+                )
+                condition.wait(timeout=actual_timeout)
+            self.notifications_map.pop(payload)
 
         # Transactionally consume and return the message if it's in the database, otherwise return null.
         with self.engine.begin() as c:
@@ -810,26 +809,26 @@ class SystemDatabase:
                             f"Received notification on channel: {channel}, payload: {notify.payload}"
                         )
                         if channel == "dbos_notifications_channel":
-                            if (
-                                notify.payload
-                                and notify.payload in self.notifications_map
-                            ):
-                                condition = self.notifications_map[notify.payload]
-                                condition.acquire()
-                                condition.notify_all()
-                                condition.release()
+                            condition = (
+                                self.notifications_map.get(notify.payload)
+                                if notify.payload
+                                else None
+                            )
+                            if condition:
+                                with condition:
+                                    condition.notify_all()
                                 dbos_logger.debug(
                                     f"Signaled notifications condition for {notify.payload}"
                                 )
                         elif channel == "dbos_workflow_events_channel":
-                            if (
-                                notify.payload
-                                and notify.payload in self.workflow_events_map
-                            ):
-                                condition = self.workflow_events_map[notify.payload]
-                                condition.acquire()
-                                condition.notify_all()
-                                condition.release()
+                            condition = (
+                                self.workflow_events_map.get(notify.payload)
+                                if notify.payload
+                                else None
+                            )
+                            if condition:
+                                with condition:
+                                    condition.notify_all()
                                 dbos_logger.debug(
                                     f"Signaled workflow_events condition for {notify.payload}"
                                 )
@@ -944,11 +943,6 @@ class SystemDatabase:
                     f"Running get_event, id: {caller_ctx['function_id']}, key: {key}"
                 )
 
-        payload = f"{target_uuid}::{key}"
-        condition = threading.Condition()
-        self.workflow_events_map[payload] = condition
-        condition.acquire()
-
         # Check if the key is already in the database. If not, wait for the notification.
         init_recv: Sequence[Any]
         with self.engine.begin() as c:
@@ -958,25 +952,29 @@ class SystemDatabase:
         if len(init_recv) > 0:
             value = _serialization.deserialize(init_recv[0][0])
         else:
-            # Wait for the notification
-            actual_timeout = timeout_seconds
-            if caller_ctx is not None:
-                # Support OAOO sleep for workflows
-                actual_timeout = self.sleep(
-                    caller_ctx["workflow_uuid"],
-                    caller_ctx["timeout_function_id"],
-                    timeout_seconds,
-                    skip_sleep=True,
-                )
-            condition.wait(timeout=actual_timeout)
+            payload = f"{target_uuid}::{key}"
+            condition = threading.Condition()
+            with condition:
+                self.workflow_events_map[payload] = condition
+
+                # Wait for the notification
+                actual_timeout = timeout_seconds
+                if caller_ctx is not None:
+                    # Support OAOO sleep for workflows
+                    actual_timeout = self.sleep(
+                        caller_ctx["workflow_uuid"],
+                        caller_ctx["timeout_function_id"],
+                        timeout_seconds,
+                        skip_sleep=True,
+                    )
+                condition.wait(timeout=actual_timeout)
 
             # Read the value from the database
             with self.engine.begin() as c:
                 final_recv = c.execute(get_sql).fetchall()
                 if len(final_recv) > 0:
                     value = _serialization.deserialize(final_recv[0][0])
-        condition.release()
-        self.workflow_events_map.pop(payload)
+            self.workflow_events_map.pop(payload)
 
         # Record the output if it's in a workflow
         if caller_ctx is not None:
