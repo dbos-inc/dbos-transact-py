@@ -9,7 +9,7 @@ from dbos import DBOS
 app = FastAPI()
 DBOS(fastapi=app)
 
-# This is a simple DBOS workflow.
+# This is a simple DBOS workflow with two steps.
 # You can use workflows to build crashproof applications.
 # Learn more here: https://docs.dbos.dev/python/programming-guide
 
