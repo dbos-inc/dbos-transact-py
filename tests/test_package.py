@@ -59,7 +59,7 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
         process = subprocess.Popen(["dbos", "start"], cwd=temp_path, env=venv)
 
         try:
-            url = "http://localhost:8000/greeting/dbos"
+            url = "http://localhost:8000/hello/"
             max_retries = 10
             for attempt in range(max_retries):
                 try:
@@ -68,7 +68,7 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
                         assert status_code == 200
                         response_data = response.read().decode("utf-8")
                         data = json.loads(response_data)
-                        assert data == "Greetings, dbos! You have been greeted 1 times."
+                        assert data == "Hello, world!"
                         break
                 except (urllib.error.URLError, AssertionError) as e:
                     if attempt < max_retries - 1:  # If not the last attempt
