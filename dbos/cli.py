@@ -129,12 +129,11 @@ def _copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
     ctx = {
         "project_name": project_name,
         "package_name": package_name,
-        "migration_command": "alembic upgrade head",
+        "migration_command": "echo 'No migrations specified'",
     }
 
     if config_mode:
         ctx["package_name"] = "."
-        ctx["migration_command"] = "echo 'No migrations specified'"
         _copy_dbos_template(
             os.path.join(src_dir, "dbos-config.yaml.dbos"),
             os.path.join(dst_dir, "dbos-config.yaml"),
