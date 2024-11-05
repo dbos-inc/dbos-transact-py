@@ -55,7 +55,6 @@ def test_admin_endpoints(dbos: DBOS) -> None:
         assert event.is_set(), "Event is not set!"
 
 
-
 def test_admin_recovery(dbos: DBOS) -> None:
     os.environ["DBOS__VMID"] = "testexecutor"
     os.environ["DBOS__APPVERSION"] = "testversion"
