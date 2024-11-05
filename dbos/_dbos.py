@@ -26,9 +26,10 @@ from typing import (
 from opentelemetry.trace import Span
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dbos._utils import run_coroutine
+
 from ._classproperty import classproperty
 from ._core import (
-    TEMP_SEND_WF_NAME,
     WorkflowHandlePolling,
     decorate_step,
     decorate_transaction,
@@ -36,10 +37,10 @@ from ._core import (
     execute_workflow_by_id,
     get_event,
     recv,
+    register_send_temp_workflow,
     send,
     set_event,
     start_workflow,
-    workflow_wrapper,
 )
 from ._queue import Queue, _queue_thread
 from ._recovery import recover_pending_workflows, startup_recovery_thread
@@ -47,8 +48,6 @@ from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
     get_or_create_class_info,
-    set_dbos_func_name,
-    set_temp_workflow_type,
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
@@ -291,15 +290,7 @@ class DBOS:
             setup_flask_middleware(self.flask)
 
         # Register send_stub as a workflow
-        def send_temp_workflow(
-            destination_id: str, message: Any, topic: Optional[str]
-        ) -> None:
-            self.send(destination_id, message, topic)
-
-        temp_send_wf = workflow_wrapper(self._registry, send_temp_workflow)
-        set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
-        set_temp_workflow_type(send_temp_workflow, "send")
-        self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
+        register_send_temp_workflow(self)
 
         for handler in dbos_logger.handlers:
             handler.flush()
@@ -600,7 +591,14 @@ class DBOS:
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
         """Send a message to a workflow execution."""
-        return send(_get_dbos_instance(), destination_id, message, topic)
+        return run_coroutine(send(_get_dbos_instance(), destination_id, message, topic))
+
+    @classmethod
+    async def send_async(
+        cls, destination_id: str, message: Any, topic: Optional[str] = None
+    ) -> None:
+        """Send a message to a workflow execution."""
+        return await send(_get_dbos_instance(), destination_id, message, topic)
 
     @classmethod
     def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
@@ -610,7 +608,19 @@ class DBOS:
         This function is to be called from within a workflow.
         `recv` will return the message sent on `topic`, waiting if necessary.
         """
-        return recv(_get_dbos_instance(), topic, timeout_seconds)
+        return run_coroutine(recv(_get_dbos_instance(), topic, timeout_seconds))
+
+    @classmethod
+    async def recv_async(
+        cls, topic: Optional[str] = None, timeout_seconds: float = 60
+    ) -> Any:
+        """
+        Receive a workflow message.
+
+        This function is to be called from within a workflow.
+        `recv` will return the message sent on `topic`, waiting if necessary.
+        """
+        return await recv(_get_dbos_instance(), topic, timeout_seconds)
 
     @classmethod
     def sleep(cls, seconds: float) -> None:

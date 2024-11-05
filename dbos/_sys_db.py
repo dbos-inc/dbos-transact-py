@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import functools
 import os
 import re
 import threading
@@ -1290,13 +1291,6 @@ class SystemDatabase:
         else:
             dbos_logger.debug(f"Running recv, id: {function_id}, topic: {topic}")
 
-        # Insert a condition to the notifications map, so the listener can notify it when a message is received.
-        payload = f"{workflow_uuid}::{topic}"
-        condition = threading.Condition()
-        # Must acquire first before adding to the map. Otherwise, the notification listener may notify it before the condition is acquired and waited.
-        condition.acquire()
-        self.notifications_map[payload] = condition
-
         # Check if the key is already in the database. If not, wait for the notification.
         init_recv: Sequence[Any]
         async with self.async_engine.begin() as c:
@@ -1312,14 +1306,28 @@ class SystemDatabase:
             ).fetchall()
 
         if len(init_recv) == 0:
-            # Wait for the notification
-            # Support OAOO sleep
-            actual_timeout = await self.sleep_async(
-                workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
-            )
-            await asyncio.to_thread(condition.wait, timeout=actual_timeout)
-        condition.release()
-        self.notifications_map.pop(payload)
+            payload = f"{workflow_uuid}::{topic}"
+
+            def blocking_wait() -> None:
+                condition = threading.Condition()
+                # Must acquire first before adding to the map. Otherwise, the notification listener may notify it before the condition is acquired and waited.
+                with condition:
+                    # Insert a condition to the notifications map, so the listener can notify it when a message is received.
+                    self.notifications_map[payload] = condition
+                    # Support OAOO sleep
+                    timeout = asyncio.run(
+                        self.sleep_async(
+                            workflow_uuid,
+                            timeout_function_id,
+                            timeout_seconds,
+                            skip_sleep=True,
+                        )
+                    )
+                    # Wait for the notification
+                    condition.wait(timeout=timeout)
+                    self.notifications_map.pop(payload)
+
+            await asyncio.to_thread(blocking_wait)
 
         # Transactionally consume and return the message if it's in the database, otherwise return null.
         async with self.async_engine.begin() as c:
@@ -1394,9 +1402,8 @@ class SystemDatabase:
                                 and notify.payload in self.notifications_map
                             ):
                                 condition = self.notifications_map[notify.payload]
-                                condition.acquire()
-                                condition.notify_all()
-                                condition.release()
+                                with condition:
+                                    condition.notify_all()
                                 dbos_logger.debug(
                                     f"Signaled notifications condition for {notify.payload}"
                                 )
@@ -1406,9 +1413,8 @@ class SystemDatabase:
                                 and notify.payload in self.workflow_events_map
                             ):
                                 condition = self.workflow_events_map[notify.payload]
-                                condition.acquire()
-                                condition.notify_all()
-                                condition.release()
+                                with condition:
+                                    condition.notify_all()
                                 dbos_logger.debug(
                                     f"Signaled workflow_events condition for {notify.payload}"
                                 )

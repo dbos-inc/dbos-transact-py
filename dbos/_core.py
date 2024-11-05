@@ -91,7 +91,7 @@ P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 F = TypeVar("F", bound=Callable[..., Any])
 
-TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
+_TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
 
 class WorkflowHandleFuture(Generic[R]):
@@ -796,15 +796,27 @@ def decorate_step(
     return decorator
 
 
-def send(
+def register_send_temp_workflow(dbos: "DBOS") -> None:
+    async def send_temp_workflow(
+        destination_id: str, message: Any, topic: Optional[str]
+    ) -> None:
+        return await send(dbos, destination_id, message, topic)
+
+    temp_send_wf = workflow_wrapper(dbos._registry, send_temp_workflow)
+    set_dbos_func_name(send_temp_workflow, _TEMP_SEND_WF_NAME)
+    set_temp_workflow_type(send_temp_workflow, "send")
+    dbos._registry.register_wf_function(_TEMP_SEND_WF_NAME, temp_send_wf)
+
+
+async def send(
     dbos: "DBOS", destination_id: str, message: Any, topic: Optional[str] = None
 ) -> None:
-    def do_send(destination_id: str, message: Any, topic: Optional[str]) -> None:
+    async def do_send(destination_id: str, message: Any, topic: Optional[str]) -> None:
         attributes: TracedAttributes = {
             "name": "send",
         }
         with EnterDBOSStep(attributes) as ctx:
-            dbos._sys_db.send(
+            await dbos._sys_db.send_async(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
                 destination_id,
@@ -815,14 +827,16 @@ def send(
     ctx = get_local_dbos_context()
     if ctx and ctx.is_within_workflow():
         assert ctx.is_workflow(), "send() must be called from within a workflow"
-        return do_send(destination_id, message, topic)
+        await do_send(destination_id, message, topic)
     else:
-        wffn = dbos._registry.workflow_info_map.get(TEMP_SEND_WF_NAME)
+        wffn = dbos._registry.workflow_info_map.get(_TEMP_SEND_WF_NAME)
         assert wffn
-        wffn(destination_id, message, topic)
+        await wffn(destination_id, message, topic)
 
 
-def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
+async def recv(
+    dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60
+) -> Any:
     cur_ctx = get_local_dbos_context()
     if cur_ctx is not None:
         # Must call it within a workflow
@@ -833,7 +847,7 @@ def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60)
         with EnterDBOSStep(attributes) as ctx:
             ctx.function_id += 1  # Reserve for the sleep
             timeout_function_id = ctx.function_id
-            return dbos._sys_db.recv(
+            return await dbos._sys_db.recv_async(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
                 timeout_function_id,
