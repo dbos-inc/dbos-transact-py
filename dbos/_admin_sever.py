@@ -6,8 +6,6 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any, List, TypedDict
 
-import psutil
-
 from ._logger import dbos_logger
 from ._recovery import recover_pending_workflows
 
@@ -16,7 +14,6 @@ if TYPE_CHECKING:
 
 _health_check_path = "/dbos-healthz"
 _workflow_recovery_path = "/dbos-workflow-recovery"
-_perf_path = "/dbos-perf"
 _deactivate_path = "/deactivate"
 
 
@@ -55,17 +52,6 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self._end_headers()
             self.wfile.write("healthy".encode("utf-8"))
-        elif self.path == _perf_path:
-            # Compares system CPU times elapsed since last call or module import, returning immediately (non blocking).
-            cpu_percent = psutil.cpu_percent(interval=None) / 100.0
-            perf_util: PerfUtilization = {
-                "idle": 1.0 - cpu_percent,
-                "active": cpu_percent,
-                "utilization": cpu_percent,
-            }
-            self.send_response(200)
-            self._end_headers()
-            self.wfile.write(json.dumps(perf_util).encode("utf-8"))
         elif self.path == _deactivate_path:
             dbos_logger.info("Deactivating DBOS")
             # Stop all scheduled workflows, queues, and kafka loops
