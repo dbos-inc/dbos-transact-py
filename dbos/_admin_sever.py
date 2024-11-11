@@ -53,7 +53,6 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self._end_headers()
             self.wfile.write("healthy".encode("utf-8"))
         elif self.path == _deactivate_path:
-            dbos_logger.info("Deactivating DBOS")
             # Stop all scheduled workflows, queues, and kafka loops
             for event in self.dbos.stop_events:
                 event.set()
