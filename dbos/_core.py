@@ -1,10 +1,24 @@
+import asyncio
+import contextvars
+import functools
+import inspect
 import json
 import sys
 import time
 import traceback
 from concurrent.futures import Future
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Generic,
+    Optional,
+    Tuple,
+    TypeVar,
+    cast,
+)
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 
@@ -187,33 +201,49 @@ def _execute_workflow(
     func: "Workflow[P, R]",
     *args: Any,
     **kwargs: Any,
-) -> R:
-    try:
-        output = func(*args, **kwargs)
-        status["status"] = "SUCCESS"
-        status["output"] = _serialization.serialize(output)
-        if status["queue_name"] is not None:
-            queue = dbos._registry.queue_info_map[status["queue_name"]]
-            dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-        dbos._sys_db.buffer_workflow_status(status)
-    except DBOSWorkflowConflictIDError:
-        # Retrieve the workflow handle and wait for the result.
-        # Must use existing_workflow=False because workflow status might not be set yet for single transaction workflows.
-        wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(
-            status["workflow_uuid"], existing_workflow=False
-        )
-        output = wf_handle.get_result()
-        return output
-    except Exception as error:
-        status["status"] = "ERROR"
-        status["error"] = _serialization.serialize_exception(error)
-        if status["queue_name"] is not None:
-            queue = dbos._registry.queue_info_map[status["queue_name"]]
-            dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-        dbos._sys_db.update_workflow_status(status)
-        raise
+) -> R | Awaitable[R]:
+    def run_workflow(callable: Callable[[], R]) -> R:
+        try:
+            output = callable()
+            status["status"] = "SUCCESS"
+            status["output"] = _serialization.serialize(output)
+            if status["queue_name"] is not None:
+                queue = dbos._registry.queue_info_map[status["queue_name"]]
+                dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
+            dbos._sys_db.buffer_workflow_status(status)
+        except DBOSWorkflowConflictIDError:
+            # Retrieve the workflow handle and wait for the result.
+            # Must use existing_workflow=False because workflow status might not be set yet for single transaction workflows.
+            wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(
+                status["workflow_uuid"], existing_workflow=False
+            )
+            output = wf_handle.get_result()
+            return output
+        except Exception as error:
+            status["status"] = "ERROR"
+            status["error"] = _serialization.serialize_exception(error)
+            if status["queue_name"] is not None:
+                queue = dbos._registry.queue_info_map[status["queue_name"]]
+                dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
+            dbos._sys_db.update_workflow_status(status)
+            raise
 
-    return output
+        return output
+
+    def task_then(future: asyncio.Future[R], task: asyncio.Task[R]) -> None:
+        try:
+            result = run_workflow(task.result)
+            future.set_result(result)
+        except Exception as error:
+            future.set_exception(error)
+
+    if inspect.iscoroutinefunction(func):
+        task: asyncio.Task[R] = asyncio.create_task(func(*args, **kwargs))
+        future = asyncio.Future[R]()
+        task.add_done_callback(functools.partial(task_then, future))
+        return future
+    else:
+        return run_workflow(functools.partial(func, *args, **kwargs))
 
 
 def _execute_workflow_wthread(
