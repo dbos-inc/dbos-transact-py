@@ -169,7 +169,7 @@ def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
 
     if not _is_valid_app_name(data["name"]):
         raise DBOSInitializationError(
-            f'Invalid app name {data["name"]}.  App names must be between 3 and 30 characters and contain only alphanumeric characters, dashes, and underscores.'
+            f'Invalid app name {data["name"]}.  App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores.'
         )
 
     if "app_db_name" not in data["database"]:
