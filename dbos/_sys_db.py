@@ -300,6 +300,12 @@ class SystemDatabase:
                 if recovery_attempts > max_recovery_attempts:
                     with self.engine.begin() as c:
                         c.execute(
+                            sa.delete(SystemSchema.workflow_queue).where(
+                                SystemSchema.workflow_queue.c.workflow_uuid
+                                == status["workflow_uuid"]
+                            )
+                        )
+                        c.execute(
                             sa.update(SystemSchema.workflow_status)
                             .where(
                                 SystemSchema.workflow_status.c.workflow_uuid
@@ -311,6 +317,7 @@ class SystemDatabase:
                             )
                             .values(
                                 status=WorkflowStatusString.RETRIES_EXCEEDED.value,
+                                queue_name=None,
                             )
                         )
                     raise DBOSDeadLetterQueueError(
