@@ -619,16 +619,24 @@ class DBOS:
         It is important to use `DBOS.sleep` (as opposed to any other sleep) within workflows,
         as the `DBOS.sleep`s are durable and completed sleeps will be skipped during recovery.
         """
-
-        attributes: TracedAttributes = {
-            "name": "sleep",
-        }
         if seconds <= 0:
             return
-        with EnterDBOSStep(attributes) as ctx:
-            _get_dbos_instance()._sys_db.sleep(
-                ctx.workflow_id, ctx.curr_step_function_id, seconds
-            )
+        cur_ctx = get_local_dbos_context()
+        if cur_ctx is not None:
+            # Must call it within a workflow
+            assert (
+                cur_ctx.is_workflow()
+            ), "sleep() must be called from within a workflow"
+            attributes: TracedAttributes = {
+                "name": "sleep",
+            }
+            with EnterDBOSStep(attributes) as ctx:
+                _get_dbos_instance()._sys_db.sleep(
+                    ctx.workflow_id, ctx.curr_step_function_id, seconds
+                )
+        else:
+            # Cannot call it from outside of a workflow
+            raise DBOSException("sleep() must be called from within a workflow")
 
     @classmethod
     def set_event(cls, key: str, value: Any) -> None:
