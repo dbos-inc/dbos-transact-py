@@ -198,4 +198,4 @@ def _app_name_to_db_name(app_name: str) -> str:
 def _set_env_vars(config: ConfigFile) -> None:
     for env, value in config.get("env", {}).items():
         if value is not None:
-            os.environ[env] = value
+            os.environ[env] = str(value)

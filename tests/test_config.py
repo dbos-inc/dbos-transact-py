@@ -44,6 +44,7 @@ def test_valid_config(mocker):
             foo: ${BARBAR}
             bazbaz: BAZBAZ
             bob: ${BOBBOB}
+            test_number: 123
     """
     os.environ["BARBAR"] = "FOOFOO"
     mocker.patch(
@@ -61,10 +62,12 @@ def test_valid_config(mocker):
     assert configFile["database"]["connectionTimeoutMillis"] == 3000
     assert configFile["env"]["foo"] == "FOOFOO"
     assert configFile["env"]["bob"] is None  # Unset environment variable
+    assert configFile["env"]["test_number"] == 123
 
     _set_env_vars(configFile)
     assert os.environ["bazbaz"] == "BAZBAZ"
     assert os.environ["foo"] == "FOOFOO"
+    assert os.environ["test_number"] == "123"
     assert "bob" not in os.environ
 
 
