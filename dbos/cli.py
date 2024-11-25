@@ -29,7 +29,9 @@ def _on_windows() -> bool:
     return platform.system() == "Windows"
 
 
-@app.command()
+@app.command(
+    help="Start your DBOS application using the start commands in 'dbos-config.yaml'"
+)
 def start() -> None:
     config = load_config()
     start_commands = config["runtimeConfig"]["start"]
@@ -168,7 +170,7 @@ def _get_project_name() -> typing.Union[str, None]:
     return name
 
 
-@app.command()
+@app.command(help="Initialize a new DBOS application from a template")
 def init(
     project_name: Annotated[
         typing.Optional[str], typer.Argument(help="Specify application name")
@@ -216,7 +218,9 @@ def init(
         print(f"[red]{e}[/red]")
 
 
-@app.command()
+@app.command(
+    help="Run your database schema migrations using the migration commands in 'dbos-config.yaml'"
+)
 def migrate() -> None:
     config = load_config()
     if not config["database"]["password"]:
@@ -266,8 +270,17 @@ def migrate() -> None:
     typer.echo(f"Completed schema migration for database {app_db_name}")
 
 
-@app.command()
-def reset():
+@app.command(help="Reset the DBOS system database")
+def reset(
+    yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompt")
+):
+    if not yes:
+        confirm = typer.confirm(
+            "This command resets your system database, deleting all data stored in it. Are you sure you want to proceed?"
+        )
+        if not confirm:
+            typer.echo("Operation cancelled.")
+            raise typer.Exit()
     config = load_config()
     sysdb_name = (
         config["database"]["sys_db_name"]
