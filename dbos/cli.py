@@ -321,7 +321,7 @@ def reset(
 
     except sa.exc.SQLAlchemyError as e:
         typer.echo(f"Error dropping database: {str(e)}")
-        return 1
+        return
 
     sys_db = None
     try:
