@@ -276,7 +276,7 @@ def reset(
 ):
     if not yes:
         confirm = typer.confirm(
-            "This command resets your system database, deleting all data stored in it. Are you sure you want to proceed?"
+            "This command resets your DBOS system database, deleting metadata about past workflows and steps. Are you sure you want to proceed?"
         )
         if not confirm:
             typer.echo("Operation cancelled.")
