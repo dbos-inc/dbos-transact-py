@@ -1,6 +1,5 @@
 import os
 import platform
-import re
 import shutil
 import signal
 import subprocess
@@ -9,11 +8,14 @@ import typing
 from os import path
 from typing import Any
 
+import sqlalchemy as sa
 import tomlkit
 import typer
 from rich import print
 from rich.prompt import Prompt
 from typing_extensions import Annotated
+
+from dbos._schemas.system_database import SystemSchema
 
 from . import load_config
 from ._app_db import ApplicationDatabase
@@ -262,6 +264,60 @@ def migrate() -> None:
         raise typer.Exit(code=1)
 
     typer.echo(f"Completed schema migration for database {app_db_name}")
+
+
+@app.command()
+def reset():
+    config = load_config()
+    sysdb_name = (
+        config["database"]["sys_db_name"]
+        if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]
+        else config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
+    )
+    postgres_db_url = sa.URL.create(
+        "postgresql+psycopg",
+        username=config["database"]["username"],
+        password=config["database"]["password"],
+        host=config["database"]["hostname"],
+        port=config["database"]["port"],
+        database="postgres",
+    )
+    try:
+        # Connect to postgres default database
+        engine = sa.create_engine(postgres_db_url)
+
+        with engine.connect() as conn:
+            # Set autocommit required for database dropping
+            conn.execution_options(isolation_level="AUTOCOMMIT")
+
+            # Terminate existing connections
+            conn.execute(
+                sa.text(
+                    """
+                SELECT pg_terminate_backend(pg_stat_activity.pid)
+                FROM pg_stat_activity
+                WHERE pg_stat_activity.datname = :db_name
+                AND pid <> pg_backend_pid()
+            """
+                ),
+                {"db_name": sysdb_name},
+            )
+
+            # Drop the database
+            conn.execute(sa.text(f"DROP DATABASE IF EXISTS {sysdb_name}"))
+
+    except sa.exc.SQLAlchemyError as e:
+        typer.echo(f"Error dropping database: {str(e)}")
+        return 1
+
+    sys_db = None
+    try:
+        sys_db = SystemDatabase(config)
+    except Exception as e:
+        typer.echo(f"DBOS system schema migration failed: {e}")
+    finally:
+        if sys_db:
+            sys_db.destroy()
 
 
 if __name__ == "__main__":
