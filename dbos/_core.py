@@ -196,9 +196,10 @@ def _init_workflow(
     return status
 
 
-T = TypeVar("T", covariant=True)  # A generic type for workflow return values
+T = TypeVar("T", covariant=True)  # A generic type for OK Result values
 
 
+# OK branch of functional Result type
 class Ok(Generic[T]):
     __slots__ = "_value"
 
@@ -215,6 +216,7 @@ class Ok(Generic[T]):
         return self._value
 
 
+# Err branch of functional Result type
 class Err:
     __slots__ = "_value"
 
@@ -234,18 +236,21 @@ class Err:
 Result: TypeAlias = Union[Ok[T], Err]
 
 
+# Helper function to return a Result from a callable (sync or async)
 def _get_result(
     func: Callable[[], Union[T, Coroutine[Any, Any, T]]]
 ) -> Union[Result[T], Coroutine[Any, Any, Result[T]]]:
     def to_result_sync(func: Callable[[], T]) -> Result[T]:
         try:
-            return Ok(func())
+            result = func()
+            return Ok(result)
         except Exception as e:
             return Err(e)
 
     async def to_result_async(func: Callable[[], Coroutine[Any, Any, T]]) -> Result[T]:
         try:
-            return Ok(await func())
+            result = await func()
+            return Ok(result)
         except Exception as e:
             return Err(e)
 
@@ -255,6 +260,7 @@ def _get_result(
         return to_result_sync(cast(Callable[[], T], func))
 
 
+# Helper function to chain a Result with a function (sync or async)
 def _and_then(
     result: Union[Result[T], Coroutine[Any, Any, Result[T]]],
     next_func: Callable[[Result[T]], R],
@@ -272,6 +278,7 @@ def _and_then(
         return and_then_sync(cast(Result[T], result))
 
 
+# function to compose a sync or async callable w/ a function to call on the result
 def and_then(
     func: Callable[[], Union[T, Coroutine[Any, Any, T]]],
     next_func: Callable[[Result[T]], R],
