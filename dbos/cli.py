@@ -273,7 +273,7 @@ def migrate() -> None:
 @app.command(help="Reset the DBOS system database")
 def reset(
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompt")
-):
+) -> None:
     if not yes:
         confirm = typer.confirm(
             "This command resets your DBOS system database, deleting metadata about past workflows and steps. Are you sure you want to proceed?"
