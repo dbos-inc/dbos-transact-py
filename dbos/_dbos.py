@@ -238,13 +238,14 @@ class DBOS:
         return _dbos_global_instance
 
     @classmethod
-    def destroy(cls) -> None:
+    def destroy(cls, *, destroy_registry: bool = True) -> None:
         global _dbos_global_instance
-        global _dbos_global_registry
         if _dbos_global_instance is not None:
             _dbos_global_instance._destroy()
         _dbos_global_instance = None
-        _dbos_global_registry = None
+        if destroy_registry:
+            global _dbos_global_registry
+            _dbos_global_registry = None
 
     def __init__(
         self,
