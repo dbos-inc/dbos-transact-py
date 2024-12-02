@@ -108,7 +108,7 @@ def chain_result(
         return next_func(result)
 
     return (
-        chain_result_async()
+        chain_result_async(func)
         if inspect.iscoroutinefunction(func)
         else chain_result_sync(cast(Callable[[], T], func))
     )

@@ -1,25 +1,10 @@
-import asyncio
-import functools
-import inspect
 import json
 import sys
 import time
 import traceback
 from concurrent.futures import Future
 from functools import wraps
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Coroutine,
-    Generic,
-    Optional,
-    Tuple,
-    TypeAlias,
-    TypeVar,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 
@@ -196,133 +181,39 @@ def _init_workflow(
     return status
 
 
-T = TypeVar("T", covariant=True)  # A generic type for OK Result values
-
-
-# OK branch of functional Result type
-class Ok(Generic[T]):
-    __slots__ = "_value"
-
-    def __init__(self, value: T) -> None:
-        self._value = value
-
-    def is_ok(self) -> bool:
-        return True
-
-    def is_err(self) -> bool:
-        return False
-
-    def unwrap(self) -> T:
-        return self._value
-
-
-# Err branch of functional Result type
-class Err:
-    __slots__ = "_value"
-
-    def __init__(self, value: BaseException) -> None:
-        self._value = value
-
-    def is_ok(self) -> bool:
-        return False
-
-    def is_err(self) -> bool:
-        return True
-
-    def unwrap(self) -> Any:
-        raise self._value
-
-
-Result: TypeAlias = Union[Ok[T], Err]
-
-
-# Helper function to return a Result from a callable (sync or async)
-def _get_result(
-    func: Callable[[], Union[T, Coroutine[Any, Any, T]]]
-) -> Union[Result[T], Coroutine[Any, Any, Result[T]]]:
-    def to_result_sync(func: Callable[[], T]) -> Result[T]:
-        try:
-            result = func()
-            return Ok(result)
-        except Exception as e:
-            return Err(e)
-
-    async def to_result_async(func: Callable[[], Coroutine[Any, Any, T]]) -> Result[T]:
-        try:
-            result = await func()
-            return Ok(result)
-        except Exception as e:
-            return Err(e)
-
-    if inspect.iscoroutinefunction(func):
-        return to_result_async(cast(Callable[[], Coroutine[Any, Any, T]], func))
-    else:
-        return to_result_sync(cast(Callable[[], T], func))
-
-
-# Helper function to chain a Result with a function (sync or async)
-def _and_then(
-    result: Union[Result[T], Coroutine[Any, Any, Result[T]]],
-    next_func: Callable[[Result[T]], R],
-) -> Union[R, Coroutine[Any, Any, R]]:
-
-    def and_then_sync(result: Result[T]) -> R:
-        return next_func(result)
-
-    async def and_then_async(result: Coroutine[Any, Any, Result[T]]) -> R:
-        return next_func(await result)
-
-    if inspect.iscoroutine(result):
-        return and_then_async(cast(Coroutine[Any, Any, Result[T]], result))
-    else:
-        return and_then_sync(cast(Result[T], result))
-
-
-# function to compose a sync or async callable w/ a function to call on the result
-def and_then(
-    func: Callable[[], Union[T, Coroutine[Any, Any, T]]],
-    next_func: Callable[[Result[T]], R],
-) -> Union[R, Coroutine[Any, Any, R]]:
-    result = _get_result(func)
-    return _and_then(result, next_func)
-
-
 def _execute_workflow(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
     func: "Workflow[P, R]",
     *args: Any,
     **kwargs: Any,
-) -> R | Coroutine[Any, Any, R]:
-    def run_workflow(result: Result[R]) -> R:
-        try:
-            output: R = result.unwrap()
-            status["status"] = "SUCCESS"
-            status["output"] = _serialization.serialize(output)
-            if status["queue_name"] is not None:
-                queue = dbos._registry.queue_info_map[status["queue_name"]]
-                dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-            dbos._sys_db.buffer_workflow_status(status)
-            return output
+) -> R:
+    try:
+        output = func(*args, **kwargs)
+        status["status"] = "SUCCESS"
+        status["output"] = _serialization.serialize(output)
+        if status["queue_name"] is not None:
+            queue = dbos._registry.queue_info_map[status["queue_name"]]
+            dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
+        dbos._sys_db.buffer_workflow_status(status)
+    except DBOSWorkflowConflictIDError:
+        # Retrieve the workflow handle and wait for the result.
+        # Must use existing_workflow=False because workflow status might not be set yet for single transaction workflows.
+        wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(
+            status["workflow_uuid"], existing_workflow=False
+        )
+        output = wf_handle.get_result()
+        return output
+    except Exception as error:
+        status["status"] = "ERROR"
+        status["error"] = _serialization.serialize_exception(error)
+        if status["queue_name"] is not None:
+            queue = dbos._registry.queue_info_map[status["queue_name"]]
+            dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
+        dbos._sys_db.update_workflow_status(status)
+        raise
 
-        except DBOSWorkflowConflictIDError:
-            # Retrieve the workflow handle and wait for the result.
-            # Must use existing_workflow=False because workflow status might not be set yet for single transaction workflows.
-            wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(
-                status["workflow_uuid"], existing_workflow=False
-            )
-            output = wf_handle.get_result()
-            return output
-        except Exception as error:
-            status["status"] = "ERROR"
-            status["error"] = _serialization.serialize_exception(error)
-            if status["queue_name"] is not None:
-                queue = dbos._registry.queue_info_map[status["queue_name"]]
-                dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-            dbos._sys_db.update_workflow_status(status)
-            raise
-
-    return and_then(functools.partial(func, *args, **kwargs), run_workflow)
+    return output
 
 
 def _execute_workflow_wthread(
@@ -340,12 +231,7 @@ def _execute_workflow_wthread(
     with DBOSContextSwap(ctx):
         with EnterDBOSWorkflow(attributes):
             try:
-                result = _execute_workflow(dbos, status, func, *args, **kwargs)
-                if inspect.iscoroutine(result):
-                    return cast(R, asyncio.run(result))
-                else:
-                    return cast(R, result)
-
+                return _execute_workflow(dbos, status, func, *args, **kwargs)
             except Exception:
                 dbos.logger.error(
                     f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
@@ -539,48 +425,23 @@ def workflow_wrapper(
         enterWorkflowCtxMgr = (
             EnterDBOSChildWorkflow if ctx and ctx.is_workflow() else EnterDBOSWorkflow
         )
-        cm1 = enterWorkflowCtxMgr(attributes)
-        cm2 = DBOSAssumeRole(rr)
-        cm1.__enter__()
-        cm2.__enter__()
+        with enterWorkflowCtxMgr(attributes), DBOSAssumeRole(rr):
+            ctx = assert_current_dbos_context()  # Now the child ctx
+            status = _init_workflow(
+                dbos,
+                ctx,
+                inputs=inputs,
+                wf_name=get_dbos_func_name(func),
+                class_name=get_dbos_class_name(fi, func, args),
+                config_name=get_config_name(fi, func, args),
+                temp_wf_type=get_temp_workflow_type(func),
+                max_recovery_attempts=max_recovery_attempts,
+            )
 
-        def after_workflow(result: Result[R]) -> R:
-            try:
-                try:
-                    return result.unwrap()
-                except:
-                    if not cm2.__exit__(*sys.exc_info()):
-                        raise
-                else:
-                    cm2.__exit__(None, None, None)
-            except:
-                if not cm1.__exit__(*sys.exc_info()):
-                    raise
-            else:
-                cm1.__exit__(None, None, None)
-
-        ctx = assert_current_dbos_context()  # Now the child ctx
-        status = _init_workflow(
-            dbos,
-            ctx,
-            inputs=inputs,
-            wf_name=get_dbos_func_name(func),
-            class_name=get_dbos_class_name(fi, func, args),
-            config_name=get_config_name(fi, func, args),
-            temp_wf_type=get_temp_workflow_type(func),
-            max_recovery_attempts=max_recovery_attempts,
-        )
-
-        dbos.logger.debug(
-            f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
-        )
-
-        return and_then(
-            functools.partial(
-                _execute_workflow, *(dbos, status, func, *args), **kwargs
-            ),
-            after_workflow,
-        )
+            dbos.logger.debug(
+                f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
+            )
+            return _execute_workflow(dbos, status, func, *args, **kwargs)
 
     wrapped_func = cast(F, wrapper)
     return wrapped_func
