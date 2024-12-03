@@ -1,7 +1,12 @@
 import inspect
 import sys
 from contextlib import AbstractContextManager
-from typing import Any, Callable, Coroutine, Generic, TypeAlias, TypeVar, Union, cast
+from typing import Any, Callable, Coroutine, Generic, TypeVar, Union, cast
+
+if sys.version_info < (3, 10):
+    from typing_extensions import TypeAlias
+else:
+    from typing import TypeAlias
 
 T = TypeVar("T", covariant=True)  # A generic type for OK Result values
 R = TypeVar("R", covariant=True)  # A generic type for OK Result values
