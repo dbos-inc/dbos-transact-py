@@ -494,7 +494,8 @@ def decorate_transaction(
                     "name": func.__name__,
                     "operationType": OperationType.TRANSACTION.value,
                 }
-                with EnterDBOSTransaction(session, attributes=attributes) as ctx:
+                with EnterDBOSTransaction(session, attributes=attributes):
+                    ctx = cast(DBOSContext, get_local_dbos_context())
                     txn_output: TransactionResultInternal = {
                         "workflow_uuid": ctx.workflow_id,
                         "function_id": ctx.function_id,
@@ -638,7 +639,8 @@ def decorate_step(
                 "name": func.__name__,
                 "operationType": OperationType.STEP.value,
             }
-            with EnterDBOSStep(attributes) as ctx:
+            with EnterDBOSStep(attributes):
+                ctx = cast(DBOSContext, get_local_dbos_context())
                 step_output: OperationResultInternal = {
                     "workflow_uuid": ctx.workflow_id,
                     "function_id": ctx.function_id,
@@ -753,7 +755,8 @@ def send(
         attributes: TracedAttributes = {
             "name": "send",
         }
-        with EnterDBOSStep(attributes) as ctx:
+        with EnterDBOSStep(attributes):
+            ctx = cast(DBOSContext, get_local_dbos_context())
             dbos._sys_db.send(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
@@ -780,7 +783,8 @@ def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60)
         attributes: TracedAttributes = {
             "name": "recv",
         }
-        with EnterDBOSStep(attributes) as ctx:
+        with EnterDBOSStep(attributes):
+            ctx = cast(DBOSContext, get_local_dbos_context())
             ctx.function_id += 1  # Reserve for the sleep
             timeout_function_id = ctx.function_id
             return dbos._sys_db.recv(
@@ -805,7 +809,8 @@ def set_event(dbos: "DBOS", key: str, value: Any) -> None:
         attributes: TracedAttributes = {
             "name": "set_event",
         }
-        with EnterDBOSStep(attributes) as ctx:
+        with EnterDBOSStep(attributes):
+            ctx = cast(DBOSContext, get_local_dbos_context())
             dbos._sys_db.set_event(
                 ctx.workflow_id, ctx.curr_step_function_id, key, value
             )
@@ -826,7 +831,8 @@ def get_event(
         attributes: TracedAttributes = {
             "name": "get_event",
         }
-        with EnterDBOSStep(attributes) as ctx:
+        with EnterDBOSStep(attributes):
+            ctx = cast(DBOSContext, get_local_dbos_context())
             ctx.function_id += 1
             timeout_function_id = ctx.function_id
             caller_ctx: GetEventWorkflowContext = {

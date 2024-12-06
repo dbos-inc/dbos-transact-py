@@ -21,6 +21,7 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
+    cast,
 )
 
 from opentelemetry.trace import Span
@@ -71,6 +72,7 @@ else:
 from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
 from ._context import (
+    DBOSContext,
     EnterDBOSStep,
     TracedAttributes,
     assert_current_dbos_context,
@@ -631,7 +633,8 @@ class DBOS:
             attributes: TracedAttributes = {
                 "name": "sleep",
             }
-            with EnterDBOSStep(attributes) as ctx:
+            with EnterDBOSStep(attributes):
+                ctx = cast(DBOSContext, get_local_dbos_context())
                 _get_dbos_instance()._sys_db.sleep(
                     ctx.workflow_id, ctx.curr_step_function_id, seconds
                 )
