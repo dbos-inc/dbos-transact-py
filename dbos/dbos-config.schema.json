@@ -144,6 +144,13 @@
             "type": "array",
             "description": "Specify commands to run to start your application (Python only)"
           },
+          "setup": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Commands to setup the application execution environment"
+          },
           "admin_port": {
             "type": "number",
             "description": "The port number of the admin server (Default: 3001)"
