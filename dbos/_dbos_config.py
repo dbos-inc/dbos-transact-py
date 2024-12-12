@@ -14,6 +14,7 @@ from ._logger import dbos_logger
 
 class RuntimeConfig(TypedDict, total=False):
     start: List[str]
+    setup: Optional[List[str]]
     admin_port: Optional[int]
 
 
