@@ -68,7 +68,7 @@ if sys.version_info < (3, 10):
 else:
     from typing import ParamSpec, TypeAlias
 
-from ._admin_sever import AdminServer
+from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
 from ._context import (
     EnterDBOSStep,
