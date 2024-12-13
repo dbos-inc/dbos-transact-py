@@ -396,16 +396,16 @@ def start_workflow(
 
 def workflow_wrapper(
     dbosreg: "DBOSRegistry",
-    func: F,
+    func: Callable[P, R],
     max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
-) -> F:
+) -> Callable[P, R]:
     func.__orig_func = func  # type: ignore
 
     fi = get_or_create_func_info(func)
     fi.max_recovery_attempts = max_recovery_attempts
 
     @wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
+    def wrapper(*args: Any, **kwargs: Any) -> R:
         if dbosreg.dbos is None:
             raise DBOSException(
                 f"Function {func.__name__} invoked before DBOS initialized"
@@ -443,14 +443,13 @@ def workflow_wrapper(
             )
             return _execute_workflow(dbos, status, func, *args, **kwargs)
 
-    wrapped_func = cast(F, wrapper)
-    return wrapped_func
+    return wrapper
 
 
 def decorate_workflow(
     reg: "DBOSRegistry", max_recovery_attempts: int
-) -> Callable[[F], F]:
-    def _workflow_decorator(func: F) -> F:
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    def _workflow_decorator(func: Callable[P, R]) -> Callable[P, R]:
         wrapped_func = workflow_wrapper(reg, func, max_recovery_attempts)
         reg.register_wf_function(func.__qualname__, wrapped_func)
         return wrapped_func

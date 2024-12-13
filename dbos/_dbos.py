@@ -432,7 +432,7 @@ class DBOS:
     @classmethod
     def workflow(
         cls, *, max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS
-    ) -> Callable[[F], F]:
+    ) -> Callable[[Callable[P, R]], Callable[P, R]]:
         """Decorate a function for use as a DBOS workflow."""
         return decorate_workflow(_get_or_create_dbos_registry(), max_recovery_attempts)
 
