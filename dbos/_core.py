@@ -1,3 +1,5 @@
+import asyncio
+import functools
 import json
 import sys
 import time
@@ -5,6 +7,8 @@ import traceback
 from concurrent.futures import Future
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
+
+from dbos._result import Immediate, Pending, Result, make_result
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 
@@ -181,39 +185,38 @@ def _init_workflow(
     return status
 
 
-def _execute_workflow(
+def _persist_wf_output(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
-    func: "Workflow[P, R]",
-    *args: Any,
-    **kwargs: Any,
-) -> R:
-    try:
-        output = func(*args, **kwargs)
-        status["status"] = "SUCCESS"
-        status["output"] = _serialization.serialize(output)
-        if status["queue_name"] is not None:
-            queue = dbos._registry.queue_info_map[status["queue_name"]]
-            dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-        dbos._sys_db.buffer_workflow_status(status)
-    except DBOSWorkflowConflictIDError:
-        # Retrieve the workflow handle and wait for the result.
-        # Must use existing_workflow=False because workflow status might not be set yet for single transaction workflows.
-        wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(
-            status["workflow_uuid"], existing_workflow=False
-        )
-        output = wf_handle.get_result()
-        return output
-    except Exception as error:
-        status["status"] = "ERROR"
-        status["error"] = _serialization.serialize_exception(error)
-        if status["queue_name"] is not None:
-            queue = dbos._registry.queue_info_map[status["queue_name"]]
-            dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-        dbos._sys_db.update_workflow_status(status)
-        raise
+) -> Callable[[Callable[[], R]], R]:
+    def persist(func: Callable[[], R]) -> R:
+        try:
+            output = func()
+            status["status"] = "SUCCESS"
+            status["output"] = _serialization.serialize(output)
+            if status["queue_name"] is not None:
+                queue = dbos._registry.queue_info_map[status["queue_name"]]
+                dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
+            dbos._sys_db.buffer_workflow_status(status)
+            return output
+        except DBOSWorkflowConflictIDError:
+            # Retrieve the workflow handle and wait for the result.
+            # Must use existing_workflow=False because workflow status might not be set yet for single transaction workflows.
+            wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(
+                status["workflow_uuid"], existing_workflow=False
+            )
+            output = wf_handle.get_result()
+            return output
+        except Exception as error:
+            status["status"] = "ERROR"
+            status["error"] = _serialization.serialize_exception(error)
+            if status["queue_name"] is not None:
+                queue = dbos._registry.queue_info_map[status["queue_name"]]
+                dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
+            dbos._sys_db.update_workflow_status(status)
+            raise
 
-    return output
+    return persist
 
 
 def _execute_workflow_wthread(
@@ -231,7 +234,13 @@ def _execute_workflow_wthread(
     with DBOSContextSwap(ctx):
         with EnterDBOSWorkflow(attributes):
             try:
-                return _execute_workflow(dbos, status, func, *args, **kwargs)
+                result: Result[R] = make_result(
+                    functools.partial(func, *args, **kwargs)
+                ).then(_persist_wf_output(dbos, status))
+                if isinstance(result, Immediate):
+                    return cast(Immediate[R], result)()
+                else:
+                    return asyncio.run(cast(Pending[R], result)())
             except Exception:
                 dbos.logger.error(
                     f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
@@ -425,7 +434,11 @@ def workflow_wrapper(
         enterWorkflowCtxMgr = (
             EnterDBOSChildWorkflow if ctx and ctx.is_workflow() else EnterDBOSWorkflow
         )
-        with enterWorkflowCtxMgr(attributes), DBOSAssumeRole(rr):
+
+        # WF Function
+        wfResult: Result[R] = make_result(functools.partial(func, *args, **kwargs))
+
+        def inner(func: Callable[[], R]) -> R:
             ctx = assert_current_dbos_context()  # Now the child ctx
             status = _init_workflow(
                 dbos,
@@ -441,7 +454,16 @@ def workflow_wrapper(
             dbos.logger.debug(
                 f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
             )
-            return _execute_workflow(dbos, status, func, *args, **kwargs)
+            zzz = _persist_wf_output(dbos, status)
+            return zzz(func)
+
+        result = (
+            wfResult.then(inner)
+            .also(DBOSAssumeRole(rr))
+            .also(enterWorkflowCtxMgr(attributes))
+        )
+        output = result()
+        return output  # type: ignore
 
     return wrapper
 
