@@ -438,7 +438,7 @@ def workflow_wrapper(
         # WF Function
         wfResult: Result[R] = make_result(functools.partial(func, *args, **kwargs))
 
-        def inner(func: Callable[[], R]) -> R:
+        def inner() -> Callable[[Callable[[], R]], R]:
             ctx = assert_current_dbos_context()  # Now the child ctx
             status = _init_workflow(
                 dbos,
@@ -454,11 +454,11 @@ def workflow_wrapper(
             dbos.logger.debug(
                 f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
             )
-            zzz = _persist_wf_output(dbos, status)
-            return zzz(func)
+
+            return _persist_wf_output(dbos, status)
 
         result = (
-            wfResult.then(inner)
+            wfResult.wrap(inner)
             .also(DBOSAssumeRole(rr))
             .also(enterWorkflowCtxMgr(attributes))
         )

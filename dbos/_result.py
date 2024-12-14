@@ -8,6 +8,11 @@ R = TypeVar("R")
 
 # define Result protocol w/ common composition methods
 class Result(Protocol[T]):
+
+    def wrap(
+        self, before: Callable[[], Callable[[Callable[[], T]], R]]
+    ) -> "Result[R]": ...
+
     def then(self, next: Callable[[Callable[[], T]], R]) -> "Result[R]": ...
 
     def also(self, cm: contextlib.AbstractContextManager[Any, bool]) -> "Result[T]": ...
@@ -24,6 +29,11 @@ class Immediate(Result[T]):
 
     def then(self, next: Callable[[Callable[[], T]], R]) -> "Immediate[R]":
         return Immediate(lambda: next(self._func))
+
+    def wrap(
+        self, before: Callable[[], Callable[[Callable[[], T]], R]]
+    ) -> "Immediate[R]":
+        return Immediate(lambda: before()(self._func))
 
     @staticmethod
     def _also(func: Callable[[], T], cm: contextlib.AbstractContextManager[Any, bool]) -> T:  # type: ignore
@@ -49,20 +59,24 @@ class Pending(Result[T]):
     def _raise(ex: BaseException) -> T:
         raise ex
 
-    # helper method to invoke  _func with await, then pass the resulting value
-    # or exception in a lambda to next. This is needed since _func is async.
-    @staticmethod
-    async def _do(
-        func: Callable[[], Coroutine[Any, Any, T]], next: Callable[[Callable[[], T]], R]
+    async def _wrap(
+        func: Callable[[], Coroutine[Any, Any, T]],
+        before: Callable[[], Callable[[Callable[[], T]], R]],
     ) -> R:
+        after = before()
         try:
             value = await func()
-            return next(lambda: value)
+            return after(lambda: value)
         except BaseException as exp:
-            return next(lambda: Pending._raise(exp))
+            return after(lambda: Pending._raise(exp))
+
+    def wrap(
+        self, before: Callable[[], Callable[[Callable[[], T]], R]]
+    ) -> "Pending[R]":
+        return Pending[R](lambda: Pending._wrap(self._func, before))
 
     def then(self, next: Callable[[Callable[[], T]], R]) -> "Pending[R]":
-        return Pending[R](lambda: Pending._do(self._func, next))
+        return Pending[R](lambda: Pending._wrap(self._func, lambda: next))
 
     @staticmethod
     async def _also(  # type: ignore
