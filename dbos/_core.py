@@ -185,7 +185,7 @@ def _init_workflow(
     return status
 
 
-def _persist_wf_output(
+def _get_wf_invoke_func(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
 ) -> Callable[[Callable[[], R]], R]:
@@ -236,7 +236,7 @@ def _execute_workflow_wthread(
             try:
                 result: Result[R] = make_result(
                     functools.partial(func, *args, **kwargs)
-                ).then(_persist_wf_output(dbos, status))
+                ).then(_get_wf_invoke_func(dbos, status))
                 if isinstance(result, Immediate):
                     return cast(Immediate[R], result)()
                 else:
@@ -455,7 +455,7 @@ def workflow_wrapper(
                 f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
             )
 
-            return _persist_wf_output(dbos, status)
+            return _get_wf_invoke_func(dbos, status)
 
         result = (
             wfResult.wrap(init_wf)
@@ -625,8 +625,8 @@ def decorate_step(
     interval_seconds: float = 1.0,
     max_attempts: int = 3,
     backoff_rate: float = 2.0,
-) -> Callable[[F], F]:
-    def decorator(func: F) -> F:
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    def decorator(func: Callable[P, R]) -> Callable[P, R]:
 
         def invoke_step(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:
@@ -743,7 +743,7 @@ def decorate_step(
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
         wrapper.__orig_func = temp_wf  # type: ignore
 
-        return cast(F, wrapper)
+        return cast(Callable[P, R], wrapper)
 
     return decorator
 

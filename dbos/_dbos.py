@@ -459,7 +459,7 @@ class DBOS:
         interval_seconds: float = 1.0,
         max_attempts: int = 3,
         backoff_rate: float = 2.0,
-    ) -> Callable[[F], F]:
+    ) -> Callable[[Callable[P, R]], Callable[P, R]]:
         """
         Decorate and configure a function for use as a DBOS step.
 
