@@ -6,22 +6,73 @@ T = TypeVar("T")
 R = TypeVar("R")
 
 
-# define Result protocol w/ common composition methods
 class Result(Protocol[T]):
+    def __call__(self) -> T: ...
+
+    @staticmethod
+    def make(func: Callable[[], T]) -> "Result[T]":
+        try:
+            value = func()
+            return Ok[T](value)
+        except BaseException as exp:
+            return Error[T](exp)
+
+    @staticmethod
+    async def make_async(func: Callable[[], Coroutine[Any, Any, T]]) -> "Result[T]":
+        try:
+            value = await func()
+            return Ok[T](value)
+        except BaseException as exp:
+            return Error[T](exp)
+
+
+class Ok(Result[T]):
+    __slots__ = "_value"
+
+    def __init__(self, value: T):
+        self._value = value
+
+    def __call__(self) -> T:
+        return self._value
+
+
+class Error(Result[T]):
+    __slots__ = "_value"
+
+    def __init__(self, value: BaseException):
+        self._value = value
+
+    def __call__(self) -> T:
+        raise self._value
+
+
+# define Outcome protocol w/ common composition methods
+class Outcome(Protocol[T]):
 
     def wrap(
         self, before: Callable[[], Callable[[Callable[[], T]], R]]
-    ) -> "Result[R]": ...
+    ) -> "Outcome[R]": ...
 
-    def then(self, next: Callable[[Callable[[], T]], R]) -> "Result[R]": ...
+    def then(self, next: Callable[[Callable[[], T]], R]) -> "Outcome[R]": ...
 
-    def also(self, cm: contextlib.AbstractContextManager[Any, bool]) -> "Result[T]": ...
+    def also(
+        self, cm: contextlib.AbstractContextManager[Any, bool]
+    ) -> "Outcome[T]": ...
 
     def __call__(self) -> Union[T, Coroutine[Any, Any, T]]: ...
 
+    # Helper function to create an Immediate or Pending Result, depending on if func is a coroutine function or not
+    @staticmethod
+    def make(func: Callable[[], Union[T, Coroutine[Any, Any, T]]]) -> "Outcome[T]":
+        return (
+            Pending(cast(Callable[[], Coroutine[Any, Any, T]], func))
+            if inspect.iscoroutinefunction(func)
+            else Immediate(cast(Callable[[], T], func))
+        )
 
-# Immediate Result - for composing non-async functions
-class Immediate(Result[T]):
+
+# Immediate Outcome - for composing non-async functions
+class Immediate(Outcome[T]):
     __slots__ = "_func"
 
     def __init__(self, func: Callable[[], T]):
@@ -47,8 +98,8 @@ class Immediate(Result[T]):
         return self._func()
 
 
-# Pending Result - for composing async functions
-class Pending(Result[T]):
+# Pending Outcome - for composing async functions
+class Pending(Outcome[T]):
     __slots__ = "_func"
 
     def __init__(self, func: Callable[[], Coroutine[Any, Any, T]]):
@@ -91,12 +142,3 @@ class Pending(Result[T]):
 
     async def __call__(self) -> T:
         return await self._func()
-
-
-# Helper function to create an Immediate or Pending Result, depending on if func is a coroutine function or not
-def make_result(func: Callable[[], Union[T, Coroutine[Any, Any, T]]]) -> Result[T]:
-    return (
-        Pending(cast(Callable[[], Coroutine[Any, Any, T]], func))
-        if inspect.iscoroutinefunction(func)
-        else Immediate(cast(Callable[[], T], func))
-    )

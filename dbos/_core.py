@@ -8,7 +8,7 @@ from concurrent.futures import Future
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
 
-from dbos._result import Immediate, Pending, Result, make_result
+from dbos._result import Immediate, Outcome, Pending
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 
@@ -234,9 +234,11 @@ def _execute_workflow_wthread(
     with DBOSContextSwap(ctx):
         with EnterDBOSWorkflow(attributes):
             try:
-                result: Result[R] = make_result(
-                    functools.partial(func, *args, **kwargs)
-                ).then(_get_wf_invoke_func(dbos, status))
+                result = (
+                    Outcome[R]
+                    .make(functools.partial(func, *args, **kwargs))
+                    .then(_get_wf_invoke_func(dbos, status))
+                )
                 if isinstance(result, Immediate):
                     return cast(Immediate[R], result)()
                 else:
@@ -436,7 +438,7 @@ def workflow_wrapper(
         )
 
         # WF Function
-        wfResult: Result[R] = make_result(functools.partial(func, *args, **kwargs))
+        wfResult = Outcome[R].make(functools.partial(func, *args, **kwargs))
 
         def init_wf() -> Callable[[Callable[[], R]], R]:
             ctx = assert_current_dbos_context()  # Now the child ctx
