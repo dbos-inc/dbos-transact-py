@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import atexit
 import json
 import os
@@ -605,6 +606,13 @@ class DBOS:
         return send(_get_dbos_instance(), destination_id, message, topic)
 
     @classmethod
+    async def send_async(
+        cls, destination_id: str, message: Any, topic: Optional[str] = None
+    ) -> None:
+        """Send a message to a workflow execution."""
+        await asyncio.to_thread(lambda: DBOS.send(destination_id, message, topic))
+
+    @classmethod
     def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
         """
         Receive a workflow message.
@@ -613,6 +621,18 @@ class DBOS:
         `recv` will return the message sent on `topic`, waiting if necessary.
         """
         return recv(_get_dbos_instance(), topic, timeout_seconds)
+
+    @classmethod
+    async def recv_async(
+        cls, topic: Optional[str] = None, timeout_seconds: float = 60
+    ) -> Any:
+        """
+        Receive a workflow message.
+
+        This function is to be called from within a workflow.
+        `recv` will return the message sent on `topic`, waiting if necessary.
+        """
+        return await asyncio.to_thread(lambda: DBOS.recv(topic, timeout_seconds))
 
     @classmethod
     def sleep(cls, seconds: float) -> None:
@@ -643,6 +663,16 @@ class DBOS:
             raise DBOSException("sleep() must be called from within a workflow")
 
     @classmethod
+    async def sleep_async(cls, seconds: float) -> None:
+        """
+        Sleep for the specified time (in seconds).
+
+        It is important to use `DBOS.sleep` (as opposed to any other sleep) within workflows,
+        as the `DBOS.sleep`s are durable and completed sleeps will be skipped during recovery.
+        """
+        await asyncio.to_thread(lambda: DBOS.sleep(seconds))
+
+    @classmethod
     def set_event(cls, key: str, value: Any) -> None:
         """
         Set a workflow event.
@@ -662,6 +692,25 @@ class DBOS:
         return set_event(_get_dbos_instance(), key, value)
 
     @classmethod
+    async def set_event_async(cls, key: str, value: Any) -> None:
+        """
+        Set a workflow event.
+
+        This function is to be called from within a workflow.
+
+        `set_event` sets the `value` of `key` for the current workflow instance ID.
+        This `value` can then be retrieved by other functions, using `get_event` below.
+
+        Each workflow invocation should only call set_event once per `key`.
+
+        Args:
+            key(str): The event key / name within the workflow
+            value(Any): A serializable value to associate with the key
+
+        """
+        await asyncio.to_thread(lambda: DBOS.set_event(key, value))
+
+    @classmethod
     def get_event(cls, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:
         """
         Return the `value` of a workflow event, waiting for it to occur if necessary.
@@ -675,6 +724,25 @@ class DBOS:
 
         """
         return get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
+
+    @classmethod
+    async def get_event_async(
+        cls, workflow_id: str, key: str, timeout_seconds: float = 60
+    ) -> Any:
+        """
+        Return the `value` of a workflow event, waiting for it to occur if necessary.
+
+        `get_event` waits for a corresponding `set_event` by the workflow with ID `workflow_id` with the same `key`.
+
+        Args:
+            workflow_id(str): The workflow instance ID that is expected to call `set_event` on `key`
+            key(str): The event key / name within the workflow
+            timeout_seconds(float): The amount of time to wait, in case `set_event` has not yet been called byt the workflow
+
+        """
+        return await asyncio.to_thread(
+            lambda: DBOS.get_event(workflow_id, key, timeout_seconds)
+        )
 
     @classmethod
     def execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
