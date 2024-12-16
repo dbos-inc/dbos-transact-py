@@ -6,44 +6,44 @@ T = TypeVar("T")
 R = TypeVar("R")
 
 
-class Result(Protocol[T]):
-    def __call__(self) -> T: ...
+# class Result(Protocol[T]):
+#     def __call__(self) -> T: ...
 
-    @staticmethod
-    def make(func: Callable[[], T]) -> "Result[T]":
-        try:
-            value = func()
-            return Ok[T](value)
-        except BaseException as exp:
-            return Error[T](exp)
+#     @staticmethod
+#     def make(func: Callable[[], T]) -> "Result[T]":
+#         try:
+#             value = func()
+#             return Ok[T](value)
+#         except BaseException as exp:
+#             return Error[T](exp)
 
-    @staticmethod
-    async def make_async(func: Callable[[], Coroutine[Any, Any, T]]) -> "Result[T]":
-        try:
-            value = await func()
-            return Ok[T](value)
-        except BaseException as exp:
-            return Error[T](exp)
-
-
-class Ok(Result[T]):
-    __slots__ = "_value"
-
-    def __init__(self, value: T):
-        self._value = value
-
-    def __call__(self) -> T:
-        return self._value
+#     @staticmethod
+#     async def make_async(func: Callable[[], Coroutine[Any, Any, T]]) -> "Result[T]":
+#         try:
+#             value = await func()
+#             return Ok[T](value)
+#         except BaseException as exp:
+#             return Error[T](exp)
 
 
-class Error(Result[T]):
-    __slots__ = "_value"
+# class Ok(Result[T]):
+#     __slots__ = "_value"
 
-    def __init__(self, value: BaseException):
-        self._value = value
+#     def __init__(self, value: T):
+#         self._value = value
 
-    def __call__(self) -> T:
-        raise self._value
+#     def __call__(self) -> T:
+#         return self._value
+
+
+# class Error(Result[T]):
+#     __slots__ = "_value"
+
+#     def __init__(self, value: BaseException):
+#         self._value = value
+
+#     def __call__(self) -> T:
+#         raise self._value
 
 
 # define Outcome protocol w/ common composition methods
@@ -81,10 +81,17 @@ class Immediate(Outcome[T]):
     def then(self, next: Callable[[Callable[[], T]], R]) -> "Immediate[R]":
         return Immediate(lambda: next(self._func))
 
+        # result = Result[T].make(self._func)
+        # return Immediate(lambda: next(result))
+
     def wrap(
         self, before: Callable[[], Callable[[Callable[[], T]], R]]
     ) -> "Immediate[R]":
         return Immediate(lambda: before()(self._func))
+
+        # after = before()
+        # result = Result[T].make(self._func)
+        # return Immediate(lambda: after(result))
 
     @staticmethod
     def _also(func: Callable[[], T], cm: contextlib.AbstractContextManager[Any, bool]) -> T:  # type: ignore
@@ -120,6 +127,10 @@ class Pending(Outcome[T]):
             return after(lambda: value)
         except BaseException as exp:
             return after(lambda: Pending._raise(exp))
+
+        # after = before()
+        # result = await Result[T].make_async(func)
+        # return after(result)
 
     def wrap(
         self, before: Callable[[], Callable[[Callable[[], T]], R]]

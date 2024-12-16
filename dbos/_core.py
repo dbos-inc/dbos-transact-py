@@ -8,7 +8,7 @@ from concurrent.futures import Future
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
 
-from dbos._result import Immediate, Outcome, Pending
+from dbos._outcome import Immediate, Outcome, Pending
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 
