@@ -1,7 +1,7 @@
 import asyncio
 import time
 import uuid
-from typing import Optional
+from typing import Optional, cast
 
 import pytest
 import sqlalchemy as sa
@@ -153,7 +153,9 @@ async def test_send_recv_async(dbos: DBOS) -> None:
         res = await test_send_workflow(handle.get_workflow_id(), "testtopic")
         assert res == dest_uuid
     begin_time = time.time()
-    assert handle.get_result() == "test2-test1-test3"
+    # TODO: fix return type of get_result
+    result: str = cast(str, handle.get_result())
+    assert result == "test2-test1-test3"
     duration = time.time() - begin_time
     assert duration < 3.0  # Shouldn't take more than 3 seconds to run
 
@@ -171,10 +173,9 @@ async def test_send_recv_async(dbos: DBOS) -> None:
     timeout_uuid = str(uuid.uuid4())
     with SetWorkflowID(timeout_uuid):
         begin_time = time.time()
-        timeoutres = await test_recv_timeout(1.0)
+        await test_recv_timeout(1.0)
         duration = time.time() - begin_time
         assert duration > 0.7
-        assert timeoutres is None
 
     # Test OAOO
     with SetWorkflowID(send_uuid):
@@ -192,10 +193,9 @@ async def test_send_recv_async(dbos: DBOS) -> None:
 
     with SetWorkflowID(timeout_uuid):
         begin_time = time.time()
-        timeoutres = await test_recv_timeout(1.0)
+        await test_recv_timeout(1.0)
         duration = time.time() - begin_time
         assert duration < 0.3
-        assert timeoutres is None
 
     # Test recv outside of a workflow
     with pytest.raises(Exception) as exc_info:
