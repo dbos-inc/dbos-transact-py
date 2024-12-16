@@ -438,7 +438,7 @@ def workflow_wrapper(
         )
 
         # WF Function
-        wfResult = Outcome[R].make(functools.partial(func, *args, **kwargs))
+        wfOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
 
         def init_wf() -> Callable[[Callable[[], R]], R]:
             ctx = assert_current_dbos_context()  # Now the child ctx
@@ -460,7 +460,7 @@ def workflow_wrapper(
             return _get_wf_invoke_func(dbos, status)
 
         result = (
-            wfResult.wrap(init_wf)
+            wfOutcome.wrap(init_wf)
             .also(DBOSAssumeRole(rr))
             .also(enterWorkflowCtxMgr(attributes))
         )
@@ -497,7 +497,7 @@ def decorate_transaction(
                     "operationType": OperationType.TRANSACTION.value,
                 }
                 with EnterDBOSTransaction(session, attributes=attributes):
-                    ctx = cast(DBOSContext, get_local_dbos_context())
+                    ctx = assert_current_dbos_context()
                     txn_output: TransactionResultInternal = {
                         "workflow_uuid": ctx.workflow_id,
                         "function_id": ctx.function_id,
@@ -642,7 +642,7 @@ def decorate_step(
                 "operationType": OperationType.STEP.value,
             }
             with EnterDBOSStep(attributes):
-                ctx = cast(DBOSContext, get_local_dbos_context())
+                ctx = assert_current_dbos_context()
                 step_output: OperationResultInternal = {
                     "workflow_uuid": ctx.workflow_id,
                     "function_id": ctx.function_id,
@@ -758,7 +758,7 @@ def send(
             "name": "send",
         }
         with EnterDBOSStep(attributes):
-            ctx = cast(DBOSContext, get_local_dbos_context())
+            ctx = assert_current_dbos_context()
             dbos._sys_db.send(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
@@ -786,7 +786,7 @@ def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60)
             "name": "recv",
         }
         with EnterDBOSStep(attributes):
-            ctx = cast(DBOSContext, get_local_dbos_context())
+            ctx = assert_current_dbos_context()
             ctx.function_id += 1  # Reserve for the sleep
             timeout_function_id = ctx.function_id
             return dbos._sys_db.recv(
@@ -812,7 +812,7 @@ def set_event(dbos: "DBOS", key: str, value: Any) -> None:
             "name": "set_event",
         }
         with EnterDBOSStep(attributes):
-            ctx = cast(DBOSContext, get_local_dbos_context())
+            ctx = assert_current_dbos_context()
             dbos._sys_db.set_event(
                 ctx.workflow_id, ctx.curr_step_function_id, key, value
             )
@@ -834,7 +834,7 @@ def get_event(
             "name": "get_event",
         }
         with EnterDBOSStep(attributes):
-            ctx = cast(DBOSContext, get_local_dbos_context())
+            ctx = assert_current_dbos_context()
             ctx.function_id += 1
             timeout_function_id = ctx.function_id
             caller_ctx: GetEventWorkflowContext = {

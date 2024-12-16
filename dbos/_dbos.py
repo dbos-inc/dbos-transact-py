@@ -634,7 +634,7 @@ class DBOS:
                 "name": "sleep",
             }
             with EnterDBOSStep(attributes):
-                ctx = cast(DBOSContext, get_local_dbos_context())
+                ctx = assert_current_dbos_context()
                 _get_dbos_instance()._sys_db.sleep(
                     ctx.workflow_id, ctx.curr_step_function_id, seconds
                 )
