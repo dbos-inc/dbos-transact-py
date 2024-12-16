@@ -437,7 +437,6 @@ def workflow_wrapper(
             EnterDBOSChildWorkflow if ctx and ctx.is_workflow() else EnterDBOSWorkflow
         )
 
-        # WF Function
         wfOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
 
         def init_wf() -> Callable[[Callable[[], R]], R]:
@@ -459,13 +458,12 @@ def workflow_wrapper(
 
             return _get_wf_invoke_func(dbos, status)
 
-        result = (
+        outcome = (
             wfOutcome.wrap(init_wf)
             .also(DBOSAssumeRole(rr))
             .also(enterWorkflowCtxMgr(attributes))
         )
-        output = result()
-        return output  # type: ignore
+        return outcome()  # type: ignore
 
     return wrapper
 
@@ -641,7 +639,28 @@ def decorate_step(
                 "name": func.__name__,
                 "operationType": OperationType.STEP.value,
             }
-            with EnterDBOSStep(attributes):
+
+            attempts = max_attempts if retries_allowed else 1
+            max_retry_interval_seconds: float = 3600  # 1 Hour
+
+            def on_exception(attempt: int, error: BaseException) -> float:
+                dbos.logger.warning(
+                    f"Step being automatically retried. (attempt {attempt} of {attempts}). {traceback.format_exc()}"
+                )
+                ctx = assert_current_dbos_context()
+                ctx.get_current_span().add_event(
+                    f"Step attempt {attempt} failed",
+                    {
+                        "error": str(error),
+                        "retryIntervalSeconds": interval_seconds,
+                    },
+                )
+                return min(
+                    interval_seconds * (backoff_rate**attempt),
+                    max_retry_interval_seconds,
+                )
+
+            def record_step_result(func: Callable[[], R]) -> R:
                 ctx = assert_current_dbos_context()
                 step_output: OperationResultInternal = {
                     "workflow_uuid": ctx.workflow_id,
@@ -649,6 +668,19 @@ def decorate_step(
                     "output": None,
                     "error": None,
                 }
+
+                try:
+                    output = func()
+                    step_output["output"] = _serialization.serialize(output)
+                    return output
+                except Exception as error:
+                    step_output["error"] = _serialization.serialize_exception(error)
+                    raise
+                finally:
+                    dbos._sys_db.record_operation_result(step_output)
+
+            def check_existing_result() -> Optional[R]:
+                ctx = assert_current_dbos_context()
                 recorded_output = dbos._sys_db.check_operation_execution(
                     ctx.workflow_id, ctx.function_id
                 )
@@ -662,57 +694,29 @@ def decorate_step(
                         )
                         raise deserialized_error
                     elif recorded_output["output"] is not None:
-                        return _serialization.deserialize(recorded_output["output"])
+                        return cast(
+                            R, _serialization.deserialize(recorded_output["output"])
+                        )
                     else:
                         raise Exception("Output and error are both None")
                 else:
                     dbos.logger.debug(
                         f"Running step, id: {ctx.function_id}, name: {attributes['name']}"
                     )
+                    return None
 
-                output = None
-                error = None
-                local_max_attempts = max_attempts if retries_allowed else 1
-                max_retry_interval_seconds: float = 3600  # 1 Hour
-                local_interval_seconds = interval_seconds
-                for attempt in range(1, local_max_attempts + 1):
-                    try:
-                        output = func(*args, **kwargs)
-                        step_output["output"] = _serialization.serialize(output)
-                        error = None
-                        break
-                    except Exception as err:
-                        error = err
-                        if retries_allowed:
-                            dbos.logger.warning(
-                                f"Step being automatically retried. (attempt {attempt} of {local_max_attempts}). {traceback.format_exc()}"
-                            )
-                            ctx.get_current_span().add_event(
-                                f"Step attempt {attempt} failed",
-                                {
-                                    "error": str(error),
-                                    "retryIntervalSeconds": local_interval_seconds,
-                                },
-                            )
-                            if attempt == local_max_attempts:
-                                error = DBOSMaxStepRetriesExceeded()
-                            else:
-                                time.sleep(local_interval_seconds)
-                                local_interval_seconds = min(
-                                    local_interval_seconds * backoff_rate,
-                                    max_retry_interval_seconds,
-                                )
-
-                step_output["error"] = (
-                    _serialization.serialize_exception(error)
-                    if error is not None
-                    else None
+            stepOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
+            if retries_allowed:
+                stepOutcome = stepOutcome.retry(
+                    max_attempts, on_exception, lambda i: DBOSMaxStepRetriesExceeded()
                 )
-                dbos._sys_db.record_operation_result(step_output)
 
-                if error is not None:
-                    raise error
-                return output
+            outcome = (
+                stepOutcome.then(record_step_result)
+                .intercept(check_existing_result)
+                .also(EnterDBOSStep(attributes))
+            )
+            return outcome()
 
         fi = get_or_create_func_info(func)
 

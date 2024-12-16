@@ -2,50 +2,10 @@ import asyncio
 import contextlib
 import inspect
 import time
-from typing import Any, Callable, Coroutine, Protocol, TypeVar, Union, cast
+from typing import Any, Callable, Coroutine, Optional, Protocol, TypeVar, Union, cast
 
 T = TypeVar("T")
 R = TypeVar("R")
-
-
-# class Result(Protocol[T]):
-#     def __call__(self) -> T: ...
-
-#     @staticmethod
-#     def make(func: Callable[[], T]) -> "Result[T]":
-#         try:
-#             value = func()
-#             return Ok[T](value)
-#         except BaseException as exp:
-#             return Error[T](exp)
-
-#     @staticmethod
-#     async def make_async(func: Callable[[], Coroutine[Any, Any, T]]) -> "Result[T]":
-#         try:
-#             value = await func()
-#             return Ok[T](value)
-#         except BaseException as exp:
-#             return Error[T](exp)
-
-
-# class Ok(Result[T]):
-#     __slots__ = "_value"
-
-#     def __init__(self, value: T):
-#         self._value = value
-
-#     def __call__(self) -> T:
-#         return self._value
-
-
-# class Error(Result[T]):
-#     __slots__ = "_value"
-
-#     def __init__(self, value: BaseException):
-#         self._value = value
-
-#     def __call__(self) -> T:
-#         raise self._value
 
 
 # define Outcome protocol w/ common composition methods
@@ -67,6 +27,8 @@ class Outcome(Protocol[T]):
         on_exception: Callable[[int, BaseException], float],
         exceeded_retries: Callable[[int], BaseException],
     ) -> "Outcome[T]": ...
+
+    def intercept(self, interceptor: Callable[[], Optional[T]]) -> "Outcome[T]": ...
 
     def __call__(self) -> Union[T, Coroutine[Any, Any, T]]: ...
 
@@ -90,17 +52,18 @@ class Immediate(Outcome[T]):
     def then(self, next: Callable[[Callable[[], T]], R]) -> "Immediate[R]":
         return Immediate(lambda: next(self._func))
 
-        # result = Result[T].make(self._func)
-        # return Immediate(lambda: next(result))
-
     def wrap(
         self, before: Callable[[], Callable[[Callable[[], T]], R]]
     ) -> "Immediate[R]":
         return Immediate(lambda: before()(self._func))
 
-        # after = before()
-        # result = Result[T].make(self._func)
-        # return Immediate(lambda: after(result))
+    @staticmethod
+    def _intercept(func: Callable[[], T], interceptor: Callable[[], Optional[T]]) -> T:
+        intercepted = interceptor()
+        return intercepted if intercepted else func()
+
+    def intercept(self, interceptor: Callable[[], Optional[T]]) -> "Immediate[T]":
+        return Immediate[T](lambda: Immediate._intercept(self._func, interceptor))
 
     @staticmethod
     def _also(func: Callable[[], T], cm: contextlib.AbstractContextManager[Any, bool]) -> T:  # type: ignore
@@ -132,6 +95,7 @@ class Immediate(Outcome[T]):
         on_exception: Callable[[int, BaseException], float],
         exceeded_retries: Callable[[int], BaseException],
     ) -> "Immediate[T]":
+        assert attempts > 0
         return Immediate[T](
             lambda: Immediate._retry(
                 self._func, attempts, on_exception, exceeded_retries
@@ -165,10 +129,6 @@ class Pending(Outcome[T]):
         except BaseException as exp:
             return after(lambda: Pending._raise(exp))
 
-        # after = before()
-        # result = await Result[T].make_async(func)
-        # return after(result)
-
     def wrap(
         self, before: Callable[[], Callable[[Callable[[], T]], R]]
     ) -> "Pending[R]":
@@ -187,6 +147,17 @@ class Pending(Outcome[T]):
 
     def also(self, cm: contextlib.AbstractContextManager[Any, bool]) -> "Pending[T]":
         return Pending[T](lambda: Pending._also(self._func, cm))
+
+    @staticmethod
+    async def _intercept(
+        func: Callable[[], Coroutine[Any, Any, T]],
+        interceptor: Callable[[], Optional[T]],
+    ) -> T:
+        intercepted = interceptor()
+        return intercepted if intercepted else await func()
+
+    def intercept(self, interceptor: Callable[[], Optional[T]]) -> "Pending[T]":
+        return Pending[T](lambda: Pending._intercept(self._func, interceptor))
 
     @staticmethod
     async def _retry(
@@ -210,6 +181,7 @@ class Pending(Outcome[T]):
         on_exception: Callable[[int, BaseException], float],
         exceeded_retries: Callable[[int], BaseException],
     ) -> "Pending[T]":
+        assert attempts > 0
         return Pending[T](
             lambda: Pending._retry(self._func, attempts, on_exception, exceeded_retries)
         )
