@@ -16,6 +16,10 @@ def before(func: Callable[[], None]) -> Callable[[Callable[[], int]], str]:
     return after
 
 
+class ExceededRetries(Exception):
+    pass
+
+
 def test_immediate() -> None:
 
     func_called = False
@@ -40,6 +44,25 @@ def test_immediate() -> None:
     assert isinstance(o3, Immediate)
     out2 = o3()
     assert out2 == "Result: 70"
+
+
+def test_immediate_retry() -> None:
+
+    count = 0
+
+    def raiser() -> int:
+        nonlocal count
+        count += 1
+        raise Exception("Error")
+
+    o1 = Outcome[int].make(raiser)
+    o2 = o1.retry(3, lambda i, e: 0.1, lambda i: ExceededRetries())
+
+    assert isinstance(o2, Immediate)
+    with pytest.raises(ExceededRetries):
+        o2()
+
+    assert count == 3
 
 
 @pytest.mark.asyncio
@@ -69,3 +92,23 @@ async def test_pending() -> None:
     assert isinstance(o3, Pending)
     out2 = await o3()
     assert out2 == "Result: 70"
+
+
+@pytest.mark.asyncio
+async def test_pending_retry() -> None:
+
+    count = 0
+
+    async def raiser() -> int:
+        nonlocal count
+        count += 1
+        raise Exception("Error")
+
+    o1 = Outcome[int].make(raiser)
+    o2 = o1.retry(3, lambda i, e: 0.1, lambda i: ExceededRetries())
+
+    assert isinstance(o2, Pending)
+    with pytest.raises(ExceededRetries):
+        await o2()
+
+    assert count == 3

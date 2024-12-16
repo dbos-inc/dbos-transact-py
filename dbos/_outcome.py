@@ -1,5 +1,7 @@
+import asyncio
 import contextlib
 import inspect
+import time
 from typing import Any, Callable, Coroutine, Protocol, TypeVar, Union, cast
 
 T = TypeVar("T")
@@ -59,6 +61,13 @@ class Outcome(Protocol[T]):
         self, cm: contextlib.AbstractContextManager[Any, bool]
     ) -> "Outcome[T]": ...
 
+    def retry(
+        self,
+        attempts: int,
+        on_exception: Callable[[int, BaseException], float],
+        exceeded_retries: Callable[[int], BaseException],
+    ) -> "Outcome[T]": ...
+
     def __call__(self) -> Union[T, Coroutine[Any, Any, T]]: ...
 
     # Helper function to create an Immediate or Pending Result, depending on if func is a coroutine function or not
@@ -100,6 +109,34 @@ class Immediate(Outcome[T]):
 
     def also(self, cm: contextlib.AbstractContextManager[Any, bool]) -> "Immediate[T]":
         return Immediate[T](lambda: Immediate._also(self._func, cm))
+
+    @staticmethod
+    def _retry(
+        func: Callable[[], T],
+        attempts: int,
+        on_exception: Callable[[int, BaseException], float],
+        exceeded_retries: Callable[[int], BaseException],
+    ) -> T:
+        for i in range(attempts):
+            try:
+                return func()
+            except Exception as exp:
+                wait_time = on_exception(i, exp)
+                time.sleep(wait_time)
+
+        raise exceeded_retries(attempts)
+
+    def retry(
+        self,
+        attempts: int,
+        on_exception: Callable[[int, BaseException], float],
+        exceeded_retries: Callable[[int], BaseException],
+    ) -> "Immediate[T]":
+        return Immediate[T](
+            lambda: Immediate._retry(
+                self._func, attempts, on_exception, exceeded_retries
+            )
+        )
 
     def __call__(self) -> T:
         return self._func()
@@ -150,6 +187,32 @@ class Pending(Outcome[T]):
 
     def also(self, cm: contextlib.AbstractContextManager[Any, bool]) -> "Pending[T]":
         return Pending[T](lambda: Pending._also(self._func, cm))
+
+    @staticmethod
+    async def _retry(
+        func: Callable[[], Coroutine[Any, Any, T]],
+        attempts: int,
+        on_exception: Callable[[int, BaseException], float],
+        exceeded_retries: Callable[[int], BaseException],
+    ) -> T:
+        for i in range(attempts):
+            try:
+                return await func()
+            except Exception as exp:
+                wait_time = on_exception(i, exp)
+                await asyncio.sleep(wait_time)
+
+        raise exceeded_retries(attempts)
+
+    def retry(
+        self,
+        attempts: int,
+        on_exception: Callable[[int, BaseException], float],
+        exceeded_retries: Callable[[int], BaseException],
+    ) -> "Pending[T]":
+        return Pending[T](
+            lambda: Pending._retry(self._func, attempts, on_exception, exceeded_retries)
+        )
 
     async def __call__(self) -> T:
         return await self._func()
