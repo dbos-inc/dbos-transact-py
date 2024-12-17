@@ -6,7 +6,19 @@ import time
 import traceback
 from concurrent.futures import Future
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Coroutine,
+    Generic,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
 
 from dbos._outcome import Immediate, Outcome, Pending
 
@@ -316,9 +328,31 @@ def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[An
                 )
 
 
+@overload
+def start_workflow(
+    dbos: "DBOS",
+    func: "Workflow[P, Coroutine[Any, Any, R]]",
+    queue_name: Optional[str],
+    execute_workflow: bool,
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> "WorkflowHandle[R]": ...
+
+
+@overload
 def start_workflow(
     dbos: "DBOS",
     func: "Workflow[P, R]",
+    queue_name: Optional[str],
+    execute_workflow: bool,
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> "WorkflowHandle[R]": ...
+
+
+def start_workflow(
+    dbos: "DBOS",
+    func: "Workflow[P, Union[R, Coroutine[Any, Any, R]]]",
     queue_name: Optional[str],
     execute_workflow: bool,
     *args: P.args,

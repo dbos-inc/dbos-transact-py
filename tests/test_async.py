@@ -153,9 +153,7 @@ async def test_send_recv_async(dbos: DBOS) -> None:
         res = await test_send_workflow(handle.get_workflow_id(), "testtopic")
         assert res == dest_uuid
     begin_time = time.time()
-    # TODO: fix return type of get_result
-    result: str = cast(str, handle.get_result())
-    assert result == "test2-test1-test3"
+    assert handle.get_result() == "test2-test1-test3"
     duration = time.time() - begin_time
     assert duration < 3.0  # Shouldn't take more than 3 seconds to run
 

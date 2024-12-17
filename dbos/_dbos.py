@@ -14,6 +14,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Coroutine,
     Generic,
     List,
     Literal,
@@ -22,7 +23,9 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
+    Union,
     cast,
+    overload,
 )
 
 from opentelemetry.trace import Span
@@ -545,15 +548,36 @@ class DBOS:
                 f"{e.name} dependency not found. Please install {e.name} via your package manager."
             ) from e
 
+    @overload
+    @classmethod
+    def start_workflow(
+        cls,
+        func: Workflow[P, Coroutine[Any, Any, R]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> WorkflowHandle[R]: ...
+
+    @overload
     @classmethod
     def start_workflow(
         cls,
         func: Workflow[P, R],
         *args: P.args,
         **kwargs: P.kwargs,
+    ) -> WorkflowHandle[R]: ...
+
+    @classmethod
+    def start_workflow(
+        cls,
+        func: Workflow[P, Union[R, Coroutine[Any, Any, R]]],
+        *args: P.args,
+        **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
-        return start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs)
+        return cast(
+            WorkflowHandle[R],
+            start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs),
+        )
 
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
