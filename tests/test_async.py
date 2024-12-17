@@ -64,7 +64,6 @@ async def test_async_step(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def test_workflow(var1: str, var2: str) -> str:
-        ctx = get_local_dbos_context()
         nonlocal wf_counter
         wf_counter += 1
         res1 = test_transaction(var1)
