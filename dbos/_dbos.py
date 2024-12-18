@@ -654,7 +654,7 @@ class DBOS:
         Receive a workflow message.
 
         This function is to be called from within a workflow.
-        `recv` will return the message sent on `topic`, waiting if necessary.
+        `recv_async` will return the message sent on `topic`, asyncronously waiting if necessary.
         """
         return await asyncio.to_thread(lambda: DBOS.recv(topic, timeout_seconds))
 
@@ -663,8 +663,8 @@ class DBOS:
         """
         Sleep for the specified time (in seconds).
 
-        It is important to use `DBOS.sleep` (as opposed to any other sleep) within workflows,
-        as the `DBOS.sleep`s are durable and completed sleeps will be skipped during recovery.
+        It is important to use `DBOS.sleep` or `DBOS.sleep_async` (as opposed to any other sleep) within workflows,
+        as the DBOS sleep methods are durable and completed sleeps will be skipped during recovery.
         """
         if seconds <= 0:
             return
@@ -691,8 +691,8 @@ class DBOS:
         """
         Sleep for the specified time (in seconds).
 
-        It is important to use `DBOS.sleep` (as opposed to any other sleep) within workflows,
-        as the `DBOS.sleep`s are durable and completed sleeps will be skipped during recovery.
+        It is important to use `DBOS.sleep` or `DBOS.sleep_async` (as opposed to any other sleep) within workflows,
+        as the DBOS sleep methods are durable and completed sleeps will be skipped during recovery.
         """
         await asyncio.to_thread(lambda: DBOS.sleep(seconds))
 
@@ -701,12 +701,10 @@ class DBOS:
         """
         Set a workflow event.
 
-        This function is to be called from within a workflow.
-
         `set_event` sets the `value` of `key` for the current workflow instance ID.
         This `value` can then be retrieved by other functions, using `get_event` below.
-
-        Each workflow invocation should only call set_event once per `key`.
+        If the event `key` already exists, its `value` is updated.
+        This function can only be called from within a workflow.
 
         Args:
             key(str): The event key / name within the workflow
@@ -720,12 +718,10 @@ class DBOS:
         """
         Set a workflow event.
 
-        This function is to be called from within a workflow.
-
-        `set_event` sets the `value` of `key` for the current workflow instance ID.
+        `set_event_async` sets the `value` of `key` for the current workflow instance ID.
         This `value` can then be retrieved by other functions, using `get_event` below.
-
-        Each workflow invocation should only call set_event once per `key`.
+        If the event `key` already exists, its `value` is updated.
+        This function can only be called from within a workflow.
 
         Args:
             key(str): The event key / name within the workflow
@@ -756,7 +752,7 @@ class DBOS:
         """
         Return the `value` of a workflow event, waiting for it to occur if necessary.
 
-        `get_event` waits for a corresponding `set_event` by the workflow with ID `workflow_id` with the same `key`.
+        `get_event_async` waits for a corresponding `set_event` by the workflow with ID `workflow_id` with the same `key`.
 
         Args:
             workflow_id(str): The workflow instance ID that is expected to call `set_event` on `key`
