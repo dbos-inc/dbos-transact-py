@@ -780,9 +780,13 @@ def decorate_step(
                 assert tempwf
                 return tempwf(*args, **kwargs)
 
-        def temp_wf(*args: Any, **kwargs: Any) -> Any:
+        def temp_wf_sync(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
 
+        async def temp_wf_async(*args: Any, **kwargs: Any) -> Any:
+            return await wrapper(*args, **kwargs)
+
+        temp_wf = temp_wf_async if inspect.iscoroutinefunction(func) else temp_wf_sync
         wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "step")

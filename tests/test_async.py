@@ -304,3 +304,28 @@ def test_async_tx_raises(config: ConfigFile) -> None:
 
     # destroy call needed to avoid "functions were registered but DBOS() was not called" warning
     DBOS.destroy()
+
+
+@pytest.mark.asyncio
+async def test_async_step_temp(dbos: DBOS) -> None:
+    step_counter: int = 0
+
+    @DBOS.step()
+    async def test_step(var: str) -> str:
+        await asyncio.sleep(0.1)
+        nonlocal step_counter
+        step_counter += 1
+        DBOS.logger.info("I'm test_step")
+        return var + f"step{step_counter}"
+
+    wfuuid = f"test_async_step_temp-{time.time_ns()}"
+    with SetWorkflowID(wfuuid):
+        result = await test_step("alice")
+        assert result == "alicestep1"
+    dbos._sys_db.wait_for_buffer_flush()
+
+    with SetWorkflowID(wfuuid):
+        result = await test_step("alice")
+        assert result == "alicestep1"
+
+    assert step_counter == 1
