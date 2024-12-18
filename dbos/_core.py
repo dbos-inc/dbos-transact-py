@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import inspect
 import json
 import sys
 import time
@@ -617,6 +618,11 @@ def decorate_transaction(
                                 dbos._app_db.record_transaction_error(txn_output)
                             raise
             return output
+
+        if inspect.iscoroutinefunction(func):
+            raise DBOSException(
+                f"Function {func.__name__} is a coroutine function, but DBOS.transaction does not support coroutine functions"
+            )
 
         fi = get_or_create_func_info(func)
 

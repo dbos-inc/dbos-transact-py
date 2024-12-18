@@ -1,14 +1,15 @@
 import asyncio
 import time
 import uuid
-from typing import Optional, cast
+from typing import Optional
 
 import pytest
 import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, SetWorkflowID
-from dbos._context import get_local_dbos_context
+from dbos._dbos_config import ConfigFile
+from dbos._error import DBOSException
 
 
 @pytest.mark.asyncio
@@ -291,3 +292,15 @@ async def test_sleep(dbos: DBOS) -> None:
     with SetWorkflowID(sleep_uuid):
         assert (await test_sleep_workflow(1.5)) == sleep_uuid
         assert time.time() - start_time < 0.3
+
+
+def test_async_tx_raises(config: ConfigFile) -> None:
+
+    with pytest.raises(DBOSException) as exc_info:
+
+        @DBOS.transaction()
+        async def test_async_tx() -> None:
+            pass
+
+    # destroy call needed to avoid "functions were registered but DBOS() was not called" warning
+    DBOS.destroy()
