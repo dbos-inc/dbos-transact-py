@@ -47,8 +47,7 @@ def test_spans(dbos: DBOS) -> None:
 
 
 def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
-
-    dbos, app = dbos_fastapi
+    _, app = dbos_fastapi
 
     @app.get("/step")
     @DBOS.step()
