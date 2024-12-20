@@ -41,7 +41,7 @@ def test_spans(dbos: DBOS) -> None:
     assert spans[1].name == test_workflow.__name__
     assert spans[2].name == test_step.__name__
 
-    assert spans[0].parent.span_id == spans[1].context.span_id
+    assert spans[0].parent.span_id == spans[1].context.span_id  # type: ignore
     assert spans[1].parent == None
     assert spans[2].parent == None
 
@@ -51,7 +51,7 @@ def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     @app.get("/step")
     @DBOS.step()
-    def test_step_endpoint() -> None:
+    def test_step_endpoint() -> str:
         return "test"
 
     exporter = InMemorySpanExporter()
@@ -76,5 +76,5 @@ def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert spans[0].name == test_step_endpoint.__name__
     assert spans[1].name == "/step"
 
-    assert spans[0].parent.span_id == spans[1].context.span_id
+    assert spans[0].parent.span_id == spans[1].context.span_id  # type:ignore
     assert spans[1].parent == None
