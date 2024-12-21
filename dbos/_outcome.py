@@ -122,12 +122,12 @@ class Pending(Outcome[T]):
         func: Callable[[], Coroutine[Any, Any, T]],
         before: Callable[[], Callable[[Callable[[], T]], R]],
     ) -> R:
-        after = before()
+        after = await asyncio.to_thread(before)
         try:
             value = await func()
-            return after(lambda: value)
+            return await asyncio.to_thread(after, lambda: value)
         except BaseException as exp:
-            return after(lambda: Pending._raise(exp))
+            return await asyncio.to_thread(after, lambda: Pending._raise(exp))
 
     def wrap(
         self, before: Callable[[], Callable[[Callable[[], T]], R]]
@@ -153,7 +153,7 @@ class Pending(Outcome[T]):
         func: Callable[[], Coroutine[Any, Any, T]],
         interceptor: Callable[[], Optional[T]],
     ) -> T:
-        intercepted = interceptor()
+        intercepted = await asyncio.to_thread(interceptor)
         return intercepted if intercepted else await func()
 
     def intercept(self, interceptor: Callable[[], Optional[T]]) -> "Pending[T]":
