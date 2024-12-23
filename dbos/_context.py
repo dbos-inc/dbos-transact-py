@@ -358,9 +358,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
     def __init__(self, attributes: TracedAttributes) -> None:
         self.created_ctx = False
         self.attributes = attributes
-        self.is_temp_workflow = (attributes["name"] == "temp_wf_sync") or (
-            attributes["name"] == "temp_wf_async"
-        )
+        self.is_temp_workflow = attributes["name"] == "temp_wf"
 
     def __enter__(self) -> DBOSContext:
         # Code to create a basic context
