@@ -98,18 +98,27 @@ class DBOSContext:
             wfid = str(uuid.uuid4())
         return wfid
 
-    def start_workflow(self, wfid: Optional[str], attributes: TracedAttributes) -> None:
+    def start_workflow(
+        self,
+        wfid: Optional[str],
+        attributes: TracedAttributes,
+        is_temp_workflow: bool = False,
+    ) -> None:
         if wfid is None or len(wfid) == 0:
             wfid = self.assign_workflow_id()
             self.id_assigned_for_next_workflow = ""
         self.workflow_id = wfid
         self.function_id = 0
-        self._start_span(attributes)
+        if not is_temp_workflow:
+            self._start_span(attributes)
 
-    def end_workflow(self, exc_value: Optional[BaseException]) -> None:
+    def end_workflow(
+        self, exc_value: Optional[BaseException], is_temp_workflow: bool = False
+    ) -> None:
         self.workflow_id = ""
         self.function_id = -1
-        self._end_span(exc_value)
+        if not is_temp_workflow:
+            self._end_span(exc_value)
 
     def is_within_workflow(self) -> bool:
         return len(self.workflow_id) > 0
@@ -349,6 +358,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
     def __init__(self, attributes: TracedAttributes) -> None:
         self.created_ctx = False
         self.attributes = attributes
+        self.is_temp_workflow = attributes["name"] == "temp_wf"
 
     def __enter__(self) -> DBOSContext:
         # Code to create a basic context
@@ -359,7 +369,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
             _set_local_dbos_context(ctx)
         assert not ctx.is_within_workflow()
         ctx.start_workflow(
-            None, self.attributes
+            None, self.attributes, self.is_temp_workflow
         )  # Will get from the context's next workflow ID
         return ctx
 
@@ -371,7 +381,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
     ) -> Literal[False]:
         ctx = assert_current_dbos_context()
         assert ctx.is_within_workflow()
-        ctx.end_workflow(exc_value)
+        ctx.end_workflow(exc_value, self.is_temp_workflow)
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()
