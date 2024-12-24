@@ -1,10 +1,27 @@
+import asyncio
+import functools
+import inspect
 import json
 import sys
 import time
 import traceback
 from concurrent.futures import Future
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Coroutine,
+    Generic,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
+
+from dbos._outcome import Immediate, Outcome, Pending
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 
@@ -181,39 +198,38 @@ def _init_workflow(
     return status
 
 
-def _execute_workflow(
+def _get_wf_invoke_func(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
-    func: "Workflow[P, R]",
-    *args: Any,
-    **kwargs: Any,
-) -> R:
-    try:
-        output = func(*args, **kwargs)
-        status["status"] = "SUCCESS"
-        status["output"] = _serialization.serialize(output)
-        if status["queue_name"] is not None:
-            queue = dbos._registry.queue_info_map[status["queue_name"]]
-            dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-        dbos._sys_db.buffer_workflow_status(status)
-    except DBOSWorkflowConflictIDError:
-        # Retrieve the workflow handle and wait for the result.
-        # Must use existing_workflow=False because workflow status might not be set yet for single transaction workflows.
-        wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(
-            status["workflow_uuid"], existing_workflow=False
-        )
-        output = wf_handle.get_result()
-        return output
-    except Exception as error:
-        status["status"] = "ERROR"
-        status["error"] = _serialization.serialize_exception(error)
-        if status["queue_name"] is not None:
-            queue = dbos._registry.queue_info_map[status["queue_name"]]
-            dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-        dbos._sys_db.update_workflow_status(status)
-        raise
+) -> Callable[[Callable[[], R]], R]:
+    def persist(func: Callable[[], R]) -> R:
+        try:
+            output = func()
+            status["status"] = "SUCCESS"
+            status["output"] = _serialization.serialize(output)
+            if status["queue_name"] is not None:
+                queue = dbos._registry.queue_info_map[status["queue_name"]]
+                dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
+            dbos._sys_db.buffer_workflow_status(status)
+            return output
+        except DBOSWorkflowConflictIDError:
+            # Retrieve the workflow handle and wait for the result.
+            # Must use existing_workflow=False because workflow status might not be set yet for single transaction workflows.
+            wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(
+                status["workflow_uuid"], existing_workflow=False
+            )
+            output = wf_handle.get_result()
+            return output
+        except Exception as error:
+            status["status"] = "ERROR"
+            status["error"] = _serialization.serialize_exception(error)
+            if status["queue_name"] is not None:
+                queue = dbos._registry.queue_info_map[status["queue_name"]]
+                dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
+            dbos._sys_db.update_workflow_status(status)
+            raise
 
-    return output
+    return persist
 
 
 def _execute_workflow_wthread(
@@ -231,7 +247,15 @@ def _execute_workflow_wthread(
     with DBOSContextSwap(ctx):
         with EnterDBOSWorkflow(attributes):
             try:
-                return _execute_workflow(dbos, status, func, *args, **kwargs)
+                result = (
+                    Outcome[R]
+                    .make(functools.partial(func, *args, **kwargs))
+                    .then(_get_wf_invoke_func(dbos, status))
+                )
+                if isinstance(result, Immediate):
+                    return cast(Immediate[R], result)()
+                else:
+                    return asyncio.run(cast(Pending[R], result)())
             except Exception:
                 dbos.logger.error(
                     f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
@@ -305,9 +329,31 @@ def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[An
                 )
 
 
+@overload
+def start_workflow(
+    dbos: "DBOS",
+    func: "Workflow[P, Coroutine[Any, Any, R]]",
+    queue_name: Optional[str],
+    execute_workflow: bool,
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> "WorkflowHandle[R]": ...
+
+
+@overload
 def start_workflow(
     dbos: "DBOS",
     func: "Workflow[P, R]",
+    queue_name: Optional[str],
+    execute_workflow: bool,
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> "WorkflowHandle[R]": ...
+
+
+def start_workflow(
+    dbos: "DBOS",
+    func: "Workflow[P, Union[R, Coroutine[Any, Any, R]]]",
     queue_name: Optional[str],
     execute_workflow: bool,
     *args: P.args,
@@ -396,16 +442,16 @@ def start_workflow(
 
 def workflow_wrapper(
     dbosreg: "DBOSRegistry",
-    func: F,
+    func: Callable[P, R],
     max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
-) -> F:
+) -> Callable[P, R]:
     func.__orig_func = func  # type: ignore
 
     fi = get_or_create_func_info(func)
     fi.max_recovery_attempts = max_recovery_attempts
 
     @wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
+    def wrapper(*args: Any, **kwargs: Any) -> R:
         if dbosreg.dbos is None:
             raise DBOSException(
                 f"Function {func.__name__} invoked before DBOS initialized"
@@ -425,7 +471,10 @@ def workflow_wrapper(
         enterWorkflowCtxMgr = (
             EnterDBOSChildWorkflow if ctx and ctx.is_workflow() else EnterDBOSWorkflow
         )
-        with enterWorkflowCtxMgr(attributes), DBOSAssumeRole(rr):
+
+        wfOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
+
+        def init_wf() -> Callable[[Callable[[], R]], R]:
             ctx = assert_current_dbos_context()  # Now the child ctx
             status = _init_workflow(
                 dbos,
@@ -441,16 +490,23 @@ def workflow_wrapper(
             dbos.logger.debug(
                 f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
             )
-            return _execute_workflow(dbos, status, func, *args, **kwargs)
 
-    wrapped_func = cast(F, wrapper)
-    return wrapped_func
+            return _get_wf_invoke_func(dbos, status)
+
+        outcome = (
+            wfOutcome.wrap(init_wf)
+            .also(DBOSAssumeRole(rr))
+            .also(enterWorkflowCtxMgr(attributes))
+        )
+        return outcome()  # type: ignore
+
+    return wrapper
 
 
 def decorate_workflow(
     reg: "DBOSRegistry", max_recovery_attempts: int
-) -> Callable[[F], F]:
-    def _workflow_decorator(func: F) -> F:
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    def _workflow_decorator(func: Callable[P, R]) -> Callable[P, R]:
         wrapped_func = workflow_wrapper(reg, func, max_recovery_attempts)
         reg.register_wf_function(func.__qualname__, wrapped_func)
         return wrapped_func
@@ -473,7 +529,8 @@ def decorate_transaction(
                     "name": func.__name__,
                     "operationType": OperationType.TRANSACTION.value,
                 }
-                with EnterDBOSTransaction(session, attributes=attributes) as ctx:
+                with EnterDBOSTransaction(session, attributes=attributes):
+                    ctx = assert_current_dbos_context()
                     txn_output: TransactionResultInternal = {
                         "workflow_uuid": ctx.workflow_id,
                         "function_id": ctx.function_id,
@@ -562,6 +619,11 @@ def decorate_transaction(
                             raise
             return output
 
+        if inspect.iscoroutinefunction(func):
+            raise DBOSException(
+                f"Function {func.__name__} is a coroutine function, but DBOS.transaction does not support coroutine functions"
+            )
+
         fi = get_or_create_func_info(func)
 
         @wraps(func)
@@ -603,8 +665,8 @@ def decorate_step(
     interval_seconds: float = 1.0,
     max_attempts: int = 3,
     backoff_rate: float = 2.0,
-) -> Callable[[F], F]:
-    def decorator(func: F) -> F:
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    def decorator(func: Callable[P, R]) -> Callable[P, R]:
 
         def invoke_step(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:
@@ -617,13 +679,48 @@ def decorate_step(
                 "name": func.__name__,
                 "operationType": OperationType.STEP.value,
             }
-            with EnterDBOSStep(attributes) as ctx:
+
+            attempts = max_attempts if retries_allowed else 1
+            max_retry_interval_seconds: float = 3600  # 1 Hour
+
+            def on_exception(attempt: int, error: BaseException) -> float:
+                dbos.logger.warning(
+                    f"Step being automatically retried. (attempt {attempt} of {attempts}). {traceback.format_exc()}"
+                )
+                ctx = assert_current_dbos_context()
+                ctx.get_current_span().add_event(
+                    f"Step attempt {attempt} failed",
+                    {
+                        "error": str(error),
+                        "retryIntervalSeconds": interval_seconds,
+                    },
+                )
+                return min(
+                    interval_seconds * (backoff_rate**attempt),
+                    max_retry_interval_seconds,
+                )
+
+            def record_step_result(func: Callable[[], R]) -> R:
+                ctx = assert_current_dbos_context()
                 step_output: OperationResultInternal = {
                     "workflow_uuid": ctx.workflow_id,
                     "function_id": ctx.function_id,
                     "output": None,
                     "error": None,
                 }
+
+                try:
+                    output = func()
+                    step_output["output"] = _serialization.serialize(output)
+                    return output
+                except Exception as error:
+                    step_output["error"] = _serialization.serialize_exception(error)
+                    raise
+                finally:
+                    dbos._sys_db.record_operation_result(step_output)
+
+            def check_existing_result() -> Optional[R]:
+                ctx = assert_current_dbos_context()
                 recorded_output = dbos._sys_db.check_operation_execution(
                     ctx.workflow_id, ctx.function_id
                 )
@@ -637,57 +734,29 @@ def decorate_step(
                         )
                         raise deserialized_error
                     elif recorded_output["output"] is not None:
-                        return _serialization.deserialize(recorded_output["output"])
+                        return cast(
+                            R, _serialization.deserialize(recorded_output["output"])
+                        )
                     else:
                         raise Exception("Output and error are both None")
                 else:
                     dbos.logger.debug(
                         f"Running step, id: {ctx.function_id}, name: {attributes['name']}"
                     )
+                    return None
 
-                output = None
-                error = None
-                local_max_attempts = max_attempts if retries_allowed else 1
-                max_retry_interval_seconds: float = 3600  # 1 Hour
-                local_interval_seconds = interval_seconds
-                for attempt in range(1, local_max_attempts + 1):
-                    try:
-                        output = func(*args, **kwargs)
-                        step_output["output"] = _serialization.serialize(output)
-                        error = None
-                        break
-                    except Exception as err:
-                        error = err
-                        if retries_allowed:
-                            dbos.logger.warning(
-                                f"Step being automatically retried. (attempt {attempt} of {local_max_attempts}). {traceback.format_exc()}"
-                            )
-                            ctx.get_current_span().add_event(
-                                f"Step attempt {attempt} failed",
-                                {
-                                    "error": str(error),
-                                    "retryIntervalSeconds": local_interval_seconds,
-                                },
-                            )
-                            if attempt == local_max_attempts:
-                                error = DBOSMaxStepRetriesExceeded()
-                            else:
-                                time.sleep(local_interval_seconds)
-                                local_interval_seconds = min(
-                                    local_interval_seconds * backoff_rate,
-                                    max_retry_interval_seconds,
-                                )
-
-                step_output["error"] = (
-                    _serialization.serialize_exception(error)
-                    if error is not None
-                    else None
+            stepOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
+            if retries_allowed:
+                stepOutcome = stepOutcome.retry(
+                    max_attempts, on_exception, lambda i: DBOSMaxStepRetriesExceeded()
                 )
-                dbos._sys_db.record_operation_result(step_output)
 
-                if error is not None:
-                    raise error
-                return output
+            outcome = (
+                stepOutcome.then(record_step_result)
+                .intercept(check_existing_result)
+                .also(EnterDBOSStep(attributes))
+            )
+            return outcome()
 
         fi = get_or_create_func_info(func)
 
@@ -711,16 +780,25 @@ def decorate_step(
                 assert tempwf
                 return tempwf(*args, **kwargs)
 
-        def temp_wf(*args: Any, **kwargs: Any) -> Any:
+        def temp_wf_sync(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
 
+        async def temp_wf_async(*args: Any, **kwargs: Any) -> Any:
+            return await wrapper(*args, **kwargs)
+
+        # Other code in transact-py depends on the name of temporary workflow functions to be "temp_wf"
+        # so set the name of both sync and async temporary workflow functions explicitly
+        temp_wf_sync.__name__ = "temp_wf"
+        temp_wf_async.__name__ = "temp_wf"
+
+        temp_wf = temp_wf_async if inspect.iscoroutinefunction(func) else temp_wf_sync
         wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
         wrapper.__orig_func = temp_wf  # type: ignore
 
-        return cast(F, wrapper)
+        return cast(Callable[P, R], wrapper)
 
     return decorator
 
@@ -732,7 +810,8 @@ def send(
         attributes: TracedAttributes = {
             "name": "send",
         }
-        with EnterDBOSStep(attributes) as ctx:
+        with EnterDBOSStep(attributes):
+            ctx = assert_current_dbos_context()
             dbos._sys_db.send(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
@@ -759,7 +838,8 @@ def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60)
         attributes: TracedAttributes = {
             "name": "recv",
         }
-        with EnterDBOSStep(attributes) as ctx:
+        with EnterDBOSStep(attributes):
+            ctx = assert_current_dbos_context()
             ctx.function_id += 1  # Reserve for the sleep
             timeout_function_id = ctx.function_id
             return dbos._sys_db.recv(
@@ -784,7 +864,8 @@ def set_event(dbos: "DBOS", key: str, value: Any) -> None:
         attributes: TracedAttributes = {
             "name": "set_event",
         }
-        with EnterDBOSStep(attributes) as ctx:
+        with EnterDBOSStep(attributes):
+            ctx = assert_current_dbos_context()
             dbos._sys_db.set_event(
                 ctx.workflow_id, ctx.curr_step_function_id, key, value
             )
@@ -805,7 +886,8 @@ def get_event(
         attributes: TracedAttributes = {
             "name": "get_event",
         }
-        with EnterDBOSStep(attributes) as ctx:
+        with EnterDBOSStep(attributes):
+            ctx = assert_current_dbos_context()
             ctx.function_id += 1
             timeout_function_id = ctx.function_id
             caller_ctx: GetEventWorkflowContext = {
