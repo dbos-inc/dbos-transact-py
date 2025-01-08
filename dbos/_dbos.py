@@ -45,7 +45,7 @@ from ._core import (
     start_workflow,
     workflow_wrapper,
 )
-from ._queue import Queue, _queue_thread
+from ._queue import Queue, queue_thread
 from ._recovery import recover_pending_workflows, startup_recovery_thread
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
@@ -283,6 +283,7 @@ class DBOS:
         self.flask: Optional["Flask"] = flask
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
+        self._executor_id: str = os.environ.get("DBOS__VMID", "local")
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
@@ -383,7 +384,7 @@ class DBOS:
             evt = threading.Event()
             self.stop_events.append(evt)
             bg_queue_thread = threading.Thread(
-                target=_queue_thread, args=(evt, self), daemon=True
+                target=queue_thread, args=(evt, self), daemon=True
             )
             bg_queue_thread.start()
             self._background_threads.append(bg_queue_thread)
