@@ -51,13 +51,13 @@ class Queue:
         return start_workflow(dbos, func, self.name, False, *args, **kwargs)
 
 
-def _queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
+def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     while not stop_event.is_set():
         if stop_event.wait(timeout=1):
             return
         for _, queue in dbos._registry.queue_info_map.items():
             try:
-                wf_ids = dbos._sys_db.start_queued_workflows(queue)
+                wf_ids = dbos._sys_db.start_queued_workflows(queue, dbos._executor_id)
                 for id in wf_ids:
                     execute_workflow_by_id(dbos, id)
             except Exception:

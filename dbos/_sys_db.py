@@ -1104,7 +1104,7 @@ class SystemDatabase:
                 .on_conflict_do_nothing()
             )
 
-    def start_queued_workflows(self, queue: "Queue") -> List[str]:
+    def start_queued_workflows(self, queue: "Queue", executor_id: str) -> List[str]:
         start_time_ms = int(time.time() * 1000)
         if queue.limiter is not None:
             limiter_period_ms = int(queue.limiter["period"] * 1000)
@@ -1159,7 +1159,7 @@ class SystemDatabase:
                     if len(ret_ids) + num_recent_queries >= queue.limiter["limit"]:
                         break
 
-                # To start a function, first set its status to PENDING
+                # To start a function, first set its status to PENDING and update its executor ID
                 c.execute(
                     SystemSchema.workflow_status.update()
                     .where(SystemSchema.workflow_status.c.workflow_uuid == id)
@@ -1167,7 +1167,10 @@ class SystemDatabase:
                         SystemSchema.workflow_status.c.status
                         == WorkflowStatusString.ENQUEUED.value
                     )
-                    .values(status=WorkflowStatusString.PENDING.value)
+                    .values(
+                        status=WorkflowStatusString.PENDING.value,
+                        executor_id=executor_id,
+                    )
                 )
 
                 # Then give it a start time
