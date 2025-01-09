@@ -338,7 +338,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
         return var2 + str(rows[0][0])
 
     @DBOS.transaction()
-    def test_transaction_return_none():
+    def test_transaction_return_none() -> None:
         nonlocal txn_return_none_counter
         DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         txn_return_none_counter += 1
@@ -448,7 +448,7 @@ def test_workflow_returns_none(dbos: DBOS) -> None:
     wf_counter: int = 0
 
     @DBOS.workflow()
-    def test_workflow(var: str, var2: str) -> str:
+    def test_workflow(var: str, var2: str) -> None:
         nonlocal wf_counter
         wf_counter += 1
         assert var == var2 == "bob"
@@ -464,7 +464,7 @@ def test_workflow_returns_none(dbos: DBOS) -> None:
         assert test_workflow("bob", "bob") is None
     assert wf_counter == 2
 
-    handle = DBOS.retrieve_workflow(wfuuid)
+    handle: WorkflowHandle[None] = DBOS.retrieve_workflow(wfuuid)
     assert handle.get_result() == None
     assert wf_counter == 2
 
