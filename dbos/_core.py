@@ -719,7 +719,7 @@ def decorate_step(
                 finally:
                     dbos._sys_db.record_operation_result(step_output)
 
-            def check_existing_result() -> Optional[R]:
+            def check_existing_result() -> Optional[str]:
                 ctx = assert_current_dbos_context()
                 recorded_output = dbos._sys_db.check_operation_execution(
                     ctx.workflow_id, ctx.function_id
@@ -734,14 +734,7 @@ def decorate_step(
                         )
                         raise deserialized_error
                     elif recorded_output["output"] is not None:
-                        return cast(
-                            R,
-                            {
-                                "output": _serialization.deserialize(
-                                    recorded_output["output"]
-                                )
-                            },
-                        )
+                        return recorded_output["output"]
                     else:
                         raise Exception("Output and error are both None")
                 else:
