@@ -21,7 +21,7 @@ from typing import (
     overload,
 )
 
-from dbos._outcome import Immediate, Outcome, Pending
+from dbos._outcome import Immediate, NoResult, Outcome, Pending
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 
@@ -719,7 +719,7 @@ def decorate_step(
                 finally:
                     dbos._sys_db.record_operation_result(step_output)
 
-            def check_existing_result() -> Optional[str]:
+            def check_existing_result() -> Union[NoResult, R]:
                 ctx = assert_current_dbos_context()
                 recorded_output = dbos._sys_db.check_operation_execution(
                     ctx.workflow_id, ctx.function_id
@@ -734,14 +734,16 @@ def decorate_step(
                         )
                         raise deserialized_error
                     elif recorded_output["output"] is not None:
-                        return recorded_output["output"]
+                        return cast(
+                            R, _serialization.deserialize(recorded_output["output"])
+                        )
                     else:
                         raise Exception("Output and error are both None")
                 else:
                     dbos.logger.debug(
                         f"Running step, id: {ctx.function_id}, name: {attributes['name']}"
                     )
-                    return None
+                    return NoResult()
 
             stepOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
             if retries_allowed:

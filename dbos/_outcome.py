@@ -4,10 +4,18 @@ import inspect
 import time
 from typing import Any, Callable, Coroutine, Optional, Protocol, TypeVar, Union, cast
 
-from . import _serialization
-
 T = TypeVar("T")
 R = TypeVar("R")
+
+
+class NoResult:
+    _instance: Optional["NoResult"] = None
+    __slots__ = ()
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> "NoResult":
+        if not cls._instance:
+            cls._instance = super(NoResult, cls).__new__(cls, *args, **kwargs)
+        return cls._instance
 
 
 # define Outcome protocol w/ common composition methods
@@ -30,7 +38,9 @@ class Outcome(Protocol[T]):
         exceeded_retries: Callable[[int], BaseException],
     ) -> "Outcome[T]": ...
 
-    def intercept(self, interceptor: Callable[[], Optional[str]]) -> "Outcome[T]": ...
+    def intercept(
+        self, interceptor: Callable[[], Union[NoResult, T]]
+    ) -> "Outcome[T]": ...
 
     def __call__(self) -> Union[T, Coroutine[Any, Any, T]]: ...
 
@@ -61,14 +71,14 @@ class Immediate(Outcome[T]):
 
     @staticmethod
     def _intercept(
-        func: Callable[[], T], interceptor: Callable[[], Optional[str]]
+        func: Callable[[], T], interceptor: Callable[[], Union[NoResult, T]]
     ) -> T:
         intercepted = interceptor()
-        return (
-            cast(T, _serialization.deserialize(intercepted)) if intercepted else func()
-        )
+        return intercepted if not isinstance(intercepted, NoResult) else func()
 
-    def intercept(self, interceptor: Callable[[], Optional[str]]) -> "Immediate[T]":
+    def intercept(
+        self, interceptor: Callable[[], Union[NoResult, T]]
+    ) -> "Immediate[T]":
         return Immediate[T](lambda: Immediate._intercept(self._func, interceptor))
 
     @staticmethod
@@ -157,16 +167,12 @@ class Pending(Outcome[T]):
     @staticmethod
     async def _intercept(
         func: Callable[[], Coroutine[Any, Any, T]],
-        interceptor: Callable[[], Optional[str]],
+        interceptor: Callable[[], Union[NoResult, T]],
     ) -> T:
         intercepted = await asyncio.to_thread(interceptor)
-        return (
-            cast(T, _serialization.deserialize(intercepted))
-            if intercepted
-            else await func()
-        )
+        return intercepted if not isinstance(intercepted, NoResult) else await func()
 
-    def intercept(self, interceptor: Callable[[], Optional[str]]) -> "Pending[T]":
+    def intercept(self, interceptor: Callable[[], Union[NoResult, T]]) -> "Pending[T]":
         return Pending[T](lambda: Pending._intercept(self._func, interceptor))
 
     @staticmethod
