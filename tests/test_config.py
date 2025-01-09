@@ -315,3 +315,26 @@ def test_local_config_without_name(mocker):
     assert configFile["database"]["password"] == os.environ["PGPASSWORD"]
     assert configFile["database"]["app_db_name"] == "some_app_local"
     assert configFile["database"]["connectionTimeoutMillis"] == 3000
+
+
+def test_db_connect_failed(mocker):
+    mock_config = """
+        name: "some-app"
+        language: "python"
+        runtimeConfig:
+            start:
+                - "python3 main.py"
+        database:
+          hostname: 'somelocalhost'
+          port: 5432
+          username: 'pgu'
+          password: ${PGPASSWORD}
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
+    )
+
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        load_config(mock_filename)
+
+    assert "Could not connect to the database" in str(exc_info.value)

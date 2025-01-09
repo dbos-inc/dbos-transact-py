@@ -17,9 +17,16 @@ def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
         return config
 
     # 2. Check if the database config is the default one. If not, surface a connection error and exit the process.
-    raise DBOSInitializationError(
-        "Could not connect to the database. Please check the database configuration."
-    )
+    db_config = config["database"]
+    if (
+        db_config["hostname"] != "localhost"
+        or db_config["port"] != 5432
+        or db_config["username"] != "postgres"
+    ):
+        raise DBOSInitializationError(
+            "Could not connect to the database. Please check the database configuration."
+        )
+
     # 3. If the database config is the default one, check if the user has Docker properly installed.
 
     # 4. If Docker is installed, prompt the user to start a local Docker based Postgres, and then set the PGPASSWORD to 'dbos' and try to connect to the database.
