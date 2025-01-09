@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import atexit
 import json
 import os
@@ -14,7 +13,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    Coroutine,
     Generic,
     List,
     Literal,
@@ -23,9 +21,6 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
-    Union,
-    cast,
-    overload,
 )
 
 from opentelemetry.trace import Span
@@ -76,7 +71,6 @@ else:
 from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
 from ._context import (
-    DBOSContext,
     EnterDBOSStep,
     TracedAttributes,
     assert_current_dbos_context,
@@ -438,7 +432,7 @@ class DBOS:
     @classmethod
     def workflow(
         cls, *, max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS
-    ) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    ) -> Callable[[F], F]:
         """Decorate a function for use as a DBOS workflow."""
         return decorate_workflow(_get_or_create_dbos_registry(), max_recovery_attempts)
 
@@ -463,7 +457,7 @@ class DBOS:
         interval_seconds: float = 1.0,
         max_attempts: int = 3,
         backoff_rate: float = 2.0,
-    ) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    ) -> Callable[[F], F]:
         """
         Decorate and configure a function for use as a DBOS step.
 
@@ -548,36 +542,15 @@ class DBOS:
                 f"{e.name} dependency not found. Please install {e.name} via your package manager."
             ) from e
 
-    @overload
-    @classmethod
-    def start_workflow(
-        cls,
-        func: Workflow[P, Coroutine[Any, Any, R]],
-        *args: P.args,
-        **kwargs: P.kwargs,
-    ) -> WorkflowHandle[R]: ...
-
-    @overload
     @classmethod
     def start_workflow(
         cls,
         func: Workflow[P, R],
         *args: P.args,
         **kwargs: P.kwargs,
-    ) -> WorkflowHandle[R]: ...
-
-    @classmethod
-    def start_workflow(
-        cls,
-        func: Workflow[P, Union[R, Coroutine[Any, Any, R]]],
-        *args: P.args,
-        **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
-        return cast(
-            WorkflowHandle[R],
-            start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs),
-        )
+        return start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs)
 
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
@@ -630,13 +603,6 @@ class DBOS:
         return send(_get_dbos_instance(), destination_id, message, topic)
 
     @classmethod
-    async def send_async(
-        cls, destination_id: str, message: Any, topic: Optional[str] = None
-    ) -> None:
-        """Send a message to a workflow execution."""
-        await asyncio.to_thread(lambda: DBOS.send(destination_id, message, topic))
-
-    @classmethod
     def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
         """
         Receive a workflow message.
@@ -647,24 +613,12 @@ class DBOS:
         return recv(_get_dbos_instance(), topic, timeout_seconds)
 
     @classmethod
-    async def recv_async(
-        cls, topic: Optional[str] = None, timeout_seconds: float = 60
-    ) -> Any:
-        """
-        Receive a workflow message.
-
-        This function is to be called from within a workflow.
-        `recv_async` will return the message sent on `topic`, asyncronously waiting if necessary.
-        """
-        return await asyncio.to_thread(lambda: DBOS.recv(topic, timeout_seconds))
-
-    @classmethod
     def sleep(cls, seconds: float) -> None:
         """
         Sleep for the specified time (in seconds).
 
-        It is important to use `DBOS.sleep` or `DBOS.sleep_async` (as opposed to any other sleep) within workflows,
-        as the DBOS sleep methods are durable and completed sleeps will be skipped during recovery.
+        It is important to use `DBOS.sleep` (as opposed to any other sleep) within workflows,
+        as the `DBOS.sleep`s are durable and completed sleeps will be skipped during recovery.
         """
         if seconds <= 0:
             return
@@ -677,8 +631,7 @@ class DBOS:
             attributes: TracedAttributes = {
                 "name": "sleep",
             }
-            with EnterDBOSStep(attributes):
-                ctx = assert_current_dbos_context()
+            with EnterDBOSStep(attributes) as ctx:
                 _get_dbos_instance()._sys_db.sleep(
                     ctx.workflow_id, ctx.curr_step_function_id, seconds
                 )
@@ -687,24 +640,16 @@ class DBOS:
             raise DBOSException("sleep() must be called from within a workflow")
 
     @classmethod
-    async def sleep_async(cls, seconds: float) -> None:
-        """
-        Sleep for the specified time (in seconds).
-
-        It is important to use `DBOS.sleep` or `DBOS.sleep_async` (as opposed to any other sleep) within workflows,
-        as the DBOS sleep methods are durable and completed sleeps will be skipped during recovery.
-        """
-        await asyncio.to_thread(lambda: DBOS.sleep(seconds))
-
-    @classmethod
     def set_event(cls, key: str, value: Any) -> None:
         """
         Set a workflow event.
 
+        This function is to be called from within a workflow.
+
         `set_event` sets the `value` of `key` for the current workflow instance ID.
         This `value` can then be retrieved by other functions, using `get_event` below.
-        If the event `key` already exists, its `value` is updated.
-        This function can only be called from within a workflow.
+
+        Each workflow invocation should only call set_event once per `key`.
 
         Args:
             key(str): The event key / name within the workflow
@@ -712,23 +657,6 @@ class DBOS:
 
         """
         return set_event(_get_dbos_instance(), key, value)
-
-    @classmethod
-    async def set_event_async(cls, key: str, value: Any) -> None:
-        """
-        Set a workflow event.
-
-        `set_event_async` sets the `value` of `key` for the current workflow instance ID.
-        This `value` can then be retrieved by other functions, using `get_event` below.
-        If the event `key` already exists, its `value` is updated.
-        This function can only be called from within a workflow.
-
-        Args:
-            key(str): The event key / name within the workflow
-            value(Any): A serializable value to associate with the key
-
-        """
-        await asyncio.to_thread(lambda: DBOS.set_event(key, value))
 
     @classmethod
     def get_event(cls, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:
@@ -744,25 +672,6 @@ class DBOS:
 
         """
         return get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
-
-    @classmethod
-    async def get_event_async(
-        cls, workflow_id: str, key: str, timeout_seconds: float = 60
-    ) -> Any:
-        """
-        Return the `value` of a workflow event, waiting for it to occur if necessary.
-
-        `get_event_async` waits for a corresponding `set_event` by the workflow with ID `workflow_id` with the same `key`.
-
-        Args:
-            workflow_id(str): The workflow instance ID that is expected to call `set_event` on `key`
-            key(str): The event key / name within the workflow
-            timeout_seconds(float): The amount of time to wait, in case `set_event` has not yet been called byt the workflow
-
-        """
-        return await asyncio.to_thread(
-            lambda: DBOS.get_event(workflow_id, key, timeout_seconds)
-        )
 
     @classmethod
     def execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
