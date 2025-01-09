@@ -444,6 +444,63 @@ def test_recovery_workflow_step(dbos: DBOS) -> None:
     assert stat.recovery_attempts == 1
 
 
+def test_workflow_returns_none(dbos: DBOS) -> None:
+    wf_counter: int = 0
+
+    @DBOS.workflow()
+    def test_workflow(var: str, var2: str) -> str:
+        nonlocal wf_counter
+        wf_counter += 1
+        assert var == var2 == "bob"
+        return
+
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowID(wfuuid):
+        assert test_workflow("bob", "bob") is None
+    assert wf_counter == 1
+
+    dbos._sys_db.wait_for_buffer_flush()
+    with SetWorkflowID(wfuuid):
+        assert test_workflow("bob", "bob") is None
+    assert wf_counter == 2
+
+    handle = DBOS.retrieve_workflow(wfuuid)
+    assert handle.get_result() == None
+    assert wf_counter == 2
+
+    # Change the workflow status to pending
+    dbos._sys_db.update_workflow_status(
+        {
+            "workflow_uuid": wfuuid,
+            "status": "PENDING",
+            "name": test_workflow.__qualname__,
+            "class_name": None,
+            "config_name": None,
+            "output": None,
+            "error": None,
+            "executor_id": None,
+            "app_id": None,
+            "app_version": None,
+            "request": None,
+            "recovery_attempts": None,
+            "authenticated_user": None,
+            "authenticated_roles": None,
+            "assumed_role": None,
+            "queue_name": None,
+        }
+    )
+
+    workflow_handles = DBOS.recover_pending_workflows()
+    assert len(workflow_handles) == 1
+    assert workflow_handles[0].get_result() is None
+    assert wf_counter == 3
+
+    # Test that there was a recovery attempt of this
+    stat = workflow_handles[0].get_status()
+    assert stat
+    assert stat.recovery_attempts == 1
+
+
 def test_recovery_temp_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
 
