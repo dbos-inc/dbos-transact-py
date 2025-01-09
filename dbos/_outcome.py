@@ -4,6 +4,8 @@ import inspect
 import time
 from typing import Any, Callable, Coroutine, Optional, Protocol, TypeVar, Union, cast
 
+from . import _serialization
+
 T = TypeVar("T")
 R = TypeVar("R")
 
@@ -28,7 +30,7 @@ class Outcome(Protocol[T]):
         exceeded_retries: Callable[[int], BaseException],
     ) -> "Outcome[T]": ...
 
-    def intercept(self, interceptor: Callable[[], Optional[T]]) -> "Outcome[T]": ...
+    def intercept(self, interceptor: Callable[[], Optional[str]]) -> "Outcome[T]": ...
 
     def __call__(self) -> Union[T, Coroutine[Any, Any, T]]: ...
 
@@ -58,11 +60,15 @@ class Immediate(Outcome[T]):
         return Immediate(lambda: before()(self._func))
 
     @staticmethod
-    def _intercept(func: Callable[[], T], interceptor: Callable[[], Optional[T]]) -> T:
+    def _intercept(
+        func: Callable[[], T], interceptor: Callable[[], Optional[str]]
+    ) -> T:
         intercepted = interceptor()
-        return intercepted if intercepted else func()
+        return (
+            cast(T, _serialization.deserialize(intercepted)) if intercepted else func()
+        )
 
-    def intercept(self, interceptor: Callable[[], Optional[T]]) -> "Immediate[T]":
+    def intercept(self, interceptor: Callable[[], Optional[str]]) -> "Immediate[T]":
         return Immediate[T](lambda: Immediate._intercept(self._func, interceptor))
 
     @staticmethod
@@ -151,12 +157,16 @@ class Pending(Outcome[T]):
     @staticmethod
     async def _intercept(
         func: Callable[[], Coroutine[Any, Any, T]],
-        interceptor: Callable[[], Optional[T]],
+        interceptor: Callable[[], Optional[str]],
     ) -> T:
         intercepted = await asyncio.to_thread(interceptor)
-        return intercepted if intercepted else await func()
+        return (
+            cast(T, _serialization.deserialize(intercepted))
+            if intercepted
+            else await func()
+        )
 
-    def intercept(self, interceptor: Callable[[], Optional[T]]) -> "Pending[T]":
+    def intercept(self, interceptor: Callable[[], Optional[str]]) -> "Pending[T]":
         return Pending[T](lambda: Pending._intercept(self._func, interceptor))
 
     @staticmethod
