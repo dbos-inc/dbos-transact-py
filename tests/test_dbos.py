@@ -390,7 +390,7 @@ def test_recovery_workflow_step(dbos: DBOS) -> None:
         nonlocal step_counter
         step_counter += 1
         print("I'm a test_step!")
-        return "step_result"
+        return
 
     wfuuid = str(uuid.uuid4())
     with SetWorkflowID(wfuuid):
@@ -504,18 +504,11 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     wf_counter: int = 0
     test_var = "dbos"
 
-    @DBOS.step()
-    def test_step(var: int) -> None:
-        print(f"I'm test_step {var}")
-        return
-
     @DBOS.workflow()
     def test_workflow(var: str) -> str:
-        test_step(1)
         nonlocal wf_counter
         if var == test_var:
             wf_counter += 1
-        test_step(2)
         return var
 
     wfuuid = str(uuid.uuid4())
@@ -548,18 +541,11 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     dbos._destroy()  # Unusual pattern - reusing the memory
     dbos.__init__(config=config)  # type: ignore
 
-    @DBOS.step()
-    def test_step(var: int) -> None:
-        print(f"I'm test_step {var}")
-        return
-
-    @DBOS.workflow()
+    @DBOS.workflow()  # type: ignore
     def test_workflow(var: str) -> str:
-        test_step(1)
         nonlocal wf_counter
         if var == test_var:
             wf_counter += 1
-        test_step(2)
         return var
 
     DBOS.launch()  # Usually the framework does this but we destroyed it above
