@@ -60,7 +60,7 @@ class Immediate(Outcome[T]):
     @staticmethod
     def _intercept(func: Callable[[], T], interceptor: Callable[[], Optional[T]]) -> T:
         intercepted = interceptor()
-        return intercepted if intercepted else func()
+        return cast(T, intercepted["output"]) if intercepted else func()  # type: ignore
 
     def intercept(self, interceptor: Callable[[], Optional[T]]) -> "Immediate[T]":
         return Immediate[T](lambda: Immediate._intercept(self._func, interceptor))
@@ -154,7 +154,7 @@ class Pending(Outcome[T]):
         interceptor: Callable[[], Optional[T]],
     ) -> T:
         intercepted = await asyncio.to_thread(interceptor)
-        return intercepted if intercepted else await func()
+        return cast(T, intercepted["output"]) if intercepted else await func()  # type: ignore
 
     def intercept(self, interceptor: Callable[[], Optional[T]]) -> "Pending[T]":
         return Pending[T](lambda: Pending._intercept(self._func, interceptor))

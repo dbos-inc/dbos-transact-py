@@ -386,10 +386,10 @@ def test_recovery_workflow_step(dbos: DBOS) -> None:
         return var
 
     @DBOS.step()
-    def test_step(var2: str) -> str:
+    def test_step(var2: str) -> None:
         nonlocal step_counter
         step_counter += 1
-        print("I'm a test_step!")
+        print(f"I'm a test_step {var2}!")
         return
 
     wfuuid = str(uuid.uuid4())
