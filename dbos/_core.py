@@ -734,11 +734,6 @@ def decorate_step(
                         )
                         raise deserialized_error
                     elif recorded_output["output"] is not None:
-                        print(
-                            recorded_output["output"],
-                            recorded_output["output"],
-                            _serialization.deserialize(recorded_output["output"]),
-                        )
                         return cast(
                             R, _serialization.deserialize(recorded_output["output"])
                         )
