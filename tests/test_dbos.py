@@ -374,6 +374,64 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     assert stat.recovery_attempts == 1
 
 
+def test_recovery_workflow_step(dbos: DBOS) -> None:
+    step_counter: int = 0
+    wf_counter: int = 0
+
+    @DBOS.workflow()
+    def test_workflow(var: str, var2: str) -> str:
+        nonlocal wf_counter
+        wf_counter += 1
+        test_step(var2)
+        return var
+
+    @DBOS.step()
+    def test_step(var2: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
+        print("I'm a test_step!")
+        return "step_result"
+
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowID(wfuuid):
+        assert test_workflow("bob", "bob") == "bob"
+
+    dbos._sys_db.wait_for_buffer_flush()
+    # Change the workflow status to pending
+    dbos._sys_db.update_workflow_status(
+        {
+            "workflow_uuid": wfuuid,
+            "status": "PENDING",
+            "name": test_workflow.__qualname__,
+            "class_name": None,
+            "config_name": None,
+            "output": None,
+            "error": None,
+            "executor_id": None,
+            "app_id": None,
+            "app_version": None,
+            "request": None,
+            "recovery_attempts": None,
+            "authenticated_user": None,
+            "authenticated_roles": None,
+            "assumed_role": None,
+            "queue_name": None,
+        }
+    )
+
+    # Recovery should execute the workflow again but skip the transaction
+    workflow_handles = DBOS.recover_pending_workflows()
+    assert len(workflow_handles) == 1
+    assert workflow_handles[0].get_result() == "bob"
+    assert wf_counter == 2
+    assert step_counter == 1
+
+    # Test that there was a recovery attempt of this
+    stat = workflow_handles[0].get_status()
+    assert stat
+    assert stat.recovery_attempts == 1
+
+
 def test_recovery_temp_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
 
@@ -446,11 +504,18 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     wf_counter: int = 0
     test_var = "dbos"
 
+    @DBOS.step()
+    def test_step(var: int) -> None:
+        print(f"I'm test_step {var}")
+        return
+
     @DBOS.workflow()
     def test_workflow(var: str) -> str:
+        test_step(1)
         nonlocal wf_counter
         if var == test_var:
             wf_counter += 1
+        test_step(2)
         return var
 
     wfuuid = str(uuid.uuid4())
@@ -483,11 +548,18 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
     dbos._destroy()  # Unusual pattern - reusing the memory
     dbos.__init__(config=config)  # type: ignore
 
-    @DBOS.workflow()  # type: ignore
+    @DBOS.step()
+    def test_step(var: int) -> None:
+        print(f"I'm test_step {var}")
+        return
+
+    @DBOS.workflow()
     def test_workflow(var: str) -> str:
+        test_step(1)
         nonlocal wf_counter
         if var == test_var:
             wf_counter += 1
+        test_step(2)
         return var
 
     DBOS.launch()  # Usually the framework does this but we destroyed it above
