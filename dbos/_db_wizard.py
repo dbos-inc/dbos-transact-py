@@ -3,12 +3,11 @@ from typing import TYPE_CHECKING, Optional
 
 import docker  # type: ignore
 import yaml
+from rich import print
 from sqlalchemy import URL, create_engine, text
 
 if TYPE_CHECKING:
     from ._dbos_config import ConfigFile
-
-from rich import print
 
 from ._cloudutils.cloudutils import get_cloud_credentials
 from ._cloudutils.databases import choose_database
@@ -22,9 +21,7 @@ def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
     if db_connection_error is None:
         return config
 
-    print("[red]Could not connect to Postgres[/red]")
-
-    # 2. Check if the database config is the default one. If not, surface a connection error and exit the process.
+    # 2. If the error is due to password authentication or the configuration is non-default, surface the error and exit.
     if "password authentication failed" in str(db_connection_error) or "28P01" in str(
         db_connection_error
     ):
@@ -40,14 +37,18 @@ def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
         raise DBOSInitializationError(
             f"Could not connect to the database. Exception: {db_connection_error}"
         )
+    print("[yellow]Postgres not detected locally[/yellow]")
 
     # 3. If the database config is the default one, check if the user has Docker properly installed.
+    print("Attempting to start Postgres via Docker")
     has_docker = _check_docker_installed()
 
     # 4. If Docker is installed, prompt the user to start a local Docker based Postgres, and then set the PGPASSWORD to 'dbos' and try to connect to the database.
     docker_started = False
     if has_docker:
         docker_started = _start_docker_postgres(config)
+    else:
+        print("[yellow]Docker not detected locally[/yellow]")
 
     # 5. If no Docker, then prompt the user to log in to DBOS Cloud and provision a DB there. Wait for the remote DB to be ready, and then create a copy of the original config file, and then load the remote connection string to the local config file.
     if not docker_started:
@@ -71,7 +72,7 @@ def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
 
 
 def _start_docker_postgres(config: "ConfigFile") -> bool:
-    dbos_logger.info("Starting a Postgres Docker container")
+    print("Starting a Postgres Docker container...")
     config["database"]["password"] = "dbos"
     client = docker.from_env()
     pg_data = "/var/lib/postgresql/data"
@@ -93,21 +94,21 @@ def _start_docker_postgres(config: "ConfigFile") -> bool:
     attempts = 30
     while attempts > 0:
         if attempts % 5 == 0:
-            dbos_logger.info("Waiting for Postgres to start...")
+            print("Waiting for Postgres Docker container to start...")
         try:
             res = container.exec_run("psql -U postgres -c 'SELECT 1;'")
             if res.exit_code != 0:
                 attempts -= 1
                 time.sleep(1)
                 continue
-            dbos_logger.info("Postgres Docker started successfully!")
+            print("[green]Postgres Docker container started successfully![/green]")
             break
         except Exception as e:
             attempts -= 1
             time.sleep(1)
 
     if attempts == 0:
-        dbos_logger.warning("Failed to start Postgres Docker container.")
+        print("[yellow]Failed to start Postgres Docker container.[/yellow]")
         return False
 
     return True
@@ -118,8 +119,7 @@ def _check_docker_installed() -> bool:
     try:
         client = docker.from_env()
         client.ping()
-    except Exception as e:
-        dbos_logger.error(f"Could not connect to Docker: {e}")
+    except Exception:
         return False
     return True
 
