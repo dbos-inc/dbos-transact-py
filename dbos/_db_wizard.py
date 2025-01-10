@@ -8,7 +8,7 @@ from sqlalchemy import URL, create_engine, text
 if TYPE_CHECKING:
     from ._dbos_config import ConfigFile
 
-from ._cloudutils.credentials import get_cloud_credentials
+from ._cloudutils.cloudutils import get_cloud_credentials
 from ._error import DBOSInitializationError
 from ._logger import dbos_logger
 
