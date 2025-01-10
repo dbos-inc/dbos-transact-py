@@ -124,6 +124,7 @@ def _check_db_connectivity(config: "ConfigFile") -> bool:
         host=config["database"]["hostname"],
         port=config["database"]["port"],
         database="postgres",
+        query={"connect_timeout": "2"},
     )
     postgres_db_engine = create_engine(postgres_db_url)
     try:

@@ -325,7 +325,7 @@ def test_db_connect_failed(mocker):
             start:
                 - "python3 main.py"
         database:
-          hostname: 'somelocalhost'
+          hostname: 'example.com'
           port: 5432
           username: 'pgu'
           password: ${PGPASSWORD}
