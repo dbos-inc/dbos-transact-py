@@ -1,5 +1,4 @@
 import base64
-import logging
 import random
 import time
 from dataclasses import dataclass
@@ -37,14 +36,14 @@ class UserDBInstance:
         self.SupabaseReference = kwargs.get("SupabaseReference", None)
 
 
-def is_valid_password(logger: logging.Logger, password: str) -> bool:
+def is_valid_password(password: str) -> bool:
     if len(password) < 8 or len(password) > 128:
-        logger.error(
+        dbos_logger.error(
             "Invalid database password. Passwords must be between 8 and 128 characters long"
         )
         return False
     if any(c in password for c in ["/", '"', "@", " ", "'"]):
-        logger.error(
+        dbos_logger.error(
             "Password contains invalid character. Passwords can contain any ASCII character except @, /, \\, \", ', and spaces"
         )
         return False
@@ -52,8 +51,6 @@ def is_valid_password(logger: logging.Logger, password: str) -> bool:
 
 
 def get_user_db_info(credentials: DBOSCloudCredentials, db_name: str) -> UserDBInstance:
-    logger = logging.getLogger()
-
     bearer_token = f"Bearer {credentials.token}"
 
     response = requests.get(
@@ -74,11 +71,9 @@ def create_user_db(
     app_db_username: str,
     app_db_password: str,
 ) -> int:
-    logger = logging.getLogger()
-
     bearer_token = f"Bearer {credentials.token}"
 
-    if not is_valid_password(logger, app_db_password):
+    if not is_valid_password(dbos_logger, app_db_password):
         return 1
 
     try:
@@ -96,7 +91,7 @@ def create_user_db(
         )
         response.raise_for_status()
 
-        logger.info(f"Successfully started provisioning database: {db_name}")
+        dbos_logger.info(f"Successfully started provisioning database: {db_name}")
 
         status = ""
         while status not in ["available", "backing-up"]:
@@ -106,10 +101,10 @@ def create_user_db(
                 time.sleep(30)  # Otherwise, sleep 30 sec
 
             user_db_info = get_user_db_info(credentials, db_name)
-            logger.info(user_db_info)
+            dbos_logger.info(user_db_info)
             status = user_db_info.Status
 
-        logger.info("Database successfully provisioned!")
+        dbos_logger.info("Database successfully provisioned!")
         return 0
 
     except requests.exceptions.RequestException as e:
@@ -119,7 +114,7 @@ def create_user_db(
             if is_cloud_api_error_response(resp):
                 handle_api_errors(error_label, e)
         else:
-            logger.error(f"{error_label}: {str(e)}")
+            dbos_logger.error(f"{error_label}: {str(e)}")
         return 1
 
 
