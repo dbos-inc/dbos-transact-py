@@ -8,6 +8,7 @@ from typing import Any, Optional, Union
 
 import jwt
 import requests
+import typer
 
 from .._logger import dbos_logger
 from .authentication import authenticate
@@ -142,21 +143,17 @@ def check_user_profile(credentials: DBOSCloudCredentials) -> bool:
     return False
 
 
-def register_user(
-    credentials: DBOSCloudCredentials,
-    user_name: Optional[str] = None,
-    secret: Optional[str] = None,
-) -> None:
+def register_user(credentials: DBOSCloudCredentials) -> None:
     dbos_logger.info("User not registered in DBOS Cloud. Registering...")
 
-    if not user_name:
-        # In a real implementation, you'd want to use a proper CLI input library
-        # like click or prompt_toolkit here
-        user_name = input("Choose your username: ")
+    user_name = None
+    while not user_name:
+        user_name = typer.prompt("Choose your username")
         validation_result = is_valid_username(user_name)
         if validation_result is not True:
-            dbos_logger.error(f"Invalid username: {user_name}. {validation_result}")
-            exit(1)
+            typer.echo(f"Invalid username: {validation_result}")
+            user_name = None
+            continue
 
     bearer_token = f"Bearer {credentials.token}"
     try:
@@ -165,7 +162,6 @@ def register_user(
             f"https://{DBOS_CLOUD_HOST}/v1alpha1/user",
             json={
                 "name": user_name,
-                "secret": secret,
             },
             headers={
                 "Content-Type": "application/json",
@@ -225,10 +221,7 @@ def check_credentials() -> DBOSCloudCredentials:
         return empty_credentials
 
 
-def get_cloud_credentials(
-    user_name: Optional[str] = None,
-    secret: Optional[str] = None,
-) -> DBOSCloudCredentials:
+def get_cloud_credentials() -> DBOSCloudCredentials:
     # Check if credentials exist and are not expired
     credentials = check_credentials()
 
@@ -250,7 +243,7 @@ def get_cloud_credentials(
         return credentials
 
     # User doesn't exist, register the user in DBOS Cloud
-    register_user(credentials, user_name, secret)
+    register_user(credentials)
     write_credentials(credentials)
 
     return credentials
