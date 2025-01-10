@@ -10,7 +10,7 @@ from sqlalchemy import URL
 
 from ._db_wizard import db_connect
 from ._error import DBOSInitializationError
-from ._logger import dbos_logger
+from ._logger import config_logger, dbos_logger
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -180,6 +180,8 @@ def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
     if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
         data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"
 
+    config_logger(data)  # type: ignore
+
     # Check the connectivity to the database and make sure it's properly configured
     data = db_connect(data, config_file_path)
 
@@ -200,7 +202,7 @@ def _app_name_to_db_name(app_name: str) -> str:
     return name if not name[0].isdigit() else f"_{name}"
 
 
-def _set_env_vars(config: ConfigFile) -> None:
+def set_env_vars(config: ConfigFile) -> None:
     for env, value in config.get("env", {}).items():
         if value is not None:
             os.environ[env] = str(value)

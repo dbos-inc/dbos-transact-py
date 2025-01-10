@@ -76,15 +76,14 @@ else:
 from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
 from ._context import (
-    DBOSContext,
     EnterDBOSStep,
     TracedAttributes,
     assert_current_dbos_context,
     get_local_dbos_context,
 )
-from ._dbos_config import ConfigFile, _set_env_vars, load_config
+from ._dbos_config import ConfigFile, load_config, set_env_vars
 from ._error import DBOSException, DBOSNonExistentWorkflowError
-from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
+from ._logger import add_otlp_to_all_loggers, dbos_logger, init_logger
 from ._sys_db import SystemDatabase
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
@@ -267,8 +266,7 @@ class DBOS:
         init_logger()
         if config is None:
             config = load_config()
-        config_logger(config)
-        _set_env_vars(config)
+        set_env_vars(config)
         dbos_tracer.config(config)
         dbos_logger.info("Initializing DBOS")
         self.config: ConfigFile = config
