@@ -65,6 +65,19 @@ def get_user_db_info(credentials: DBOSCloudCredentials, db_name: str) -> UserDBI
     return UserDBInstance(**data)
 
 
+def create_user_role(credentials: DBOSCloudCredentials, db_name: str) -> UserDBInstance:
+    bearer_token = f"Bearer {credentials.token}"
+
+    response = requests.post(
+        f"https://{DBOS_CLOUD_HOST}/v1alpha1/{credentials.organization}/databases/userdb/{db_name}/createuserdbrole",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": bearer_token,
+        },
+    )
+    response.raise_for_status()
+
+
 def create_user_db(
     credentials: DBOSCloudCredentials,
     db_name: str,
@@ -177,5 +190,7 @@ def choose_database(credentials: DBOSCloudCredentials) -> Optional[UserDBInstanc
         # Use the only available database server
         user_db_name = user_dbs[0].PostgresInstanceName
         dbos_logger.info(f"Using database instance: {user_db_name}")
+
+    create_user_role(credentials, user_db_name)
 
     return get_user_db_info(credentials, user_db_name)
