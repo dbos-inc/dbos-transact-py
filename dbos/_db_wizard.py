@@ -46,7 +46,13 @@ def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
         dbos_logger.info("Connecting to DBOS Cloud")
         cred = get_cloud_credentials()
         db = choose_database(cred)
-        print(db)
+        if db is None:
+            raise DBOSInitializationError("Error connecting to cloud database")
+        config["database"]["hostname"] = db.HostName
+        config["database"]["port"] = db.Port
+        config["database"]["username"] = db.DatabaseUsername
+        password = input("Enter password: ")
+        config["database"]["password"] = password
 
     # 6. Save the config to the config file and return the updated config.
     # TODO: make the config file prettier

@@ -123,14 +123,14 @@ def create_user_db(
         return 1
 
 
-def choose_database(user_credentials: DBOSCloudCredentials) -> str:
+def choose_database(credentials: DBOSCloudCredentials) -> Optional[UserDBInstance]:
     # List existing database instances
     user_dbs: List[UserDBInstance] = []
-    bearer_token = f"Bearer {user_credentials.token}"
+    bearer_token = f"Bearer {credentials.token}"
 
     try:
         response = requests.get(
-            f"https://{DBOS_CLOUD_HOST}/v1alpha1/{user_credentials.organization}/databases",
+            f"https://{DBOS_CLOUD_HOST}/v1alpha1/{credentials.organization}/databases",
             headers={
                 "Content-Type": "application/json",
                 "Authorization": bearer_token,
@@ -148,21 +148,21 @@ def choose_database(user_credentials: DBOSCloudCredentials) -> str:
                 handle_api_errors(error_label, e)
         else:
             dbos_logger.error(f"{error_label}: {str(e)}")
-        return ""
+        return None
 
     if not user_dbs:
         # If not, prompt the user to provision one
         dbos_logger.info("No database found, provisioning a database server...")
-        user_db_name = f"{user_credentials.user_name}-db-server"
+        user_db_name = f"{credentials.user_name}-db-server"
 
         # Use a default user name and auto generated password
         app_db_username = "dbos_user"
         app_db_password = base64.b64encode(str(random.random()).encode()).decode()
         res = create_user_db(
-            user_credentials, user_db_name, app_db_username, app_db_password
+            credentials, user_db_name, app_db_username, app_db_password
         )
         if res != 0:
-            return ""
+            return None
     elif len(user_dbs) > 1:
         # If there is more than one database instance, prompt the user to select one
         choices = [db.PostgresInstanceName for db in user_dbs]
@@ -183,4 +183,4 @@ def choose_database(user_credentials: DBOSCloudCredentials) -> str:
         user_db_name = user_dbs[0].PostgresInstanceName
         dbos_logger.info(f"Using database instance: {user_db_name}")
 
-    return user_db_name
+    return get_user_db_info(credentials, user_db_name)
