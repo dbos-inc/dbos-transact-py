@@ -42,7 +42,7 @@ dbos_env_path = ".dbos"
 def is_token_expired(token: str) -> bool:
     try:
         decoded = jwt.decode(token, options={"verify_signature": False})
-        exp = decoded.get("exp")
+        exp: int = decoded.get("exp")
         if not exp:
             return False
         return time.time() >= exp

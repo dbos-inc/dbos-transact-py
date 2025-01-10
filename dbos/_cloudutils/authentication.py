@@ -22,10 +22,6 @@ DBOS_CLIENT_ID = (
 DBOS_CLOUD_IDENTIFIER = "dbos-cloud-api"
 
 
-def sleep_ms(ms: int):
-    time.sleep(ms / 1000)
-
-
 @dataclass
 class DeviceCodeResponse:
     device_code: str
@@ -83,7 +79,7 @@ class JWKSClient:
         raise Exception(f"Unable to find signing key with kid: {kid}")
 
 
-def verify_token(token: str) -> Dict[str, Any]:
+def verify_token(token: str) -> None:
     header = jwt.get_unverified_header(token)
 
     if not header.get("kid"):
@@ -91,7 +87,7 @@ def verify_token(token: str) -> Dict[str, Any]:
 
     client = JWKSClient(f"https://{AUTH0_DOMAIN}/.well-known/jwks.json")
     signing_key = client.get_signing_key(header["kid"])
-    return jwt.decode(
+    jwt.decode(
         token,
         signing_key,
         algorithms=["RS256"],

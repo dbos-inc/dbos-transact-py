@@ -2,7 +2,7 @@ import base64
 import random
 import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import requests
 
@@ -26,7 +26,7 @@ class UserDBInstance:
     IsLinked: bool = False
     SupabaseReference: Optional[str] = None
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         self.PostgresInstanceName = kwargs.get("PostgresInstanceName", "")
         self.Status = kwargs.get("Status", "")
         self.HostName = kwargs.get("HostName", "")
@@ -65,7 +65,7 @@ def get_user_db_info(credentials: DBOSCloudCredentials, db_name: str) -> UserDBI
     return UserDBInstance(**data)
 
 
-def create_user_role(credentials: DBOSCloudCredentials, db_name: str) -> UserDBInstance:
+def create_user_role(credentials: DBOSCloudCredentials, db_name: str) -> None:
     bearer_token = f"Bearer {credentials.token}"
 
     response = requests.post(
@@ -86,7 +86,7 @@ def create_user_db(
 ) -> int:
     bearer_token = f"Bearer {credentials.token}"
 
-    if not is_valid_password(dbos_logger, app_db_password):
+    if not is_valid_password(app_db_password):
         return 1
 
     try:
@@ -175,8 +175,8 @@ def choose_database(credentials: DBOSCloudCredentials) -> Optional[UserDBInstanc
         # If there is more than one database instance, prompt the user to select one
         choices = [db.PostgresInstanceName for db in user_dbs]
         print("Choose a database instance for this app:")
-        for i, choice in enumerate(choices, 1):
-            print(f"{i}. {choice}")
+        for i, entry in enumerate(choices, 1):
+            print(f"{i}. {entry}")
         while True:
             try:
                 choice = int(input("Enter number: ")) - 1

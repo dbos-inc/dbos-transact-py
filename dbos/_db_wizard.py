@@ -1,7 +1,7 @@
 import time
 from typing import TYPE_CHECKING
 
-import docker
+import docker  # type: ignore
 import yaml
 from sqlalchemy import URL, create_engine, text
 
@@ -69,7 +69,7 @@ def _start_docker_postgres(config: "ConfigFile") -> bool:
     pg_data = "/var/lib/postgresql/data"
     container_name = "dbos-db"
     client.containers.run(
-        "pgvector/pgvector:pg16",
+        image="pgvector/pgvector:pg16",
         detach=True,
         environment={
             "POSTGRES_PASSWORD": config["database"]["password"],

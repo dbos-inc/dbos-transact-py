@@ -182,7 +182,7 @@ def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
     if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
         data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"
 
-    config_logger(data)  # type: ignore
+    config_logger(data)
 
     # Check the connectivity to the database and make sure it's properly configured
     data = db_connect(data, config_file_path)
