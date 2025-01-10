@@ -84,7 +84,6 @@ class JWKSClient:
 
 
 def verify_token(token: str) -> Dict[str, Any]:
-    decoded = jwt.decode(token, options={"verify_signature": False})
     header = jwt.get_unverified_header(token)
 
     if not header.get("kid"):
@@ -93,7 +92,14 @@ def verify_token(token: str) -> Dict[str, Any]:
     client = JWKSClient(f"https://{AUTH0_DOMAIN}/.well-known/jwks.json")
     signing_key = client.get_signing_key(header["kid"])
     return jwt.decode(
-        token, signing_key, algorithms=["RS256"], audience=DBOS_CLOUD_IDENTIFIER
+        token,
+        signing_key,
+        algorithms=["RS256"],
+        audience=DBOS_CLOUD_IDENTIFIER,
+        options={
+            "verify_iat": False,
+            "clock_tolerance": 60,
+        },
     )
 
 
