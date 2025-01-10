@@ -1,5 +1,5 @@
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import docker  # type: ignore
 import yaml
@@ -7,6 +7,8 @@ from sqlalchemy import URL, create_engine, text
 
 if TYPE_CHECKING:
     from ._dbos_config import ConfigFile
+
+from rich import print
 
 from ._cloudutils.cloudutils import get_cloud_credentials
 from ._cloudutils.databases import choose_database
@@ -16,12 +18,19 @@ from ._logger import dbos_logger
 
 def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
     # 1. Check the connectivity to the database. Return if successful. If cannot connect, continue to the following steps.
-    db_connected = _check_db_connectivity(config)
-    if db_connected:
-        dbos_logger.debug("Database is connected")
+    db_connection_error = _check_db_connectivity(config)
+    if db_connection_error is None:
         return config
 
+    print("[red]Could not connect to Postgres[/red]")
+
     # 2. Check if the database config is the default one. If not, surface a connection error and exit the process.
+    if "password authentication failed" in str(db_connection_error) or "28P01" in str(
+        db_connection_error
+    ):
+        raise DBOSInitializationError(
+            f"Could not connect to Postgres: password authentication failed: {db_connection_error}"
+        )
     db_config = config["database"]
     if (
         db_config["hostname"] != "localhost"
@@ -29,7 +38,7 @@ def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
         or db_config["username"] != "postgres"
     ):
         raise DBOSInitializationError(
-            "Could not connect to the database. Please check the database configuration."
+            f"Could not connect to the database. Exception: {db_connection_error}"
         )
 
     # 3. If the database config is the default one, check if the user has Docker properly installed.
@@ -38,7 +47,6 @@ def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
     # 4. If Docker is installed, prompt the user to start a local Docker based Postgres, and then set the PGPASSWORD to 'dbos' and try to connect to the database.
     docker_started = False
     if has_docker:
-        dbos_logger.debug("Docker is installed")
         docker_started = _start_docker_postgres(config)
 
     # 5. If no Docker, then prompt the user to log in to DBOS Cloud and provision a DB there. Wait for the remote DB to be ready, and then create a copy of the original config file, and then load the remote connection string to the local config file.
@@ -116,7 +124,7 @@ def _check_docker_installed() -> bool:
     return True
 
 
-def _check_db_connectivity(config: "ConfigFile") -> bool:
+def _check_db_connectivity(config: "ConfigFile") -> Optional[Exception]:
     postgres_db_url = URL.create(
         "postgresql+psycopg",
         username=config["database"]["username"],
@@ -134,12 +142,10 @@ def _check_db_connectivity(config: "ConfigFile") -> bool:
                 dbos_logger.error(
                     f"Unexpected value returned from database: expected 1, received {val}"
                 )
-                return False
+                return Exception()
     except Exception as e:
-        # TODO: check if the error is pg password related. If so, prompt the user to set the PGPASSWORD env variable.
-        dbos_logger.error(f"Could not connect to the database: {e}")
-        return False
+        return e
     finally:
         postgres_db_engine.dispose()
 
-    return True
+    return None
