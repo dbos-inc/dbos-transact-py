@@ -10,7 +10,7 @@ from sqlalchemy import URL
 
 from ._db_wizard import db_connect
 from ._error import DBOSInitializationError
-from ._logger import config_logger, dbos_logger
+from ._logger import config_logger, dbos_logger, init_logger
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -132,6 +132,8 @@ def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
         ConfigFile: The loaded configuration
 
     """
+
+    init_logger()
 
     with open(config_file_path, "r") as file:
         content = file.read()

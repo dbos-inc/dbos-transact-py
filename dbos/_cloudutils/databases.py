@@ -1,0 +1,186 @@
+import base64
+import logging
+import random
+import time
+from dataclasses import dataclass
+from typing import List, Optional
+
+import requests
+
+from dbos._cloudutils.cloudutils import (
+    DBOS_CLOUD_HOST,
+    DBOSCloudCredentials,
+    handle_api_errors,
+    is_cloud_api_error_response,
+)
+
+from .._logger import dbos_logger
+
+
+@dataclass
+class UserDBInstance:
+    PostgresInstanceName: str = ""
+    Status: str = ""
+    HostName: str = ""
+    Port: int = 0
+    DatabaseUsername: str = ""
+    IsLinked: bool = False
+    SupabaseReference: Optional[str] = None
+
+    def __init__(self, **kwargs):
+        self.PostgresInstanceName = kwargs.get("PostgresInstanceName", "")
+        self.Status = kwargs.get("Status", "")
+        self.HostName = kwargs.get("HostName", "")
+        self.Port = kwargs.get("Port", 0)
+        self.DatabaseUsername = kwargs.get("DatabaseUsername", "")
+        self.IsLinked = kwargs.get("IsLinked", False)
+        self.SupabaseReference = kwargs.get("SupabaseReference", None)
+
+
+def is_valid_password(logger: logging.Logger, password: str) -> bool:
+    if len(password) < 8 or len(password) > 128:
+        logger.error(
+            "Invalid database password. Passwords must be between 8 and 128 characters long"
+        )
+        return False
+    if any(c in password for c in ["/", '"', "@", " ", "'"]):
+        logger.error(
+            "Password contains invalid character. Passwords can contain any ASCII character except @, /, \\, \", ', and spaces"
+        )
+        return False
+    return True
+
+
+def get_user_db_info(credentials: DBOSCloudCredentials, db_name: str) -> UserDBInstance:
+    logger = logging.getLogger()
+
+    bearer_token = f"Bearer {credentials.token}"
+
+    response = requests.get(
+        f"https://{DBOS_CLOUD_HOST}/v1alpha1/{credentials.organization}/databases/userdb/info/{db_name}",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": bearer_token,
+        },
+    )
+    response.raise_for_status()
+    data = response.json()
+    return UserDBInstance(**data)
+
+
+def create_user_db(
+    credentials: DBOSCloudCredentials,
+    db_name: str,
+    app_db_username: str,
+    app_db_password: str,
+) -> int:
+    logger = logging.getLogger()
+
+    bearer_token = f"Bearer {credentials.token}"
+
+    if not is_valid_password(logger, app_db_password):
+        return 1
+
+    try:
+        response = requests.post(
+            f"https://{DBOS_CLOUD_HOST}/v1alpha1/{credentials.organization}/databases/userdb",
+            json={
+                "Name": db_name,
+                "AdminName": app_db_username,
+                "AdminPassword": app_db_password,
+            },
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": bearer_token,
+            },
+        )
+        response.raise_for_status()
+
+        logger.info(f"Successfully started provisioning database: {db_name}")
+
+        status = ""
+        while status not in ["available", "backing-up"]:
+            if status == "":
+                time.sleep(5)  # First time sleep 5 sec
+            else:
+                time.sleep(30)  # Otherwise, sleep 30 sec
+
+            user_db_info = get_user_db_info(credentials, db_name)
+            logger.info(user_db_info)
+            status = user_db_info.Status
+
+        logger.info("Database successfully provisioned!")
+        return 0
+
+    except requests.exceptions.RequestException as e:
+        error_label = f"Failed to create database {db_name}"
+        if hasattr(e, "response") and e.response is not None:
+            resp = e.response.json()
+            if is_cloud_api_error_response(resp):
+                handle_api_errors(error_label, e)
+        else:
+            logger.error(f"{error_label}: {str(e)}")
+        return 1
+
+
+def choose_database(user_credentials: DBOSCloudCredentials) -> str:
+    # List existing database instances
+    user_dbs: List[UserDBInstance] = []
+    bearer_token = f"Bearer {user_credentials.token}"
+
+    try:
+        response = requests.get(
+            f"https://{DBOS_CLOUD_HOST}/v1alpha1/{user_credentials.organization}/databases",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": bearer_token,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        user_dbs = [UserDBInstance(**db) for db in data]
+
+    except requests.exceptions.RequestException as e:
+        error_label = "Failed to list databases"
+        if hasattr(e, "response") and e.response is not None:
+            resp = e.response.json()
+            if is_cloud_api_error_response(resp):
+                handle_api_errors(error_label, e)
+        else:
+            dbos_logger.error(f"{error_label}: {str(e)}")
+        return ""
+
+    if not user_dbs:
+        # If not, prompt the user to provision one
+        dbos_logger.info("No database found, provisioning a database server...")
+        user_db_name = f"{user_credentials.user_name}-db-server"
+
+        # Use a default user name and auto generated password
+        app_db_username = "dbos_user"
+        app_db_password = base64.b64encode(str(random.random()).encode()).decode()
+        res = create_user_db(
+            user_credentials, user_db_name, app_db_username, app_db_password
+        )
+        if res != 0:
+            return ""
+    elif len(user_dbs) > 1:
+        # If there is more than one database instance, prompt the user to select one
+        choices = [db.PostgresInstanceName for db in user_dbs]
+        print("Choose a database instance for this app:")
+        for i, choice in enumerate(choices, 1):
+            print(f"{i}. {choice}")
+        while True:
+            try:
+                choice = int(input("Enter number: ")) - 1
+                if 0 <= choice < len(choices):
+                    user_db_name = choices[choice]
+                    break
+            except ValueError:
+                continue
+            print("Invalid choice, please try again")
+    else:
+        # Use the only available database server
+        user_db_name = user_dbs[0].PostgresInstanceName
+        dbos_logger.info(f"Using database instance: {user_db_name}")
+
+    return user_db_name

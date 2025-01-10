@@ -263,7 +263,6 @@ class DBOS:
             return
 
         self._initialized: bool = True
-        init_logger()
         if config is None:
             config = load_config()
         set_env_vars(config)

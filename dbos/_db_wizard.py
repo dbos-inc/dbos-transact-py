@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from ._dbos_config import ConfigFile
 
 from ._cloudutils.cloudutils import get_cloud_credentials
+from ._cloudutils.databases import choose_database
 from ._error import DBOSInitializationError
 from ._logger import dbos_logger
 
@@ -44,7 +45,8 @@ def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
     if not docker_started:
         dbos_logger.info("Connecting to DBOS Cloud")
         cred = get_cloud_credentials()
-        # TODO: Implement the DBOS Cloud connection logic here.
+        db = choose_database(cred)
+        print(db)
 
     # 6. Save the config to the config file and return the updated config.
     # TODO: make the config file prettier
