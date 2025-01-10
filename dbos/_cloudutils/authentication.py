@@ -8,7 +8,7 @@ import jwt
 import requests
 from jwcrypto import jwk
 
-from ._logger import dbos_logger
+from .._logger import dbos_logger
 
 # Constants
 DBOS_CLOUD_HOST = os.getenv("DBOS_DOMAIN", "cloud.dbos.dev")

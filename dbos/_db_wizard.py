@@ -8,6 +8,7 @@ from sqlalchemy import URL, create_engine, text
 if TYPE_CHECKING:
     from ._dbos_config import ConfigFile
 
+from ._cloudutils.credentials import get_cloud_credentials
 from ._error import DBOSInitializationError
 from ._logger import dbos_logger
 
@@ -42,6 +43,7 @@ def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
     # 5. If no Docker, then prompt the user to log in to DBOS Cloud and provision a DB there. Wait for the remote DB to be ready, and then create a copy of the original config file, and then load the remote connection string to the local config file.
     if not docker_started:
         dbos_logger.info("Connecting to DBOS Cloud")
+        cred = get_cloud_credentials()
         # TODO: Implement the DBOS Cloud connection logic here.
 
     # 6. Save the config to the config file and return the updated config.
