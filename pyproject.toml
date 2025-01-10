@@ -21,7 +21,7 @@ dependencies = [
     "psycopg[binary]>=3.1", # Keep compatibility with 3.1--older Python installations/machines can't always install 3.2
     "fastapi-cli==0.0.5",
     "docker>=7.1.0",
-    "jwcrypto>=1.5.6",
+    "cryptography>=43.0.3",
 ]
 requires-python = ">=3.9"
 readme = "README.md"

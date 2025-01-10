@@ -1,4 +1,3 @@
-import logging
 import os
 import time
 from dataclasses import dataclass
@@ -6,7 +5,7 @@ from typing import Any, Dict, Optional
 
 import jwt
 import requests
-from jwcrypto import jwk
+from cryptography.x509 import load_pem_x509_certificate
 
 from .._logger import dbos_logger
 
@@ -75,7 +74,9 @@ class JWKSClient:
         jwks = response.json()
         for key in jwks["keys"]:
             if key["kid"] == kid:
-                return jwk.JWK(**key).export_to_pem()
+                cert_text = f"-----BEGIN CERTIFICATE-----\n{key['x5c'][0]}\n-----END CERTIFICATE-----"
+                cert = load_pem_x509_certificate(cert_text.encode())
+                return cert.public_key()
         raise Exception(f"Unable to find signing key with kid: {kid}")
 
 

@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:dfb047628beff5a2c4243d4cfd4e6a96c0f949836e2a5cc4fd55d07b7754f271"
+content_hash = "sha256:311cf8d4a31a3960774fc9519ef5fb2773a88fa9d902ab8f7f19d11260c3d738"
 
 [[metadata.targets]]
 requires_python = ">=3.9"
@@ -905,21 +905,6 @@ dependencies = [
 files = [
     {file = "jsonschema_specifications-2024.10.1-py3-none-any.whl", hash = "sha256:a09a0680616357d9a0ecf05c12ad234479f549239d0f5b55f3deea67475da9bf"},
     {file = "jsonschema_specifications-2024.10.1.tar.gz", hash = "sha256:0f38b83639958ce1152d02a7f062902c41c8fd20d558b0c34344292d417ae272"},
-]
-
-[[package]]
-name = "jwcrypto"
-version = "1.5.6"
-requires_python = ">= 3.8"
-summary = "Implementation of JOSE Web standards"
-groups = ["default"]
-dependencies = [
-    "cryptography>=3.4",
-    "typing-extensions>=4.5.0",
-]
-files = [
-    {file = "jwcrypto-1.5.6-py3-none-any.whl", hash = "sha256:150d2b0ebbdb8f40b77f543fb44ffd2baeff48788be71f67f03566692fd55789"},
-    {file = "jwcrypto-1.5.6.tar.gz", hash = "sha256:771a87762a0c081ae6166958a954f80848820b2ab066937dc8b8379d65b1b039"},
 ]
 
 [[package]]
