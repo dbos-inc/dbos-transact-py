@@ -158,12 +158,6 @@ def register_user(
             dbos_logger.error(f"Invalid username: {user_name}. {validation_result}")
             exit(1)
 
-    given_name = family_name = company = ""
-    if not credentials.user_name:
-        given_name = input("Enter first/given name: ")
-        family_name = input("Enter last/family name: ")
-        company = input("Enter company name: ")
-
     bearer_token = f"Bearer {credentials.token}"
     try:
         # Register user
@@ -171,9 +165,6 @@ def register_user(
             f"https://{DBOS_CLOUD_HOST}/v1alpha1/user",
             json={
                 "name": user_name,
-                "given_name": given_name,
-                "family_name": family_name,
-                "company": company,
                 "secret": secret,
             },
             headers={
