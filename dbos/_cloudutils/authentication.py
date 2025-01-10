@@ -7,6 +7,7 @@ import jwt
 import requests
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from cryptography.x509 import load_pem_x509_certificate
+from rich import print
 
 from .._logger import dbos_logger
 
@@ -102,7 +103,9 @@ def verify_token(token: str) -> None:
 
 
 def authenticate(get_refresh_token: bool = False) -> Optional[AuthenticationResponse]:
-    dbos_logger.info("Please authenticate with DBOS Cloud!")
+    print(
+        "[bold blue]Please log in/sign up to DBOS Cloud to access a Postgres database[/bold blue]"
+    )
 
     # Get device code
     device_code_data = {
@@ -123,7 +126,7 @@ def authenticate(get_refresh_token: bool = False) -> Optional[AuthenticationResp
         return None
 
     login_url = device_code_response.verification_uri_complete
-    print(f"Login URL: {login_url}")
+    print(f"[bold blue]Login URL:[/bold blue] {login_url}")
 
     # Poll for token
     token_data = {

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, List, Optional
 
 import requests
+from rich import print
 
 from dbos._cloudutils.cloudutils import (
     DBOS_CLOUD_HOST,
@@ -34,20 +35,6 @@ class UserDBInstance:
         self.DatabaseUsername = kwargs.get("DatabaseUsername", "")
         self.IsLinked = kwargs.get("IsLinked", False)
         self.SupabaseReference = kwargs.get("SupabaseReference", None)
-
-
-def is_valid_password(password: str) -> bool:
-    if len(password) < 8 or len(password) > 128:
-        dbos_logger.error(
-            "Invalid database password. Passwords must be between 8 and 128 characters long"
-        )
-        return False
-    if any(c in password for c in ["/", '"', "@", " ", "'"]):
-        dbos_logger.error(
-            "Password contains invalid character. Passwords can contain any ASCII character except @, /, \\, \", ', and spaces"
-        )
-        return False
-    return True
 
 
 def get_user_db_info(credentials: DBOSCloudCredentials, db_name: str) -> UserDBInstance:
@@ -86,9 +73,6 @@ def create_user_db(
 ) -> int:
     bearer_token = f"Bearer {credentials.token}"
 
-    if not is_valid_password(app_db_password):
-        return 1
-
     try:
         response = requests.post(
             f"https://{DBOS_CLOUD_HOST}/v1alpha1/{credentials.organization}/databases/userdb",
@@ -104,7 +88,7 @@ def create_user_db(
         )
         response.raise_for_status()
 
-        dbos_logger.info(f"Successfully started provisioning database: {db_name}")
+        print(f"Successfully started provisioning database: {db_name}")
 
         status = ""
         while status not in ["available", "backing-up"]:
@@ -114,10 +98,13 @@ def create_user_db(
                 time.sleep(30)  # Otherwise, sleep 30 sec
 
             user_db_info = get_user_db_info(credentials, db_name)
+            print(
+                f"Waiting for cloud database to finish provisioning. Status: {user_db_info.Status}"
+            )
             dbos_logger.info(user_db_info)
             status = user_db_info.Status
 
-        dbos_logger.info("Database successfully provisioned!")
+        print("[green]Database successfully provisioned![/green]")
         return 0
 
     except requests.exceptions.RequestException as e:
@@ -160,7 +147,7 @@ def choose_database(credentials: DBOSCloudCredentials) -> Optional[UserDBInstanc
 
     if not user_dbs:
         # If not, prompt the user to provision one
-        dbos_logger.info("No database found, provisioning a database server...")
+        print("Provisioning a cloud Postgres server")
         user_db_name = f"{credentials.user_name}-db-server"
 
         # Use a default user name and auto generated password
@@ -189,7 +176,7 @@ def choose_database(credentials: DBOSCloudCredentials) -> Optional[UserDBInstanc
     else:
         # Use the only available database server
         user_db_name = user_dbs[0].PostgresInstanceName
-        dbos_logger.info(f"Using database instance: {user_db_name}")
+        print(f"[green]Using database instance:[/green] {user_db_name}")
 
     create_user_role(credentials, user_db_name)
 

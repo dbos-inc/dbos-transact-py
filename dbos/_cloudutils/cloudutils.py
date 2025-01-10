@@ -9,6 +9,7 @@ from typing import Any, Optional, Union
 import jwt
 import requests
 import typer
+from rich import print
 
 from .._logger import dbos_logger
 from .authentication import authenticate
@@ -144,7 +145,7 @@ def check_user_profile(credentials: DBOSCloudCredentials) -> bool:
 
 
 def register_user(credentials: DBOSCloudCredentials) -> None:
-    dbos_logger.info("User not registered in DBOS Cloud. Registering...")
+    print("User not registered in DBOS Cloud. Registering...")
 
     user_name = None
     while not user_name:
@@ -182,9 +183,7 @@ def register_user(credentials: DBOSCloudCredentials) -> None:
         profile = UserProfile(**response.json())
         credentials.user_name = profile.Name
         credentials.organization = profile.Organization
-        dbos_logger.info(
-            f" ... Successfully registered and logged in as {credentials.user_name}!"
-        )
+        print(f" ... Successfully registered and logged in as {credentials.user_name}!")
 
     except requests.exceptions.RequestException as e:
         error_label = f"Failed to register user {user_name}"
@@ -208,10 +207,9 @@ def check_credentials() -> DBOSCloudCredentials:
 
         # Trim trailing /r /n
         credentials.token = credentials.token.strip()
-        dbos_logger.debug(f"Loaded credentials from {dbos_env_path}/credentials")
 
         if is_token_expired(credentials.token):
-            dbos_logger.warning("Credentials expired. Logging in again...")
+            print("Credentials expired. Logging in again...")
             delete_credentials()
             return empty_credentials
 
