@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 import jwt
 import requests
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from cryptography.x509 import load_pem_x509_certificate
 
 from .._logger import dbos_logger
@@ -69,14 +70,14 @@ class JWKSClient:
     def __init__(self, jwks_uri: str):
         self.jwks_uri = jwks_uri
 
-    def get_signing_key(self, kid: str) -> str:
+    def get_signing_key(self, kid: str) -> RSAPublicKey:
         response = requests.get(self.jwks_uri)
         jwks = response.json()
         for key in jwks["keys"]:
             if key["kid"] == kid:
                 cert_text = f"-----BEGIN CERTIFICATE-----\n{key['x5c'][0]}\n-----END CERTIFICATE-----"
                 cert = load_pem_x509_certificate(cert_text.encode())
-                return cert.public_key()
+                return cert.public_key()  # type: ignore
         raise Exception(f"Unable to find signing key with kid: {kid}")
 
 
