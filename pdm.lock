@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:d0f1cd7a7bea60bce3ced7e83ab5c2ff304d32639a0203af515efdf128d82461"
+content_hash = "sha256:f5bad3bdc5e8dfe96831c767d6e8661aa10b32900f7e020e0e7e2216224c72d5"
 
 [[metadata.targets]]
 requires_python = ">=3.9"
@@ -905,6 +905,19 @@ dependencies = [
 files = [
     {file = "jsonschema_specifications-2024.10.1-py3-none-any.whl", hash = "sha256:a09a0680616357d9a0ecf05c12ad234479f549239d0f5b55f3deea67475da9bf"},
     {file = "jsonschema_specifications-2024.10.1.tar.gz", hash = "sha256:0f38b83639958ce1152d02a7f062902c41c8fd20d558b0c34344292d417ae272"},
+]
+
+[[package]]
+name = "jwt"
+version = "1.3.1"
+requires_python = ">= 3.6"
+summary = "JSON Web Token library for Python 3."
+groups = ["default"]
+dependencies = [
+    "cryptography!=3.4.0,>=3.1",
+]
+files = [
+    {file = "jwt-1.3.1-py3-none-any.whl", hash = "sha256:61c9170f92e736b530655e75374681d4fcca9cfa8763ab42be57353b2b203494"},
 ]
 
 [[package]]
