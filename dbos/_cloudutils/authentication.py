@@ -104,7 +104,7 @@ def verify_token(token: str) -> None:
 
 def authenticate(get_refresh_token: bool = False) -> Optional[AuthenticationResponse]:
     print(
-        "[bold blue]Please log in/sign up to DBOS Cloud to access a Postgres database[/bold blue]"
+        "[bold blue]Please authenticate with DBOS Cloud to access a Postgres database[/bold blue]"
     )
 
     # Get device code

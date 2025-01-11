@@ -145,14 +145,14 @@ def check_user_profile(credentials: DBOSCloudCredentials) -> bool:
 
 
 def register_user(credentials: DBOSCloudCredentials) -> None:
-    print("User not registered in DBOS Cloud. Registering...")
+    print("Please register for DBOS Cloud")
 
     user_name = None
     while not user_name:
         user_name = typer.prompt("Choose your username")
         validation_result = is_valid_username(user_name)
         if validation_result is not True:
-            typer.echo(f"Invalid username: {validation_result}")
+            print(f"[red]Invalid username: {validation_result}[/red]")
             user_name = None
             continue
 
@@ -183,7 +183,7 @@ def register_user(credentials: DBOSCloudCredentials) -> None:
         profile = UserProfile(**response.json())
         credentials.user_name = profile.Name
         credentials.organization = profile.Organization
-        print(f" ... Successfully registered and logged in as {credentials.user_name}!")
+        print(f"Successfully registered and logged in as {credentials.user_name}!")
 
     except requests.exceptions.RequestException as e:
         error_label = f"Failed to register user {user_name}"

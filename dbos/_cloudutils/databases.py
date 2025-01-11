@@ -111,7 +111,7 @@ def create_user_db(
         )
         response.raise_for_status()
 
-        print(f"Successfully started provisioning database: {db_name}")
+        print(f"Successfully started provisioning {db_name}")
 
         status = ""
         while status not in ["available", "backing-up"]:
@@ -121,11 +121,10 @@ def create_user_db(
                 time.sleep(30)  # Otherwise, sleep 30 sec
 
             user_db_info = get_user_db_info(credentials, db_name)
-            print(
-                f"Waiting for cloud database to finish provisioning. Status: {user_db_info.Status}"
-            )
-            dbos_logger.info(user_db_info)
             status = user_db_info.Status
+            print(
+                f"[bold blue]Waiting for cloud database to finish provisioning.[/bold blue] Status: {status}"
+            )
 
         print("[green]Database successfully provisioned![/green]")
         return 0
@@ -170,7 +169,7 @@ def choose_database(credentials: DBOSCloudCredentials) -> Optional[UserDBInstanc
 
     if not user_dbs:
         # If not, prompt the user to provision one
-        print("Provisioning a cloud Postgres server")
+        print("Provisioning a cloud Postgres database server")
         user_db_name = f"{credentials.user_name}-db-server"
 
         # Use a default user name and auto generated password
