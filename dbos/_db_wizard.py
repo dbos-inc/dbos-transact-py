@@ -70,7 +70,7 @@ def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
                 f"Could not connect to the database. Exception: {db_connection_error}"
             )
 
-    # 7. Save the config to the config file and return the updated config.
+    # 6. Save the config to the config file and return the updated config.
     # TODO: make the config file prettier
     with open(config_file_path, "w") as file:
         file.write(yaml.dump(config))
