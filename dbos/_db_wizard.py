@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from ._dbos_config import ConfigFile
 
 from ._cloudutils.cloudutils import get_cloud_credentials
-from ._cloudutils.databases import choose_database
+from ._cloudutils.databases import choose_database, get_user_db_credentials
 from ._error import DBOSInitializationError
 from ._logger import dbos_logger
 
@@ -60,10 +60,17 @@ def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
         config["database"]["hostname"] = db.HostName
         config["database"]["port"] = db.Port
         config["database"]["username"] = db.DatabaseUsername
-        password = input("Enter password: ")
-        config["database"]["password"] = password
+        db_credentials = get_user_db_credentials(cred, db.PostgresInstanceName)
+        config["database"]["password"] = db_credentials.Password
 
-    # 6. Save the config to the config file and return the updated config.
+    # 6. Verify these new credentials work
+    db_connection_error = _check_db_connectivity(config)
+    if db_connection_error is not None:
+        raise DBOSInitializationError(
+            f"Could not connect to the database. Exception: {db_connection_error}"
+        )
+
+    # 7. Save the config to the config file and return the updated config.
     # TODO: make the config file prettier
     with open(config_file_path, "w") as file:
         file.write(yaml.dump(config))

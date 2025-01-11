@@ -18,6 +18,12 @@ from .._logger import dbos_logger
 
 
 @dataclass
+class UserDBCredentials:
+    RoleName: str
+    Password: str
+
+
+@dataclass
 class UserDBInstance:
     PostgresInstanceName: str = ""
     Status: str = ""
@@ -50,6 +56,23 @@ def get_user_db_info(credentials: DBOSCloudCredentials, db_name: str) -> UserDBI
     response.raise_for_status()
     data = response.json()
     return UserDBInstance(**data)
+
+
+def get_user_db_credentials(
+    credentials: DBOSCloudCredentials, db_name: str
+) -> UserDBCredentials:
+    bearer_token = f"Bearer {credentials.token}"
+
+    response = requests.get(
+        f"https://{DBOS_CLOUD_HOST}/v1alpha1/{credentials.organization}/databases/userdb/{db_name}/credentials",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": bearer_token,
+        },
+    )
+    response.raise_for_status()
+    data = response.json()
+    return UserDBCredentials(**data)
 
 
 def create_user_role(credentials: DBOSCloudCredentials, db_name: str) -> None:
