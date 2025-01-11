@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:f5bad3bdc5e8dfe96831c767d6e8661aa10b32900f7e020e0e7e2216224c72d5"
+content_hash = "sha256:0db25f2f1e4b2b1fd06b5110ef43b52db944e0220bd820665eff90f512e058b8"
 
 [[metadata.targets]]
 requires_python = ">=3.9"
@@ -908,19 +908,6 @@ files = [
 ]
 
 [[package]]
-name = "jwt"
-version = "1.3.1"
-requires_python = ">= 3.6"
-summary = "JSON Web Token library for Python 3."
-groups = ["default"]
-dependencies = [
-    "cryptography!=3.4.0,>=3.1",
-]
-files = [
-    {file = "jwt-1.3.1-py3-none-any.whl", hash = "sha256:61c9170f92e736b530655e75374681d4fcca9cfa8763ab42be57353b2b203494"},
-]
-
-[[package]]
 name = "mako"
 version = "1.3.5"
 requires_python = ">=3.8"
@@ -1510,7 +1497,7 @@ name = "pyjwt"
 version = "2.10.1"
 requires_python = ">=3.9"
 summary = "JSON Web Token implementation in Python"
-groups = ["dev"]
+groups = ["default"]
 files = [
     {file = "PyJWT-2.10.1-py3-none-any.whl", hash = "sha256:dcdd193e30abefd5debf142f9adfcdd2b58004e644f25406ffaebd50bd98dacb"},
     {file = "pyjwt-2.10.1.tar.gz", hash = "sha256:3cc5772eb20009233caf06e9d8a0577824723b44e6648ee0a2aedb6cf9381953"},
