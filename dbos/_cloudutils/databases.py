@@ -123,7 +123,7 @@ def create_user_db(
             user_db_info = get_user_db_info(credentials, db_name)
             status = user_db_info.Status
             print(
-                f"[bold blue]Waiting for cloud database to finish provisioning.[/bold blue] Status: {status}"
+                f"[bold blue]Waiting for cloud database to finish provisioning. Status:[/bold blue] [yellow]{status}[/yellow]"
             )
 
         print("[green]Database successfully provisioned![/green]")

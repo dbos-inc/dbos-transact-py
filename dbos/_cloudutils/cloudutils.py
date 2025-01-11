@@ -183,7 +183,7 @@ def register_user(credentials: DBOSCloudCredentials) -> None:
         profile = UserProfile(**response.json())
         credentials.user_name = profile.Name
         credentials.organization = profile.Organization
-        print(f"Successfully registered and logged in as {credentials.user_name}!")
+        print(f"[green]Successfully registered as {credentials.user_name}[/green]")
 
     except requests.exceptions.RequestException as e:
         error_label = f"Failed to register user {user_name}"
@@ -237,7 +237,7 @@ def get_cloud_credentials() -> DBOSCloudCredentials:
     user_exists = check_user_profile(credentials)
     if user_exists:
         write_credentials(credentials)
-        dbos_logger.debug(f"Successfully logged in as {credentials.user_name}!")
+        print(f"[green]Successfully logged in as {credentials.user_name}[/green]")
         return credentials
 
     # User doesn't exist, register the user in DBOS Cloud
