@@ -85,8 +85,7 @@
         "required": [
           "hostname",
           "port",
-          "username",
-          "password"
+          "username"
         ]
       },
       "telemetry": {
