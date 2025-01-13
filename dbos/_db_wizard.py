@@ -62,6 +62,7 @@ def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
         config["database"]["username"] = db.DatabaseUsername
         db_credentials = get_user_db_credentials(cred, db.PostgresInstanceName)
         config["database"]["password"] = db_credentials.Password
+        config["database"]["local_suffix"] = True
 
         # Verify these new credentials work
         db_connection_error = _check_db_connectivity(config)
