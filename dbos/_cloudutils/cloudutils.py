@@ -11,6 +11,8 @@ import requests
 import typer
 from rich import print
 
+from dbos._error import DBOSInitializationError
+
 from .._logger import dbos_logger
 from .authentication import authenticate
 
@@ -105,7 +107,9 @@ def handle_api_errors(label: str, e: requests.exceptions.RequestException) -> No
     if hasattr(e, "response") and e.response is not None:
         resp = e.response.json()
         if is_cloud_api_error_response(resp):
-            dbos_logger.error(f"[{resp['requestID']}] {label}: {resp['message']}.")
+            message = f"[{resp['requestID']}] {label}: {resp['message']}."
+            dbos_logger.error(message)
+            raise DBOSInitializationError(message)
 
 
 def is_valid_username(value: str) -> Union[bool, str]:

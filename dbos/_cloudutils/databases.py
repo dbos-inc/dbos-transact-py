@@ -13,6 +13,7 @@ from dbos._cloudutils.cloudutils import (
     handle_api_errors,
     is_cloud_api_error_response,
 )
+from dbos._error import DBOSInitializationError
 
 from .._logger import dbos_logger
 
@@ -46,46 +47,74 @@ class UserDBInstance:
 def get_user_db_info(credentials: DBOSCloudCredentials, db_name: str) -> UserDBInstance:
     bearer_token = f"Bearer {credentials.token}"
 
-    response = requests.get(
-        f"https://{DBOS_CLOUD_HOST}/v1alpha1/{credentials.organization}/databases/userdb/info/{db_name}",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": bearer_token,
-        },
-    )
-    response.raise_for_status()
-    data = response.json()
-    return UserDBInstance(**data)
+    try:
+        response = requests.get(
+            f"https://{DBOS_CLOUD_HOST}/v1alpha1/{credentials.organization}/databases/userdb/info/{db_name}",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": bearer_token,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        return UserDBInstance(**data)
+    except requests.exceptions.RequestException as e:
+        error_label = f"Failed to get status of database {db_name}"
+        if hasattr(e, "response") and e.response is not None:
+            resp = e.response.json()
+            if is_cloud_api_error_response(resp):
+                handle_api_errors(error_label, e)
+        else:
+            dbos_logger.error(f"{error_label}: {str(e)}")
+        raise DBOSInitializationError(f"{error_label}: {str(e)}")
 
 
 def get_user_db_credentials(
     credentials: DBOSCloudCredentials, db_name: str
 ) -> UserDBCredentials:
     bearer_token = f"Bearer {credentials.token}"
-
-    response = requests.get(
-        f"https://{DBOS_CLOUD_HOST}/v1alpha1/{credentials.organization}/databases/userdb/{db_name}/credentials",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": bearer_token,
-        },
-    )
-    response.raise_for_status()
-    data = response.json()
-    return UserDBCredentials(**data)
+    try:
+        response = requests.get(
+            f"https://{DBOS_CLOUD_HOST}/v1alpha1/{credentials.organization}/databases/userdb/{db_name}/credentials",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": bearer_token,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        return UserDBCredentials(**data)
+    except requests.exceptions.RequestException as e:
+        error_label = f"Failed to get credentials for database {db_name}"
+        if hasattr(e, "response") and e.response is not None:
+            resp = e.response.json()
+            if is_cloud_api_error_response(resp):
+                handle_api_errors(error_label, e)
+        else:
+            dbos_logger.error(f"{error_label}: {str(e)}")
+        raise DBOSInitializationError(f"{error_label}: {str(e)}")
 
 
 def create_user_role(credentials: DBOSCloudCredentials, db_name: str) -> None:
     bearer_token = f"Bearer {credentials.token}"
-
-    response = requests.post(
-        f"https://{DBOS_CLOUD_HOST}/v1alpha1/{credentials.organization}/databases/userdb/{db_name}/createuserdbrole",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": bearer_token,
-        },
-    )
-    response.raise_for_status()
+    try:
+        response = requests.post(
+            f"https://{DBOS_CLOUD_HOST}/v1alpha1/{credentials.organization}/databases/userdb/{db_name}/createuserdbrole",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": bearer_token,
+            },
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        error_label = f"Failed to create a user role for database {db_name}"
+        if hasattr(e, "response") and e.response is not None:
+            resp = e.response.json()
+            if is_cloud_api_error_response(resp):
+                handle_api_errors(error_label, e)
+        else:
+            dbos_logger.error(f"{error_label}: {str(e)}")
+        raise DBOSInitializationError(f"{error_label}: {str(e)}")
 
 
 def create_user_db(
