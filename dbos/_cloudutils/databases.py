@@ -229,6 +229,9 @@ def choose_database(credentials: DBOSCloudCredentials) -> Optional[UserDBInstanc
         user_db_name = user_dbs[0].PostgresInstanceName
         print(f"[green]Using database instance:[/green] {user_db_name}")
 
-    create_user_role(credentials, user_db_name)
+    info = get_user_db_info(credentials, user_db_name)
 
-    return get_user_db_info(credentials, user_db_name)
+    if not info.IsLinked:
+        create_user_role(credentials, user_db_name)
+
+    return info

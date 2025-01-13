@@ -2,6 +2,7 @@ import time
 from typing import TYPE_CHECKING, Optional
 
 import docker  # type: ignore
+import typer
 import yaml
 from rich import print
 from sqlalchemy import URL, create_engine, text
@@ -59,9 +60,16 @@ def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
             raise DBOSInitializationError("Error connecting to cloud database")
         config["database"]["hostname"] = db.HostName
         config["database"]["port"] = db.Port
-        config["database"]["username"] = db.DatabaseUsername
-        db_credentials = get_user_db_credentials(cred, db.PostgresInstanceName)
-        config["database"]["password"] = db_credentials.Password
+        if db.SupabaseReference is not None:
+            config["database"]["username"] = f"postgres.{db.SupabaseReference}"
+            supabase_password = typer.prompt(
+                "Enter your Supabase database password", hide_input=True
+            )
+            config["database"]["password"] = supabase_password
+        else:
+            config["database"]["username"] = db.DatabaseUsername
+            db_credentials = get_user_db_credentials(cred, db.PostgresInstanceName)
+            config["database"]["password"] = db_credentials.Password
         config["database"]["local_suffix"] = True
 
         # Verify these new credentials work
