@@ -7,7 +7,7 @@ import pytest
 
 # Public API
 from dbos import load_config
-from dbos._dbos_config import _set_env_vars
+from dbos._dbos_config import set_env_vars
 from dbos._error import DBOSInitializationError
 
 mock_filename = "test.yaml"
@@ -34,9 +34,9 @@ def test_valid_config(mocker):
                 - "python3 main.py"
             admin_port: 8001
         database:
-          hostname: 'some host'
-          port: 1234
-          username: 'some user'
+          hostname: 'localhost'
+          port: 5432
+          username: 'postgres'
           password: ${PGPASSWORD}
           app_db_name: 'some db'
           connectionTimeoutMillis: 3000
@@ -54,9 +54,9 @@ def test_valid_config(mocker):
     configFile = load_config(mock_filename)
     assert configFile["name"] == "some-app"
     assert configFile["language"] == "python"
-    assert configFile["database"]["hostname"] == "some host"
-    assert configFile["database"]["port"] == 1234
-    assert configFile["database"]["username"] == "some user"
+    assert configFile["database"]["hostname"] == "localhost"
+    assert configFile["database"]["port"] == 5432
+    assert configFile["database"]["username"] == "postgres"
     assert configFile["database"]["password"] == os.environ["PGPASSWORD"]
     assert configFile["database"]["app_db_name"] == "some db"
     assert configFile["database"]["connectionTimeoutMillis"] == 3000
@@ -64,7 +64,7 @@ def test_valid_config(mocker):
     assert configFile["env"]["bob"] is None  # Unset environment variable
     assert configFile["env"]["test_number"] == 123
 
-    _set_env_vars(configFile)
+    set_env_vars(configFile)
     assert os.environ["bazbaz"] == "BAZBAZ"
     assert os.environ["foo"] == "FOOFOO"
     assert os.environ["test_number"] == "123"
@@ -80,9 +80,9 @@ def test_valid_config_without_appdbname(mocker):
                 - "python3 main.py"
             admin_port: 8001
         database:
-          hostname: 'some host'
-          port: 1234
-          username: 'some user'
+          hostname: 'localhost'
+          port: 5432
+          username: 'postgres'
           password: ${PGPASSWORD}
           connectionTimeoutMillis: 3000
     """
@@ -259,9 +259,9 @@ def test_local_config(mocker):
                 - "python3 main.py"
             admin_port: 8001
         database:
-          hostname: 'some host'
-          port: 1234
-          username: 'some user'
+          hostname: 'localhost'
+          port: 5432
+          username: 'postgres'
           password: ${PGPASSWORD}
           app_db_name: 'some_db'
           connectionTimeoutMillis: 3000
@@ -276,9 +276,9 @@ def test_local_config(mocker):
     assert configFile["name"] == "some-app"
     assert configFile["database"]["local_suffix"] == True
     assert configFile["language"] == "python"
-    assert configFile["database"]["hostname"] == "some host"
-    assert configFile["database"]["port"] == 1234
-    assert configFile["database"]["username"] == "some user"
+    assert configFile["database"]["hostname"] == "localhost"
+    assert configFile["database"]["port"] == 5432
+    assert configFile["database"]["username"] == "postgres"
     assert configFile["database"]["password"] == os.environ["PGPASSWORD"]
     assert configFile["database"]["app_db_name"] == "some_db_local"
     assert configFile["database"]["connectionTimeoutMillis"] == 3000
@@ -293,9 +293,9 @@ def test_local_config_without_name(mocker):
                 - "python3 main.py"
             admin_port: 8001
         database:
-          hostname: 'some host'
-          port: 1234
-          username: 'some user'
+          hostname: 'localhost'
+          port: 5432
+          username: 'postgres'
           password: ${PGPASSWORD}
           connectionTimeoutMillis: 3000
           local_suffix: true
@@ -309,9 +309,32 @@ def test_local_config_without_name(mocker):
     assert configFile["name"] == "some-app"
     assert configFile["database"]["local_suffix"] == True
     assert configFile["language"] == "python"
-    assert configFile["database"]["hostname"] == "some host"
-    assert configFile["database"]["port"] == 1234
-    assert configFile["database"]["username"] == "some user"
+    assert configFile["database"]["hostname"] == "localhost"
+    assert configFile["database"]["port"] == 5432
+    assert configFile["database"]["username"] == "postgres"
     assert configFile["database"]["password"] == os.environ["PGPASSWORD"]
     assert configFile["database"]["app_db_name"] == "some_app_local"
     assert configFile["database"]["connectionTimeoutMillis"] == 3000
+
+
+def test_db_connect_failed(mocker):
+    mock_config = """
+        name: "some-app"
+        language: "python"
+        runtimeConfig:
+            start:
+                - "python3 main.py"
+        database:
+          hostname: 'example.com'
+          port: 5432
+          username: 'pgu'
+          password: ${PGPASSWORD}
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
+    )
+
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        load_config(mock_filename)
+
+    assert "Could not connect to the database" in str(exc_info.value)
