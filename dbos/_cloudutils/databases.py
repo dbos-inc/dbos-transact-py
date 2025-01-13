@@ -170,7 +170,7 @@ def choose_database(credentials: DBOSCloudCredentials) -> Optional[UserDBInstanc
     if not user_dbs:
         # If not, prompt the user to provision one
         print("Provisioning a cloud Postgres database server")
-        user_db_name = f"{credentials.user_name}-db-server"
+        user_db_name = f"{credentials.userName}-db-server"
 
         # Use a default user name and auto generated password
         app_db_username = "dbos_user"

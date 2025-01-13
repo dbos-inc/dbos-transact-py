@@ -15,12 +15,13 @@ from .._logger import dbos_logger
 from .authentication import authenticate
 
 
+# Must be the same as in TS
 @dataclass
 class DBOSCloudCredentials:
     token: str
-    user_name: str
+    userName: str
     organization: str
-    refresh_token: Optional[str] = None
+    refreshToken: Optional[str] = None
 
 
 @dataclass
@@ -127,7 +128,7 @@ def check_user_profile(credentials: DBOSCloudCredentials) -> bool:
         )
         response.raise_for_status()
         profile = UserProfile(**response.json())
-        credentials.user_name = profile.Name
+        credentials.userName = profile.Name
         credentials.organization = profile.Organization
         return True
     except requests.exceptions.RequestException as e:
@@ -181,9 +182,9 @@ def register_user(credentials: DBOSCloudCredentials) -> None:
         )
         response.raise_for_status()
         profile = UserProfile(**response.json())
-        credentials.user_name = profile.Name
+        credentials.userName = profile.Name
         credentials.organization = profile.Organization
-        print(f"[green]Successfully registered as {credentials.user_name}[/green]")
+        print(f"[green]Successfully registered as {credentials.userName}[/green]")
 
     except requests.exceptions.RequestException as e:
         error_label = f"Failed to register user {user_name}"
@@ -195,7 +196,7 @@ def register_user(credentials: DBOSCloudCredentials) -> None:
 
 
 def check_credentials() -> DBOSCloudCredentials:
-    empty_credentials = DBOSCloudCredentials(token="", user_name="", organization="")
+    empty_credentials = DBOSCloudCredentials(token="", userName="", organization="")
 
     if not credentials_exist():
         return empty_credentials
@@ -230,14 +231,14 @@ def get_cloud_credentials() -> DBOSCloudCredentials:
             dbos_logger.error("Failed to login. Exiting...")
             exit(1)
         credentials.token = auth_response.token
-        credentials.refresh_token = auth_response.refresh_token
+        credentials.refreshToken = auth_response.refresh_token
         write_credentials(credentials)
 
     # Check if the user exists in DBOS Cloud
     user_exists = check_user_profile(credentials)
     if user_exists:
         write_credentials(credentials)
-        print(f"[green]Successfully logged in as {credentials.user_name}[/green]")
+        print(f"[green]Successfully logged in as {credentials.userName}[/green]")
         return credentials
 
     # User doesn't exist, register the user in DBOS Cloud
