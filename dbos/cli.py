@@ -338,8 +338,59 @@ def reset(
 
 
 @workflow.command(help="List workflows for your application")
-def list() -> None:
-    print("Listing workflows")
+def list(
+    limit: Annotated[
+        typing.Optional[int],
+        typer.Option("--limit", "-l", help="Limit the results returned"),
+    ] = 10,
+    user: Annotated[
+        typing.Optional[str],
+        typer.Option("--user", "-u", help="Retrieve workflows run by this user"),
+    ] = None,
+    starttime: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--start-time",
+            "-s",
+            help="Retrieve workflows starting after this timestamp (ISO 8601 format)",
+        ),
+    ] = None,
+    endtime: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--end-time",
+            "-e",
+            help="Retrieve workflows starting before this timestamp (ISO 8601 format)",
+        ),
+    ] = None,
+    status: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--status",
+            "-S",
+            help="Retrieve workflows with this status (PENDING, SUCCESS, ERROR, RETRIES_EXCEEDED, ENQUEUED, or CANCELLED)",
+        ),
+    ] = None,
+    appversion: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--application-version",
+            "-v",
+            help="Retrieve workflows with this application version",
+        ),
+    ] = None,
+    request: Annotated[
+        bool,
+        typer.Option("--request", help="Retrieve workflow request information"),
+    ] = True,
+    appdir: Annotated[
+        typing.Optional[str],
+        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
+    ] = None,
+) -> None:
+    print(
+        f"Listing workflows limit {limit} user {user} st {starttime} et {endtime} status {status} appver {appversion} req {request} adddir {appdir}"
+    )
 
 
 @workflow.command(help="Retrieve the status of a workflow")
