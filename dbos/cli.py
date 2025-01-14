@@ -23,6 +23,9 @@ from ._dbos_config import _is_valid_app_name
 from ._sys_db import SystemDatabase
 
 app = typer.Typer()
+workflow = typer.Typer()
+
+app.add_typer(workflow, name="workflow", help="Manage DBOS workflows")
 
 
 def _on_windows() -> bool:
@@ -33,6 +36,7 @@ def _on_windows() -> bool:
     help="Start your DBOS application using the start commands in 'dbos-config.yaml'"
 )
 def start() -> None:
+    print("mjjjjjjjj Starting DBOS application")
     config = load_config()
     start_commands = config["runtimeConfig"]["start"]
     typer.echo("Executing start commands from 'dbos-config.yaml'")
@@ -331,6 +335,35 @@ def reset(
     finally:
         if sys_db:
             sys_db.destroy()
+
+
+@workflow.command(help="List workflows for your application")
+def list() -> None:
+    print("Listing workflows")
+
+
+@workflow.command(help="Retrieve the status of a workflow")
+def get() -> None:
+    print("Get Workflow")
+
+
+@workflow.command(
+    help="Cancel a workflow so it is no longer automatically retried or restarted"
+)
+def cancel() -> None:
+    print("Cancel workflows")
+
+
+@workflow.command(
+    help="Resume a workflow from the last step it executed, keeping its UUID"
+)
+def resume() -> None:
+    print("resume workflows")
+
+
+@workflow.command(help="Restart a workflow from the beginning with a new UUID")
+def restart() -> None:
+    print("restart workflows")
 
 
 if __name__ == "__main__":
