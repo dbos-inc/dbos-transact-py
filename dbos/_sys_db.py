@@ -1142,6 +1142,7 @@ class SystemDatabase:
                 sa.select(
                     SystemSchema.workflow_queue.c.workflow_uuid,
                     SystemSchema.workflow_queue.c.started_at_epoch_ms,
+                    SystemSchema.workflow_queue.c.executor_id,
                 )
                 .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
                 .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms == None)
@@ -1151,26 +1152,48 @@ class SystemDatabase:
                 query = query.limit(queue.concurrency)
 
             rows = c.execute(query).fetchall()
+            dbos_logger.info(f"dequeued {len(rows)} task(s)")
+            dbos_logger.info(rows)
+            if len(rows) == 0:
+                return []
 
             # First, get the IDs of functions that have already been started
             # We will use these to calculate how many more functions this worker can start while respecting global concurrency
             already_started_ids: List[str] = [
                 row[0] for row in rows if row[1] is not None
             ]
+            dbos_logger.info(f"{len(already_started_ids)} task(s) already started")
             max_tasks_this_worker_can_dequeue_to_respect_global_concurrency = max(
-                queue.concurrency - len(already_started_ids), 0
+                # queue.concurrency >= len(rows) > 0
+                len(rows) - len(already_started_ids),
+                0,
+            )
+            dbos_logger.info(
+                f"{max_tasks_this_worker_can_dequeue_to_respect_global_concurrency} task(s) eligible for dequeue"
             )
             if max_tasks_this_worker_can_dequeue_to_respect_global_concurrency == 0:
                 return []
 
-            # Now, get the workflow IDs of functions that have not yet been started
-            # Limit the list by the maximum concurrency for this worker
-            dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None][
-                : min(
+            tasks_this_worker_is_already_working_on: List[str] = len(
+                [row[0] for row in rows if len(rows) == 3 and rows[2] == executor_id]
+            )
+
+            # This worker can dequeue up whatever is smaller between the eligible tasks and its set concurrency
+            # Of course we must account for tasks this worker is already working on, dequeued during a previous pass of this function
+            max_tasks_this_worker_can_dequeue = (
+                min(
                     max_tasks_this_worker_can_dequeue_to_respect_global_concurrency,
                     queue.worker_concurrency,
                 )
+                - tasks_this_worker_is_already_working_on
+            )
+
+            # Now, get the workflow IDs of functions that have not yet been started
+            # Limit the list by the maximum concurrency for this worker
+            dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None][
+                :max_tasks_this_worker_can_dequeue
             ]
+            dbos_logger.info(f"dequeueing {len(dequeued_ids)} task(s)")
             ret_ids: list[str] = []
             for id in dequeued_ids:
 
@@ -1194,11 +1217,11 @@ class SystemDatabase:
                     )
                 )
 
-                # Then give it a start time
+                # Then give it a start time and assign the executor ID
                 c.execute(
                     SystemSchema.workflow_queue.update()
                     .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
-                    .values(started_at_epoch_ms=start_time_ms)
+                    .values(started_at_epoch_ms=start_time_ms, executor_id=executor_id)
                 )
                 ret_ids.append(id)
 
