@@ -1157,8 +1157,8 @@ class SystemDatabase:
             already_started_ids: List[str] = [
                 row[0] for row in rows if row[1] is not None
             ]
-            max_tasks_this_worker_can_dequeue_to_respect_global_concurrency = (
-                queue.concurrency - len(already_started_ids)
+            max_tasks_this_worker_can_dequeue_to_respect_global_concurrency = max(
+                queue.concurrency - len(already_started_ids), 0
             )
 
             # Now, get the workflow IDs of functions that have not yet been started
