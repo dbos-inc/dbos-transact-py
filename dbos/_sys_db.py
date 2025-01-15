@@ -1174,8 +1174,8 @@ class SystemDatabase:
             if max_tasks_this_worker_can_dequeue_to_respect_global_concurrency == 0:
                 return []
 
-            tasks_this_worker_is_already_working_on: List[str] = len(
-                [row[0] for row in rows if len(rows) == 3 and rows[2] == executor_id]
+            tasks_this_worker_is_already_working_on: int = len(
+                [row[0] for row in rows if len(row) == 3 and rows[2] == executor_id]
             )
 
             # This worker can dequeue up whatever is smaller between the eligible tasks and its set concurrency
