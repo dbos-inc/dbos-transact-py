@@ -16,6 +16,7 @@ from rich import print
 from rich.prompt import Prompt
 from typing_extensions import Annotated
 
+from dbos import DBOS
 from dbos._schemas.system_database import SystemSchema
 
 from . import load_config
@@ -412,20 +413,41 @@ def get(
 @workflow.command(
     help="Cancel a workflow so it is no longer automatically retried or restarted"
 )
-def cancel() -> None:
+def cancel(
+    uuid: Annotated[str, typer.Argument()],
+    appdir: Annotated[
+        typing.Optional[str],
+        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
+    ] = None,
+) -> None:
     print("Cancel workflows")
+    _cancel_workflow(uuid)
 
 
 @workflow.command(
     help="Resume a workflow from the last step it executed, keeping its UUID"
 )
-def resume() -> None:
+def resume(
+    uuid: Annotated[str, typer.Argument()],
+    appdir: Annotated[
+        typing.Optional[str],
+        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
+    ] = None,
+) -> None:
     print("resume workflows")
+    _reattempt_workflow(uuid, False)
 
 
 @workflow.command(help="Restart a workflow from the beginning with a new UUID")
-def restart() -> None:
+def restart(
+    uuid: Annotated[str, typer.Argument()],
+    appdir: Annotated[
+        typing.Optional[str],
+        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
+    ] = None,
+) -> None:
     print("restart workflows")
+    _reattempt_workflow(uuid, True)
 
 
 def _list_workflows(
@@ -496,6 +518,38 @@ def _get_workflow(uuid: str, request: bool) -> str:
 
     info = _get_workflow_info(sys_db, uuid, request)
     return info
+
+
+def _cancel_workflow(uuid: str) -> str:
+    print(f"Getting workflow info for {uuid}")
+    config = load_config()
+    sys_db = None
+
+    try:
+        sys_db = SystemDatabase(config)
+    except Exception as e:
+        typer.echo(f"DBOS system schema migration failed: {e}")
+    finally:
+        if sys_db:
+            sys_db.destroy()
+
+    sys_db.set_workflow_status(uuid, "CANCELLED", False)
+
+
+def _reattempt_workflow(uuid: str, startNewWorkflow: bool) -> str:
+    print(f"Reattempt workflow info for {uuid}")
+    config = load_config()
+
+    dbos = DBOS(config=config)
+    dbos.launch()
+
+    if startNewWorkflow != True:
+        dbos._sys_db.set_workflow_status(uuid, "PENDING", True)
+
+    handle = dbos.execute_workflow_id(uuid)
+    output = handle.result()
+    print(output)
+    dbos.destroy()
 
 
 def _get_workflow_info(
