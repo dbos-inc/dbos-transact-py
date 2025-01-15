@@ -320,3 +320,43 @@ def test_multiple_queues(dbos: DBOS) -> None:
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_one_at_a_time_with_worker_concurrency(dbos: DBOS) -> None:
+    wf_counter = 0
+    flag = False
+    workflow_event = threading.Event()
+    main_thread_event = threading.Event()
+
+    @DBOS.workflow()
+    def workflow_one() -> None:
+        nonlocal wf_counter
+        wf_counter += 1
+        main_thread_event.set()  # Signal main thread we got running
+        workflow_event.wait()  # Wait to complete
+
+    @DBOS.workflow()
+    def workflow_two() -> None:
+        nonlocal flag
+        flag = True
+
+    queue = Queue("test_queue", worker_concurrency=1)
+    handle1 = queue.enqueue(workflow_one)
+    handle2 = queue.enqueue(workflow_two)
+
+    # Wait until the first task is dequeued
+    main_thread_event.wait()
+    # Let pass a few dequeuing intervals
+    time.sleep(2)
+    # 2nd task should not have been dequeued
+    assert not flag
+    # Unlock the first task
+    workflow_event.set()
+    # Both tasks should have completed
+    assert handle1.get_result() == None
+    assert handle2.get_result() == None
+    assert flag
+    assert wf_counter == 1
+    assert queue_entries_are_cleaned_up(dbos)
+
+    # Test global concurrency enforcement (queue.concurrency <= number tasks already started)
