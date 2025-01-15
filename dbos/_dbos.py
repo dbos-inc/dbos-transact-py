@@ -83,7 +83,7 @@ from ._context import (
 )
 from ._dbos_config import ConfigFile, load_config, set_env_vars
 from ._error import DBOSException, DBOSNonExistentWorkflowError
-from ._logger import add_otlp_to_all_loggers, dbos_logger, init_logger
+from ._logger import add_otlp_to_all_loggers, dbos_logger
 from ._sys_db import SystemDatabase
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
