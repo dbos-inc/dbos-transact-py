@@ -1136,7 +1136,7 @@ class SystemDatabase:
 
             # Select not-yet-completed functions in the queue ordered by the
             # time at which they were enqueued.
-            # If there is a concurrency limit N, select only the N most recent
+            # If there is a concurrency limit N, select only the N oldest enqueued
             # functions, else select all of them.
             query = (
                 sa.select(
@@ -1150,10 +1150,25 @@ class SystemDatabase:
             if queue.concurrency is not None:
                 query = query.limit(queue.concurrency)
 
-            # From the functions retrieved, get the workflow IDs of the functions
-            # that have not yet been started so we can start them.
             rows = c.execute(query).fetchall()
-            dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
+
+            # First, get the IDs of functions that have already been started
+            # We will use these to calculate how many more functions this worker can start while respecting global concurrency
+            already_started_ids: List[str] = [
+                row[0] for row in rows if row[1] is not None
+            ]
+            max_tasks_this_worker_can_dequeue_to_respect_global_concurrency = (
+                queue.concurrency - len(already_started_ids)
+            )
+
+            # Now, get the workflow IDs of functions that have not yet been started
+            # Limit the list by the maximum concurrency for this worker
+            dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None][
+                : min(
+                    max_tasks_this_worker_can_dequeue_to_respect_global_concurrency,
+                    queue.worker_concurrency,
+                )
+            ]
             ret_ids: list[str] = []
             for id in dequeued_ids:
 

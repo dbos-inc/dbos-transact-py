@@ -32,10 +32,12 @@ class Queue:
         self,
         name: str,
         concurrency: Optional[int] = None,
+        worker_concurrency: Optional[int] = None,
         limiter: Optional[QueueRateLimit] = None,
     ) -> None:
         self.name = name
         self.concurrency = concurrency
+        self.worker_concurrency = worker_concurrency
         self.limiter = limiter
         from ._dbos import _get_or_create_dbos_registry
 
