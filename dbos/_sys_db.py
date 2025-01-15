@@ -562,6 +562,8 @@ class SystemDatabase:
             SystemSchema.workflow_status.c.created_at.desc()
         )
 
+        print(query)
+
         if input.name:
             query = query.where(SystemSchema.workflow_status.c.name == input.name)
         if input.authenticated_user:
@@ -589,9 +591,13 @@ class SystemDatabase:
         if input.limit:
             query = query.limit(input.limit)
 
+        print(query)
+
         with self.engine.begin() as c:
             rows = c.execute(query)
         workflow_uuids = [row[0] for row in rows]
+
+        print(workflow_uuids)
 
         return GetWorkflowsOutput(workflow_uuids)
 
