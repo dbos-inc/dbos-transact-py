@@ -389,15 +389,24 @@ def list(
         typer.Option("--app-dir", "-d", help="Specify the application root directory"),
     ] = None,
 ) -> None:
-    # print(
-    #    f"Listing workflows limit {limit} user {user} st {starttime} et {endtime} status {status} appver {appversion} req {request} adddir {appdir}"
-    # )
+
     _list_workflows(limit, user, starttime, endtime, status, request, appversion)
 
 
 @workflow.command(help="Retrieve the status of a workflow")
-def get() -> None:
+def get(
+    uuid: Annotated[str, typer.Argument()],
+    appdir: Annotated[
+        typing.Optional[str],
+        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
+    ] = None,
+    request: Annotated[
+        bool,
+        typer.Option("--request", help="Retrieve workflow request information"),
+    ] = True,
+) -> None:
     print("Get Workflow")
+    print(_get_workflow(uuid, request))
 
 
 @workflow.command(
@@ -470,6 +479,23 @@ def _list_workflows(
 
     # print(json.dumps(infos))
     print(infos)
+
+
+def _get_workflow(uuid: str, request: bool) -> str:
+    print(f"Getting workflow info for {uuid}")
+    config = load_config()
+    sys_db = None
+
+    try:
+        sys_db = SystemDatabase(config)
+    except Exception as e:
+        typer.echo(f"DBOS system schema migration failed: {e}")
+    finally:
+        if sys_db:
+            sys_db.destroy()
+
+    info = _get_workflow_info(sys_db, uuid, request)
+    return info
 
 
 def _get_workflow_info(
