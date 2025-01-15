@@ -1160,6 +1160,8 @@ class SystemDatabase:
             max_tasks_this_worker_can_dequeue_to_respect_global_concurrency = max(
                 queue.concurrency - len(already_started_ids), 0
             )
+            if max_tasks_this_worker_can_dequeue_to_respect_global_concurrency == 0:
+                return []
 
             # Now, get the workflow IDs of functions that have not yet been started
             # Limit the list by the maximum concurrency for this worker
