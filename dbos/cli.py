@@ -1,3 +1,4 @@
+import json
 import os
 import platform
 import shutil
@@ -20,7 +21,7 @@ from dbos._schemas.system_database import SystemSchema
 from . import load_config
 from ._app_db import ApplicationDatabase
 from ._dbos_config import _is_valid_app_name
-from ._sys_db import SystemDatabase
+from ._sys_db import GetWorkflowsInput, GetWorkflowsOutput, SystemDatabase
 
 app = typer.Typer()
 workflow = typer.Typer()
@@ -388,9 +389,10 @@ def list(
         typer.Option("--app-dir", "-d", help="Specify the application root directory"),
     ] = None,
 ) -> None:
-    print(
-        f"Listing workflows limit {limit} user {user} st {starttime} et {endtime} status {status} appver {appversion} req {request} adddir {appdir}"
-    )
+    # print(
+    #    f"Listing workflows limit {limit} user {user} st {starttime} et {endtime} status {status} appver {appversion} req {request} adddir {appdir}"
+    # )
+    _list_workflows(limit, user, starttime, endtime, status, request, appversion)
 
 
 @workflow.command(help="Retrieve the status of a workflow")
@@ -415,6 +417,87 @@ def resume() -> None:
 @workflow.command(help="Restart a workflow from the beginning with a new UUID")
 def restart() -> None:
     print("restart workflows")
+
+
+def _list_workflows(
+    li: int,
+    user: str,
+    starttime: str,
+    endtime: str,
+    status: str,
+    request: bool,
+    appversion: str,
+) -> None:
+    print(
+        f"Listing steps limit {li} user {user} st {starttime} et {endtime} status {status} req {request}"
+    )
+    config = load_config()
+    sys_db = None
+
+    try:
+        sys_db = SystemDatabase(config)
+    except Exception as e:
+        typer.echo(f"DBOS system schema migration failed: {e}")
+    finally:
+        if sys_db:
+            sys_db.destroy()
+
+    input = GetWorkflowsInput()
+    input.authenticated_user = user
+    input.start_time = starttime
+    input.end_time = endtime
+    input.status = status
+    input.application_version = appversion
+    input.limit = li
+
+    output: GetWorkflowsOutput = sys_db.get_workflows(input)
+
+    print(output)
+
+    infos = []
+
+    # TODO reverse the workflow uuids
+
+    if output.workflow_uuids is None:
+        print("No workflows found")
+        return {}
+
+    for workflow_id in output.workflow_uuids:
+        info = _get_workflow_info(
+            sys_db, workflow_id, request
+        )  # Call the method for each ID
+        infos.append(info)
+
+    # print(json.dumps(infos))
+    print(infos)
+
+
+def _get_workflow_info(
+    sys_db: SystemDatabase, workflowUUID: str, getRequest: bool
+) -> str:
+    info = sys_db.get_workflow_status(workflowUUID)
+    if info is None:
+        return {}
+
+    info["workflowUUID"] = workflowUUID
+
+    input_data = sys_db.get_workflow_inputs(workflowUUID)
+    if input_data is not None:
+        info["input"] = input_data
+
+    if info.get("status") == "SUCCESS":
+        result = sys_db.await_workflow_result(workflowUUID)
+        info["output"] = result
+    elif info.get("status") == "ERROR":
+        try:
+            sys_db.await_workflow_result(workflowUUID)
+        except Exception as e:
+            info["error"] = str(e)
+
+    if not getRequest:
+        info.pop("request", None)
+
+    return info
 
 
 if __name__ == "__main__":
