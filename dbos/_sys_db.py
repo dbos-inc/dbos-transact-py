@@ -1157,16 +1157,16 @@ class SystemDatabase:
                 return []
 
             # First, get the IDs of functions that have already been started
-            # We will use these to calculate how many more functions this worker can start while respecting global concurrency
-            already_started_ids: List[str] = [
-                row[0] for row in rows if row[1] is not None
-            ]
+            # We will use these to calculate how many more functions this worker can start
+            number_of_tasks_already_started: int = len(
+                [row[0] for row in rows if row[1] is not None]
+            )
             dbos_logger.debug(
-                f"[{queue.name}] {len(already_started_ids)} task(s) already started"
+                f"[{queue.name}] {number_of_tasks_already_started} task(s) already started"
             )
 
-            # queue lenght >= queue.concurrency >= len(rows) >= len(already_started_ids) > 0
-            number_of_eligible_tasks: int = len(rows) - len(already_started_ids)
+            # queue lenght >= queue.concurrency >= len(rows) >= number_of_tasks_already_started > 0
+            number_of_eligible_tasks: int = len(rows) - number_of_tasks_already_started
             dbos_logger.debug(
                 f"[{queue.name}] {number_of_eligible_tasks} task(s) eligible for dequeue"
             )
