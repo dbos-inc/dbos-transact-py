@@ -35,6 +35,14 @@ class Queue:
         worker_concurrency: Optional[int] = None,
         limiter: Optional[QueueRateLimit] = None,
     ) -> None:
+        if (
+            worker_concurrency is not None
+            and worker_concurrency is not None
+            and worker_concurrency > concurrency
+        ):
+            raise ValueError(
+                "worker_concurrency must be less than or equal to concurrency"
+            )
         self.name = name
         self.concurrency = concurrency
         self.worker_concurrency = worker_concurrency
