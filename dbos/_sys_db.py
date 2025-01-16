@@ -1162,11 +1162,10 @@ class SystemDatabase:
                 row[0] for row in rows if row[1] is not None
             ]
             dbos_logger.info(f"{len(already_started_ids)} task(s) already started")
-            max_tasks_this_worker_can_dequeue_to_respect_global_concurrency = max(
-                # queue.concurrency >= len(rows) > 0
-                len(rows) - len(already_started_ids),
-                0,
-            )
+            # queue.concurrency >= len(rows) >= len(already_started_ids) > 0
+            max_tasks_this_worker_can_dequeue_to_respect_global_concurrency: int = len(
+                rows
+            ) - len(already_started_ids)
             dbos_logger.info(
                 f"{max_tasks_this_worker_can_dequeue_to_respect_global_concurrency} task(s) eligible for dequeue"
             )
