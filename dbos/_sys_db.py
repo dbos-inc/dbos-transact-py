@@ -1163,14 +1163,10 @@ class SystemDatabase:
             ]
             dbos_logger.info(f"{len(already_started_ids)} task(s) already started")
 
-            # queue.concurrency >= len(rows) >= len(already_started_ids) > 0
-            max_tasks_this_worker_can_dequeue_to_respect_global_concurrency: int = len(
-                rows
-            ) - len(already_started_ids)
-            dbos_logger.info(
-                f"{max_tasks_this_worker_can_dequeue_to_respect_global_concurrency} task(s) eligible for dequeue"
-            )
-            if max_tasks_this_worker_can_dequeue_to_respect_global_concurrency == 0:
+            # queue lenght >= queue.concurrency >= len(rows) >= len(already_started_ids) > 0
+            number_of_eligible_tasks: int = len(rows) - len(already_started_ids)
+            dbos_logger.info(f"{number_of_eligible_tasks} task(s) eligible for dequeue")
+            if number_of_eligible_tasks == 0:
                 return []
 
             tasks_this_worker_is_already_working_on: int = len(
@@ -1181,7 +1177,7 @@ class SystemDatabase:
             # Of course we must account for tasks this worker is already working on, dequeued during a previous pass of this function
             max_tasks_this_worker_can_dequeue = (
                 min(
-                    max_tasks_this_worker_can_dequeue_to_respect_global_concurrency,
+                    number_of_eligible_tasks,
                     (
                         queue.worker_concurrency
                         if queue.worker_concurrency is not None
