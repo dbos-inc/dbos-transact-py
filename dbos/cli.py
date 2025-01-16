@@ -393,7 +393,6 @@ def list(
         typer.Option("--app-dir", "-d", help="Specify the application root directory"),
     ] = None,
 ) -> None:
-
     _list_workflows(limit, user, starttime, endtime, status, request, appversion)
 
 

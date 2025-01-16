@@ -1,15 +1,22 @@
-from typing import Any
+from typing import Any, List
 
+import typer
 from rich import print
 
 from dbos import DBOS
 
 from . import load_config
-from ._dbos_config import _is_valid_app_name
-from ._sys_db import GetWorkflowsInput, GetWorkflowsOutput, SystemDatabase
+from ._dbos_config import ConfigFile, _is_valid_app_name
+from ._sys_db import (
+    GetWorkflowsInput,
+    GetWorkflowsOutput,
+    SystemDatabase,
+    WorkflowStatusInternal,
+)
 
 
 def _list_workflows(
+    config: ConfigFile,
     li: int,
     user: str,
     starttime: str,
@@ -17,11 +24,11 @@ def _list_workflows(
     status: str,
     request: bool,
     appversion: str,
-) -> None:
+) -> List[WorkflowStatusInternal]:
     print(
         f"Listing steps limit {li} user {user} st {starttime} et {endtime} status {status} req {request}"
     )
-    config = load_config()
+    # config = load_config()
     sys_db = None
 
     try:
@@ -60,9 +67,10 @@ def _list_workflows(
 
     # print(json.dumps(infos))
     print(infos)
+    return infos
 
 
-def _get_workflow(uuid: str, request: bool) -> str:
+def _get_workflow(uuid: str, request: bool) -> WorkflowStatusInternal | None:
     print(f"Getting workflow info for {uuid}")
     config = load_config()
     sys_db = None
@@ -113,7 +121,7 @@ def _reattempt_workflow(uuid: str, startNewWorkflow: bool) -> str:
 
 def _get_workflow_info(
     sys_db: SystemDatabase, workflowUUID: str, getRequest: bool
-) -> str:
+) -> WorkflowStatusInternal | None:
     info = sys_db.get_workflow_status(workflowUUID)
     if info is None:
         return {}
