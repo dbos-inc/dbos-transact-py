@@ -23,8 +23,11 @@ def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
         return config
 
     # 2. If the error is due to password authentication or the configuration is non-default, surface the error and exit.
-    if "password authentication failed" in str(db_connection_error) or "28P01" in str(
-        db_connection_error
+    error_str = str(db_connection_error)
+    if (
+        "password authentication failed" in error_str
+        or "28P01" in error_str
+        or "no password supplied" in error_str
     ):
         raise DBOSInitializationError(
             f"Could not connect to Postgres: password authentication failed: {db_connection_error}"
