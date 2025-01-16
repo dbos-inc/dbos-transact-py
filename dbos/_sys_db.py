@@ -1165,7 +1165,7 @@ class SystemDatabase:
                 f"[{queue.name}] {number_of_tasks_already_started} task(s) already started"
             )
 
-            # queue lenght >= queue.concurrency >= len(rows) >= number_of_tasks_already_started > 0
+            # queue length >= queue.concurrency >= len(rows) >= number_of_tasks_already_started > 0
             number_of_eligible_tasks: int = len(rows) - number_of_tasks_already_started
             dbos_logger.debug(
                 f"[{queue.name}] {number_of_eligible_tasks} task(s) eligible for dequeue"
