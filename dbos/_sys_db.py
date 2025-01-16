@@ -1177,15 +1177,22 @@ class SystemDatabase:
                 [row[0] for row in rows if len(row) == 3 and row[2] == executor_id]
             )
 
-            # This worker can dequeue up whatever is smaller between the eligible tasks and its set concurrency
+            # This worker can dequeue up to whatever is smaller between the eligible tasks and its set concurrency
             # Of course we must account for tasks this worker is already working on, dequeued during a previous pass of this function
             max_tasks_this_worker_can_dequeue = (
                 min(
                     max_tasks_this_worker_can_dequeue_to_respect_global_concurrency,
-                    queue.worker_concurrency,
+                    (
+                        queue.worker_concurrency
+                        if queue.worker_concurrency is not None
+                        else float("inf")
+                    ),
                 )
                 - tasks_this_worker_is_already_working_on
             )
+            assert (
+                max_tasks_this_worker_can_dequeue >= 0
+            )  # TODO: remove this assert after sufficient tests are implemented
 
             # Now, get the workflow IDs of functions that have not yet been started
             # Limit the list by the maximum concurrency for this worker
