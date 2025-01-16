@@ -1185,7 +1185,7 @@ class SystemDatabase:
 
                 # This worker can dequeue up to whatever is smaller between the eligible tasks and its set concurrency
                 # Of course we must account for tasks this worker is already working on, dequeued during a previous pass of this function
-                max_tasks_this_worker_can_dequeue = (
+                max_tasks_this_worker_can_dequeue = int(
                     min(
                         number_of_eligible_tasks,
                         (
