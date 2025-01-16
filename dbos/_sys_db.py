@@ -1152,7 +1152,7 @@ class SystemDatabase:
                 query = query.limit(queue.concurrency)
 
             rows = c.execute(query).fetchall()
-            dbos_logger.info(f"dequeued {len(rows)} task(s)")
+            dbos_logger.debug(f"[{queue.name}] dequeued {len(rows)} task(s)")
             if len(rows) == 0:
                 return []
 
@@ -1161,11 +1161,15 @@ class SystemDatabase:
             already_started_ids: List[str] = [
                 row[0] for row in rows if row[1] is not None
             ]
-            dbos_logger.info(f"{len(already_started_ids)} task(s) already started")
+            dbos_logger.debug(
+                f"[{queue.name}] {len(already_started_ids)} task(s) already started"
+            )
 
             # queue lenght >= queue.concurrency >= len(rows) >= len(already_started_ids) > 0
             number_of_eligible_tasks: int = len(rows) - len(already_started_ids)
-            dbos_logger.info(f"{number_of_eligible_tasks} task(s) eligible for dequeue")
+            dbos_logger.debug(
+                f"[{queue.name}] {number_of_eligible_tasks} task(s) eligible for dequeue"
+            )
             if number_of_eligible_tasks == 0:
                 return []
 
@@ -1195,7 +1199,7 @@ class SystemDatabase:
             dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None][
                 :max_tasks_this_worker_can_dequeue
             ]
-            dbos_logger.info(f"dequeueing {len(dequeued_ids)} task(s)")
+            dbos_logger.debug(f"[{queue.name}] dequeueing {len(dequeued_ids)} task(s)")
             ret_ids: list[str] = []
             for id in dequeued_ids:
 

@@ -363,5 +363,3 @@ def test_one_at_a_time_with_worker_concurrency(dbos: DBOS) -> None:
     assert flag
     assert wf_counter == 1
     assert queue_entries_are_cleaned_up(dbos)
-
-    # Test global concurrency enforcement (queue.concurrency <= number tasks already started)
