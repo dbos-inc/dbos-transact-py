@@ -562,7 +562,8 @@ class SystemDatabase:
             SystemSchema.workflow_status.c.created_at.desc()
         )
 
-        print(query)
+        print("start time", input.start_time)
+        print("end time", input.end_time)
 
         if input.name:
             query = query.where(SystemSchema.workflow_status.c.name == input.name)
@@ -572,14 +573,21 @@ class SystemDatabase:
                 == input.authenticated_user
             )
         if input.start_time:
+            print(
+                "st",
+                datetime.datetime.fromisoformat(input.start_time).timestamp() * 1000,
+            )
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                >= datetime.datetime.fromisoformat(input.start_time).timestamp()
+                >= datetime.datetime.fromisoformat(input.start_time).timestamp() * 1000
             )
         if input.end_time:
+            print(
+                "et", datetime.datetime.fromisoformat(input.end_time).timestamp() * 1000
+            )
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                <= datetime.datetime.fromisoformat(input.end_time).timestamp()
+                <= datetime.datetime.fromisoformat(input.end_time).timestamp() * 1000
             )
         if input.status:
             query = query.where(SystemSchema.workflow_status.c.status == input.status)
