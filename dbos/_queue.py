@@ -37,7 +37,7 @@ class Queue:
     ) -> None:
         if (
             worker_concurrency is not None
-            and worker_concurrency is not None
+            and concurrency is not None
             and worker_concurrency > concurrency
         ):
             raise ValueError(
