@@ -249,7 +249,9 @@ class SystemDatabase:
         *,
         conn: Optional[sa.Connection] = None,
         max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
-    ) -> None:
+    ) -> WorkflowStatuses:
+        wf_status: WorkflowStatuses = status["status"]
+
         cmd = pg.insert(SystemSchema.workflow_status).values(
             workflow_uuid=status["workflow_uuid"],
             status=status["status"],
@@ -286,17 +288,19 @@ class SystemDatabase:
             )
         else:
             cmd = cmd.on_conflict_do_nothing()
-        cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts)  # type: ignore
+        cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status)  # type: ignore
 
         if conn is not None:
             results = conn.execute(cmd)
         else:
             with self.engine.begin() as c:
                 results = c.execute(cmd)
+
         if in_recovery:
             row = results.fetchone()
             if row is not None:
                 recovery_attempts: int = row[0]
+                wf_status = row[1]
                 if recovery_attempts > max_recovery_attempts:
                     with self.engine.begin() as c:
                         c.execute(
@@ -327,6 +331,8 @@ class SystemDatabase:
         # Record we have exported status for this single-transaction workflow
         if status["workflow_uuid"] in self._temp_txn_wf_ids:
             self._exported_temp_txn_wf_status.add(status["workflow_uuid"])
+
+        return wf_status
 
     def set_workflow_status(
         self,

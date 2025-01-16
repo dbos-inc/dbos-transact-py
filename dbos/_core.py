@@ -180,11 +180,12 @@ def _init_workflow(
     if class_name is not None:
         inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
 
+    wf_status = status["status"]
     if temp_wf_type != "transaction" or queue is not None:
         # Synchronously record the status and inputs for workflows and single-step workflows
         # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
         # TODO: Make this transactional (and with the queue step below)
-        dbos._sys_db.update_workflow_status(
+        wf_status = dbos._sys_db.update_workflow_status(
             status, False, ctx.in_recovery, max_recovery_attempts=max_recovery_attempts
         )
         dbos._sys_db.update_workflow_inputs(wfid, _serialization.serialize_args(inputs))
@@ -192,9 +193,10 @@ def _init_workflow(
         # Buffer the inputs for single-transaction workflows, but don't buffer the status
         dbos._sys_db.buffer_workflow_inputs(wfid, _serialization.serialize_args(inputs))
 
-    if queue is not None:
+    if queue is not None and wf_status == WorkflowStatusString.ENQUEUED.value:
         dbos._sys_db.enqueue(wfid, queue)
 
+    status["status"] = wf_status
     return status
 
 
@@ -413,7 +415,13 @@ def start_workflow(
         max_recovery_attempts=fi.max_recovery_attempts,
     )
 
-    if not execute_workflow:
+    wf_status = status["status"]
+
+    if (
+        not execute_workflow
+        or wf_status == WorkflowStatusString.ERROR.value
+        or wf_status == WorkflowStatusString.SUCCESS.value
+    ):
         return WorkflowHandlePolling(new_wf_id, dbos)
 
     if fself is not None:
