@@ -20,12 +20,12 @@ from ._sys_db import (
 def _list_workflows(
     config: ConfigFile,
     li: int,
-    user: str | None,
-    starttime: str | None,
-    endtime: str | None,
-    status: str | None,
+    user: Optional[str],
+    starttime: Optional[str],
+    endtime: Optional[str],
+    status: Optional[str],
     request: bool,
-    appversion: str | None,
+    appversion: Optional[str],
 ) -> List[WorkflowStatusInternal]:
 
     sys_db = None

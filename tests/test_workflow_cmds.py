@@ -14,6 +14,7 @@ from dbos import (
     ConfigFile,
     SetWorkflowID,
     WorkflowHandle,
+    WorkflowStatusInternal,
     WorkflowStatusString,
     _workflow_commands,
 )
@@ -138,9 +139,11 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile) -> None:
     wfUuid = output[0]["workflow_uuid"]
 
     info = _workflow_commands._get_workflow(config, wfUuid, True)
-    assert info != None, "Expected output to be not None"
-    if info != None:
-        assert info["workflow_uuid"] == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
+    assert info is not None, "Expected output to be not None"
+
+    info = cast(WorkflowStatusInternal, info)
+    # if info != None:
+    assert info["workflow_uuid"] == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
     print(info)
 
 
