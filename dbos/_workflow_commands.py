@@ -70,7 +70,7 @@ def _list_workflows(
 
 def _get_workflow(
     config: ConfigFile, uuid: str, request: bool
-) -> WorkflowStatusInternal | None:
+) -> WorkflowStatusInternal:
     print(f"Getting workflow info for {uuid}")
     # config = load_config()
     sys_db = None
