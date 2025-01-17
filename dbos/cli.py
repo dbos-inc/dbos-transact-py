@@ -393,7 +393,10 @@ def list(
         typer.Option("--app-dir", "-d", help="Specify the application root directory"),
     ] = None,
 ) -> None:
-    _list_workflows(limit, user, starttime, endtime, status, request, appversion)
+    config = load_config()
+    _list_workflows(
+        config, limit, user, starttime, endtime, status, request, appversion
+    )
 
 
 @workflow.command(help="Retrieve the status of a workflow")
@@ -409,7 +412,8 @@ def get(
     ] = True,
 ) -> None:
     print("Get Workflow")
-    print(_get_workflow(uuid, request))
+    config = load_config()
+    print(_get_workflow(config, uuid, request))
 
 
 @workflow.command(
@@ -423,7 +427,8 @@ def cancel(
     ] = None,
 ) -> None:
     print("Cancel workflows")
-    _cancel_workflow(uuid)
+    config = load_config()
+    _cancel_workflow(config, uuid)
 
 
 @workflow.command(

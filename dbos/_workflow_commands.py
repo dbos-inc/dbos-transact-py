@@ -70,9 +70,11 @@ def _list_workflows(
     return infos
 
 
-def _get_workflow(uuid: str, request: bool) -> WorkflowStatusInternal | None:
+def _get_workflow(
+    config: ConfigFile, uuid: str, request: bool
+) -> WorkflowStatusInternal | None:
     print(f"Getting workflow info for {uuid}")
-    config = load_config()
+    # config = load_config()
     sys_db = None
 
     try:
@@ -87,9 +89,9 @@ def _get_workflow(uuid: str, request: bool) -> WorkflowStatusInternal | None:
     return info
 
 
-def _cancel_workflow(uuid: str) -> str:
+def _cancel_workflow(config: ConfigFile, uuid: str) -> str:
     print(f"Getting workflow info for {uuid}")
-    config = load_config()
+    # config = load_config()
     sys_db = None
 
     try:
