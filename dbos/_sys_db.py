@@ -562,9 +562,6 @@ class SystemDatabase:
             SystemSchema.workflow_status.c.created_at.desc()
         )
 
-        print("start time", input.start_time)
-        print("end time", input.end_time)
-
         if input.name:
             query = query.where(SystemSchema.workflow_status.c.name == input.name)
         if input.authenticated_user:
@@ -573,18 +570,11 @@ class SystemDatabase:
                 == input.authenticated_user
             )
         if input.start_time:
-            print(
-                "st",
-                datetime.datetime.fromisoformat(input.start_time).timestamp() * 1000,
-            )
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
                 >= datetime.datetime.fromisoformat(input.start_time).timestamp() * 1000
             )
         if input.end_time:
-            print(
-                "et", datetime.datetime.fromisoformat(input.end_time).timestamp() * 1000
-            )
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
                 <= datetime.datetime.fromisoformat(input.end_time).timestamp() * 1000
@@ -599,13 +589,9 @@ class SystemDatabase:
         if input.limit:
             query = query.limit(input.limit)
 
-        print(query)
-
         with self.engine.begin() as c:
             rows = c.execute(query)
         workflow_uuids = [row[0] for row in rows]
-
-        print(workflow_uuids)
 
         return GetWorkflowsOutput(workflow_uuids)
 

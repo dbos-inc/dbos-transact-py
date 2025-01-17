@@ -36,7 +36,8 @@ def test_list_workflow(dbos: DBOS, config: ConfigFile) -> None:
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
     assert output[0] != None, "Expected output to be not None"
-    assert output[0]["workflow_uuid"].strip(), "field_name is an empty string"
+    if output[0] != None:
+        assert output[0]["workflow_uuid"].strip(), "field_name is an empty string"
 
 
 def test_list_workflow_limit(dbos: DBOS, config: ConfigFile) -> None:

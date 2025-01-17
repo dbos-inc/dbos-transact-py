@@ -26,11 +26,8 @@ def _list_workflows(
     status: str | None,
     request: bool,
     appversion: str | None,
-) -> List[WorkflowStatusInternal | None]:
-    print(
-        f"Listing steps limit {li} user {user} st {starttime} et {endtime} status {status} req {request}"
-    )
-    # config = load_config()
+) -> List[WorkflowStatusInternal]:
+
     sys_db = None
 
     try:
@@ -53,24 +50,21 @@ def _list_workflows(
 
     output: GetWorkflowsOutput = sys_db.get_workflows(input)
 
-    print(output)
-
-    infos = []
+    infos: List[WorkflowStatusInternal] = []
 
     # TODO reverse the workflow uuids
 
     if output.workflow_uuids is None:
-        print("No workflows found")
+        typer.echo("No workflows found")
         return {}
 
     for workflow_id in output.workflow_uuids:
         info = _get_workflow_info(
             sys_db, workflow_id, request
         )  # Call the method for each ID
-        infos.append(info)
+        if info is not None:
+            infos.append(info)
 
-    # print(json.dumps(infos))
-    print(infos)
     return infos
 
 
@@ -95,7 +89,6 @@ def _get_workflow(
 
 
 def _cancel_workflow(config: ConfigFile, uuid: str) -> None:
-    print(f"Getting workflow info for {uuid}")
     # config = load_config()
     sys_db = None
 
