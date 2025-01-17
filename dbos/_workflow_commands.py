@@ -1,4 +1,4 @@
-from typing import Any, List
+from typing import Any, List, cast
 
 import typer
 from rich import print
@@ -11,20 +11,22 @@ from ._sys_db import (
     GetWorkflowsInput,
     GetWorkflowsOutput,
     SystemDatabase,
+    WorkflowStatuses,
     WorkflowStatusInternal,
+    WorkflowStatusString,
 )
 
 
 def _list_workflows(
     config: ConfigFile,
     li: int,
-    user: str,
-    starttime: str,
-    endtime: str,
-    status: str,
+    user: str | None,
+    starttime: str | None,
+    endtime: str | None,
+    status: str | None,
     request: bool,
-    appversion: str,
-) -> List[WorkflowStatusInternal]:
+    appversion: str | None,
+) -> List[WorkflowStatusInternal | None]:
     print(
         f"Listing steps limit {li} user {user} st {starttime} et {endtime} status {status} req {request}"
     )
@@ -35,6 +37,7 @@ def _list_workflows(
         sys_db = SystemDatabase(config)
     except Exception as e:
         typer.echo(f"DBOS system schema migration failed: {e}")
+        return []
     finally:
         if sys_db:
             sys_db.destroy()
@@ -43,7 +46,8 @@ def _list_workflows(
     input.authenticated_user = user
     input.start_time = starttime
     input.end_time = endtime
-    input.status = status
+    if status is not None:
+        input.status = cast(WorkflowStatuses, status)
     input.application_version = appversion
     input.limit = li
 
@@ -81,6 +85,7 @@ def _get_workflow(
         sys_db = SystemDatabase(config)
     except Exception as e:
         typer.echo(f"DBOS system schema migration failed: {e}")
+        return None
     finally:
         if sys_db:
             sys_db.destroy()
@@ -89,7 +94,7 @@ def _get_workflow(
     return info
 
 
-def _cancel_workflow(config: ConfigFile, uuid: str) -> str:
+def _cancel_workflow(config: ConfigFile, uuid: str) -> None:
     print(f"Getting workflow info for {uuid}")
     # config = load_config()
     sys_db = None
@@ -98,27 +103,18 @@ def _cancel_workflow(config: ConfigFile, uuid: str) -> str:
         sys_db = SystemDatabase(config)
     except Exception as e:
         typer.echo(f"DBOS system schema migration failed: {e}")
+        return None
     finally:
         if sys_db:
             sys_db.destroy()
 
-    sys_db.set_workflow_status(uuid, "CANCELLED", False)
+    sys_db.set_workflow_status(uuid, WorkflowStatusString.CANCELLED, False)
+    return
 
 
-def _reattempt_workflow(uuid: str, startNewWorkflow: bool) -> str:
-    print(f"Reattempt workflow info for {uuid}")
-    config = load_config()
-
-    dbos = DBOS(config=config)
-    dbos.launch()
-
-    if startNewWorkflow != True:
-        dbos._sys_db.set_workflow_status(uuid, "PENDING", True)
-
-    handle = dbos.execute_workflow_id(uuid)
-    output = handle.result()
-    print(output)
-    dbos.destroy()
+def _reattempt_workflow(uuid: str, startNewWorkflow: bool) -> None:
+    print(f"Reattempt workflow info for {uuid} not implemented")
+    return
 
 
 def _get_workflow_info(
@@ -126,13 +122,14 @@ def _get_workflow_info(
 ) -> WorkflowStatusInternal | None:
     info = sys_db.get_workflow_status(workflowUUID)
     if info is None:
-        return {}
+        return info
 
-    info["workflowUUID"] = workflowUUID
+    info["workflow_uuid"] = workflowUUID
 
-    input_data = sys_db.get_workflow_inputs(workflowUUID)
-    if input_data is not None:
-        info["input"] = input_data
+    # no input field
+    # input_data = sys_db.get_workflow_inputs(workflowUUID)
+    # if input_data is not None:
+    #    info["input"] = input_data
 
     if info.get("status") == "SUCCESS":
         result = sys_db.await_workflow_result(workflowUUID)
@@ -144,6 +141,6 @@ def _get_workflow_info(
             info["error"] = str(e)
 
     if not getRequest:
-        info.pop("request", None)
+        info["request"] = None
 
     return info

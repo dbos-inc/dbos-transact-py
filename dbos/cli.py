@@ -345,7 +345,7 @@ def reset(
 @workflow.command(help="List workflows for your application")
 def list(
     limit: Annotated[
-        typing.Optional[int],
+        int,
         typer.Option("--limit", "-l", help="Limit the results returned"),
     ] = 10,
     user: Annotated[
