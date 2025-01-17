@@ -112,10 +112,10 @@ def _reattempt_workflow(uuid: str, startNewWorkflow: bool) -> None:
 
 def _get_workflow_info(
     sys_db: SystemDatabase, workflowUUID: str, getRequest: bool
-) -> WorkflowStatusInternal | None:
+) -> WorkflowStatusInternal:
     info = sys_db.get_workflow_status(workflowUUID)
     if info is None:
-        return info
+        return WorkflowStatusInternal()
 
     info["workflow_uuid"] = workflowUUID
 
