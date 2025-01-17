@@ -134,11 +134,13 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile) -> None:
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
     assert output[0] != None, "Expected output to be not None"
+
     wfUuid = output[0]["workflow_uuid"]
 
     info = _workflow_commands._get_workflow(config, wfUuid, True)
     assert info != None, "Expected output to be not None"
-    assert info["workflow_uuid"] == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
+    if info != None:
+        assert info["workflow_uuid"] == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
     print(info)
 
 
@@ -168,4 +170,5 @@ def test_cancel_workflow(dbos: DBOS, config: ConfigFile) -> None:
     info = _workflow_commands._get_workflow(config, wfUuid, True)
     print(info)
     assert info != None, "Expected info to be not None"
-    assert info["status"] == "CANCELLED", f"Expected status to be CANCELLED"
+    if info != None:
+        assert info["status"] == "CANCELLED", f"Expected status to be CANCELLED"
