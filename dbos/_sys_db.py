@@ -23,7 +23,8 @@ import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 from alembic import command
 from alembic.config import Config
-from sqlalchemy.exc import DBAPIError
+from psycopg import errors
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 from . import _serialization
 from ._dbos_config import ConfigFile
@@ -1239,6 +1240,14 @@ class SystemDatabase:
                         )
                     )
                     ret_ids.append(id)
+            except OperationalError as e:
+                # Abandon the queue items in case of serialization error
+                if isinstance(e.orig, errors.SerializationFailure):
+                    dbos_logger.warning("Serialization failure. Abandoning queue items")
+                    return []
+                else:
+                    # Re-raise other OperationalError types if unrelated
+                    raise
             finally:
                 # If we have a limiter, garbage-collect all completed functions started
                 # before the period. If there's no limiter, there's no need--they were
