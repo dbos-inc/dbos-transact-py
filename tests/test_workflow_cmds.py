@@ -3,7 +3,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, cast
 
 import pytest
 import sqlalchemy as sa
@@ -14,7 +14,6 @@ from dbos import (
     ConfigFile,
     SetWorkflowID,
     WorkflowHandle,
-    WorkflowStatusInternal,
     WorkflowStatusString,
     _workflow_commands,
 )
@@ -141,9 +140,8 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile) -> None:
     info = _workflow_commands._get_workflow(config, wfUuid, True)
     assert info is not None, "Expected output to be not None"
 
-    info = cast(WorkflowStatusInternal, info)
-    # if info != None:
-    assert info["workflow_uuid"] == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
+    if info is not None:
+        assert info["workflow_uuid"] == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
     print(info)
 
 
