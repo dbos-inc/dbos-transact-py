@@ -52,8 +52,6 @@ def _list_workflows(
 
     infos: List[WorkflowStatusInternal] = []
 
-    # TODO reverse the workflow uuids
-
     if output.workflow_uuids is None:
         typer.echo("No workflows found")
         return {}
@@ -72,7 +70,6 @@ def _get_workflow(
     config: ConfigFile, uuid: str, request: bool
 ) -> Optional[WorkflowStatusInternal]:
     print(f"Getting workflow info for {uuid}")
-    # config = load_config()
     sys_db = None
 
     try:
