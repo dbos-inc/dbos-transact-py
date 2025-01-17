@@ -1,4 +1,4 @@
-from typing import Any, List, cast
+from typing import Any, List, Optional, cast
 
 import typer
 from rich import print
@@ -70,7 +70,7 @@ def _list_workflows(
 
 def _get_workflow(
     config: ConfigFile, uuid: str, request: bool
-) -> WorkflowStatusInternal:
+) -> Optional[WorkflowStatusInternal]:
     print(f"Getting workflow info for {uuid}")
     # config = load_config()
     sys_db = None
@@ -112,10 +112,10 @@ def _reattempt_workflow(uuid: str, startNewWorkflow: bool) -> None:
 
 def _get_workflow_info(
     sys_db: SystemDatabase, workflowUUID: str, getRequest: bool
-) -> WorkflowStatusInternal:
+) -> Optional[WorkflowStatusInternal]:
     info = sys_db.get_workflow_status(workflowUUID)
     if info is None:
-        return WorkflowStatusInternal()
+        return None
 
     info["workflow_uuid"] = workflowUUID
 
