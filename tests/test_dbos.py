@@ -157,12 +157,20 @@ def test_exception_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
     step_counter: int = 0
+    bad_txn_counter: int = 0
 
     @DBOS.transaction()
     def exception_transaction(var: str) -> str:
         nonlocal txn_counter
         txn_counter += 1
         raise Exception(var)
+
+    @DBOS.transaction()
+    def bad_transaction() -> None:
+        nonlocal bad_txn_counter
+        bad_txn_counter += 1
+        # Make sure we record this error in the database
+        DBOS.sql_session.execute(sa.text("selct abc from c;")).fetchall()
 
     @DBOS.step()
     def exception_step(var: str) -> str:
@@ -187,6 +195,11 @@ def test_exception_workflow(dbos: DBOS) -> None:
             err2 = e
         assert err1 is not None and err2 is not None
         assert str(err1) == str(err2)
+
+        try:
+            bad_transaction()
+        except Exception as e:
+            assert str(e.orig.sqlstate) == "42601"  # type: ignore
         raise err1
 
     with pytest.raises(Exception) as exc_info:
@@ -207,6 +220,7 @@ def test_exception_workflow(dbos: DBOS) -> None:
     assert "test error" == str(exc_info.value)
     assert txn_counter == 2  # Only increment once
     assert step_counter == 2  # Only increment once
+    assert bad_txn_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid, shouldn't throw errors
     handle = DBOS.execute_workflow_id(wfuuid)

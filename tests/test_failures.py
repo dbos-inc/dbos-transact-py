@@ -1,11 +1,12 @@
 import datetime
 import threading
 import time
+import uuid
 
 import pytest
 import sqlalchemy as sa
 from psycopg.errors import SerializationFailure
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import InvalidRequestError, OperationalError
 
 # Public API
 from dbos import DBOS, GetWorkflowsInput, Queue, SetWorkflowID
@@ -40,6 +41,63 @@ def test_transaction_errors(dbos: DBOS) -> None:
         test_noretry_transaction()
     assert exc_info.value.orig.sqlstate == "42601"  # type: ignore
     assert retry_counter == 11
+
+
+def test_invalid_transaction_error(dbos: DBOS) -> None:
+    commit_txn_counter: int = 0
+    rollback_txn_counter: int = 0
+
+    @DBOS.transaction()
+    def test_commit_transaction() -> None:
+        nonlocal commit_txn_counter
+        commit_txn_counter += 1
+        # Commit shouldn't be allowed to be called in a transaction. The error message should be clear.
+        DBOS.sql_session.commit()
+        return
+
+    @DBOS.transaction()
+    def test_abort_transaction() -> None:
+        nonlocal rollback_txn_counter
+        rollback_txn_counter += 1
+        # Rollback shouldn't be allowed to be called in a transaction. The error message should be clear.
+        DBOS.sql_session.rollback()
+        return
+
+    # Test OAOO and exception handling
+    wfuuid = str(uuid.uuid4())
+    with pytest.raises(InvalidRequestError) as exc_info:
+        with SetWorkflowID(wfuuid):
+            test_commit_transaction()
+    assert "Can't operate on closed transaction inside context manager." in str(
+        exc_info.value
+    )
+    print(exc_info.value)
+
+    with pytest.raises(InvalidRequestError) as exc_info:
+        with SetWorkflowID(wfuuid):
+            test_commit_transaction()
+    assert "Can't operate on closed transaction inside context manager." in str(
+        exc_info.value
+    )
+
+    assert commit_txn_counter == 1
+
+    wfuuid = str(uuid.uuid4())
+    with pytest.raises(InvalidRequestError) as exc_info:
+        with SetWorkflowID(wfuuid):
+            test_abort_transaction()
+    assert "Can't operate on closed transaction inside context manager." in str(
+        exc_info.value
+    )
+    print(exc_info.value)
+
+    with pytest.raises(InvalidRequestError) as exc_info:
+        with SetWorkflowID(wfuuid):
+            test_abort_transaction()
+    assert "Can't operate on closed transaction inside context manager." in str(
+        exc_info.value
+    )
+    assert rollback_txn_counter == 1
 
 
 def test_notification_errors(dbos: DBOS) -> None:
