@@ -116,6 +116,49 @@ def test_list_workflow_start_end_times(dbos: DBOS, config: ConfigFile) -> None:
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
 
+def test_list_workflow_end_times_positive(dbos: DBOS, config: ConfigFile) -> None:
+    print("Testing list_workflow")
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        print("Executed Simple workflow")
+        return
+
+    now = datetime.now()
+
+    time_0 = (now - timedelta(seconds=40)).isoformat()
+
+    time_1 = (now - timedelta(seconds=20)).isoformat()
+
+    # run the workflow
+    simple_workflow()
+    time.sleep(1)  # wait for the workflow to complete
+    # get the workflow list
+    time_2 = datetime.now().isoformat()
+
+    simple_workflow()
+    time.sleep(1)  # wait for the workflow to complete
+    # get the workflow list
+    time_3 = datetime.now().isoformat()
+
+    output = _workflow_commands._list_workflows(
+        config, 10, None, time_0, time_1, None, False, None
+    )
+
+    assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
+
+    output = _workflow_commands._list_workflows(
+        config, 10, None, time_1, time_2, None, False, None
+    )
+
+    assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
+
+    output = _workflow_commands._list_workflows(
+        config, 10, None, time_1, time_3, None, False, None
+    )
+    assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
+
+
 def test_get_workflow(dbos: DBOS, config: ConfigFile) -> None:
     print("Testing get_workflow")
 
