@@ -117,9 +117,9 @@ def _get_workflow_info(
     info["workflow_uuid"] = workflowUUID
 
     # no input field
-    # input_data = sys_db.get_workflow_inputs(workflowUUID)
-    # if input_data is not None:
-    #    info["input"] = input_data
+    input_data = sys_db.get_workflow_inputs(workflowUUID)
+    if input_data is not None:
+        info["input"] = input_data
 
     if info.get("status") == "SUCCESS":
         result = sys_db.await_workflow_result(workflowUUID)
