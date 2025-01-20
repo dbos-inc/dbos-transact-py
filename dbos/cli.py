@@ -17,7 +17,7 @@ from typing_extensions import Annotated
 
 from dbos._schemas.system_database import SystemSchema
 
-from . import load_config
+from . import _serialization, load_config
 from ._app_db import ApplicationDatabase
 from ._dbos_config import _is_valid_app_name
 from ._sys_db import SystemDatabase
@@ -397,7 +397,7 @@ def list(
     workflows = _list_workflows(
         config, limit, user, starttime, endtime, status, request, appversion
     )
-    print(workflows)
+    print(_serialization.serialize(workflows))
 
 
 @workflow.command(help="Retrieve the status of a workflow")
@@ -413,7 +413,7 @@ def get(
     ] = True,
 ) -> None:
     config = load_config()
-    print(_get_workflow(config, uuid, request))
+    print(_serialization.serialize(_get_workflow(config, uuid, request)))
 
 
 @workflow.command(

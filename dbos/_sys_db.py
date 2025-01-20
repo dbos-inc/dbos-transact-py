@@ -62,6 +62,7 @@ class WorkflowStatusInternal(TypedDict):
     name: str
     class_name: Optional[str]
     config_name: Optional[str]
+    input: Optional[_serialization.WorkflowInputs]  # JSON (jsonpickle)
     output: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
     executor_id: Optional[str]

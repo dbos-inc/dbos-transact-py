@@ -37,7 +37,7 @@ def test_list_workflow(dbos: DBOS, config: ConfigFile) -> None:
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
     assert output[0] != None, "Expected output to be not None"
     if output[0] != None:
-        assert output[0]["workflow_uuid"].strip(), "field_name is an empty string"
+        assert output[0].workflowUUID.strip(), "field_name is an empty string"
 
 
 def test_list_workflow_limit(dbos: DBOS, config: ConfigFile) -> None:
@@ -178,13 +178,13 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile) -> None:
 
     assert output[0] != None, "Expected output to be not None"
 
-    wfUuid = output[0]["workflow_uuid"]
+    wfUuid = output[0].workflowUUID
 
     info = _workflow_commands._get_workflow(config, wfUuid, True)
     assert info is not None, "Expected output to be not None"
 
     if info is not None:
-        assert info["workflow_uuid"] == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
+        assert info.workflowUUID == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
     print(info)
 
 
@@ -207,7 +207,7 @@ def test_cancel_workflow(dbos: DBOS, config: ConfigFile) -> None:
 
     print(output[0])
     assert output[0] != None, "Expected output to be not None"
-    wfUuid = output[0]["workflow_uuid"]
+    wfUuid = output[0].workflowUUID
 
     _workflow_commands._cancel_workflow(config, wfUuid)
 
@@ -215,4 +215,4 @@ def test_cancel_workflow(dbos: DBOS, config: ConfigFile) -> None:
     print(info)
     assert info is not None, "Expected info to be not None"
     if info is not None:
-        assert info["status"] == "CANCELLED", f"Expected status to be CANCELLED"
+        assert info.status == "CANCELLED", f"Expected status to be CANCELLED"

@@ -5,7 +5,7 @@ from rich import print
 
 from dbos import DBOS
 
-from . import load_config
+from . import _serialization, load_config
 from ._dbos_config import ConfigFile, _is_valid_app_name
 from ._sys_db import (
     GetWorkflowsInput,
@@ -17,6 +17,26 @@ from ._sys_db import (
 )
 
 
+class WorkflowInformation:
+    workflowUUID: str
+    status: WorkflowStatuses
+    name: str
+    class_name: Optional[str]
+    config_name: Optional[str]
+    input: Optional[_serialization.WorkflowInputs]  # JSON (jsonpickle)
+    output: Optional[str]  # JSON (jsonpickle)
+    error: Optional[str]  # JSON (jsonpickle)
+    executor_id: Optional[str]
+    app_version: Optional[str]
+    app_id: Optional[str]
+    request: Optional[str]  # JSON (jsonpickle)
+    recovery_attempts: Optional[int]
+    authenticated_user: Optional[str]
+    assumed_role: Optional[str]
+    authenticated_roles: Optional[str]  # JSON list of roles.
+    queue_name: Optional[str]
+
+
 def _list_workflows(
     config: ConfigFile,
     li: int,
@@ -26,10 +46,9 @@ def _list_workflows(
     status: Optional[str],
     request: bool,
     appversion: Optional[str],
-) -> List[WorkflowStatusInternal]:
+) -> List[WorkflowInformation]:
 
     sys_db = None
-
     try:
         sys_db = SystemDatabase(config)
     except Exception as e:
@@ -50,7 +69,7 @@ def _list_workflows(
 
     output: GetWorkflowsOutput = sys_db.get_workflows(input)
 
-    infos: List[WorkflowStatusInternal] = []
+    infos: List[WorkflowInformation] = []
 
     if output.workflow_uuids is None:
         typer.echo("No workflows found")
@@ -68,8 +87,7 @@ def _list_workflows(
 
 def _get_workflow(
     config: ConfigFile, uuid: str, request: bool
-) -> Optional[WorkflowStatusInternal]:
-    print(f"Getting workflow info for {uuid}")
+) -> Optional[WorkflowInformation]:
     sys_db = None
 
     try:
@@ -109,28 +127,43 @@ def _reattempt_workflow(uuid: str, startNewWorkflow: bool) -> None:
 
 def _get_workflow_info(
     sys_db: SystemDatabase, workflowUUID: str, getRequest: bool
-) -> Optional[WorkflowStatusInternal]:
+) -> Optional[WorkflowInformation]:
     info = sys_db.get_workflow_status(workflowUUID)
     if info is None:
         return None
 
-    info["workflow_uuid"] = workflowUUID
+    winfo = WorkflowInformation()
+    print("creating winfo")
+
+    winfo.workflowUUID = workflowUUID
+    winfo.status = info["status"]
+    winfo.name = info["name"]
+    winfo.class_name = info["class_name"]
+    winfo.config_name = info["config_name"]
+    winfo.executor_id = info["executor_id"]
+    winfo.app_version = info["app_version"]
+    winfo.app_id = info["app_id"]
+    winfo.recovery_attempts = info["recovery_attempts"]
+    winfo.authenticated_user = info["authenticated_user"]
+    winfo.assumed_role = info["assumed_role"]
+    winfo.authenticated_roles = info["authenticated_roles"]
+    winfo.queue_name = info["queue_name"]
 
     # no input field
     input_data = sys_db.get_workflow_inputs(workflowUUID)
     if input_data is not None:
-        info["input"] = input_data
+        winfo.input = input_data
 
     if info.get("status") == "SUCCESS":
         result = sys_db.await_workflow_result(workflowUUID)
-        info["output"] = result
+        winfo.output = result
     elif info.get("status") == "ERROR":
         try:
             sys_db.await_workflow_result(workflowUUID)
         except Exception as e:
-            info["error"] = str(e)
+            winfo.error = str(e)
 
     if not getRequest:
-        info["request"] = None
+        winfo.request = None
 
-    return info
+    return winfo
