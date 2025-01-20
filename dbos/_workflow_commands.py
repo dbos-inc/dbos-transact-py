@@ -33,7 +33,7 @@ def _list_workflows(
     try:
         sys_db = SystemDatabase(config)
     except Exception as e:
-        typer.echo(f"DBOS system schema migration failed: {e}")
+        typer.echo(f"Failed to connect to DBOS system database: {e}")
         return []
     finally:
         if sys_db:
@@ -75,7 +75,7 @@ def _get_workflow(
     try:
         sys_db = SystemDatabase(config)
     except Exception as e:
-        typer.echo(f"DBOS system schema migration failed: {e}")
+        typer.echo(f"Failed to connect to DBOS system database: {e}")
         return None
     finally:
         if sys_db:
@@ -92,7 +92,7 @@ def _cancel_workflow(config: ConfigFile, uuid: str) -> None:
     try:
         sys_db = SystemDatabase(config)
     except Exception as e:
-        typer.echo(f"DBOS system schema migration failed: {e}")
+        typer.echo(f"Failed to connect to DBOS system database: {e}")
         return None
     finally:
         if sys_db:
