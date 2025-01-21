@@ -27,15 +27,15 @@ q = Queue("testq", concurrency=1, limiter={"limit": 1, "period": 1})
 
 
 class WF:
+    @staticmethod
     @DBOS.workflow()
-    @classmethod
-    def queued_task(cls) -> int:
+    def queued_task() -> int:
         DBOS.sleep(0.1)
         return 1
 
+    @staticmethod
     @DBOS.workflow()
-    @classmethod
-    def enqueue_5_tasks(cls) -> int:
+    def enqueue_5_tasks() -> int:
         for i in range(5):
             print(f"Iteration {i + 1}")
             wfh = DBOS.start_workflow(WF.queued_task)
