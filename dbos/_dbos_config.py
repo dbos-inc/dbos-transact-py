@@ -129,7 +129,9 @@ def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
     return db_url.render_as_string(hide_password=False)
 
 
-def load_config(config_file_path: str = DBOS_CONFIG_PATH) -> ConfigFile:
+def load_config(
+    config_file_path: str = DBOS_CONFIG_PATH, *, use_db_wizard=True
+) -> ConfigFile:
     """
     Load the DBOS `ConfigFile` from the specified path (typically `dbos-config.yaml`).
 
@@ -160,6 +162,9 @@ def load_config(config_file_path: str = DBOS_CONFIG_PATH) -> ConfigFile:
         validate(instance=data, schema=schema)
     except ValidationError as e:
         raise DBOSInitializationError(f"Validation error: {e}")
+
+    if "database" not in data:
+        data["database"] = {}
 
     if "name" not in data:
         raise DBOSInitializationError(
@@ -207,7 +212,8 @@ def load_config(config_file_path: str = DBOS_CONFIG_PATH) -> ConfigFile:
     config_logger(data)
 
     # Check the connectivity to the database and make sure it's properly configured
-    data = db_wizard(data, config_file_path)
+    if use_db_wizard:
+        data = db_wizard(data, config_file_path)
 
     if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
         data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"
