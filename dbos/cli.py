@@ -8,7 +8,7 @@ import typing
 from os import path
 from typing import Any
 
-import jsonpickle
+import jsonpickle  # type: ignore
 import sqlalchemy as sa
 import tomlkit
 import typer
