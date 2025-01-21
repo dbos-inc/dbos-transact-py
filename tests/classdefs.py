@@ -3,9 +3,6 @@ import sqlalchemy as sa
 # Public API
 from dbos import DBOS, DBOSConfiguredInstance
 
-# Private API used because this is a test
-from dbos._context import assert_current_dbos_context
-
 
 @DBOS.dbos_class()
 class DBOSTestClass(DBOSConfiguredInstance):
