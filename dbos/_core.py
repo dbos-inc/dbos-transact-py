@@ -84,7 +84,7 @@ if TYPE_CHECKING:
         IsolationLevel,
     )
 
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, InvalidRequestError
 
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
@@ -545,6 +545,7 @@ def decorate_transaction(
                     max_retry_wait_seconds = 2.0
                     while True:
                         has_recorded_error = False
+                        txn_error: Optional[Exception] = None
                         try:
                             with session.begin():
                                 # This must be the first statement in the transaction!
@@ -608,15 +609,24 @@ def decorate_transaction(
                                     max_retry_wait_seconds,
                                 )
                                 continue
+                            txn_error = dbapi_error
+                            raise
+                        except InvalidRequestError as invalid_request_error:
+                            dbos.logger.error(
+                                f"InvalidRequestError in transaction {func.__qualname__} \033[1m Hint: Do not call commit() or rollback() within a DBOS transaction.\033[0m"
+                            )
+                            txn_error = invalid_request_error
                             raise
                         except Exception as error:
+                            txn_error = error
+                            raise
+                        finally:
                             # Don't record the error if it was already recorded
-                            if not has_recorded_error:
+                            if txn_error and not has_recorded_error:
                                 txn_output["error"] = (
-                                    _serialization.serialize_exception(error)
+                                    _serialization.serialize_exception(txn_error)
                                 )
                                 dbos._app_db.record_transaction_error(txn_output)
-                            raise
             return output
 
         if inspect.iscoroutinefunction(func):

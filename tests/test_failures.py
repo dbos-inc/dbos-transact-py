@@ -1,15 +1,16 @@
 import datetime
 import threading
 import time
+import uuid
 
 import pytest
 import sqlalchemy as sa
 from psycopg.errors import SerializationFailure
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import InvalidRequestError, OperationalError
 
 # Public API
 from dbos import DBOS, GetWorkflowsInput, Queue, SetWorkflowID
-from dbos._error import DBOSDeadLetterQueueError
+from dbos._error import DBOSDeadLetterQueueError, DBOSException
 from dbos._sys_db import WorkflowStatusString
 
 
@@ -40,6 +41,63 @@ def test_transaction_errors(dbos: DBOS) -> None:
         test_noretry_transaction()
     assert exc_info.value.orig.sqlstate == "42601"  # type: ignore
     assert retry_counter == 11
+
+
+def test_invalid_transaction_error(dbos: DBOS) -> None:
+    commit_txn_counter: int = 0
+    rollback_txn_counter: int = 0
+
+    @DBOS.transaction()
+    def test_commit_transaction() -> None:
+        nonlocal commit_txn_counter
+        commit_txn_counter += 1
+        # Commit shouldn't be allowed to be called in a transaction. The error message should be clear.
+        DBOS.sql_session.commit()
+        return
+
+    @DBOS.transaction()
+    def test_abort_transaction() -> None:
+        nonlocal rollback_txn_counter
+        rollback_txn_counter += 1
+        # Rollback shouldn't be allowed to be called in a transaction. The error message should be clear.
+        DBOS.sql_session.rollback()
+        return
+
+    # Test OAOO and exception handling
+    wfuuid = str(uuid.uuid4())
+    with pytest.raises(InvalidRequestError) as exc_info:
+        with SetWorkflowID(wfuuid):
+            test_commit_transaction()
+    assert "Can't operate on closed transaction inside context manager." in str(
+        exc_info.value
+    )
+    print(exc_info.value)
+
+    with pytest.raises(InvalidRequestError) as exc_info:
+        with SetWorkflowID(wfuuid):
+            test_commit_transaction()
+    assert "Can't operate on closed transaction inside context manager." in str(
+        exc_info.value
+    )
+
+    assert commit_txn_counter == 1
+
+    wfuuid = str(uuid.uuid4())
+    with pytest.raises(InvalidRequestError) as exc_info:
+        with SetWorkflowID(wfuuid):
+            test_abort_transaction()
+    assert "Can't operate on closed transaction inside context manager." in str(
+        exc_info.value
+    )
+    print(exc_info.value)
+
+    with pytest.raises(InvalidRequestError) as exc_info:
+        with SetWorkflowID(wfuuid):
+            test_abort_transaction()
+    assert "Can't operate on closed transaction inside context manager." in str(
+        exc_info.value
+    )
+    assert rollback_txn_counter == 1
 
 
 def test_notification_errors(dbos: DBOS) -> None:
@@ -191,3 +249,35 @@ def test_enqueued_dead_letter_queue(dbos: DBOS) -> None:
     assert handle.get_result() == None
     dbos._sys_db.wait_for_buffer_flush()
     assert handle.get_status().status == WorkflowStatusString.SUCCESS.value
+
+
+def test_wfstatus_invalid(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def regular_workflow() -> str:
+        return "done"
+
+    has_executed = False
+
+    @DBOS.workflow()
+    def non_deterministic_worklow() -> None:
+        nonlocal has_executed
+        handle = dbos.start_workflow(regular_workflow)
+        if not has_executed:
+            # Mock a scenario where the workflow control flow is changed by an external process
+            dbos.set_event("test_event", "value1")
+            has_executed = True
+
+        res = handle.get_result()
+        assert res == "done"
+
+        handle.get_status()
+        return
+
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowID(wfuuid):
+        non_deterministic_worklow()
+
+    with pytest.raises(DBOSException) as exc_info:
+        with SetWorkflowID(wfuuid):
+            non_deterministic_worklow()
+    assert "Hint: Check if your workflow is deterministic." in str(exc_info.value)

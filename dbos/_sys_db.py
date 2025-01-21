@@ -29,6 +29,7 @@ from . import _serialization
 from ._dbos_config import ConfigFile
 from ._error import (
     DBOSDeadLetterQueueError,
+    DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSWorkflowConflictIDError,
 )
@@ -405,7 +406,10 @@ class SystemDatabase:
                     res["output"]
                 )
                 return resstat
-            return None
+            else:
+                raise DBOSException(
+                    "Workflow status record not found. This should not happen! \033[1m Hint: Check if your workflow is deterministic.\033[0m"
+                )
         stat = self.get_workflow_status(workflow_uuid)
         self.record_operation_result(
             {
