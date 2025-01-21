@@ -367,8 +367,14 @@ def test_one_at_a_time_with_worker_concurrency(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def default_config(i: int) -> ConfigFile:
-    return {
+# Declare a workflow globally (we need it to be registered across process under a known name)
+@DBOS.workflow()
+def test_worker_concurrency_workflow() -> None:
+    pass
+
+
+def run_dbos_test_in_process(i: int) -> None:
+    dbos_config = {
         "name": "test-app",
         "language": "python",
         "database": {
@@ -385,19 +391,10 @@ def default_config(i: int) -> ConfigFile:
         "telemetry": {},
         "env": {},
     }
-
-
-# Declare a workflow globally (we need it to be registered across process under a known name)
-@DBOS.workflow()
-def test_worker_concurrency_workflow() -> None:
-    pass
-
-
-def run_dbos_test_in_process(i: int) -> None:
-    dbos = DBOS(config=default_config(i))
+    dbos = DBOS(config=dbos_config)
     DBOS.launch()
 
-    queue = Queue("test_queue", worker_concurrency=1)
+    Queue("test_queue", worker_concurrency=1)
     time.sleep(
         2
     )  # Give some time for the parent worker to enqueue and for this worker to dequeue
