@@ -190,6 +190,18 @@ def load_config(config_file_path: str = DBOS_CONFIG_PATH) -> ConfigFile:
     # Load the DB connection file. Use its values for missing fields from dbos-config.yaml. Use defaults otherwise.
     data = cast(ConfigFile, data)
     db_connection = load_db_connection()
+    data["database"]["hostname"] = (
+        data["database"].get("hostname") or db_connection.get("hostname") or "localhost"
+    )
+    data["database"]["port"] = (
+        data["database"].get("port") or db_connection.get("port") or 5432
+    )
+    data["database"]["username"] = (
+        data["database"].get("username") or db_connection.get("username") or "postgres"
+    )
+    data["database"]["password"] = (
+        data["database"].get("password") or db_connection.get("password") or "dbos"
+    )
 
     # Configure the DBOS logger
     config_logger(data)
@@ -223,7 +235,7 @@ def set_env_vars(config: ConfigFile) -> None:
             os.environ[env] = str(value)
 
 
-def load_db_connection() -> Optional[DatabaseConnection]:
+def load_db_connection() -> DatabaseConnection:
     try:
         with open(DB_CONNECTION_PATH) as f:
             data = json.load(f)
