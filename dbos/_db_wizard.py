@@ -16,7 +16,7 @@ from ._error import DBOSInitializationError
 from ._logger import dbos_logger
 
 
-def db_connect(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
+def db_wizard(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
     # 1. Check the connectivity to the database. Return if successful. If cannot connect, continue to the following steps.
     db_connection_error = _check_db_connectivity(config)
     if db_connection_error is None:

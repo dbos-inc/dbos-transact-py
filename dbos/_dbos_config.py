@@ -8,9 +8,12 @@ import yaml
 from jsonschema import ValidationError, validate
 from sqlalchemy import URL
 
-from ._db_wizard import db_connect
+from ._db_wizard import db_wizard
 from ._error import DBOSInitializationError
 from ._logger import config_logger, dbos_logger, init_logger
+
+DBOS_CONFIG_PATH = "dbos-config.yaml"
+DB_CONNECTION_PATH = os.path.join(".dbos", "db_connection")
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -23,7 +26,7 @@ class DatabaseConfig(TypedDict, total=False):
     hostname: str
     port: int
     username: str
-    password: Optional[str]
+    password: str
     connectionTimeoutMillis: Optional[int]
     app_db_name: str
     sys_db_name: Optional[str]
@@ -76,6 +79,13 @@ class ConfigFile(TypedDict, total=False):
     application: Dict[str, Any]
 
 
+class DatabaseConnection(TypedDict, total=False):
+    hostname: Optional[str]
+    port: Optional[int]
+    username: Optional[str]
+    password: Optional[str]
+
+
 def _substitute_env_vars(content: str) -> str:
     regex = r"\$\{([^}]+)\}"  # Regex to match ${VAR_NAME} style placeholders
 
@@ -93,7 +103,7 @@ def _substitute_env_vars(content: str) -> str:
     return re.sub(regex, replace_func, content)
 
 
-def get_dbos_database_url(config_file_path: str = "dbos-config.yaml") -> str:
+def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
     """
     Retrieve application database URL from configuration `.yaml` file.
 
@@ -119,7 +129,7 @@ def get_dbos_database_url(config_file_path: str = "dbos-config.yaml") -> str:
     return db_url.render_as_string(hide_password=False)
 
 
-def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
+def load_config(config_file_path: str = DBOS_CONFIG_PATH) -> ConfigFile:
     """
     Load the DBOS `ConfigFile` from the specified path (typically `dbos-config.yaml`).
 
@@ -169,8 +179,6 @@ def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
     if "runtimeConfig" not in data or "start" not in data["runtimeConfig"]:
         raise DBOSInitializationError(f"dbos-config.yaml must specify a start command")
 
-    data = cast(ConfigFile, data)
-
     if not _is_valid_app_name(data["name"]):
         raise DBOSInitializationError(
             f'Invalid app name {data["name"]}.  App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores.'
@@ -179,10 +187,15 @@ def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
     if "app_db_name" not in data["database"]:
         data["database"]["app_db_name"] = _app_name_to_db_name(data["name"])
 
+    # Load the DB connection file. Use its values for missing fields from dbos-config.yaml. Use defaults otherwise.
+    data = cast(ConfigFile, data)
+    db_connection = load_db_connection()
+
+    # Configure the DBOS logger
     config_logger(data)
 
     # Check the connectivity to the database and make sure it's properly configured
-    data = db_connect(data, config_file_path)
+    data = db_wizard(data, config_file_path)
 
     if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
         data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"
@@ -208,3 +221,25 @@ def set_env_vars(config: ConfigFile) -> None:
     for env, value in config.get("env", {}).items():
         if value is not None:
             os.environ[env] = str(value)
+
+
+def load_db_connection() -> Optional[DatabaseConnection]:
+    try:
+        with open(DB_CONNECTION_PATH) as f:
+            data = json.load(f)
+            return DatabaseConnection(
+                hostname=data.get("hostname", None),
+                port=data.get("port", None),
+                username=data.get("username", None),
+                password=data.get("password", None),
+            )
+    except:
+        return DatabaseConnection(
+            hostname=None, port=None, username=None, password=None
+        )
+
+
+def save_db_connection(connection: DatabaseConnection) -> None:
+    os.makedirs(".dbos", exist_ok=True)
+    with open(DB_CONNECTION_PATH, "w") as f:
+        json.dump(connection, f)
