@@ -7,7 +7,7 @@ from multiprocessing import Process
 
 import sqlalchemy as sa
 
-from dbos import DBOS, Queue, SetWorkflowID
+from dbos import DBOS, ConfigFile, Queue, SetWorkflowID
 from dbos._dbos import WorkflowHandle
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
@@ -420,7 +420,7 @@ def test_worker_concurrency_workflow() -> None:
 
 
 def run_dbos_test_in_process(i: int) -> None:
-    dbos_config = {
+    dbos_config: ConfigFile = {
         "name": "test-app",
         "language": "python",
         "database": {
