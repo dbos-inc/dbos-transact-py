@@ -20,9 +20,9 @@ from ._sys_db import (
 class WorkflowInformation:
     workflowUUID: str
     status: WorkflowStatuses
-    name: str
-    class_name: Optional[str]
-    config_name: Optional[str]
+    workflowName: str
+    workflowClassName: Optional[str]
+    workflowConfigName: Optional[str]
     input: Optional[_serialization.WorkflowInputs]  # JSON (jsonpickle)
     output: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
@@ -136,9 +136,9 @@ def _get_workflow_info(
 
     winfo.workflowUUID = workflowUUID
     winfo.status = info["status"]
-    winfo.name = info["name"]
-    winfo.class_name = info["class_name"]
-    winfo.config_name = info["config_name"]
+    winfo.workflowName = info["name"]
+    winfo.workflowClassName = info["class_name"]
+    winfo.workflowConfigName = info["config_name"]
     winfo.executor_id = info["executor_id"]
     winfo.app_version = info["app_version"]
     winfo.app_id = info["app_id"]
