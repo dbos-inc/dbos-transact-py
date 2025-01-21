@@ -1,4 +1,5 @@
 import os
+import subprocess
 import threading
 import time
 import uuid
@@ -10,6 +11,7 @@ from dbos import DBOS, ConfigFile, Queue, SetWorkflowID
 from dbos._dbos import WorkflowHandle
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
+from tests.conftest import default_config
 
 
 def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
@@ -322,6 +324,50 @@ def test_multiple_queues(dbos: DBOS) -> None:
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
+
+
+    def test_queue_workflow_in_recovered_workflow(dbos: DBOS) -> None:
+    # We don't want to be taking queued jobs while subprocess runs
+    DBOS.destroy()
+
+    # Set up environment variables to trigger the crash in subprocess
+    env = os.environ.copy()
+    env["DIE_ON_PURPOSE"] = "true"
+
+    # Run the script as a subprocess to get a workflow stuck
+    process = subprocess.run(
+        ["python", "tests/queuedworkflow.py"],
+        cwd=os.getcwd(),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    # print ("Process Return: ")
+    # print (process.stdout)
+    # print (process.stderr)
+    assert process.returncode != 0  # Crashed
+
+    # Run script again without crash
+    process = subprocess.run(
+        ["python", "tests/queuedworkflow.py"],
+        cwd=os.getcwd(),
+        env=os.environ,
+        capture_output=True,
+        text=True,
+    )
+    # print ("Process Return: ")
+    # print (process.stdout)
+    # print (process.stderr)
+    assert process.returncode == 0  # Ran to completion
+
+    # Launch DBOS to check answer
+    dbos = DBOS(config=default_config())
+    DBOS.launch()
+    wfh: WorkflowHandle[int] = DBOS.retrieve_workflow("testqueuedwfcrash")
+    assert wfh.get_result() == 5
+    assert wfh.get_status().status == "SUCCESS"
+    assert queue_entries_are_cleaned_up(dbos)
+    return
 
 
 ###########################
