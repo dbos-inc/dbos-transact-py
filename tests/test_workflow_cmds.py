@@ -185,7 +185,6 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile) -> None:
 
     if info is not None:
         assert info.workflowUUID == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
-    print(info)
 
 
 def test_cancel_workflow(dbos: DBOS, config: ConfigFile) -> None:
@@ -212,7 +211,6 @@ def test_cancel_workflow(dbos: DBOS, config: ConfigFile) -> None:
     _workflow_commands._cancel_workflow(config, wfUuid)
 
     info = _workflow_commands._get_workflow(config, wfUuid, True)
-    print(info)
     assert info is not None, "Expected info to be not None"
     if info is not None:
         assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
