@@ -2,6 +2,9 @@ import threading
 import traceback
 from typing import TYPE_CHECKING, Optional, TypedDict
 
+from psycopg import errors
+from sqlalchemy.exc import OperationalError
+
 from ._core import P, R, execute_workflow_by_id, start_workflow
 
 if TYPE_CHECKING:
@@ -70,6 +73,14 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                 wf_ids = dbos._sys_db.start_queued_workflows(queue, dbos._executor_id)
                 for id in wf_ids:
                     execute_workflow_by_id(dbos, id)
+            except OperationalError as e:
+                # Ignore serialization error
+                if isinstance(e.orig, errors.SerializationFailure):
+                    return []
+                else:
+                    dbos.logger.warning(
+                        f"Exception encountered in queue thread: {traceback.format_exc()}"
+                    )
             except Exception:
                 dbos.logger.warning(
                     f"Exception encountered in queue thread: {traceback.format_exc()}"
