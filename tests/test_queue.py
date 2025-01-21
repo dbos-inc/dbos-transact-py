@@ -326,7 +326,7 @@ def test_multiple_queues(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-    def test_queue_workflow_in_recovered_workflow(dbos: DBOS) -> None:
+def test_queue_workflow_in_recovered_workflow(dbos: DBOS) -> None:
     # We don't want to be taking queued jobs while subprocess runs
     DBOS.destroy()
 
