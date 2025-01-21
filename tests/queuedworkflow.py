@@ -59,6 +59,7 @@ def main() -> None:
         WF.enqueue_5_tasks()
 
     DBOS.destroy()
+    os._exit(0)
 
 
 if __name__ == "__main__":
