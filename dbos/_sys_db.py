@@ -1162,7 +1162,6 @@ class SystemDatabase:
                 query = query.limit(queue._concurrency)
 
             rows = c.execute(query).fetchall()
-            dbos_logger.debug(f"[{queue.name}] dequeued {len(rows)} task(s)")
 
             # Now, get the workflow IDs of functions that have not yet been started
             dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
