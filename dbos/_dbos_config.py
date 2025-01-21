@@ -197,7 +197,10 @@ def load_config(
         data["database"].get("username") or db_connection.get("username") or "postgres"
     )
     data["database"]["password"] = (
-        data["database"].get("password") or db_connection.get("password") or "dbos"
+        data["database"].get("password")
+        or db_connection.get("password")
+        or os.environ.get("PGPASSWORD")
+        or "dbos"
     )
     data["database"]["local_suffix"] = (
         data["database"].get("local_suffix")

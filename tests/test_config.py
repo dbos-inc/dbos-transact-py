@@ -118,7 +118,7 @@ def test_config_load_defaults(mocker):
     assert configFile["database"]["hostname"] == "localhost"
     assert configFile["database"]["port"] == 5432
     assert configFile["database"]["username"] == "postgres"
-    assert configFile["database"]["password"] == "dbos"
+    assert configFile["database"]["password"] == os.environ.get("PGPASSWORD", "dbos")
 
 
 def test_config_load_db_connection(mocker):

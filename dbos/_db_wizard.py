@@ -108,7 +108,6 @@ def db_wizard(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
 
 def _start_docker_postgres(config: "ConfigFile") -> bool:
     print("Starting a Postgres Docker container...")
-    config["database"]["password"] = "dbos"
     client = docker.from_env()
     pg_data = "/var/lib/postgresql/data"
     container_name = "dbos-db"
