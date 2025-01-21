@@ -1158,7 +1158,7 @@ class SystemDatabase:
             if queue.worker_concurrency is not None:
                 query = query.limit(queue.worker_concurrency)
             elif queue.concurrency is not None:
-                query = query.limit(queue._concurrency)
+                query = query.limit(queue.concurrency)
 
             rows = c.execute(query).fetchall()
 
