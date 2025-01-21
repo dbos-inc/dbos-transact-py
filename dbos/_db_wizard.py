@@ -1,5 +1,7 @@
+import json
+import os
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, TypedDict
 
 import docker  # type: ignore
 import typer
@@ -14,6 +16,16 @@ from ._cloudutils.cloudutils import get_cloud_credentials
 from ._cloudutils.databases import choose_database, get_user_db_credentials
 from ._error import DBOSInitializationError
 from ._logger import dbos_logger
+
+DB_CONNECTION_PATH = os.path.join(".dbos", "db_connection")
+
+
+class DatabaseConnection(TypedDict):
+    hostname: Optional[str]
+    port: Optional[int]
+    username: Optional[str]
+    password: Optional[str]
+    local_suffix: Optional[bool]
 
 
 def db_wizard(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
@@ -82,11 +94,15 @@ def db_wizard(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
                 f"Could not connect to the database. Exception: {db_connection_error}"
             )
 
-    # 6. Save the config to the config file and return the updated config.
-    # TODO: make the config file prettier
-    with open(config_file_path, "w") as file:
-        file.write(yaml.dump(config))
-
+    # 6. Save the config to the database connection file
+    updated_connection = DatabaseConnection(
+        hostname=config["database"]["hostname"],
+        port=config["database"]["port"],
+        username=config["database"]["username"],
+        password=config["database"]["password"],
+        local_suffix=config["database"]["local_suffix"],
+    )
+    save_db_connection(updated_connection)
     return config
 
 
@@ -151,7 +167,7 @@ def _check_db_connectivity(config: "ConfigFile") -> Optional[Exception]:
         host=config["database"]["hostname"],
         port=config["database"]["port"],
         database="postgres",
-        query={"connect_timeout": "2"},
+        query={"connect_timeout": "1"},
     )
     postgres_db_engine = create_engine(postgres_db_url)
     try:
@@ -168,3 +184,26 @@ def _check_db_connectivity(config: "ConfigFile") -> Optional[Exception]:
         postgres_db_engine.dispose()
 
     return None
+
+
+def load_db_connection() -> DatabaseConnection:
+    try:
+        with open(DB_CONNECTION_PATH, "r") as f:
+            data = json.load(f)
+            return DatabaseConnection(
+                hostname=data.get("hostname", None),
+                port=data.get("port", None),
+                username=data.get("username", None),
+                password=data.get("password", None),
+                local_suffix=data.get("local_suffix", None),
+            )
+    except:
+        return DatabaseConnection(
+            hostname=None, port=None, username=None, password=None, local_suffix=None
+        )
+
+
+def save_db_connection(connection: DatabaseConnection) -> None:
+    os.makedirs(".dbos", exist_ok=True)
+    with open(DB_CONNECTION_PATH, "w") as f:
+        json.dump(connection, f)

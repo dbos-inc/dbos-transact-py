@@ -130,7 +130,7 @@ def test_config_load_db_connection(mocker):
                 - "python3 main.py"
     """
     mock_db_connection = """
-    {"hostname": "example.com", "port": 2345, "username": "example", "password": "password"}
+    {"hostname": "example.com", "port": 2345, "username": "example", "password": "password", "local_suffix": true}
     """
     mocker.patch(
         "builtins.open",
@@ -146,6 +146,8 @@ def test_config_load_db_connection(mocker):
     assert configFile["database"]["port"] == 2345
     assert configFile["database"]["username"] == "example"
     assert configFile["database"]["password"] == "password"
+    assert configFile["database"]["local_suffix"] == True
+    assert configFile["database"]["app_db_name"] == "some_app_local"
 
 
 def test_config_mixed_params(mocker):

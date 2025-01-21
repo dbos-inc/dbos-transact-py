@@ -8,12 +8,11 @@ import yaml
 from jsonschema import ValidationError, validate
 from sqlalchemy import URL
 
-from ._db_wizard import db_wizard
+from ._db_wizard import db_wizard, load_db_connection
 from ._error import DBOSInitializationError
 from ._logger import config_logger, dbos_logger, init_logger
 
 DBOS_CONFIG_PATH = "dbos-config.yaml"
-DB_CONNECTION_PATH = os.path.join(".dbos", "db_connection")
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -77,13 +76,6 @@ class ConfigFile(TypedDict, total=False):
     telemetry: Optional[TelemetryConfig]
     env: Dict[str, str]
     application: Dict[str, Any]
-
-
-class DatabaseConnection(TypedDict, total=False):
-    hostname: Optional[str]
-    port: Optional[int]
-    username: Optional[str]
-    password: Optional[str]
 
 
 def _substitute_env_vars(content: str) -> str:
@@ -207,6 +199,11 @@ def load_config(
     data["database"]["password"] = (
         data["database"].get("password") or db_connection.get("password") or "dbos"
     )
+    data["database"]["local_suffix"] = (
+        data["database"].get("local_suffix")
+        or db_connection.get("local_suffix")
+        or False
+    )
 
     # Configure the DBOS logger
     config_logger(data)
@@ -239,25 +236,3 @@ def set_env_vars(config: ConfigFile) -> None:
     for env, value in config.get("env", {}).items():
         if value is not None:
             os.environ[env] = str(value)
-
-
-def load_db_connection() -> DatabaseConnection:
-    try:
-        with open(DB_CONNECTION_PATH, "r") as f:
-            data = json.load(f)
-            return DatabaseConnection(
-                hostname=data.get("hostname", None),
-                port=data.get("port", None),
-                username=data.get("username", None),
-                password=data.get("password", None),
-            )
-    except:
-        return DatabaseConnection(
-            hostname=None, port=None, username=None, password=None
-        )
-
-
-def save_db_connection(connection: DatabaseConnection) -> None:
-    os.makedirs(".dbos", exist_ok=True)
-    with open(DB_CONNECTION_PATH, "w") as f:
-        json.dump(connection, f)
