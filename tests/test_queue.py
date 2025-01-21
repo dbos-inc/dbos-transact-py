@@ -393,7 +393,7 @@ def test_worker_concurrency_workflow() -> None:
     pass
 
 
-def run_dbos_test_in_process(i) -> None:
+def run_dbos_test_in_process(i: int) -> None:
     dbos = DBOS(config=default_config(i))
     DBOS.launch()
 
