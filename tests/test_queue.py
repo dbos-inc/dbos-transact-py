@@ -1,10 +1,12 @@
+import os
 import threading
 import time
 import uuid
+from multiprocessing import Process
 
 import sqlalchemy as sa
 
-from dbos import DBOS, Queue, SetWorkflowID
+from dbos import DBOS, ConfigFile, Queue, SetWorkflowID
 from dbos._dbos import WorkflowHandle
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
@@ -361,5 +363,65 @@ def test_one_at_a_time_with_worker_concurrency(dbos: DBOS) -> None:
     assert handle1.get_result() == None
     assert handle2.get_result() == None
     assert flag
-    assert wf_counter == 1
+    assert wf_counter == 1, f"wf_counter={wf_counter}"
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def default_config(i: int) -> ConfigFile:
+    return {
+        "name": "test-app",
+        "language": "python",
+        "database": {
+            "hostname": "localhost",
+            "port": 5432,
+            "username": "postgres",
+            "password": os.environ["PGPASSWORD"],
+            "app_db_name": "dbostestpy",
+        },
+        "runtimeConfig": {
+            "start": ["python3 main.py"],
+            "admin_port": 8001 + i,
+        },
+        "telemetry": {},
+        "env": {},
+    }
+
+
+# Declare a workflow globally (we need it to be registered across process under a known name)
+@DBOS.workflow()
+def test_worker_concurrency_workflow() -> None:
+    pass
+
+
+def run_dbos_test_in_process(i) -> None:
+    dbos = DBOS(config=default_config(i))
+    DBOS.launch()
+
+    queue = Queue("test_queue", worker_concurrency=1)
+    time.sleep(
+        2
+    )  # Give some time for the parent worker to enqueue and for this worker to dequeue
+
+    queue_entries_are_cleaned_up(dbos)
+
+    DBOS.destroy()
+
+
+def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
+
+    # Start N proccesses to dequeue
+    processes = []
+    for i in range(0, 10):
+        os.environ["DBOS__VMID"] = f"test-executor-{i}"
+        process = Process(target=run_dbos_test_in_process, args=(i,))
+        process.start()
+        processes.append(process)
+
+    # Enqueue N tasks but ensure this worker cannot dequeue
+
+    queue = Queue("test_queue", limiter={"limit": 0, "period": 1})
+    for i in range(0, 10):
+        queue.enqueue(test_worker_concurrency_workflow)
+
+    for process in processes:
+        process.join()
