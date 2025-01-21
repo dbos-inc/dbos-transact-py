@@ -613,7 +613,7 @@ def decorate_transaction(
                             raise
                         except InvalidRequestError as invalid_request_error:
                             dbos.logger.error(
-                                f"InvalidRequestError in transaction {func.__qualname__} \033[1m Hint: Do not call commit() or rollback() within a DBOS function.\033[0m"
+                                f"InvalidRequestError in transaction {func.__qualname__} \033[1m Hint: Do not call commit() or rollback() within a DBOS transaction.\033[0m"
                             )
                             txn_error = invalid_request_error
                             raise
