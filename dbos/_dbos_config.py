@@ -130,7 +130,7 @@ def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
 
 
 def load_config(
-    config_file_path: str = DBOS_CONFIG_PATH, *, use_db_wizard=True
+    config_file_path: str = DBOS_CONFIG_PATH, *, use_db_wizard: bool = True
 ) -> ConfigFile:
     """
     Load the DBOS `ConfigFile` from the specified path (typically `dbos-config.yaml`).
@@ -243,7 +243,7 @@ def set_env_vars(config: ConfigFile) -> None:
 
 def load_db_connection() -> DatabaseConnection:
     try:
-        with open(DB_CONNECTION_PATH) as f:
+        with open(DB_CONNECTION_PATH, "r") as f:
             data = json.load(f)
             return DatabaseConnection(
                 hostname=data.get("hostname", None),
