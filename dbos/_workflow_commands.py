@@ -49,40 +49,42 @@ def _list_workflows(
 ) -> List[WorkflowInformation]:
 
     sys_db = None
+
     try:
         sys_db = SystemDatabase(config)
+
+        input = GetWorkflowsInput()
+        input.authenticated_user = user
+        input.start_time = starttime
+        input.end_time = endtime
+        if status is not None:
+            input.status = cast(WorkflowStatuses, status)
+        input.application_version = appversion
+        input.limit = li
+
+        output: GetWorkflowsOutput = sys_db.get_workflows(input)
+
+        infos: List[WorkflowInformation] = []
+
+        if output.workflow_uuids is None:
+            typer.echo("No workflows found")
+            return {}
+
+        for workflow_id in output.workflow_uuids:
+            info = _get_workflow_info(
+                sys_db, workflow_id, request
+            )  # Call the method for each ID
+
+            if info is not None:
+                infos.append(info)
+
+        return infos
     except Exception as e:
-        typer.echo(f"Failed to connect to DBOS system database: {e}")
+        typer.echo(f"Error listing workflows: {e}")
         return []
     finally:
         if sys_db:
             sys_db.destroy()
-
-    input = GetWorkflowsInput()
-    input.authenticated_user = user
-    input.start_time = starttime
-    input.end_time = endtime
-    if status is not None:
-        input.status = cast(WorkflowStatuses, status)
-    input.application_version = appversion
-    input.limit = li
-
-    output: GetWorkflowsOutput = sys_db.get_workflows(input)
-
-    infos: List[WorkflowInformation] = []
-
-    if output.workflow_uuids is None:
-        typer.echo("No workflows found")
-        return {}
-
-    for workflow_id in output.workflow_uuids:
-        info = _get_workflow_info(
-            sys_db, workflow_id, request
-        )  # Call the method for each ID
-        if info is not None:
-            infos.append(info)
-
-    return infos
 
 
 def _get_workflow(
@@ -92,15 +94,16 @@ def _get_workflow(
 
     try:
         sys_db = SystemDatabase(config)
+
+        info = _get_workflow_info(sys_db, uuid, request)
+        return info
+
     except Exception as e:
-        typer.echo(f"Failed to connect to DBOS system database: {e}")
+        typer.echo(f"Error getting workflow: {e}")
         return None
     finally:
         if sys_db:
             sys_db.destroy()
-
-    info = _get_workflow_info(sys_db, uuid, request)
-    return info
 
 
 def _cancel_workflow(config: ConfigFile, uuid: str) -> None:
@@ -109,15 +112,15 @@ def _cancel_workflow(config: ConfigFile, uuid: str) -> None:
 
     try:
         sys_db = SystemDatabase(config)
+        sys_db.set_workflow_status(uuid, WorkflowStatusString.CANCELLED, False)
+        return
+
     except Exception as e:
         typer.echo(f"Failed to connect to DBOS system database: {e}")
         return None
     finally:
         if sys_db:
             sys_db.destroy()
-
-    sys_db.set_workflow_status(uuid, WorkflowStatusString.CANCELLED, False)
-    return
 
 
 def _reattempt_workflow(uuid: str, startNewWorkflow: bool) -> None:
@@ -128,6 +131,7 @@ def _reattempt_workflow(uuid: str, startNewWorkflow: bool) -> None:
 def _get_workflow_info(
     sys_db: SystemDatabase, workflowUUID: str, getRequest: bool
 ) -> Optional[WorkflowInformation]:
+
     info = sys_db.get_workflow_status(workflowUUID)
     if info is None:
         return None

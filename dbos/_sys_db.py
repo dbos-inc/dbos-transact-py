@@ -349,7 +349,7 @@ class SystemDatabase:
                 stmt = (
                     sa.update(SystemSchema.workflow_status)
                     .where(
-                        SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid
+                        SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
                     )
                     .values(recovery_attempts=reset_recovery_attempts)
                 )
