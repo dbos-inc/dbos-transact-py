@@ -1196,21 +1196,19 @@ class SystemDatabase:
                 )
                 ret_ids.append(id)
 
-                # If we have a limiter, garbage-collect all completed functions started
-                # before the period. If there's no limiter, there's no need--they were
-                # deleted on completion.
-                if queue.limiter is not None:
-                    c.execute(
-                        sa.delete(SystemSchema.workflow_queue)
-                        .where(
-                            SystemSchema.workflow_queue.c.completed_at_epoch_ms != None
-                        )
-                        .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
-                        .where(
-                            SystemSchema.workflow_queue.c.started_at_epoch_ms
-                            < start_time_ms - limiter_period_ms
-                        )
+            # If we have a limiter, garbage-collect all completed functions started
+            # before the period. If there's no limiter, there's no need--they were
+            # deleted on completion.
+            if queue.limiter is not None:
+                c.execute(
+                    sa.delete(SystemSchema.workflow_queue)
+                    .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms != None)
+                    .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
+                    .where(
+                        SystemSchema.workflow_queue.c.started_at_epoch_ms
+                        < start_time_ms - limiter_period_ms
                     )
+                )
 
             # Return the IDs of all functions we started
             return ret_ids
