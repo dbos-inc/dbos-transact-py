@@ -133,7 +133,6 @@ def _get_workflow_info(
         return None
 
     winfo = WorkflowInformation()
-    print("creating winfo")
 
     winfo.workflowUUID = workflowUUID
     winfo.status = info["status"]

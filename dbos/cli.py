@@ -8,6 +8,7 @@ import typing
 from os import path
 from typing import Any
 
+import jsonpickle
 import sqlalchemy as sa
 import tomlkit
 import typer
@@ -397,7 +398,7 @@ def list(
     workflows = _list_workflows(
         config, limit, user, starttime, endtime, status, request, appversion
     )
-    print(_serialization.serialize(workflows))
+    print(jsonpickle.encode(workflows, unpicklable=False))
 
 
 @workflow.command(help="Retrieve the status of a workflow")
@@ -413,7 +414,7 @@ def get(
     ] = True,
 ) -> None:
     config = load_config()
-    print(_serialization.serialize(_get_workflow(config, uuid, request)))
+    print(jsonpickle.encode(_get_workflow(config, uuid, request), unpicklable=False))
 
 
 @workflow.command(
