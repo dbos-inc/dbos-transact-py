@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, TypedDict, cast
 
 import yaml
 from jsonschema import ValidationError, validate
+from rich import print
 from sqlalchemy import URL
 
 from ._db_wizard import db_wizard, load_db_connection
@@ -187,6 +188,19 @@ def load_config(
     # Load the DB connection file. Use its values for missing fields from dbos-config.yaml. Use defaults otherwise.
     data = cast(ConfigFile, data)
     db_connection = load_db_connection()
+    if data["database"].get("hostname"):
+        print(
+            "[bold blue]Loading database connection parameters from dbos-config.yaml[/bold blue]"
+        )
+    elif db_connection.get("hostname"):
+        print(
+            "[bold blue]Loading database connection parameters from .dbos/db_connection[/bold blue]"
+        )
+    else:
+        print(
+            "[bold blue]Using default database connection parameters (localhost)[/bold blue]"
+        )
+
     data["database"]["hostname"] = (
         data["database"].get("hostname") or db_connection.get("hostname") or "localhost"
     )

@@ -137,7 +137,7 @@ def _start_docker_postgres(config: "ConfigFile") -> bool:
                 continue
             print("[green]Postgres Docker container started successfully![/green]")
             break
-        except Exception as e:
+        except:
             attempts -= 1
             time.sleep(1)
 
