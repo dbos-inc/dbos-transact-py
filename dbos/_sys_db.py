@@ -1116,7 +1116,6 @@ class SystemDatabase:
             # Execute with snapshot isolation to ensure multiple workers respect limits
             c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
 
-            ret_ids: list[str] = []
             # If there is a limiter, compute how many functions have started in its period.
             if queue.limiter is not None:
                 query = (
@@ -1165,6 +1164,7 @@ class SystemDatabase:
 
             # Now, get the workflow IDs of functions that have not yet been started
             dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
+            ret_ids: list[str] = []
             dbos_logger.debug(f"[{queue.name}] dequeueing {len(dequeued_ids)} task(s)")
             for id in dequeued_ids:
 
