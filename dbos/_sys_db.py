@@ -356,7 +356,7 @@ class SystemDatabase:
                 stmt = (
                     sa.update(SystemSchema.workflow_status)
                     .where(
-                        SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid
+                        SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
                     )
                     .values(recovery_attempts=reset_recovery_attempts)
                 )
@@ -582,12 +582,12 @@ class SystemDatabase:
         if input.start_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                >= datetime.datetime.fromisoformat(input.start_time).timestamp()
+                >= datetime.datetime.fromisoformat(input.start_time).timestamp() * 1000
             )
         if input.end_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                <= datetime.datetime.fromisoformat(input.end_time).timestamp()
+                <= datetime.datetime.fromisoformat(input.end_time).timestamp() * 1000
             )
         if input.status:
             query = query.where(SystemSchema.workflow_status.c.status == input.status)

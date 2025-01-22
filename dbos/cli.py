@@ -8,6 +8,7 @@ import typing
 from os import path
 from typing import Any
 
+import jsonpickle  # type: ignore
 import sqlalchemy as sa
 import tomlkit
 import typer
@@ -17,12 +18,21 @@ from typing_extensions import Annotated
 
 from dbos._schemas.system_database import SystemSchema
 
-from . import load_config
+from . import _serialization, load_config
 from ._app_db import ApplicationDatabase
 from ._dbos_config import _is_valid_app_name
 from ._sys_db import SystemDatabase
+from ._workflow_commands import (
+    _cancel_workflow,
+    _get_workflow,
+    _list_workflows,
+    _reattempt_workflow,
+)
 
 app = typer.Typer()
+workflow = typer.Typer()
+
+app.add_typer(workflow, name="workflow", help="Manage DBOS workflows")
 
 
 def _on_windows() -> bool:
@@ -331,6 +341,95 @@ def reset(
     finally:
         if sys_db:
             sys_db.destroy()
+
+
+@workflow.command(help="List workflows for your application")
+def list(
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-l", help="Limit the results returned"),
+    ] = 10,
+    user: Annotated[
+        typing.Optional[str],
+        typer.Option("--user", "-u", help="Retrieve workflows run by this user"),
+    ] = None,
+    starttime: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--start-time",
+            "-s",
+            help="Retrieve workflows starting after this timestamp (ISO 8601 format)",
+        ),
+    ] = None,
+    endtime: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--end-time",
+            "-e",
+            help="Retrieve workflows starting before this timestamp (ISO 8601 format)",
+        ),
+    ] = None,
+    status: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--status",
+            "-S",
+            help="Retrieve workflows with this status (PENDING, SUCCESS, ERROR, RETRIES_EXCEEDED, ENQUEUED, or CANCELLED)",
+        ),
+    ] = None,
+    appversion: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--application-version",
+            "-v",
+            help="Retrieve workflows with this application version",
+        ),
+    ] = None,
+    request: Annotated[
+        bool,
+        typer.Option("--request", help="Retrieve workflow request information"),
+    ] = True,
+    appdir: Annotated[
+        typing.Optional[str],
+        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
+    ] = None,
+) -> None:
+    config = load_config()
+    workflows = _list_workflows(
+        config, limit, user, starttime, endtime, status, request, appversion
+    )
+    print(jsonpickle.encode(workflows, unpicklable=False))
+
+
+@workflow.command(help="Retrieve the status of a workflow")
+def get(
+    uuid: Annotated[str, typer.Argument()],
+    appdir: Annotated[
+        typing.Optional[str],
+        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
+    ] = None,
+    request: Annotated[
+        bool,
+        typer.Option("--request", help="Retrieve workflow request information"),
+    ] = True,
+) -> None:
+    config = load_config()
+    print(jsonpickle.encode(_get_workflow(config, uuid, request), unpicklable=False))
+
+
+@workflow.command(
+    help="Cancel a workflow so it is no longer automatically retried or restarted"
+)
+def cancel(
+    uuid: Annotated[str, typer.Argument()],
+    appdir: Annotated[
+        typing.Optional[str],
+        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
+    ] = None,
+) -> None:
+    config = load_config()
+    _cancel_workflow(config, uuid)
+    print(f"Workflow {uuid} has been cancelled")
 
 
 if __name__ == "__main__":
