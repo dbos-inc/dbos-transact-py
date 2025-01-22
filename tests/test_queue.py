@@ -415,7 +415,7 @@ def test_one_at_a_time_with_worker_concurrency(dbos: DBOS) -> None:
 
 # Declare a workflow globally (we need it to be registered across process under a known name)
 @DBOS.workflow()
-def test_worker_concurrency_workflow() -> None:
+def worker_concurrency_test_workflow() -> None:
     pass
 
 
@@ -464,7 +464,7 @@ def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
 
     queue = Queue("test_queue", limiter={"limit": 0, "period": 1})
     for i in range(0, 10):
-        queue.enqueue(test_worker_concurrency_workflow)
+        queue.enqueue(worker_concurrency_test_workflow)
 
     for process in processes:
         process.join()
