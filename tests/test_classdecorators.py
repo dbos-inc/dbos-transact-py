@@ -187,6 +187,7 @@ def test_required_roles_class(dbos: DBOS) -> None:
 
 # We can put classes in functions to test decorators for now...
 def test_simple_workflow_static(dbos: DBOS) -> None:
+    @DBOS.dbos_class()
     class DBOSTestClassStatic:
         txn_counter: int = 0
         wf_counter: int = 0

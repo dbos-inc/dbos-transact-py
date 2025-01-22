@@ -26,6 +26,7 @@ def default_config() -> ConfigFile:
 q = Queue("testq", concurrency=1, limiter={"limit": 1, "period": 1})
 
 
+@DBOS.dbos_class()
 class WF:
     @staticmethod
     @DBOS.workflow()
