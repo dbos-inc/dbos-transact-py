@@ -6,11 +6,14 @@ from typing import Any, Dict, List, Optional, TypedDict, cast
 
 import yaml
 from jsonschema import ValidationError, validate
+from rich import print
 from sqlalchemy import URL
 
-from ._db_wizard import db_connect
+from ._db_wizard import db_wizard, load_db_connection
 from ._error import DBOSInitializationError
 from ._logger import config_logger, dbos_logger, init_logger
+
+DBOS_CONFIG_PATH = "dbos-config.yaml"
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -23,7 +26,7 @@ class DatabaseConfig(TypedDict, total=False):
     hostname: str
     port: int
     username: str
-    password: Optional[str]
+    password: str
     connectionTimeoutMillis: Optional[int]
     app_db_name: str
     sys_db_name: Optional[str]
@@ -93,7 +96,7 @@ def _substitute_env_vars(content: str) -> str:
     return re.sub(regex, replace_func, content)
 
 
-def get_dbos_database_url(config_file_path: str = "dbos-config.yaml") -> str:
+def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
     """
     Retrieve application database URL from configuration `.yaml` file.
 
@@ -119,7 +122,9 @@ def get_dbos_database_url(config_file_path: str = "dbos-config.yaml") -> str:
     return db_url.render_as_string(hide_password=False)
 
 
-def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
+def load_config(
+    config_file_path: str = DBOS_CONFIG_PATH, *, use_db_wizard: bool = True
+) -> ConfigFile:
     """
     Load the DBOS `ConfigFile` from the specified path (typically `dbos-config.yaml`).
 
@@ -151,6 +156,9 @@ def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
     except ValidationError as e:
         raise DBOSInitializationError(f"Validation error: {e}")
 
+    if "database" not in data:
+        data["database"] = {}
+
     if "name" not in data:
         raise DBOSInitializationError(
             f"dbos-config.yaml must specify an application name"
@@ -169,8 +177,6 @@ def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
     if "runtimeConfig" not in data or "start" not in data["runtimeConfig"]:
         raise DBOSInitializationError(f"dbos-config.yaml must specify a start command")
 
-    data = cast(ConfigFile, data)
-
     if not _is_valid_app_name(data["name"]):
         raise DBOSInitializationError(
             f'Invalid app name {data["name"]}.  App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores.'
@@ -179,10 +185,49 @@ def load_config(config_file_path: str = "dbos-config.yaml") -> ConfigFile:
     if "app_db_name" not in data["database"]:
         data["database"]["app_db_name"] = _app_name_to_db_name(data["name"])
 
+    # Load the DB connection file. Use its values for missing fields from dbos-config.yaml. Use defaults otherwise.
+    data = cast(ConfigFile, data)
+    db_connection = load_db_connection()
+    if data["database"].get("hostname"):
+        print(
+            "[bold blue]Loading database connection parameters from dbos-config.yaml[/bold blue]"
+        )
+    elif db_connection.get("hostname"):
+        print(
+            "[bold blue]Loading database connection parameters from .dbos/db_connection[/bold blue]"
+        )
+    else:
+        print(
+            "[bold blue]Using default database connection parameters (localhost)[/bold blue]"
+        )
+
+    data["database"]["hostname"] = (
+        data["database"].get("hostname") or db_connection.get("hostname") or "localhost"
+    )
+    data["database"]["port"] = (
+        data["database"].get("port") or db_connection.get("port") or 5432
+    )
+    data["database"]["username"] = (
+        data["database"].get("username") or db_connection.get("username") or "postgres"
+    )
+    data["database"]["password"] = (
+        data["database"].get("password")
+        or db_connection.get("password")
+        or os.environ.get("PGPASSWORD")
+        or "dbos"
+    )
+    data["database"]["local_suffix"] = (
+        data["database"].get("local_suffix")
+        or db_connection.get("local_suffix")
+        or False
+    )
+
+    # Configure the DBOS logger
     config_logger(data)
 
     # Check the connectivity to the database and make sure it's properly configured
-    data = db_connect(data, config_file_path)
+    if use_db_wizard:
+        data = db_wizard(data, config_file_path)
 
     if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
         data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"

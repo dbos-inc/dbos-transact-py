@@ -14,13 +14,18 @@ mock_filename = "test.yaml"
 original_open = __builtins__["open"]
 
 
-def generate_mock_open(filename, mock_data):
+def generate_mock_open(filenames, mock_files):
+    if not isinstance(filenames, list):
+        filenames = [filenames]
+    if not isinstance(mock_files, list):
+        mock_files = [mock_files]
+
     def conditional_mock_open(*args, **kwargs):
-        if args[0] == filename:
-            m = mock_open(read_data=mock_data)
-            return m()
-        else:
-            return original_open(*args, **kwargs)
+        for filename, mock_file in zip(filenames, mock_files):
+            if args[0] == filename:
+                m = mock_open(read_data=mock_file)
+                return m()
+        return original_open(*args, **kwargs)
 
     return conditional_mock_open
 
@@ -95,23 +100,79 @@ def test_valid_config_without_appdbname(mocker):
     assert configFile["database"]["app_db_name"] == "some_app"
 
 
-def test_config_missing_params(mocker):
+def test_config_load_defaults(mocker):
     mock_config = """
         name: "some-app"
-        database:
-          port: 1234
-          username: 'some user'
-          password: abc123
-          connectionTimeoutMillis: 3000
+        language: "python"
+        runtimeConfig:
+            start:
+                - "python3 main.py"
     """
     mocker.patch(
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
     )
 
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        load_config(mock_filename)
+    configFile = load_config(mock_filename)
+    assert configFile["name"] == "some-app"
+    assert configFile["language"] == "python"
+    assert configFile["database"]["hostname"] == "localhost"
+    assert configFile["database"]["port"] == 5432
+    assert configFile["database"]["username"] == "postgres"
+    assert configFile["database"]["password"] == os.environ.get("PGPASSWORD", "dbos")
 
-    assert "'hostname' is a required property" in str(exc_info.value)
+
+def test_config_load_db_connection(mocker):
+    mock_config = """
+        name: "some-app"
+        language: "python"
+        runtimeConfig:
+            start:
+                - "python3 main.py"
+    """
+    mock_db_connection = """
+    {"hostname": "example.com", "port": 2345, "username": "example", "password": "password", "local_suffix": true}
+    """
+    mocker.patch(
+        "builtins.open",
+        side_effect=generate_mock_open(
+            [mock_filename, ".dbos/db_connection"], [mock_config, mock_db_connection]
+        ),
+    )
+
+    configFile = load_config(mock_filename, use_db_wizard=False)
+    assert configFile["name"] == "some-app"
+    assert configFile["language"] == "python"
+    assert configFile["database"]["hostname"] == "example.com"
+    assert configFile["database"]["port"] == 2345
+    assert configFile["database"]["username"] == "example"
+    assert configFile["database"]["password"] == "password"
+    assert configFile["database"]["local_suffix"] == True
+    assert configFile["database"]["app_db_name"] == "some_app_local"
+
+
+def test_config_mixed_params(mocker):
+    mock_config = """
+        name: "some-app"
+        language: "python"
+        runtimeConfig:
+            start:
+                - "python3 main.py"
+        database:
+          port: 1234
+          username: 'some user'
+          password: abc123
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
+    )
+
+    configFile = load_config(mock_filename, use_db_wizard=False)
+    assert configFile["name"] == "some-app"
+    assert configFile["language"] == "python"
+    assert configFile["database"]["hostname"] == "localhost"
+    assert configFile["database"]["port"] == 1234
+    assert configFile["database"]["username"] == "some user"
+    assert configFile["database"]["password"] == "abc123"
 
 
 def test_config_extra_params(mocker):
