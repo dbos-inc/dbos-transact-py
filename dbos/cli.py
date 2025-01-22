@@ -432,31 +432,5 @@ def cancel(
     print(f"Workflow {uuid} has been cancelled")
 
 
-@workflow.command(
-    help="Resume a workflow from the last step it executed, keeping its UUID"
-)
-def resume(
-    uuid: Annotated[str, typer.Argument()],
-    appdir: Annotated[
-        typing.Optional[str],
-        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
-    ] = None,
-) -> None:
-    print("resume workflows")
-    _reattempt_workflow(uuid, False)
-
-
-@workflow.command(help="Restart a workflow from the beginning with a new UUID")
-def restart(
-    uuid: Annotated[str, typer.Argument()],
-    appdir: Annotated[
-        typing.Optional[str],
-        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
-    ] = None,
-) -> None:
-    print("restart workflows")
-    _reattempt_workflow(uuid, True)
-
-
 if __name__ == "__main__":
     app()
