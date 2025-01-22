@@ -35,8 +35,8 @@ class Queue:
         self,
         name: str,
         concurrency: Optional[int] = None,
-        worker_concurrency: Optional[int] = None,
         limiter: Optional[QueueRateLimit] = None,
+        worker_concurrency: Optional[int] = None,
     ) -> None:
         if (
             worker_concurrency is not None
