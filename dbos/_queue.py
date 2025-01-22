@@ -2,6 +2,9 @@ import threading
 import traceback
 from typing import TYPE_CHECKING, Optional, TypedDict
 
+from psycopg import errors
+from sqlalchemy.exc import OperationalError
+
 from ._core import P, R, execute_workflow_by_id, start_workflow
 
 if TYPE_CHECKING:
@@ -33,9 +36,19 @@ class Queue:
         name: str,
         concurrency: Optional[int] = None,
         limiter: Optional[QueueRateLimit] = None,
+        worker_concurrency: Optional[int] = None,
     ) -> None:
+        if (
+            worker_concurrency is not None
+            and concurrency is not None
+            and worker_concurrency > concurrency
+        ):
+            raise ValueError(
+                "worker_concurrency must be less than or equal to concurrency"
+            )
         self.name = name
         self.concurrency = concurrency
+        self.worker_concurrency = worker_concurrency
         self.limiter = limiter
         from ._dbos import _get_or_create_dbos_registry
 
@@ -60,6 +73,12 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                 wf_ids = dbos._sys_db.start_queued_workflows(queue, dbos._executor_id)
                 for id in wf_ids:
                     execute_workflow_by_id(dbos, id)
+            except OperationalError as e:
+                # Ignore serialization error
+                if not isinstance(e.orig, errors.SerializationFailure):
+                    dbos.logger.warning(
+                        f"Exception encountered in queue thread: {traceback.format_exc()}"
+                    )
             except Exception:
                 dbos.logger.warning(
                     f"Exception encountered in queue thread: {traceback.format_exc()}"

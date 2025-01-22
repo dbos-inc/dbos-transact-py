@@ -13,7 +13,6 @@ from typing import (
     Optional,
     Sequence,
     Set,
-    Tuple,
     TypedDict,
     cast,
 )
@@ -23,6 +22,7 @@ import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import or_
 from sqlalchemy.exc import DBAPIError
 
 from . import _serialization
@@ -1140,27 +1140,38 @@ class SystemDatabase:
                 if num_recent_queries >= queue.limiter["limit"]:
                     return []
 
-            # Select not-yet-completed functions in the queue ordered by the
-            # time at which they were enqueued.
-            # If there is a concurrency limit N, select only the N most recent
+            # Dequeue functions eligible for this worker and ordered by the time at which they were enqueued.
+            # If there is a global or local concurrency limit N, select only the N oldest enqueued
             # functions, else select all of them.
             query = (
                 sa.select(
                     SystemSchema.workflow_queue.c.workflow_uuid,
                     SystemSchema.workflow_queue.c.started_at_epoch_ms,
+                    SystemSchema.workflow_queue.c.executor_id,
                 )
                 .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
                 .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms == None)
+                .where(
+                    # Only select functions that have not been started yet or have been started by this worker
+                    or_(
+                        SystemSchema.workflow_queue.c.executor_id == None,
+                        SystemSchema.workflow_queue.c.executor_id == executor_id,
+                    )
+                )
                 .order_by(SystemSchema.workflow_queue.c.created_at_epoch_ms.asc())
             )
-            if queue.concurrency is not None:
+            # Set a dequeue limit if necessary
+            if queue.worker_concurrency is not None:
+                query = query.limit(queue.worker_concurrency)
+            elif queue.concurrency is not None:
                 query = query.limit(queue.concurrency)
 
-            # From the functions retrieved, get the workflow IDs of the functions
-            # that have not yet been started so we can start them.
             rows = c.execute(query).fetchall()
+
+            # Now, get the workflow IDs of functions that have not yet been started
             dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
             ret_ids: list[str] = []
+            dbos_logger.debug(f"[{queue.name}] dequeueing {len(dequeued_ids)} task(s)")
             for id in dequeued_ids:
 
                 # If we have a limiter, stop starting functions when the number
@@ -1183,11 +1194,11 @@ class SystemDatabase:
                     )
                 )
 
-                # Then give it a start time
+                # Then give it a start time and assign the executor ID
                 c.execute(
                     SystemSchema.workflow_queue.update()
                     .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
-                    .values(started_at_epoch_ms=start_time_ms)
+                    .values(started_at_epoch_ms=start_time_ms, executor_id=executor_id)
                 )
                 ret_ids.append(id)
 

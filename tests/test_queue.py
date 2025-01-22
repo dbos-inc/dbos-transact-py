@@ -3,10 +3,11 @@ import subprocess
 import threading
 import time
 import uuid
+from multiprocessing import Process
 
 import sqlalchemy as sa
 
-from dbos import DBOS, Queue, SetWorkflowID
+from dbos import DBOS, ConfigFile, Queue, SetWorkflowID
 from dbos._dbos import WorkflowHandle
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
@@ -367,3 +368,103 @@ def test_queue_workflow_in_recovered_workflow(dbos: DBOS) -> None:
     assert wfh.get_status().status == "SUCCESS"
     assert queue_entries_are_cleaned_up(dbos)
     return
+
+
+###########################
+# TEST WORKER CONCURRENCY #
+###########################
+
+
+def test_one_at_a_time_with_worker_concurrency(dbos: DBOS) -> None:
+    wf_counter = 0
+    flag = False
+    workflow_event = threading.Event()
+    main_thread_event = threading.Event()
+
+    @DBOS.workflow()
+    def workflow_one() -> None:
+        nonlocal wf_counter
+        wf_counter += 1
+        main_thread_event.set()  # Signal main thread we got running
+        workflow_event.wait()  # Wait to complete
+
+    @DBOS.workflow()
+    def workflow_two() -> None:
+        nonlocal flag
+        flag = True
+
+    queue = Queue("test_queue", worker_concurrency=1)
+    handle1 = queue.enqueue(workflow_one)
+    handle2 = queue.enqueue(workflow_two)
+
+    # Wait until the first task is dequeued
+    main_thread_event.wait()
+    # Let pass a few dequeuing intervals
+    time.sleep(2)
+    # 2nd task should not have been dequeued
+    assert not flag
+    # Unlock the first task
+    workflow_event.set()
+    # Both tasks should have completed
+    assert handle1.get_result() == None
+    assert handle2.get_result() == None
+    assert flag
+    assert wf_counter == 1, f"wf_counter={wf_counter}"
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+# Declare a workflow globally (we need it to be registered across process under a known name)
+@DBOS.workflow()
+def worker_concurrency_test_workflow() -> None:
+    pass
+
+
+def run_dbos_test_in_process(i: int) -> None:
+    dbos_config: ConfigFile = {
+        "name": "test-app",
+        "language": "python",
+        "database": {
+            "hostname": "localhost",
+            "port": 5432,
+            "username": "postgres",
+            "password": os.environ["PGPASSWORD"],
+            "app_db_name": "dbostestpy",
+        },
+        "runtimeConfig": {
+            "start": ["python3 main.py"],
+            "admin_port": 8001 + i,
+        },
+        "telemetry": {},
+        "env": {},
+    }
+    dbos = DBOS(config=dbos_config)
+    DBOS.launch()
+
+    Queue("test_queue", worker_concurrency=1)
+    time.sleep(
+        2
+    )  # Give some time for the parent worker to enqueue and for this worker to dequeue
+
+    queue_entries_are_cleaned_up(dbos)
+
+    DBOS.destroy()
+
+
+def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
+
+    # Start N proccesses to dequeue
+    processes = []
+    for i in range(0, 10):
+        os.environ["DBOS__VMID"] = f"test-executor-{i}"
+        process = Process(target=run_dbos_test_in_process, args=(i,))
+        process.start()
+        processes.append(process)
+
+    # Enqueue N tasks but ensure this worker cannot dequeue
+
+    queue = Queue("test_queue", limiter={"limit": 0, "period": 1})
+    for i in range(0, 10):
+        queue.enqueue(worker_concurrency_test_workflow)
+
+    for process in processes:
+        process.join()
