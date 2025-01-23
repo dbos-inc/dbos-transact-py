@@ -44,7 +44,7 @@ If your program crashes or is interrupted, they automatically recover its workfl
 So all you need to use DBOS is Postgres&mdash;there are no other dependencies you have to manage, no separate workflow server.
 
 One big advantage of this approach is that you can add DBOS to **any** Python application&mdash;**it’s just a library**.
-For example, you can use DBOS to add reliable background jobs or cron scheduling or queues to your app with no external dependencies except Postgres.
+You can use DBOS to add reliable background jobs or cron scheduling or queues to your app with no external dependencies except Postgres.
 
 ## Getting Started
 
