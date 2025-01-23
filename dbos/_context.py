@@ -99,7 +99,7 @@ class DBOSContext:
         else:
             if self.is_within_set_workflow_id_block:
                 self.logger.warning(
-                    f"Multiple workflow started within the SetWorkflowID block. Only the first workflow will be assigned with the specified workflow ID; subsequent workflows will use a generated workflow ID."
+                    f"Multiple workflows started in the same SetWorkflowID block. Only the first workflow is assigned the specified workflow ID; subsequent workflows will use a generated workflow ID."
                 )
             wfid = str(uuid.uuid4())
         return wfid

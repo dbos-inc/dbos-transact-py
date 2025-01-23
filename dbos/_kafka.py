@@ -45,7 +45,7 @@ def _kafka_consumer_loop(
 
     if config.get("group.id") is None:
         config["group.id"] = safe_group_name(func.__qualname__, topics)
-        dbos_logger.debug(
+        dbos_logger.warning(
             f"Consumer group ID not found. Using generated group.id {config['group.id']}"
         )
 

@@ -520,7 +520,7 @@ def test_duplicate_workflow_id(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> 
         # The second one will generate a warning message but no error.
         test_dup_workflow()
 
-    assert "Multiple workflow started within the SetWorkflowID block." in caplog.text
+    assert "Multiple workflows started in the same SetWorkflowID block." in caplog.text
 
     # It's okay to call the same workflow with the same ID again.
     with SetWorkflowID(wfid):
