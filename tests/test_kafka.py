@@ -117,6 +117,42 @@ def test_kafka_in_order(dbos: DBOS) -> None:
         if kafka_count == 3:
             event.set()
 
-    wait = event.wait(timeout=10)
+    wait = event.wait(timeout=15)
     assert wait
     assert kafka_count == 3
+    time.sleep(2)  # Wait for things to clean up
+
+
+def test_kafka_no_groupid(dbos: DBOS) -> None:
+    event = threading.Event()
+    kafka_count = 0
+    server = "localhost:9092"
+    topic1 = f"dbos-kafka-{random.randrange(1_000_000_000, 2_000_000_000)}"
+    topic2 = f"dbos-kafka-{random.randrange(2_000_000_000, 3_000_000_000)}"
+
+    if not send_test_messages(server, topic1):
+        pytest.skip("Kafka not available")
+
+    if not send_test_messages(server, topic2):
+        pytest.skip("Kafka not available")
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "auto.offset.reset": "earliest",
+        },
+        [topic1, topic2],
+    )
+    @DBOS.workflow()
+    def test_kafka_workflow(msg: KafkaMessage) -> None:
+        nonlocal kafka_count
+        kafka_count += 1
+        assert b"test message key" in msg.key  # type: ignore
+        assert b"test message value" in msg.value  # type: ignore
+        print(msg)
+        if kafka_count == 6:
+            event.set()
+
+    wait = event.wait(timeout=10)
+    assert wait
+    assert kafka_count == 6

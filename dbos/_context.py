@@ -57,6 +57,7 @@ class DBOSContext:
         self.request: Optional["Request"] = None
 
         self.id_assigned_for_next_workflow: str = ""
+        self.is_within_set_workflow_id_block: bool = False
 
         self.parent_workflow_id: str = ""
         self.parent_workflow_fid: int = -1
@@ -78,6 +79,7 @@ class DBOSContext:
         rv.logger = self.logger
         rv.id_assigned_for_next_workflow = self.id_assigned_for_next_workflow
         self.id_assigned_for_next_workflow = ""
+        rv.is_within_set_workflow_id_block = self.is_within_set_workflow_id_block
         rv.parent_workflow_id = self.workflow_id
         rv.parent_workflow_fid = self.function_id
         rv.in_recovery = self.in_recovery
@@ -95,6 +97,10 @@ class DBOSContext:
         if len(self.id_assigned_for_next_workflow) > 0:
             wfid = self.id_assigned_for_next_workflow
         else:
+            if self.is_within_set_workflow_id_block:
+                self.logger.warning(
+                    f"Multiple workflows started in the same SetWorkflowID block. Only the first workflow is assigned the specified workflow ID; subsequent workflows will use a generated workflow ID."
+                )
             wfid = str(uuid.uuid4())
         return wfid
 
@@ -286,7 +292,7 @@ class DBOSContextSwap:
 
 class SetWorkflowID:
     """
-    Set the workflow ID to be used for the enclosed workflow invocation.
+    Set the workflow ID to be used for the enclosed workflow invocation. Note: Only the first workflow will be started with the specified workflow ID within a `with SetWorkflowID` block.
 
     Typical Usage
         ```
@@ -311,7 +317,9 @@ class SetWorkflowID:
         if ctx is None:
             self.created_ctx = True
             _set_local_dbos_context(DBOSContext())
-        assert_current_dbos_context().id_assigned_for_next_workflow = self.wfid
+        ctx = assert_current_dbos_context()
+        ctx.id_assigned_for_next_workflow = self.wfid
+        ctx.is_within_set_workflow_id_block = True
         return self
 
     def __exit__(
@@ -321,6 +329,7 @@ class SetWorkflowID:
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
         # Code to clean up the basic context if we created it
+        assert_current_dbos_context().is_within_set_workflow_id_block = False
         if self.created_ctx:
             _clear_local_dbos_context()
         return False  # Did not handle

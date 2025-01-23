@@ -223,11 +223,12 @@ def test_exception_workflow(dbos: DBOS) -> None:
     assert bad_txn_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid, shouldn't throw errors
+    dbos._sys_db._flush_workflow_status_buffer()
     handle = DBOS.execute_workflow_id(wfuuid)
     with pytest.raises(Exception) as exc_info:
         handle.get_result()
     assert "test error" == str(exc_info.value)
-    assert wf_counter == 4
+    assert wf_counter == 3  # The workflow error is directly returned without running
 
 
 def test_temp_workflow(dbos: DBOS) -> None:
@@ -1185,6 +1186,8 @@ def test_debug_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
     assert "Running recv" in caplog.text
     caplog.clear()
 
+    dbos._sys_db._flush_workflow_status_buffer()
+
     # Second run
     with SetWorkflowID(dest_wfid):
         dest_handle_2 = dbos.start_workflow(test_workflow_dest)
@@ -1204,8 +1207,8 @@ def test_debug_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
 
     result4 = dest_handle_2.get_result()
     assert result4 == result2
-    assert "Replaying get_event" in caplog.text
-    assert "Replaying recv" in caplog.text
+    # In start_workflow, we skip the replay of already finished workflows
+    assert f"Workflow {dest_wfid} already completed with status" in caplog.text
 
     # Reset logging
     logging.getLogger("dbos").propagate = original_propagate

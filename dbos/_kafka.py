@@ -1,3 +1,4 @@
+import re
 import threading
 from typing import TYPE_CHECKING, Any, Callable, NoReturn
 
@@ -19,6 +20,14 @@ _kafka_queue: Queue
 _in_order_kafka_queues: dict[str, Queue] = {}
 
 
+def safe_group_name(method_name: str, topics: list[str]) -> str:
+    safe_group_id = "-".join(
+        re.sub(r"[^a-zA-Z0-9\-]", "", str(r)) for r in [method_name, *topics]
+    )
+
+    return f"dbos-kafka-group-{safe_group_id}"[:255]
+
+
 def _kafka_consumer_loop(
     func: _KafkaConsumerWorkflow,
     config: dict[str, Any],
@@ -33,6 +42,12 @@ def _kafka_consumer_loop(
     config["error_cb"] = on_error
     if "auto.offset.reset" not in config:
         config["auto.offset.reset"] = "earliest"
+
+    if config.get("group.id") is None:
+        config["group.id"] = safe_group_name(func.__qualname__, topics)
+        dbos_logger.warning(
+            f"Consumer group ID not found. Using generated group.id {config['group.id']}"
+        )
 
     consumer = Consumer(config)
     try:
@@ -71,8 +86,9 @@ def _kafka_consumer_loop(
                     topic=cmsg.topic(),
                     value=cmsg.value(),
                 )
+                groupID = config.get("group.id")
                 with SetWorkflowID(
-                    f"kafka-unique-id-{msg.topic}-{msg.partition}-{msg.offset}"
+                    f"kafka-unique-id-{msg.topic}-{msg.partition}-{groupID}-{msg.offset}"
                 ):
                     if in_order:
                         assert msg.topic is not None

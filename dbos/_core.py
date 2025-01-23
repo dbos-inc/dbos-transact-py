@@ -188,6 +188,7 @@ def _init_workflow(
         wf_status = dbos._sys_db.update_workflow_status(
             status, False, ctx.in_recovery, max_recovery_attempts=max_recovery_attempts
         )
+        # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
         dbos._sys_db.update_workflow_inputs(wfid, _serialization.serialize_args(inputs))
     else:
         # Buffer the inputs for single-transaction workflows, but don't buffer the status
@@ -422,6 +423,9 @@ def start_workflow(
         or wf_status == WorkflowStatusString.ERROR.value
         or wf_status == WorkflowStatusString.SUCCESS.value
     ):
+        dbos.logger.debug(
+            f"Workflow {new_wf_id} already completed with status {wf_status}. Directly returning a workflow handle."
+        )
         return WorkflowHandlePolling(new_wf_id, dbos)
 
     if fself is not None:
@@ -494,7 +498,7 @@ def workflow_wrapper(
                 temp_wf_type=get_temp_workflow_type(func),
                 max_recovery_attempts=max_recovery_attempts,
             )
-
+            # TODO: maybe modify the parameters if they've been changed by `_init_workflow`
             dbos.logger.debug(
                 f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
             )
