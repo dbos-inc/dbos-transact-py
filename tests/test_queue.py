@@ -5,10 +5,17 @@ import time
 import uuid
 from multiprocessing import Process
 
+import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, ConfigFile, Queue, SetWorkflowID
-from dbos._dbos import WorkflowHandle
+from dbos import (
+    DBOS,
+    ConfigFile,
+    DBOSConfiguredInstance,
+    Queue,
+    SetWorkflowID,
+    WorkflowHandle,
+)
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from tests.conftest import default_config
@@ -468,3 +475,97 @@ def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
 
     for process in processes:
         process.join()
+
+
+# Test error cases where we have duplicated workflows starting with the same workflow ID.
+def test_duplicate_workflow_id(dbos: DBOS) -> None:
+    wfid = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    def test_workflow(var1: str) -> str:
+        DBOS.sleep(1)
+        return var1
+
+    @DBOS.workflow()
+    def test_dup_workflow() -> None:
+        DBOS.sleep(0.1)
+        return
+
+    @DBOS.dbos_class()
+    class TestDup:
+        @classmethod
+        @DBOS.workflow()
+        def test_workflow(cls, var1: str) -> str:
+            DBOS.sleep(0.1)
+            return var1
+
+    @DBOS.dbos_class()
+    class TestDupInst(DBOSConfiguredInstance):
+        def __init__(self, config_name: str):
+            self.config_name = config_name
+            super().__init__(config_name)
+
+        @DBOS.workflow()
+        def test_workflow(self, var1: str) -> str:
+            DBOS.sleep(0.1)
+            return self.config_name + ":" + var1
+
+    with SetWorkflowID(wfid):
+        origHandle = DBOS.start_workflow(test_workflow, "abc")
+        # The second one will generate a warning message but no error.
+        test_dup_workflow()
+
+    # It's okay to call the same workflow with the same ID again.
+    with SetWorkflowID(wfid):
+        same_handle = DBOS.start_workflow(test_workflow, "abc")
+
+    # Call with a different function name is not allowed.
+    with SetWorkflowID(wfid):
+        with pytest.raises(Exception) as exc_info:
+            DBOS.start_workflow(test_dup_workflow)
+        assert "Workflow already exists with a different function name" in str(
+            exc_info.value
+        )
+
+    # Call the same function name in a different class is not allowed.
+    with SetWorkflowID(wfid):
+        with pytest.raises(Exception) as exc_info:
+            DBOS.start_workflow(TestDup.test_workflow, "abc")
+        assert "Workflow already exists with a different function name" in str(
+            exc_info.value
+        )
+    # Normal invocation is fine.
+    res = TestDup.test_workflow("abc")
+    assert res == "abc"
+
+    # Call the same function name from a different instance is not allowed.
+    wfid2 = str(uuid.uuid4())
+    inst = TestDupInst("myconfig")
+    with SetWorkflowID(wfid2):
+        # Normal invocation is fine.
+        res = inst.test_workflow("abc")
+        assert res == "myconfig:abc"
+
+    inst2 = TestDupInst("myconfig2")
+    with SetWorkflowID(wfid2):
+        with pytest.raises(Exception) as exc_info:
+            inst2.test_workflow("abc")
+        assert "Workflow already exists with a different config name" in str(
+            exc_info.value
+        )
+
+    # Call the same function in a different queue would generate a warning, but is allowed.
+    queue = Queue("test_queue")
+    with SetWorkflowID(wfid):
+        handle = queue.enqueue(test_workflow, "abc")
+    assert handle.get_result() == "abc"
+
+    # Call with a different input would generate a warning, but still use the recorded input.
+    with SetWorkflowID(wfid):
+        res = test_workflow("def")
+        # We want to see the warning message, but the result is non-deterministic
+        # TODO: in the future, we may want to always use the recorded inputs.
+        assert res == "abc" or res == "def"
+
+    assert origHandle.get_result() == "abc"
+    assert same_handle.get_result() == "abc"

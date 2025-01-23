@@ -28,6 +28,7 @@ from sqlalchemy.exc import DBAPIError
 from . import _serialization
 from ._dbos_config import ConfigFile
 from ._error import (
+    DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
     DBOSException,
     DBOSNonExistentWorkflowError,
@@ -288,8 +289,14 @@ class SystemDatabase:
                 ),
             )
         else:
-            cmd = cmd.on_conflict_do_nothing()
-        cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status)  # type: ignore
+            # A blank update so that we can return the existing status
+            cmd = cmd.on_conflict_do_update(
+                index_elements=["workflow_uuid"],
+                set_=dict(
+                    recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
+                ),
+            )
+        cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
 
         if conn is not None:
             results = conn.execute(cmd)
@@ -297,37 +304,53 @@ class SystemDatabase:
             with self.engine.begin() as c:
                 results = c.execute(cmd)
 
-        if in_recovery:
-            row = results.fetchone()
-            if row is not None:
-                recovery_attempts: int = row[0]
-                wf_status = row[1]
-                if recovery_attempts > max_recovery_attempts:
-                    with self.engine.begin() as c:
-                        c.execute(
-                            sa.delete(SystemSchema.workflow_queue).where(
-                                SystemSchema.workflow_queue.c.workflow_uuid
-                                == status["workflow_uuid"]
-                            )
+        row = results.fetchone()
+        if row is not None:
+            # Check the started workflow matches the expected name, class_name, config_name, and queue_name
+            # A mismatch indicates a workflow starting with the same UUID but different functions, which would throw an exception.
+            recovery_attempts: int = row[0]
+            wf_status = row[1]
+            err_msg: Optional[str] = None
+            if row[2] != status["name"]:
+                err_msg = f"Workflow already exists with a different function name: {row[2]}, but the provided function name is: {status['name']}"
+            elif row[3] != status["class_name"]:
+                err_msg = f"Workflow already exists with a different class name: {row[3]}, but the provided class name is: {status['class_name']}"
+            elif row[4] != status["config_name"]:
+                err_msg = f"Workflow already exists with a different config name: {row[4]}, but the provided config name is: {status['config_name']}"
+            elif row[5] != status["queue_name"]:
+                # This is a warning because a different queue name is not necessarily an error.
+                dbos_logger.warning(
+                    f"Workflow already exists in queue: {row[5]}, but the provided queue name is: {status['queue_name']}. The queue is not updated."
+                )
+            if err_msg is not None:
+                raise DBOSConflictingWorkflowError(status["workflow_uuid"], err_msg)
+
+            if in_recovery and recovery_attempts > max_recovery_attempts:
+                with self.engine.begin() as c:
+                    c.execute(
+                        sa.delete(SystemSchema.workflow_queue).where(
+                            SystemSchema.workflow_queue.c.workflow_uuid
+                            == status["workflow_uuid"]
                         )
-                        c.execute(
-                            sa.update(SystemSchema.workflow_status)
-                            .where(
-                                SystemSchema.workflow_status.c.workflow_uuid
-                                == status["workflow_uuid"]
-                            )
-                            .where(
-                                SystemSchema.workflow_status.c.status
-                                == WorkflowStatusString.PENDING.value
-                            )
-                            .values(
-                                status=WorkflowStatusString.RETRIES_EXCEEDED.value,
-                                queue_name=None,
-                            )
-                        )
-                    raise DBOSDeadLetterQueueError(
-                        status["workflow_uuid"], max_recovery_attempts
                     )
+                    c.execute(
+                        sa.update(SystemSchema.workflow_status)
+                        .where(
+                            SystemSchema.workflow_status.c.workflow_uuid
+                            == status["workflow_uuid"]
+                        )
+                        .where(
+                            SystemSchema.workflow_status.c.status
+                            == WorkflowStatusString.PENDING.value
+                        )
+                        .values(
+                            status=WorkflowStatusString.RETRIES_EXCEEDED.value,
+                            queue_name=None,
+                        )
+                    )
+                raise DBOSDeadLetterQueueError(
+                    status["workflow_uuid"], max_recovery_attempts
+                )
 
         # Record we have exported status for this single-transaction workflow
         if status["workflow_uuid"] in self._temp_txn_wf_ids:
@@ -538,18 +561,27 @@ class SystemDatabase:
                 workflow_uuid=workflow_uuid,
                 inputs=inputs,
             )
-            .on_conflict_do_nothing()
+            .on_conflict_do_update(
+                index_elements=["workflow_uuid"],
+                set_=dict(workflow_uuid=SystemSchema.workflow_inputs.c.workflow_uuid),
+            )
+            .returning(SystemSchema.workflow_inputs.c.inputs)
         )
         if conn is not None:
-            conn.execute(cmd)
+            row = conn.execute(cmd).fetchone()
         else:
             with self.engine.begin() as c:
-                c.execute(cmd)
-
+                row = c.execute(cmd).fetchone()
+        if row is not None and row[0] != inputs:
+            dbos_logger.warning(
+                f"Workflow inputs for {workflow_uuid} changed since the first call! Use the original inputs."
+            )
+            # TODO: actually changing the input
         if workflow_uuid in self._temp_txn_wf_ids:
             # Clean up the single-transaction tracking sets
             self._exported_temp_txn_wf_status.discard(workflow_uuid)
             self._temp_txn_wf_ids.discard(workflow_uuid)
+        return
 
     def get_workflow_inputs(
         self, workflow_uuid: str

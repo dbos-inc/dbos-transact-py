@@ -35,6 +35,7 @@ class DBOSErrorCode(Enum):
     DeadLetterQueueError = 6
     MaxStepRetriesExceeded = 7
     NotAuthorized = 8
+    ConflictingWorkflowError = 9
 
 
 class DBOSWorkflowConflictIDError(DBOSException):
@@ -44,6 +45,16 @@ class DBOSWorkflowConflictIDError(DBOSException):
         super().__init__(
             f"Conflicting workflow ID {workflow_id}",
             dbos_error_code=DBOSErrorCode.ConflictingIDError.value,
+        )
+
+
+class DBOSConflictingWorkflowError(DBOSException):
+    """Exception raised different workflows started with the same workflow ID."""
+
+    def __init__(self, workflow_id: str, message: Optional[str] = None):
+        super().__init__(
+            f"Conflicting workflow invocation with the same ID ({workflow_id}): {message}",
+            dbos_error_code=DBOSErrorCode.ConflictingWorkflowError.value,
         )
 
 
