@@ -423,6 +423,9 @@ def start_workflow(
         or wf_status == WorkflowStatusString.ERROR.value
         or wf_status == WorkflowStatusString.SUCCESS.value
     ):
+        dbos.logger.debug(
+            f"Workflow {new_wf_id} already completed with status {wf_status}. Directly returning a workflow handle."
+        )
         return WorkflowHandlePolling(new_wf_id, dbos)
 
     if fself is not None:
