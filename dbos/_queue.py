@@ -36,6 +36,7 @@ class Queue:
         name: str,
         concurrency: Optional[int] = None,
         limiter: Optional[QueueRateLimit] = None,
+        *,  # Disable positional arguments from here on
         worker_concurrency: Optional[int] = None,
     ) -> None:
         if (
