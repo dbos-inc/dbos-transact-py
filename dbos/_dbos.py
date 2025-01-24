@@ -221,6 +221,7 @@ class DBOS:
     ) -> DBOS:
         global _dbos_global_instance
         global _dbos_global_registry
+        print("Creating a new DBOS instance")
         if _dbos_global_instance is None:
             if (
                 _dbos_global_registry is not None
@@ -231,9 +232,17 @@ class DBOS:
                         f"DBOS configured multiple times with conflicting information"
                     )
                 config = _dbos_global_registry.config
+
+            print("calling new setting up the global instance")
             _dbos_global_instance = super().__new__(cls)
             _dbos_global_instance.__init__(fastapi=fastapi, config=config, flask=flask)  # type: ignore
         else:
+            if config is None:
+                print("config is None")
+            if _dbos_global_instance.config is not config:
+                print("global instance config is not config")
+            if _dbos_global_instance.fastapi is not fastapi:
+                print("global instance fastapi is not fastapi")
             if (config is not None and _dbos_global_instance.config is not config) or (
                 _dbos_global_instance.fastapi is not fastapi
             ):

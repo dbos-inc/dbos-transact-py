@@ -1,3 +1,6 @@
+import importlib
+import os
+import sys
 from typing import Any, List, Optional, cast
 
 import typer
@@ -6,6 +9,7 @@ from rich import print
 from dbos import DBOS
 
 from . import _serialization, load_config
+from ._core import execute_workflow_by_id
 from ._dbos_config import ConfigFile, _is_valid_app_name
 from ._sys_db import (
     GetWorkflowsInput,
@@ -123,8 +127,28 @@ def _cancel_workflow(config: ConfigFile, uuid: str) -> None:
             sys_db.destroy()
 
 
-def _reattempt_workflow(uuid: str, startNewWorkflow: bool) -> None:
-    print(f"Reattempt workflow info for {uuid} not implemented")
+def _reattempt_workflow(config: ConfigFile, uuid: str, startNewWorkflow: bool) -> None:
+    print(f"Resuming workflow info for {uuid}")
+    current_dir = os.getcwd()  # Get the current working directory
+
+    print(f"Current directory is {current_dir}")
+
+    if current_dir not in sys.path:
+        sys.path.insert(
+            0, current_dir
+        )  # Add the directory to Python's module search path
+
+    print(f"Python path is {sys.path}")
+
+    mod = importlib.import_module("testapp.main")
+
+    print(mod.__file__)
+    print(mod.__name__)
+
+    # dbos = DBOS(config=config)
+    DBOS.launch()
+
+    DBOS.execute_workflow_id(uuid)
     return
 
 

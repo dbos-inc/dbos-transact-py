@@ -432,5 +432,20 @@ def cancel(
     print(f"Workflow {uuid} has been cancelled")
 
 
+@workflow.command(
+    help="Resume a workflow from the last step it executed, keeping its UUID"
+)
+def resume(
+    uuid: Annotated[str, typer.Argument()],
+    appdir: Annotated[
+        typing.Optional[str],
+        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
+    ] = None,
+) -> None:
+    config = load_config()
+    _reattempt_workflow(config, uuid, False)
+    print(f"Workflow {uuid} has been cancelled")
+
+
 if __name__ == "__main__":
     app()
