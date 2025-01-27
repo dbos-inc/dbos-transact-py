@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +16,9 @@ if TYPE_CHECKING:
 _health_check_path = "/dbos-healthz"
 _workflow_recovery_path = "/dbos-workflow-recovery"
 _deactivate_path = "/deactivate"
+# /workflows//:workflow_id
+# _worflow_resume_path = "/workflows/resume" # /workflows/resume/:workflow_id
+# _workflow_restart_path = "/workflows/restart" # /workflows/restart/:workflow_id
 
 
 class AdminServer:
@@ -79,11 +83,51 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self._end_headers()
             self.wfile.write(json.dumps(workflow_ids).encode("utf-8"))
         else:
-            self.send_response(404)
-            self._end_headers()
+
+            restart_match = re.match(
+                r"^/workflows/(?P<workflow_id>[^/]+)/restart$", self.path
+            )
+            resume_match = re.match(
+                r"^/workflows/(?P<workflow_id>[^/]+)/resume$", self.path
+            )
+            cancel_match = re.match(
+                r"^/workflows/(?P<workflow_id>[^/]+)/cancel$", self.path
+            )
+
+            if restart_match:
+                workflow_id = restart_match.group("workflow_id")
+                self._handle_restart(workflow_id)
+            elif resume_match:
+                workflow_id = resume_match.group("workflow_id")
+                self._handle_resume(workflow_id)
+            elif cancel_match:
+                workflow_id = cancel_match.group("workflow_id")
+                self._handle_cancel(workflow_id)
+            else:
+                self.send_response(404)
+                self._end_headers()
 
     def log_message(self, format: str, *args: Any) -> None:
         return  # Disable admin server request logging
+
+    def _handle_restart(self, workflow_id: str) -> None:
+        # self.dbos.restart_workflow(workflow_id)
+        print("Restarting workflow", workflow_id)
+        self.send_response(200)
+        self._end_headers()
+
+    def _handle_resume(self, workflow_id: str) -> None:
+        # self.dbos.resume_workflow(workflow_id)
+        print("Resuming workflow", workflow_id)
+        self.send_response(200)
+        self._end_headers()
+
+    def _handle_cancel(self, workflow_id: str) -> None:
+        # self.dbos.cancel_workflow(workflow_id)
+        print("Cancelling workflow", workflow_id)
+        self.dbos.cancel_workflow(workflow_id)
+        self.send_response(200)
+        self._end_headers()
 
 
 # Be consistent with DBOS-TS response.

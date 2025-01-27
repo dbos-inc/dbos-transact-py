@@ -783,6 +783,13 @@ class DBOS:
         """Find all PENDING workflows and execute them."""
         return recover_pending_workflows(_get_dbos_instance(), executor_ids)
 
+    @classmethod
+    def cancel_workflow(cls, workflow_id: str) -> None:
+        """Cancel a workflow by ID."""
+        return _get_dbos_instance()._sys_db.set_workflow_status(
+            workflow_id, "CANCELLED", False
+        )
+
     @classproperty
     def logger(cls) -> Logger:
         """Return the DBOS `Logger` for the current context."""
