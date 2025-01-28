@@ -780,7 +780,7 @@ class DBOS:
     @classmethod
     def restart_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Execute a workflow by ID (for recovery)."""
-        return execute_workflow_by_newid(_get_dbos_instance(), workflow_id)
+        return execute_workflow_by_id(_get_dbos_instance(), workflow_id, True)
 
     @classmethod
     def recover_pending_workflows(

@@ -22,12 +22,7 @@ from . import _serialization, load_config
 from ._app_db import ApplicationDatabase
 from ._dbos_config import _is_valid_app_name
 from ._sys_db import SystemDatabase
-from ._workflow_commands import (
-    _cancel_workflow,
-    _get_workflow,
-    _list_workflows,
-    _reattempt_workflow,
-)
+from ._workflow_commands import _cancel_workflow, _get_workflow, _list_workflows
 
 app = typer.Typer()
 workflow = typer.Typer()
