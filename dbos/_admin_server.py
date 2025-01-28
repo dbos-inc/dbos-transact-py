@@ -16,9 +16,9 @@ if TYPE_CHECKING:
 _health_check_path = "/dbos-healthz"
 _workflow_recovery_path = "/dbos-workflow-recovery"
 _deactivate_path = "/deactivate"
-# /workflows//:workflow_id
-# _worflow_resume_path = "/workflows/resume" # /workflows/resume/:workflow_id
-# _workflow_restart_path = "/workflows/restart" # /workflows/restart/:workflow_id
+# /workflows/:workflow_id/cancel
+# /workflows/:workflow_id/resume
+# /workflows/:workflow_id/restart
 
 
 class AdminServer:
