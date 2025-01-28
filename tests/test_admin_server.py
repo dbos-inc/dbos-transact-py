@@ -176,25 +176,29 @@ def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
 
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
 
-    data = []
     response = requests.post(
-        f"http://localhost:3001/workflows/{wfUuid}/cancel", json=data, timeout=5
+        f"http://localhost:3001/workflows/{wfUuid}/cancel", json=[], timeout=5
     )
     assert response.status_code == 200
 
     info = _workflow_commands._get_workflow(config, wfUuid, True)
-    assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
+    if info is not None:
+        assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
+    else:
+        assert False, "Expected info to be not None"
 
-    data = []
     response = requests.post(
-        f"http://localhost:3001/workflows/{wfUuid}/resume", json=data, timeout=5
+        f"http://localhost:3001/workflows/{wfUuid}/resume", json=[], timeout=5
     )
     assert response.status_code == 200
 
     time.sleep(1)
 
     info = _workflow_commands._get_workflow(config, wfUuid, True)
-    assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
+    if info is not None:
+        assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
+    else:
+        assert False, "Expected info to be not None"
 
 
 def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
@@ -223,25 +227,29 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
 
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
 
-    data = []
     response = requests.post(
-        f"http://localhost:3001/workflows/{wfUuid}/cancel", json=data, timeout=5
+        f"http://localhost:3001/workflows/{wfUuid}/cancel", json=[], timeout=5
     )
     assert response.status_code == 200
 
     info = _workflow_commands._get_workflow(config, wfUuid, True)
-    assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
+    if info is not None:
+        assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
+    else:
+        assert False, "Expected info to be not None"
 
-    data = []
     response = requests.post(
-        f"http://localhost:3001/workflows/{wfUuid}/restart", json=data, timeout=5
+        f"http://localhost:3001/workflows/{wfUuid}/restart", json=[], timeout=5
     )
     assert response.status_code == 200
 
     time.sleep(1)
 
     info = _workflow_commands._get_workflow(config, wfUuid, True)
-    assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
+    if info is not None:
+        assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
+    else:
+        assert False, "Expected info to be not None"
 
     output = _workflow_commands._list_workflows(
         config, 10, None, None, None, None, False, None
@@ -256,4 +264,7 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
     print(new_wfUuid)
 
     info = _workflow_commands._get_workflow(config, new_wfUuid, True)
-    assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
+    if info is not None:
+        assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
+    else:
+        assert False, "Expected info to be not None"
