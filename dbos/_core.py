@@ -267,7 +267,7 @@ def _execute_workflow_wthread(
 
 
 def execute_workflow_by_id(
-    dbos: "DBOS", workflow_id: str, startNew: False
+    dbos: "DBOS", workflow_id: str, startNew: bool = False
 ) -> "WorkflowHandle[Any]":
     status = dbos._sys_db.get_workflow_status(workflow_id)
     if not status:

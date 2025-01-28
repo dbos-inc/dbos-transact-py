@@ -38,7 +38,6 @@ from ._core import (
     decorate_transaction,
     decorate_workflow,
     execute_workflow_by_id,
-    execute_workflow_by_newid,
     get_event,
     recv,
     send,
@@ -57,6 +56,7 @@ from ._registrations import (
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
+from ._sys_db import WorkflowStatusString
 from ._tracer import dbos_tracer
 
 if TYPE_CHECKING:
@@ -778,9 +778,9 @@ class DBOS:
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id)
 
     @classmethod
-    def restart_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
+    def restart_workflow(cls, workflow_id: str) -> None:
         """Execute a workflow by ID (for recovery)."""
-        return execute_workflow_by_id(_get_dbos_instance(), workflow_id, True)
+        execute_workflow_by_id(_get_dbos_instance(), workflow_id, True)
 
     @classmethod
     def recover_pending_workflows(
@@ -792,14 +792,14 @@ class DBOS:
     @classmethod
     def cancel_workflow(cls, workflow_id: str) -> None:
         """Cancel a workflow by ID."""
-        return _get_dbos_instance()._sys_db.set_workflow_status(
-            workflow_id, "CANCELLED", False
+        _get_dbos_instance()._sys_db.set_workflow_status(
+            workflow_id, WorkflowStatusString.CANCELLED, False
         )
 
     @classmethod
     def resume_workflow(cls, workflow_id: str) -> None:
         """Cancel a workflow by ID."""
-        return _get_dbos_instance().execute_workflow_id(workflow_id)
+        execute_workflow_by_id(_get_dbos_instance(), workflow_id, False)
 
     @classproperty
     def logger(cls) -> Logger:
