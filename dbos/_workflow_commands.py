@@ -127,31 +127,6 @@ def _cancel_workflow(config: ConfigFile, uuid: str) -> None:
             sys_db.destroy()
 
 
-def _reattempt_workflow(config: ConfigFile, uuid: str, startNewWorkflow: bool) -> None:
-    print(f"Resuming workflow info for {uuid}")
-    current_dir = os.getcwd()  # Get the current working directory
-
-    print(f"Current directory is {current_dir}")
-
-    if current_dir not in sys.path:
-        sys.path.insert(
-            0, current_dir
-        )  # Add the directory to Python's module search path
-
-    print(f"Python path is {sys.path}")
-
-    mod = importlib.import_module("testapp.main")
-
-    print(mod.__file__)
-    print(mod.__name__)
-
-    # dbos = DBOS(config=config)
-    DBOS.launch()
-
-    DBOS.execute_workflow_id(uuid)
-    return
-
-
 def _get_workflow_info(
     sys_db: SystemDatabase, workflowUUID: str, getRequest: bool
 ) -> Optional[WorkflowInformation]:

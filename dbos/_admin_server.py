@@ -117,14 +117,12 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         self._end_headers()
 
     def _handle_resume(self, workflow_id: str) -> None:
-        # self.dbos.resume_workflow(workflow_id)
         print("Resuming workflow", workflow_id)
         self.dbos.resume_workflow(workflow_id)
         self.send_response(200)
         self._end_headers()
 
     def _handle_cancel(self, workflow_id: str) -> None:
-        # self.dbos.cancel_workflow(workflow_id)
         print("Cancelling workflow", workflow_id)
         self.dbos.cancel_workflow(workflow_id)
         self.send_response(200)
