@@ -790,6 +790,11 @@ class DBOS:
             workflow_id, "CANCELLED", False
         )
 
+    @classmethod
+    def resume_workflow(cls, workflow_id: str) -> None:
+        """Cancel a workflow by ID."""
+        return _get_dbos_instance().execute_workflow_id(workflow_id)
+
     @classproperty
     def logger(cls) -> Logger:
         """Return the DBOS `Logger` for the current context."""

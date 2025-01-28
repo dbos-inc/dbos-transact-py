@@ -119,6 +119,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
     def _handle_resume(self, workflow_id: str) -> None:
         # self.dbos.resume_workflow(workflow_id)
         print("Resuming workflow", workflow_id)
+        self.dbos.resume_workflow(workflow_id)
         self.send_response(200)
         self._end_headers()
 
