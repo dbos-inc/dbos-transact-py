@@ -9,6 +9,7 @@ from os import path
 from typing import Any
 
 import jsonpickle  # type: ignore
+import requests
 import sqlalchemy as sa
 import tomlkit
 import typer
@@ -425,6 +426,50 @@ def cancel(
     config = load_config()
     _cancel_workflow(config, uuid)
     print(f"Workflow {uuid} has been cancelled")
+
+
+@workflow.command(help="Resume a workflow that has been cancelled")
+def resume(
+    uuid: Annotated[str, typer.Argument()],
+    host: Annotated[
+        typing.Optional[str],
+        typer.Option("--host", "-h", help="Specify the admin host"),
+    ] = "localhost",
+    port: Annotated[
+        typing.Optional[int],
+        typer.Option("--port", "-p", help="Specify the admin port"),
+    ] = 3001,
+) -> None:
+    response = requests.post(
+        f"http://{host}:{port}/workflows/{uuid}/resume", json=[], timeout=5
+    )
+
+    if response.status_code == 200:
+        print(f"Workflow {uuid} has been resumed")
+    else:
+        print(f"Failed to resume workflow {uuid}. Status code: {response.status_code}")
+
+
+@workflow.command(help="Restart a workflow that has been cancelled with a new id")
+def restart(
+    uuid: Annotated[str, typer.Argument()],
+    host: Annotated[
+        typing.Optional[str],
+        typer.Option("--host", "-h", help="Specify the admin host"),
+    ] = "localhost",
+    port: Annotated[
+        typing.Optional[int],
+        typer.Option("--port", "-p", help="Specify the admin port"),
+    ] = 3001,
+) -> None:
+    response = requests.post(
+        f"http://{host}:{port}/workflows/{uuid}/restart", json=[], timeout=5
+    )
+
+    if response.status_code == 200:
+        print(f"Workflow {uuid} has been restarted")
+    else:
+        print(f"Failed to resume workflow {uuid}. Status code: {response.status_code}")
 
 
 if __name__ == "__main__":
