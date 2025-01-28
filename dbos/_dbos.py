@@ -38,6 +38,7 @@ from ._core import (
     decorate_transaction,
     decorate_workflow,
     execute_workflow_by_id,
+    execute_workflow_by_newid,
     get_event,
     recv,
     send,
@@ -775,6 +776,11 @@ class DBOS:
     def execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Execute a workflow by ID (for recovery)."""
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id)
+
+    @classmethod
+    def restart_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
+        """Execute a workflow by ID (for recovery)."""
+        return execute_workflow_by_newid(_get_dbos_instance(), workflow_id)
 
     @classmethod
     def recover_pending_workflows(

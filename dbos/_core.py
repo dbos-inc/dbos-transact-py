@@ -332,6 +332,71 @@ def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[An
                 )
 
 
+def execute_workflow_by_newid(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]":
+    status = dbos._sys_db.get_workflow_status(workflow_id)
+    if not status:
+        raise DBOSRecoveryError(workflow_id, "Workflow status not found")
+    inputs = dbos._sys_db.get_workflow_inputs(workflow_id)
+    if not inputs:
+        raise DBOSRecoveryError(workflow_id, "Workflow inputs not found")
+    wf_func = dbos._registry.workflow_info_map.get(status["name"], None)
+    if not wf_func:
+        raise DBOSWorkflowFunctionNotFoundError(
+            workflow_id, "Workflow function not found"
+        )
+    with DBOSContextEnsure():
+        ctx = assert_current_dbos_context()
+        request = status["request"]
+        ctx.request = (
+            _serialization.deserialize(request) if request is not None else None
+        )
+        if status["config_name"] is not None:
+            config_name = status["config_name"]
+            class_name = status["class_name"]
+            iname = f"{class_name}/{config_name}"
+            if iname not in dbos._registry.instance_info_map:
+                raise DBOSWorkflowFunctionNotFoundError(
+                    workflow_id,
+                    f"Cannot execute workflow because instance '{iname}' is not registered",
+                )
+
+            return start_workflow(
+                dbos,
+                wf_func,
+                status["queue_name"],
+                True,
+                dbos._registry.instance_info_map[iname],
+                *inputs["args"],
+                **inputs["kwargs"],
+            )
+        elif status["class_name"] is not None:
+            class_name = status["class_name"]
+            if class_name not in dbos._registry.class_info_map:
+                raise DBOSWorkflowFunctionNotFoundError(
+                    workflow_id,
+                    f"Cannot execute workflow because class '{class_name}' is not registered",
+                )
+
+            return start_workflow(
+                dbos,
+                wf_func,
+                status["queue_name"],
+                True,
+                dbos._registry.class_info_map[class_name],
+                *inputs["args"],
+                **inputs["kwargs"],
+            )
+        else:
+            return start_workflow(
+                dbos,
+                wf_func,
+                status["queue_name"],
+                True,
+                *inputs["args"],
+                **inputs["kwargs"],
+            )
+
+
 @overload
 def start_workflow(
     dbos: "DBOS",
