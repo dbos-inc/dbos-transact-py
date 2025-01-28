@@ -195,3 +195,65 @@ def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
 
     info = _workflow_commands._get_workflow(config, wfUuid, True)
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
+
+
+def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        print("Executed Simple workflow")
+        return
+
+    # run the workflow
+    simple_workflow()
+    time.sleep(1)
+
+    # get the workflow list
+    output = _workflow_commands._list_workflows(
+        config, 10, None, None, None, None, False, None
+    )
+    assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
+
+    assert output[0] != None, "Expected output to be not None"
+
+    wfUuid = output[0].workflowUUID
+
+    info = _workflow_commands._get_workflow(config, wfUuid, True)
+    assert info is not None, "Expected output to be not None"
+
+    assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
+
+    data = []
+    response = requests.post(
+        f"http://localhost:3001/workflows/{wfUuid}/cancel", json=data, timeout=5
+    )
+    assert response.status_code == 200
+
+    info = _workflow_commands._get_workflow(config, wfUuid, True)
+    assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
+
+    data = []
+    response = requests.post(
+        f"http://localhost:3001/workflows/{wfUuid}/restart", json=data, timeout=5
+    )
+    assert response.status_code == 200
+
+    time.sleep(1)
+
+    info = _workflow_commands._get_workflow(config, wfUuid, True)
+    assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
+
+    output = _workflow_commands._list_workflows(
+        config, 10, None, None, None, None, False, None
+    )
+    assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
+
+    if output[0].workflowUUID == wfUuid:
+        new_wfUuid = output[1].workflowUUID
+    else:
+        new_wfUuid = output[0].workflowUUID
+
+    print(new_wfUuid)
+
+    info = _workflow_commands._get_workflow(config, new_wfUuid, True)
+    assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
