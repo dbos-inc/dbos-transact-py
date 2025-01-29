@@ -1,18 +1,14 @@
 import os
-import pathlib
-import re
 from base64 import b64decode
-from typing import List, Optional, TypedDict
+from typing import List, TypedDict
 
 import requests
 
-# Constants
 DEMO_REPO_API = "https://api.github.com/repos/dbos-inc/dbos-demo-apps"
 PY_DEMO_PATH = "python/"
 BRANCH = "main"
 
 
-# Type definitions using TypedDict
 class GitHubTreeItem(TypedDict):
     path: str
     mode: str
@@ -68,13 +64,14 @@ def _fetch_github(url: str) -> requests.Response:
 
 def _fetch_github_tree(tag: str) -> List[GitHubTreeItem]:
     response = _fetch_github(f"{DEMO_REPO_API}/git/trees/{tag}?recursive=1")
-    return response.json()["tree"]
+    tree_data: GitHubTree = response.json()
+    return tree_data["tree"]
 
 
 def _fetch_github_item(url: str) -> str:
     response = _fetch_github(url)
-    content_base64 = response.json()["content"]
-    return b64decode(content_base64).decode("utf-8")
+    item: GitHubItem = response.json()
+    return b64decode(item["content"]).decode("utf-8")
 
 
 def create_template_from_github(app_name: str, template_name: str) -> None:

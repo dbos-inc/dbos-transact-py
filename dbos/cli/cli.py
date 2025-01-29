@@ -12,7 +12,7 @@ import requests
 import sqlalchemy as sa
 import typer
 from rich import print
-from rich.prompt import IntPrompt, Prompt
+from rich.prompt import IntPrompt
 from typing_extensions import Annotated
 
 from .. import load_config
