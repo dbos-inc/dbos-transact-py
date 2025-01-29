@@ -12,7 +12,7 @@ import requests
 import sqlalchemy as sa
 import typer
 from rich import print
-from rich.prompt import Prompt
+from rich.prompt import IntPrompt, Prompt
 from typing_extensions import Annotated
 
 from .. import load_config
@@ -100,6 +100,40 @@ def init(
     ] = False,
 ) -> None:
     try:
+        git_templates = ["dbos-app-starter", "dbos-cron-starter"]
+        templates_dir = get_templates_directory()
+        templates = git_templates + [
+            x.name for x in os.scandir(templates_dir) if x.is_dir()
+        ]
+        if len(templates) == 0:
+            raise Exception(f"no DBOS templates found in {templates_dir} ")
+
+        if template:
+            if template not in templates:
+                raise Exception(f"Template {template} not found in {templates_dir}")
+        else:
+            print("\n[bold]Available templates:[/bold]")
+            for idx, template_name in enumerate(templates, 1):
+                print(f"  {idx}. {template_name}")
+            while True:
+                try:
+                    choice = IntPrompt.ask(
+                        "\nSelect template number",
+                        show_choices=False,
+                        show_default=False,
+                    )
+                    if 1 <= choice <= len(templates):
+                        template = templates[choice - 1]
+                        break
+                    else:
+                        print(
+                            "[red]Invalid selection. Please choose a number from the list.[/red]"
+                        )
+                except (KeyboardInterrupt, EOFError):
+                    raise typer.Abort()
+                except ValueError:
+                    print("[red]Please enter a valid number.[/red]")
+
         if project_name is None:
             project_name = typing.cast(
                 str, typer.prompt("What is your project's name?", get_project_name())
@@ -109,25 +143,6 @@ def init(
             raise Exception(
                 f"{project_name} is an invalid DBOS app name. App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores."
             )
-
-        git_templates = ["dbos-app-starter", "dbos-cron-starter"]
-        templates_dir = get_templates_directory()
-        templates = [
-            x.name for x in os.scandir(templates_dir) if x.is_dir()
-        ] + git_templates
-        if len(templates) == 0:
-            raise Exception(f"no DBOS templates found in {templates_dir} ")
-
-        if template == None:
-            if len(templates) == 1:
-                template = templates[0]
-            else:
-                template = Prompt.ask(
-                    "Which project template do you want to use?", choices=templates
-                )
-        else:
-            if template not in templates:
-                raise Exception(f"template {template} not found in {templates_dir}")
 
         if template in git_templates:
             create_template_from_github(app_name=project_name, template_name=template)
