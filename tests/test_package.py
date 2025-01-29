@@ -49,7 +49,9 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
 
         # initalize the app with dbos scaffolding
         subprocess.check_call(
-            ["dbos", "init", "pkgtest", "--template", "hello"], cwd=temp_path, env=venv
+            ["dbos", "init", "pkgtest", "--template", "dbos-db-starter"],
+            cwd=temp_path,
+            env=venv,
         )
 
         # Run schema migration
