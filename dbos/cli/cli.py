@@ -15,13 +15,13 @@ from rich import print
 from rich.prompt import Prompt
 from typing_extensions import Annotated
 
-from dbos._schemas.system_database import SystemSchema
-
 from .. import load_config
 from .._app_db import ApplicationDatabase
 from .._dbos_config import _is_valid_app_name
+from .._schemas.system_database import SystemSchema
 from .._sys_db import SystemDatabase
 from .._workflow_commands import _cancel_workflow, _get_workflow, _list_workflows
+from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
 
 app = typer.Typer()
@@ -112,7 +112,9 @@ def init(
 
         git_templates = ["dbos-app-starter", "dbos-cron-starter"]
         templates_dir = get_templates_directory()
-        templates = [x.name for x in os.scandir(templates_dir) if x.is_dir()]
+        templates = [
+            x.name for x in os.scandir(templates_dir) if x.is_dir()
+        ] + git_templates
         if len(templates) == 0:
             raise Exception(f"no DBOS templates found in {templates_dir} ")
 
@@ -127,9 +129,12 @@ def init(
             if template not in templates:
                 raise Exception(f"template {template} not found in {templates_dir}")
 
-        copy_template(
-            path.join(templates_dir, template), project_name, config_mode=config
-        )
+        if template in git_templates:
+            create_template_from_github(app_name=project_name, template_name=template)
+        else:
+            copy_template(
+                path.join(templates_dir, template), project_name, config_mode=config
+            )
     except Exception as e:
         print(f"[red]{e}[/red]")
 
