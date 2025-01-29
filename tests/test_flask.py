@@ -1,6 +1,8 @@
+import logging
 import uuid
 from typing import Tuple
 
+import pytest
 import sqlalchemy as sa
 from flask import Flask, Response, jsonify
 
@@ -8,7 +10,9 @@ from dbos import DBOS
 from dbos._context import assert_current_dbos_context
 
 
-def test_flask_endpoint(dbos_flask: Tuple[DBOS, Flask]) -> None:
+def test_flask_endpoint(
+    dbos_flask: Tuple[DBOS, Flask], caplog: pytest.LogCaptureFixture
+) -> None:
     _, app = dbos_flask
 
     @app.route("/endpoint/<var1>/<var2>")
@@ -27,6 +31,7 @@ def test_flask_endpoint(dbos_flask: Tuple[DBOS, Flask]) -> None:
         result = res1 + res2
         return jsonify({"result": result})
 
+    @app.route("/transaction/<var>")
     @DBOS.transaction()
     def test_transaction(var: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
@@ -39,13 +44,27 @@ def test_flask_endpoint(dbos_flask: Tuple[DBOS, Flask]) -> None:
     app.config["TESTING"] = True
     client = app.test_client()
 
+    original_propagate = logging.getLogger("dbos").propagate
+    caplog.set_level(logging.WARNING, "dbos")
+    logging.getLogger("dbos").propagate = True
+
     response = client.get("/endpoint/a/b")
     assert response.status_code == 200
     assert response.json == {"result": "a1b"}
+    assert caplog.text == ""
 
     response = client.get("/workflow/a/b")
     assert response.status_code == 200
     assert response.json == {"result": "a1b"}
+    assert caplog.text == ""
+
+    response = client.get("/transaction/bob")
+    assert response.status_code == 200
+    assert response.text == "bob1"
+    assert caplog.text == ""
+
+    # Reset logging
+    logging.getLogger("dbos").propagate = original_propagate
 
 
 def test_endpoint_recovery(dbos_flask: Tuple[DBOS, Flask]) -> None:
