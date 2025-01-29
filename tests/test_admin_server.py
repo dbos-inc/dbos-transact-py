@@ -5,7 +5,7 @@ import uuid
 import requests
 
 # Public API
-from dbos import DBOS, SetWorkflowID
+from dbos import DBOS, ConfigFile, SetWorkflowID, _workflow_commands
 
 
 def test_admin_endpoints(dbos: DBOS) -> None:
@@ -148,3 +148,121 @@ runtimeConfig:
         # Clean up after the test
         DBOS.destroy()
         os.remove("dbos-config.yaml")
+
+
+def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        print("Executed Simple workflow")
+        return
+
+    # run the workflow
+    simple_workflow()
+    time.sleep(1)
+
+    # get the workflow list
+    output = _workflow_commands._list_workflows(
+        config, 10, None, None, None, None, False, None
+    )
+    assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
+
+    assert output[0] != None, "Expected output to be not None"
+
+    wfUuid = output[0].workflowUUID
+
+    info = _workflow_commands._get_workflow(config, wfUuid, True)
+    assert info is not None, "Expected output to be not None"
+
+    assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
+
+    response = requests.post(
+        f"http://localhost:3001/workflows/{wfUuid}/cancel", json=[], timeout=5
+    )
+    assert response.status_code == 204
+
+    info = _workflow_commands._get_workflow(config, wfUuid, True)
+    if info is not None:
+        assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
+    else:
+        assert False, "Expected info to be not None"
+
+    response = requests.post(
+        f"http://localhost:3001/workflows/{wfUuid}/resume", json=[], timeout=5
+    )
+    assert response.status_code == 204
+
+    time.sleep(1)
+
+    info = _workflow_commands._get_workflow(config, wfUuid, True)
+    if info is not None:
+        assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
+    else:
+        assert False, "Expected info to be not None"
+
+
+def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        print("Executed Simple workflow")
+        return
+
+    # run the workflow
+    simple_workflow()
+    time.sleep(1)
+
+    # get the workflow list
+    output = _workflow_commands._list_workflows(
+        config, 10, None, None, None, None, False, None
+    )
+    assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
+
+    assert output[0] != None, "Expected output to be not None"
+
+    wfUuid = output[0].workflowUUID
+
+    info = _workflow_commands._get_workflow(config, wfUuid, True)
+    assert info is not None, "Expected output to be not None"
+
+    assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
+
+    response = requests.post(
+        f"http://localhost:3001/workflows/{wfUuid}/cancel", json=[], timeout=5
+    )
+    assert response.status_code == 204
+
+    info = _workflow_commands._get_workflow(config, wfUuid, True)
+    if info is not None:
+        assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
+    else:
+        assert False, "Expected info to be not None"
+
+    response = requests.post(
+        f"http://localhost:3001/workflows/{wfUuid}/restart", json=[], timeout=5
+    )
+    assert response.status_code == 204
+
+    time.sleep(1)
+
+    info = _workflow_commands._get_workflow(config, wfUuid, True)
+    if info is not None:
+        assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
+    else:
+        assert False, "Expected info to be not None"
+
+    output = _workflow_commands._list_workflows(
+        config, 10, None, None, None, None, False, None
+    )
+    assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
+
+    if output[0].workflowUUID == wfUuid:
+        new_wfUuid = output[1].workflowUUID
+    else:
+        new_wfUuid = output[0].workflowUUID
+
+    info = _workflow_commands._get_workflow(config, new_wfUuid, True)
+    if info is not None:
+        assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
+    else:
+        assert False, "Expected info to be not None"

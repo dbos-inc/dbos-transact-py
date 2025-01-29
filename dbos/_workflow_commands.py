@@ -1,3 +1,6 @@
+import importlib
+import os
+import sys
 from typing import Any, List, Optional, cast
 
 import typer
@@ -6,6 +9,7 @@ from rich import print
 from dbos import DBOS
 
 from . import _serialization, load_config
+from ._core import execute_workflow_by_id
 from ._dbos_config import ConfigFile, _is_valid_app_name
 from ._sys_db import (
     GetWorkflowsInput,
@@ -121,11 +125,6 @@ def _cancel_workflow(config: ConfigFile, uuid: str) -> None:
     finally:
         if sys_db:
             sys_db.destroy()
-
-
-def _reattempt_workflow(uuid: str, startNewWorkflow: bool) -> None:
-    print(f"Reattempt workflow info for {uuid} not implemented")
-    return
 
 
 def _get_workflow_info(

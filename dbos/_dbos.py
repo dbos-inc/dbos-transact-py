@@ -56,6 +56,7 @@ from ._registrations import (
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
+from ._sys_db import WorkflowStatusString
 from ._tracer import dbos_tracer
 
 if TYPE_CHECKING:
@@ -231,6 +232,7 @@ class DBOS:
                         f"DBOS configured multiple times with conflicting information"
                     )
                 config = _dbos_global_registry.config
+
             _dbos_global_instance = super().__new__(cls)
             _dbos_global_instance.__init__(fastapi=fastapi, config=config, flask=flask)  # type: ignore
         else:
@@ -768,11 +770,28 @@ class DBOS:
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id)
 
     @classmethod
+    def restart_workflow(cls, workflow_id: str) -> None:
+        """Execute a workflow by ID (for recovery)."""
+        execute_workflow_by_id(_get_dbos_instance(), workflow_id, True)
+
+    @classmethod
     def recover_pending_workflows(
         cls, executor_ids: List[str] = ["local"]
     ) -> List[WorkflowHandle[Any]]:
         """Find all PENDING workflows and execute them."""
         return recover_pending_workflows(_get_dbos_instance(), executor_ids)
+
+    @classmethod
+    def cancel_workflow(cls, workflow_id: str) -> None:
+        """Cancel a workflow by ID."""
+        _get_dbos_instance()._sys_db.set_workflow_status(
+            workflow_id, WorkflowStatusString.CANCELLED, False
+        )
+
+    @classmethod
+    def resume_workflow(cls, workflow_id: str) -> None:
+        """Resume a workflow by ID."""
+        execute_workflow_by_id(_get_dbos_instance(), workflow_id, False)
 
     @classproperty
     def logger(cls) -> Logger:
