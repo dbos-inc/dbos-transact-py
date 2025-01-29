@@ -261,8 +261,6 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
     else:
         new_wfUuid = output[0].workflowUUID
 
-    print(new_wfUuid)
-
     info = _workflow_commands._get_workflow(config, new_wfUuid, True)
     if info is not None:
         assert info.status == "SUCCESS", f"Expected status to be SUCCESS"

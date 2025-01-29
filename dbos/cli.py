@@ -450,7 +450,7 @@ def resume(
         print(f"Failed to resume workflow {uuid}. Status code: {response.status_code}")
 
 
-@workflow.command(help="Restart a workflow that has been cancelled with a new id")
+@workflow.command(help="Restart a workflow from the beginning with a new id")
 def restart(
     uuid: Annotated[str, typer.Argument()],
     host: Annotated[

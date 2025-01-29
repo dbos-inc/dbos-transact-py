@@ -113,19 +113,19 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
     def _handle_restart(self, workflow_id: str) -> None:
         self.dbos.restart_workflow(workflow_id)
         print("Restarting workflow", workflow_id)
-        self.send_response(200)
+        self.send_response(204)
         self._end_headers()
 
     def _handle_resume(self, workflow_id: str) -> None:
         print("Resuming workflow", workflow_id)
         self.dbos.resume_workflow(workflow_id)
-        self.send_response(200)
+        self.send_response(204)
         self._end_headers()
 
     def _handle_cancel(self, workflow_id: str) -> None:
         print("Cancelling workflow", workflow_id)
         self.dbos.cancel_workflow(workflow_id)
-        self.send_response(200)
+        self.send_response(204)
         self._end_headers()
 
 
