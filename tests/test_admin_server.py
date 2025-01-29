@@ -179,7 +179,7 @@ def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
     response = requests.post(
         f"http://localhost:3001/workflows/{wfUuid}/cancel", json=[], timeout=5
     )
-    assert response.status_code == 200
+    assert response.status_code == 204
 
     info = _workflow_commands._get_workflow(config, wfUuid, True)
     if info is not None:
@@ -190,7 +190,7 @@ def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
     response = requests.post(
         f"http://localhost:3001/workflows/{wfUuid}/resume", json=[], timeout=5
     )
-    assert response.status_code == 200
+    assert response.status_code == 204
 
     time.sleep(1)
 
@@ -230,7 +230,7 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
     response = requests.post(
         f"http://localhost:3001/workflows/{wfUuid}/cancel", json=[], timeout=5
     )
-    assert response.status_code == 200
+    assert response.status_code == 204
 
     info = _workflow_commands._get_workflow(config, wfUuid, True)
     if info is not None:
@@ -241,7 +241,7 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
     response = requests.post(
         f"http://localhost:3001/workflows/{wfUuid}/restart", json=[], timeout=5
     )
-    assert response.status_code == 200
+    assert response.status_code == 204
 
     time.sleep(1)
 
