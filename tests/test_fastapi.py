@@ -1,6 +1,8 @@
+import logging
 import uuid
 from typing import Tuple
 
+import pytest
 import sqlalchemy as sa
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -12,7 +14,9 @@ from dbos import DBOS
 from dbos._context import assert_current_dbos_context
 
 
-def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
+def test_simple_endpoint(
+    dbos_fastapi: Tuple[DBOS, FastAPI], caplog: pytest.LogCaptureFixture
+) -> None:
     dbos, app = dbos_fastapi
     client = TestClient(app)
 
@@ -32,6 +36,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         res2 = test_step(var2)
         return res1 + res2
 
+    @app.get("/transaction/{var}")
     @DBOS.transaction()
     def test_transaction(var: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
@@ -41,13 +46,27 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     def test_step(var: str) -> str:
         return var
 
+    original_propagate = logging.getLogger("dbos").propagate
+    caplog.set_level(logging.WARNING, "dbos")
+    logging.getLogger("dbos").propagate = True
+
     response = client.get("/workflow/bob/bob")
     assert response.status_code == 200
     assert response.text == '"bob1bob"'
+    assert caplog.text == ""
 
     response = client.get("/endpoint/bob/bob")
     assert response.status_code == 200
     assert response.text == '"bob1bob"'
+    assert caplog.text == ""
+
+    response = client.get("/transaction/bob")
+    assert response.status_code == 200
+    assert response.text == '"bob1"'
+    assert caplog.text == ""
+
+    # Reset logging
+    logging.getLogger("dbos").propagate = original_propagate
 
 
 def test_start_workflow(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:

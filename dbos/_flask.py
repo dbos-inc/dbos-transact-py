@@ -34,8 +34,12 @@ class FlaskMiddleware:
         with EnterDBOSHandler(attributes):
             ctx = assert_current_dbos_context()
             ctx.request = _make_request(request)
-            workflow_id = request.headers.get("dbos-idempotency-key", "")
-            with SetWorkflowID(workflow_id):
+            workflow_id = request.headers.get("dbos-idempotency-key")
+            if workflow_id is not None:
+                # Set the workflow ID for the handler
+                with SetWorkflowID(workflow_id):
+                    response = self.app(environ, start_response)
+            else:
                 response = self.app(environ, start_response)
         return response
 

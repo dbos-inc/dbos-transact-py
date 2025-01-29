@@ -94,7 +94,11 @@ def setup_fastapi_middleware(app: FastAPI, dbos: DBOS) -> None:
         with EnterDBOSHandler(attributes):
             ctx = assert_current_dbos_context()
             ctx.request = _make_request(request)
-            workflow_id = request.headers.get("dbos-idempotency-key", "")
-            with SetWorkflowID(workflow_id):
+            workflow_id = request.headers.get("dbos-idempotency-key")
+            if workflow_id is not None:
+                # Set the workflow ID for the handler
+                with SetWorkflowID(workflow_id):
+                    response = await call_next(request)
+            else:
                 response = await call_next(request)
         return response
