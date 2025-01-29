@@ -134,10 +134,14 @@ def init(
                 except ValueError:
                     print("[red]Please enter a valid number.[/red]")
 
-        if project_name is None:
-            project_name = typing.cast(
-                str, typer.prompt("What is your project's name?", get_project_name())
-            )
+        if template in git_templates:
+            project_name = template
+        else:
+            if project_name is None:
+                project_name = typing.cast(
+                    str,
+                    typer.prompt("What is your project's name?", get_project_name()),
+                )
 
         if not _is_valid_app_name(project_name):
             raise Exception(
