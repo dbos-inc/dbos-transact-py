@@ -130,11 +130,15 @@ class GetWorkflowsOutput:
     def __init__(self, workflow_uuids: List[str]):
         self.workflow_uuids = workflow_uuids
 
+
 class GetPendingWorkflowsOutput:
-    def __init__(self, *, executor_id: str, workflow_uuid: str, queue_name: Optional[str] = None):
+    def __init__(
+        self, *, executor_id: str, workflow_uuid: str, queue_name: Optional[str] = None
+    ):
         self.executor_id: str = executor_id
         self.workflow_uuid: str = workflow_uuid
         self.queue_name: Optional[str] = queue_name
+
 
 class WorkflowInformation(TypedDict, total=False):
     workflow_uuid: str
@@ -697,24 +701,28 @@ class SystemDatabase:
 
         return GetWorkflowsOutput(workflow_uuids)
 
-    def get_pending_workflows(self, executor_id: str) -> list[GetPendingWorkflowsOutput]:
+    def get_pending_workflows(
+        self, executor_id: str
+    ) -> list[GetPendingWorkflowsOutput]:
         with self.engine.begin() as c:
             rows = c.execute(
-                sa.select(SystemSchema.workflow_status.c.workflow_uuid, SystemSchema.workflow_status.c.queue_name).where(
+                sa.select(
+                    SystemSchema.workflow_status.c.workflow_uuid,
+                    SystemSchema.workflow_status.c.queue_name,
+                ).where(
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value,
                     SystemSchema.workflow_status.c.executor_id == executor_id,
                 )
             ).fetchall()
             return [
-            GetPendingWorkflowsOutput(
-                executor_id=executor_id,
-                workflow_uuid=row.workflow_uuid,
-                queue_name=row.queue_name
-            )
-            for row in rows
-        ]
-
+                GetPendingWorkflowsOutput(
+                    executor_id=executor_id,
+                    workflow_uuid=row.workflow_uuid,
+                    queue_name=row.queue_name,
+                )
+                for row in rows
+            ]
 
     def record_operation_result(
         self, result: OperationResultInternal, conn: Optional[sa.Connection] = None

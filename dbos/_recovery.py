@@ -12,18 +12,27 @@ from ._sys_db import GetPendingWorkflowsOutput
 if TYPE_CHECKING:
     from ._dbos import DBOS, WorkflowHandle
 
-def clear_pending_workflow_queue_assignement(dbos: "DBOS", workflow: GetPendingWorkflowsOutput) -> None:
-    dbos.logger.debug(f"Clearing queue assignment for workflow: {workflow.workflow_uuid}")
+
+def clear_pending_workflow_queue_assignement(
+    dbos: "DBOS", workflow: GetPendingWorkflowsOutput
+) -> None:
+    dbos.logger.debug(
+        f"Clearing queue assignment for workflow: {workflow.workflow_uuid}"
+    )
     try:
         dbos._sys_db.clear_queue_assignment(workflow.workflow_uuid)
     except DatabaseError as e:
-        if getattr(e.orig, 'pgcode', None) == '40001':
-            dbos.logger.debug(f"Workflow {workflow.workflow_uuid} queue assignment is already being cleared")
+        if getattr(e.orig, "pgcode", None) == "40001":
+            dbos.logger.debug(
+                f"Workflow {workflow.workflow_uuid} queue assignment is already being cleared"
+            )
         else:
             raise e
 
 
-def startup_recovery_thread(dbos: "DBOS", pending_workflows: List[GetPendingWorkflowsOutput]) -> None:
+def startup_recovery_thread(
+    dbos: "DBOS", pending_workflows: List[GetPendingWorkflowsOutput]
+) -> None:
     """Attempt to recover local pending workflows on startup using a background thread."""
     stop_event = threading.Event()
     dbos.stop_events.append(stop_event)
