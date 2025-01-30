@@ -164,7 +164,9 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_custom_lifespan() -> None:
+async def test_custom_lifespan(
+    config: ConfigFile, cleanup_test_databases: None
+) -> None:
     resource = None
     port = 8000
 
@@ -176,6 +178,9 @@ async def test_custom_lifespan() -> None:
         resource = None
 
     app = FastAPI(lifespan=lifespan)
+
+    DBOS.destroy()
+    DBOS(fastapi=app, config=config)
 
     @app.get("/")
     async def get_resource() -> Any:
