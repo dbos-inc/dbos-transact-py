@@ -118,15 +118,7 @@ def dbos_fastapi(
 ) -> Generator[Tuple[DBOS, FastAPI], Any, None]:
     DBOS.destroy()
     app = FastAPI()
-
-    # ignore the on_event deprecation warnings
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            category=DeprecationWarning,
-            message=r"\s*on_event is deprecated, use lifespan event handlers instead\.",
-        )
-        dbos = DBOS(fastapi=app, config=config)
+    dbos = DBOS(fastapi=app, config=config)
 
     # This is for test convenience.
     #    Usually fastapi itself does launch, but we are not completing the fastapi lifecycle
