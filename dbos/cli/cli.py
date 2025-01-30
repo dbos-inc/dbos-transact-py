@@ -1,6 +1,5 @@
 import os
 import platform
-import shutil
 import signal
 import subprocess
 import time
@@ -11,19 +10,19 @@ from typing import Any
 import jsonpickle  # type: ignore
 import requests
 import sqlalchemy as sa
-import tomlkit
 import typer
 from rich import print
-from rich.prompt import Prompt
+from rich.prompt import IntPrompt
 from typing_extensions import Annotated
 
-from dbos._schemas.system_database import SystemSchema
-
-from . import _serialization, load_config
-from ._app_db import ApplicationDatabase
-from ._dbos_config import _is_valid_app_name
-from ._sys_db import SystemDatabase
-from ._workflow_commands import _cancel_workflow, _get_workflow, _list_workflows
+from .. import load_config
+from .._app_db import ApplicationDatabase
+from .._dbos_config import _is_valid_app_name
+from .._schemas.system_database import SystemSchema
+from .._sys_db import SystemDatabase
+from .._workflow_commands import _cancel_workflow, _get_workflow, _list_workflows
+from ..cli._github_init import create_template_from_github
+from ._template_init import copy_template, get_project_name, get_templates_directory
 
 app = typer.Typer()
 workflow = typer.Typer()
@@ -86,96 +85,6 @@ def start() -> None:
         process.wait()
 
 
-def _get_templates_directory() -> str:
-    import dbos
-
-    package_dir = path.abspath(path.dirname(dbos.__file__))
-    return path.join(package_dir, "_templates")
-
-
-def _copy_dbos_template(src: str, dst: str, ctx: dict[str, str]) -> None:
-    with open(src, "r") as f:
-        content = f.read()
-
-    for key, value in ctx.items():
-        content = content.replace(f"${{{key}}}", value)
-
-    with open(dst, "w") as f:
-        f.write(content)
-
-
-def _copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]) -> None:
-
-    for root, dirs, files in os.walk(src_dir, topdown=True):
-        dirs[:] = [d for d in dirs if d != "__package"]
-
-        dst_root = path.join(dst_dir, path.relpath(root, src_dir))
-        if len(dirs) == 0:
-            os.makedirs(dst_root, exist_ok=True)
-        else:
-            for dir in dirs:
-                os.makedirs(path.join(dst_root, dir), exist_ok=True)
-
-        for file in files:
-            src = path.join(root, file)
-            base, ext = path.splitext(file)
-
-            dst = path.join(dst_root, base if ext == ".dbos" else file)
-            if path.exists(dst):
-                print(f"[yellow]File {dst} already exists, skipping[/yellow]")
-                continue
-
-            if ext == ".dbos":
-                _copy_dbos_template(src, dst, ctx)
-            else:
-                shutil.copy(src, dst)
-
-
-def _copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
-
-    dst_dir = path.abspath(".")
-
-    package_name = project_name.replace("-", "_")
-    ctx = {
-        "project_name": project_name,
-        "package_name": package_name,
-        "migration_command": "alembic upgrade head",
-    }
-
-    if config_mode:
-        ctx["package_name"] = "."
-        ctx["migration_command"] = "echo 'No migrations specified'"
-        _copy_dbos_template(
-            os.path.join(src_dir, "dbos-config.yaml.dbos"),
-            os.path.join(dst_dir, "dbos-config.yaml"),
-            ctx,
-        )
-    else:
-        _copy_template_dir(src_dir, dst_dir, ctx)
-        _copy_template_dir(
-            path.join(src_dir, "__package"), path.join(dst_dir, package_name), ctx
-        )
-
-
-def _get_project_name() -> typing.Union[str, None]:
-    name = None
-    try:
-        with open("pyproject.toml", "rb") as file:
-            pyproj = typing.cast(dict[str, Any], tomlkit.load(file))
-            name = typing.cast(str, pyproj["project"]["name"])
-    except:
-        pass
-
-    if name == None:
-        try:
-            _, parent = path.split(path.abspath("."))
-            name = parent
-        except:
-            pass
-
-    return name
-
-
 @app.command(help="Initialize a new DBOS application from a template")
 def init(
     project_name: Annotated[
@@ -191,35 +100,60 @@ def init(
     ] = False,
 ) -> None:
     try:
-        if project_name is None:
-            project_name = typing.cast(
-                str, typer.prompt("What is your project's name?", _get_project_name())
-            )
+        git_templates = ["dbos-app-starter", "dbos-cron-starter"]
+        templates_dir = get_templates_directory()
+        templates = git_templates + [
+            x.name for x in os.scandir(templates_dir) if x.is_dir()
+        ]
+        if len(templates) == 0:
+            raise Exception(f"no DBOS templates found in {templates_dir} ")
+
+        if template:
+            if template not in templates:
+                raise Exception(f"Template {template} not found in {templates_dir}")
+        else:
+            print("\n[bold]Available templates:[/bold]")
+            for idx, template_name in enumerate(templates, 1):
+                print(f"  {idx}. {template_name}")
+            while True:
+                try:
+                    choice = IntPrompt.ask(
+                        "\nSelect template number",
+                        show_choices=False,
+                        show_default=False,
+                    )
+                    if 1 <= choice <= len(templates):
+                        template = templates[choice - 1]
+                        break
+                    else:
+                        print(
+                            "[red]Invalid selection. Please choose a number from the list.[/red]"
+                        )
+                except (KeyboardInterrupt, EOFError):
+                    raise typer.Abort()
+                except ValueError:
+                    print("[red]Please enter a valid number.[/red]")
+
+        if template in git_templates:
+            project_name = template
+        else:
+            if project_name is None:
+                project_name = typing.cast(
+                    str,
+                    typer.prompt("What is your project's name?", get_project_name()),
+                )
 
         if not _is_valid_app_name(project_name):
             raise Exception(
                 f"{project_name} is an invalid DBOS app name. App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores."
             )
 
-        templates_dir = _get_templates_directory()
-        templates = [x.name for x in os.scandir(templates_dir) if x.is_dir()]
-        if len(templates) == 0:
-            raise Exception(f"no DBOS templates found in {templates_dir} ")
-
-        if template == None:
-            if len(templates) == 1:
-                template = templates[0]
-            else:
-                template = Prompt.ask(
-                    "Which project template do you want to use?", choices=templates
-                )
+        if template in git_templates:
+            create_template_from_github(app_name=project_name, template_name=template)
         else:
-            if template not in templates:
-                raise Exception(f"template {template} not found in {templates_dir}")
-
-        _copy_template(
-            path.join(templates_dir, template), project_name, config_mode=config
-        )
+            copy_template(
+                path.join(templates_dir, template), project_name, config_mode=config
+            )
     except Exception as e:
         print(f"[red]{e}[/red]")
 
