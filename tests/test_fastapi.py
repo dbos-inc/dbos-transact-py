@@ -195,7 +195,7 @@ async def test_custom_lifespan(
 
     # Run server in background task
     server_task = asyncio.create_task(server.serve())
-    await asyncio.sleep(0.1)  # Give server time to start
+    await asyncio.sleep(0.2)  # Give server time to start
 
     async with httpx.AsyncClient() as client:
         r = await client.get(f"http://127.0.0.1:{port}")
