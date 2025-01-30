@@ -1,10 +1,10 @@
 import uuid
-from typing import Any, Callable, cast
+from typing import Any, Callable, MutableMapping, cast
 
 from fastapi import FastAPI
 from fastapi import Request as FastAPIRequest
 from fastapi.responses import JSONResponse
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import DBOS
 from ._context import (
@@ -62,7 +62,7 @@ class LifespanMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
 
-            async def wrapped_send(message: dict):
+            async def wrapped_send(message: MutableMapping[str, Any]) -> None:
                 if message["type"] == "lifespan.startup.complete":
                     self.dbos._launch()
                 elif message["type"] == "lifespan.shutdown.complete":

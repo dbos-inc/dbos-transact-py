@@ -183,15 +183,17 @@ async def test_custom_lifespan(
     DBOS(fastapi=app, config=config)
 
     @app.get("/")
-    async def get_resource():
+    async def get_resource() -> Any:
         return await resource_workflow()
 
     @DBOS.workflow()
-    async def resource_workflow():
+    async def resource_workflow() -> Any:
         return {"resource": resource}
 
-    config = uvicorn.Config(app=app, host="127.0.0.1", port=port, log_level="error")
-    server = uvicorn.Server(config=config)
+    uvicorn_config = uvicorn.Config(
+        app=app, host="127.0.0.1", port=port, log_level="error"
+    )
+    server = uvicorn.Server(config=uvicorn_config)
 
     # Run server in background task
     server_task = asyncio.create_task(server.serve())
