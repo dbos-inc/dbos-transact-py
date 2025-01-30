@@ -6,20 +6,21 @@ from typing import TYPE_CHECKING, Any, List
 
 from ._core import execute_workflow_by_id
 from ._error import DBOSWorkflowFunctionNotFoundError
+from ._sys_db import GetPendingWorkflowsOutput
 
 if TYPE_CHECKING:
     from ._dbos import DBOS, WorkflowHandle
 
 
-def startup_recovery_thread(dbos: "DBOS", workflow_ids: List[str]) -> None:
+def startup_recovery_thread(dbos: "DBOS", pending_workflows: List[GetPendingWorkflowsOutput]) -> None:
     """Attempt to recover local pending workflows on startup using a background thread."""
     stop_event = threading.Event()
     dbos.stop_events.append(stop_event)
-    while not stop_event.is_set() and len(workflow_ids) > 0:
+    while not stop_event.is_set() and len(pending_workflows) > 0:
         try:
-            for workflowID in list(workflow_ids):
-                execute_workflow_by_id(dbos, workflowID)
-                workflow_ids.remove(workflowID)
+            for pending_workflow in list(pending_workflows):
+                execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
+                pending_workflows.remove(pending_workflow)
         except DBOSWorkflowFunctionNotFoundError:
             time.sleep(1)
         except Exception as e:
@@ -39,11 +40,11 @@ def recover_pending_workflows(
                 f"Skip local recovery because it's running in a VM: {os.environ.get('DBOS__VMID')}"
             )
         dbos.logger.debug(f"Recovering pending workflows for executor: {executor_id}")
-        workflow_ids = dbos._sys_db.get_pending_workflows(executor_id)
-        dbos.logger.debug(f"Pending workflows: {workflow_ids}")
+        pending_workflows = dbos._sys_db.get_pending_workflows(executor_id)
+        dbos.logger.debug(f"Pending workflows: {pending_workflows}")
 
-        for workflowID in workflow_ids:
-            handle = execute_workflow_by_id(dbos, workflowID)
+        for pending_workflow in pending_workflows:
+            handle = execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
             workflow_handles.append(handle)
 
     dbos.logger.info("Recovered pending workflows")

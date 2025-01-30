@@ -360,8 +360,8 @@ class DBOS:
             self._admin_server_field = AdminServer(dbos=self, port=admin_port)
 
             if not os.environ.get("DBOS__VMID"):
-                workflow_ids = self._sys_db.get_pending_workflows("local")
-                self._executor.submit(startup_recovery_thread, self, workflow_ids)
+                pending_workflows = self._sys_db.get_pending_workflows("local")
+                self._executor.submit(startup_recovery_thread, self, pending_workflows)
 
             # Listen to notifications
             notification_listener_thread = threading.Thread(
