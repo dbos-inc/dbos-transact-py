@@ -61,15 +61,16 @@ class LifespanMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
-            while True:
-                message = await receive()
-                if message["type"] == "lifespan.startup":
+
+            async def wrapped_send(message: dict):
+                if message["type"] == "lifespan.startup.complete":
                     self.dbos._launch()
-                    await send({"type": "lifespan.startup.complete"})
-                elif message["type"] == "lifespan.shutdown":
+                elif message["type"] == "lifespan.shutdown.complete":
                     self.dbos._destroy()
-                    await send({"type": "lifespan.shutdown.complete"})
-                    break
+                await send(message)
+
+            # Call the original app with our wrapped functions
+            await self.app(scope, receive, wrapped_send)
         else:
             await self.app(scope, receive, send)
 
