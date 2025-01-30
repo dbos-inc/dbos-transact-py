@@ -80,7 +80,7 @@ def setup_fastapi_middleware(app: FastAPI, dbos: DBOS) -> None:
     app.add_middleware(LifespanMiddleware, dbos=dbos)
     app.add_exception_handler(DBOSException, _dbos_error_handler)
 
-    @app.middleware("http")
+    # @app.middleware("http")
     async def dbos_fastapi_middleware(
         request: FastAPIRequest, call_next: Callable[..., Any]
     ) -> Any:
