@@ -488,6 +488,22 @@ def start_workflow(
     return WorkflowHandleFuture(new_wf_id, future, dbos)
 
 
+if sys.version_info < (3, 12):
+
+    def _mark_coroutine(func: Callable[P, R]) -> Callable[P, R]:
+        @wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> R:
+            return await func(*args, **kwargs)  # type: ignore
+
+        return async_wrapper  # type: ignore
+
+else:
+
+    def _mark_coroutine(func: Callable[P, R]) -> Callable[P, R]:
+        inspect.markcoroutinefunction(func)
+        return func
+
+
 def workflow_wrapper(
     dbosreg: "DBOSRegistry",
     func: Callable[P, R],
@@ -548,7 +564,7 @@ def workflow_wrapper(
         )
         return outcome()  # type: ignore
 
-    return wrapper
+    return _mark_coroutine(wrapper) if inspect.iscoroutinefunction(func) else wrapper
 
 
 def decorate_workflow(
@@ -837,6 +853,10 @@ def decorate_step(
                 tempwf = dbosreg.workflow_info_map.get("<temp>." + func.__qualname__)
                 assert tempwf
                 return tempwf(*args, **kwargs)
+
+        wrapper = (
+            _mark_coroutine(wrapper) if inspect.iscoroutinefunction(func) else wrapper  # type: ignore
+        )
 
         def temp_wf_sync(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
