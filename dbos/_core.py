@@ -488,7 +488,9 @@ def start_workflow(
     return WorkflowHandleFuture(new_wf_id, future, dbos)
 
 if sys.version_info <= (3, 11):
+    from asyncio.coroutines import _is_coroutine 
     def mark_coroutine(func: Callable[P, R]) -> Callable[P, R]:
+        setattr(func, '_is_coroutine', _is_coroutine)
         return func
 else:
     def mark_coroutine(func: Callable[P, R]) -> Callable[P, R]:
