@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 
 import sqlalchemy as sa
+import yaml
 
 
 def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
@@ -90,3 +91,27 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
             finally:
                 os.kill(process.pid, signal.SIGINT)
                 process.wait()
+
+
+def test_init_config() -> None:
+    app_name = "example-name"
+    expected_yaml = {
+        "name": app_name,
+        "language": "python",
+        "runtimeConfig": {"start": ["fastapi run ./main.py"]},
+        "database": {"migrate": ["echo 'No migrations specified'"]},
+        "telemetry": {"logs": {"logLevel": "INFO"}},
+    }
+    with tempfile.TemporaryDirectory() as temp_path:
+        subprocess.check_call(
+            ["dbos", "init", app_name, "--config"],
+            cwd=temp_path,
+        )
+
+        config_path = os.path.join(temp_path, "dbos-config.yaml")
+        assert os.path.exists(config_path)
+
+        with open(config_path) as f:
+            actual_yaml = yaml.safe_load(f)
+
+        assert actual_yaml == expected_yaml

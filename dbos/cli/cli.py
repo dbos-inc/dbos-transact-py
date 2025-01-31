@@ -100,13 +100,15 @@ def init(
     ] = False,
 ) -> None:
     try:
+
         git_templates = ["dbos-app-starter", "dbos-cron-starter"]
         templates_dir = get_templates_directory()
         templates = git_templates + [
             x.name for x in os.scandir(templates_dir) if x.is_dir()
         ]
-        if len(templates) == 0:
-            raise Exception(f"no DBOS templates found in {templates_dir} ")
+
+        if config and template is None:
+            template = templates[-1]
 
         if template:
             if template not in templates:
