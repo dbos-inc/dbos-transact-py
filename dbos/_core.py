@@ -487,15 +487,22 @@ def start_workflow(
         )
     return WorkflowHandleFuture(new_wf_id, future, dbos)
 
-if sys.version_info <= (3, 11):
-    from asyncio.coroutines import _is_coroutine 
+
+if sys.version_info < (3, 12):
+
     def mark_coroutine(func: Callable[P, R]) -> Callable[P, R]:
-        setattr(func, '_is_coroutine', _is_coroutine)
-        return func
+        @wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> R:
+            return await func(*args, **kwargs)  # type: ignore
+
+        return async_wrapper  # type: ignore
+
 else:
+
     def mark_coroutine(func: Callable[P, R]) -> Callable[P, R]:
         inspect.markcoroutinefunction(func)
         return func
+
 
 def workflow_wrapper(
     dbosreg: "DBOSRegistry",
@@ -557,10 +564,7 @@ def workflow_wrapper(
         )
         return outcome()  # type: ignore
 
-    if inspect.iscoroutinefunction(func):
-        mark_coroutine(wrapper)
-
-    return wrapper
+    return mark_coroutine(wrapper) if inspect.iscoroutinefunction(func) else wrapper
 
 
 def decorate_workflow(
