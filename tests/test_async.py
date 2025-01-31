@@ -303,7 +303,7 @@ def test_async_tx_raises(config: ConfigFile) -> None:
             pass
 
     # destroy call needed to avoid "functions were registered but DBOS() was not called" warning
-    DBOS.destroy()
+    DBOS.destroy(destroy_registry=True)
 
 
 @pytest.mark.asyncio
