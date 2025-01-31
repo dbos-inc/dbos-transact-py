@@ -1214,7 +1214,7 @@ def test_debug_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
     logging.getLogger("dbos").propagate = original_propagate
 
 
-def test_destroy_semantics(dbos: DBOS, config: ConfigFile):
+def test_destroy_semantics(dbos: DBOS, config: ConfigFile) -> None:
 
     @DBOS.workflow()
     def test_workflow(var: str) -> str:
