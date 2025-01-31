@@ -487,6 +487,13 @@ def start_workflow(
         )
     return WorkflowHandleFuture(new_wf_id, future, dbos)
 
+if sys.version_info <= (3, 11):
+    def mark_coroutine(func: Callable[P, R]) -> Callable[P, R]:
+        return func
+else:
+    def mark_coroutine(func: Callable[P, R]) -> Callable[P, R]:
+        inspect.markcoroutinefunction(func)
+        return func
 
 def workflow_wrapper(
     dbosreg: "DBOSRegistry",
@@ -549,7 +556,8 @@ def workflow_wrapper(
         return outcome()  # type: ignore
 
     if inspect.iscoroutinefunction(func):
-        inspect.markcoroutinefunction(wrapper)
+        mark_coroutine(wrapper)
+
     return wrapper
 
 
