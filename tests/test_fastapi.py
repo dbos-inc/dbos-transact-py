@@ -14,6 +14,20 @@ from dbos import DBOS
 from dbos._context import assert_current_dbos_context
 
 
+def test_stacked_decorators(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
+    dbos, app = dbos_fastapi
+    client = TestClient(app)
+
+    @app.get("/endpoint/{var1}/{var2}")
+    @DBOS.workflow()
+    async def test_endpoint(var1: str, var2: str) -> str:
+        return f"{var1}, {var2}!"
+
+    response = client.get("/endpoint/plums/deify")
+    assert response.status_code == 200
+    assert response.text == '"plums, deify!"'
+
+
 def test_simple_endpoint(
     dbos_fastapi: Tuple[DBOS, FastAPI], caplog: pytest.LogCaptureFixture
 ) -> None:
