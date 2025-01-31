@@ -1,14 +1,18 @@
+import asyncio
 import logging
 import uuid
-from typing import Tuple
+from contextlib import asynccontextmanager
+from typing import Any, Tuple
 
+import httpx
 import pytest
 import sqlalchemy as sa
+import uvicorn
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 # Public API
-from dbos import DBOS
+from dbos import DBOS, ConfigFile
 
 # Private API because this is a unit test
 from dbos._context import assert_current_dbos_context
@@ -157,6 +161,48 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     workflow_handles = DBOS.recover_pending_workflows()
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == ("a", wfuuid)
+
+
+@pytest.mark.asyncio
+async def test_custom_lifespan(
+    config: ConfigFile, cleanup_test_databases: None
+) -> None:
+    resource = None
+    port = 8000
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> Any:
+        nonlocal resource
+        resource = 1
+        yield
+        resource = None
+
+    app = FastAPI(lifespan=lifespan)
+
+    DBOS.destroy()
+    DBOS(fastapi=app, config=config)
+
+    @app.get("/")
+    @DBOS.workflow()
+    async def resource_workflow() -> Any:
+        return {"resource": resource}
+
+    uvicorn_config = uvicorn.Config(
+        app=app, host="127.0.0.1", port=port, log_level="error"
+    )
+    server = uvicorn.Server(config=uvicorn_config)
+
+    # Run server in background task
+    server_task = asyncio.create_task(server.serve())
+    await asyncio.sleep(0.2)  # Give server time to start
+
+    async with httpx.AsyncClient() as client:
+        r = await client.get(f"http://127.0.0.1:{port}")
+        assert r.json()["resource"] == 1
+
+    server.should_exit = True
+    await server_task
+    assert resource is None
 
 
 def test_stacked_decorators_wf(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:

@@ -1,10 +1,10 @@
 import uuid
-from typing import Any, Callable, cast
+from typing import Any, Callable, MutableMapping, cast
 
 from fastapi import FastAPI
 from fastapi import Request as FastAPIRequest
 from fastapi.responses import JSONResponse
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import DBOS
 from ._context import (
@@ -61,15 +61,16 @@ class LifespanMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
-            while True:
-                message = await receive()
-                if message["type"] == "lifespan.startup":
+
+            async def wrapped_send(message: MutableMapping[str, Any]) -> None:
+                if message["type"] == "lifespan.startup.complete":
                     self.dbos._launch()
-                    await send({"type": "lifespan.startup.complete"})
-                elif message["type"] == "lifespan.shutdown":
+                elif message["type"] == "lifespan.shutdown.complete":
                     self.dbos._destroy()
-                    await send({"type": "lifespan.shutdown.complete"})
-                    break
+                await send(message)
+
+            # Call the original app with our wrapped functions
+            await self.app(scope, receive, wrapped_send)
         else:
             await self.app(scope, receive, send)
 
