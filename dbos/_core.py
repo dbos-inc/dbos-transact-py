@@ -854,7 +854,9 @@ def decorate_step(
                 assert tempwf
                 return tempwf(*args, **kwargs)
 
-        # wrapper = mark_coroutine(wrapper) if inspect.iscoroutinefunction(func) else wrapper
+        wrapper = (
+            mark_coroutine(wrapper) if inspect.iscoroutinefunction(func) else wrapper
+        )
 
         def temp_wf_sync(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
