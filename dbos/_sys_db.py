@@ -367,7 +367,7 @@ class SystemDatabase:
         with self.engine.begin() as c:
             stmt = (
                 sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
                 .values(
                     status=status,
                 )
