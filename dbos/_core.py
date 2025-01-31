@@ -490,7 +490,7 @@ def start_workflow(
 
 if sys.version_info < (3, 12):
 
-    def mark_coroutine(func: Callable[P, R]) -> Callable[P, R]:
+    def _mark_coroutine(func: Callable[P, R]) -> Callable[P, R]:
         @wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> R:
             return await func(*args, **kwargs)  # type: ignore
@@ -499,7 +499,7 @@ if sys.version_info < (3, 12):
 
 else:
 
-    def mark_coroutine(func: Callable[P, R]) -> Callable[P, R]:
+    def _mark_coroutine(func: Callable[P, R]) -> Callable[P, R]:
         inspect.markcoroutinefunction(func)
         return func
 
@@ -564,7 +564,7 @@ def workflow_wrapper(
         )
         return outcome()  # type: ignore
 
-    return mark_coroutine(wrapper) if inspect.iscoroutinefunction(func) else wrapper
+    return _mark_coroutine(wrapper) if inspect.iscoroutinefunction(func) else wrapper
 
 
 def decorate_workflow(
@@ -855,7 +855,7 @@ def decorate_step(
                 return tempwf(*args, **kwargs)
 
         wrapper = (
-            mark_coroutine(wrapper) if inspect.iscoroutinefunction(func) else wrapper
+            _mark_coroutine(wrapper) if inspect.iscoroutinefunction(func) else wrapper
         )
 
         def temp_wf_sync(*args: Any, **kwargs: Any) -> Any:
