@@ -183,9 +183,6 @@ async def test_custom_lifespan(
     DBOS(fastapi=app, config=config)
 
     @app.get("/")
-    async def get_resource() -> Any:
-        return await resource_workflow()
-
     @DBOS.workflow()
     async def resource_workflow() -> Any:
         return {"resource": resource}
@@ -206,3 +203,31 @@ async def test_custom_lifespan(
     server.should_exit = True
     await server_task
     assert resource is None
+
+
+def test_stacked_decorators_wf(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
+    dbos, app = dbos_fastapi
+    client = TestClient(app)
+
+    @app.get("/endpoint/{var1}/{var2}")
+    @DBOS.workflow()
+    async def test_endpoint(var1: str, var2: str) -> str:
+        return f"{var1}, {var2}!"
+
+    response = client.get("/endpoint/plums/deify")
+    assert response.status_code == 200
+    assert response.text == '"plums, deify!"'
+
+
+def test_stacked_decorators_step(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
+    dbos, app = dbos_fastapi
+    client = TestClient(app)
+
+    @app.get("/endpoint/{var1}/{var2}")
+    @DBOS.step()
+    async def test_endpoint(var1: str, var2: str) -> str:
+        return f"{var1}, {var2}!"
+
+    response = client.get("/endpoint/plums/deify")
+    assert response.status_code == 200
+    assert response.text == '"plums, deify!"'
