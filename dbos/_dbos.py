@@ -245,7 +245,7 @@ class DBOS:
         return _dbos_global_instance
 
     @classmethod
-    def destroy(cls, *, destroy_registry: bool = True) -> None:
+    def destroy(cls, *, destroy_registry: bool = False) -> None:
         global _dbos_global_instance
         if _dbos_global_instance is not None:
             _dbos_global_instance._destroy()

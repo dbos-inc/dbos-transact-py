@@ -98,7 +98,7 @@ def cleanup_test_databases(config: ConfigFile, postgres_db_engine: sa.Engine) ->
 def dbos(
     config: ConfigFile, cleanup_test_databases: None
 ) -> Generator[DBOS, Any, None]:
-    DBOS.destroy()
+    DBOS.destroy(destroy_registry=True)
 
     # This launches for test convenience.
     #    Tests add to running DBOS and then call stuff without adding
@@ -109,14 +109,14 @@ def dbos(
     DBOS.launch()
 
     yield dbos
-    DBOS.destroy()
+    DBOS.destroy(destroy_registry=True)
 
 
 @pytest.fixture()
 def dbos_fastapi(
     config: ConfigFile, cleanup_test_databases: None
 ) -> Generator[Tuple[DBOS, FastAPI], Any, None]:
-    DBOS.destroy()
+    DBOS.destroy(destroy_registry=True)
     app = FastAPI()
     dbos = DBOS(fastapi=app, config=config)
 
@@ -125,14 +125,14 @@ def dbos_fastapi(
     DBOS.launch()
 
     yield dbos, app
-    DBOS.destroy()
+    DBOS.destroy(destroy_registry=True)
 
 
 @pytest.fixture()
 def dbos_flask(
     config: ConfigFile, cleanup_test_databases: None
 ) -> Generator[Tuple[DBOS, Flask], Any, None]:
-    DBOS.destroy()
+    DBOS.destroy(destroy_registry=True)
     app = Flask(__name__)
 
     dbos = DBOS(flask=app, config=config)
@@ -142,7 +142,7 @@ def dbos_flask(
     DBOS.launch()
 
     yield dbos, app
-    DBOS.destroy()
+    DBOS.destroy(destroy_registry=True)
 
 
 # Pretty-print test names
