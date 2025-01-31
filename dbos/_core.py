@@ -548,6 +548,8 @@ def workflow_wrapper(
         )
         return outcome()  # type: ignore
 
+    if inspect.iscoroutinefunction(func):
+        inspect.markcoroutinefunction(wrapper)
     return wrapper
 
 
