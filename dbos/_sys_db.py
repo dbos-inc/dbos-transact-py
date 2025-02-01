@@ -1389,7 +1389,6 @@ class SystemDatabase:
                     f"[{queue.name}] dequeueing {len(dequeued_ids)} task(s)"
                 )
             ret_ids: list[str] = []
-
             for id in dequeued_ids:
                 # If we have a limiter, stop starting functions when the number
                 # of functions started this period exceeds the limit.
