@@ -74,7 +74,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 queue_metadata = {
                     "name": queue.name,
                     "concurrency": queue.concurrency,
-                    "worker_concurrency": queue.worker_concurrency,
+                    "workerConcurrency": queue.worker_concurrency,
                     "limiter": queue.limiter,
                 }
                 # Remove keys with None values
