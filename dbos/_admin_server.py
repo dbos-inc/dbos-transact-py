@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 _health_check_path = "/dbos-healthz"
 _workflow_recovery_path = "/dbos-workflow-recovery"
 _deactivate_path = "/deactivate"
+_workflow_queues_metadata_path = "/dbos-workflow-queues-metadata"
 # /workflows/:workflow_id/cancel
 # /workflows/:workflow_id/resume
 # /workflows/:workflow_id/restart
@@ -64,6 +65,26 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self._end_headers()
             self.wfile.write("deactivated".encode("utf-8"))
+        elif self.path == _workflow_queues_metadata_path:
+            queue_metadata_array = []
+            from ._dbos import _get_or_create_dbos_registry
+
+            registry = _get_or_create_dbos_registry()
+            for queue in registry.queue_info_map.values():
+                queue_metadata = {
+                    "name": queue.name,
+                    "concurrency": queue.concurrency,
+                    "worker_concurrency": queue.worker_concurrency,
+                    "limiter": queue.limiter,
+                }
+                # Remove keys with None values
+                queue_metadata = {
+                    k: v for k, v in queue_metadata.items() if v is not None
+                }
+                queue_metadata_array.append(queue_metadata)
+            self.send_response(200)
+            self._end_headers()
+            self.wfile.write(json.dumps(queue_metadata_array).encode("utf-8"))
         else:
             self.send_response(404)
             self._end_headers()
