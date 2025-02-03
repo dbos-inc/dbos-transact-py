@@ -18,8 +18,7 @@ from typing_extensions import Annotated
 from .. import load_config
 from .._app_db import ApplicationDatabase
 from .._dbos_config import _is_valid_app_name
-from .._schemas.system_database import SystemSchema
-from .._sys_db import SystemDatabase
+from .._sys_db import SystemDatabase, reset_system_database
 from .._workflow_commands import _cancel_workflow, _get_workflow, _list_workflows
 from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
@@ -224,55 +223,11 @@ def reset(
             typer.echo("Operation cancelled.")
             raise typer.Exit()
     config = load_config()
-    sysdb_name = (
-        config["database"]["sys_db_name"]
-        if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]
-        else config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
-    )
-    postgres_db_url = sa.URL.create(
-        "postgresql+psycopg",
-        username=config["database"]["username"],
-        password=config["database"]["password"],
-        host=config["database"]["hostname"],
-        port=config["database"]["port"],
-        database="postgres",
-    )
     try:
-        # Connect to postgres default database
-        engine = sa.create_engine(postgres_db_url)
-
-        with engine.connect() as conn:
-            # Set autocommit required for database dropping
-            conn.execution_options(isolation_level="AUTOCOMMIT")
-
-            # Terminate existing connections
-            conn.execute(
-                sa.text(
-                    """
-                SELECT pg_terminate_backend(pg_stat_activity.pid)
-                FROM pg_stat_activity
-                WHERE pg_stat_activity.datname = :db_name
-                AND pid <> pg_backend_pid()
-            """
-                ),
-                {"db_name": sysdb_name},
-            )
-
-            # Drop the database
-            conn.execute(sa.text(f"DROP DATABASE IF EXISTS {sysdb_name}"))
-
+        reset_system_database(config)
     except sa.exc.SQLAlchemyError as e:
-        typer.echo(f"Error dropping database: {str(e)}")
+        typer.echo(f"Error resetting system database: {str(e)}")
         return
-
-    sys_db = None
-    try:
-        sys_db = SystemDatabase(config)
-    except Exception as e:
-        typer.echo(f"DBOS system schema migration failed: {e}")
-    finally:
-        if sys_db:
-            sys_db.destroy()
 
 
 @workflow.command(help="List workflows for your application")
