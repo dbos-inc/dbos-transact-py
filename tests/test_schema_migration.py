@@ -104,7 +104,7 @@ def rollback_system_db(sysdb_url: str) -> None:
     command.downgrade(alembic_cfg, "base")  # Rollback all migrations
 
 
-def test_reset(config: ConfigFile, postgres_db_engine: sa.Engine):
+def test_reset(config: ConfigFile, postgres_db_engine: sa.Engine) -> None:
     DBOS.destroy()
     dbos = DBOS(config=config)
     DBOS.launch()
@@ -126,10 +126,10 @@ def test_reset(config: ConfigFile, postgres_db_engine: sa.Engine):
     )
     with postgres_db_engine.connect() as c:
         c.execution_options(isolation_level="AUTOCOMMIT")
-        result = c.execute(
+        count: int = c.execute(
             sa.text(f"SELECT COUNT(*) FROM pg_database WHERE datname = '{sysdb_name}'")
-        ).scalar()
-        assert result == 0
+        ).scalar_one()
+        assert count == 0
 
     DBOS.launch()
 

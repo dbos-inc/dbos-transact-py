@@ -1267,7 +1267,7 @@ class SystemDatabase:
                 )
 
 
-def reset_system_database(config: ConfigFile):
+def reset_system_database(config: ConfigFile) -> None:
     sysdb_name = (
         config["database"]["sys_db_name"]
         if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]
