@@ -419,11 +419,9 @@ class DBOS:
             _dbos_global_instance._reset_system_database()
 
     def _reset_system_database(self) -> None:
-        if self._launched:
-            dbos_logger.error(
-                "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
-            )
-            return
+        assert (
+            not self._launched
+        ), "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
         reset_system_database(self.config)
 
     def _destroy(self) -> None:

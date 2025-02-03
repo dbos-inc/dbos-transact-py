@@ -129,7 +129,7 @@ def test_reset(config: ConfigFile, postgres_db_engine: sa.Engine):
         result = c.execute(
             sa.text(f"SELECT COUNT(*) FROM pg_database WHERE datname = '{sysdb_name}'")
         ).scalar()
-        assert result == 0, f"Database {sysdb_name} should not exist"
+        assert result == 0
 
     DBOS.launch()
 
@@ -138,3 +138,7 @@ def test_reset(config: ConfigFile, postgres_db_engine: sa.Engine):
         sql = SystemSchema.workflow_status.select()
         result = c.execute(sql)
         assert result.fetchall() == []
+
+    # Verify that resetting after launch throws
+    with pytest.raises(AssertionError):
+        DBOS.reset_system_database()
