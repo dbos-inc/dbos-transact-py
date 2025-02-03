@@ -102,3 +102,43 @@ def rollback_system_db(sysdb_url: str) -> None:
     )
     alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
     command.downgrade(alembic_cfg, "base")  # Rollback all migrations
+
+
+def test_reset(config: ConfigFile, postgres_db_engine: sa.Engine) -> None:
+    DBOS.destroy()
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    # Make sure the system database exists
+    with dbos._sys_db.engine.connect() as c:
+        sql = SystemSchema.workflow_status.select()
+        result = c.execute(sql)
+        assert result.fetchall() == []
+
+    DBOS.destroy()
+    dbos = DBOS(config=config)
+    DBOS.reset_system_database()
+
+    sysdb_name = (
+        config["database"]["sys_db_name"]
+        if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]
+        else config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
+    )
+    with postgres_db_engine.connect() as c:
+        c.execution_options(isolation_level="AUTOCOMMIT")
+        count: int = c.execute(
+            sa.text(f"SELECT COUNT(*) FROM pg_database WHERE datname = '{sysdb_name}'")
+        ).scalar_one()
+        assert count == 0
+
+    DBOS.launch()
+
+    # Make sure the system database is recreated
+    with dbos._sys_db.engine.connect() as c:
+        sql = SystemSchema.workflow_status.select()
+        result = c.execute(sql)
+        assert result.fetchall() == []
+
+    # Verify that resetting after launch throws
+    with pytest.raises(AssertionError):
+        DBOS.reset_system_database()

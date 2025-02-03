@@ -50,7 +50,7 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
 
             # initalize the app with dbos scaffolding
             subprocess.check_call(
-                ["dbos", "init", template_name, "--template", "dbos-db-starter"],
+                ["dbos", "init", template_name, "--template", template_name],
                 cwd=temp_path,
                 env=venv,
             )
@@ -115,3 +115,35 @@ def test_init_config() -> None:
             actual_yaml = yaml.safe_load(f)
 
         assert actual_yaml == expected_yaml
+
+
+def test_reset(postgres_db_engine: sa.Engine) -> None:
+    app_name = "reset-app"
+    sysdb_name = "reset_app_dbos_sys"
+    with tempfile.TemporaryDirectory() as temp_path:
+        subprocess.check_call(
+            ["dbos", "init", app_name, "--template", "dbos-db-starter"],
+            cwd=temp_path,
+        )
+
+        # Create a system database and verify it exists
+        subprocess.check_call(["dbos", "migrate"], cwd=temp_path)
+        with postgres_db_engine.connect() as c:
+            c.execution_options(isolation_level="AUTOCOMMIT")
+            result = c.execute(
+                sa.text(
+                    f"SELECT COUNT(*) FROM pg_database WHERE datname = '{sysdb_name}'"
+                )
+            ).scalar()
+            assert result == 1
+
+        # Call reset and verify it's destroyed
+        subprocess.check_call(["dbos", "reset", "-y"], cwd=temp_path)
+        with postgres_db_engine.connect() as c:
+            c.execution_options(isolation_level="AUTOCOMMIT")
+            result = c.execute(
+                sa.text(
+                    f"SELECT COUNT(*) FROM pg_database WHERE datname = '{sysdb_name}'"
+                )
+            ).scalar()
+            assert result == 0
