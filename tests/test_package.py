@@ -50,7 +50,7 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
 
             # initalize the app with dbos scaffolding
             subprocess.check_call(
-                ["dbos", "init", template_name, "--template", "dbos-db-starter"],
+                ["dbos", "init", template_name, "--template", template_name],
                 cwd=temp_path,
                 env=venv,
             )
