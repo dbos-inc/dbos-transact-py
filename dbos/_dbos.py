@@ -414,6 +414,7 @@ class DBOS:
         """
         Destroy the DBOS system database. Useful for resetting the state of DBOS between tests.
         This is a destructive operation and should only be used in a test environment.
+        More information on testing DBOS apps: https://docs.dbos.dev/python/tutorials/testing
         """
         if _dbos_global_instance is not None:
             _dbos_global_instance._reset_system_database()
