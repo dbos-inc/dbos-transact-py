@@ -7,7 +7,7 @@ from os import path
 import pytest
 
 # Public API
-from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle
+from dbos import DBOS, SetWorkflowID, WorkflowHandle
 
 # Private API used because this is a test
 from dbos._context import DBOSContextEnsure, assert_current_dbos_context
