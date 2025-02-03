@@ -56,7 +56,7 @@ from ._registrations import (
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
-from ._sys_db import WorkflowStatusString
+from ._sys_db import WorkflowStatusString, reset_system_database
 from ._tracer import dbos_tracer
 
 if TYPE_CHECKING:
@@ -408,6 +408,23 @@ class DBOS:
         except Exception:
             dbos_logger.error(f"DBOS failed to launch: {traceback.format_exc()}")
             raise
+
+    @classmethod
+    def reset_system_database(cls) -> None:
+        """
+        Reset the DBOS system database. Useful for resetting the state of DBOS between tests.
+        This is a destructive operation and should only be used in a test environment.
+        """
+        if _dbos_global_instance is not None:
+            _dbos_global_instance._reset_system_database()
+
+    def _reset_system_database(self) -> None:
+        if self._launched:
+            dbos_logger.error(
+                "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
+            )
+            return
+        reset_system_database(self.config)
 
     def _destroy(self) -> None:
         self._initialized = False

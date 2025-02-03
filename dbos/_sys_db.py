@@ -1265,3 +1265,46 @@ class SystemDatabase:
                     .where(SystemSchema.workflow_queue.c.workflow_uuid == workflow_id)
                     .values(completed_at_epoch_ms=int(time.time() * 1000))
                 )
+
+
+def reset_system_database(config: ConfigFile):
+    sysdb_name = (
+        config["database"]["sys_db_name"]
+        if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]
+        else config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
+    )
+    postgres_db_url = sa.URL.create(
+        "postgresql+psycopg",
+        username=config["database"]["username"],
+        password=config["database"]["password"],
+        host=config["database"]["hostname"],
+        port=config["database"]["port"],
+        database="postgres",
+    )
+    try:
+        # Connect to postgres default database
+        engine = sa.create_engine(postgres_db_url)
+
+        with engine.connect() as conn:
+            # Set autocommit required for database dropping
+            conn.execution_options(isolation_level="AUTOCOMMIT")
+
+            # Terminate existing connections
+            conn.execute(
+                sa.text(
+                    """
+                SELECT pg_terminate_backend(pg_stat_activity.pid)
+                FROM pg_stat_activity
+                WHERE pg_stat_activity.datname = :db_name
+                AND pid <> pg_backend_pid()
+            """
+                ),
+                {"db_name": sysdb_name},
+            )
+
+            # Drop the database
+            conn.execute(sa.text(f"DROP DATABASE IF EXISTS {sysdb_name}"))
+
+    except sa.exc.SQLAlchemyError as e:
+        dbos_logger.error(f"Error resetting system database: {str(e)}")
+        raise e
