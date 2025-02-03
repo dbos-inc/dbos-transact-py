@@ -412,7 +412,7 @@ class DBOS:
     @classmethod
     def reset_system_database(cls) -> None:
         """
-        Reset the DBOS system database. Useful for resetting the state of DBOS between tests.
+        Destroy the DBOS system database. Useful for resetting the state of DBOS between tests.
         This is a destructive operation and should only be used in a test environment.
         """
         if _dbos_global_instance is not None:
