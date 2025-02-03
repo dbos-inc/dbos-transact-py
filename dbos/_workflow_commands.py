@@ -116,7 +116,7 @@ def _cancel_workflow(config: ConfigFile, uuid: str) -> None:
 
     try:
         sys_db = SystemDatabase(config)
-        sys_db.set_workflow_status(uuid, WorkflowStatusString.CANCELLED, False)
+        sys_db.set_workflow_status(uuid, WorkflowStatusString.CANCELLED)
         return
 
     except Exception as e:
