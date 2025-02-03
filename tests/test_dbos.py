@@ -14,6 +14,7 @@ from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle, WorkflowStatus
 # Private API because this is a test
 from dbos._context import assert_current_dbos_context, get_local_dbos_context
 from dbos._error import DBOSMaxStepRetriesExceeded
+from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import GetWorkflowsInput
 
 
@@ -61,6 +62,23 @@ def test_simple_workflow(dbos: DBOS) -> None:
     handle = DBOS.execute_workflow_id(wfuuid)
     assert handle.get_result() == "alice1alice"
     assert wf_counter == 4
+
+
+def test_simple_workflow_attempts_counter(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def noop() -> None:
+        pass
+
+    wfuuid = str(uuid.uuid4())
+    with dbos._sys_db.engine.connect() as c:
+        stmt = sa.select(SystemSchema.workflow_status.c.recovery_attempts).where(
+            SystemSchema.workflow_status.c.workflow_uuid == wfuuid
+        )
+        for i in range(10):
+            with SetWorkflowID(wfuuid):
+                noop()
+            result = c.execute(stmt).scalar()
+            assert result == i + 1
 
 
 def test_child_workflow(dbos: DBOS) -> None:
