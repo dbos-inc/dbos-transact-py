@@ -1,5 +1,6 @@
 import uuid
 
+import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -22,7 +23,7 @@ class Hello(Base):
         return f"Hello(greet_count={self.greet_count!r}, name={self.name!r})"
 
 
-def test_simple_workflow(dbos: DBOS) -> None:
+def test_simple_transaction(dbos: DBOS) -> None:
     txn_counter: int = 0
     assert dbos._app_db_field is not None
     Base.metadata.drop_all(dbos._app_db_field.engine)
@@ -58,3 +59,37 @@ def test_simple_workflow(dbos: DBOS) -> None:
     assert txn_counter == 3  # Only increment once
 
     Base.metadata.drop_all(dbos._app_db_field.engine)
+
+
+def test_error_transaction(dbos: DBOS) -> None:
+    txn_counter: int = 0
+    assert dbos._app_db_field is not None
+    # Drop the database but don't re-create. Should fail.
+    Base.metadata.drop_all(dbos._app_db_field.engine)
+
+    @DBOS.transaction()
+    def test_transaction(name: str) -> str:
+        nonlocal txn_counter
+        txn_counter += 1
+        new_greeting = Hello(name=name)
+        DBOS.sql_session.add(new_greeting)
+        return name
+
+    with pytest.raises(Exception) as exc_info:
+        test_transaction("alice")
+    assert 'relation "dbos_hello" does not exist' in str(exc_info.value)
+    assert txn_counter == 1
+
+    # Test OAOO
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowID(wfuuid):
+        with pytest.raises(Exception) as exc_info:
+            test_transaction("alice")
+    assert 'relation "dbos_hello" does not exist' in str(exc_info.value)
+    assert txn_counter == 2
+
+    with SetWorkflowID(wfuuid):
+        with pytest.raises(Exception) as exc_info:
+            test_transaction("alice")
+    assert 'relation "dbos_hello" does not exist' in str(exc_info.value)
+    assert txn_counter == 2
