@@ -243,6 +243,107 @@ class SystemDatabase:
             dbos_logger.debug("Waiting for system buffers to be exported")
             time.sleep(1)
 
+    def insert_workflow_status(
+        self,
+        status: WorkflowStatusInternal,
+        *,
+        max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
+    ) -> WorkflowStatuses:
+        wf_status: WorkflowStatuses = status["status"]
+
+        cmd = (
+            pg.insert(SystemSchema.workflow_status)
+            .values(
+                workflow_uuid=status["workflow_uuid"],
+                status=status["status"],
+                name=status["name"],
+                class_name=status["class_name"],
+                config_name=status["config_name"],
+                output=status["output"],
+                error=status["error"],
+                executor_id=status["executor_id"],
+                application_version=status["app_version"],
+                application_id=status["app_id"],
+                request=status["request"],
+                authenticated_user=status["authenticated_user"],
+                authenticated_roles=status["authenticated_roles"],
+                assumed_role=status["assumed_role"],
+                queue_name=status["queue_name"],
+                recovery_attempts=(
+                    1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
+                ),
+            )
+            .on_conflict_do_update(
+                index_elements=["workflow_uuid"],
+                set_=dict(
+                    recovery_attempts=(
+                        SystemSchema.workflow_status.c.recovery_attempts + 1
+                    ),
+                ),
+            )
+        )
+
+        cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
+
+        with self.engine.begin() as c:
+            results = c.execute(cmd)
+
+        row = results.fetchone()
+        if row is not None:
+            # Check the started workflow matches the expected name, class_name, config_name, and queue_name
+            # A mismatch indicates a workflow starting with the same UUID but different functions, which would throw an exception.
+            recovery_attempts: int = row[0]
+            wf_status = row[1]
+            err_msg: Optional[str] = None
+            if row[2] != status["name"]:
+                err_msg = f"Workflow already exists with a different function name: {row[2]}, but the provided function name is: {status['name']}"
+            elif row[3] != status["class_name"]:
+                err_msg = f"Workflow already exists with a different class name: {row[3]}, but the provided class name is: {status['class_name']}"
+            elif row[4] != status["config_name"]:
+                err_msg = f"Workflow already exists with a different config name: {row[4]}, but the provided config name is: {status['config_name']}"
+            elif row[5] != status["queue_name"]:
+                # This is a warning because a different queue name is not necessarily an error.
+                dbos_logger.warning(
+                    f"Workflow already exists in queue: {row[5]}, but the provided queue name is: {status['queue_name']}. The queue is not updated."
+                )
+            if err_msg is not None:
+                raise DBOSConflictingWorkflowError(status["workflow_uuid"], err_msg)
+
+            # Every time we start executing a workflow (and thus attempt to insert its status), we increment `recovery_attempts` by 1.
+            # When this number becomes equal to `maxRetries + 1`, we mark the workflow as `RETRIES_EXCEEDED`.
+            if recovery_attempts > max_recovery_attempts + 1:
+                with self.engine.begin() as c:
+                    c.execute(
+                        sa.delete(SystemSchema.workflow_queue).where(
+                            SystemSchema.workflow_queue.c.workflow_uuid
+                            == status["workflow_uuid"]
+                        )
+                    )
+                    c.execute(
+                        sa.update(SystemSchema.workflow_status)
+                        .where(
+                            SystemSchema.workflow_status.c.workflow_uuid
+                            == status["workflow_uuid"]
+                        )
+                        .where(
+                            SystemSchema.workflow_status.c.status
+                            == WorkflowStatusString.PENDING.value
+                        )
+                        .values(
+                            status=WorkflowStatusString.RETRIES_EXCEEDED.value,
+                            queue_name=None,
+                        )
+                    )
+                raise DBOSDeadLetterQueueError(
+                    status["workflow_uuid"], max_recovery_attempts
+                )
+
+        # Record we have exported status for this single-transaction workflow
+        if status["workflow_uuid"] in self._temp_txn_wf_ids:
+            self._exported_temp_txn_wf_status.add(status["workflow_uuid"])
+
+        return wf_status
+
     def update_workflow_status(
         self,
         status: WorkflowStatusInternal,
