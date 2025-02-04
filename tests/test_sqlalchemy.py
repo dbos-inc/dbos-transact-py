@@ -23,7 +23,7 @@ class Hello(Base):
         return f"Hello(greet_count={self.greet_count!r}, name={self.name!r})"
 
 
-def test_simple_transaction(dbos: DBOS) -> None:
+def test_simple_transaction(dbos: DBOS, postgres_db_engine: sa.Engine) -> None:
     txn_counter: int = 0
     assert dbos._app_db_field is not None
     Base.metadata.drop_all(dbos._app_db_field.engine)
@@ -60,8 +60,17 @@ def test_simple_transaction(dbos: DBOS) -> None:
 
     Base.metadata.drop_all(dbos._app_db_field.engine)
 
+    # Make sure no transactions are left open
+    with postgres_db_engine.begin() as conn:
+        result = conn.execute(
+            sa.text(
+                "select * from pg_stat_activity where state = 'idle in transaction'"
+            )
+        ).fetchall()
+        assert len(result) == 0
 
-def test_error_transaction(dbos: DBOS) -> None:
+
+def test_error_transaction(dbos: DBOS, postgres_db_engine: sa.Engine) -> None:
     txn_counter: int = 0
     assert dbos._app_db_field is not None
     # Drop the database but don't re-create. Should fail.
@@ -93,3 +102,12 @@ def test_error_transaction(dbos: DBOS) -> None:
             test_transaction("alice")
     assert 'relation "dbos_hello" does not exist' in str(exc_info.value)
     assert txn_counter == 2
+
+    # Make sure no transactions are left open
+    with postgres_db_engine.begin() as conn:
+        result = conn.execute(
+            sa.text(
+                "select * from pg_stat_activity where state = 'idle in transaction'"
+            )
+        ).fetchall()
+        assert len(result) == 0
