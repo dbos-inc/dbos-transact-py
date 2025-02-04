@@ -200,10 +200,6 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     assert exc_info.errisinstance(DBOSDeadLetterQueueError)
     assert handle.get_status().status == WorkflowStatusString.RETRIES_EXCEEDED.value
 
-    with SetWorkflowID(handle.get_workflow_id()):
-        DBOS.start_workflow(dead_letter_workflow)
-    assert recovery_count == max_recovery_attempts + 2
-
     event.set()
     assert handle.get_result() == None
     dbos._sys_db.wait_for_buffer_flush()

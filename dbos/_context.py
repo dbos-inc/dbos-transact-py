@@ -63,7 +63,6 @@ class DBOSContext:
         self.parent_workflow_fid: int = -1
         self.workflow_id: str = ""
         self.function_id: int = -1
-        self.in_recovery: bool = False
 
         self.curr_step_function_id: int = -1
         self.curr_tx_function_id: int = -1
@@ -82,7 +81,6 @@ class DBOSContext:
         rv.is_within_set_workflow_id_block = self.is_within_set_workflow_id_block
         rv.parent_workflow_id = self.workflow_id
         rv.parent_workflow_fid = self.function_id
-        rv.in_recovery = self.in_recovery
         rv.authenticated_user = self.authenticated_user
         rv.authenticated_roles = (
             self.authenticated_roles[:]
@@ -330,34 +328,6 @@ class SetWorkflowID:
     ) -> Literal[False]:
         # Code to clean up the basic context if we created it
         assert_current_dbos_context().is_within_set_workflow_id_block = False
-        if self.created_ctx:
-            _clear_local_dbos_context()
-        return False  # Did not handle
-
-
-class SetWorkflowRecovery:
-    def __init__(self) -> None:
-        self.created_ctx = False
-
-    def __enter__(self) -> SetWorkflowRecovery:
-        # Code to create a basic context
-        ctx = get_local_dbos_context()
-        if ctx is None:
-            self.created_ctx = True
-            _set_local_dbos_context(DBOSContext())
-        assert_current_dbos_context().in_recovery = True
-
-        return self
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> Literal[False]:
-        assert assert_current_dbos_context().in_recovery == True
-        assert_current_dbos_context().in_recovery = False
-        # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()
         return False  # Did not handle

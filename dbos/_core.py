@@ -186,7 +186,7 @@ def _init_workflow(
         # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
         # TODO: Make this transactional (and with the queue step below)
         wf_status = dbos._sys_db.update_workflow_status(
-            status, False, ctx.in_recovery, max_recovery_attempts=max_recovery_attempts
+            status, False, max_recovery_attempts=max_recovery_attempts
         )
         # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
         dbos._sys_db.update_workflow_inputs(wfid, _serialization.serialize_args(inputs))

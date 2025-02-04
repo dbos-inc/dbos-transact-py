@@ -247,10 +247,10 @@ class SystemDatabase:
         self,
         status: WorkflowStatusInternal,
         replace: bool = True,
-        in_recovery: bool = False,
         *,
         conn: Optional[sa.Connection] = None,
         max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
+        is_status_flush: bool = False,
     ) -> WorkflowStatuses:
         wf_status: WorkflowStatuses = status["status"]
 
@@ -270,6 +270,9 @@ class SystemDatabase:
             authenticated_roles=status["authenticated_roles"],
             assumed_role=status["assumed_role"],
             queue_name=status["queue_name"],
+            recovery_attempts=(
+                1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
+            ),
         )
         if replace:
             cmd = cmd.on_conflict_do_update(
@@ -278,24 +281,25 @@ class SystemDatabase:
                     status=status["status"],
                     output=status["output"],
                     error=status["error"],
-                ),
-            )
-        elif in_recovery:
-            cmd = cmd.on_conflict_do_update(
-                index_elements=["workflow_uuid"],
-                set_=dict(
-                    recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
-                    + 1,
+                    recovery_attempts=(
+                        SystemSchema.workflow_status.c.recovery_attempts + 1
+                        if not is_status_flush
+                        else SystemSchema.workflow_status.c.recovery_attempts
+                    ),
                 ),
             )
         else:
-            # A blank update so that we can return the existing status
             cmd = cmd.on_conflict_do_update(
                 index_elements=["workflow_uuid"],
                 set_=dict(
-                    recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
+                    recovery_attempts=(
+                        SystemSchema.workflow_status.c.recovery_attempts + 1
+                        if not is_status_flush
+                        else SystemSchema.workflow_status.c.recovery_attempts
+                    ),
                 ),
             )
+
         cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
 
         if conn is not None:
@@ -325,7 +329,10 @@ class SystemDatabase:
             if err_msg is not None:
                 raise DBOSConflictingWorkflowError(status["workflow_uuid"], err_msg)
 
-            if in_recovery and recovery_attempts > max_recovery_attempts:
+            # recovery_attempt means "attempts" (we kept the name for backward compatibility). It's default value is 1.
+            # Every time we init the status, we increment `recovery_attempts` by 1.
+            # Thus, when this number becomes equal to `maxRetries + 1`, we should mark the workflow as `RETRIES_EXCEEDED`.
+            if recovery_attempts > max_recovery_attempts + 1:
                 with self.engine.begin() as c:
                     c.execute(
                         sa.delete(SystemSchema.workflow_queue).where(
@@ -362,7 +369,6 @@ class SystemDatabase:
         self,
         workflow_uuid: str,
         status: WorkflowStatusString,
-        reset_recovery_attempts: bool,
     ) -> None:
         with self.engine.begin() as c:
             stmt = (
@@ -373,17 +379,6 @@ class SystemDatabase:
                 )
             )
             c.execute(stmt)
-
-        if reset_recovery_attempts:
-            with self.engine.begin() as c:
-                stmt = (
-                    sa.update(SystemSchema.workflow_status)
-                    .where(
-                        SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
-                    )
-                    .values(recovery_attempts=reset_recovery_attempts)
-                )
-                c.execute(stmt)
 
     def get_workflow_status(
         self, workflow_uuid: str
@@ -1062,7 +1057,7 @@ class SystemDatabase:
                     continue
                 exported_status[wf_id] = status
                 try:
-                    self.update_workflow_status(status, conn=c)
+                    self.update_workflow_status(status, conn=c, is_status_flush=True)
                     exported += 1
                 except Exception as e:
                     dbos_logger.error(f"Error while flushing status buffer: {e}")

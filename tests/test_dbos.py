@@ -14,6 +14,7 @@ from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle, WorkflowStatus
 # Private API because this is a test
 from dbos._context import assert_current_dbos_context, get_local_dbos_context
 from dbos._error import DBOSMaxStepRetriesExceeded
+from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import GetWorkflowsInput
 
 
@@ -61,6 +62,23 @@ def test_simple_workflow(dbos: DBOS) -> None:
     handle = DBOS.execute_workflow_id(wfuuid)
     assert handle.get_result() == "alice1alice"
     assert wf_counter == 4
+
+
+def test_simple_workflow_attempts_counter(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def noop() -> None:
+        pass
+
+    wfuuid = str(uuid.uuid4())
+    with dbos._sys_db.engine.connect() as c:
+        stmt = sa.select(SystemSchema.workflow_status.c.recovery_attempts).where(
+            SystemSchema.workflow_status.c.workflow_uuid == wfuuid
+        )
+        for i in range(10):
+            with SetWorkflowID(wfuuid):
+                noop()
+            result = c.execute(stmt).scalar()
+            assert result == i + 1
 
 
 def test_child_workflow(dbos: DBOS) -> None:
@@ -365,26 +383,12 @@ def test_recovery_workflow(dbos: DBOS) -> None:
 
     dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
-    dbos._sys_db.update_workflow_status(
-        {
-            "workflow_uuid": wfuuid,
-            "status": "PENDING",
-            "name": test_workflow.__qualname__,
-            "class_name": None,
-            "config_name": None,
-            "output": None,
-            "error": None,
-            "executor_id": None,
-            "app_id": None,
-            "app_version": None,
-            "request": None,
-            "recovery_attempts": None,
-            "authenticated_user": None,
-            "authenticated_roles": None,
-            "assumed_role": None,
-            "queue_name": None,
-        }
-    )
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": "PENDING", "name": test_workflow.__qualname__})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
+        )
 
     # Recovery should execute the workflow again but skip the transaction
     workflow_handles = DBOS.recover_pending_workflows()
@@ -397,7 +401,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     # Test that there was a recovery attempt of this
     stat = workflow_handles[0].get_status()
     assert stat
-    assert stat.recovery_attempts == 1
+    assert stat.recovery_attempts == 2  # original attempt + recovery attempt
 
 
 def test_recovery_workflow_step(dbos: DBOS) -> None:
@@ -425,26 +429,12 @@ def test_recovery_workflow_step(dbos: DBOS) -> None:
 
     dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
-    dbos._sys_db.update_workflow_status(
-        {
-            "workflow_uuid": wfuuid,
-            "status": "PENDING",
-            "name": test_workflow.__qualname__,
-            "class_name": None,
-            "config_name": None,
-            "output": None,
-            "error": None,
-            "executor_id": None,
-            "app_id": None,
-            "app_version": None,
-            "request": None,
-            "recovery_attempts": None,
-            "authenticated_user": None,
-            "authenticated_roles": None,
-            "assumed_role": None,
-            "queue_name": None,
-        }
-    )
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": "PENDING", "name": test_workflow.__qualname__})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
+        )
 
     # Recovery should execute the workflow again but skip the transaction
     workflow_handles = DBOS.recover_pending_workflows()
@@ -456,7 +446,7 @@ def test_recovery_workflow_step(dbos: DBOS) -> None:
     # Test that there was a recovery attempt of this
     stat = workflow_handles[0].get_status()
     assert stat
-    assert stat.recovery_attempts == 1
+    assert stat.recovery_attempts == 2
 
 
 def test_workflow_returns_none(dbos: DBOS) -> None:
@@ -484,26 +474,12 @@ def test_workflow_returns_none(dbos: DBOS) -> None:
     assert wf_counter == 2
 
     # Change the workflow status to pending
-    dbos._sys_db.update_workflow_status(
-        {
-            "workflow_uuid": wfuuid,
-            "status": "PENDING",
-            "name": test_workflow.__qualname__,
-            "class_name": None,
-            "config_name": None,
-            "output": None,
-            "error": None,
-            "executor_id": None,
-            "app_id": None,
-            "app_version": None,
-            "request": None,
-            "recovery_attempts": None,
-            "authenticated_user": None,
-            "authenticated_roles": None,
-            "assumed_role": None,
-            "queue_name": None,
-        }
-    )
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": "PENDING", "name": test_workflow.__qualname__})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
+        )
 
     workflow_handles = DBOS.recover_pending_workflows()
     assert len(workflow_handles) == 1
@@ -513,7 +489,7 @@ def test_workflow_returns_none(dbos: DBOS) -> None:
     # Test that there was a recovery attempt of this
     stat = workflow_handles[0].get_status()
     assert stat
-    assert stat.recovery_attempts == 1
+    assert stat.recovery_attempts == 3  # 2 calls to test_workflow + 1 recovery attempt
 
 
 def test_recovery_temp_workflow(dbos: DBOS) -> None:
@@ -545,26 +521,12 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert wfi["name"].startswith("<temp>")
 
     # Change the workflow status to pending
-    dbos._sys_db.update_workflow_status(
-        {
-            "workflow_uuid": wfuuid,
-            "status": "PENDING",
-            "name": wfi["name"],
-            "class_name": None,
-            "config_name": None,
-            "output": None,
-            "error": None,
-            "executor_id": None,
-            "app_id": None,
-            "app_version": None,
-            "request": None,
-            "recovery_attempts": None,
-            "authenticated_user": None,
-            "authenticated_roles": None,
-            "assumed_role": None,
-            "queue_name": None,
-        }
-    )
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": "PENDING", "name": wfi["name"]})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
+        )
 
     # Recovery should execute the workflow again but skip the transaction
     workflow_handles = DBOS.recover_pending_workflows()
@@ -787,19 +749,19 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
     with SetWorkflowID("parent_b"):
         assert test_workflow_status_b() == "PENDINGrun_this_once_bSUCCESS"
 
-    # Test that there were no recovery attempts of this
+    # Test that the number of attempts matches the number of calls
     stat = dbos.get_workflow_status("parent_a")
     assert stat
-    assert stat.recovery_attempts == 0
+    assert stat.recovery_attempts == 2
     stat = dbos.get_workflow_status("parent_b")
     assert stat
-    assert stat.recovery_attempts == 0
+    assert stat.recovery_attempts == 2
     stat = dbos.get_workflow_status("run_this_once_a")
     assert stat
-    assert stat.recovery_attempts == 0
+    assert stat.recovery_attempts == 2
     stat = dbos.get_workflow_status("run_this_once_b")
     assert stat
-    assert stat.recovery_attempts == 0
+    assert stat.recovery_attempts == 2
 
 
 def test_sleep(dbos: DBOS) -> None:
