@@ -269,6 +269,7 @@ class SystemDatabase:
             authenticated_roles=status["authenticated_roles"],
             assumed_role=status["assumed_role"],
             queue_name=status["queue_name"],
+            recovery_attempts=1,
         )
         if replace:
             cmd = cmd.on_conflict_do_update(
@@ -281,13 +282,19 @@ class SystemDatabase:
                     + 1,
                 ),
             )
-        else:
+        elif wf_status != WorkflowStatusString.ENQUEUED:
             cmd = cmd.on_conflict_do_update(
                 index_elements=["workflow_uuid"],
                 set_=dict(
                     recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
                     + 1
                 ),
+            )
+        else:
+            # Blank update so we can return a status
+            cmd = cmd.on_conflict_do_update(
+                index_elements=["workflow_uuid"],
+                set_=dict(workflow_uuid=SystemSchema.workflow_status.c.workflow_uuid),
             )
         cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
 
