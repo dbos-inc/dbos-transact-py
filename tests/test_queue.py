@@ -581,3 +581,32 @@ def test_duplicate_workflow_id(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> 
 
     # Reset logging
     logging.getLogger("dbos").propagate = original_propagate
+
+
+def test_queue_recovery(dbos: DBOS) -> None:
+    step_counter: int = 0
+    queued_steps = 5
+
+    wfid = str(uuid.uuid4())
+    queue = Queue("test_queue")
+
+    @DBOS.workflow()
+    def test_workflow() -> str:
+        assert DBOS.workflow_id == wfid
+        handles = []
+        for i in range(queued_steps):
+            h = queue.enqueue(test_step, i)
+            handles.append(h)
+        return [h.get_result() for h in handles]
+
+    @DBOS.step()
+    def test_step(i: int) -> str:
+        nonlocal step_counter
+        step_counter += 1
+        return i
+
+    with SetWorkflowID(wfid):
+        assert test_workflow() == [0, 1, 2, 3, 4]
+    with SetWorkflowID(wfid):
+        assert test_workflow() == [0, 1, 2, 3, 4]
+    assert step_counter == 5
