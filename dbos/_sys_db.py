@@ -243,70 +243,50 @@ class SystemDatabase:
             dbos_logger.debug("Waiting for system buffers to be exported")
             time.sleep(1)
 
-    def update_workflow_status(
+    def insert_workflow_status(
         self,
         status: WorkflowStatusInternal,
-        replace: bool = True,
         *,
-        conn: Optional[sa.Connection] = None,
         max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
-        is_status_flush: bool = False,
     ) -> WorkflowStatuses:
         wf_status: WorkflowStatuses = status["status"]
 
-        cmd = pg.insert(SystemSchema.workflow_status).values(
-            workflow_uuid=status["workflow_uuid"],
-            status=status["status"],
-            name=status["name"],
-            class_name=status["class_name"],
-            config_name=status["config_name"],
-            output=status["output"],
-            error=status["error"],
-            executor_id=status["executor_id"],
-            application_version=status["app_version"],
-            application_id=status["app_id"],
-            request=status["request"],
-            authenticated_user=status["authenticated_user"],
-            authenticated_roles=status["authenticated_roles"],
-            assumed_role=status["assumed_role"],
-            queue_name=status["queue_name"],
-            recovery_attempts=(
-                1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
-            ),
+        cmd = (
+            pg.insert(SystemSchema.workflow_status)
+            .values(
+                workflow_uuid=status["workflow_uuid"],
+                status=status["status"],
+                name=status["name"],
+                class_name=status["class_name"],
+                config_name=status["config_name"],
+                output=status["output"],
+                error=status["error"],
+                executor_id=status["executor_id"],
+                application_version=status["app_version"],
+                application_id=status["app_id"],
+                request=status["request"],
+                authenticated_user=status["authenticated_user"],
+                authenticated_roles=status["authenticated_roles"],
+                assumed_role=status["assumed_role"],
+                queue_name=status["queue_name"],
+                recovery_attempts=(
+                    1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
+                ),
+            )
+            .on_conflict_do_update(
+                index_elements=["workflow_uuid"],
+                set_=dict(
+                    recovery_attempts=(
+                        SystemSchema.workflow_status.c.recovery_attempts + 1
+                    ),
+                ),
+            )
         )
-        if replace:
-            cmd = cmd.on_conflict_do_update(
-                index_elements=["workflow_uuid"],
-                set_=dict(
-                    status=status["status"],
-                    output=status["output"],
-                    error=status["error"],
-                    recovery_attempts=(
-                        SystemSchema.workflow_status.c.recovery_attempts + 1
-                        if not is_status_flush
-                        else SystemSchema.workflow_status.c.recovery_attempts
-                    ),
-                ),
-            )
-        else:
-            cmd = cmd.on_conflict_do_update(
-                index_elements=["workflow_uuid"],
-                set_=dict(
-                    recovery_attempts=(
-                        SystemSchema.workflow_status.c.recovery_attempts + 1
-                        if not is_status_flush
-                        else SystemSchema.workflow_status.c.recovery_attempts
-                    ),
-                ),
-            )
 
         cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
 
-        if conn is not None:
-            results = conn.execute(cmd)
-        else:
-            with self.engine.begin() as c:
-                results = c.execute(cmd)
+        with self.engine.begin() as c:
+            results = c.execute(cmd)
 
         row = results.fetchone()
         if row is not None:
@@ -329,9 +309,8 @@ class SystemDatabase:
             if err_msg is not None:
                 raise DBOSConflictingWorkflowError(status["workflow_uuid"], err_msg)
 
-            # recovery_attempt means "attempts" (we kept the name for backward compatibility). It's default value is 1.
-            # Every time we init the status, we increment `recovery_attempts` by 1.
-            # Thus, when this number becomes equal to `maxRetries + 1`, we should mark the workflow as `RETRIES_EXCEEDED`.
+            # Every time we start executing a workflow (and thus attempt to insert its status), we increment `recovery_attempts` by 1.
+            # When this number becomes equal to `maxRetries + 1`, we mark the workflow as `RETRIES_EXCEEDED`.
             if recovery_attempts > max_recovery_attempts + 1:
                 with self.engine.begin() as c:
                     c.execute(
@@ -359,11 +338,57 @@ class SystemDatabase:
                     status["workflow_uuid"], max_recovery_attempts
                 )
 
-        # Record we have exported status for this single-transaction workflow
+        return wf_status
+
+    def update_workflow_status(
+        self,
+        status: WorkflowStatusInternal,
+        *,
+        conn: Optional[sa.Connection] = None,
+    ) -> None:
+        wf_status: WorkflowStatuses = status["status"]
+
+        cmd = (
+            pg.insert(SystemSchema.workflow_status)
+            .values(
+                workflow_uuid=status["workflow_uuid"],
+                status=status["status"],
+                name=status["name"],
+                class_name=status["class_name"],
+                config_name=status["config_name"],
+                output=status["output"],
+                error=status["error"],
+                executor_id=status["executor_id"],
+                application_version=status["app_version"],
+                application_id=status["app_id"],
+                request=status["request"],
+                authenticated_user=status["authenticated_user"],
+                authenticated_roles=status["authenticated_roles"],
+                assumed_role=status["assumed_role"],
+                queue_name=status["queue_name"],
+                recovery_attempts=(
+                    1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
+                ),
+            )
+            .on_conflict_do_update(
+                index_elements=["workflow_uuid"],
+                set_=dict(
+                    status=status["status"],
+                    output=status["output"],
+                    error=status["error"],
+                ),
+            )
+        )
+
+        if conn is not None:
+            conn.execute(cmd)
+        else:
+            with self.engine.begin() as c:
+                c.execute(cmd)
+
+        # If this is a single-transaction workflow, record that its status has been exported
         if status["workflow_uuid"] in self._temp_txn_wf_ids:
             self._exported_temp_txn_wf_status.add(status["workflow_uuid"])
-
-        return wf_status
 
     def set_workflow_status(
         self,
@@ -1057,7 +1082,7 @@ class SystemDatabase:
                     continue
                 exported_status[wf_id] = status
                 try:
-                    self.update_workflow_status(status, conn=c, is_status_flush=True)
+                    self.update_workflow_status(status, conn=c)
                     exported += 1
                 except Exception as e:
                     dbos_logger.error(f"Error while flushing status buffer: {e}")
