@@ -282,7 +282,7 @@ class SystemDatabase:
                     + 1,
                 ),
             )
-        elif wf_status != WorkflowStatusString.ENQUEUED:
+        elif wf_status != WorkflowStatusString.ENQUEUED.value:
             cmd = cmd.on_conflict_do_update(
                 index_elements=["workflow_uuid"],
                 set_=dict(
