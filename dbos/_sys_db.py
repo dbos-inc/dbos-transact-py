@@ -250,6 +250,7 @@ class SystemDatabase:
         *,
         conn: Optional[sa.Connection] = None,
         max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
+        is_status_flush: bool = False,
     ) -> WorkflowStatuses:
         wf_status: WorkflowStatuses = status["status"]
 
@@ -280,18 +281,25 @@ class SystemDatabase:
                     status=status["status"],
                     output=status["output"],
                     error=status["error"],
-                    recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
-                    + 1,
+                    recovery_attempts=(
+                        SystemSchema.workflow_status.c.recovery_attempts + 1
+                        if not is_status_flush
+                        else SystemSchema.workflow_status.c.recovery_attempts
+                    ),
                 ),
             )
         else:
             cmd = cmd.on_conflict_do_update(
                 index_elements=["workflow_uuid"],
                 set_=dict(
-                    recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
-                    + 1
+                    recovery_attempts=(
+                        SystemSchema.workflow_status.c.recovery_attempts + 1
+                        if not is_status_flush
+                        else SystemSchema.workflow_status.c.recovery_attempts
+                    ),
                 ),
             )
+
         cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
 
         if conn is not None:
@@ -1049,7 +1057,7 @@ class SystemDatabase:
                     continue
                 exported_status[wf_id] = status
                 try:
-                    self.update_workflow_status(status, conn=c)
+                    self.update_workflow_status(status, conn=c, is_status_flush=True)
                     exported += 1
                 except Exception as e:
                     dbos_logger.error(f"Error while flushing status buffer: {e}")
