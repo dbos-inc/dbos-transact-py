@@ -100,7 +100,7 @@ def init(
 ) -> None:
     try:
 
-        git_templates = ["dbos-app-starter", "dbos-cron-starter"]
+        git_templates = ["dbos-toolbox", "dbos-app-starter", "dbos-cron-starter"]
         templates_dir = get_templates_directory()
         templates = git_templates + [
             x.name for x in os.scandir(templates_dir) if x.is_dir()
