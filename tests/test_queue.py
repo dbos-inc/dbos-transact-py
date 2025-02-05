@@ -589,6 +589,8 @@ def test_queue_recovery(dbos: DBOS) -> None:
 
     wfid = str(uuid.uuid4())
     queue = Queue("test_queue")
+    step_events = [threading.Event() for _ in range(queued_steps)]
+    event = threading.Event()
 
     @DBOS.workflow()
     def test_workflow() -> str:
@@ -603,10 +605,26 @@ def test_queue_recovery(dbos: DBOS) -> None:
     def test_step(i: int) -> str:
         nonlocal step_counter
         step_counter += 1
+        step_events[i].set()
+        event.wait()
         return i
 
     with SetWorkflowID(wfid):
-        assert test_workflow() == [0, 1, 2, 3, 4]
+        original_handle = DBOS.start_workflow(test_workflow)
+    for e in step_events:
+        e.wait()
+    assert step_counter == 5
+
+    recovery_handles = DBOS.recover_pending_workflows()
+    event.set()
+
+    for h in recovery_handles:
+        if h.get_workflow_id() == wfid:
+            assert h.get_result() == [0, 1, 2, 3, 4]
+    assert original_handle.get_result() == [0, 1, 2, 3, 4]
+
+    assert step_counter == 10
+
     with SetWorkflowID(wfid):
         assert test_workflow() == [0, 1, 2, 3, 4]
-    assert step_counter == 5
+    assert step_counter == 10
