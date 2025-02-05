@@ -17,6 +17,7 @@ from dbos import (
     SetWorkflowID,
     WorkflowHandle,
 )
+from dbos._error import DBOSDeadLetterQueueError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from tests.conftest import default_config
@@ -671,6 +672,60 @@ def test_cancelling_queued_workflows(dbos: DBOS):
     # Complete the blocked workflow
     blocking_event.set()
     assert blocked_handle.get_result() == None
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
+    start_event = threading.Event()
+    blocking_event = threading.Event()
+    max_recovery_attempts = 10
+    recovery_count = 0
+
+    @DBOS.workflow(max_recovery_attempts=max_recovery_attempts)
+    def blocked_workflow() -> None:
+        start_event.set()
+        nonlocal recovery_count
+        recovery_count += 1
+        blocking_event.wait()
+
+    @DBOS.workflow()
+    def regular_workflow() -> None:
+        return
+
+    # Enqueue both the blocked workflow and a regular workflow on a queue with concurrency 1
+    queue = Queue("test_queue", concurrency=1)
+    blocked_handle = queue.enqueue(blocked_workflow)
+    regular_handle = queue.enqueue(regular_workflow)
+
+    # Verify that the blocked workflow starts and is PENDING while the regular workflow remains ENQUEUED.
+    start_event.wait()
+    assert blocked_handle.get_status().status == WorkflowStatusString.PENDING.value
+    assert regular_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
+
+    # Attempt to recover the blocked workflow the maximum number of times
+    for i in range(max_recovery_attempts):
+        DBOS.recover_pending_workflows()
+        assert recovery_count == i + 2
+
+    # Verify that recovering one more than the maximum throws a DLQ error and puts the workflow in the DLQ status.
+    with pytest.raises(Exception) as exc_info:
+        DBOS.recover_pending_workflows()
+    assert exc_info.errisinstance(DBOSDeadLetterQueueError)
+    assert (
+        blocked_handle.get_status().status
+        == WorkflowStatusString.RETRIES_EXCEEDED.value
+    )
+
+    # Verify the blocked workflow entering the DLQ lets the regular workflow run
+    assert regular_handle.get_result() == None
+
+    # Complete the blocked workflow
+    blocking_event.set()
+    assert blocked_handle.get_result() == None
+    dbos._sys_db.wait_for_buffer_flush()
+    assert blocked_handle.get_status().status == WorkflowStatusString.SUCCESS.value
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)

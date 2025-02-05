@@ -206,47 +206,6 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     assert handle.get_status().status == WorkflowStatusString.SUCCESS.value
 
 
-def test_enqueued_dead_letter_queue(dbos: DBOS) -> None:
-    function_started_event = threading.Event()
-    event = threading.Event()
-    max_concurrency = 1
-    max_recovery_attempts = 10
-    recovery_count = 0
-
-    @DBOS.workflow(max_recovery_attempts=max_recovery_attempts)
-    def dead_letter_workflow() -> None:
-        function_started_event.set()
-        nonlocal recovery_count
-        recovery_count += 1
-        event.wait()
-
-    @DBOS.workflow()
-    def regular_workflow() -> None:
-        return
-
-    queue = Queue("test_queue", concurrency=max_concurrency)
-    handle = queue.enqueue(dead_letter_workflow)
-    function_started_event.wait()
-
-    for i in range(max_recovery_attempts):
-        DBOS.recover_pending_workflows()
-        assert recovery_count == i + 2
-
-    regular_handle = queue.enqueue(regular_workflow)
-
-    with pytest.raises(Exception) as exc_info:
-        DBOS.recover_pending_workflows()
-    assert exc_info.errisinstance(DBOSDeadLetterQueueError)
-    assert handle.get_status().status == WorkflowStatusString.RETRIES_EXCEEDED.value
-
-    assert regular_handle.get_result() == None
-
-    event.set()
-    assert handle.get_result() == None
-    dbos._sys_db.wait_for_buffer_flush()
-    assert handle.get_status().status == WorkflowStatusString.SUCCESS.value
-
-
 def test_wfstatus_invalid(dbos: DBOS) -> None:
     @DBOS.workflow()
     def regular_workflow() -> str:
