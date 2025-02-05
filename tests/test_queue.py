@@ -615,11 +615,16 @@ def test_queue_recovery(dbos: DBOS) -> None:
         original_handle = DBOS.start_workflow(test_workflow)
     for e in step_events:
         e.wait()
+        e.clear()
     assert step_counter == 5
 
     # Recover the workflow, then resume it.
     recovery_handles = DBOS.recover_pending_workflows()
+    # Wait until the 2nd invocation of the workflows are dequeued and executed
+    for e in step_events:
+        e.wait()
     event.set()
+
     # There should be one handle for the workflow and another for each queued step.
     assert len(recovery_handles) == queued_steps + 1
     # Verify that both the recovered and original workflows complete correctly.
@@ -636,6 +641,61 @@ def test_queue_recovery(dbos: DBOS) -> None:
     assert step_counter == 10
 
     # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
+    event = threading.Event()
+    wf_events = [threading.Event() for _ in range(2)]
+
+    @DBOS.workflow()
+    def blocked_workflow(i: int) -> None:
+        wf_events[i].set()
+        event.wait()
+
+    @DBOS.workflow()
+    def noop() -> None:
+        pass
+
+    queue = Queue("test_queue", concurrency=2)
+    handle1 = queue.enqueue(blocked_workflow, 0)
+    handle2 = queue.enqueue(blocked_workflow, 1)
+    handle3 = queue.enqueue(noop)
+
+    # Wait for the two first workflows to be dequeued
+    for e in wf_events:
+        e.wait()
+
+    assert handle1.get_status().status == WorkflowStatusString.PENDING.value
+    assert handle2.get_status().status == WorkflowStatusString.PENDING.value
+    assert handle3.get_status().status == WorkflowStatusString.ENQUEUED.value
+
+    # Manually update the database to pretend the 3rd workflow is PENDING and comes from another executor
+    with dbos._sys_db.engine.begin() as c:
+        query = (
+            sa.update(SystemSchema.workflow_status)
+            .values(status=WorkflowStatusString.PENDING.value, executor_id="other")
+            .where(
+                SystemSchema.workflow_status.c.workflow_uuid
+                == handle3.get_workflow_id()
+            )
+        )
+        c.execute(query)
+
+    # Trigger workflow recovery. The two first workflows should still be blocked but the 3rd one enqueued
+    DBOS.recover_pending_workflows(["other"])
+    assert handle1.get_status().status == WorkflowStatusString.PENDING.value
+    assert handle2.get_status().status == WorkflowStatusString.PENDING.value
+    assert handle3.get_status().status == WorkflowStatusString.ENQUEUED.value
+
+    # Unblock the first two workflows
+    event.set()
+
+    # Verify all queue entries eventually get cleaned up.
+    assert handle1.get_result() == None
+    assert handle2.get_result() == None
+    assert handle3.get_result() == None
+    assert handle3.get_status().executor_id == "local"
     assert queue_entries_are_cleaned_up(dbos)
 
 
