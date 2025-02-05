@@ -31,7 +31,7 @@ def test_list_workflow(dbos: DBOS, config: ConfigFile) -> None:
     simple_workflow()
     time.sleep(1)  # wait for the workflow to complete
     # get the workflow list
-    output = _workflow_commands._list_workflows(
+    output = _workflow_commands.list_workflows(
         config, 10, None, None, None, None, False, None
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
@@ -54,7 +54,7 @@ def test_list_workflow_limit(dbos: DBOS, config: ConfigFile) -> None:
     simple_workflow()
     time.sleep(1)  # wait for the workflow to complete
     # get the workflow list
-    output = _workflow_commands._list_workflows(
+    output = _workflow_commands.list_workflows(
         config, 2, None, None, None, None, False, None
     )
     assert len(output) == 2, f"Expected list length to be 1, but got {len(output)}"
@@ -72,12 +72,12 @@ def test_list_workflow_status(dbos: DBOS, config: ConfigFile) -> None:
     simple_workflow()
     time.sleep(1)  # wait for the workflow to complete
     # get the workflow list
-    output = _workflow_commands._list_workflows(
+    output = _workflow_commands.list_workflows(
         config, 10, None, None, None, "PENDING", False, None
     )
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
-    output = _workflow_commands._list_workflows(
+    output = _workflow_commands.list_workflows(
         config, 10, None, None, None, "SUCCESS", False, None
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
@@ -102,7 +102,7 @@ def test_list_workflow_start_end_times(dbos: DBOS, config: ConfigFile) -> None:
     endtime = datetime.now().isoformat()
     print(endtime)
 
-    output = _workflow_commands._list_workflows(
+    output = _workflow_commands.list_workflows(
         config, 10, None, starttime, endtime, None, False, None
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
@@ -110,7 +110,7 @@ def test_list_workflow_start_end_times(dbos: DBOS, config: ConfigFile) -> None:
     newstarttime = (now - timedelta(seconds=30)).isoformat()
     newendtime = starttime
 
-    output = _workflow_commands._list_workflows(
+    output = _workflow_commands.list_workflows(
         config, 10, None, newstarttime, newendtime, None, False, None
     )
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
@@ -141,19 +141,19 @@ def test_list_workflow_end_times_positive(dbos: DBOS, config: ConfigFile) -> Non
     # get the workflow list
     time_3 = datetime.now().isoformat()
 
-    output = _workflow_commands._list_workflows(
+    output = _workflow_commands.list_workflows(
         config, 10, None, time_0, time_1, None, False, None
     )
 
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
-    output = _workflow_commands._list_workflows(
+    output = _workflow_commands.list_workflows(
         config, 10, None, time_1, time_2, None, False, None
     )
 
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
-    output = _workflow_commands._list_workflows(
+    output = _workflow_commands.list_workflows(
         config, 10, None, time_1, time_3, None, False, None
     )
     assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
@@ -171,7 +171,7 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile) -> None:
     simple_workflow()
     time.sleep(1)  # wait for the workflow to complete
     # get the workflow list
-    output = _workflow_commands._list_workflows(
+    output = _workflow_commands.list_workflows(
         config, 10, None, None, None, None, False, None
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
@@ -180,7 +180,7 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile) -> None:
 
     wfUuid = output[0].workflowUUID
 
-    info = _workflow_commands._get_workflow(config, wfUuid, True)
+    info = _workflow_commands.get_workflow(config, wfUuid, True)
     assert info is not None, "Expected output to be not None"
 
     if info is not None:
@@ -199,7 +199,7 @@ def test_cancel_workflow(dbos: DBOS, config: ConfigFile) -> None:
     # run the workflow
     simple_workflow()
     # get the workflow list
-    output = _workflow_commands._list_workflows(
+    output = _workflow_commands.list_workflows(
         config, 10, None, None, None, None, False, None
     )
     # assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
@@ -208,9 +208,9 @@ def test_cancel_workflow(dbos: DBOS, config: ConfigFile) -> None:
     assert output[0] != None, "Expected output to be not None"
     wfUuid = output[0].workflowUUID
 
-    _workflow_commands._cancel_workflow(config, wfUuid)
+    _workflow_commands.cancel_workflow(config, wfUuid)
 
-    info = _workflow_commands._get_workflow(config, wfUuid, True)
+    info = _workflow_commands.get_workflow(config, wfUuid, True)
     assert info is not None, "Expected info to be not None"
     if info is not None:
         assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
