@@ -639,7 +639,7 @@ def test_queue_recovery(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_cancelling_queued_workflows(dbos: DBOS):
+def test_cancelling_queued_workflows(dbos: DBOS) -> None:
     start_event = threading.Event()
     blocking_event = threading.Event()
 
