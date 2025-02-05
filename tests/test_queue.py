@@ -593,7 +593,7 @@ def test_queue_recovery(dbos: DBOS) -> None:
     event = threading.Event()
 
     @DBOS.workflow()
-    def test_workflow() -> str:
+    def test_workflow() -> list[int]:
         assert DBOS.workflow_id == wfid
         handles = []
         for i in range(queued_steps):
@@ -602,7 +602,7 @@ def test_queue_recovery(dbos: DBOS) -> None:
         return [h.get_result() for h in handles]
 
     @DBOS.step()
-    def test_step(i: int) -> str:
+    def test_step(i: int) -> int:
         nonlocal step_counter
         step_counter += 1
         step_events[i].set()
