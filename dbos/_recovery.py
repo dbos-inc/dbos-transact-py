@@ -3,6 +3,7 @@ import threading
 import time
 import traceback
 from typing import TYPE_CHECKING, Any, List
+
 from sqlalchemy.exc import DatabaseError
 
 from ._core import execute_workflow_by_id
@@ -68,8 +69,9 @@ def recover_pending_workflows(
         for pending_workflow in pending_workflows:
             if pending_workflow.queue_name:
                 clear_pending_workflow_queue_assignement(dbos, pending_workflow)
-                continue
-            handle = execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
+                handle = dbos.retrieve_workflow(pending_workflow.workflow_uuid)
+            else:
+                handle = execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
             workflow_handles.append(handle)
 
     dbos.logger.info("Recovered pending workflows")

@@ -465,6 +465,7 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.authenticated_roles,
                     SystemSchema.workflow_status.c.assumed_role,
                     SystemSchema.workflow_status.c.queue_name,
+                    SystemSchema.workflow_status.c.executor_id,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -479,7 +480,7 @@ class SystemDatabase:
                 "error": None,
                 "app_id": None,
                 "app_version": None,
-                "executor_id": None,
+                "executor_id": row[10],
                 "request": row[2],
                 "recovery_attempts": row[3],
                 "authenticated_user": row[6],
