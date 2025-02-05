@@ -56,7 +56,7 @@ from ._registrations import (
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
-from ._sys_db import WorkflowStatusString, reset_system_database
+from ._sys_db import reset_system_database
 from ._tracer import dbos_tracer
 
 if TYPE_CHECKING:
