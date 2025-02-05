@@ -609,22 +609,30 @@ def test_queue_recovery(dbos: DBOS) -> None:
         event.wait()
         return i
 
+    # Start the workflow. Wait for all five steps to start. Verify that they started.
     with SetWorkflowID(wfid):
         original_handle = DBOS.start_workflow(test_workflow)
     for e in step_events:
         e.wait()
     assert step_counter == 5
 
+    # Recover the workflow, then resume it.
     recovery_handles = DBOS.recover_pending_workflows()
     event.set()
-
+    # There should be one handle for the workflow and another for each queued step.
+    assert len(recovery_handles) == queued_steps + 1
+    # Verify that both the recovered and original workflows complete correctly.
     for h in recovery_handles:
         if h.get_workflow_id() == wfid:
             assert h.get_result() == [0, 1, 2, 3, 4]
     assert original_handle.get_result() == [0, 1, 2, 3, 4]
-
+    # Each step should start twice, once originally and once in recovery.
     assert step_counter == 10
 
+    # Rerun the workflow. Because each step is complete, none should start again.
     with SetWorkflowID(wfid):
         assert test_workflow() == [0, 1, 2, 3, 4]
     assert step_counter == 10
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
