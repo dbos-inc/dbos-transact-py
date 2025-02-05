@@ -636,3 +636,41 @@ def test_queue_recovery(dbos: DBOS) -> None:
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_cancelling_queued_workflows(dbos: DBOS):
+    start_event = threading.Event()
+    blocking_event = threading.Event()
+
+    @DBOS.workflow()
+    def stuck_workflow() -> None:
+        start_event.set()
+        blocking_event.wait()
+
+    @DBOS.workflow()
+    def regular_workflow() -> None:
+        return
+
+    # Enqueue both the blocked workflow and a regular workflow on a queue with concurrency 1
+    queue = Queue("test_queue", concurrency=1)
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        blocked_handle = queue.enqueue(stuck_workflow)
+    regular_handle = queue.enqueue(regular_workflow)
+
+    # Verify that the blocked workflow starts and is PENDING while the regular workflow remains ENQUEUED.
+    start_event.wait()
+    assert blocked_handle.get_status().status == WorkflowStatusString.PENDING.value
+    assert regular_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
+
+    # Cancel the blocked workflow. Verify this lets the regular workflow run.
+    dbos.cancel_workflow(wfid)
+    assert blocked_handle.get_status().status == WorkflowStatusString.CANCELLED.value
+    assert regular_handle.get_result() == None
+
+    # Complete the blocked workflow
+    blocking_event.set()
+    assert blocked_handle.get_result() == None
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
