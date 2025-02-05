@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Carta de San Valentín - RDR2</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            text-align: center;
+            background-color: #2b1d0e;
+            color: #fff;
+            padding: 20px;
+        }
+        .card {
+            background: #8b4513;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 5px 5px 15px rgba(0, 0, 0, 0.5);
+            max-width: 400px;
+            margin: auto;
+        }
+        .sticker {
+            display: none;
+            margin-top: 20px;
+            width: 100px;
+        }
+        button {
+            background: #d32f2f;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        button:hover {
+            background: #b71c1c;
+        }
+    </style>
+</head>
+<body onload="playMusic()">
+    <audio id="music" autoplay loop>
+        <source src="https://www.myinstants.com/media/sounds/red-dead-redemption-2-theme.mp3" type="audio/mpeg">
+        Tu navegador no soporta audio.
+    </audio>
+    <div class="card">
+        <h1>Querid@ Valentine,</h1>
+        <p>"Algunos dicen que el amor es como una partida de póker en Valentine... pero contigo, sé que tengo la mejor mano."</p>
+        <p>Gracias por ser mi compañer@ en esta travesía, tan épica como un viaje por los campos de Red Dead Redemption 2.</p>
+        <button onclick="mostrarSticker()">¿Aceptas ser mi Valentine?</button>
+        <img id="sticker" class="sticker" src="https://i.imgur.com/JRrrbHf.png" alt="Sticker RDR2">
+    </div>
+
+    <script>
+        function mostrarSticker() {
+            document.getElementById('sticker').style.display = 'block';
+        }
+        function playMusic() {
+            document.getElementById('music').play();
+        }
+    </script>
+</body>
+</html>
