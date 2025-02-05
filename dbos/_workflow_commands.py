@@ -9,7 +9,6 @@ from ._sys_db import (
     GetWorkflowsOutput,
     SystemDatabase,
     WorkflowStatuses,
-    WorkflowStatusString,
 )
 
 
@@ -101,9 +100,10 @@ def get_workflow(
 def cancel_workflow(config: ConfigFile, uuid: str) -> None:
     try:
         sys_db = SystemDatabase(config)
-        sys_db.set_workflow_status(uuid, WorkflowStatusString.CANCELLED)
+        sys_db.cancel_workflow(uuid)
     except Exception as e:
         typer.echo(f"Failed to connect to DBOS system database: {e}")
+        raise e
     finally:
         if sys_db:
             sys_db.destroy()

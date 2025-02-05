@@ -390,20 +390,25 @@ class SystemDatabase:
         if status["workflow_uuid"] in self._temp_txn_wf_ids:
             self._exported_temp_txn_wf_status.add(status["workflow_uuid"])
 
-    def set_workflow_status(
+    def cancel_workflow(
         self,
-        workflow_uuid: str,
-        status: WorkflowStatusString,
+        workflow_id: str,
     ) -> None:
         with self.engine.begin() as c:
-            stmt = (
-                sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
-                .values(
-                    status=status,
+            # Remove the workflow from the queues table so it does not block the table
+            c.execute(
+                sa.delete(SystemSchema.workflow_queue).where(
+                    SystemSchema.workflow_queue.c.workflow_uuid == workflow_id
                 )
             )
-            c.execute(stmt)
+            # Set the workflow's status to CANCELLED
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .values(
+                    status=WorkflowStatusString.CANCELLED.value,
+                )
+            )
 
     def get_workflow_status(
         self, workflow_uuid: str

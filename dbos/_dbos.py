@@ -800,9 +800,7 @@ class DBOS:
     @classmethod
     def cancel_workflow(cls, workflow_id: str) -> None:
         """Cancel a workflow by ID."""
-        _get_dbos_instance()._sys_db.set_workflow_status(
-            workflow_id, WorkflowStatusString.CANCELLED
-        )
+        _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
 
     @classmethod
     def resume_workflow(cls, workflow_id: str) -> None:
