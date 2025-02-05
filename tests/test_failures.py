@@ -9,7 +9,7 @@ from psycopg.errors import SerializationFailure
 from sqlalchemy.exc import InvalidRequestError, OperationalError
 
 # Public API
-from dbos import DBOS, GetWorkflowsInput, Queue, SetWorkflowID
+from dbos import DBOS, GetWorkflowsInput, SetWorkflowID
 from dbos._error import DBOSDeadLetterQueueError, DBOSException
 from dbos._sys_db import WorkflowStatusString
 
