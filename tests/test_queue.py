@@ -709,7 +709,7 @@ def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
         DBOS.recover_pending_workflows()
         assert recovery_count == i + 2
 
-    # Verify that recovering one more than the maximum throws a DLQ error and puts the workflow in the DLQ status.
+    # Verify an additional recovery throws a DLQ error and puts the workflow in the DLQ status.
     with pytest.raises(Exception) as exc_info:
         DBOS.recover_pending_workflows()
     assert exc_info.errisinstance(DBOSDeadLetterQueueError)
