@@ -805,6 +805,7 @@ class DBOS:
     @classmethod
     def resume_workflow(cls, workflow_id: str) -> None:
         """Resume a workflow by ID."""
+        _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
         execute_workflow_by_id(_get_dbos_instance(), workflow_id, False)
 
     @classproperty
