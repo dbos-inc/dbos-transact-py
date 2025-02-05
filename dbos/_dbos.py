@@ -803,10 +803,10 @@ class DBOS:
         _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
 
     @classmethod
-    def resume_workflow(cls, workflow_id: str) -> None:
+    def resume_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Resume a workflow by ID."""
         _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
-        execute_workflow_by_id(_get_dbos_instance(), workflow_id, False)
+        return execute_workflow_by_id(_get_dbos_instance(), workflow_id, False)
 
     @classproperty
     def logger(cls) -> Logger:

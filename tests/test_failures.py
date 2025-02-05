@@ -189,19 +189,41 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
         recovery_count += 1
         event.wait()
 
-    handle = DBOS.start_workflow(dead_letter_workflow)
+    # Start a workflow that blocks forever
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(dead_letter_workflow)
 
+    # Attempt to recover the blocked workflow the maximum number of times
     for i in range(max_recovery_attempts):
         DBOS.recover_pending_workflows()
         assert recovery_count == i + 2
 
+    # Verify an additional attempt (either through recovery or through a direct call) throws a DLQ error
+    # and puts the workflow in the DLQ status.
     with pytest.raises(Exception) as exc_info:
         DBOS.recover_pending_workflows()
     assert exc_info.errisinstance(DBOSDeadLetterQueueError)
     assert handle.get_status().status == WorkflowStatusString.RETRIES_EXCEEDED.value
+    with pytest.raises(Exception) as exc_info:
+        with SetWorkflowID(wfid):
+            dead_letter_workflow()
+    assert exc_info.errisinstance(DBOSDeadLetterQueueError)
 
+    # Resume the workflow. Verify it returns to PENDING status without error.
+    resumed_handle = dbos.resume_workflow(wfid)
+    assert (
+        handle.get_status().status
+        == resumed_handle.get_status().status
+        == WorkflowStatusString.PENDING.value
+    )
+
+    # Verify the workflow can recover again without error.
+    DBOS.recover_pending_workflows()
+
+    # Complete the blocked workflow
     event.set()
-    assert handle.get_result() == None
+    assert handle.get_result() == resumed_handle.get_result() == None
     dbos._sys_db.wait_for_buffer_flush()
     assert handle.get_status().status == WorkflowStatusString.SUCCESS.value
 
