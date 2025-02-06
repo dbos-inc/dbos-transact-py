@@ -182,10 +182,12 @@ def test_list_commands() -> None:
             os.kill(process.pid, signal.SIGINT)
             process.wait()
 
+        # Verify the output is valid JSON
         output = subprocess.check_output(["dbos", "workflow", "list"], cwd=temp_path)
         data = json.loads(output)
         assert isinstance(data, list) and len(data) == 10
 
+        # Verify the output is valid JSON
         output = subprocess.check_output(
             ["dbos", "workflow", "queue", "list"], cwd=temp_path
         )
