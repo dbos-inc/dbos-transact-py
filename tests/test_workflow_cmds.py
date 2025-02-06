@@ -231,11 +231,12 @@ def test_queued_workflows(dbos: DBOS, config: ConfigFile) -> None:
     # Verify all blocking steps are enqueued and have the right data
     workflows = _workflow_commands.list_queued_workflows(config)
     assert len(workflows) == queued_steps
-    for workflow in workflows:
+    for i, workflow in enumerate(workflows):
         assert workflow.status == WorkflowStatusString.PENDING.value
         assert workflow.queue_name == queue.name
         assert workflow.input is not None
-        assert 0 <= workflow.input["args"][0] < 10
+        # Verify newest queue entries appear first
+        assert workflow.input["args"][0] == queued_steps - i - 1
         assert workflow.output is None
         assert workflow.error is None
         assert "blocking_step" in workflow.workflowName
