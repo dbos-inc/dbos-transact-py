@@ -814,9 +814,8 @@ def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
 
     # Verify an additional recovery throws puts the workflow in the DLQ status.
     DBOS.recover_pending_workflows()
-    time.sleep(
-        2
-    )  # we can't start_event.wait() here because the workflow will never execute
+    # we can't start_event.wait() here because the workflow will never execute
+    time.sleep(2)
     assert (
         blocked_handle.get_status().status
         == WorkflowStatusString.RETRIES_EXCEEDED.value
