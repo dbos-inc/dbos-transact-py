@@ -234,6 +234,7 @@ def test_queued_workflows(dbos: DBOS, config: ConfigFile) -> None:
     for workflow in workflows:
         assert workflow.status == WorkflowStatusString.PENDING.value
         assert workflow.queue_name == queue.name
+        assert workflow.input is not None
         assert 0 <= workflow.input["args"][0] < 10
         assert workflow.output is None
         assert workflow.error is None

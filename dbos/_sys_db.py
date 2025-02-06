@@ -128,12 +128,10 @@ class GetWorkflowsInput:
 
 class GetQueuedWorkflowsInput(TypedDict):
     queue_name: Optional[str]
-    status: Optional[WorkflowStatuses]
+    status: Optional[str]
     start_time: Optional[str]  # Timestamp in ISO 8601 format
     end_time: Optional[str]  # Timestamp in ISO 8601 format
-    limit: Optional[
-        int
-    ]  # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
+    limit: Optional[int]  # Return up to this many workflows IDs.
 
 
 class GetWorkflowsOutput:

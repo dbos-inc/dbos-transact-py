@@ -358,10 +358,10 @@ def restart(
         print(f"Failed to resume workflow {uuid}. Status code: {response.status_code}")
 
 
-@queue.command(help="List enqueued functions for your application")
-def list(
+@queue.command(name="list", help="List enqueued functions for your application")
+def list_queue(
     limit: Annotated[
-        int,
+        typing.Optional[int],
         typer.Option("--limit", "-l", help="Limit the results returned"),
     ] = None,
     start_time: Annotated[
