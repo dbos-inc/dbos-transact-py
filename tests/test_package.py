@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.request
 
+import requests
 import sqlalchemy as sa
 import yaml
 
@@ -147,3 +148,46 @@ def test_reset(postgres_db_engine: sa.Engine) -> None:
                 )
             ).scalar()
             assert result == 0
+
+
+def test_list_commands() -> None:
+    app_name = "reset-app"
+    with tempfile.TemporaryDirectory() as temp_path:
+        subprocess.check_call(
+            ["dbos", "init", app_name, "--template", "dbos-toolbox"],
+            cwd=temp_path,
+        )
+        subprocess.check_call(["dbos", "reset", "-y"], cwd=temp_path)
+        subprocess.check_call(["dbos", "migrate"], cwd=temp_path)
+
+        # Get some workflows enqueued on the toolbox, then kill the toolbox
+        process = subprocess.Popen(["dbos", "start"], cwd=temp_path)
+        try:
+            session = requests.Session()
+            for i in range(10):
+                try:
+                    session.get(
+                        "http://localhost:8000/queue", timeout=1
+                    ).raise_for_status()
+                    break
+                except requests.exceptions.Timeout:
+                    break
+                except requests.exceptions.ConnectionError as e:
+                    if i == 9:
+                        raise
+                    print(f"Attempt {i+1} failed: {e}. Retrying in 1 second...")
+                    time.sleep(1)
+            time.sleep(1)  # So the queued workflows can start
+        finally:
+            os.kill(process.pid, signal.SIGINT)
+            process.wait()
+
+        output = subprocess.check_output(["dbos", "workflow", "list"], cwd=temp_path)
+        data = json.loads(output)
+        assert isinstance(data, list) and len(data) == 10
+
+        output = subprocess.check_output(
+            ["dbos", "workflow", "queue", "list"], cwd=temp_path
+        )
+        data = json.loads(output)
+        assert isinstance(data, list) and len(data) == 10
