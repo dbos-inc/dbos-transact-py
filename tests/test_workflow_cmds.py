@@ -213,20 +213,22 @@ def test_queued_workflows(dbos: DBOS, config: ConfigFile) -> None:
     def test_workflow() -> list[int]:
         handles = []
         for i in range(queued_steps):
-            h = queue.enqueue(test_step, i)
+            h = queue.enqueue(blocking_step, i)
             handles.append(h)
         return [h.get_result() for h in handles]
 
     @DBOS.step()
-    def test_step(i: int) -> int:
+    def blocking_step(i: int) -> int:
         step_events[i].set()
         event.wait()
         return i
 
+    # The workflow enqueues blocking steps, wait for all to start
     handle = DBOS.start_workflow(test_workflow)
     for e in step_events:
         e.wait()
 
+    # Verify all blocking steps are enqueued and have the right data
     workflows = _workflow_commands.list_queued_workflows(config)
     assert len(workflows) == queued_steps
     for workflow in workflows:
@@ -235,8 +237,9 @@ def test_queued_workflows(dbos: DBOS, config: ConfigFile) -> None:
         assert 0 <= workflow.input["args"][0] < 10
         assert workflow.output is None
         assert workflow.error is None
-        assert "test_step" in workflow.workflowName
+        assert "blocking_step" in workflow.workflowName
 
+    # Test every filter
     workflows = _workflow_commands.list_queued_workflows(
         config, status=WorkflowStatusString.PENDING.value
     )
@@ -263,5 +266,8 @@ def test_queued_workflows(dbos: DBOS, config: ConfigFile) -> None:
     )
     assert len(workflows) == 0
 
+    # Confirm the workflow finishes and nothing is enqueued afterwards
     event.set()
     assert handle.get_result() == [0, 1, 2, 3, 4]
+    workflows = _workflow_commands.list_queued_workflows(config)
+    assert len(workflows) == 0
