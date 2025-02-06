@@ -616,6 +616,7 @@ def test_queue_recovery(dbos: DBOS) -> None:
     for e in step_events:
         e.wait()
         e.clear()
+
     assert step_counter == 5
 
     # Recover the workflow, then resume it.
@@ -624,6 +625,7 @@ def test_queue_recovery(dbos: DBOS) -> None:
     for e in step_events:
         e.wait()
     event.set()
+
 
     # There should be one handle for the workflow and another for each queued step.
     assert len(recovery_handles) == queued_steps + 1
@@ -697,6 +699,7 @@ def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
     assert handle3.get_result() == None
     assert handle3.get_status().executor_id == "local"
     assert queue_entries_are_cleaned_up(dbos)
+
 
 
 def test_cancelling_queued_workflows(dbos: DBOS) -> None:
