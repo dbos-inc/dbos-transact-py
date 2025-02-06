@@ -132,6 +132,7 @@ class GetQueuedWorkflowsInput(TypedDict):
     start_time: Optional[str]  # Timestamp in ISO 8601 format
     end_time: Optional[str]  # Timestamp in ISO 8601 format
     limit: Optional[int]  # Return up to this many workflows IDs.
+    name: Optional[str]  # The name of the workflow function
 
 
 class GetWorkflowsOutput:
@@ -666,7 +667,6 @@ class SystemDatabase:
         query = sa.select(SystemSchema.workflow_status.c.workflow_uuid).order_by(
             SystemSchema.workflow_status.c.created_at.desc()
         )
-
         if input.name:
             query = query.where(SystemSchema.workflow_status.c.name == input.name)
         if input.authenticated_user:
@@ -713,6 +713,9 @@ class SystemDatabase:
             )
             .order_by(SystemSchema.workflow_status.c.created_at.desc())
         )
+
+        if input.get("name"):
+            query = query.where(SystemSchema.workflow_status.c.name == input["name"])
 
         if input.get("queue_name"):
             query = query.where(

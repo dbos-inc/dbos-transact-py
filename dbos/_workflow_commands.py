@@ -42,6 +42,7 @@ def list_workflows(
     status: Optional[str],
     request: bool,
     appversion: Optional[str],
+    name: Optional[str],
 ) -> List[WorkflowInformation]:
     try:
         sys_db = SystemDatabase(config)
@@ -54,6 +55,7 @@ def list_workflows(
             input.status = cast(WorkflowStatuses, status)
         input.application_version = appversion
         input.limit = limit
+        input.name = name
 
         output: GetWorkflowsOutput = sys_db.get_workflows(input)
         infos: List[WorkflowInformation] = []
@@ -80,6 +82,7 @@ def list_queued_workflows(
     end_time: Optional[str] = None,
     queue_name: Optional[str] = None,
     status: Optional[str] = None,
+    name: Optional[str] = None,
     request: bool = False,
 ) -> List[WorkflowInformation]:
     try:
@@ -90,6 +93,7 @@ def list_queued_workflows(
             "end_time": end_time,
             "status": status,
             "limit": limit,
+            "name": name,
         }
         output: GetWorkflowsOutput = sys_db.get_queued_workflows(input)
         infos: List[WorkflowInformation] = []

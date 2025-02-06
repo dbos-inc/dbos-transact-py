@@ -279,6 +279,14 @@ def list(
             help="Retrieve workflows with this application version",
         ),
     ] = None,
+    name: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--name",
+            "-n",
+            help="Retrieve workflows with this name",
+        ),
+    ] = None,
     request: Annotated[
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
@@ -286,7 +294,7 @@ def list(
 ) -> None:
     config = load_config(silent=True)
     workflows = list_workflows(
-        config, limit, user, starttime, endtime, status, request, appversion
+        config, limit, user, starttime, endtime, status, request, appversion, name
     )
     print(jsonpickle.encode(workflows, unpicklable=False))
 
@@ -396,6 +404,14 @@ def list_queue(
             help="Retrieve functions on this queue",
         ),
     ] = None,
+    name: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--name",
+            "-n",
+            help="Retrieve functions on this queue",
+        ),
+    ] = None,
     request: Annotated[
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
@@ -410,6 +426,7 @@ def list_queue(
         queue_name=queue_name,
         status=status,
         request=request,
+        name=name,
     )
     print(jsonpickle.encode(workflows, unpicklable=False))
 

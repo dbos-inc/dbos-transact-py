@@ -165,7 +165,7 @@ def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
 
     # Verify the workflow has succeeded
     output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, None, False, None
+        config, 10, None, None, None, None, False, None, None
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
     assert output[0] != None, "Expected output to be not None"
@@ -219,7 +219,7 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
 
     # get the workflow list
     output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, None, False, None
+        config, 10, None, None, None, None, False, None, None
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
@@ -257,7 +257,7 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
         assert False, "Expected info to be not None"
 
     output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, None, False, None
+        config, 10, None, None, None, None, False, None, None
     )
     assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
 
