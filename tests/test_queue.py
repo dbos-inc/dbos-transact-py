@@ -626,7 +626,6 @@ def test_queue_recovery(dbos: DBOS) -> None:
         e.wait()
     event.set()
 
-
     # There should be one handle for the workflow and another for each queued step.
     assert len(recovery_handles) == queued_steps + 1
     # Verify that both the recovered and original workflows complete correctly.
@@ -699,7 +698,6 @@ def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
     assert handle3.get_result() == None
     assert handle3.get_status().executor_id == "local"
     assert queue_entries_are_cleaned_up(dbos)
-
 
 
 def test_cancelling_queued_workflows(dbos: DBOS) -> None:
@@ -809,13 +807,16 @@ def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
 
     # Attempt to recover the blocked workflow the maximum number of times
     for i in range(max_recovery_attempts):
+        start_event.clear()
         DBOS.recover_pending_workflows()
+        start_event.wait()
         assert recovery_count == i + 2
 
-    # Verify an additional recovery throws a DLQ error and puts the workflow in the DLQ status.
-    with pytest.raises(Exception) as exc_info:
-        DBOS.recover_pending_workflows()
-    assert exc_info.errisinstance(DBOSDeadLetterQueueError)
+    # Verify an additional recovery throws puts the workflow in the DLQ status.
+    DBOS.recover_pending_workflows()
+    time.sleep(
+        2
+    )  # we can't start_event.wait() here because the workflow will never execute
     assert (
         blocked_handle.get_status().status
         == WorkflowStatusString.RETRIES_EXCEEDED.value
