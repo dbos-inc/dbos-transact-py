@@ -648,10 +648,13 @@ def test_queue_recovery(dbos: DBOS) -> None:
 def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
     event = threading.Event()
     wf_events = [threading.Event() for _ in range(2)]
+    counter = 0
 
     @DBOS.workflow()
     def blocked_workflow(i: int) -> None:
         wf_events[i].set()
+        nonlocal counter
+        counter += 1
         event.wait()
 
     @DBOS.workflow()
@@ -668,6 +671,7 @@ def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
         e.wait()
         e.clear()
 
+    assert counter == 2
     assert handle1.get_status().status == WorkflowStatusString.PENDING.value
     assert handle2.get_status().status == WorkflowStatusString.PENDING.value
     assert handle3.get_status().status == WorkflowStatusString.ENQUEUED.value
@@ -702,6 +706,7 @@ def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
         ]
     for e in wf_events:
         e.wait()
+    assert counter == 4
     assert handle1.get_status().status == WorkflowStatusString.PENDING.value
     assert handle2.get_status().status == WorkflowStatusString.PENDING.value
     # Because tasks are re-enqueued in order, the 3rd task is head of line blocked
