@@ -40,7 +40,10 @@ def startup_recovery_thread(
     while not stop_event.is_set() and len(pending_workflows) > 0:
         try:
             for pending_workflow in list(pending_workflows):
-                if pending_workflow.queue_name:
+                if (
+                    pending_workflow.queue_name
+                    and pending_workflow.queue_name != "_dbos_internal_queue"
+                ):
                     clear_pending_workflow_queue_assignement(dbos, pending_workflow)
                     continue
                 execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
@@ -66,7 +69,10 @@ def recover_pending_workflows(
         dbos.logger.debug(f"Recovering pending workflows for executor: {executor_id}")
         pending_workflows = dbos._sys_db.get_pending_workflows(executor_id)
         for pending_workflow in pending_workflows:
-            if pending_workflow.queue_name:
+            if (
+                pending_workflow.queue_name
+                and pending_workflow.queue_name != "_dbos_internal_queue"
+            ):
                 clear_pending_workflow_queue_assignement(dbos, pending_workflow)
                 workflow_handles.append(
                     dbos.retrieve_workflow(pending_workflow.workflow_uuid)
