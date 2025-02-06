@@ -75,10 +75,13 @@ def recover_pending_workflows(
                 pending_workflow.queue_name
                 and pending_workflow.queue_name != "_dbos_internal_queue"
             ):
-                clear_pending_workflow_queue_assignement(dbos, pending_workflow)
-                workflow_handles.append(
-                    dbos.retrieve_workflow(pending_workflow.workflow_uuid)
-                )
+                try:
+                    clear_pending_workflow_queue_assignement(dbos, pending_workflow)
+                    workflow_handles.append(
+                        dbos.retrieve_workflow(pending_workflow.workflow_uuid)
+                    )
+                except DBOSWorkflowRecoveryError as e:
+                    dbos.logger.error(e)
             else:
                 workflow_handles.append(
                     execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
