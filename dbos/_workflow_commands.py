@@ -58,18 +58,11 @@ def list_workflows(
         input.limit = li
 
         output: GetWorkflowsOutput = sys_db.get_workflows(input)
-
         infos: List[WorkflowInformation] = []
-
-        if output.workflow_uuids is None:
-            typer.echo("No workflows found")
-            return {}
-
         for workflow_id in output.workflow_uuids:
             info = _get_workflow_info(
                 sys_db, workflow_id, request
             )  # Call the method for each ID
-
             if info is not None:
                 infos.append(info)
 
