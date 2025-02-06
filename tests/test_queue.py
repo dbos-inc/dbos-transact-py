@@ -666,6 +666,7 @@ def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
     # Wait for the two first workflows to be dequeued
     for e in wf_events:
         e.wait()
+        e.clear()
 
     assert handle1.get_status().status == WorkflowStatusString.PENDING.value
     assert handle2.get_status().status == WorkflowStatusString.PENDING.value
@@ -684,9 +685,26 @@ def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
         c.execute(query)
 
     # Trigger workflow recovery. The two first workflows should still be blocked but the 3rd one enqueued
-    DBOS.recover_pending_workflows(["other"])
+    recovered_other_handles = DBOS.recover_pending_workflows(["other"])
     assert handle1.get_status().status == WorkflowStatusString.PENDING.value
     assert handle2.get_status().status == WorkflowStatusString.PENDING.value
+    assert len(recovered_other_handles) == 1
+    assert recovered_other_handles[0].get_workflow_id() == handle3.get_workflow_id()
+    assert handle3.get_status().status == WorkflowStatusString.ENQUEUED.value
+
+    # Trigger workflow recovery for "local". The two first workflows should be re-enqueued then dequeued again
+    recovered_local_handles = DBOS.recover_pending_workflows(["local"])
+    assert len(recovered_local_handles) == 2
+    for h in recovered_local_handles:
+        assert h.get_workflow_id() in [
+            handle1.get_workflow_id(),
+            handle2.get_workflow_id(),
+        ]
+    for e in wf_events:
+        e.wait()
+    assert handle1.get_status().status == WorkflowStatusString.PENDING.value
+    assert handle2.get_status().status == WorkflowStatusString.PENDING.value
+    # Because tasks are re-enqueued in order, the 3rd task is head of line blocked
     assert handle3.get_status().status == WorkflowStatusString.ENQUEUED.value
 
     # Unblock the first two workflows
