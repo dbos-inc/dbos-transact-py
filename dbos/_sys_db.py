@@ -704,10 +704,14 @@ class SystemDatabase:
         self, input: GetQueuedWorkflowsInput
     ) -> GetWorkflowsOutput:
 
-        query = sa.select(SystemSchema.workflow_queue.c.workflow_uuid).join(
-            SystemSchema.workflow_status,
-            SystemSchema.workflow_queue.c.workflow_uuid
-            == SystemSchema.workflow_status.c.workflow_uuid,
+        query = (
+            sa.select(SystemSchema.workflow_queue.c.workflow_uuid)
+            .join(
+                SystemSchema.workflow_status,
+                SystemSchema.workflow_queue.c.workflow_uuid
+                == SystemSchema.workflow_status.c.workflow_uuid,
+            )
+            .order_by(SystemSchema.workflow_status.c.created_at.desc())
         )
 
         if input.get("queue_name"):
