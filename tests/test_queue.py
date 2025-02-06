@@ -17,6 +17,7 @@ from dbos import (
     SetWorkflowID,
     WorkflowHandle,
 )
+from dbos._error import DBOSDeadLetterQueueError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from tests.conftest import default_config
@@ -581,3 +582,190 @@ def test_duplicate_workflow_id(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> 
 
     # Reset logging
     logging.getLogger("dbos").propagate = original_propagate
+
+
+def test_queue_recovery(dbos: DBOS) -> None:
+    step_counter: int = 0
+    queued_steps = 5
+
+    wfid = str(uuid.uuid4())
+    queue = Queue("test_queue")
+    step_events = [threading.Event() for _ in range(queued_steps)]
+    event = threading.Event()
+
+    @DBOS.workflow()
+    def test_workflow() -> list[int]:
+        assert DBOS.workflow_id == wfid
+        handles = []
+        for i in range(queued_steps):
+            h = queue.enqueue(test_step, i)
+            handles.append(h)
+        return [h.get_result() for h in handles]
+
+    @DBOS.step()
+    def test_step(i: int) -> int:
+        nonlocal step_counter
+        step_counter += 1
+        step_events[i].set()
+        event.wait()
+        return i
+
+    # Start the workflow. Wait for all five steps to start. Verify that they started.
+    with SetWorkflowID(wfid):
+        original_handle = DBOS.start_workflow(test_workflow)
+    for e in step_events:
+        e.wait()
+    assert step_counter == 5
+
+    # Recover the workflow, then resume it.
+    recovery_handles = DBOS.recover_pending_workflows()
+    event.set()
+    # There should be one handle for the workflow and another for each queued step.
+    assert len(recovery_handles) == queued_steps + 1
+    # Verify that both the recovered and original workflows complete correctly.
+    for h in recovery_handles:
+        if h.get_workflow_id() == wfid:
+            assert h.get_result() == [0, 1, 2, 3, 4]
+    assert original_handle.get_result() == [0, 1, 2, 3, 4]
+    # Each step should start twice, once originally and once in recovery.
+    assert step_counter == 10
+
+    # Rerun the workflow. Because each step is complete, none should start again.
+    with SetWorkflowID(wfid):
+        assert test_workflow() == [0, 1, 2, 3, 4]
+    assert step_counter == 10
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_cancelling_queued_workflows(dbos: DBOS) -> None:
+    start_event = threading.Event()
+    blocking_event = threading.Event()
+
+    @DBOS.workflow()
+    def stuck_workflow() -> None:
+        start_event.set()
+        blocking_event.wait()
+
+    @DBOS.workflow()
+    def regular_workflow() -> None:
+        return
+
+    # Enqueue both the blocked workflow and a regular workflow on a queue with concurrency 1
+    queue = Queue("test_queue", concurrency=1)
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        blocked_handle = queue.enqueue(stuck_workflow)
+    regular_handle = queue.enqueue(regular_workflow)
+
+    # Verify that the blocked workflow starts and is PENDING while the regular workflow remains ENQUEUED.
+    start_event.wait()
+    assert blocked_handle.get_status().status == WorkflowStatusString.PENDING.value
+    assert regular_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
+
+    # Cancel the blocked workflow. Verify this lets the regular workflow run.
+    dbos.cancel_workflow(wfid)
+    assert blocked_handle.get_status().status == WorkflowStatusString.CANCELLED.value
+    assert regular_handle.get_result() == None
+
+    # Complete the blocked workflow
+    blocking_event.set()
+    assert blocked_handle.get_result() == None
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_resuming_queued_workflows(dbos: DBOS) -> None:
+    start_event = threading.Event()
+    blocking_event = threading.Event()
+
+    @DBOS.workflow()
+    def stuck_workflow() -> None:
+        start_event.set()
+        blocking_event.wait()
+
+    @DBOS.workflow()
+    def regular_workflow() -> None:
+        return
+
+    # Enqueue a blocked workflow and two regular workflows on a queue with concurrency 1
+    queue = Queue("test_queue", concurrency=1)
+    wfid = str(uuid.uuid4())
+    blocked_handle = queue.enqueue(stuck_workflow)
+    with SetWorkflowID(wfid):
+        regular_handle_1 = queue.enqueue(regular_workflow)
+    regular_handle_2 = queue.enqueue(regular_workflow)
+
+    # Verify that the blocked workflow starts and is PENDING while the regular workflows remain ENQUEUED.
+    start_event.wait()
+    assert blocked_handle.get_status().status == WorkflowStatusString.PENDING.value
+    assert regular_handle_1.get_status().status == WorkflowStatusString.ENQUEUED.value
+    assert regular_handle_2.get_status().status == WorkflowStatusString.ENQUEUED.value
+
+    # Resume a regular workflow. Verify it completes.
+    dbos.resume_workflow(wfid)
+    assert regular_handle_1.get_result() == None
+
+    # Complete the blocked workflow. Verify the second regular workflow also completes.
+    blocking_event.set()
+    assert blocked_handle.get_result() == None
+    assert regular_handle_2.get_result() == None
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
+    start_event = threading.Event()
+    blocking_event = threading.Event()
+    max_recovery_attempts = 10
+    recovery_count = 0
+
+    @DBOS.workflow(max_recovery_attempts=max_recovery_attempts)
+    def blocked_workflow() -> None:
+        start_event.set()
+        nonlocal recovery_count
+        recovery_count += 1
+        blocking_event.wait()
+
+    @DBOS.workflow()
+    def regular_workflow() -> None:
+        return
+
+    # Enqueue both the blocked workflow and a regular workflow on a queue with concurrency 1
+    queue = Queue("test_queue", concurrency=1)
+    blocked_handle = queue.enqueue(blocked_workflow)
+    regular_handle = queue.enqueue(regular_workflow)
+
+    # Verify that the blocked workflow starts and is PENDING while the regular workflow remains ENQUEUED.
+    start_event.wait()
+    assert blocked_handle.get_status().status == WorkflowStatusString.PENDING.value
+    assert regular_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
+
+    # Attempt to recover the blocked workflow the maximum number of times
+    for i in range(max_recovery_attempts):
+        DBOS.recover_pending_workflows()
+        assert recovery_count == i + 2
+
+    # Verify an additional recovery throws a DLQ error and puts the workflow in the DLQ status.
+    with pytest.raises(Exception) as exc_info:
+        DBOS.recover_pending_workflows()
+    assert exc_info.errisinstance(DBOSDeadLetterQueueError)
+    assert (
+        blocked_handle.get_status().status
+        == WorkflowStatusString.RETRIES_EXCEEDED.value
+    )
+
+    # Verify the blocked workflow entering the DLQ lets the regular workflow run
+    assert regular_handle.get_result() == None
+
+    # Complete the blocked workflow
+    blocking_event.set()
+    assert blocked_handle.get_result() == None
+    dbos._sys_db.wait_for_buffer_flush()
+    assert blocked_handle.get_status().status == WorkflowStatusString.SUCCESS.value
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)

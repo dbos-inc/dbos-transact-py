@@ -1,23 +1,14 @@
-import importlib
-import os
-import sys
-from typing import Any, List, Optional, cast
+from typing import List, Optional, cast
 
 import typer
-from rich import print
 
-from dbos import DBOS
-
-from . import _serialization, load_config
-from ._core import execute_workflow_by_id
-from ._dbos_config import ConfigFile, _is_valid_app_name
+from . import _serialization
+from ._dbos_config import ConfigFile
 from ._sys_db import (
     GetWorkflowsInput,
     GetWorkflowsOutput,
     SystemDatabase,
     WorkflowStatuses,
-    WorkflowStatusInternal,
-    WorkflowStatusString,
 )
 
 
@@ -41,7 +32,7 @@ class WorkflowInformation:
     queue_name: Optional[str]
 
 
-def _list_workflows(
+def list_workflows(
     config: ConfigFile,
     li: int,
     user: Optional[str],
@@ -91,17 +82,13 @@ def _list_workflows(
             sys_db.destroy()
 
 
-def _get_workflow(
+def get_workflow(
     config: ConfigFile, uuid: str, request: bool
 ) -> Optional[WorkflowInformation]:
-    sys_db = None
-
     try:
         sys_db = SystemDatabase(config)
-
         info = _get_workflow_info(sys_db, uuid, request)
         return info
-
     except Exception as e:
         typer.echo(f"Error getting workflow: {e}")
         return None
@@ -110,18 +97,13 @@ def _get_workflow(
             sys_db.destroy()
 
 
-def _cancel_workflow(config: ConfigFile, uuid: str) -> None:
-    # config = load_config()
-    sys_db = None
-
+def cancel_workflow(config: ConfigFile, uuid: str) -> None:
     try:
         sys_db = SystemDatabase(config)
-        sys_db.set_workflow_status(uuid, WorkflowStatusString.CANCELLED)
-        return
-
+        sys_db.cancel_workflow(uuid)
     except Exception as e:
         typer.echo(f"Failed to connect to DBOS system database: {e}")
-        return None
+        raise e
     finally:
         if sys_db:
             sys_db.destroy()

@@ -19,7 +19,7 @@ from .. import load_config
 from .._app_db import ApplicationDatabase
 from .._dbos_config import _is_valid_app_name
 from .._sys_db import SystemDatabase, reset_system_database
-from .._workflow_commands import _cancel_workflow, _get_workflow, _list_workflows
+from .._workflow_commands import cancel_workflow, get_workflow, list_workflows
 from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
 
@@ -282,7 +282,7 @@ def list(
     ] = None,
 ) -> None:
     config = load_config()
-    workflows = _list_workflows(
+    workflows = list_workflows(
         config, limit, user, starttime, endtime, status, request, appversion
     )
     print(jsonpickle.encode(workflows, unpicklable=False))
@@ -301,7 +301,7 @@ def get(
     ] = True,
 ) -> None:
     config = load_config()
-    print(jsonpickle.encode(_get_workflow(config, uuid, request), unpicklable=False))
+    print(jsonpickle.encode(get_workflow(config, uuid, request), unpicklable=False))
 
 
 @workflow.command(
@@ -315,7 +315,7 @@ def cancel(
     ] = None,
 ) -> None:
     config = load_config()
-    _cancel_workflow(config, uuid)
+    cancel_workflow(config, uuid)
     print(f"Workflow {uuid} has been cancelled")
 
 

@@ -151,54 +151,59 @@ runtimeConfig:
 
 
 def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
+    counter: int = 0
 
     @DBOS.workflow()
     def simple_workflow() -> None:
-        print("Executed Simple workflow")
-        return
+        nonlocal counter
+        counter += 1
 
-    # run the workflow
+    # Run the workflow and flush its results
     simple_workflow()
-    time.sleep(1)
+    assert counter == 1
+    dbos._sys_db.wait_for_buffer_flush()
 
-    # get the workflow list
-    output = _workflow_commands._list_workflows(
+    # Verify the workflow has succeeded
+    output = _workflow_commands.list_workflows(
         config, 10, None, None, None, None, False, None
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
-
     assert output[0] != None, "Expected output to be not None"
-
     wfUuid = output[0].workflowUUID
-
-    info = _workflow_commands._get_workflow(config, wfUuid, True)
+    info = _workflow_commands.get_workflow(config, wfUuid, True)
     assert info is not None, "Expected output to be not None"
-
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
 
+    # Cancel the workflow. Verify it was cancelled
     response = requests.post(
         f"http://localhost:3001/workflows/{wfUuid}/cancel", json=[], timeout=5
     )
     assert response.status_code == 204
+    info = _workflow_commands.get_workflow(config, wfUuid, True)
+    assert info is not None
+    assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
 
-    info = _workflow_commands._get_workflow(config, wfUuid, True)
-    if info is not None:
-        assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
-    else:
-        assert False, "Expected info to be not None"
-
+    # Resume the workflow. Verify that it succeeds again.
     response = requests.post(
         f"http://localhost:3001/workflows/{wfUuid}/resume", json=[], timeout=5
     )
     assert response.status_code == 204
+    dbos._sys_db.wait_for_buffer_flush()
+    assert counter == 2
+    info = _workflow_commands.get_workflow(config, wfUuid, True)
+    assert info is not None
+    assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
 
-    time.sleep(1)
-
-    info = _workflow_commands._get_workflow(config, wfUuid, True)
-    if info is not None:
-        assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
-    else:
-        assert False, "Expected info to be not None"
+    # Resume the workflow. Verify it does not run and status remains SUCCESS
+    response = requests.post(
+        f"http://localhost:3001/workflows/{wfUuid}/resume", json=[], timeout=5
+    )
+    assert response.status_code == 204
+    dbos._sys_db.wait_for_buffer_flush()
+    info = _workflow_commands.get_workflow(config, wfUuid, True)
+    assert info is not None
+    assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
+    assert counter == 2
 
 
 def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
@@ -213,7 +218,7 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
     time.sleep(1)
 
     # get the workflow list
-    output = _workflow_commands._list_workflows(
+    output = _workflow_commands.list_workflows(
         config, 10, None, None, None, None, False, None
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
@@ -222,7 +227,7 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
 
     wfUuid = output[0].workflowUUID
 
-    info = _workflow_commands._get_workflow(config, wfUuid, True)
+    info = _workflow_commands.get_workflow(config, wfUuid, True)
     assert info is not None, "Expected output to be not None"
 
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
@@ -232,7 +237,7 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
     )
     assert response.status_code == 204
 
-    info = _workflow_commands._get_workflow(config, wfUuid, True)
+    info = _workflow_commands.get_workflow(config, wfUuid, True)
     if info is not None:
         assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
     else:
@@ -245,13 +250,13 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
 
     time.sleep(1)
 
-    info = _workflow_commands._get_workflow(config, wfUuid, True)
+    info = _workflow_commands.get_workflow(config, wfUuid, True)
     if info is not None:
         assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
     else:
         assert False, "Expected info to be not None"
 
-    output = _workflow_commands._list_workflows(
+    output = _workflow_commands.list_workflows(
         config, 10, None, None, None, None, False, None
     )
     assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
@@ -261,7 +266,7 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
     else:
         new_wfUuid = output[0].workflowUUID
 
-    info = _workflow_commands._get_workflow(config, new_wfUuid, True)
+    info = _workflow_commands.get_workflow(config, new_wfUuid, True)
     if info is not None:
         assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
     else:

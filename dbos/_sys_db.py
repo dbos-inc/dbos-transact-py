@@ -390,20 +390,55 @@ class SystemDatabase:
         if status["workflow_uuid"] in self._temp_txn_wf_ids:
             self._exported_temp_txn_wf_status.add(status["workflow_uuid"])
 
-    def set_workflow_status(
+    def cancel_workflow(
         self,
-        workflow_uuid: str,
-        status: WorkflowStatusString,
+        workflow_id: str,
     ) -> None:
         with self.engine.begin() as c:
-            stmt = (
-                sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
-                .values(
-                    status=status,
+            # Remove the workflow from the queues table so it does not block the table
+            c.execute(
+                sa.delete(SystemSchema.workflow_queue).where(
+                    SystemSchema.workflow_queue.c.workflow_uuid == workflow_id
                 )
             )
-            c.execute(stmt)
+            # Set the workflow's status to CANCELLED
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .values(
+                    status=WorkflowStatusString.CANCELLED.value,
+                )
+            )
+
+    def resume_workflow(
+        self,
+        workflow_id: str,
+    ) -> None:
+        with self.engine.begin() as c:
+            # Check the status of the workflow. If it is complete, do nothing.
+            row = c.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.status,
+                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+            ).fetchone()
+            if (
+                row is None
+                or row[0] == WorkflowStatusString.SUCCESS.value
+                or row[0] == WorkflowStatusString.ERROR.value
+            ):
+                return
+            # Remove the workflow from the queues table so resume can safely be called on an ENQUEUED workflow
+            c.execute(
+                sa.delete(SystemSchema.workflow_queue).where(
+                    SystemSchema.workflow_queue.c.workflow_uuid == workflow_id
+                )
+            )
+            # Set the workflow's status to PENDING and clear its recovery attempts.
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .values(status=WorkflowStatusString.PENDING.value, recovery_attempts=0)
+            )
 
     def get_workflow_status(
         self, workflow_uuid: str
