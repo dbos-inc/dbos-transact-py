@@ -281,7 +281,7 @@ def list(
         typer.Option("--app-dir", "-d", help="Specify the application root directory"),
     ] = None,
 ) -> None:
-    config = load_config()
+    config = load_config(silent=True)
     workflows = list_workflows(
         config, limit, user, starttime, endtime, status, request, appversion
     )
@@ -291,16 +291,12 @@ def list(
 @workflow.command(help="Retrieve the status of a workflow")
 def get(
     uuid: Annotated[str, typer.Argument()],
-    appdir: Annotated[
-        typing.Optional[str],
-        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
-    ] = None,
     request: Annotated[
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
     ] = True,
 ) -> None:
-    config = load_config()
+    config = load_config(silent=True)
     print(jsonpickle.encode(get_workflow(config, uuid, request), unpicklable=False))
 
 
