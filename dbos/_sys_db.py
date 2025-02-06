@@ -721,18 +721,19 @@ class SystemDatabase:
             query = query.where(
                 SystemSchema.workflow_status.c.status == input["status"]
             )
-        if input.start_time:
+        if "start_time" in input and input["start_time"] is not None:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                >= datetime.datetime.fromisoformat(input.start_time).timestamp() * 1000
+                >= datetime.datetime.fromisoformat(input["start_time"]).timestamp()
+                * 1000
             )
-        if input.end_time:
+        if "end_time" in input and input["end_time"] is not None:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                <= datetime.datetime.fromisoformat(input.end_time).timestamp() * 1000
+                <= datetime.datetime.fromisoformat(input["end_time"]).timestamp() * 1000
             )
-        if input.limit:
-            query = query.limit(input.limit)
+        if input.get("limit"):
+            query = query.limit(input["limit"])
 
         with self.engine.begin() as c:
             rows = c.execute(query)

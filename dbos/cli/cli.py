@@ -276,10 +276,6 @@ def list(
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
     ] = True,
-    appdir: Annotated[
-        typing.Optional[str],
-        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
-    ] = None,
 ) -> None:
     config = load_config(silent=True)
     workflows = list_workflows(
@@ -305,10 +301,6 @@ def get(
 )
 def cancel(
     uuid: Annotated[str, typer.Argument()],
-    appdir: Annotated[
-        typing.Optional[str],
-        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
-    ] = None,
 ) -> None:
     config = load_config()
     cancel_workflow(config, uuid)

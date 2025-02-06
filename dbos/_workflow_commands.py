@@ -34,7 +34,7 @@ class WorkflowInformation:
 
 def list_workflows(
     config: ConfigFile,
-    li: int,
+    limit: int,
     user: Optional[str],
     starttime: Optional[str],
     endtime: Optional[str],
@@ -42,9 +42,6 @@ def list_workflows(
     request: bool,
     appversion: Optional[str],
 ) -> List[WorkflowInformation]:
-
-    sys_db = None
-
     try:
         sys_db = SystemDatabase(config)
 
@@ -55,7 +52,7 @@ def list_workflows(
         if status is not None:
             input.status = cast(WorkflowStatuses, status)
         input.application_version = appversion
-        input.limit = li
+        input.limit = limit
 
         output: GetWorkflowsOutput = sys_db.get_workflows(input)
         infos: List[WorkflowInformation] = []
