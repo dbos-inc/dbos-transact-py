@@ -132,10 +132,7 @@ class GetWorkflowsOutput:
 
 
 class GetPendingWorkflowsOutput:
-    def __init__(
-        self, *, executor_id: str, workflow_uuid: str, queue_name: Optional[str] = None
-    ):
-        self.executor_id: str = executor_id
+    def __init__(self, *, workflow_uuid: str, queue_name: Optional[str] = None):
         self.workflow_uuid: str = workflow_uuid
         self.queue_name: Optional[str] = queue_name
 
@@ -718,7 +715,6 @@ class SystemDatabase:
             ).fetchall()
             return [
                 GetPendingWorkflowsOutput(
-                    executor_id=executor_id,
                     workflow_uuid=row.workflow_uuid,
                     queue_name=row.queue_name,
                 )

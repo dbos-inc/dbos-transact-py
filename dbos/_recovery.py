@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, List
 from sqlalchemy.exc import DatabaseError
 
 from ._core import execute_workflow_by_id
-from ._error import DBOSWorkflowFunctionNotFoundError
+from ._error import DBOSWorkflowFunctionNotFoundError, DBOSWorkflowRecoveryError
 from ._sys_db import GetPendingWorkflowsOutput
 
 if TYPE_CHECKING:
@@ -28,7 +28,9 @@ def clear_pending_workflow_queue_assignement(
                 f"Workflow {workflow.workflow_uuid} queue assignment is already being cleared"
             )
         else:
-            raise e
+            raise DBOSWorkflowRecoveryError(
+                workflow.workflow_uuid, f"clearing queue assignment: {e}"
+            )
 
 
 def startup_recovery_thread(
