@@ -65,7 +65,6 @@ def recover_pending_workflows(
             )
         dbos.logger.debug(f"Recovering pending workflows for executor: {executor_id}")
         pending_workflows = dbos._sys_db.get_pending_workflows(executor_id)
-        dbos.logger.debug(f"Pending workflows: {pending_workflows}")
         for pending_workflow in pending_workflows:
             if pending_workflow.queue_name:
                 clear_pending_workflow_queue_assignement(dbos, pending_workflow)
