@@ -140,6 +140,12 @@ class GetWorkflowsOutput:
         self.workflow_uuids = workflow_uuids
 
 
+class GetPendingWorkflowsOutput:
+    def __init__(self, *, workflow_uuid: str, queue_name: Optional[str] = None):
+        self.workflow_uuid: str = workflow_uuid
+        self.queue_name: Optional[str] = queue_name
+
+
 class WorkflowInformation(TypedDict, total=False):
     workflow_uuid: str
     status: WorkflowStatuses  # The status of the workflow.
@@ -465,6 +471,7 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.authenticated_roles,
                     SystemSchema.workflow_status.c.assumed_role,
                     SystemSchema.workflow_status.c.queue_name,
+                    SystemSchema.workflow_status.c.executor_id,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -479,7 +486,7 @@ class SystemDatabase:
                 "error": None,
                 "app_id": None,
                 "app_version": None,
-                "executor_id": None,
+                "executor_id": row[10],
                 "request": row[2],
                 "recovery_attempts": row[3],
                 "authenticated_user": row[6],
@@ -746,16 +753,27 @@ class SystemDatabase:
 
         return GetWorkflowsOutput(workflow_uuids)
 
-    def get_pending_workflows(self, executor_id: str) -> list[str]:
+    def get_pending_workflows(
+        self, executor_id: str
+    ) -> list[GetPendingWorkflowsOutput]:
         with self.engine.begin() as c:
             rows = c.execute(
-                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                sa.select(
+                    SystemSchema.workflow_status.c.workflow_uuid,
+                    SystemSchema.workflow_status.c.queue_name,
+                ).where(
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value,
                     SystemSchema.workflow_status.c.executor_id == executor_id,
                 )
             ).fetchall()
-            return [row[0] for row in rows]
+            return [
+                GetPendingWorkflowsOutput(
+                    workflow_uuid=row.workflow_uuid,
+                    queue_name=row.queue_name,
+                )
+                for row in rows
+            ]
 
     def record_operation_result(
         self, result: OperationResultInternal, conn: Optional[sa.Connection] = None
@@ -1374,6 +1392,19 @@ class SystemDatabase:
                     .where(SystemSchema.workflow_queue.c.workflow_uuid == workflow_id)
                     .values(completed_at_epoch_ms=int(time.time() * 1000))
                 )
+
+    def clear_queue_assignment(self, workflow_id: str) -> None:
+        with self.engine.begin() as c:
+            c.execute(
+                sa.update(SystemSchema.workflow_queue)
+                .where(SystemSchema.workflow_queue.c.workflow_uuid == workflow_id)
+                .values(executor_id=None, started_at_epoch_ms=None)
+            )
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .values(executor_id=None, status=WorkflowStatusString.ENQUEUED.value)
+            )
 
 
 def reset_system_database(config: ConfigFile) -> None:

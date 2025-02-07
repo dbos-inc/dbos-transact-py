@@ -56,7 +56,7 @@ from ._registrations import (
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
-from ._sys_db import WorkflowStatusString, reset_system_database
+from ._sys_db import reset_system_database
 from ._tracer import dbos_tracer
 
 if TYPE_CHECKING:
@@ -613,6 +613,7 @@ class DBOS:
             workflow_id=workflow_id,
             status=stat["status"],
             name=stat["name"],
+            executor_id=stat["executor_id"],
             recovery_attempts=stat["recovery_attempts"],
             class_name=stat["class_name"],
             config_name=stat["config_name"],
@@ -909,6 +910,7 @@ class WorkflowStatus:
         workflow_id(str):  The ID of the workflow execution
         status(str):  The status of the execution, from `WorkflowStatusString`
         name(str): The workflow function name
+        executor_id(str): The ID of the executor running the workflow
         class_name(str): For member functions, the name of the class containing the workflow function
         config_name(str): For instance member functions, the name of the class instance for the execution
         queue_name(str): For workflows that are or were queued, the queue name
@@ -922,6 +924,7 @@ class WorkflowStatus:
     workflow_id: str
     status: str
     name: str
+    executor_id: Optional[str]
     class_name: Optional[str]
     config_name: Optional[str]
     queue_name: Optional[str]

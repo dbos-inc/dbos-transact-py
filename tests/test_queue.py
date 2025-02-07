@@ -615,11 +615,17 @@ def test_queue_recovery(dbos: DBOS) -> None:
         original_handle = DBOS.start_workflow(test_workflow)
     for e in step_events:
         e.wait()
+        e.clear()
+
     assert step_counter == 5
 
     # Recover the workflow, then resume it.
     recovery_handles = DBOS.recover_pending_workflows()
+    # Wait until the 2nd invocation of the workflows are dequeued and executed
+    for e in step_events:
+        e.wait()
     event.set()
+
     # There should be one handle for the workflow and another for each queued step.
     assert len(recovery_handles) == queued_steps + 1
     # Verify that both the recovered and original workflows complete correctly.
@@ -636,6 +642,84 @@ def test_queue_recovery(dbos: DBOS) -> None:
     assert step_counter == 10
 
     # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
+    event = threading.Event()
+    wf_events = [threading.Event() for _ in range(2)]
+    counter = 0
+
+    @DBOS.workflow()
+    def blocked_workflow(i: int) -> None:
+        wf_events[i].set()
+        nonlocal counter
+        counter += 1
+        event.wait()
+
+    @DBOS.workflow()
+    def noop() -> None:
+        pass
+
+    queue = Queue("test_queue", concurrency=2)
+    handle1 = queue.enqueue(blocked_workflow, 0)
+    handle2 = queue.enqueue(blocked_workflow, 1)
+    handle3 = queue.enqueue(noop)
+
+    # Wait for the two first workflows to be dequeued
+    for e in wf_events:
+        e.wait()
+        e.clear()
+
+    assert counter == 2
+    assert handle1.get_status().status == WorkflowStatusString.PENDING.value
+    assert handle2.get_status().status == WorkflowStatusString.PENDING.value
+    assert handle3.get_status().status == WorkflowStatusString.ENQUEUED.value
+
+    # Manually update the database to pretend the 3rd workflow is PENDING and comes from another executor
+    with dbos._sys_db.engine.begin() as c:
+        query = (
+            sa.update(SystemSchema.workflow_status)
+            .values(status=WorkflowStatusString.PENDING.value, executor_id="other")
+            .where(
+                SystemSchema.workflow_status.c.workflow_uuid
+                == handle3.get_workflow_id()
+            )
+        )
+        c.execute(query)
+
+    # Trigger workflow recovery. The two first workflows should still be blocked but the 3rd one enqueued
+    recovered_other_handles = DBOS.recover_pending_workflows(["other"])
+    assert handle1.get_status().status == WorkflowStatusString.PENDING.value
+    assert handle2.get_status().status == WorkflowStatusString.PENDING.value
+    assert len(recovered_other_handles) == 1
+    assert recovered_other_handles[0].get_workflow_id() == handle3.get_workflow_id()
+    assert handle3.get_status().status == WorkflowStatusString.ENQUEUED.value
+
+    # Trigger workflow recovery for "local". The two first workflows should be re-enqueued then dequeued again
+    recovered_local_handles = DBOS.recover_pending_workflows(["local"])
+    assert len(recovered_local_handles) == 2
+    for h in recovered_local_handles:
+        assert h.get_workflow_id() in [
+            handle1.get_workflow_id(),
+            handle2.get_workflow_id(),
+        ]
+    for e in wf_events:
+        e.wait()
+    assert counter == 4
+    assert handle1.get_status().status == WorkflowStatusString.PENDING.value
+    assert handle2.get_status().status == WorkflowStatusString.PENDING.value
+    # Because tasks are re-enqueued in order, the 3rd task is head of line blocked
+    assert handle3.get_status().status == WorkflowStatusString.ENQUEUED.value
+
+    # Unblock the first two workflows
+    event.set()
+
+    # Verify all queue entries eventually get cleaned up.
+    assert handle1.get_result() == None
+    assert handle2.get_result() == None
+    assert handle3.get_result() == None
+    assert handle3.get_status().executor_id == "local"
     assert queue_entries_are_cleaned_up(dbos)
 
 
@@ -746,17 +830,28 @@ def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
 
     # Attempt to recover the blocked workflow the maximum number of times
     for i in range(max_recovery_attempts):
+        start_event.clear()
         DBOS.recover_pending_workflows()
+        start_event.wait()
         assert recovery_count == i + 2
 
-    # Verify an additional recovery throws a DLQ error and puts the workflow in the DLQ status.
-    with pytest.raises(Exception) as exc_info:
-        DBOS.recover_pending_workflows()
-    assert exc_info.errisinstance(DBOSDeadLetterQueueError)
+    # Verify an additional recovery throws puts the workflow in the DLQ status.
+    DBOS.recover_pending_workflows()
+    # we can't start_event.wait() here because the workflow will never execute
+    time.sleep(2)
     assert (
         blocked_handle.get_status().status
         == WorkflowStatusString.RETRIES_EXCEEDED.value
     )
+    with dbos._sys_db.engine.begin() as c:
+        query = sa.select(SystemSchema.workflow_status.c.recovery_attempts).where(
+            SystemSchema.workflow_status.c.workflow_uuid
+            == blocked_handle.get_workflow_id()
+        )
+        result = c.execute(query)
+        row = result.fetchone()
+        assert row is not None
+        assert row[0] == max_recovery_attempts + 2
 
     # Verify the blocked workflow entering the DLQ lets the regular workflow run
     assert regular_handle.get_result() == None
@@ -766,6 +861,15 @@ def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
     assert blocked_handle.get_result() == None
     dbos._sys_db.wait_for_buffer_flush()
     assert blocked_handle.get_status().status == WorkflowStatusString.SUCCESS.value
+    with dbos._sys_db.engine.begin() as c:
+        query = sa.select(SystemSchema.workflow_status.c.recovery_attempts).where(
+            SystemSchema.workflow_status.c.workflow_uuid
+            == blocked_handle.get_workflow_id()
+        )
+        result = c.execute(query)
+        row = result.fetchone()
+        assert row is not None
+        assert row[0] == max_recovery_attempts + 2
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
