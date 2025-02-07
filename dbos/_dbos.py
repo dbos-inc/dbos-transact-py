@@ -28,6 +28,7 @@ from typing import (
     overload,
 )
 
+from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Span
 
 from ._classproperty import classproperty
@@ -863,6 +864,11 @@ class DBOS:
         """Return the tracing `Span` associated with the current context."""
         ctx = assert_current_dbos_context()
         return ctx.get_current_span()
+
+    @classproperty
+    def tracer_provider(cls) -> Optional["TracerProvider"]:
+        """Return the tracer provider associated with ..."""
+        return dbos_tracer.get_provider()
 
     @classproperty
     def request(cls) -> Optional["Request"]:

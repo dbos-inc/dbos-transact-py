@@ -35,7 +35,11 @@ class DBOSTracer:
                     OTLPSpanExporter(endpoint=otlp_traces_endpoint)
                 )
                 provider.add_span_processor(processor)
+            self.set_provider(provider)
             trace.set_tracer_provider(provider)
+
+    def get_provider(self) -> Optional[TracerProvider]:
+        return self.provider
 
     def set_provider(self, provider: Optional[TracerProvider]) -> None:
         self.provider = provider
