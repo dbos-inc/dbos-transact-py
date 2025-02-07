@@ -5,6 +5,7 @@ import typer
 from . import _serialization
 from ._dbos_config import ConfigFile
 from ._sys_db import (
+    GetQueuedWorkflowsInput,
     GetWorkflowsInput,
     GetWorkflowsOutput,
     SystemDatabase,
@@ -19,8 +20,8 @@ class WorkflowInformation:
     workflowClassName: Optional[str]
     workflowConfigName: Optional[str]
     input: Optional[_serialization.WorkflowInputs]  # JSON (jsonpickle)
-    output: Optional[str]  # JSON (jsonpickle)
-    error: Optional[str]  # JSON (jsonpickle)
+    output: Optional[str] = None  # JSON (jsonpickle)
+    error: Optional[str] = None  # JSON (jsonpickle)
     executor_id: Optional[str]
     app_version: Optional[str]
     app_id: Optional[str]
@@ -34,17 +35,15 @@ class WorkflowInformation:
 
 def list_workflows(
     config: ConfigFile,
-    li: int,
+    limit: int,
     user: Optional[str],
     starttime: Optional[str],
     endtime: Optional[str],
     status: Optional[str],
     request: bool,
     appversion: Optional[str],
+    name: Optional[str],
 ) -> List[WorkflowInformation]:
-
-    sys_db = None
-
     try:
         sys_db = SystemDatabase(config)
 
@@ -55,24 +54,55 @@ def list_workflows(
         if status is not None:
             input.status = cast(WorkflowStatuses, status)
         input.application_version = appversion
-        input.limit = li
+        input.limit = limit
+        input.name = name
 
         output: GetWorkflowsOutput = sys_db.get_workflows(input)
-
         infos: List[WorkflowInformation] = []
-
-        if output.workflow_uuids is None:
-            typer.echo("No workflows found")
-            return {}
-
         for workflow_id in output.workflow_uuids:
             info = _get_workflow_info(
                 sys_db, workflow_id, request
             )  # Call the method for each ID
-
             if info is not None:
                 infos.append(info)
 
+        return infos
+    except Exception as e:
+        typer.echo(f"Error listing workflows: {e}")
+        return []
+    finally:
+        if sys_db:
+            sys_db.destroy()
+
+
+def list_queued_workflows(
+    config: ConfigFile,
+    limit: Optional[int] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    queue_name: Optional[str] = None,
+    status: Optional[str] = None,
+    name: Optional[str] = None,
+    request: bool = False,
+) -> List[WorkflowInformation]:
+    try:
+        sys_db = SystemDatabase(config)
+        input: GetQueuedWorkflowsInput = {
+            "queue_name": queue_name,
+            "start_time": start_time,
+            "end_time": end_time,
+            "status": status,
+            "limit": limit,
+            "name": name,
+        }
+        output: GetWorkflowsOutput = sys_db.get_queued_workflows(input)
+        infos: List[WorkflowInformation] = []
+        for workflow_id in output.workflow_uuids:
+            info = _get_workflow_info(
+                sys_db, workflow_id, request
+            )  # Call the method for each ID
+            if info is not None:
+                infos.append(info)
         return infos
     except Exception as e:
         typer.echo(f"Error listing workflows: {e}")
