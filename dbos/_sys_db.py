@@ -755,7 +755,7 @@ class SystemDatabase:
 
     def get_pending_workflows(
         self, executor_id: str
-    ) -> list[GetPendingWorkflowsOutput]:>>>>>>> main
+    ) -> list[GetPendingWorkflowsOutput]:
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(
