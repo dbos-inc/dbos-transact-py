@@ -50,7 +50,10 @@ def recover_pending_workflows(
         dbos.logger.debug(f"Recovering pending workflows for executor: {executor_id}")
         pending_workflows = dbos._sys_db.get_pending_workflows(executor_id)
         for pending_workflow in pending_workflows:
-            if pending_workflow.queue_name:
+            if (
+                pending_workflow.queue_name
+                and pending_workflow.queue_name != "_dbos_internal_queue"
+            ):
                 try:
                     dbos._sys_db.clear_queue_assignment(pending_workflow.workflow_uuid)
                     workflow_handles.append(
