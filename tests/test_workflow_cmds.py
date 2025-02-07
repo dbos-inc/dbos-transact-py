@@ -245,8 +245,8 @@ def test_queued_workflows(dbos: DBOS, config: ConfigFile) -> None:
         assert workflow.status == WorkflowStatusString.PENDING.value
         assert workflow.queue_name == queue.name
         assert workflow.input is not None
-        # Verify newest queue entries appear first
-        assert workflow.input["args"][0] == queued_steps - i - 1
+        # Verify oldest queue entries appear first
+        assert workflow.input["args"][0] == i
         assert workflow.output is None
         assert workflow.error is None
         assert "blocking_step" in workflow.workflowName
