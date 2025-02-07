@@ -123,7 +123,10 @@ def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
 
 
 def load_config(
-    config_file_path: str = DBOS_CONFIG_PATH, *, use_db_wizard: bool = True
+    config_file_path: str = DBOS_CONFIG_PATH,
+    *,
+    use_db_wizard: bool = True,
+    silent: bool = False,
 ) -> ConfigFile:
     """
     Load the DBOS `ConfigFile` from the specified path (typically `dbos-config.yaml`).
@@ -188,18 +191,19 @@ def load_config(
     # Load the DB connection file. Use its values for missing fields from dbos-config.yaml. Use defaults otherwise.
     data = cast(ConfigFile, data)
     db_connection = load_db_connection()
-    if data["database"].get("hostname"):
-        print(
-            "[bold blue]Loading database connection parameters from dbos-config.yaml[/bold blue]"
-        )
-    elif db_connection.get("hostname"):
-        print(
-            "[bold blue]Loading database connection parameters from .dbos/db_connection[/bold blue]"
-        )
-    else:
-        print(
-            "[bold blue]Using default database connection parameters (localhost)[/bold blue]"
-        )
+    if not silent:
+        if data["database"].get("hostname"):
+            print(
+                "[bold blue]Loading database connection parameters from dbos-config.yaml[/bold blue]"
+            )
+        elif db_connection.get("hostname"):
+            print(
+                "[bold blue]Loading database connection parameters from .dbos/db_connection[/bold blue]"
+            )
+        else:
+            print(
+                "[bold blue]Using default database connection parameters (localhost)[/bold blue]"
+            )
 
     data["database"]["hostname"] = (
         data["database"].get("hostname") or db_connection.get("hostname") or "localhost"

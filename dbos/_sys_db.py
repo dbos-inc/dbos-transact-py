@@ -126,6 +126,15 @@ class GetWorkflowsInput:
         )
 
 
+class GetQueuedWorkflowsInput(TypedDict):
+    queue_name: Optional[str]
+    status: Optional[str]
+    start_time: Optional[str]  # Timestamp in ISO 8601 format
+    end_time: Optional[str]  # Timestamp in ISO 8601 format
+    limit: Optional[int]  # Return up to this many workflows IDs.
+    name: Optional[str]  # The name of the workflow function
+
+
 class GetWorkflowsOutput:
     def __init__(self, workflow_uuids: List[str]):
         self.workflow_uuids = workflow_uuids
@@ -665,7 +674,6 @@ class SystemDatabase:
         query = sa.select(SystemSchema.workflow_status.c.workflow_uuid).order_by(
             SystemSchema.workflow_status.c.created_at.desc()
         )
-
         if input.name:
             query = query.where(SystemSchema.workflow_status.c.name == input.name)
         if input.authenticated_user:
@@ -699,9 +707,55 @@ class SystemDatabase:
 
         return GetWorkflowsOutput(workflow_uuids)
 
+    def get_queued_workflows(
+        self, input: GetQueuedWorkflowsInput
+    ) -> GetWorkflowsOutput:
+
+        query = (
+            sa.select(SystemSchema.workflow_queue.c.workflow_uuid)
+            .join(
+                SystemSchema.workflow_status,
+                SystemSchema.workflow_queue.c.workflow_uuid
+                == SystemSchema.workflow_status.c.workflow_uuid,
+            )
+            .order_by(SystemSchema.workflow_status.c.created_at.desc())
+        )
+
+        if input.get("name"):
+            query = query.where(SystemSchema.workflow_status.c.name == input["name"])
+
+        if input.get("queue_name"):
+            query = query.where(
+                SystemSchema.workflow_queue.c.queue_name == input["queue_name"]
+            )
+
+        if input.get("status"):
+            query = query.where(
+                SystemSchema.workflow_status.c.status == input["status"]
+            )
+        if "start_time" in input and input["start_time"] is not None:
+            query = query.where(
+                SystemSchema.workflow_status.c.created_at
+                >= datetime.datetime.fromisoformat(input["start_time"]).timestamp()
+                * 1000
+            )
+        if "end_time" in input and input["end_time"] is not None:
+            query = query.where(
+                SystemSchema.workflow_status.c.created_at
+                <= datetime.datetime.fromisoformat(input["end_time"]).timestamp() * 1000
+            )
+        if input.get("limit"):
+            query = query.limit(input["limit"])
+
+        with self.engine.begin() as c:
+            rows = c.execute(query)
+        workflow_uuids = [row[0] for row in rows]
+
+        return GetWorkflowsOutput(workflow_uuids)
+
     def get_pending_workflows(
         self, executor_id: str
-    ) -> list[GetPendingWorkflowsOutput]:
+    ) -> list[GetPendingWorkflowsOutput]:>>>>>>> main
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(

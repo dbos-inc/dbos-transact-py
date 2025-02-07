@@ -19,14 +19,21 @@ from .. import load_config
 from .._app_db import ApplicationDatabase
 from .._dbos_config import _is_valid_app_name
 from .._sys_db import SystemDatabase, reset_system_database
-from .._workflow_commands import cancel_workflow, get_workflow, list_workflows
+from .._workflow_commands import (
+    cancel_workflow,
+    get_workflow,
+    list_queued_workflows,
+    list_workflows,
+)
 from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
 
 app = typer.Typer()
 workflow = typer.Typer()
+queue = typer.Typer()
 
 app.add_typer(workflow, name="workflow", help="Manage DBOS workflows")
+workflow.add_typer(queue, name="queue", help="Manage enqueued workflows")
 
 
 def _on_windows() -> bool:
@@ -272,18 +279,22 @@ def list(
             help="Retrieve workflows with this application version",
         ),
     ] = None,
+    name: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--name",
+            "-n",
+            help="Retrieve workflows with this name",
+        ),
+    ] = None,
     request: Annotated[
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
     ] = True,
-    appdir: Annotated[
-        typing.Optional[str],
-        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
-    ] = None,
 ) -> None:
-    config = load_config()
+    config = load_config(silent=True)
     workflows = list_workflows(
-        config, limit, user, starttime, endtime, status, request, appversion
+        config, limit, user, starttime, endtime, status, request, appversion, name
     )
     print(jsonpickle.encode(workflows, unpicklable=False))
 
@@ -291,16 +302,12 @@ def list(
 @workflow.command(help="Retrieve the status of a workflow")
 def get(
     uuid: Annotated[str, typer.Argument()],
-    appdir: Annotated[
-        typing.Optional[str],
-        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
-    ] = None,
     request: Annotated[
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
     ] = True,
 ) -> None:
-    config = load_config()
+    config = load_config(silent=True)
     print(jsonpickle.encode(get_workflow(config, uuid, request), unpicklable=False))
 
 
@@ -309,10 +316,6 @@ def get(
 )
 def cancel(
     uuid: Annotated[str, typer.Argument()],
-    appdir: Annotated[
-        typing.Optional[str],
-        typer.Option("--app-dir", "-d", help="Specify the application root directory"),
-    ] = None,
 ) -> None:
     config = load_config()
     cancel_workflow(config, uuid)
@@ -361,6 +364,71 @@ def restart(
         print(f"Workflow {uuid} has been restarted")
     else:
         print(f"Failed to resume workflow {uuid}. Status code: {response.status_code}")
+
+
+@queue.command(name="list", help="List enqueued functions for your application")
+def list_queue(
+    limit: Annotated[
+        typing.Optional[int],
+        typer.Option("--limit", "-l", help="Limit the results returned"),
+    ] = None,
+    start_time: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--start-time",
+            "-s",
+            help="Retrieve functions starting after this timestamp (ISO 8601 format)",
+        ),
+    ] = None,
+    end_time: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--end-time",
+            "-e",
+            help="Retrieve functions starting before this timestamp (ISO 8601 format)",
+        ),
+    ] = None,
+    status: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--status",
+            "-S",
+            help="Retrieve functions with this status (PENDING, SUCCESS, ERROR, RETRIES_EXCEEDED, ENQUEUED, or CANCELLED)",
+        ),
+    ] = None,
+    queue_name: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--queue-name",
+            "-q",
+            help="Retrieve functions on this queue",
+        ),
+    ] = None,
+    name: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--name",
+            "-n",
+            help="Retrieve functions on this queue",
+        ),
+    ] = None,
+    request: Annotated[
+        bool,
+        typer.Option("--request", help="Retrieve workflow request information"),
+    ] = True,
+) -> None:
+    config = load_config(silent=True)
+    workflows = list_queued_workflows(
+        config=config,
+        limit=limit,
+        start_time=start_time,
+        end_time=end_time,
+        queue_name=queue_name,
+        status=status,
+        request=request,
+        name=name,
+    )
+    print(jsonpickle.encode(workflows, unpicklable=False))
 
 
 if __name__ == "__main__":
