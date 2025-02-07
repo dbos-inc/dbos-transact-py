@@ -4,10 +4,8 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Any, List
 
-from sqlalchemy.exc import DatabaseError
-
 from ._core import execute_workflow_by_id
-from ._error import DBOSWorkflowFunctionNotFoundError, DBOSWorkflowRecoveryError
+from ._error import DBOSWorkflowFunctionNotFoundError
 from ._sys_db import GetPendingWorkflowsOutput
 
 if TYPE_CHECKING:
