@@ -14,25 +14,6 @@ if TYPE_CHECKING:
     from ._dbos import DBOS, WorkflowHandle
 
 
-def clear_pending_workflow_queue_assignement(
-    dbos: "DBOS", workflow: GetPendingWorkflowsOutput
-) -> None:
-    dbos.logger.debug(
-        f"Clearing queue assignment for workflow: {workflow.workflow_uuid}"
-    )
-    try:
-        dbos._sys_db.clear_queue_assignment(workflow.workflow_uuid)
-    except DatabaseError as e:
-        if getattr(e.orig, "pgcode", None) == "40001":
-            dbos.logger.debug(
-                f"Workflow {workflow.workflow_uuid} queue assignment is already being cleared"
-            )
-        else:
-            raise DBOSWorkflowRecoveryError(
-                workflow.workflow_uuid, f"clearing queue assignment: {e}"
-            )
-
-
 def startup_recovery_thread(
     dbos: "DBOS", pending_workflows: List[GetPendingWorkflowsOutput]
 ) -> None:
@@ -46,7 +27,7 @@ def startup_recovery_thread(
                     pending_workflow.queue_name
                     and pending_workflow.queue_name != "_dbos_internal_queue"
                 ):
-                    clear_pending_workflow_queue_assignement(dbos, pending_workflow)
+                    dbos._sys_db.clear_queue_assignment(pending_workflow.workflow_uuid)
                     continue
                 execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
                 pending_workflows.remove(pending_workflow)
@@ -71,16 +52,13 @@ def recover_pending_workflows(
         dbos.logger.debug(f"Recovering pending workflows for executor: {executor_id}")
         pending_workflows = dbos._sys_db.get_pending_workflows(executor_id)
         for pending_workflow in pending_workflows:
-            if (
-                pending_workflow.queue_name
-                and pending_workflow.queue_name != "_dbos_internal_queue"
-            ):
+            if pending_workflow.queue_name:
                 try:
-                    clear_pending_workflow_queue_assignement(dbos, pending_workflow)
+                    dbos._sys_db.clear_queue_assignment(pending_workflow.workflow_uuid)
                     workflow_handles.append(
                         dbos.retrieve_workflow(pending_workflow.workflow_uuid)
                     )
-                except DBOSWorkflowRecoveryError as e:
+                except Exception as e:
                     dbos.logger.error(e)
             else:
                 workflow_handles.append(

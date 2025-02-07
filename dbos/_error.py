@@ -127,13 +127,3 @@ class DBOSMaxStepRetriesExceeded(DBOSException):
             "Step reached maximum retries.",
             dbos_error_code=DBOSErrorCode.MaxStepRetriesExceeded.value,
         )
-
-
-class DBOSWorkflowRecoveryError(DBOSException):
-    """Exception raised when a workflow recovery fails."""
-
-    def __init__(self, workflow_id: str, message: Optional[str] = None):
-        super().__init__(
-            f"Recovery error for workflow ID {workflow_id}: {message}",
-            dbos_error_code=DBOSErrorCode.RecoveryError.value,
-        )
