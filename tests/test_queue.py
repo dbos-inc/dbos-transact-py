@@ -843,6 +843,15 @@ def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
         blocked_handle.get_status().status
         == WorkflowStatusString.RETRIES_EXCEEDED.value
     )
+    with dbos._sys_db.engine.begin() as c:
+        query = sa.select(SystemSchema.workflow_status.c.recovery_attempts).where(
+            SystemSchema.workflow_status.c.workflow_uuid
+            == blocked_handle.get_workflow_id()
+        )
+        result = c.execute(query)
+        row = result.fetchone()
+        assert row is not None
+        assert row[0] == max_recovery_attempts + 2
 
     # Verify the blocked workflow entering the DLQ lets the regular workflow run
     assert regular_handle.get_result() == None
@@ -852,6 +861,15 @@ def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
     assert blocked_handle.get_result() == None
     dbos._sys_db.wait_for_buffer_flush()
     assert blocked_handle.get_status().status == WorkflowStatusString.SUCCESS.value
+    with dbos._sys_db.engine.begin() as c:
+        query = sa.select(SystemSchema.workflow_status.c.recovery_attempts).where(
+            SystemSchema.workflow_status.c.workflow_uuid
+            == blocked_handle.get_workflow_id()
+        )
+        result = c.execute(query)
+        row = result.fetchone()
+        assert row is not None
+        assert row[0] == max_recovery_attempts + 2
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
