@@ -905,10 +905,10 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
 
     wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 2
-    assert wfs.workflow_uuids[1] == dest_uuid
-    assert wfs.workflow_uuids[0] != dest_uuid
+    assert wfs.workflow_uuids[0] == dest_uuid
+    assert wfs.workflow_uuids[1] != dest_uuid
 
-    wfi = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[0], False)
+    wfi = dbos._sys_db.get_workflow_info(wfs.workflow_uuids[1], False)
     assert wfi
     assert wfi["name"] == "<temp>.temp_send_workflow"
 

@@ -672,7 +672,7 @@ class SystemDatabase:
 
     def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
         query = sa.select(SystemSchema.workflow_status.c.workflow_uuid).order_by(
-            SystemSchema.workflow_status.c.created_at.desc()
+            SystemSchema.workflow_status.c.created_at.asc()
         )
         if input.name:
             query = query.where(SystemSchema.workflow_status.c.name == input.name)
@@ -718,7 +718,7 @@ class SystemDatabase:
                 SystemSchema.workflow_queue.c.workflow_uuid
                 == SystemSchema.workflow_status.c.workflow_uuid,
             )
-            .order_by(SystemSchema.workflow_status.c.created_at.desc())
+            .order_by(SystemSchema.workflow_status.c.created_at.asc())
         )
 
         if input.get("name"):
