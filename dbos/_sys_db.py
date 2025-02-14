@@ -189,6 +189,7 @@ class SystemDatabase:
             host=config["database"]["hostname"],
             port=config["database"]["port"],
             database="postgres",
+            query={"application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"}
         )
         engine = sa.create_engine(postgres_db_url)
         with engine.connect() as conn:
@@ -207,6 +208,7 @@ class SystemDatabase:
             host=config["database"]["hostname"],
             port=config["database"]["port"],
             database=sysdb_name,
+            query={"application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"}
         )
 
         # Create a connection pool for the system database
