@@ -189,6 +189,7 @@ class SystemDatabase:
             host=config["database"]["hostname"],
             port=config["database"]["port"],
             database="postgres",
+            query={"application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"}
         )
         engine = sa.create_engine(postgres_db_url)
         with engine.connect() as conn:
@@ -207,6 +208,7 @@ class SystemDatabase:
             host=config["database"]["hostname"],
             port=config["database"]["port"],
             database=sysdb_name,
+            query={"application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"}
         )
 
         # Create a connection pool for the system database
@@ -1330,7 +1332,10 @@ class SystemDatabase:
             # Now, get the workflow IDs of functions that have not yet been started
             dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
             ret_ids: list[str] = []
-            dbos_logger.debug(f"[{queue.name}] dequeueing {len(dequeued_ids)} task(s)")
+            if len(dequeued_ids) > 0:
+                dbos_logger.debug(
+                    f"[{queue.name}] dequeueing {len(dequeued_ids)} task(s)"
+                )
             for id in dequeued_ids:
 
                 # If we have a limiter, stop starting functions when the number
