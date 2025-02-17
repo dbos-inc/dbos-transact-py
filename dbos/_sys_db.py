@@ -227,7 +227,12 @@ class SystemDatabase:
             self.engine.url.render_as_string(hide_password=False),
         )
         alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
-        command.upgrade(alembic_cfg, "head")
+        try:
+            command.upgrade(alembic_cfg, "head")
+        except Exception as e:
+            dbos_logger.warning(
+                f"Error during system database construction. This is most likely because the system database was configured using a later version of DBOS: {e}"
+            )
 
         self.notification_conn: Optional[psycopg.connection.Connection] = None
         self.notifications_map: Dict[str, threading.Condition] = {}
