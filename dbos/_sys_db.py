@@ -231,7 +231,7 @@ class SystemDatabase:
             command.upgrade(alembic_cfg, "head")
         except Exception as e:
             dbos_logger.warning(
-                f"Error during system database construction. This is most likely because the system database was configured using a later version of DBOS: {e}"
+                f"Exception during system database construction. This is most likely because the system database was configured using a later version of DBOS: {e}"
             )
 
         self.notification_conn: Optional[psycopg.connection.Connection] = None
