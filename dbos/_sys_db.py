@@ -1309,6 +1309,15 @@ class SystemDatabase:
             # Dequeue functions eligible for this worker and ordered by the time at which they were enqueued.
             # If there is a global or local concurrency limit N, select only the N oldest enqueued
             # functions, else select all of them.
+
+            running_tasks_subquery = (
+                sa.select(sa.func.count())
+                .where(
+                    (SystemSchema.workflow_queue.c.queue_name == queue.name)
+                    & (SystemSchema.workflow_queue.c.executor_id.isnot(None))  # Task is dequeued
+                    & (SystemSchema.workflow_queue.c.completed_at_epoch_ms.is_(None))  # Task is not completed
+                )
+            ).scalar_subquery()
             query = (
                 sa.select(
                     SystemSchema.workflow_queue.c.workflow_uuid,
@@ -1325,17 +1334,21 @@ class SystemDatabase:
                     )
                 )
                 .order_by(SystemSchema.workflow_queue.c.created_at_epoch_ms.asc())
+                # Set a dequeue limit if necessary. worker_concurrency <= concurrency is already enforced, but still.
+                .limit(
+                    sa.func.least(queue.worker_concurrency, queue.concurrency - running_tasks_subquery)
+                )
+                .with_for_update(nowait=True) # Error out early
             )
-            # Set a dequeue limit if necessary
-            if queue.worker_concurrency is not None:
-                query = query.limit(queue.worker_concurrency)
-            elif queue.concurrency is not None:
-                query = query.limit(queue.concurrency)
-
             rows = c.execute(query).fetchall()
 
             # Now, get the workflow IDs of functions that have not yet been started
             dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
+            already_started_ids: List[str] = [row[0] for row in rows if row[1] is not None]
+            if len(already_started_ids) > 0:
+                dbos_logger.debug(
+                    f"[{queue.name}] already started {len(already_started_ids)} task(s)"
+                )
             ret_ids: list[str] = []
             dbos_logger.debug(f"[{queue.name}] dequeueing {len(dequeued_ids)} task(s)")
             for id in dequeued_ids:
