@@ -1,10 +1,11 @@
 import logging
+import multiprocessing
+import multiprocessing.synchronize
 import os
 import subprocess
 import threading
 import time
 import uuid
-from multiprocessing import Process
 
 import pytest
 import sqlalchemy as sa
@@ -423,12 +424,24 @@ def test_one_at_a_time_with_worker_concurrency(dbos: DBOS) -> None:
 
 
 # Declare a workflow globally (we need it to be registered across process under a known name)
+start_event = threading.Event()
+end_event = threading.Event()
+
+
 @DBOS.workflow()
 def worker_concurrency_test_workflow() -> None:
-    pass
+    start_event.set()
+    end_event.wait()
 
 
-def run_dbos_test_in_process(i: int) -> None:
+global_concurrency_limit: int = 5
+
+
+def run_dbos_test_in_process(
+    i: int,
+    start_signal: multiprocessing.synchronize.Event,
+    end_signal: multiprocessing.synchronize.Event,
+) -> None:
     dbos_config: ConfigFile = {
         "name": "test-app",
         "language": "python",
@@ -449,31 +462,74 @@ def run_dbos_test_in_process(i: int) -> None:
     dbos = DBOS(config=dbos_config)
     DBOS.launch()
 
-    Queue("test_queue", worker_concurrency=1)
-    time.sleep(
-        2
-    )  # Give some time for the parent worker to enqueue and for this worker to dequeue
+    Queue("test_queue", worker_concurrency=1, concurrency=global_concurrency_limit)
+    start_event.wait()
+    # Signal the parent process we've dequeued
+    start_signal.set()
+    # Wait for the parent process to signal we can move on
+    end_signal.wait()
+    # Complete the task
+    end_event.set()
 
+    # Now whatever is in the queue should be cleared up fast (start/end events are already set)
     queue_entries_are_cleaned_up(dbos)
 
     DBOS.destroy()
 
 
 def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
-
     # Start N proccesses to dequeue
     processes = []
-    for i in range(0, 10):
+    start_signals = []
+    end_signals = []
+    manager = multiprocessing.Manager()
+    # Start more workers than the global concurrency limit
+    for i in range(0, global_concurrency_limit * 2):
         os.environ["DBOS__VMID"] = f"test-executor-{i}"
-        process = Process(target=run_dbos_test_in_process, args=(i,))
+        start_signal = manager.Event()
+        start_signals.append(start_signal)
+        end_signal = manager.Event()
+        end_signals.append(end_signal)
+        process = multiprocessing.Process(
+            target=run_dbos_test_in_process, args=(i, start_signal, end_signal)
+        )
         process.start()
         processes.append(process)
 
-    # Enqueue N tasks but ensure this worker cannot dequeue
-
+    # Enqueue 10 * global concurrency limit tasks and ensure this worker cannot dequeue
     queue = Queue("test_queue", limiter={"limit": 0, "period": 1})
-    for i in range(0, 10):
+    for i in range(0, 10 * global_concurrency_limit):
         queue.enqueue(worker_concurrency_test_workflow)
+
+    # Wait for global_concurrency_limit workers to start
+    num_dequeued = 0
+    while num_dequeued < global_concurrency_limit:
+        for signal in start_signals:
+            signal.wait(timeout=1)
+            if signal.is_set():
+                num_dequeued += 1
+
+    # Now check in the DB that global concurrency is met
+    with dbos._sys_db.engine.begin() as conn:
+        query = (
+            sa.select(sa.func.count())
+            .select_from(SystemSchema.workflow_status)
+            .where(
+                SystemSchema.workflow_status.c.status
+                == WorkflowStatusString.PENDING.value
+            )
+        )
+        row = conn.execute(query).fetchone()
+
+        assert row is not None, "Query returned no results"
+        count = row[0]
+        assert (
+            count == global_concurrency_limit
+        ), f"Expected {global_concurrency_limit} workflows, found {count}"
+
+    # Signal the workers they can move on
+    for signal in end_signals:
+        signal.set()
 
     for process in processes:
         process.join()
