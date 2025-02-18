@@ -189,7 +189,9 @@ class SystemDatabase:
             host=config["database"]["hostname"],
             port=config["database"]["port"],
             database="postgres",
-            query={"application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"}
+            query={
+                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"
+            },
         )
         engine = sa.create_engine(postgres_db_url)
         with engine.connect() as conn:
@@ -208,7 +210,9 @@ class SystemDatabase:
             host=config["database"]["hostname"],
             port=config["database"]["port"],
             database=sysdb_name,
-            query={"application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"}
+            query={
+                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"
+            },
         )
 
         # Create a connection pool for the system database
@@ -1306,11 +1310,14 @@ class SystemDatabase:
             # functions, else select all of them.
 
             running_tasks_subquery = (
-                sa.select(sa.func.count())
-                .where(
+                sa.select(sa.func.count()).where(
                     (SystemSchema.workflow_queue.c.queue_name == queue.name)
-                    & (SystemSchema.workflow_queue.c.executor_id.isnot(None))  # Task is dequeued
-                    & (SystemSchema.workflow_queue.c.completed_at_epoch_ms.is_(None))  # Task is not completed
+                    & (
+                        SystemSchema.workflow_queue.c.executor_id.isnot(None)
+                    )  # Task is dequeued
+                    & (
+                        SystemSchema.workflow_queue.c.completed_at_epoch_ms.is_(None)
+                    )  # Task is not completed
                 )
             ).scalar_subquery()
             query = (
@@ -1331,9 +1338,12 @@ class SystemDatabase:
                 .order_by(SystemSchema.workflow_queue.c.created_at_epoch_ms.asc())
                 # Set a dequeue limit if necessary. worker_concurrency <= concurrency is already enforced, but still.
                 .limit(
-                    sa.func.least(queue.worker_concurrency, queue.concurrency - running_tasks_subquery)
+                    sa.func.least(
+                        queue.worker_concurrency,
+                        queue.concurrency - running_tasks_subquery,
+                    )
                 )
-                .with_for_update(nowait=True) # Error out early
+                .with_for_update(nowait=True)  # Error out early
             )
             rows = c.execute(query).fetchall()
 
