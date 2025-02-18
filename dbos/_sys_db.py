@@ -1407,6 +1407,7 @@ class SystemDatabase:
 
             # Now, get the workflow IDs of functions that have not yet been started
             dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
+<<<<<<< HEAD
             already_started_ids: List[str] = [row[0] for row in rows if row[1] is not None]
             if len(already_started_ids) > 0:
                 dbos_logger.debug(
@@ -1414,6 +1415,8 @@ class SystemDatabase:
                 )
             ret_ids: list[str] = []
 >>>>>>> 0a2301f (fix global concurrency)
+=======
+>>>>>>> a76d556 (remove debug entry)
             if len(dequeued_ids) > 0:
                 dbos_logger.debug(
                     f"[{queue.name}] dequeueing {len(dequeued_ids)} task(s)"
