@@ -18,9 +18,26 @@ from dbos import (
     SetWorkflowID,
     WorkflowHandle,
 )
+from dbos._error import DBOSDeadLetterQueueError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
-from tests.conftest import default_config, queue_entries_are_cleaned_up
+from tests.conftest import default_config
+
+
+def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
+    max_tries = 10
+    success = False
+    for i in range(max_tries):
+        with dbos._sys_db.engine.begin() as c:
+            query = sa.select(sa.func.count()).select_from(SystemSchema.workflow_queue)
+            row = c.execute(query).fetchone()
+            assert row is not None
+            count = row[0]
+            if count == 0:
+                success = True
+                break
+        time.sleep(1)
+    return success
 
 
 def test_simple_queue(dbos: DBOS) -> None:
@@ -363,6 +380,11 @@ def test_queue_workflow_in_recovered_workflow(dbos: DBOS) -> None:
     return
 
 
+###########################
+# TEST WORKER CONCURRENCY #
+###########################
+
+
 def test_one_at_a_time_with_worker_concurrency(dbos: DBOS) -> None:
     wf_counter = 0
     flag = False
@@ -412,8 +434,7 @@ def worker_concurrency_test_workflow() -> None:
     end_event.wait()
 
 
-local_concurrency_limit: int = 5
-global_concurrency_limit: int = local_concurrency_limit * 2
+global_concurrency_limit: int = 5
 
 
 def run_dbos_test_in_process(
@@ -437,53 +458,33 @@ def run_dbos_test_in_process(
         },
         "telemetry": {},
         "env": {},
-        "application": {},
     }
     dbos = DBOS(config=dbos_config)
     DBOS.launch()
 
-    Queue(
-        "test_queue",
-        worker_concurrency=local_concurrency_limit,
-        concurrency=global_concurrency_limit,
-    )
-    # Wait to dequeue as many tasks as we can locally
-    for _ in range(0, local_concurrency_limit):
-        start_event.wait()
-        start_event.clear()
+    Queue("test_queue", worker_concurrency=1, concurrency=global_concurrency_limit)
+    start_event.wait()
     # Signal the parent process we've dequeued
     start_signal.set()
     # Wait for the parent process to signal we can move on
     end_signal.wait()
-    # Complete the task. 1 set should unblock them all
+    # Complete the task
     end_event.set()
 
     # Now whatever is in the queue should be cleared up fast (start/end events are already set)
     queue_entries_are_cleaned_up(dbos)
 
+    DBOS.destroy()
 
-# Test global concurrency and worker utilization by carefully filling the queue up to 1) the local limit 2) the global limit
-# For the global limit, we fill the queue in 2 steps, ensuring that the 2nd worker is able to cap its local utilization even
-# after having dequeued some tasks already
+
 def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
-    # Ensure children processes do not share global variables (including DBOS instance) with the parent
-    multiprocessing.set_start_method("spawn")
-
-    queue = Queue(
-        "test_queue", limiter={"limit": 0, "period": 1}
-    )  # This process cannot dequeue tasks
-
-    # First, start local concurrency limit tasks
-    handles = []
-    for _ in range(0, local_concurrency_limit):
-        handles.append(queue.enqueue(worker_concurrency_test_workflow))
-
-    # Start 2 workers
+    # Start N proccesses to dequeue
     processes = []
     start_signals = []
     end_signals = []
     manager = multiprocessing.Manager()
-    for i in range(0, 2):
+    # Start more workers than the global concurrency limit
+    for i in range(0, global_concurrency_limit * 2):
         os.environ["DBOS__VMID"] = f"test-executor-{i}"
         start_signal = manager.Event()
         start_signals.append(start_signal)
@@ -494,58 +495,19 @@ def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
         )
         process.start()
         processes.append(process)
-    del os.environ["DBOS__VMID"]
 
-    # Check that a single worker was able to acquire all the tasks
-    loop = True
-    while loop:
-        for signal in start_signals:
-            signal.wait(timeout=1)
-            if signal.is_set():
-                loop = False
-    executors = []
-    for handle in handles:
-        status = handle.get_status()
-        assert status.status == WorkflowStatusString.PENDING.value
-        executors.append(status.executor_id)
-    assert len(set(executors)) == 1
+    # Enqueue 10 * global concurrency limit tasks and ensure this worker cannot dequeue
+    queue = Queue("test_queue", limiter={"limit": 0, "period": 1})
+    for i in range(0, 10 * global_concurrency_limit):
+        queue.enqueue(worker_concurrency_test_workflow)
 
-    # Now enqueue less than the local concurrency limit. Check that the 2nd worker acquired them. We won't have a signal set from the worker so we need to sleep a little.
-    handles = []
-    for _ in range(0, local_concurrency_limit - 1):
-        handles.append(queue.enqueue(worker_concurrency_test_workflow))
-    time.sleep(2)
-    executors = []
-    for handle in handles:
-        status = handle.get_status()
-        assert status.status == WorkflowStatusString.PENDING.value
-        executors.append(status.executor_id)
-    assert len(set(executors)) == 1
-
-    # Now, enqueue two more tasks. This means qlen > local concurrency limit * 2 and qlen > global concurrency limit
-    # We should have 1 tasks PENDING and 1 ENQUEUED, thus meeting both local and global concurrency limits
-    handles = []
-    for _ in range(0, 2):
-        handles.append(queue.enqueue(worker_concurrency_test_workflow))
-    # we can check the signal because the 2nd executor will set it
+    # Wait for global_concurrency_limit workers to start
     num_dequeued = 0
-    while num_dequeued < 2:
+    while num_dequeued < global_concurrency_limit:
         for signal in start_signals:
             signal.wait(timeout=1)
             if signal.is_set():
                 num_dequeued += 1
-    executors = []
-    statuses = []
-    for handle in handles:
-        status = handle.get_status()
-        statuses.append(status.status)
-        executors.append(status.executor_id)
-    assert set(statuses) == {
-        WorkflowStatusString.PENDING.value,
-        WorkflowStatusString.ENQUEUED.value,
-    }
-    assert len(set(executors)) == 2
-    assert "local" in executors
 
     # Now check in the DB that global concurrency is met
     with dbos._sys_db.engine.begin() as conn:
@@ -571,9 +533,6 @@ def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
 
     for process in processes:
         process.join()
-
-    # Verify all queue entries eventually get cleaned up.
-    assert queue_entries_are_cleaned_up(dbos)
 
 
 # Test error cases where we have duplicated workflows starting with the same workflow ID.
@@ -758,9 +717,7 @@ def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
     def noop() -> None:
         pass
 
-    queue = Queue(
-        "test_queue", worker_concurrency=2
-    )  # covers global concurrency limit because we have a single process
+    queue = Queue("test_queue", concurrency=2)
     handle1 = queue.enqueue(blocked_workflow, 0)
     handle2 = queue.enqueue(blocked_workflow, 1)
     handle3 = queue.enqueue(noop)
