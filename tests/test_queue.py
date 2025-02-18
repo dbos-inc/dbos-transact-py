@@ -458,6 +458,7 @@ def run_dbos_test_in_process(
         },
         "telemetry": {},
         "env": {},
+        "application": {},
     }
     dbos = DBOS(config=dbos_config)
     DBOS.launch()
