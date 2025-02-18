@@ -1316,6 +1316,7 @@ class SystemDatabase:
             # If there is a global or local concurrency limit N, select only the N oldest enqueued
             # functions, else select all of them.
 
+<<<<<<< HEAD
             # First lets figure out how many tasks the worker can dequeue
             running_tasks_query = (
                 sa.select(
@@ -1364,6 +1365,16 @@ class SystemDatabase:
                 max_tasks = min(max_tasks, available_tasks)
 
             # Lookup tasks
+=======
+            running_tasks_subquery = (
+                sa.select(sa.func.count())
+                .where(
+                    (SystemSchema.workflow_queue.c.queue_name == queue.name)
+                    & (SystemSchema.workflow_queue.c.executor_id.isnot(None))  # Task is dequeued
+                    & (SystemSchema.workflow_queue.c.completed_at_epoch_ms.is_(None))  # Task is not completed
+                )
+            ).scalar_subquery()
+>>>>>>> 0a2301f (fix global concurrency)
             query = (
                 sa.select(
                     SystemSchema.workflow_queue.c.workflow_uuid,
@@ -1374,6 +1385,7 @@ class SystemDatabase:
                 .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms == None)
                 .where(SystemSchema.workflow_queue.c.executor_id == None)
                 .order_by(SystemSchema.workflow_queue.c.created_at_epoch_ms.asc())
+<<<<<<< HEAD
                 .with_for_update(nowait=True)  # Error out early
             )
             # Apply limit only if max_tasks is finite
@@ -1384,6 +1396,24 @@ class SystemDatabase:
 
             # Get the workflow IDs
             dequeued_ids: List[str] = [row[0] for row in rows]
+=======
+                # Set a dequeue limit if necessary. worker_concurrency <= concurrency is already enforced, but still.
+                .limit(
+                    sa.func.least(queue.worker_concurrency, queue.concurrency - running_tasks_subquery)
+                )
+                .with_for_update(nowait=True) # Error out early
+            )
+            rows = c.execute(query).fetchall()
+
+            # Now, get the workflow IDs of functions that have not yet been started
+            dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
+            already_started_ids: List[str] = [row[0] for row in rows if row[1] is not None]
+            if len(already_started_ids) > 0:
+                dbos_logger.debug(
+                    f"[{queue.name}] already started {len(already_started_ids)} task(s)"
+                )
+            ret_ids: list[str] = []
+>>>>>>> 0a2301f (fix global concurrency)
             if len(dequeued_ids) > 0:
                 dbos_logger.debug(
                     f"[{queue.name}] dequeueing {len(dequeued_ids)} task(s)"
