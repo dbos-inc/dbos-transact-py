@@ -1354,12 +1354,9 @@ class SystemDatabase:
 
             # Now, get the workflow IDs of functions that have not yet been started
             dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
-            already_started_ids: List[str] = [
-                row[0] for row in rows if row[1] is not None
-            ]
-            if len(already_started_ids) > 0:
+            if len(dequeued_ids) > 0:
                 dbos_logger.debug(
-                    f"[{queue.name}] already started {len(already_started_ids)} task(s)"
+                    f"[{queue.name}] dequeueing {len(dequeued_ids)} task(s)"
                 )
             ret_ids: list[str] = []
 
