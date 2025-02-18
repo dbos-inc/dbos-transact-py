@@ -1341,7 +1341,7 @@ class SystemDatabase:
                     )
                 )
                 .order_by(SystemSchema.workflow_queue.c.created_at_epoch_ms.asc())
-                # Set a dequeue limit if necessary. worker_concurrency <= concurrency is already enforced, but still.
+                # Set a dequeue limit if necessary.
                 .limit(
                     sa.func.least(
                         queue.worker_concurrency,
