@@ -504,6 +504,8 @@ def workflow_wrapper(
 
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> R:
+        fi = get_func_info(func)
+        assert fi is not None
         if dbosreg.dbos is None:
             raise DBOSException(
                 f"Function {func.__name__} invoked before DBOS initialized"
@@ -715,6 +717,7 @@ def decorate_transaction(
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
         wrapper.__orig_func = temp_wf  # type: ignore
         set_func_info(wrapped_wf, get_or_create_func_info(func))
+        set_func_info(temp_wf, get_or_create_func_info(func))
 
         return cast(F, wrapper)
 
@@ -865,6 +868,7 @@ def decorate_step(
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
         wrapper.__orig_func = temp_wf  # type: ignore
         set_func_info(wrapped_wf, get_or_create_func_info(func))
+        set_func_info(temp_wf, get_or_create_func_info(func))
 
         return cast(Callable[P, R], wrapper)
 

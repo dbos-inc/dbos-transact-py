@@ -509,6 +509,48 @@ def test_inst_async_step_recovery(dbos: DBOS) -> None:
     assert recovery_handle.get_result() == input * multiplier
 
 
+def test_step_recovery(dbos: DBOS) -> None:
+    wfid = str(uuid.uuid4())
+    thread_event = threading.Event()
+    blocking_event = threading.Event()
+    return_value = None
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):
+
+        def __init__(self, multiplier: int) -> None:
+            self.multiply: Callable[[int], int] = lambda x: x * multiplier
+            super().__init__("test_class")
+
+        @DBOS.step()
+        def step(self, x: int) -> int:
+            thread_event.set()
+            blocking_event.wait()
+            return self.multiply(x)
+
+    input = 2
+    multiplier = 5
+    inst = TestClass(multiplier)
+
+    # We're testing synchronously calling the step, but need to do so
+    # asynchronously. Hence, a thread.
+    def call_step():
+        with SetWorkflowID(wfid):
+            nonlocal return_value
+            return_value = inst.step(input)
+
+    thread = threading.Thread(target=call_step)
+    thread.start()
+    thread_event.wait()
+
+    recovery_handle = DBOS.execute_workflow_id(wfid)
+
+    blocking_event.set()
+    thread.join()
+    assert return_value == input * multiplier
+    assert recovery_handle.get_result() == input * multiplier
+
+
 def test_class_queue_recovery(dbos: DBOS) -> None:
     step_counter: int = 0
     queued_steps = 5
