@@ -1,6 +1,6 @@
 import threading
 import uuid
-from typing import Optional
+from typing import Callable, Optional
 
 import pytest
 import sqlalchemy as sa
@@ -455,8 +455,8 @@ def test_inst_step_recovery(dbos: DBOS) -> None:
     @DBOS.dbos_class()
     class DBOSTestInstRec(DBOSConfiguredInstance):
 
-        def __init__(self, multiplier) -> None:
-            self.multiply = lambda x: x * multiplier
+        def __init__(self, multiplier: int) -> None:
+            self.multiply: Callable[[int], int] = lambda x: x * multiplier
             super().__init__("bob")
 
         @DBOS.step()
