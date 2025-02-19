@@ -1,5 +1,7 @@
 import logging
 import multiprocessing
+
+print(multiprocessing.get_start_method())
 import multiprocessing.synchronize
 import os
 import subprocess
