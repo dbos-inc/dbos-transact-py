@@ -714,6 +714,7 @@ def decorate_transaction(
         set_temp_workflow_type(temp_wf, "transaction")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
         wrapper.__orig_func = temp_wf  # type: ignore
+        set_func_info(wrapped_wf, get_or_create_func_info(func))
 
         return cast(F, wrapper)
 
