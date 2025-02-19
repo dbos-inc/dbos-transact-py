@@ -1314,8 +1314,12 @@ class SystemDatabase:
             # If there is a global or local concurrency limit N, select only the N oldest enqueued
             # functions, else select all of them.
 
+            # First lets figure out how many tasks the worker can dequeue
             running_tasks_query = (
-                sa.select(sa.func.count())
+                sa.select(
+                    SystemSchema.workflow_queue.c.executor_id,
+                    sa.func.count().label("task_count"),
+                )
                 .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
                 .where(
                     SystemSchema.workflow_queue.c.executor_id.isnot(
@@ -1327,18 +1331,26 @@ class SystemDatabase:
                         None
                     )  # Task is not completed
                 )
+                .group_by(SystemSchema.workflow_queue.c.executor_id)
             )
-            running_tasks_result = c.execute(running_tasks_query).scalar()
-            running_tasks_count = int(running_tasks_result or 0)
+            running_tasks_result = c.execute(running_tasks_query).fetchall()
+            running_tasks_result_dict = {row[0]: row[1] for row in running_tasks_result}
+            running_tasks_for_this_worker = running_tasks_result_dict.get(
+                executor_id, 0
+            )  # Get count for current executor
 
             max_tasks = float("inf")
             if queue.worker_concurrency is not None:
-                max_tasks = queue.worker_concurrency
+                max_tasks = max(
+                    0, queue.worker_concurrency - running_tasks_for_this_worker
+                )
             if queue.concurrency is not None:
+                total_running_tasks = sum(running_tasks_result_dict.values())
                 # queue.concurrency should always be >= running_tasks_count
-                available_tasks = max(0, queue.concurrency - running_tasks_count)
+                available_tasks = max(0, queue.concurrency - total_running_tasks)
                 max_tasks = min(max_tasks, available_tasks)
 
+            # Lookup tasks
             query = (
                 sa.select(
                     SystemSchema.workflow_queue.c.workflow_uuid,
@@ -1347,13 +1359,7 @@ class SystemDatabase:
                 )
                 .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
                 .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms == None)
-                .where(
-                    # Only select functions that have not been started yet or have been started by this worker
-                    or_(
-                        SystemSchema.workflow_queue.c.executor_id == None,
-                        SystemSchema.workflow_queue.c.executor_id == executor_id,
-                    )
-                )
+                .where(SystemSchema.workflow_queue.c.executor_id == None)
                 .order_by(SystemSchema.workflow_queue.c.created_at_epoch_ms.asc())
                 .with_for_update(nowait=True)  # Error out early
             )
@@ -1363,8 +1369,8 @@ class SystemDatabase:
 
             rows = c.execute(query).fetchall()
 
-            # Now, get the workflow IDs of functions that have not yet been started
-            dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
+            # Get the workflow IDs
+            dequeued_ids: List[str] = [row[0] for row in rows]
             if len(dequeued_ids) > 0:
                 dbos_logger.debug(
                     f"[{queue.name}] dequeueing {len(dequeued_ids)} task(s)"
