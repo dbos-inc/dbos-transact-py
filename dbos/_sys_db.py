@@ -1317,10 +1317,10 @@ class SystemDatabase:
             running_tasks_subquery = (
                 sa.select(sa.func.count()).where(
                     (SystemSchema.workflow_queue.c.queue_name == queue.name)
-                    & (
+                    and (
                         SystemSchema.workflow_queue.c.executor_id.isnot(None)
                     )  # Task is dequeued
-                    & (
+                    and (
                         SystemSchema.workflow_queue.c.completed_at_epoch_ms.is_(None)
                     )  # Task is not completed
                 )
