@@ -547,7 +547,7 @@ def test_step_recovery(dbos: DBOS) -> None:
 
     # We're testing synchronously calling the step, but need to do so
     # asynchronously. Hence, a thread.
-    def call_step():
+    def call_step() -> None:
         with SetWorkflowID(wfid):
             nonlocal return_value
             return_value = inst.step(input)

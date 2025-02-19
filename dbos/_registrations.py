@@ -111,7 +111,7 @@ def get_or_create_func_info(func: Callable[..., Any]) -> DBOSFuncInfo:
     return fi
 
 
-def set_func_info(func: Callable[..., Any], fi: DBOSFuncInfo):
+def set_func_info(func: Callable[..., Any], fi: DBOSFuncInfo) -> None:
     setattr(func, "dbos_func_decorator_info", fi)
 
 

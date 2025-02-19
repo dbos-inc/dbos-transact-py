@@ -404,7 +404,7 @@ def start_workflow(
     if hasattr(func, "__self__"):
         fself = func.__self__
     if fself is not None:
-        args = (fself,) + args
+        args = (fself,) + args  # type: ignore
 
     fi = get_func_info(func)
     if fi is None:
