@@ -474,8 +474,6 @@ def run_dbos_test_in_process(
     # Now whatever is in the queue should be cleared up fast (start/end events are already set)
     queue_entries_are_cleaned_up(dbos)
 
-    DBOS.destroy()
-
 
 def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
     # Start N proccesses to dequeue
