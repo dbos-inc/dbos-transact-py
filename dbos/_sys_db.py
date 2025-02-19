@@ -1341,12 +1341,23 @@ class SystemDatabase:
 
             max_tasks = float("inf")
             if queue.worker_concurrency is not None:
+                # Worker local concurrency limit should always be >= running_tasks_for_this_worker
+                # This should never happen but a check + warning doesn't hurt
+                if queue.worker_concurrency > running_tasks_for_this_worker:
+                    dbos_logger.warning(
+                        f"Worker concurrency limit {queue.worker_concurrency} is less than the number of tasks running for this worker {running_tasks_for_this_worker}"
+                    )
                 max_tasks = max(
                     0, queue.worker_concurrency - running_tasks_for_this_worker
                 )
             if queue.concurrency is not None:
                 total_running_tasks = sum(running_tasks_result_dict.values())
-                # queue.concurrency should always be >= running_tasks_count
+                # Queue global concurrency limit should always be >= running_tasks_count
+                # This should never happen but a check + warning doesn't hurt
+                if queue.concurrency > total_running_tasks:
+                    dbos_logger.warning(
+                        f"Queue global concurrency limit {queue.concurrency} is less than the number of tasks running for this queue {total_running_tasks}"
+                    )
                 available_tasks = max(0, queue.concurrency - total_running_tasks)
                 max_tasks = min(max_tasks, available_tasks)
 
