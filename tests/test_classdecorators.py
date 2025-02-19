@@ -457,7 +457,7 @@ def test_inst_async_recovery(dbos: DBOS) -> None:
 
         def __init__(self, multiplier: int) -> None:
             self.multiply: Callable[[int], int] = lambda x: x * multiplier
-            super().__init__("test_inst_async_recovery")
+            super().__init__("test_class")
 
         @DBOS.workflow()
         def workflow(self, x: int) -> int:
@@ -470,6 +470,36 @@ def test_inst_async_recovery(dbos: DBOS) -> None:
 
     with SetWorkflowID(wfid):
         orig_handle = DBOS.start_workflow(inst.workflow, input)
+
+    recovery_handle = DBOS.execute_workflow_id(wfid)
+
+    event.set()
+    assert orig_handle.get_result() == input * multiplier
+    assert recovery_handle.get_result() == input * multiplier
+
+
+def test_inst_async_step_recovery(dbos: DBOS) -> None:
+    wfid = str(uuid.uuid4())
+    event = threading.Event()
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):
+
+        def __init__(self, multiplier: int) -> None:
+            self.multiply: Callable[[int], int] = lambda x: x * multiplier
+            super().__init__("test_class")
+
+        @DBOS.step()
+        def step(self, x: int) -> int:
+            event.wait()
+            return self.multiply(x)
+
+    input = 2
+    multiplier = 5
+    inst = TestClass(multiplier)
+
+    with SetWorkflowID(wfid):
+        orig_handle = DBOS.start_workflow(inst.step, input)
 
     recovery_handle = DBOS.execute_workflow_id(wfid)
 

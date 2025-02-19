@@ -111,6 +111,10 @@ def get_or_create_func_info(func: Callable[..., Any]) -> DBOSFuncInfo:
     return fi
 
 
+def set_func_info(func: Callable[..., Any], fi: DBOSFuncInfo):
+    setattr(func, "dbos_func_decorator_info", fi)
+
+
 def get_class_info(cls: Type[Any]) -> Optional[DBOSClassInfo]:
     if hasattr(cls, "dbos_class_decorator_info"):
         ci: DBOSClassInfo = getattr(cls, "dbos_class_decorator_info")
