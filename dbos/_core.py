@@ -398,9 +398,12 @@ def start_workflow(
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> "WorkflowHandle[R]":
+    # If the function has a class, add the class object as its first argument
     fself: Optional[object] = None
     if hasattr(func, "__self__"):
         fself = func.__self__
+    if fself is not None:
+        args = (fself,) + args
 
     fi = get_func_info(func)
     if fi is None:
@@ -436,17 +439,13 @@ def start_workflow(
     new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
     new_wf_id = new_wf_ctx.id_assigned_for_next_workflow
 
-    gin_args: Tuple[Any, ...] = args
-    if fself is not None:
-        gin_args = (fself,)
-
     status = _init_workflow(
         dbos,
         new_wf_ctx,
         inputs=inputs,
         wf_name=get_dbos_func_name(func),
-        class_name=get_dbos_class_name(fi, func, gin_args),
-        config_name=get_config_name(fi, func, gin_args),
+        class_name=get_dbos_class_name(fi, func, args),
+        config_name=get_config_name(fi, func, args),
         temp_wf_type=get_temp_workflow_type(func),
         queue=queue_name,
         max_recovery_attempts=fi.max_recovery_attempts,
@@ -464,27 +463,15 @@ def start_workflow(
         )
         return WorkflowHandlePolling(new_wf_id, dbos)
 
-    if fself is not None:
-        future = dbos._executor.submit(
-            cast(Callable[..., R], _execute_workflow_wthread),
-            dbos,
-            status,
-            func,
-            new_wf_ctx,
-            fself,
-            *args,
-            **kwargs,
-        )
-    else:
-        future = dbos._executor.submit(
-            cast(Callable[..., R], _execute_workflow_wthread),
-            dbos,
-            status,
-            func,
-            new_wf_ctx,
-            *args,
-            **kwargs,
-        )
+    future = dbos._executor.submit(
+        cast(Callable[..., R], _execute_workflow_wthread),
+        dbos,
+        status,
+        func,
+        new_wf_ctx,
+        *args,
+        **kwargs,
+    )
     return WorkflowHandleFuture(new_wf_id, future, dbos)
 
 

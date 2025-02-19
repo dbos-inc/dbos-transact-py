@@ -448,27 +448,28 @@ def test_inst_recovery(dbos: DBOS) -> None:
     assert last_inst is inst
 
 
-def test_inst_step_recovery(dbos: DBOS) -> None:
+def test_inst_async_recovery(dbos: DBOS) -> None:
     wfid = str(uuid.uuid4())
     event = threading.Event()
 
     @DBOS.dbos_class()
-    class DBOSTestInstRec(DBOSConfiguredInstance):
+    class TestClass(DBOSConfiguredInstance):
 
         def __init__(self, multiplier: int) -> None:
             self.multiply: Callable[[int], int] = lambda x: x * multiplier
-            super().__init__("bob")
+            super().__init__("test_inst_async_recovery")
 
-        @DBOS.step()
-        def step(self, x: int) -> int:
+        @DBOS.workflow()
+        def workflow(self, x: int) -> int:
             event.wait()
             return self.multiply(x)
 
     input = 2
     multiplier = 5
-    inst = DBOSTestInstRec(multiplier)
+    inst = TestClass(multiplier)
+
     with SetWorkflowID(wfid):
-        orig_handle = DBOS.start_workflow(inst.step, input)
+        orig_handle = DBOS.start_workflow(inst.workflow, input)
 
     recovery_handle = DBOS.execute_workflow_id(wfid)
 
