@@ -1314,17 +1314,31 @@ class SystemDatabase:
             # If there is a global or local concurrency limit N, select only the N oldest enqueued
             # functions, else select all of them.
 
-            running_tasks_subquery = (
-                sa.select(sa.func.count()).where(
-                    (SystemSchema.workflow_queue.c.queue_name == queue.name)
-                    and (
-                        SystemSchema.workflow_queue.c.executor_id.isnot(None)
+            running_tasks_query = (
+                sa.select(sa.func.count())
+                .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
+                .where(
+                    SystemSchema.workflow_queue.c.executor_id.isnot(
+                        None
                     )  # Task is dequeued
-                    and (
-                        SystemSchema.workflow_queue.c.completed_at_epoch_ms.is_(None)
+                )
+                .where(
+                    SystemSchema.workflow_queue.c.completed_at_epoch_ms.is_(
+                        None
                     )  # Task is not completed
                 )
-            ).scalar_subquery()
+            )
+            running_tasks_result = c.execute(running_tasks_query).scalar()
+            running_tasks_count = int(running_tasks_result or 0)
+
+            max_tasks = float("inf")
+            if queue.worker_concurrency is not None:
+                max_tasks = queue.worker_concurrency
+            if queue.concurrency is not None:
+                # queue.concurrency should always be >= running_tasks_count
+                available_tasks = max(0, queue.concurrency - running_tasks_count)
+                max_tasks = min(max_tasks, available_tasks)
+
             query = (
                 sa.select(
                     SystemSchema.workflow_queue.c.workflow_uuid,
@@ -1341,15 +1355,12 @@ class SystemDatabase:
                     )
                 )
                 .order_by(SystemSchema.workflow_queue.c.created_at_epoch_ms.asc())
-                # Set a dequeue limit if necessary.
-                .limit(
-                    sa.func.least(
-                        queue.worker_concurrency,
-                        queue.concurrency - running_tasks_subquery,
-                    )
-                )
                 .with_for_update(nowait=True)  # Error out early
             )
+            # Apply limit only if max_tasks is finite
+            if max_tasks != float("inf"):
+                query = query.limit(max_tasks)
+
             rows = c.execute(query).fetchall()
 
             # Now, get the workflow IDs of functions that have not yet been started
