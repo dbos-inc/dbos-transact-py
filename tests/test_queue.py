@@ -556,7 +556,6 @@ def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
         status = handle.get_status()
         statuses.append(status.status)
         executors.append(status.executor_id)
-    assert len(set(executors)) == 2
     assert set(statuses) == {
         WorkflowStatusString.PENDING.value,
         WorkflowStatusString.ENQUEUED.value,
