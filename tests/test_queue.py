@@ -18,7 +18,6 @@ from dbos import (
     SetWorkflowID,
     WorkflowHandle,
 )
-from dbos._error import DBOSDeadLetterQueueError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from tests.conftest import default_config
