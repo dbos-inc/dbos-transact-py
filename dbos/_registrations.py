@@ -1,4 +1,5 @@
 import inspect
+from dataclasses import dataclass
 from enum import Enum
 from types import FunctionType
 from typing import Any, Callable, List, Literal, Optional, Tuple, Type, cast
@@ -31,9 +32,9 @@ def set_temp_workflow_type(f: Any, name: TempWorkflowType) -> None:
     setattr(f, "dbos_temp_workflow_type", name)
 
 
+@dataclass
 class DBOSClassInfo:
-    def __init__(self) -> None:
-        self.def_required_roles: Optional[List[str]] = None
+    def_required_roles: Optional[List[str]] = None
 
 
 class DBOSFuncType(Enum):
@@ -44,12 +45,12 @@ class DBOSFuncType(Enum):
     Instance = 4
 
 
+@dataclass
 class DBOSFuncInfo:
-    def __init__(self) -> None:
-        self.class_info: Optional[DBOSClassInfo] = None
-        self.func_type: DBOSFuncType = DBOSFuncType.Unknown
-        self.required_roles: Optional[List[str]] = None
-        self.max_recovery_attempts = DEFAULT_MAX_RECOVERY_ATTEMPTS
+    class_info: Optional[DBOSClassInfo] = None
+    func_type: DBOSFuncType = DBOSFuncType.Unknown
+    required_roles: Optional[List[str]] = None
+    max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS
 
 
 def get_or_create_class_info(cls: Type[Any]) -> DBOSClassInfo:
