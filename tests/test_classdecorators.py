@@ -6,10 +6,11 @@ import pytest
 import sqlalchemy as sa
 
 # Public API
-from dbos import DBOS, DBOSConfiguredInstance, SetWorkflowID
+from dbos import DBOS, DBOSConfiguredInstance, Queue, SetWorkflowID
 
 # Private API used because this is a test
 from dbos._context import DBOSContextEnsure, assert_current_dbos_context
+from tests.conftest import queue_entries_are_cleaned_up
 
 
 def test_required_roles(dbos: DBOS) -> None:
@@ -506,3 +507,74 @@ def test_inst_async_step_recovery(dbos: DBOS) -> None:
     event.set()
     assert orig_handle.get_result() == input * multiplier
     assert recovery_handle.get_result() == input * multiplier
+
+
+def test_class_queue_recovery(dbos: DBOS) -> None:
+    step_counter: int = 0
+    queued_steps = 5
+    multiplier = 5
+
+    wfid = str(uuid.uuid4())
+    queue = Queue("test_queue")
+    step_events = [threading.Event() for _ in range(queued_steps)]
+    event = threading.Event()
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):
+        def __init__(self, multiplier: int) -> None:
+            self.multiply: Callable[[int], int] = lambda x: x * multiplier
+            super().__init__("test_class")
+
+        @DBOS.workflow()
+        def test_workflow(self) -> list[int]:
+            assert DBOS.workflow_id == wfid
+            handles = []
+            for i in range(queued_steps):
+                h = queue.enqueue(self.test_step, i)
+                handles.append(h)
+            return [h.get_result() for h in handles]
+
+        @DBOS.step()
+        def test_step(self, i: int) -> int:
+            nonlocal step_counter
+            step_counter += 1
+            step_events[i].set()
+            event.wait()
+            return self.multiply(i)
+
+    inst = TestClass(multiplier)
+
+    # Start the workflow. Wait for all five steps to start. Verify that they started.
+    with SetWorkflowID(wfid):
+        original_handle = DBOS.start_workflow(inst.test_workflow)
+    for e in step_events:
+        e.wait()
+        e.clear()
+
+    assert step_counter == 5
+
+    # Recover the workflow, then resume it.
+    recovery_handles = DBOS.recover_pending_workflows()
+    # Wait until the 2nd invocation of the workflows are dequeued and executed
+    for e in step_events:
+        e.wait()
+    event.set()
+
+    # There should be one handle for the workflow and another for each queued step.
+    assert len(recovery_handles) == queued_steps + 1
+    # Verify that both the recovered and original workflows complete correctly.
+    result = [i * multiplier for i in range(5)]
+    for h in recovery_handles:
+        if h.get_workflow_id() == wfid:
+            assert h.get_result() == result
+    assert original_handle.get_result() == result
+    # Each step should start twice, once originally and once in recovery.
+    assert step_counter == 10
+
+    # Rerun the workflow. Because each step is complete, none should start again.
+    with SetWorkflowID(wfid):
+        assert inst.test_workflow() == result
+    assert step_counter == 10
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
