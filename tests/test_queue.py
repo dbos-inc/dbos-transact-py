@@ -588,6 +588,9 @@ def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
     for process in processes:
         process.join()
 
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
+
 
 # Test error cases where we have duplicated workflows starting with the same workflow ID.
 def test_duplicate_workflow_id(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
