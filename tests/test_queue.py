@@ -1,7 +1,5 @@
 import logging
 import multiprocessing
-
-print(multiprocessing.get_start_method())
 import multiprocessing.synchronize
 import os
 import subprocess
@@ -478,6 +476,8 @@ def run_dbos_test_in_process(
 
 
 def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
+    # Ensure children processes do not share global variables (including DBOS instance) with the parent
+    multiprocessing.set_start_method("spawn")
     # Start N proccesses to dequeue
     processes = []
     start_signals = []
