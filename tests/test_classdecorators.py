@@ -417,13 +417,14 @@ def test_class_recovery(dbos: DBOS) -> None:
 
 
 def test_inst_recovery(dbos: DBOS) -> None:
+    wfid = str(uuid.uuid4())
     exc_cnt: int = 0
-    last_inst: Optional[DBOSTestInstRec] = None
+    last_inst: Optional[TestClass] = None
 
     @DBOS.dbos_class()
-    class DBOSTestInstRec(DBOSConfiguredInstance):
+    class TestClass(DBOSConfiguredInstance):
         def __init__(self) -> None:
-            super().__init__("bob")
+            super().__init__("test_class")
 
         @DBOS.workflow()
         def check_inst(self, arg1: str) -> str:
@@ -434,8 +435,8 @@ def test_inst_recovery(dbos: DBOS) -> None:
             last_inst = self
             return "ran2"
 
-    inst = DBOSTestInstRec()
-    with SetWorkflowID("run2"):
+    inst = TestClass()
+    with SetWorkflowID(wfid):
         assert "ran2" == inst.check_inst("arg1")
 
     assert exc_cnt == 1
@@ -443,10 +444,14 @@ def test_inst_recovery(dbos: DBOS) -> None:
 
     # Test we can execute the workflow by uuid as recovery would do
     last_inst = None
-    handle = DBOS.execute_workflow_id("run2")
+    handle = DBOS.execute_workflow_id(wfid)
     assert handle.get_result() == "ran2"
     assert exc_cnt == 2
     assert last_inst is inst
+
+    status = DBOS.retrieve_workflow(wfid).get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == "test_class"
 
 
 def test_inst_async_recovery(dbos: DBOS) -> None:
@@ -471,6 +476,10 @@ def test_inst_async_recovery(dbos: DBOS) -> None:
 
     with SetWorkflowID(wfid):
         orig_handle = DBOS.start_workflow(inst.workflow, input)
+
+    status = orig_handle.get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == "test_class"
 
     recovery_handle = DBOS.execute_workflow_id(wfid)
 
@@ -501,6 +510,10 @@ def test_inst_async_step_recovery(dbos: DBOS) -> None:
 
     with SetWorkflowID(wfid):
         orig_handle = DBOS.start_workflow(inst.step, input)
+
+    status = orig_handle.get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == "test_class"
 
     recovery_handle = DBOS.execute_workflow_id(wfid)
 
@@ -542,6 +555,10 @@ def test_step_recovery(dbos: DBOS) -> None:
     thread = threading.Thread(target=call_step)
     thread.start()
     thread_event.wait()
+
+    status = DBOS.retrieve_workflow(wfid).get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == "test_class"
 
     recovery_handle = DBOS.execute_workflow_id(wfid)
 
@@ -607,6 +624,9 @@ def test_class_queue_recovery(dbos: DBOS) -> None:
     # Verify that both the recovered and original workflows complete correctly.
     result = [i * multiplier for i in range(5)]
     for h in recovery_handles:
+        status = h.get_status()
+        assert status.class_name == "TestClass"
+        assert status.config_name == "test_class"
         if h.get_workflow_id() == wfid:
             assert h.get_result() == result
     assert original_handle.get_result() == result
