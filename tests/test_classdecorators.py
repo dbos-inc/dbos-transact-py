@@ -1,3 +1,5 @@
+import threading
+import uuid
 from typing import Optional
 
 import pytest
@@ -444,3 +446,32 @@ def test_inst_recovery(dbos: DBOS) -> None:
     assert handle.get_result() == "ran2"
     assert exc_cnt == 2
     assert last_inst is inst
+
+
+def test_inst_step_recovery(dbos: DBOS) -> None:
+    wfid = str(uuid.uuid4())
+    event = threading.Event()
+
+    @DBOS.dbos_class()
+    class DBOSTestInstRec(DBOSConfiguredInstance):
+
+        def __init__(self, multiplier) -> None:
+            self.multiply = lambda x: x * multiplier
+            super().__init__("bob")
+
+        @DBOS.step()
+        def step(self, x: int) -> int:
+            event.wait()
+            return self.multiply(x)
+
+    input = 2
+    multiplier = 5
+    inst = DBOSTestInstRec(multiplier)
+    with SetWorkflowID(wfid):
+        orig_handle = DBOS.start_workflow(inst.step, input)
+
+    recovery_handle = DBOS.execute_workflow_id(wfid)
+
+    event.set()
+    assert orig_handle.get_result() == input * multiplier
+    assert recovery_handle.get_result() == input * multiplier
