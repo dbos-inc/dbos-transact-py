@@ -1359,7 +1359,7 @@ class SystemDatabase:
             )
             # Apply limit only if max_tasks is finite
             if max_tasks != float("inf"):
-                query = query.limit(max_tasks)
+                query = query.limit(int(max_tasks))
 
             rows = c.execute(query).fetchall()
 
