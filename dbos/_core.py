@@ -287,6 +287,7 @@ def execute_workflow_by_id(
         ctx.request = (
             _serialization.deserialize(request) if request is not None else None
         )
+        # If this function belongs to a configured class, add that class instance as its first argument
         if status["config_name"] is not None:
             config_name = status["config_name"]
             class_name = status["class_name"]
@@ -296,28 +297,9 @@ def execute_workflow_by_id(
                     workflow_id,
                     f"Cannot execute workflow because instance '{iname}' is not registered",
                 )
-
-            if startNew:
-                return start_workflow(
-                    dbos,
-                    wf_func,
-                    status["queue_name"],
-                    True,
-                    dbos._registry.instance_info_map[iname],
-                    *inputs["args"],
-                    **inputs["kwargs"],
-                )
-            else:
-                with SetWorkflowID(workflow_id):
-                    return start_workflow(
-                        dbos,
-                        wf_func,
-                        status["queue_name"],
-                        True,
-                        dbos._registry.instance_info_map[iname],
-                        *inputs["args"],
-                        **inputs["kwargs"],
-                    )
+            class_instance = dbos._registry.instance_info_map[iname]
+            inputs["args"] = (class_instance,) + inputs["args"]
+        # If this function is a class method, add that class object as its first argument
         elif status["class_name"] is not None:
             class_name = status["class_name"]
             if class_name not in dbos._registry.class_info_map:
@@ -325,30 +307,20 @@ def execute_workflow_by_id(
                     workflow_id,
                     f"Cannot execute workflow because class '{class_name}' is not registered",
                 )
+            class_object = dbos._registry.class_info_map[class_name]
+            inputs["args"] = (class_object,) + inputs["args"]
 
-            if startNew:
-                return start_workflow(
-                    dbos,
-                    wf_func,
-                    status["queue_name"],
-                    True,
-                    dbos._registry.class_info_map[class_name],
-                    *inputs["args"],
-                    **inputs["kwargs"],
-                )
-            else:
-                with SetWorkflowID(workflow_id):
-                    return start_workflow(
-                        dbos,
-                        wf_func,
-                        status["queue_name"],
-                        True,
-                        dbos._registry.class_info_map[class_name],
-                        *inputs["args"],
-                        **inputs["kwargs"],
-                    )
+        if startNew:
+            return start_workflow(
+                dbos,
+                wf_func,
+                status["queue_name"],
+                True,
+                *inputs["args"],
+                **inputs["kwargs"],
+            )
         else:
-            if startNew:
+            with SetWorkflowID(workflow_id):
                 return start_workflow(
                     dbos,
                     wf_func,
@@ -357,16 +329,6 @@ def execute_workflow_by_id(
                     *inputs["args"],
                     **inputs["kwargs"],
                 )
-            else:
-                with SetWorkflowID(workflow_id):
-                    return start_workflow(
-                        dbos,
-                        wf_func,
-                        status["queue_name"],
-                        True,
-                        *inputs["args"],
-                        **inputs["kwargs"],
-                    )
 
 
 @overload
