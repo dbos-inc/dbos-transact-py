@@ -76,7 +76,9 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                     execute_workflow_by_id(dbos, id)
             except OperationalError as e:
                 # Ignore serialization error
-                if not isinstance(e.orig, errors.SerializationFailure):
+                if not isinstance(
+                    e.orig, (errors.SerializationFailure, errors.LockNotAvailable)
+                ):
                     dbos.logger.warning(
                         f"Exception encountered in queue thread: {traceback.format_exc()}"
                     )
