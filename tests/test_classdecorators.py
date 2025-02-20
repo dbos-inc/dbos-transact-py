@@ -817,3 +817,49 @@ def test_inst_txn(dbos: DBOS) -> None:
     status = handle.get_status()
     assert status.class_name == "TestClass"
     assert status.config_name == "test_class"
+
+
+def test_mixed_methods(dbos: DBOS) -> None:
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):
+
+        def __init__(self, multiplier: int) -> None:
+            self.multiply: Callable[[int], int] = lambda x: x * multiplier
+            super().__init__("test_class")
+
+        @DBOS.workflow()
+        def instance_workflow(self, x: int) -> int:
+            return self.multiply(x)
+
+        @classmethod
+        @DBOS.workflow()
+        def classmethod_workflow(cls, x: int) -> int:
+            return x
+
+        @staticmethod
+        @DBOS.workflow()
+        def staticmethod_workflow(x: int) -> int:
+            return x
+
+    input = 2
+    multiplier = 5
+    inst = TestClass(multiplier)
+
+    handle = DBOS.start_workflow(inst.instance_workflow, input)
+    assert handle.get_result() == input * multiplier
+    status = handle.get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == "test_class"
+
+    handle = DBOS.start_workflow(inst.classmethod_workflow, input)
+    assert handle.get_result() == input
+    status = handle.get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == None
+
+    handle = DBOS.start_workflow(inst.staticmethod_workflow, input)
+    assert handle.get_result() == input
+    status = handle.get_status()
+    assert status.class_name == None
+    assert status.config_name == None
