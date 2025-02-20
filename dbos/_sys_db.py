@@ -189,6 +189,7 @@ class SystemDatabase:
             host=config["database"]["hostname"],
             port=config["database"]["port"],
             database="postgres",
+            # fills the "application_name" column in pg_stat_activity
             query={
                 "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"
             },
@@ -210,6 +211,7 @@ class SystemDatabase:
             host=config["database"]["hostname"],
             port=config["database"]["port"],
             database=sysdb_name,
+            # fills the "application_name" column in pg_stat_activity
             query={
                 "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"
             },
