@@ -640,3 +640,36 @@ def test_class_queue_recovery(dbos: DBOS) -> None:
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_inst_txn(dbos: DBOS) -> None:
+    wfid = str(uuid.uuid4())
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):
+
+        def __init__(self, multiplier: int) -> None:
+            self.multiply: Callable[[int], int] = lambda x: x * multiplier
+            super().__init__("test_class")
+
+        @DBOS.transaction()
+        def transaction(self, x: int) -> int:
+            return self.multiply(x)
+
+    input = 2
+    multiplier = 5
+    inst = TestClass(multiplier)
+
+    with SetWorkflowID(wfid):
+        assert inst.transaction(input) == input * multiplier
+    dbos._sys_db.wait_for_buffer_flush()
+    status = DBOS.retrieve_workflow(wfid).get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == "test_class"
+
+    handle = DBOS.start_workflow(inst.transaction, input)
+    assert handle.get_result() == input * multiplier
+    dbos._sys_db.wait_for_buffer_flush()
+    status = handle.get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == "test_class"
