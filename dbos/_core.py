@@ -63,6 +63,7 @@ from ._registrations import (
     get_or_create_func_info,
     get_temp_workflow_type,
     set_dbos_func_name,
+    set_func_info,
     set_temp_workflow_type,
 )
 from ._roles import check_required_roles
@@ -286,6 +287,7 @@ def execute_workflow_by_id(
         ctx.request = (
             _serialization.deserialize(request) if request is not None else None
         )
+        # If this function belongs to a configured class, add that class instance as its first argument
         if status["config_name"] is not None:
             config_name = status["config_name"]
             class_name = status["class_name"]
@@ -295,28 +297,9 @@ def execute_workflow_by_id(
                     workflow_id,
                     f"Cannot execute workflow because instance '{iname}' is not registered",
                 )
-
-            if startNew:
-                return start_workflow(
-                    dbos,
-                    wf_func,
-                    status["queue_name"],
-                    True,
-                    dbos._registry.instance_info_map[iname],
-                    *inputs["args"],
-                    **inputs["kwargs"],
-                )
-            else:
-                with SetWorkflowID(workflow_id):
-                    return start_workflow(
-                        dbos,
-                        wf_func,
-                        status["queue_name"],
-                        True,
-                        dbos._registry.instance_info_map[iname],
-                        *inputs["args"],
-                        **inputs["kwargs"],
-                    )
+            class_instance = dbos._registry.instance_info_map[iname]
+            inputs["args"] = (class_instance,) + inputs["args"]
+        # If this function is a class method, add that class object as its first argument
         elif status["class_name"] is not None:
             class_name = status["class_name"]
             if class_name not in dbos._registry.class_info_map:
@@ -324,30 +307,20 @@ def execute_workflow_by_id(
                     workflow_id,
                     f"Cannot execute workflow because class '{class_name}' is not registered",
                 )
+            class_object = dbos._registry.class_info_map[class_name]
+            inputs["args"] = (class_object,) + inputs["args"]
 
-            if startNew:
-                return start_workflow(
-                    dbos,
-                    wf_func,
-                    status["queue_name"],
-                    True,
-                    dbos._registry.class_info_map[class_name],
-                    *inputs["args"],
-                    **inputs["kwargs"],
-                )
-            else:
-                with SetWorkflowID(workflow_id):
-                    return start_workflow(
-                        dbos,
-                        wf_func,
-                        status["queue_name"],
-                        True,
-                        dbos._registry.class_info_map[class_name],
-                        *inputs["args"],
-                        **inputs["kwargs"],
-                    )
+        if startNew:
+            return start_workflow(
+                dbos,
+                wf_func,
+                status["queue_name"],
+                True,
+                *inputs["args"],
+                **inputs["kwargs"],
+            )
         else:
-            if startNew:
+            with SetWorkflowID(workflow_id):
                 return start_workflow(
                     dbos,
                     wf_func,
@@ -356,16 +329,6 @@ def execute_workflow_by_id(
                     *inputs["args"],
                     **inputs["kwargs"],
                 )
-            else:
-                with SetWorkflowID(workflow_id):
-                    return start_workflow(
-                        dbos,
-                        wf_func,
-                        status["queue_name"],
-                        True,
-                        *inputs["args"],
-                        **inputs["kwargs"],
-                    )
 
 
 @overload
@@ -398,9 +361,12 @@ def start_workflow(
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> "WorkflowHandle[R]":
+    # If the function has a class, add the class object as its first argument
     fself: Optional[object] = None
     if hasattr(func, "__self__"):
         fself = func.__self__
+    if fself is not None:
+        args = (fself,) + args  # type: ignore
 
     fi = get_func_info(func)
     if fi is None:
@@ -436,17 +402,13 @@ def start_workflow(
     new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
     new_wf_id = new_wf_ctx.id_assigned_for_next_workflow
 
-    gin_args: Tuple[Any, ...] = args
-    if fself is not None:
-        gin_args = (fself,)
-
     status = _init_workflow(
         dbos,
         new_wf_ctx,
         inputs=inputs,
         wf_name=get_dbos_func_name(func),
-        class_name=get_dbos_class_name(fi, func, gin_args),
-        config_name=get_config_name(fi, func, gin_args),
+        class_name=get_dbos_class_name(fi, func, args),
+        config_name=get_config_name(fi, func, args),
         temp_wf_type=get_temp_workflow_type(func),
         queue=queue_name,
         max_recovery_attempts=fi.max_recovery_attempts,
@@ -464,27 +426,15 @@ def start_workflow(
         )
         return WorkflowHandlePolling(new_wf_id, dbos)
 
-    if fself is not None:
-        future = dbos._executor.submit(
-            cast(Callable[..., R], _execute_workflow_wthread),
-            dbos,
-            status,
-            func,
-            new_wf_ctx,
-            fself,
-            *args,
-            **kwargs,
-        )
-    else:
-        future = dbos._executor.submit(
-            cast(Callable[..., R], _execute_workflow_wthread),
-            dbos,
-            status,
-            func,
-            new_wf_ctx,
-            *args,
-            **kwargs,
-        )
+    future = dbos._executor.submit(
+        cast(Callable[..., R], _execute_workflow_wthread),
+        dbos,
+        status,
+        func,
+        new_wf_ctx,
+        *args,
+        **kwargs,
+    )
     return WorkflowHandleFuture(new_wf_id, future, dbos)
 
 
@@ -516,6 +466,8 @@ def workflow_wrapper(
 
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> R:
+        fi = get_func_info(func)
+        assert fi is not None
         if dbosreg.dbos is None:
             raise DBOSException(
                 f"Function {func.__name__} invoked before DBOS initialized"
@@ -726,6 +678,8 @@ def decorate_transaction(
         set_temp_workflow_type(temp_wf, "transaction")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
         wrapper.__orig_func = temp_wf  # type: ignore
+        set_func_info(wrapped_wf, get_or_create_func_info(func))
+        set_func_info(temp_wf, get_or_create_func_info(func))
 
         return cast(F, wrapper)
 
@@ -875,6 +829,8 @@ def decorate_step(
         set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
         wrapper.__orig_func = temp_wf  # type: ignore
+        set_func_info(wrapped_wf, get_or_create_func_info(func))
+        set_func_info(temp_wf, get_or_create_func_info(func))
 
         return cast(Callable[P, R], wrapper)
 
