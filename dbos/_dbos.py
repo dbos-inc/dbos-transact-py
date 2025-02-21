@@ -283,6 +283,7 @@ class DBOS:
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
         self._executor_id: str = os.environ.get("DBOS__VMID", "local")
+        self.app_version = os.environ.get("DBOS__APPVERSION", "")
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
@@ -351,6 +352,8 @@ class DBOS:
                 dbos_logger.warning(f"DBOS was already launched")
                 return
             self._launched = True
+            if self.app_version == "":
+                self.app_version = self._compute_app_version()
             self._executor_field = ThreadPoolExecutor(max_workers=64)
             self._sys_db_field = SystemDatabase(self.config)
             self._app_db_field = ApplicationDatabase(self.config)
@@ -897,6 +900,9 @@ class DBOS:
         ctx = assert_current_dbos_context()
         ctx.authenticated_user = authenticated_user
         ctx.authenticated_roles = authenticated_roles
+
+    def _compute_app_version(self):
+        return "5"
 
 
 @dataclass
