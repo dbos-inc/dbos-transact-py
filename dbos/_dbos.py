@@ -997,6 +997,10 @@ def _dbos_exit_hook() -> None:
         )
         return
     if not _dbos_global_instance._launched:
+        if _dbos_global_instance.fastapi is not None:
+            # FastAPI lifespan middleware will call launch/destroy, so we can ignore this.
+            # This is likely to happen during fastapi dev runs, where the reloader loads the module multiple times.
+            return
         print("DBOS exiting; DBOS exists but launch() was not called")
         dbos_logger.warning("DBOS exiting; DBOS exists but launch() was not called")
         return
