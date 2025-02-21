@@ -1,7 +1,7 @@
 import glob
 import os
 import subprocess
-import warnings
+import time
 from typing import Any, Generator, Tuple
 
 import pytest
@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from flask import Flask
 
 from dbos import DBOS, ConfigFile
+from dbos._schemas.system_database import SystemSchema
 
 
 @pytest.fixture(scope="session")
@@ -149,3 +150,19 @@ def dbos_flask(
 def pytest_collection_modifyitems(session: Any, config: Any, items: Any) -> None:
     for item in items:
         item._nodeid = "\n" + item.nodeid + "\n"
+
+
+def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
+    max_tries = 10
+    success = False
+    for i in range(max_tries):
+        with dbos._sys_db.engine.begin() as c:
+            query = sa.select(sa.func.count()).select_from(SystemSchema.workflow_queue)
+            row = c.execute(query).fetchone()
+            assert row is not None
+            count = row[0]
+            if count == 0:
+                success = True
+                break
+        time.sleep(1)
+    return success

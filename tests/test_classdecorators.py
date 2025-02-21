@@ -1,13 +1,16 @@
-from typing import Optional
+import threading
+import uuid
+from typing import Callable, Optional
 
 import pytest
 import sqlalchemy as sa
 
 # Public API
-from dbos import DBOS, DBOSConfiguredInstance, SetWorkflowID
+from dbos import DBOS, DBOSConfiguredInstance, Queue, SetWorkflowID
 
 # Private API used because this is a test
 from dbos._context import DBOSContextEnsure, assert_current_dbos_context
+from tests.conftest import queue_entries_are_cleaned_up
 
 
 def test_required_roles(dbos: DBOS) -> None:
@@ -414,13 +417,14 @@ def test_class_recovery(dbos: DBOS) -> None:
 
 
 def test_inst_recovery(dbos: DBOS) -> None:
+    wfid = str(uuid.uuid4())
     exc_cnt: int = 0
-    last_inst: Optional[DBOSTestInstRec] = None
+    last_inst: Optional[TestClass] = None
 
     @DBOS.dbos_class()
-    class DBOSTestInstRec(DBOSConfiguredInstance):
+    class TestClass(DBOSConfiguredInstance):
         def __init__(self) -> None:
-            super().__init__("bob")
+            super().__init__("test_class")
 
         @DBOS.workflow()
         def check_inst(self, arg1: str) -> str:
@@ -431,8 +435,8 @@ def test_inst_recovery(dbos: DBOS) -> None:
             last_inst = self
             return "ran2"
 
-    inst = DBOSTestInstRec()
-    with SetWorkflowID("run2"):
+    inst = TestClass()
+    with SetWorkflowID(wfid):
         assert "ran2" == inst.check_inst("arg1")
 
     assert exc_cnt == 1
@@ -440,7 +444,422 @@ def test_inst_recovery(dbos: DBOS) -> None:
 
     # Test we can execute the workflow by uuid as recovery would do
     last_inst = None
-    handle = DBOS.execute_workflow_id("run2")
+    handle = DBOS.execute_workflow_id(wfid)
     assert handle.get_result() == "ran2"
     assert exc_cnt == 2
     assert last_inst is inst
+
+    status = DBOS.retrieve_workflow(wfid).get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == "test_class"
+
+
+def test_inst_async_recovery(dbos: DBOS) -> None:
+    wfid = str(uuid.uuid4())
+    event = threading.Event()
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):
+
+        def __init__(self, multiplier: int) -> None:
+            self.multiply: Callable[[int], int] = lambda x: x * multiplier
+            super().__init__("test_class")
+
+        @DBOS.workflow()
+        def workflow(self, x: int) -> int:
+            event.wait()
+            return self.multiply(x)
+
+    input = 2
+    multiplier = 5
+    inst = TestClass(multiplier)
+
+    with SetWorkflowID(wfid):
+        orig_handle = DBOS.start_workflow(inst.workflow, input)
+
+    status = orig_handle.get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == "test_class"
+
+    recovery_handle = DBOS.execute_workflow_id(wfid)
+
+    event.set()
+    assert orig_handle.get_result() == input * multiplier
+    assert recovery_handle.get_result() == input * multiplier
+
+
+def test_inst_async_step_recovery(dbos: DBOS) -> None:
+    wfid = str(uuid.uuid4())
+    event = threading.Event()
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):
+
+        def __init__(self, multiplier: int) -> None:
+            self.multiply: Callable[[int], int] = lambda x: x * multiplier
+            super().__init__("test_class")
+
+        @DBOS.step()
+        def step(self, x: int) -> int:
+            event.wait()
+            return self.multiply(x)
+
+    input = 2
+    multiplier = 5
+    inst = TestClass(multiplier)
+
+    with SetWorkflowID(wfid):
+        orig_handle = DBOS.start_workflow(inst.step, input)
+
+    status = orig_handle.get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == "test_class"
+
+    recovery_handle = DBOS.execute_workflow_id(wfid)
+
+    event.set()
+    assert orig_handle.get_result() == input * multiplier
+    assert recovery_handle.get_result() == input * multiplier
+
+
+def test_step_recovery(dbos: DBOS) -> None:
+    wfid = str(uuid.uuid4())
+    thread_event = threading.Event()
+    blocking_event = threading.Event()
+    return_value = None
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):
+
+        def __init__(self, multiplier: int) -> None:
+            self.multiply: Callable[[int], int] = lambda x: x * multiplier
+            super().__init__("test_class")
+
+        @DBOS.step()
+        def step(self, x: int) -> int:
+            thread_event.set()
+            blocking_event.wait()
+            return self.multiply(x)
+
+    input = 2
+    multiplier = 5
+    inst = TestClass(multiplier)
+
+    # We're testing synchronously calling the step, but need to do so
+    # asynchronously. Hence, a thread.
+    def call_step() -> None:
+        with SetWorkflowID(wfid):
+            nonlocal return_value
+            return_value = inst.step(input)
+
+    thread = threading.Thread(target=call_step)
+    thread.start()
+    thread_event.wait()
+
+    status = DBOS.retrieve_workflow(wfid).get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == "test_class"
+
+    recovery_handle = DBOS.execute_workflow_id(wfid)
+
+    blocking_event.set()
+    thread.join()
+    assert return_value == input * multiplier
+    assert recovery_handle.get_result() == input * multiplier
+
+
+def test_class_queue_recovery(dbos: DBOS) -> None:
+    step_counter: int = 0
+    queued_steps = 5
+    multiplier = 5
+
+    wfid = str(uuid.uuid4())
+    queue = Queue("test_queue")
+    step_events = [threading.Event() for _ in range(queued_steps)]
+    event = threading.Event()
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):
+        def __init__(self, multiplier: int) -> None:
+            self.multiply: Callable[[int], int] = lambda x: x * multiplier
+            super().__init__("test_class")
+
+        @DBOS.workflow()
+        def test_workflow(self) -> list[int]:
+            assert DBOS.workflow_id == wfid
+            handles = []
+            for i in range(queued_steps):
+                h = queue.enqueue(self.test_step, i)
+                handles.append(h)
+            return [h.get_result() for h in handles]
+
+        @DBOS.step()
+        def test_step(self, i: int) -> int:
+            nonlocal step_counter
+            step_counter += 1
+            step_events[i].set()
+            event.wait()
+            return self.multiply(i)
+
+    inst = TestClass(multiplier)
+
+    # Start the workflow. Wait for all five steps to start. Verify that they started.
+    with SetWorkflowID(wfid):
+        original_handle = DBOS.start_workflow(inst.test_workflow)
+    for e in step_events:
+        e.wait()
+        e.clear()
+
+    assert step_counter == 5
+
+    # Recover the workflow, then resume it.
+    recovery_handles = DBOS.recover_pending_workflows()
+    # Wait until the 2nd invocation of the workflows are dequeued and executed
+    for e in step_events:
+        e.wait()
+    event.set()
+
+    # There should be one handle for the workflow and another for each queued step.
+    assert len(recovery_handles) == queued_steps + 1
+    # Verify that both the recovered and original workflows complete correctly.
+    result = [i * multiplier for i in range(5)]
+    for h in recovery_handles:
+        status = h.get_status()
+        assert status.class_name == "TestClass"
+        assert status.config_name == "test_class"
+        if h.get_workflow_id() == wfid:
+            assert h.get_result() == result
+    assert original_handle.get_result() == result
+    # Each step should start twice, once originally and once in recovery.
+    assert step_counter == 10
+
+    # Rerun the workflow. Because each step is complete, none should start again.
+    with SetWorkflowID(wfid):
+        assert inst.test_workflow() == result
+    assert step_counter == 10
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_class_static_queue_recovery(dbos: DBOS) -> None:
+    step_counter: int = 0
+    queued_steps = 5
+
+    wfid = str(uuid.uuid4())
+    queue = Queue("test_queue")
+    step_events = [threading.Event() for _ in range(queued_steps)]
+    event = threading.Event()
+
+    @DBOS.dbos_class()
+    class TestClass:
+        @staticmethod
+        @DBOS.workflow()
+        def test_workflow() -> list[int]:
+            assert DBOS.workflow_id == wfid
+            handles = []
+            for i in range(queued_steps):
+                h = queue.enqueue(TestClass.test_step, i)
+                handles.append(h)
+            return [h.get_result() for h in handles]
+
+        @staticmethod
+        @DBOS.step()
+        def test_step(i: int) -> int:
+            nonlocal step_counter
+            step_counter += 1
+            step_events[i].set()
+            event.wait()
+            return i
+
+    # Start the workflow. Wait for all five steps to start. Verify that they started.
+    with SetWorkflowID(wfid):
+        original_handle = DBOS.start_workflow(TestClass.test_workflow)
+    for e in step_events:
+        e.wait()
+        e.clear()
+
+    assert step_counter == 5
+
+    # Recover the workflow, then resume it.
+    recovery_handles = DBOS.recover_pending_workflows()
+    # Wait until the 2nd invocation of the workflows are dequeued and executed
+    for e in step_events:
+        e.wait()
+    event.set()
+
+    # There should be one handle for the workflow and another for each queued step.
+    assert len(recovery_handles) == queued_steps + 1
+    # Verify that both the recovered and original workflows complete correctly.
+    result = [i for i in range(5)]
+    for h in recovery_handles:
+        status = h.get_status()
+        # Class name is not recorded for static methods
+        assert status.class_name == None
+        assert status.config_name == None
+        if h.get_workflow_id() == wfid:
+            assert h.get_result() == result
+    assert original_handle.get_result() == result
+    # Each step should start twice, once originally and once in recovery.
+    assert step_counter == 10
+
+    # Rerun the workflow. Because each step is complete, none should start again.
+    with SetWorkflowID(wfid):
+        assert TestClass.test_workflow() == result
+    assert step_counter == 10
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_class_classmethod_queue_recovery(dbos: DBOS) -> None:
+    step_counter: int = 0
+    multiplier = 5
+    queued_steps = 5
+
+    wfid = str(uuid.uuid4())
+    queue = Queue("test_queue")
+    step_events = [threading.Event() for _ in range(queued_steps)]
+    event = threading.Event()
+
+    @DBOS.dbos_class()
+    class TestClass:
+        multiply: Callable[[int], int] = lambda _: 0
+
+        @classmethod
+        @DBOS.workflow()
+        def test_workflow(cls) -> list[int]:
+            cls.multiply = lambda x: x * multiplier
+            assert DBOS.workflow_id == wfid
+            handles = []
+            for i in range(queued_steps):
+                h = queue.enqueue(TestClass.test_step, i)
+                handles.append(h)
+            return [h.get_result() for h in handles]
+
+        @classmethod
+        @DBOS.step()
+        def test_step(cls, i: int) -> int:
+            nonlocal step_counter
+            step_counter += 1
+            step_events[i].set()
+            event.wait()
+            return cls.multiply(i)
+
+    # Start the workflow. Wait for all five steps to start. Verify that they started.
+    with SetWorkflowID(wfid):
+        original_handle = DBOS.start_workflow(TestClass.test_workflow)
+    for e in step_events:
+        e.wait()
+        e.clear()
+
+    assert step_counter == 5
+
+    # Recover the workflow, then resume it.
+    recovery_handles = DBOS.recover_pending_workflows()
+    # Wait until the 2nd invocation of the workflows are dequeued and executed
+    for e in step_events:
+        e.wait()
+    event.set()
+
+    # There should be one handle for the workflow and another for each queued step.
+    assert len(recovery_handles) == queued_steps + 1
+    # Verify that both the recovered and original workflows complete correctly.
+    result = [i * multiplier for i in range(5)]
+    for h in recovery_handles:
+        status = h.get_status()
+        # Class name is recorded for class methods
+        assert status.class_name == "TestClass"
+        assert status.config_name == None
+        if h.get_workflow_id() == wfid:
+            assert h.get_result() == result
+    assert original_handle.get_result() == result
+    # Each step should start twice, once originally and once in recovery.
+    assert step_counter == 10
+
+    # Rerun the workflow. Because each step is complete, none should start again.
+    with SetWorkflowID(wfid):
+        assert TestClass.test_workflow() == result
+    assert step_counter == 10
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_inst_txn(dbos: DBOS) -> None:
+    wfid = str(uuid.uuid4())
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):
+
+        def __init__(self, multiplier: int) -> None:
+            self.multiply: Callable[[int], int] = lambda x: x * multiplier
+            super().__init__("test_class")
+
+        @DBOS.transaction()
+        def transaction(self, x: int) -> int:
+            return self.multiply(x)
+
+    input = 2
+    multiplier = 5
+    inst = TestClass(multiplier)
+
+    with SetWorkflowID(wfid):
+        assert inst.transaction(input) == input * multiplier
+    dbos._sys_db.wait_for_buffer_flush()
+    status = DBOS.retrieve_workflow(wfid).get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == "test_class"
+
+    handle = DBOS.start_workflow(inst.transaction, input)
+    assert handle.get_result() == input * multiplier
+    dbos._sys_db.wait_for_buffer_flush()
+    status = handle.get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == "test_class"
+
+
+def test_mixed_methods(dbos: DBOS) -> None:
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):
+
+        def __init__(self, multiplier: int) -> None:
+            self.multiply: Callable[[int], int] = lambda x: x * multiplier
+            super().__init__("test_class")
+
+        @DBOS.workflow()
+        def instance_workflow(self, x: int) -> int:
+            return self.multiply(x)
+
+        @classmethod
+        @DBOS.workflow()
+        def classmethod_workflow(cls, x: int) -> int:
+            return x
+
+        @staticmethod
+        @DBOS.workflow()
+        def staticmethod_workflow(x: int) -> int:
+            return x
+
+    input = 2
+    multiplier = 5
+    inst = TestClass(multiplier)
+
+    handle = DBOS.start_workflow(inst.instance_workflow, input)
+    assert handle.get_result() == input * multiplier
+    status = handle.get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == "test_class"
+
+    handle = DBOS.start_workflow(inst.classmethod_workflow, input)
+    assert handle.get_result() == input
+    status = handle.get_status()
+    assert status.class_name == "TestClass"
+    assert status.config_name == None
+
+    handle = DBOS.start_workflow(inst.staticmethod_workflow, input)
+    assert handle.get_result() == input
+    status = handle.get_status()
+    assert status.class_name == None
+    assert status.config_name == None

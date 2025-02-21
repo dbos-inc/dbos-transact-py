@@ -189,6 +189,7 @@ class SystemDatabase:
             host=config["database"]["hostname"],
             port=config["database"]["port"],
             database="postgres",
+            # fills the "application_name" column in pg_stat_activity
             query={
                 "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"
             },
@@ -210,6 +211,7 @@ class SystemDatabase:
             host=config["database"]["hostname"],
             port=config["database"]["port"],
             database=sysdb_name,
+            # fills the "application_name" column in pg_stat_activity
             query={
                 "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"
             },
@@ -233,7 +235,12 @@ class SystemDatabase:
             self.engine.url.render_as_string(hide_password=False),
         )
         alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
-        command.upgrade(alembic_cfg, "head")
+        try:
+            command.upgrade(alembic_cfg, "head")
+        except Exception as e:
+            dbos_logger.warning(
+                f"Exception during system database construction. This is most likely because the system database was configured using a later version of DBOS: {e}"
+            )
 
         self.notification_conn: Optional[psycopg.connection.Connection] = None
         self.notifications_map: Dict[str, threading.Condition] = {}
@@ -1309,17 +1316,54 @@ class SystemDatabase:
             # If there is a global or local concurrency limit N, select only the N oldest enqueued
             # functions, else select all of them.
 
-            running_tasks_subquery = (
-                sa.select(sa.func.count()).where(
-                    (SystemSchema.workflow_queue.c.queue_name == queue.name)
-                    & (
-                        SystemSchema.workflow_queue.c.executor_id.isnot(None)
+            # First lets figure out how many tasks the worker can dequeue
+            running_tasks_query = (
+                sa.select(
+                    SystemSchema.workflow_queue.c.executor_id,
+                    sa.func.count().label("task_count"),
+                )
+                .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
+                .where(
+                    SystemSchema.workflow_queue.c.executor_id.isnot(
+                        None
                     )  # Task is dequeued
-                    & (
-                        SystemSchema.workflow_queue.c.completed_at_epoch_ms.is_(None)
+                )
+                .where(
+                    SystemSchema.workflow_queue.c.completed_at_epoch_ms.is_(
+                        None
                     )  # Task is not completed
                 )
-            ).scalar_subquery()
+                .group_by(SystemSchema.workflow_queue.c.executor_id)
+            )
+            running_tasks_result = c.execute(running_tasks_query).fetchall()
+            running_tasks_result_dict = {row[0]: row[1] for row in running_tasks_result}
+            running_tasks_for_this_worker = running_tasks_result_dict.get(
+                executor_id, 0
+            )  # Get count for current executor
+
+            max_tasks = float("inf")
+            if queue.worker_concurrency is not None:
+                # Worker local concurrency limit should always be >= running_tasks_for_this_worker
+                # This should never happen but a check + warning doesn't hurt
+                if running_tasks_for_this_worker > queue.worker_concurrency:
+                    dbos_logger.warning(
+                        f"Number of tasks on this worker ({running_tasks_for_this_worker}) exceeds the worker concurrency limit ({queue.worker_concurrency})"
+                    )
+                max_tasks = max(
+                    0, queue.worker_concurrency - running_tasks_for_this_worker
+                )
+            if queue.concurrency is not None:
+                total_running_tasks = sum(running_tasks_result_dict.values())
+                # Queue global concurrency limit should always be >= running_tasks_count
+                # This should never happen but a check + warning doesn't hurt
+                if total_running_tasks > queue.concurrency:
+                    dbos_logger.warning(
+                        f"Total running tasks ({total_running_tasks}) exceeds the global concurrency limit ({queue.concurrency})"
+                    )
+                available_tasks = max(0, queue.concurrency - total_running_tasks)
+                max_tasks = min(max_tasks, available_tasks)
+
+            # Lookup tasks
             query = (
                 sa.select(
                     SystemSchema.workflow_queue.c.workflow_uuid,
@@ -1328,27 +1372,18 @@ class SystemDatabase:
                 )
                 .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
                 .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms == None)
-                .where(
-                    # Only select functions that have not been started yet or have been started by this worker
-                    or_(
-                        SystemSchema.workflow_queue.c.executor_id == None,
-                        SystemSchema.workflow_queue.c.executor_id == executor_id,
-                    )
-                )
+                .where(SystemSchema.workflow_queue.c.executor_id == None)
                 .order_by(SystemSchema.workflow_queue.c.created_at_epoch_ms.asc())
-                # Set a dequeue limit if necessary. worker_concurrency <= concurrency is already enforced, but still.
-                .limit(
-                    sa.func.least(
-                        queue.worker_concurrency,
-                        queue.concurrency - running_tasks_subquery,
-                    )
-                )
                 .with_for_update(nowait=True)  # Error out early
             )
+            # Apply limit only if max_tasks is finite
+            if max_tasks != float("inf"):
+                query = query.limit(int(max_tasks))
+
             rows = c.execute(query).fetchall()
 
-            # Now, get the workflow IDs of functions that have not yet been started
-            dequeued_ids: List[str] = [row[0] for row in rows if row[1] is None]
+            # Get the workflow IDs
+            dequeued_ids: List[str] = [row[0] for row in rows]
             if len(dequeued_ids) > 0:
                 dbos_logger.debug(
                     f"[{queue.name}] dequeueing {len(dequeued_ids)} task(s)"
