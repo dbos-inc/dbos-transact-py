@@ -191,7 +191,7 @@ class SystemDatabase:
             database="postgres",
             # fills the "application_name" column in pg_stat_activity
             query={
-                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"
+                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}"
             },
         )
         engine = sa.create_engine(postgres_db_url)
@@ -213,7 +213,7 @@ class SystemDatabase:
             database=sysdb_name,
             # fills the "application_name" column in pg_stat_activity
             query={
-                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"
+                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}"
             },
         )
 

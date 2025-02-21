@@ -283,7 +283,7 @@ class DBOS:
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
         self._executor_id: str = os.environ.get("DBOS__VMID", "local")
-        self.app_version = os.environ.get("DBOS__APPVERSION", "")
+        self.app_version: str = os.environ.get("DBOS__APPVERSION", "")
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
@@ -354,6 +354,7 @@ class DBOS:
             self._launched = True
             if self.app_version == "":
                 self.app_version = self._compute_app_version()
+            dbos_tracer.app_version = self.app_version
             self._executor_field = ThreadPoolExecutor(max_workers=64)
             self._sys_db_field = SystemDatabase(self.config)
             self._app_db_field = ApplicationDatabase(self.config)
@@ -407,7 +408,7 @@ class DBOS:
             # to enable their export in DBOS Cloud
             for handler in dbos_logger.handlers:
                 handler.flush()
-            add_otlp_to_all_loggers()
+            add_otlp_to_all_loggers(self.app_version)
         except Exception:
             dbos_logger.error(f"DBOS failed to launch: {traceback.format_exc()}")
             raise
@@ -901,7 +902,7 @@ class DBOS:
         ctx.authenticated_user = authenticated_user
         ctx.authenticated_roles = authenticated_roles
 
-    def _compute_app_version(self):
+    def _compute_app_version(self) -> str:
         return "5"
 
 
