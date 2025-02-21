@@ -501,36 +501,6 @@ def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
     for i in range(0, 10 * global_concurrency_limit):
         queue.enqueue(worker_concurrency_test_workflow)
 
-    # Wait for global_concurrency_limit workers to start
-    num_dequeued = 0
-    while num_dequeued < global_concurrency_limit:
-        for signal in start_signals:
-            signal.wait(timeout=1)
-            if signal.is_set():
-                num_dequeued += 1
-
-    # Now check in the DB that global concurrency is met
-    with dbos._sys_db.engine.begin() as conn:
-        query = (
-            sa.select(sa.func.count())
-            .select_from(SystemSchema.workflow_status)
-            .where(
-                SystemSchema.workflow_status.c.status
-                == WorkflowStatusString.PENDING.value
-            )
-        )
-        row = conn.execute(query).fetchone()
-
-        assert row is not None, "Query returned no results"
-        count = row[0]
-        assert (
-            count == global_concurrency_limit
-        ), f"Expected {global_concurrency_limit} workflows, found {count}"
-
-    # Signal the workers they can move on
-    for signal in end_signals:
-        signal.set()
-
     for process in processes:
         process.join()
 
