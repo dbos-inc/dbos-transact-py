@@ -547,16 +547,21 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert txn_counter == 1
 
 
-def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
+def test_recovery_thread(config: ConfigFile) -> None:
     wf_counter: int = 0
     test_var = "dbos"
 
-    @DBOS.workflow()
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()  # type: ignore
     def test_workflow(var: str) -> str:
         nonlocal wf_counter
         if var == test_var:
             wf_counter += 1
         return var
+
+    DBOS.launch()
 
     wfuuid = str(uuid.uuid4())
     with SetWorkflowID(wfuuid):
@@ -585,8 +590,8 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
         }
     )
 
-    dbos._destroy()  # Unusual pattern - reusing the memory
-    dbos.__init__(config=config)  # type: ignore
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)  # type: ignore
 
     @DBOS.workflow()  # type: ignore
     def test_workflow(var: str) -> str:
@@ -595,9 +600,9 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
             wf_counter += 1
         return var
 
-    DBOS.launch()  # Usually the framework does this but we destroyed it above
+    DBOS.launch()
 
-    # Upon re-initialization, the background thread should recover the workflow safely.
+    # Upon re-launch, the background thread should recover the workflow safely.
     max_retries = 10
     success = False
     for i in range(max_retries):
