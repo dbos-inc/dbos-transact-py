@@ -1264,3 +1264,67 @@ def test_app_version(config: ConfigFile) -> None:
     assert dbos.app_version == app_version
 
     del os.environ["DBOS__APPVERSION"]
+
+
+def test_recovery_appversion(config: ConfigFile) -> None:
+    input = 5
+
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def test_workflow(x: int) -> int:
+        return x
+
+    DBOS.launch()
+
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowID(wfuuid):
+        assert test_workflow(input) == input
+
+    # Change the workflow status to pending
+    dbos._sys_db.wait_for_buffer_flush()
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": "PENDING", "name": test_workflow.__qualname__})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
+        )
+
+    # Reconstruct an identical environment to simulate a restart
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def test_workflow(x: int) -> int:
+        return x
+
+    DBOS.launch()
+
+    # The workflow should successfully recover
+    workflow_handles = DBOS.recover_pending_workflows()
+    assert len(workflow_handles) == 1
+    assert workflow_handles[0].get_result() == input
+
+    # Change the workflow status to pending
+    dbos._sys_db.wait_for_buffer_flush()
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": "PENDING", "name": test_workflow.__qualname__})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
+        )
+
+    # Now reconstruct a "modified application" with a different application version
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def test_workflow(x: int) -> int:
+        return x + 1
+
+    DBOS.launch()
+
+    # The workflow should not recover
+    workflow_handles = DBOS.recover_pending_workflows()
+    assert len(workflow_handles) == 0
