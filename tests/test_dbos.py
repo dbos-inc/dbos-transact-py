@@ -1,3 +1,5 @@
+# mypy: disable-error-code="no-redef"
+
 import datetime
 import logging
 import os
@@ -554,7 +556,7 @@ def test_recovery_thread(config: ConfigFile) -> None:
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
 
-    @DBOS.workflow()  # type: ignore
+    @DBOS.workflow()
     def test_workflow(var: str) -> str:
         nonlocal wf_counter
         if var == test_var:
@@ -591,9 +593,9 @@ def test_recovery_thread(config: ConfigFile) -> None:
     )
 
     DBOS.destroy(destroy_registry=True)
-    DBOS(config=config)  # type: ignore
+    DBOS(config=config)
 
-    @DBOS.workflow()  # type: ignore
+    @DBOS.workflow()
     def test_workflow(var: str) -> str:
         nonlocal wf_counter
         if var == test_var:
@@ -1198,19 +1200,19 @@ def test_destroy_semantics(dbos: DBOS, config: ConfigFile) -> None:
     assert test_workflow(var) == var
 
 
-def test_app_version(config: ConfigFile):
-    def is_hex(s):
+def test_app_version(config: ConfigFile) -> None:
+    def is_hex(s: str) -> bool:
         return all(c in "0123456789abcdefABCDEF" for c in s)
 
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
 
     @DBOS.workflow()
-    def workflow_one(x: int):
+    def workflow_one(x: int) -> int:
         return x
 
     @DBOS.workflow()
-    def workflow_two(y: int):
+    def workflow_two(y: int) -> int:
         return y
 
     DBOS.launch()
@@ -1224,11 +1226,11 @@ def test_app_version(config: ConfigFile):
     dbos = DBOS(config=config)
 
     @DBOS.workflow()
-    def workflow_one(x: int):
+    def workflow_one(x: int) -> int:
         return x
 
     @DBOS.workflow()
-    def workflow_two(y: int):
+    def workflow_two(y: int) -> int:
         return y
 
     DBOS.launch()
@@ -1240,7 +1242,7 @@ def test_app_version(config: ConfigFile):
     dbos = DBOS(config=config)
 
     @DBOS.workflow()
-    def workflow_one(x: int):
+    def workflow_one(x: int) -> int:
         return x
 
     # Verify that changing the workflow source changes the workflow version
@@ -1255,7 +1257,7 @@ def test_app_version(config: ConfigFile):
     dbos = DBOS(config=config)
 
     @DBOS.workflow()
-    def workflow_one(x: int):
+    def workflow_one(x: int) -> int:
         return x
 
     DBOS.launch()
