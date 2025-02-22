@@ -48,7 +48,9 @@ def recover_pending_workflows(
                 f"Skip local recovery because it's running in a VM: {os.environ.get('DBOS__VMID')}"
             )
         dbos.logger.debug(f"Recovering pending workflows for executor: {executor_id}")
-        pending_workflows = dbos._sys_db.get_pending_workflows(executor_id)
+        num_wrong_version, pending_workflows = dbos._sys_db.get_pending_workflows(
+            executor_id, dbos.app_version
+        )
         for pending_workflow in pending_workflows:
             if (
                 pending_workflow.queue_name
@@ -65,6 +67,9 @@ def recover_pending_workflows(
                 workflow_handles.append(
                     execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
                 )
-
-    dbos.logger.info("Recovered pending workflows")
+        dbos.logger.info(f"Recovering {len(pending_workflows)} workflows")
+        if num_wrong_version > 0:
+            dbos.logger.info(
+                f"{num_wrong_version} workflows were not recovered because they belong to a different application version"
+            )
     return workflow_handles

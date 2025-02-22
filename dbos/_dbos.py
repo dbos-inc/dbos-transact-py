@@ -191,12 +191,12 @@ class DBOSRegistry:
     def compute_app_version(self) -> str:
         """
         An application's version is computed from a hash of the source of its workflows.
-        This is guaranteed to be stable given identical source code because it uses a SHA256 hash
+        This is guaranteed to be stable given identical source code because it uses an MD5 hash
         and because it iterates through the workflows in insertion order (which Python dicts guarantee).
         This way, if the app's workflows are updated (which would break recovery), its version changes.
         App version can be manually set through the DBOS__APPVERSION environment variable.
         """
-        hasher = hashlib.sha256()
+        hasher = hashlib.md5()
         for wf in self.workflow_info_map.values():
             source = inspect.getsource(wf)
             hasher.update(source.encode("utf-8"))
@@ -379,9 +379,17 @@ class DBOS:
                 admin_port = 3001
             self._admin_server_field = AdminServer(dbos=self, port=admin_port)
 
-            if not os.environ.get("DBOS__VMID"):
-                workflow_ids = self._sys_db.get_pending_workflows("local")
-                self._executor.submit(startup_recovery_thread, self, workflow_ids)
+            num_wrong_version, workflow_ids = self._sys_db.get_pending_workflows(
+                self._executor_id, self.app_version
+            )
+            if (len(workflow_ids)) > 0:
+                self.logger.info(f"Recovering {len(workflow_ids)} workflows")
+            if num_wrong_version > 0:
+                self.logger.info(
+                    f"{num_wrong_version} workflows were not recovered because they belong to a different application version"
+                )
+
+            self._executor.submit(startup_recovery_thread, self, workflow_ids)
 
             # Listen to notifications
             notification_listener_thread = threading.Thread(

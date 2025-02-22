@@ -13,6 +13,7 @@ from typing import (
     Optional,
     Sequence,
     Set,
+    Tuple,
     TypedDict,
     cast,
 )
@@ -767,8 +768,8 @@ class SystemDatabase:
         return GetWorkflowsOutput(workflow_uuids)
 
     def get_pending_workflows(
-        self, executor_id: str
-    ) -> list[GetPendingWorkflowsOutput]:
+        self, executor_id: str, app_version: str
+    ) -> Tuple[int, list[GetPendingWorkflowsOutput]]:
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(
@@ -778,9 +779,10 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value,
                     SystemSchema.workflow_status.c.executor_id == executor_id,
+                    SystemSchema.workflow_status.c.application_version == app_version,
                 )
             ).fetchall()
-            return [
+            return 0, [
                 GetPendingWorkflowsOutput(
                     workflow_uuid=row.workflow_uuid,
                     queue_name=row.queue_name,
