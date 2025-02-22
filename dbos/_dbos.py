@@ -418,9 +418,8 @@ class DBOS:
                 self._background_threads.append(poller_thread)
             self._registry.pollers = []
 
-            dbos_logger.info(
-                f"DBOS launched! Application version hash: {self.app_version}"
-            )
+            dbos_logger.info("DBOS launched!")
+            dbos_logger.info(f"Application version: {self.app_version}")
 
             # Flush handlers and add OTLP to all loggers if enabled
             # to enable their export in DBOS Cloud
