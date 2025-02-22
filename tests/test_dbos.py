@@ -1255,3 +1255,5 @@ def test_app_version(config: ConfigFile):
 
     DBOS.launch()
     assert dbos.app_version == app_version
+
+    del os.environ["DBOS__APPVERSION"]
