@@ -1,5 +1,6 @@
 import datetime
 import logging
+import os
 import threading
 import time
 import uuid
@@ -1190,3 +1191,67 @@ def test_destroy_semantics(dbos: DBOS, config: ConfigFile) -> None:
     DBOS.launch()
 
     assert test_workflow(var) == var
+
+
+def test_app_version(config: ConfigFile):
+    def is_hex(s):
+        return all(c in "0123456789abcdefABCDEF" for c in s)
+
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def workflow_one(x: int):
+        return x
+
+    @DBOS.workflow()
+    def workflow_two(y: int):
+        return y
+
+    DBOS.launch()
+
+    # Verify that app version is correctly set to a hex string
+    app_version = dbos.app_version
+    assert len(app_version) > 0
+    assert is_hex(app_version)
+
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def workflow_one(x: int):
+        return x
+
+    @DBOS.workflow()
+    def workflow_two(y: int):
+        return y
+
+    DBOS.launch()
+
+    # Verify stability--the same workflow source produces the same app version.
+    assert dbos.app_version == app_version
+
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def workflow_one(x: int):
+        return x
+
+    # Verify that changing the workflow source changes the workflow version
+    DBOS.launch()
+    assert dbos.app_version != app_version
+
+    # Verify that version can be overriden with an environment variable
+    app_version = "12345"
+    os.environ["DBOS__APPVERSION"] = app_version
+
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def workflow_one(x: int):
+        return x
+
+    DBOS.launch()
+    assert dbos.app_version == app_version

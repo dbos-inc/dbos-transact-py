@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import hashlib
+import inspect
 import json
 import os
 import sys
@@ -186,6 +188,20 @@ class DBOSRegistry:
         else:
             self.instance_info_map[fn] = inst
 
+    def compute_app_version(self) -> str:
+        """
+        An application's version is computed from a hash of the source of its workflows.
+        This is guaranteed to be stable given identical source code because it uses a SHA256 hash
+        and because it iterates through the workflows in insertion order (which Python dicts guarantee).
+        This way, if the app's workflows are updated (which would break recovery), its version changes.
+        App version can be manually set through the DBOS__APPVERSION environment variable.
+        """
+        hasher = hashlib.sha256()
+        for wf in self.workflow_info_map.values():
+            source = inspect.getsource(wf)
+            hasher.update(source.encode("utf-8"))
+        return hasher.hexdigest()
+
 
 class DBOS:
     """
@@ -353,7 +369,7 @@ class DBOS:
                 return
             self._launched = True
             if self.app_version == "":
-                self.app_version = self._compute_app_version()
+                self.app_version = self._registry.compute_app_version()
             dbos_tracer.app_version = self.app_version
             self._executor_field = ThreadPoolExecutor(max_workers=64)
             self._sys_db_field = SystemDatabase(self.config)
@@ -901,9 +917,6 @@ class DBOS:
         ctx = assert_current_dbos_context()
         ctx.authenticated_user = authenticated_user
         ctx.authenticated_roles = authenticated_roles
-
-    def _compute_app_version(self) -> str:
-        return "5"
 
 
 @dataclass
