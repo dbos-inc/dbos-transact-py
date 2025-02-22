@@ -13,6 +13,7 @@ from typing import (
     Optional,
     Sequence,
     Set,
+    Tuple,
     TypedDict,
     cast,
 )
@@ -191,7 +192,7 @@ class SystemDatabase:
             database="postgres",
             # fills the "application_name" column in pg_stat_activity
             query={
-                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"
+                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}"
             },
         )
         engine = sa.create_engine(postgres_db_url)
@@ -213,7 +214,7 @@ class SystemDatabase:
             database=sysdb_name,
             # fills the "application_name" column in pg_stat_activity
             query={
-                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"
+                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}"
             },
         )
 
@@ -767,8 +768,8 @@ class SystemDatabase:
         return GetWorkflowsOutput(workflow_uuids)
 
     def get_pending_workflows(
-        self, executor_id: str
-    ) -> list[GetPendingWorkflowsOutput]:
+        self, executor_id: str, app_version: str
+    ) -> Tuple[int, list[GetPendingWorkflowsOutput]]:
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(
@@ -778,9 +779,23 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value,
                     SystemSchema.workflow_status.c.executor_id == executor_id,
+                    SystemSchema.workflow_status.c.application_version == app_version,
                 )
             ).fetchall()
-            return [
+
+            num_wrong_version = (
+                c.execute(
+                    sa.select(sa.func.count()).where(
+                        SystemSchema.workflow_status.c.status
+                        == WorkflowStatusString.PENDING.value,
+                        SystemSchema.workflow_status.c.executor_id == executor_id,
+                        SystemSchema.workflow_status.c.application_version
+                        != app_version,
+                    )
+                ).scalar()
+                or 0
+            )
+            return num_wrong_version, [
                 GetPendingWorkflowsOutput(
                     workflow_uuid=row.workflow_uuid,
                     queue_name=row.queue_name,

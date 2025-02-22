@@ -86,8 +86,9 @@ def config_logger(config: "ConfigFile") -> None:
         dbos_logger.addFilter(_otlp_transformer)
 
 
-def add_otlp_to_all_loggers() -> None:
+def add_otlp_to_all_loggers(app_version: str) -> None:
     if _otlp_handler is not None and _otlp_transformer is not None:
+        _otlp_transformer.app_version = app_version
         root = logging.root
 
         root.addHandler(_otlp_handler)

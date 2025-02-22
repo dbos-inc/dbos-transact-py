@@ -36,6 +36,7 @@ def test_spans(dbos: DBOS) -> None:
 
     for span in spans:
         assert span.attributes is not None
+        assert span.attributes["applicationVersion"] == dbos.app_version
         assert span.context is not None
 
     assert spans[0].name == test_step.__name__
@@ -73,6 +74,7 @@ async def test_spans_async(dbos: DBOS) -> None:
 
     for span in spans:
         assert span.attributes is not None
+        assert span.attributes["applicationVersion"] == dbos.app_version
         assert span.context is not None
 
     assert spans[0].name == test_step.__name__
@@ -85,7 +87,7 @@ async def test_spans_async(dbos: DBOS) -> None:
 
 
 def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
-    _, app = dbos_fastapi
+    dbos, app = dbos_fastapi
 
     @app.get("/step")
     @DBOS.step()
@@ -109,6 +111,7 @@ def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     for span in spans:
         assert span.attributes is not None
+        assert span.attributes["applicationVersion"] == dbos.app_version
         assert span.context is not None
 
     assert spans[0].name == test_step_endpoint.__name__
