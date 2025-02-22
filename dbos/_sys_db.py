@@ -782,7 +782,20 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.application_version == app_version,
                 )
             ).fetchall()
-            return 0, [
+
+            num_wrong_version = (
+                c.execute(
+                    sa.select(sa.func.count()).where(
+                        SystemSchema.workflow_status.c.status
+                        == WorkflowStatusString.PENDING.value,
+                        SystemSchema.workflow_status.c.executor_id == executor_id,
+                        SystemSchema.workflow_status.c.application_version
+                        != app_version,
+                    )
+                ).scalar()
+                or 0
+            )
+            return num_wrong_version, [
                 GetPendingWorkflowsOutput(
                     workflow_uuid=row.workflow_uuid,
                     queue_name=row.queue_name,
