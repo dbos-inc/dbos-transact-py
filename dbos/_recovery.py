@@ -70,6 +70,6 @@ def recover_pending_workflows(
         dbos.logger.info(f"Recovering {len(pending_workflows)} workflows")
         if num_wrong_version > 0:
             dbos.logger.info(
-                f"{num_wrong_version} workflows were not recovered because they belong to a different application version"
+                f"{num_wrong_version} workflows with a different app version were not recovered"
             )
     return workflow_handles

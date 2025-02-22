@@ -386,7 +386,7 @@ class DBOS:
                 self.logger.info(f"Recovering {len(workflow_ids)} workflows")
             if num_wrong_version > 0:
                 self.logger.info(
-                    f"{num_wrong_version} workflows were not recovered because they belong to a different application version"
+                    f"{num_wrong_version} workflows with a different app version were not recovered"
                 )
 
             self._executor.submit(startup_recovery_thread, self, workflow_ids)
