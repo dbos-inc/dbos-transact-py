@@ -36,6 +36,7 @@ class DBOSErrorCode(Enum):
     MaxStepRetriesExceeded = 7
     NotAuthorized = 8
     ConflictingWorkflowError = 9
+    WorkflowCancelled = 10
 
 
 class DBOSWorkflowConflictIDError(DBOSException):
@@ -126,4 +127,14 @@ class DBOSMaxStepRetriesExceeded(DBOSException):
         super().__init__(
             "Step reached maximum retries.",
             dbos_error_code=DBOSErrorCode.MaxStepRetriesExceeded.value,
+        )
+
+
+class DBOSWorkflowCancelledError(DBOSException):
+    """Exception raised when the workflow has already been cancelled."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Workflow Cancelled.",
+            dbos_error_code=DBOSErrorCode.WorkflowCancelled.value,
         )

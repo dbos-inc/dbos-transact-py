@@ -148,6 +148,7 @@ class DBOSRegistry:
         self.pollers: list[RegisteredJob] = []
         self.dbos: Optional[DBOS] = None
         self.config: Optional[ConfigFile] = None
+        self.workflow_cancelled_map: dict[str, bool] = {}
 
     def register_wf_function(self, name: str, wrapped_func: F) -> None:
         self.workflow_info_map[name] = wrapped_func
@@ -185,6 +186,15 @@ class DBOSRegistry:
                 )
         else:
             self.instance_info_map[fn] = inst
+
+    def cancel_workflow(self, workflow_id: str) -> None:
+        self.workflow_cancelled_map[workflow_id] = True
+
+    def is_workflow_cancelled(self, workflow_id: str) -> bool:
+        return self.workflow_cancelled_map.get(workflow_id, False)
+
+    def clear_workflow_cancelled(self, workflow_id: str) -> None:
+        self.workflow_cancelled_map.pop(workflow_id, None)
 
 
 class DBOS:
