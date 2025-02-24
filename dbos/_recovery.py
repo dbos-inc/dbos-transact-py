@@ -43,10 +43,6 @@ def recover_pending_workflows(
 ) -> List["WorkflowHandle[Any]"]:
     workflow_handles: List["WorkflowHandle[Any]"] = []
     for executor_id in executor_ids:
-        if executor_id == "local" and os.environ.get("DBOS__VMID"):
-            dbos.logger.debug(
-                f"Skip local recovery because it's running in a VM: {os.environ.get('DBOS__VMID')}"
-            )
         dbos.logger.debug(f"Recovering pending workflows for executor: {executor_id}")
         num_wrong_version, pending_workflows = dbos._sys_db.get_pending_workflows(
             executor_id, dbos.app_version
