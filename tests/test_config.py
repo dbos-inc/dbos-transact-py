@@ -399,3 +399,26 @@ def test_db_connect_failed(mocker):
         load_config(mock_filename)
 
     assert "Could not connect to the database" in str(exc_info.value)
+
+
+def test_no_db_wizard(mocker):
+    mock_config = """
+        name: "some-app"
+        language: "python"
+        runtimeConfig:
+            start:
+                - "python3 main.py"
+        database:
+          hostname: 'localhost'
+          port: 5432
+          username: 'postgres'
+          password: 'somerandom'
+
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
+    )
+
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        load_config(mock_filename)
+    assert "Could not connect" in str(exc_info.value)
