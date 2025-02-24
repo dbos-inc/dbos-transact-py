@@ -818,6 +818,7 @@ class DBOS:
     def resume_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Resume a workflow by ID."""
         _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
+        _dbos_global_registry.clear_workflow_cancelled(workflow_id)
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id, False)
 
     @classproperty

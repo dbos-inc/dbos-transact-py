@@ -133,8 +133,8 @@ class DBOSMaxStepRetriesExceeded(DBOSException):
 class DBOSWorkflowCancelledError(DBOSException):
     """Exception raised when the workflow has already been cancelled."""
 
-    def __init__(self) -> None:
+    def __init__(self, msg: str) -> None:
         super().__init__(
-            "Workflow Cancelled.",
+            msg,
             dbos_error_code=DBOSErrorCode.WorkflowCancelled.value,
         )
