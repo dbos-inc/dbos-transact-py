@@ -45,8 +45,16 @@ def db_wizard(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
             f"Could not connect to Postgres: password authentication failed: {db_connection_error}"
         )
     db_config = config["database"]
+
+    # Read the config file and check if the database hostname/port/username are set. If so, skip the wizard.
+    with open(config_file_path, "r") as file:
+        content = file.read()
+        local_config = yaml.safe_load(content)
     if (
-        db_config["hostname"] != "localhost"
+        local_config["database"]["hostname"]
+        or local_config["database"]["port"]
+        or local_config["database"]["username"]
+        or db_config["hostname"] != "localhost"
         or db_config["port"] != 5432
         or db_config["username"] != "postgres"
     ):
