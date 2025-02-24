@@ -812,6 +812,7 @@ class DBOS:
     def cancel_workflow(cls, workflow_id: str) -> None:
         """Cancel a workflow by ID."""
         _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
+        _dbos_global_registry.cancel_workflow(workflow_id)
 
     @classmethod
     def resume_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:

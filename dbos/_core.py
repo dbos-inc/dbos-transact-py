@@ -711,7 +711,7 @@ def decorate_step(
 
             # Check if the workflow is cancelled
             ctx = assert_current_dbos_context()
-            if workflow_cancellation_map.get(ctx.workflow_id, False):
+            if dbosreg.is_workflow_cancelled(ctx.workflow_id):
                 raise DBOSWorkflowCancelledError(
                     f"Workflow {ctx.workflow_id} is cancelled. Aborting step {func.__name__}."
                 )
