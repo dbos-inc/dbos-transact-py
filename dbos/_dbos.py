@@ -192,13 +192,15 @@ class DBOSRegistry:
         """
         An application's version is computed from a hash of the source of its workflows.
         This is guaranteed to be stable given identical source code because it uses an MD5 hash
-        and because it iterates through the workflows in insertion order (which Python dicts guarantee).
+        and because it iterates through the workflows in sorted order.
         This way, if the app's workflows are updated (which would break recovery), its version changes.
         App version can be manually set through the DBOS__APPVERSION environment variable.
         """
         hasher = hashlib.md5()
-        for wf in self.workflow_info_map.values():
-            source = inspect.getsource(wf)
+        sources = sorted(
+            [inspect.getsource(wf) for wf in self.workflow_info_map.values()]
+        )
+        for source in sources:
             hasher.update(source.encode("utf-8"))
         return hasher.hexdigest()
 
