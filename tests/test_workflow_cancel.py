@@ -134,3 +134,12 @@ def test_two_transactions_cancel(dbos: DBOS, config: ConfigFile) -> None:
     assert (
         tr_completed == 2
     ), f"Expected steps_completed to be 2, but got {tr_completed}"
+
+    # resume it a 2nd time
+
+    dbos.resume_workflow(wfuuid)
+    time.sleep(1)
+
+    assert (
+        tr_completed == 2
+    ), f"Expected steps_completed to be 2, but got {tr_completed}"
