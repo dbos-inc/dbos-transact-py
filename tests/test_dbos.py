@@ -71,14 +71,22 @@ def test_simple_workflow_attempts_counter(dbos: DBOS) -> None:
 
     wfuuid = str(uuid.uuid4())
     with dbos._sys_db.engine.connect() as c:
-        stmt = sa.select(SystemSchema.workflow_status.c.recovery_attempts).where(
-            SystemSchema.workflow_status.c.workflow_uuid == wfuuid
-        )
+        stmt = sa.select(
+            SystemSchema.workflow_status.c.recovery_attempts,
+            SystemSchema.workflow_status.c.created_at,
+            SystemSchema.workflow_status.c.updated_at,
+        ).where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
         for i in range(10):
             with SetWorkflowID(wfuuid):
                 noop()
-            result = c.execute(stmt).scalar()
-            assert result == i + 1
+            result = c.execute(stmt).fetchone()
+            assert result is not None
+            recovery_attempts, created_at, updated_at = result
+            assert recovery_attempts == i + 1
+            if i == 0:
+                assert created_at == updated_at
+            else:
+                assert updated_at > created_at
 
 
 def test_child_workflow(dbos: DBOS) -> None:

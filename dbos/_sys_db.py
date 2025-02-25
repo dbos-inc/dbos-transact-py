@@ -22,8 +22,8 @@ import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import or_
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.sql import func
 
 from . import _serialization
 from ._dbos_config import ConfigFile
@@ -307,6 +307,7 @@ class SystemDatabase:
                     recovery_attempts=(
                         SystemSchema.workflow_status.c.recovery_attempts + 1
                     ),
+                    updated_at=func.extract("epoch", func.now()) * 1000,
                 ),
             )
         )
@@ -404,6 +405,7 @@ class SystemDatabase:
                     status=status["status"],
                     output=status["output"],
                     error=status["error"],
+                    updated_at=func.extract("epoch", func.now()) * 1000,
                 ),
             )
         )
