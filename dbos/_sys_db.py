@@ -1,4 +1,5 @@
 import datetime
+import logging
 import os
 import re
 import threading
@@ -229,6 +230,7 @@ class SystemDatabase:
         )
         alembic_cfg = Config()
         alembic_cfg.set_main_option("script_location", migration_dir)
+        logging.getLogger("alembic").setLevel(logging.WARNING)
         # Alembic requires the % in URL-escaped parameters to itself be escaped to %%.
         escaped_conn_string = re.sub(
             r"%(?=[0-9A-Fa-f]{2})",
