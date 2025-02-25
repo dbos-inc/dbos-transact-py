@@ -549,7 +549,7 @@ def decorate_transaction(
             ctx = assert_current_dbos_context()
             if dbosreg.is_workflow_cancelled(ctx.workflow_id):
                 raise DBOSWorkflowCancelledError(
-                    f"Workflow {ctx.workflow_id} is cancelled. Aborting step {func.__name__}."
+                    f"Workflow {ctx.workflow_id} is cancelled. Aborting transaction {func.__name__}."
                 )
 
             dbos = dbosreg.dbos
@@ -576,7 +576,7 @@ def decorate_transaction(
 
                         if dbosreg.is_workflow_cancelled(ctx.workflow_id):
                             raise DBOSWorkflowCancelledError(
-                                f"Workflow {ctx.workflow_id} is cancelled. Aborting step {func.__name__}."
+                                f"Workflow {ctx.workflow_id} is cancelled. Aborting transaction {func.__name__}."
                             )
 
                         has_recorded_error = False
