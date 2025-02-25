@@ -172,7 +172,7 @@ _buffer_flush_interval_secs = 1.0
 
 class SystemDatabase:
 
-    def __init__(self, config: ConfigFile):
+    def __init__(self, config: ConfigFile, debug_mode: bool = False):
         self.config = config
 
         sysdb_name = (
@@ -182,27 +182,28 @@ class SystemDatabase:
         )
 
         # If the system database does not already exist, create it
-        postgres_db_url = sa.URL.create(
-            "postgresql+psycopg",
-            username=config["database"]["username"],
-            password=config["database"]["password"],
-            host=config["database"]["hostname"],
-            port=config["database"]["port"],
-            database="postgres",
-            # fills the "application_name" column in pg_stat_activity
-            query={
-                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"
-            },
-        )
-        engine = sa.create_engine(postgres_db_url)
-        with engine.connect() as conn:
-            conn.execution_options(isolation_level="AUTOCOMMIT")
-            if not conn.execute(
-                sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
-                parameters={"db_name": sysdb_name},
-            ).scalar():
-                conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
-        engine.dispose()
+        if not debug_mode:
+            postgres_db_url = sa.URL.create(
+                "postgresql+psycopg",
+                username=config["database"]["username"],
+                password=config["database"]["password"],
+                host=config["database"]["hostname"],
+                port=config["database"]["port"],
+                database="postgres",
+                # fills the "application_name" column in pg_stat_activity
+                query={
+                    "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"
+                },
+            )
+            engine = sa.create_engine(postgres_db_url)
+            with engine.connect() as conn:
+                conn.execution_options(isolation_level="AUTOCOMMIT")
+                if not conn.execute(
+                    sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
+                    parameters={"db_name": sysdb_name},
+                ).scalar():
+                    conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
+            engine.dispose()
 
         system_db_url = sa.URL.create(
             "postgresql+psycopg",
@@ -223,24 +224,25 @@ class SystemDatabase:
         )
 
         # Run a schema migration for the system database
-        migration_dir = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), "_migrations"
-        )
-        alembic_cfg = Config()
-        alembic_cfg.set_main_option("script_location", migration_dir)
-        # Alembic requires the % in URL-escaped parameters to itself be escaped to %%.
-        escaped_conn_string = re.sub(
-            r"%(?=[0-9A-Fa-f]{2})",
-            "%%",
-            self.engine.url.render_as_string(hide_password=False),
-        )
-        alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
-        try:
-            command.upgrade(alembic_cfg, "head")
-        except Exception as e:
-            dbos_logger.warning(
-                f"Exception during system database construction. This is most likely because the system database was configured using a later version of DBOS: {e}"
+        if not debug_mode:
+            migration_dir = os.path.join(
+                os.path.dirname(os.path.realpath(__file__)), "_migrations"
             )
+            alembic_cfg = Config()
+            alembic_cfg.set_main_option("script_location", migration_dir)
+            # Alembic requires the % in URL-escaped parameters to itself be escaped to %%.
+            escaped_conn_string = re.sub(
+                r"%(?=[0-9A-Fa-f]{2})",
+                "%%",
+                self.engine.url.render_as_string(hide_password=False),
+            )
+            alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
+            try:
+                command.upgrade(alembic_cfg, "head")
+            except Exception as e:
+                dbos_logger.warning(
+                    f"Exception during system database construction. This is most likely because the system database was configured using a later version of DBOS: {e}"
+                )
 
         self.notification_conn: Optional[psycopg.connection.Connection] = None
         self.notifications_map: Dict[str, threading.Condition] = {}

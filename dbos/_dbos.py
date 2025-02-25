@@ -283,6 +283,7 @@ class DBOS:
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
         self._executor_id: str = os.environ.get("DBOS__VMID", "local")
+        self._debug_wf_id: Optional[str] = os.getenv("DBOS_DEBUG_WORKFLOW_ID")
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
@@ -340,6 +341,10 @@ class DBOS:
         rv: AdminServer = self._admin_server_field
         return rv
 
+    @property
+    def _debug_mode(self) -> bool:
+        return self._debug_wf_id is not None
+
     @classmethod
     def launch(cls) -> None:
         if _dbos_global_instance is not None:
@@ -352,8 +357,18 @@ class DBOS:
                 return
             self._launched = True
             self._executor_field = ThreadPoolExecutor(max_workers=64)
-            self._sys_db_field = SystemDatabase(self.config)
-            self._app_db_field = ApplicationDatabase(self.config)
+            self._sys_db_field = SystemDatabase(self.config, self._debug_mode)
+            self._app_db_field = ApplicationDatabase(self.config, self._debug_mode)
+
+            if self._debug_wf_id is not None:
+                dbos_logger.info(f"Debugging workflow {self._debug_wf_id}")
+                handle = self.execute_workflow_id(self._debug_wf_id)
+                result = handle.get_result()
+                dbos_logger.info("Workflow Debugging complete. Exiting process.")
+                self._destroy()
+                sys.exit(0)
+                return  # return for cases where process.exit is mocked
+
             admin_port = self.config["runtimeConfig"].get("admin_port")
             if admin_port is None:
                 admin_port = 3001
