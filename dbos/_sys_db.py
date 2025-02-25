@@ -769,7 +769,7 @@ class SystemDatabase:
 
     def get_pending_workflows(
         self, executor_id: str, app_version: str
-    ) -> Tuple[int, list[GetPendingWorkflowsOutput]]:
+    ) -> list[GetPendingWorkflowsOutput]:
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(
@@ -783,19 +783,7 @@ class SystemDatabase:
                 )
             ).fetchall()
 
-            num_wrong_version = (
-                c.execute(
-                    sa.select(sa.func.count()).where(
-                        SystemSchema.workflow_status.c.status
-                        == WorkflowStatusString.PENDING.value,
-                        SystemSchema.workflow_status.c.executor_id == executor_id,
-                        SystemSchema.workflow_status.c.application_version
-                        != app_version,
-                    )
-                ).scalar()
-                or 0
-            )
-            return num_wrong_version, [
+            return [
                 GetPendingWorkflowsOutput(
                     workflow_uuid=row.workflow_uuid,
                     queue_name=row.queue_name,

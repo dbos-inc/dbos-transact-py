@@ -372,6 +372,7 @@ class DBOS:
             self._launched = True
             if self.app_version == "":
                 self.app_version = self._registry.compute_app_version()
+            dbos_logger.info(f"Application version: {self.app_version}")
             dbos_tracer.app_version = self.app_version
             self._executor_field = ThreadPoolExecutor(max_workers=64)
             self._sys_db_field = SystemDatabase(self.config)
@@ -381,14 +382,16 @@ class DBOS:
                 admin_port = 3001
             self._admin_server_field = AdminServer(dbos=self, port=admin_port)
 
-            num_wrong_version, workflow_ids = self._sys_db.get_pending_workflows(
+            workflow_ids = self._sys_db.get_pending_workflows(
                 self._executor_id, self.app_version
             )
             if (len(workflow_ids)) > 0:
-                self.logger.info(f"Recovering {len(workflow_ids)} workflows")
-            if num_wrong_version > 0:
                 self.logger.info(
-                    f"{num_wrong_version} workflows with a different app version were not recovered"
+                    f"Recovering {len(workflow_ids)} workflows from application version {self.app_version}"
+                )
+            else:
+                self.logger.info(
+                    f"No workflows to recover from application version {self.app_version}"
                 )
 
             self._executor.submit(startup_recovery_thread, self, workflow_ids)
@@ -429,7 +432,6 @@ class DBOS:
             self._registry.pollers = []
 
             dbos_logger.info("DBOS launched!")
-            dbos_logger.info(f"Application version: {self.app_version}")
 
             # Flush handlers and add OTLP to all loggers if enabled
             # to enable their export in DBOS Cloud

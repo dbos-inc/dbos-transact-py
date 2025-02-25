@@ -44,7 +44,7 @@ def recover_pending_workflows(
     workflow_handles: List["WorkflowHandle[Any]"] = []
     for executor_id in executor_ids:
         dbos.logger.debug(f"Recovering pending workflows for executor: {executor_id}")
-        num_wrong_version, pending_workflows = dbos._sys_db.get_pending_workflows(
+        pending_workflows = dbos._sys_db.get_pending_workflows(
             executor_id, dbos.app_version
         )
         for pending_workflow in pending_workflows:
@@ -63,9 +63,7 @@ def recover_pending_workflows(
                 workflow_handles.append(
                     execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
                 )
-        dbos.logger.info(f"Recovering {len(pending_workflows)} workflows")
-        if num_wrong_version > 0:
-            dbos.logger.info(
-                f"{num_wrong_version} workflows with a different app version were not recovered"
-            )
+        dbos.logger.info(
+            f"Recovering {len(pending_workflows)} workflows from version {dbos.app_version}"
+        )
     return workflow_handles
