@@ -89,3 +89,48 @@ def test_two_steps_cancel(dbos: DBOS, config: ConfigFile) -> None:
     assert (
         steps_completed == 2
     ), f"Expected steps_completed to be 2, but got {steps_completed}"
+
+
+def test_two_transactions_cancel(dbos: DBOS, config: ConfigFile) -> None:
+
+    tr_completed = 0
+
+    @DBOS.transaction()
+    def transaction_one():
+        nonlocal tr_completed
+        tr_completed += 1
+        print("Transaction one completed!")
+
+    @DBOS.transaction()
+    def transaction_two():
+        nonlocal tr_completed
+        tr_completed += 1
+        print("Step two completed!")
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        transaction_one()
+        dbos.sleep(2)
+        transaction_two()
+        print("Executed Simple workflow")
+        return
+
+    # run the workflow
+    try:
+        wfuuid = str(uuid.uuid4())
+        with SetWorkflowID(wfuuid):
+            simple_workflow()
+
+        dbos.cancel_workflow(wfuuid)
+    except Exception as e:
+        # time.sleep(1)  # wait for the workflow to complete
+        assert (
+            tr_completed == 1
+        ), f"Expected tr_completed to be 1, but got {tr_completed}"
+
+    dbos.resume_workflow(wfuuid)
+    time.sleep(1)
+
+    assert (
+        tr_completed == 2
+    ), f"Expected steps_completed to be 2, but got {tr_completed}"
