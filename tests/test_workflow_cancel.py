@@ -19,13 +19,13 @@ def test_basic(dbos: DBOS, config: ConfigFile) -> None:
     steps_completed = 0
 
     @DBOS.step()
-    def step_one():
+    def step_one() -> None:
         nonlocal steps_completed
         steps_completed += 1
         print("Step one completed!")
 
     @DBOS.step()
-    def step_two():
+    def step_two() -> None:
         nonlocal steps_completed
         steps_completed += 1
         print("Step two completed!")
@@ -51,13 +51,13 @@ def test_two_steps_cancel(dbos: DBOS, config: ConfigFile) -> None:
     steps_completed = 0
 
     @DBOS.step()
-    def step_one():
+    def step_one() -> None:
         nonlocal steps_completed
         steps_completed += 1
         print("Step one completed!")
 
     @DBOS.step()
-    def step_two():
+    def step_two() -> None:
         nonlocal steps_completed
         steps_completed += 1
         print("Step two completed!")
@@ -96,13 +96,13 @@ def test_two_transactions_cancel(dbos: DBOS, config: ConfigFile) -> None:
     tr_completed = 0
 
     @DBOS.transaction()
-    def transaction_one():
+    def transaction_one() -> None:
         nonlocal tr_completed
         tr_completed += 1
         print("Transaction one completed!")
 
     @DBOS.transaction()
-    def transaction_two():
+    def transaction_two() -> None:
         nonlocal tr_completed
         tr_completed += 1
         print("Step two completed!")
