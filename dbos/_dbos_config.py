@@ -192,7 +192,11 @@ def load_config(
     data = cast(ConfigFile, data)
     db_connection = load_db_connection()
     if not silent:
-        if data["database"].get("hostname"):
+        if os.getenv("DBOS_DBHOST"):
+            print(
+                "[bold blue]Loading database connection parameters from debug environment variables[/bold blue]"
+            )
+        elif data["database"].get("hostname"):
             print(
                 "[bold blue]Loading database connection parameters from dbos-config.yaml[/bold blue]"
             )
@@ -205,23 +209,47 @@ def load_config(
                 "[bold blue]Using default database connection parameters (localhost)[/bold blue]"
             )
 
+    dbos_dbport: int | None = None
+    dbport_env = os.getenv("DBOS_DBPORT")
+    if dbport_env:
+        try:
+            dbos_dbport = int(dbport_env)
+        except ValueError:
+            pass
+    dbos_dblocalsuffix: bool | None = None
+    dblocalsuffix_env = os.getenv("DBOS_DBLOCALSUFFIX")
+    if dblocalsuffix_env:
+        try:
+            dbos_dblocalsuffix = bool(dblocalsuffix_env)
+        except ValueError:
+            pass
+
     data["database"]["hostname"] = (
-        data["database"].get("hostname") or db_connection.get("hostname") or "localhost"
+        os.getenv("DBOS_DBHOST")
+        or data["database"].get("hostname")
+        or db_connection.get("hostname")
+        or "localhost"
     )
+
     data["database"]["port"] = (
-        data["database"].get("port") or db_connection.get("port") or 5432
+        dbos_dbport or data["database"].get("port") or db_connection.get("port") or 5432
     )
     data["database"]["username"] = (
-        data["database"].get("username") or db_connection.get("username") or "postgres"
+        os.getenv("DBOS_DBUSER")
+        or data["database"].get("username")
+        or db_connection.get("username")
+        or "postgres"
     )
     data["database"]["password"] = (
-        data["database"].get("password")
+        os.getenv("DBOS_DBPASSWORD")
+        or data["database"].get("password")
         or db_connection.get("password")
         or os.environ.get("PGPASSWORD")
         or "dbos"
     )
     data["database"]["local_suffix"] = (
-        data["database"].get("local_suffix")
+        dbos_dblocalsuffix
+        or data["database"].get("local_suffix")
         or db_connection.get("local_suffix")
         or False
     )
@@ -230,7 +258,9 @@ def load_config(
     config_logger(data)
 
     # Check the connectivity to the database and make sure it's properly configured
-    if use_db_wizard:
+    # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)
+    debugWorkflowId = os.getenv("DBOS_DEBUG_WORKFLOW_ID")
+    if use_db_wizard and debugWorkflowId is None:
         data = db_wizard(data, config_file_path)
 
     if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
