@@ -5,7 +5,7 @@ import uuid
 import requests
 
 # Public API
-from dbos import DBOS, ConfigFile, SetWorkflowID, _workflow_commands
+from dbos import DBOS, ConfigFile, Queue, SetWorkflowID, _workflow_commands
 
 
 def test_admin_endpoints(dbos: DBOS) -> None:
@@ -22,6 +22,27 @@ def test_admin_endpoints(dbos: DBOS) -> None:
     )
     assert response.status_code == 200
     assert response.json() == []
+
+    # Test GET /dbos-workflow-queues-metadata
+    Queue("q1")
+    Queue("q2", concurrency=1)
+    Queue("q3", concurrency=1, worker_concurrency=1)
+    Queue("q4", concurrency=1, worker_concurrency=1, limiter={"limit": 0, "period": 0})
+    response = requests.get(
+        "http://localhost:3001/dbos-workflow-queues-metadata", timeout=5
+    )
+    assert response.status_code == 200
+    assert response.json() == [
+        {"name": "q1"},
+        {"name": "q2", "concurrency": 1},
+        {"name": "q3", "concurrency": 1, "workerConcurrency": 1},
+        {
+            "name": "q4",
+            "concurrency": 1,
+            "workerConcurrency": 1,
+            "rateLimit": {"limit": 0, "period": 0},
+        },
+    ]
 
     # Test GET not found
     response = requests.get("http://localhost:3001/stuff", timeout=5)
