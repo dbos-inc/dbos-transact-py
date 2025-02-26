@@ -226,9 +226,6 @@ def _get_wf_invoke_func(
             output = wf_handle.get_result()
             return output
         except DBOSWorkflowCancelledError as error:
-            if status["queue_name"] is not None:
-                queue = dbos._registry.queue_info_map[status["queue_name"]]
-                dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
             raise
         except Exception as error:
             status["status"] = "ERROR"
