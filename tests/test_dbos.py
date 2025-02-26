@@ -16,7 +16,7 @@ from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle, WorkflowStatus
 
 # Private API because this is a test
 from dbos._context import assert_current_dbos_context, get_local_dbos_context
-from dbos._error import DBOSMaxStepRetriesExceeded
+from dbos._error import DBOSConflictingRegistrationError, DBOSMaxStepRetriesExceeded
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import GetWorkflowsInput
 
@@ -1206,6 +1206,20 @@ def test_destroy_semantics(dbos: DBOS, config: ConfigFile) -> None:
     DBOS.launch()
 
     assert test_workflow(var) == var
+
+
+def test_double_decoration(dbos: DBOS) -> None:
+    with pytest.raises(
+        DBOSConflictingRegistrationError,
+        match="is already registered with a conflicting function type",
+    ):
+
+        @DBOS.step()
+        @DBOS.transaction()
+        def my_function() -> None:
+            pass
+
+        my_function()
 
 
 def test_app_version(config: ConfigFile) -> None:

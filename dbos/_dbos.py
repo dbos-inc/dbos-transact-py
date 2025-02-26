@@ -85,7 +85,11 @@ from ._context import (
     get_local_dbos_context,
 )
 from ._dbos_config import ConfigFile, load_config, set_env_vars
-from ._error import DBOSException, DBOSNonExistentWorkflowError
+from ._error import (
+    DBOSConflictingRegistrationError,
+    DBOSException,
+    DBOSNonExistentWorkflowError,
+)
 from ._logger import add_otlp_to_all_loggers, dbos_logger
 from ._sys_db import SystemDatabase
 
@@ -144,6 +148,7 @@ RegisteredJob = Tuple[
 class DBOSRegistry:
     def __init__(self) -> None:
         self.workflow_info_map: dict[str, Workflow[..., Any]] = {}
+        self.function_type_map: dict[str, str] = {}
         self.class_info_map: dict[str, type] = {}
         self.instance_info_map: dict[str, object] = {}
         self.queue_info_map: dict[str, Queue] = {}
@@ -151,7 +156,11 @@ class DBOSRegistry:
         self.dbos: Optional[DBOS] = None
         self.config: Optional[ConfigFile] = None
 
-    def register_wf_function(self, name: str, wrapped_func: F) -> None:
+    def register_wf_function(self, name: str, wrapped_func: F, functype: str) -> None:
+        if name in self.function_type_map:
+            if self.function_type_map[name] != functype:
+                raise DBOSConflictingRegistrationError(name)
+        self.function_type_map[name] = functype
         self.workflow_info_map[name] = wrapped_func
 
     def register_class(self, cls: type, ci: DBOSClassInfo) -> None:
@@ -324,7 +333,7 @@ class DBOS:
         temp_send_wf = workflow_wrapper(self._registry, send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
         set_temp_workflow_type(send_temp_workflow, "send")
-        self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
+        self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf, "send")
 
         for handler in dbos_logger.handlers:
             handler.flush()
