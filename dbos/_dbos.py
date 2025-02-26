@@ -248,6 +248,7 @@ class DBOS:
         config: Optional[ConfigFile] = None,
         fastapi: Optional["FastAPI"] = None,
         flask: Optional["Flask"] = None,
+        conductor_url: Optional[str] = None,
     ) -> DBOS:
         global _dbos_global_instance
         global _dbos_global_registry
@@ -263,7 +264,7 @@ class DBOS:
                 config = _dbos_global_registry.config
 
             _dbos_global_instance = super().__new__(cls)
-            _dbos_global_instance.__init__(fastapi=fastapi, config=config, flask=flask)  # type: ignore
+            _dbos_global_instance.__init__(fastapi=fastapi, config=config, flask=flask, conductor_url=conductor_url)  # type: ignore
         else:
             if (config is not None and _dbos_global_instance.config is not config) or (
                 _dbos_global_instance.fastapi is not fastapi
