@@ -23,6 +23,10 @@ class UserDBCredentials:
     RoleName: str
     Password: str
 
+    def __init__(self, **kwargs: Any) -> None:
+        self.RoleName = kwargs.get("RoleName", "")
+        self.Password = kwargs.get("Password", "")
+
 
 @dataclass
 class UserDBInstance:
