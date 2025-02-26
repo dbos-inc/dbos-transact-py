@@ -209,14 +209,14 @@ def load_config(
                 "[bold blue]Using default database connection parameters (localhost)[/bold blue]"
             )
 
-    dbos_dbport: int | None = None
+    dbos_dbport: Optional[int] = None
     dbport_env = os.getenv("DBOS_DBPORT")
     if dbport_env:
         try:
             dbos_dbport = int(dbport_env)
         except ValueError:
             pass
-    dbos_dblocalsuffix: bool | None = None
+    dbos_dblocalsuffix: Optional[bool] = None
     dblocalsuffix_env = os.getenv("DBOS_DBLOCALSUFFIX")
     if dblocalsuffix_env:
         try:
