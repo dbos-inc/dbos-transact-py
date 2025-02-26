@@ -36,6 +36,7 @@ class DBOSErrorCode(Enum):
     MaxStepRetriesExceeded = 7
     NotAuthorized = 8
     ConflictingWorkflowError = 9
+    ConflictingRegistrationError = 25
 
 
 class DBOSWorkflowConflictIDError(DBOSException):
@@ -126,4 +127,14 @@ class DBOSMaxStepRetriesExceeded(DBOSException):
         super().__init__(
             "Step reached maximum retries.",
             dbos_error_code=DBOSErrorCode.MaxStepRetriesExceeded.value,
+        )
+
+
+class DBOSConflictingRegistrationError(DBOSException):
+    """Exception raised when conflicting decorators are applied to the same function."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f"Operation (Name: {name}) is already registered with a conflicting function type",
+            dbos_error_code=DBOSErrorCode.ConflictingRegistrationError.value,
         )

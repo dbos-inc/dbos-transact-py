@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import hashlib
+import inspect
 import json
 import os
 import sys
@@ -83,7 +85,11 @@ from ._context import (
     get_local_dbos_context,
 )
 from ._dbos_config import ConfigFile, load_config, set_env_vars
-from ._error import DBOSException, DBOSNonExistentWorkflowError
+from ._error import (
+    DBOSConflictingRegistrationError,
+    DBOSException,
+    DBOSNonExistentWorkflowError,
+)
 from ._logger import add_otlp_to_all_loggers, dbos_logger
 from ._sys_db import SystemDatabase
 
@@ -142,6 +148,7 @@ RegisteredJob = Tuple[
 class DBOSRegistry:
     def __init__(self) -> None:
         self.workflow_info_map: dict[str, Workflow[..., Any]] = {}
+        self.function_type_map: dict[str, str] = {}
         self.class_info_map: dict[str, type] = {}
         self.instance_info_map: dict[str, object] = {}
         self.queue_info_map: dict[str, Queue] = {}
@@ -149,7 +156,11 @@ class DBOSRegistry:
         self.dbos: Optional[DBOS] = None
         self.config: Optional[ConfigFile] = None
 
-    def register_wf_function(self, name: str, wrapped_func: F) -> None:
+    def register_wf_function(self, name: str, wrapped_func: F, functype: str) -> None:
+        if name in self.function_type_map:
+            if self.function_type_map[name] != functype:
+                raise DBOSConflictingRegistrationError(name)
+        self.function_type_map[name] = functype
         self.workflow_info_map[name] = wrapped_func
 
     def register_class(self, cls: type, ci: DBOSClassInfo) -> None:
@@ -185,6 +196,22 @@ class DBOSRegistry:
                 )
         else:
             self.instance_info_map[fn] = inst
+
+    def compute_app_version(self) -> str:
+        """
+        An application's version is computed from a hash of the source of its workflows.
+        This is guaranteed to be stable given identical source code because it uses an MD5 hash
+        and because it iterates through the workflows in sorted order.
+        This way, if the app's workflows are updated (which would break recovery), its version changes.
+        App version can be manually set through the DBOS__APPVERSION environment variable.
+        """
+        hasher = hashlib.md5()
+        sources = sorted(
+            [inspect.getsource(wf) for wf in self.workflow_info_map.values()]
+        )
+        for source in sources:
+            hasher.update(source.encode("utf-8"))
+        return hasher.hexdigest()
 
 
 class DBOS:
@@ -284,6 +311,7 @@ class DBOS:
         self._background_threads: List[threading.Thread] = []
         self._executor_id: str = os.environ.get("DBOS__VMID", "local")
         self._debug_wf_id: Optional[str] = os.getenv("DBOS_DEBUG_WORKFLOW_ID")
+        self.app_version: str = os.environ.get("DBOS__APPVERSION", "")
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
@@ -306,7 +334,7 @@ class DBOS:
         temp_send_wf = workflow_wrapper(self._registry, send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
         set_temp_workflow_type(send_temp_workflow, "send")
-        self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf)
+        self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf, "send")
 
         for handler in dbos_logger.handlers:
             handler.flush()
@@ -356,6 +384,10 @@ class DBOS:
                 dbos_logger.warning(f"DBOS was already launched")
                 return
             self._launched = True
+            if self.app_version == "":
+                self.app_version = self._registry.compute_app_version()
+            dbos_logger.info(f"Application version: {self.app_version}")
+            dbos_tracer.app_version = self.app_version
             self._executor_field = ThreadPoolExecutor(max_workers=64)
             self._sys_db_field = SystemDatabase(self.config, self._debug_mode)
             self._app_db_field = ApplicationDatabase(self.config, self._debug_mode)
@@ -374,9 +406,19 @@ class DBOS:
                 admin_port = 3001
             self._admin_server_field = AdminServer(dbos=self, port=admin_port)
 
-            if not os.environ.get("DBOS__VMID"):
-                workflow_ids = self._sys_db.get_pending_workflows("local")
-                self._executor.submit(startup_recovery_thread, self, workflow_ids)
+            workflow_ids = self._sys_db.get_pending_workflows(
+                self._executor_id, self.app_version
+            )
+            if (len(workflow_ids)) > 0:
+                self.logger.info(
+                    f"Recovering {len(workflow_ids)} workflows from application version {self.app_version}"
+                )
+            else:
+                self.logger.info(
+                    f"No workflows to recover from application version {self.app_version}"
+                )
+
+            self._executor.submit(startup_recovery_thread, self, workflow_ids)
 
             # Listen to notifications
             notification_listener_thread = threading.Thread(
@@ -413,13 +455,13 @@ class DBOS:
                 self._background_threads.append(poller_thread)
             self._registry.pollers = []
 
-            dbos_logger.info("DBOS launched")
+            dbos_logger.info("DBOS launched!")
 
             # Flush handlers and add OTLP to all loggers if enabled
             # to enable their export in DBOS Cloud
             for handler in dbos_logger.handlers:
                 handler.flush()
-            add_otlp_to_all_loggers()
+            add_otlp_to_all_loggers(self.app_version)
         except Exception:
             dbos_logger.error(f"DBOS failed to launch: {traceback.format_exc()}")
             raise
