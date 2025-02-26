@@ -87,6 +87,7 @@ from ._context import (
 from ._dbos_config import ConfigFile, load_config, set_env_vars
 from ._error import (
     DBOSConflictingRegistrationError,
+    DBOSDebugModeCompleteError,
     DBOSException,
     DBOSNonExistentWorkflowError,
 )
@@ -398,8 +399,11 @@ class DBOS:
                 result = handle.get_result()
                 dbos_logger.info("Workflow Debugging complete. Exiting process.")
                 self._destroy()
-                sys.exit(0)
-                return  # return for cases where process.exit is mocked
+                if self.fastapi or self.flask:
+                    raise DBOSDebugModeCompleteError()
+                else:
+                    sys.exit(0)
+                    return  # return for cases where process.exit is mocked
 
             admin_port = self.config["runtimeConfig"].get("admin_port")
             if admin_port is None:
@@ -462,6 +466,8 @@ class DBOS:
             for handler in dbos_logger.handlers:
                 handler.flush()
             add_otlp_to_all_loggers(self.app_version)
+        except DBOSDebugModeCompleteError:
+            raise
         except Exception:
             dbos_logger.error(f"DBOS failed to launch: {traceback.format_exc()}")
             raise

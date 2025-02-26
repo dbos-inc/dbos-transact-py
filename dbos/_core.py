@@ -221,10 +221,11 @@ def _get_wf_invoke_func(
             output = func()
             status["status"] = "SUCCESS"
             status["output"] = _serialization.serialize(output)
-            if status["queue_name"] is not None:
-                queue = dbos._registry.queue_info_map[status["queue_name"]]
-                dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-            dbos._sys_db.buffer_workflow_status(status)
+            if not dbos._debug_mode:
+                if status["queue_name"] is not None:
+                    queue = dbos._registry.queue_info_map[status["queue_name"]]
+                    dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
+                dbos._sys_db.buffer_workflow_status(status)
             return output
         except DBOSWorkflowConflictIDError:
             # Retrieve the workflow handle and wait for the result.

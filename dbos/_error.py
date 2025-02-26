@@ -37,6 +37,7 @@ class DBOSErrorCode(Enum):
     NotAuthorized = 8
     ConflictingWorkflowError = 9
     ConflictingRegistrationError = 25
+    DebugModeCompleteError = 10
 
 
 class DBOSWorkflowConflictIDError(DBOSException):
@@ -137,4 +138,14 @@ class DBOSConflictingRegistrationError(DBOSException):
         super().__init__(
             f"Operation (Name: {name}) is already registered with a conflicting function type",
             dbos_error_code=DBOSErrorCode.ConflictingRegistrationError.value,
+        )
+
+
+class DBOSDebugModeCompleteError(DBOSException):
+    """Exception raised when the debug mode execution is complete."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Debug mode execution is complete.",
+            dbos_error_code=DBOSErrorCode.DebugModeCompleteError.value,
         )
