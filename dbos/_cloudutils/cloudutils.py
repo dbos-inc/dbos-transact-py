@@ -29,9 +29,11 @@ class DBOSCloudCredentials:
 @dataclass
 class UserProfile:
     Name: str
-    Email: str
     Organization: str
-    SubscriptionPlan: str
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.Name = kwargs.get("Name", "")
+        self.Organization = kwargs.get("Organization", "")
 
 
 class AppLanguages(Enum):
