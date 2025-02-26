@@ -182,21 +182,31 @@ def _init_workflow(
         inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
 
     wf_status = status["status"]
-    if temp_wf_type != "transaction" or queue is not None:
-        # Synchronously record the status and inputs for workflows and single-step workflows
-        # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
-        # TODO: Make this transactional (and with the queue step below)
-        wf_status = dbos._sys_db.insert_workflow_status(
-            status, max_recovery_attempts=max_recovery_attempts
-        )
-        # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
-        dbos._sys_db.update_workflow_inputs(wfid, _serialization.serialize_args(inputs))
+    if dbos._debug_mode:
+        get_status_result = dbos._sys_db.get_workflow_status(wfid)
+        if get_status_result is None:
+            raise DBOSNonExistentWorkflowError(wfid)
+        wf_status = get_status_result["status"]
     else:
-        # Buffer the inputs for single-transaction workflows, but don't buffer the status
-        dbos._sys_db.buffer_workflow_inputs(wfid, _serialization.serialize_args(inputs))
+        if temp_wf_type != "transaction" or queue is not None:
+            # Synchronously record the status and inputs for workflows and single-step workflows
+            # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
+            # TODO: Make this transactional (and with the queue step below)
+            wf_status = dbos._sys_db.insert_workflow_status(
+                status, max_recovery_attempts=max_recovery_attempts
+            )
+            # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
+            dbos._sys_db.update_workflow_inputs(
+                wfid, _serialization.serialize_args(inputs)
+            )
+        else:
+            # Buffer the inputs for single-transaction workflows, but don't buffer the status
+            dbos._sys_db.buffer_workflow_inputs(
+                wfid, _serialization.serialize_args(inputs)
+            )
 
-    if queue is not None and wf_status == WorkflowStatusString.ENQUEUED.value:
-        dbos._sys_db.enqueue(wfid, queue)
+        if queue is not None and wf_status == WorkflowStatusString.ENQUEUED.value:
+            dbos._sys_db.enqueue(wfid, queue)
 
     status["status"] = wf_status
     return status
@@ -416,10 +426,12 @@ def start_workflow(
 
     wf_status = status["status"]
 
-    if (
-        not execute_workflow
-        or wf_status == WorkflowStatusString.ERROR.value
-        or wf_status == WorkflowStatusString.SUCCESS.value
+    if not execute_workflow or (
+        not dbos._debug_mode
+        and (
+            wf_status == WorkflowStatusString.ERROR.value
+            or wf_status == WorkflowStatusString.SUCCESS.value
+        )
     ):
         dbos.logger.debug(
             f"Workflow {new_wf_id} already completed with status {wf_status}. Directly returning a workflow handle."
