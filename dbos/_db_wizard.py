@@ -1,7 +1,7 @@
 import json
 import os
 import time
-from typing import TYPE_CHECKING, Optional, TypedDict
+from typing import TYPE_CHECKING, Optional, TypedDict, cast
 
 import docker  # type: ignore
 import typer
@@ -50,10 +50,14 @@ def db_wizard(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
     with open(config_file_path, "r") as file:
         content = file.read()
         local_config = yaml.safe_load(content)
+        if "database" not in local_config:
+            local_config["database"] = {}
+        local_config = cast("ConfigFile", local_config)
+
     if (
-        local_config["database"]["hostname"]
-        or local_config["database"]["port"]
-        or local_config["database"]["username"]
+        local_config["database"].get("hostname")
+        or local_config["database"].get("port")
+        or local_config["database"].get("username")
         or db_config["hostname"] != "localhost"
         or db_config["port"] != 5432
         or db_config["username"] != "postgres"

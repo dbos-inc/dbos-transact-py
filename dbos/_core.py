@@ -530,7 +530,7 @@ def decorate_workflow(
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     def _workflow_decorator(func: Callable[P, R]) -> Callable[P, R]:
         wrapped_func = workflow_wrapper(reg, func, max_recovery_attempts)
-        reg.register_wf_function(func.__qualname__, wrapped_func)
+        reg.register_wf_function(func.__qualname__, wrapped_func, "workflow")
         return wrapped_func
 
     return _workflow_decorator
@@ -695,7 +695,9 @@ def decorate_transaction(
         wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "transaction")
-        dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+        dbosreg.register_wf_function(
+            get_dbos_func_name(temp_wf), wrapped_wf, "transaction"
+        )
         wrapper.__orig_func = temp_wf  # type: ignore
         set_func_info(wrapped_wf, get_or_create_func_info(func))
         set_func_info(temp_wf, get_or_create_func_info(func))
@@ -854,7 +856,7 @@ def decorate_step(
         wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
         set_temp_workflow_type(temp_wf, "step")
-        dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+        dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf, "step")
         wrapper.__orig_func = temp_wf  # type: ignore
         set_func_info(wrapped_wf, get_or_create_func_info(func))
         set_func_info(temp_wf, get_or_create_func_info(func))

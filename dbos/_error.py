@@ -37,6 +37,7 @@ class DBOSErrorCode(Enum):
     NotAuthorized = 8
     ConflictingWorkflowError = 9
     WorkflowCancelled = 10
+    ConflictingRegistrationError = 25
 
 
 class DBOSWorkflowConflictIDError(DBOSException):
@@ -137,4 +138,14 @@ class DBOSWorkflowCancelledError(DBOSException):
         super().__init__(
             msg,
             dbos_error_code=DBOSErrorCode.WorkflowCancelled.value,
+        )
+
+
+class DBOSConflictingRegistrationError(DBOSException):
+    """Exception raised when conflicting decorators are applied to the same function."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f"Operation (Name: {name}) is already registered with a conflicting function type",
+            dbos_error_code=DBOSErrorCode.ConflictingRegistrationError.value,
         )
