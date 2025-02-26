@@ -590,6 +590,10 @@ def decorate_transaction(
                                         ctx.function_id,
                                     )
                                 )
+                                if dbos._debug_mode and recorded_output is None:
+                                    raise DBOSException(
+                                        "Transaction output not found in debug mode"
+                                    )
                                 if recorded_output:
                                     dbos.logger.debug(
                                         f"Replaying transaction, id: {ctx.function_id}, name: {attributes['name']}"
@@ -764,6 +768,8 @@ def decorate_step(
                 recorded_output = dbos._sys_db.check_operation_execution(
                     ctx.workflow_id, ctx.function_id
                 )
+                if dbos._debug_mode and recorded_output is None:
+                    raise DBOSException("Step output not found in debug mode")
                 if recorded_output:
                     dbos.logger.debug(
                         f"Replaying step, id: {ctx.function_id}, name: {attributes['name']}"

@@ -65,6 +65,7 @@ class ApplicationDatabase:
             app_db_url, pool_size=20, max_overflow=5, pool_timeout=30
         )
         self.sessionmaker = sessionmaker(bind=self.engine)
+        self.debug_mode = debug_mode
 
         # Create the dbos schema and transaction_outputs table in the application database
         if not debug_mode:
@@ -102,6 +103,8 @@ class ApplicationDatabase:
             raise
 
     def record_transaction_error(self, output: TransactionResultInternal) -> None:
+        if self.debug_mode:
+            raise Exception("called record_transaction_error in debug mode")
         try:
             with self.engine.begin() as conn:
                 conn.execute(

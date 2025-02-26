@@ -258,6 +258,7 @@ class SystemDatabase:
 
         # Now we can run background processes
         self._run_background_processes = True
+        self._debug_mode = debug_mode
 
     # Destroy the pool when finished
     def destroy(self) -> None:
@@ -279,6 +280,8 @@ class SystemDatabase:
         *,
         max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
     ) -> WorkflowStatuses:
+        if self._debug_mode:
+            raise Exception("called insert_workflow_status in debug mode")
         wf_status: WorkflowStatuses = status["status"]
 
         cmd = (
@@ -377,6 +380,8 @@ class SystemDatabase:
         *,
         conn: Optional[sa.Connection] = None,
     ) -> None:
+        if self._debug_mode:
+            raise Exception("called update_workflow_status in debug mode")
         wf_status: WorkflowStatuses = status["status"]
 
         cmd = (
@@ -426,6 +431,8 @@ class SystemDatabase:
         self,
         workflow_id: str,
     ) -> None:
+        if self._debug_mode:
+            raise Exception("called cancel_workflow in debug mode")
         with self.engine.begin() as c:
             # Remove the workflow from the queues table so it does not block the table
             c.execute(
@@ -446,6 +453,8 @@ class SystemDatabase:
         self,
         workflow_id: str,
     ) -> None:
+        if self._debug_mode:
+            raise Exception("called resume_workflow in debug mode")
         with self.engine.begin() as c:
             # Check the status of the workflow. If it is complete, do nothing.
             row = c.execute(
@@ -643,6 +652,9 @@ class SystemDatabase:
     def update_workflow_inputs(
         self, workflow_uuid: str, inputs: str, conn: Optional[sa.Connection] = None
     ) -> None:
+        if self._debug_mode:
+            raise Exception("called update_workflow_inputs in debug mode")
+
         cmd = (
             pg.insert(SystemSchema.workflow_inputs)
             .values(
@@ -795,6 +807,8 @@ class SystemDatabase:
     def record_operation_result(
         self, result: OperationResultInternal, conn: Optional[sa.Connection] = None
     ) -> None:
+        if self._debug_mode:
+            raise Exception("called record_operation_result in debug mode")
         error = result["error"]
         output = result["output"]
         assert error is None or output is None, "Only one of error or output can be set"
@@ -854,6 +868,11 @@ class SystemDatabase:
             recorded_output = self.check_operation_execution(
                 workflow_uuid, function_id, conn=c
             )
+            if self._debug_mode and recorded_output is None:
+                raise Exception(
+                    "called send in debug mode without a previous execution"
+                )
+
             if recorded_output is not None:
                 dbos_logger.debug(
                     f"Replaying send, id: {function_id}, destination_uuid: {destination_uuid}, topic: {topic}"
@@ -897,6 +916,8 @@ class SystemDatabase:
 
         # First, check for previous executions.
         recorded_output = self.check_operation_execution(workflow_uuid, function_id)
+        if self._debug_mode and recorded_output is None:
+            raise Exception("called recv in debug mode without a previous execution")
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying recv, id: {function_id}, topic: {topic}")
             if recorded_output["output"] is not None:
@@ -1046,6 +1067,9 @@ class SystemDatabase:
     ) -> float:
         recorded_output = self.check_operation_execution(workflow_uuid, function_id)
         end_time: float
+        if self._debug_mode and recorded_output is None:
+            raise Exception("called sleep in debug mode without a previous execution")
+
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying sleep, id: {function_id}, seconds: {seconds}")
             assert recorded_output["output"] is not None, "no recorded end time"
@@ -1080,6 +1104,10 @@ class SystemDatabase:
             recorded_output = self.check_operation_execution(
                 workflow_uuid, function_id, conn=c
             )
+            if self._debug_mode and recorded_output is None:
+                raise Exception(
+                    "called set_event in debug mode without a previous execution"
+                )
             if recorded_output is not None:
                 dbos_logger.debug(f"Replaying set_event, id: {function_id}, key: {key}")
                 return  # Already sent before
@@ -1124,6 +1152,10 @@ class SystemDatabase:
             recorded_output = self.check_operation_execution(
                 caller_ctx["workflow_uuid"], caller_ctx["function_id"]
             )
+            if self._debug_mode and recorded_output is None:
+                raise Exception(
+                    "called get_event in debug mode without a previous execution"
+                )
             if recorded_output is not None:
                 dbos_logger.debug(
                     f"Replaying get_event, id: {caller_ctx['function_id']}, key: {key}"
@@ -1186,6 +1218,9 @@ class SystemDatabase:
         return value
 
     def _flush_workflow_status_buffer(self) -> None:
+        if self._debug_mode:
+            raise Exception("called _flush_workflow_status_buffer in debug mode")
+
         """Export the workflow status buffer to the database, up to the batch size."""
         if len(self._workflow_status_buffer) == 0:
             return
@@ -1216,6 +1251,9 @@ class SystemDatabase:
                     break
 
     def _flush_workflow_inputs_buffer(self) -> None:
+        if self._debug_mode:
+            raise Exception("called _flush_workflow_inputs_buffer in debug mode")
+
         """Export the workflow inputs buffer to the database, up to the batch size."""
         if len(self._workflow_inputs_buffer) == 0:
             return
@@ -1280,6 +1318,8 @@ class SystemDatabase:
         )
 
     def enqueue(self, workflow_id: str, queue_name: str) -> None:
+        if self._debug_mode:
+            raise Exception("called enqueue in debug mode")
         with self.engine.begin() as c:
             c.execute(
                 pg.insert(SystemSchema.workflow_queue)
@@ -1291,6 +1331,9 @@ class SystemDatabase:
             )
 
     def start_queued_workflows(self, queue: "Queue", executor_id: str) -> List[str]:
+        if self._debug_mode:
+            return []
+
         start_time_ms = int(time.time() * 1000)
         if queue.limiter is not None:
             limiter_period_ms = int(queue.limiter["period"] * 1000)
@@ -1441,6 +1484,9 @@ class SystemDatabase:
             return ret_ids
 
     def remove_from_queue(self, workflow_id: str, queue: "Queue") -> None:
+        if self._debug_mode:
+            raise Exception("called remove_from_queue in debug mode")
+
         with self.engine.begin() as c:
             if queue.limiter is None:
                 c.execute(
@@ -1456,6 +1502,8 @@ class SystemDatabase:
                 )
 
     def clear_queue_assignment(self, workflow_id: str) -> None:
+        if self._debug_mode:
+            raise Exception("called clear_queue_assignment in debug mode")
         with self.engine.begin() as c:
             c.execute(
                 sa.update(SystemSchema.workflow_queue)
