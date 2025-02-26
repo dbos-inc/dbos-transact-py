@@ -440,9 +440,9 @@ class DBOS:
             evt = threading.Event()
             self.stop_events.append(evt)
             if self.conductor_url is not None:
-                conductor_websocket = ConductorWebsocket(self.conductor_url, evt)
-                conductor_websocket.start()
-                self._background_threads.append(conductor_websocket)
+                self.conductor_websocket = ConductorWebsocket(self.conductor_url, evt)
+                self.conductor_websocket.start()
+                self._background_threads.append(self.conductor_websocket)
 
             # Grab any pollers that were deferred and start them
             for evt, func, args, kwargs in self._registry.pollers:
