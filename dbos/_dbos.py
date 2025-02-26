@@ -32,6 +32,8 @@ from typing import (
 
 from opentelemetry.trace import Span
 
+from dbos._conductor import conductor_websocket
+
 from ._classproperty import classproperty
 from ._core import (
     TEMP_SEND_WF_NAME,
@@ -287,6 +289,7 @@ class DBOS:
         config: Optional[ConfigFile] = None,
         fastapi: Optional["FastAPI"] = None,
         flask: Optional["Flask"] = None,
+        conductor_url: Optional[str] = None,
     ) -> None:
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -311,6 +314,7 @@ class DBOS:
         self._background_threads: List[threading.Thread] = []
         self._executor_id: str = os.environ.get("DBOS__VMID", "local")
         self.app_version: str = os.environ.get("DBOS__APPVERSION", "")
+        self.conductor_url: Optional[str] = conductor_url
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
@@ -429,6 +433,13 @@ class DBOS:
             )
             bg_queue_thread.start()
             self._background_threads.append(bg_queue_thread)
+
+            # Start the conductor thread if requested
+            if self.conductor_url is not None:
+                conductor_thread = threading.Thread(
+                    target=conductor_websocket, args=(self.conductor_url), daemon=True
+                )
+                conductor_thread.start()
 
             # Grab any pollers that were deferred and start them
             for evt, func, args, kwargs in self._registry.pollers:
