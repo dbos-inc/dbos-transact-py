@@ -1,4 +1,5 @@
 import datetime
+import logging
 import os
 import re
 import threading
@@ -13,6 +14,7 @@ from typing import (
     Optional,
     Sequence,
     Set,
+    Tuple,
     TypedDict,
     cast,
 )
@@ -191,7 +193,7 @@ class SystemDatabase:
             database="postgres",
             # fills the "application_name" column in pg_stat_activity
             query={
-                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"
+                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}"
             },
         )
         engine = sa.create_engine(postgres_db_url)
@@ -213,7 +215,7 @@ class SystemDatabase:
             database=sysdb_name,
             # fills the "application_name" column in pg_stat_activity
             query={
-                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}_{os.environ.get('DBOS__APPVERSION', '')}"
+                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}"
             },
         )
 
@@ -228,6 +230,7 @@ class SystemDatabase:
         )
         alembic_cfg = Config()
         alembic_cfg.set_main_option("script_location", migration_dir)
+        logging.getLogger("alembic").setLevel(logging.WARNING)
         # Alembic requires the % in URL-escaped parameters to itself be escaped to %%.
         escaped_conn_string = re.sub(
             r"%(?=[0-9A-Fa-f]{2})",
@@ -769,7 +772,7 @@ class SystemDatabase:
         return GetWorkflowsOutput(workflow_uuids)
 
     def get_pending_workflows(
-        self, executor_id: str
+        self, executor_id: str, app_version: str
     ) -> list[GetPendingWorkflowsOutput]:
         with self.engine.begin() as c:
             rows = c.execute(
@@ -780,8 +783,10 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value,
                     SystemSchema.workflow_status.c.executor_id == executor_id,
+                    SystemSchema.workflow_status.c.application_version == app_version,
                 )
             ).fetchall()
+
             return [
                 GetPendingWorkflowsOutput(
                     workflow_uuid=row.workflow_uuid,

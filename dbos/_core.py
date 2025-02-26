@@ -163,7 +163,7 @@ def _init_workflow(
         "output": None,
         "error": None,
         "app_id": ctx.app_id,
-        "app_version": ctx.app_version,
+        "app_version": dbos.app_version,
         "executor_id": ctx.executor_id,
         "request": (
             _serialization.serialize(ctx.request) if ctx.request is not None else None

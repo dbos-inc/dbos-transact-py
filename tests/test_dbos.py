@@ -1,5 +1,8 @@
+# mypy: disable-error-code="no-redef"
+
 import datetime
 import logging
+import os
 import threading
 import time
 import uuid
@@ -554,9 +557,12 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert txn_counter == 1
 
 
-def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
+def test_recovery_thread(config: ConfigFile) -> None:
     wf_counter: int = 0
     test_var = "dbos"
+
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
 
     @DBOS.workflow()
     def test_workflow(var: str) -> str:
@@ -564,6 +570,8 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
         if var == test_var:
             wf_counter += 1
         return var
+
+    DBOS.launch()
 
     wfuuid = str(uuid.uuid4())
     with SetWorkflowID(wfuuid):
@@ -592,19 +600,19 @@ def test_recovery_thread(config: ConfigFile, dbos: DBOS) -> None:
         }
     )
 
-    dbos._destroy()  # Unusual pattern - reusing the memory
-    dbos.__init__(config=config)  # type: ignore
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
 
-    @DBOS.workflow()  # type: ignore
+    @DBOS.workflow()
     def test_workflow(var: str) -> str:
         nonlocal wf_counter
         if var == test_var:
             wf_counter += 1
         return var
 
-    DBOS.launch()  # Usually the framework does this but we destroyed it above
+    DBOS.launch()
 
-    # Upon re-initialization, the background thread should recover the workflow safely.
+    # Upon re-launch, the background thread should recover the workflow safely.
     max_retries = 10
     success = False
     for i in range(max_retries):
@@ -1212,3 +1220,133 @@ def test_double_decoration(dbos: DBOS) -> None:
             pass
 
         my_function()
+
+
+def test_app_version(config: ConfigFile) -> None:
+    def is_hex(s: str) -> bool:
+        return all(c in "0123456789abcdefABCDEF" for c in s)
+
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def workflow_one(x: int) -> int:
+        return x
+
+    @DBOS.workflow()
+    def workflow_two(y: int) -> int:
+        return y
+
+    DBOS.launch()
+
+    # Verify that app version is correctly set to a hex string
+    app_version = dbos.app_version
+    assert len(app_version) > 0
+    assert is_hex(app_version)
+
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def workflow_one(x: int) -> int:
+        return x
+
+    @DBOS.workflow()
+    def workflow_two(y: int) -> int:
+        return y
+
+    DBOS.launch()
+
+    # Verify stability--the same workflow source produces the same app version.
+    assert dbos.app_version == app_version
+
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def workflow_one(x: int) -> int:
+        return x
+
+    # Verify that changing the workflow source changes the workflow version
+    DBOS.launch()
+    assert dbos.app_version != app_version
+
+    # Verify that version can be overriden with an environment variable
+    app_version = "12345"
+    os.environ["DBOS__APPVERSION"] = app_version
+
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def workflow_one(x: int) -> int:
+        return x
+
+    DBOS.launch()
+    assert dbos.app_version == app_version
+
+    del os.environ["DBOS__APPVERSION"]
+
+
+def test_recovery_appversion(config: ConfigFile) -> None:
+    input = 5
+
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def test_workflow(x: int) -> int:
+        return x
+
+    DBOS.launch()
+
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowID(wfuuid):
+        assert test_workflow(input) == input
+
+    # Change the workflow status to pending
+    dbos._sys_db.wait_for_buffer_flush()
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": "PENDING", "name": test_workflow.__qualname__})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
+        )
+
+    # Reconstruct an identical environment to simulate a restart
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def test_workflow(x: int) -> int:
+        return x
+
+    DBOS.launch()
+
+    # The workflow should successfully recover
+    workflow_handles = DBOS.recover_pending_workflows()
+    assert len(workflow_handles) == 1
+    assert workflow_handles[0].get_result() == input
+
+    # Change the workflow status to pending
+    dbos._sys_db.wait_for_buffer_flush()
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": "PENDING", "name": test_workflow.__qualname__})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
+        )
+
+    # Now reconstruct a "modified application" with a different application version
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def test_workflow(x: int) -> int:
+        return x + 1
+
+    DBOS.launch()
+
+    # The workflow should not recover
+    workflow_handles = DBOS.recover_pending_workflows()
+    assert len(workflow_handles) == 0
