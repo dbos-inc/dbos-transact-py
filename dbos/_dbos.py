@@ -32,7 +32,7 @@ from typing import (
 
 from opentelemetry.trace import Span
 
-from dbos._conductor import conductor_websocket
+from dbos._conductor import ConductorWebsocket
 
 from ._classproperty import classproperty
 from ._core import (
@@ -316,6 +316,7 @@ class DBOS:
         self._executor_id: str = os.environ.get("DBOS__VMID", "local")
         self.app_version: str = os.environ.get("DBOS__APPVERSION", "")
         self.conductor_url: Optional[str] = conductor_url
+        self.conductor_websocket: Optional[ConductorWebsocket] = None
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
@@ -439,12 +440,9 @@ class DBOS:
             evt = threading.Event()
             self.stop_events.append(evt)
             if self.conductor_url is not None:
-                conductor_thread = threading.Thread(
-                    target=conductor_websocket,
-                    args=(self.conductor_url, evt),
-                    daemon=True,
-                )
-                conductor_thread.start()
+                conductor_websocket = ConductorWebsocket(self.conductor_url, evt)
+                conductor_websocket.start()
+                self._background_threads.append(conductor_websocket)
 
             # Grab any pollers that were deferred and start them
             for evt, func, args, kwargs in self._registry.pollers:
@@ -496,6 +494,11 @@ class DBOS:
         if self._admin_server_field is not None:
             self._admin_server_field.stop()
             self._admin_server_field = None
+        if (
+            self.conductor_websocket is not None
+            and self.conductor_websocket.websocket is not None
+        ):
+            self.conductor_websocket.websocket.close()
         # CB - This needs work, some things ought to stop before DBs are tossed out,
         #  on the other hand it hangs to move it
         if self._executor_field is not None:

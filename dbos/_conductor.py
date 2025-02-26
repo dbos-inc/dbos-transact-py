@@ -1,11 +1,20 @@
 import threading
+from typing import Optional
 
-from websockets.sync.client import connect
+from websockets.sync.client import ClientConnection, connect
 
 
-def conductor_websocket(url: str, evt: threading.Event) -> None:
-    with connect(url) as websocket:
-        websocket.send("Hello world!")
-        while not evt.is_set():
-            message = websocket.recv()
+class ConductorWebsocket(threading.Thread):
+
+    def __init__(self, url: str, evt: threading.Event):
+        super().__init__(daemon=True)
+        self.websocket: Optional[ClientConnection] = None
+        self.url = url
+        self.evt = evt
+
+    def run(self) -> None:
+        self.websocket = connect(self.url)
+        self.websocket.send("Hello world!")
+        while not self.evt.is_set():
+            message = self.websocket.recv()
             print(message)
