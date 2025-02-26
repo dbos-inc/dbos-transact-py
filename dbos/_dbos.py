@@ -436,9 +436,13 @@ class DBOS:
             self._background_threads.append(bg_queue_thread)
 
             # Start the conductor thread if requested
+            evt = threading.Event()
+            self.stop_events.append(evt)
             if self.conductor_url is not None:
                 conductor_thread = threading.Thread(
-                    target=conductor_websocket, args=(self.conductor_url), daemon=True
+                    target=conductor_websocket,
+                    args=(self.conductor_url, evt),
+                    daemon=True,
                 )
                 conductor_thread.start()
 
