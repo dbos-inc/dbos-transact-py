@@ -35,6 +35,3 @@ class ExecutorInfoRequest(BaseMessage):
 class ExecutorInfoResponse(BaseMessage):
     executor_id: str
     application_version: str
-
-    def __post_init__(self) -> None:
-        self.type = MessageType.EXECUTOR_INFO

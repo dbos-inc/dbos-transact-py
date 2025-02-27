@@ -37,6 +37,12 @@ class ConductorWebsocket(threading.Thread):
                     base_message = p.BaseMessage.from_json(message)
                     type = base_message.type
                     if type == p.MessageType.EXECUTOR_INFO.value:
+                        response = p.ExecutorInfoResponse(
+                            type=p.MessageType.EXECUTOR_INFO,
+                            executor_id="id",
+                            application_version="1",
+                        )
+                        self.websocket.send(response.to_json())
                         pass
                     else:
                         self.dbos.logger.warning(f"Unexpected message type: {type}")
