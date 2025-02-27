@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Optional
 from websockets import ConnectionClosed, ConnectionClosedOK
 from websockets.sync.client import ClientConnection, connect
 
+from dbos._utils import GlobalParams
+
 from . import protocol as p
 
 if TYPE_CHECKING:
@@ -39,8 +41,8 @@ class ConductorWebsocket(threading.Thread):
                     if type == p.MessageType.EXECUTOR_INFO.value:
                         response = p.ExecutorInfoResponse(
                             type=p.MessageType.EXECUTOR_INFO,
-                            executor_id="id",
-                            application_version="1",
+                            executor_id=GlobalParams.executor_id,
+                            application_version=GlobalParams.app_version,
                         )
                         self.websocket.send(response.to_json())
                         pass

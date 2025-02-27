@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 import traceback
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from logging import Logger
@@ -398,6 +399,10 @@ class DBOS:
             self._launched = True
             if GlobalParams.app_version == "":
                 GlobalParams.app_version = self._registry.compute_app_version()
+            if self.conductor_url is not None:
+                GlobalParams.executor_id = str(uuid.uuid4())
+            if GlobalParams.executor_id is not None:
+                dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             self._executor_field = ThreadPoolExecutor(max_workers=64)
             self._sys_db_field = SystemDatabase(self.config)
