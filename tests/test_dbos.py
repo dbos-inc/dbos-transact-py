@@ -19,6 +19,7 @@ from dbos._context import assert_current_dbos_context, get_local_dbos_context
 from dbos._error import DBOSConflictingRegistrationError, DBOSMaxStepRetriesExceeded
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import GetWorkflowsInput
+from dbos._utils import GlobalParams
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -1240,11 +1241,12 @@ def test_app_version(config: ConfigFile) -> None:
     DBOS.launch()
 
     # Verify that app version is correctly set to a hex string
-    app_version = dbos.app_version
+    app_version = GlobalParams.app_version
     assert len(app_version) > 0
     assert is_hex(app_version)
 
     DBOS.destroy(destroy_registry=True)
+    assert GlobalParams.app_version == ""
     dbos = DBOS(config=config)
 
     @DBOS.workflow()
@@ -1258,7 +1260,7 @@ def test_app_version(config: ConfigFile) -> None:
     DBOS.launch()
 
     # Verify stability--the same workflow source produces the same app version.
-    assert dbos.app_version == app_version
+    assert GlobalParams.app_version == app_version
 
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
@@ -1269,7 +1271,7 @@ def test_app_version(config: ConfigFile) -> None:
 
     # Verify that changing the workflow source changes the workflow version
     DBOS.launch()
-    assert dbos.app_version != app_version
+    assert GlobalParams.app_version != app_version
 
     # Verify that version can be overriden with an environment variable
     app_version = "12345"
@@ -1283,7 +1285,7 @@ def test_app_version(config: ConfigFile) -> None:
         return x
 
     DBOS.launch()
-    assert dbos.app_version == app_version
+    assert GlobalParams.app_version == app_version
 
     del os.environ["DBOS__APPVERSION"]
 

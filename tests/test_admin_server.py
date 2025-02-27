@@ -6,6 +6,7 @@ import requests
 
 # Public API
 from dbos import DBOS, ConfigFile, Queue, SetWorkflowID, _workflow_commands
+from dbos._utils import GlobalParams
 
 
 def test_admin_endpoints(dbos: DBOS) -> None:
@@ -59,10 +60,13 @@ def test_admin_endpoints(dbos: DBOS) -> None:
         assert event.is_set(), "Event is not set!"
 
 
-def test_admin_recovery(dbos: DBOS) -> None:
+def test_admin_recovery(config: ConfigFile) -> None:
     os.environ["DBOS__VMID"] = "testexecutor"
     os.environ["DBOS__APPVERSION"] = "testversion"
     os.environ["DBOS__APPID"] = "testappid"
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    DBOS.launch()
 
     step_counter: int = 0
     wf_counter: int = 0
