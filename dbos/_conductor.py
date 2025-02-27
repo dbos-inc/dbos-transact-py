@@ -1,5 +1,6 @@
 import threading
 import time
+import urllib.parse
 from typing import TYPE_CHECKING, Optional
 
 from websockets import ConnectionClosed, ConnectionClosedOK
@@ -11,12 +12,16 @@ if TYPE_CHECKING:
 
 class ConductorWebsocket(threading.Thread):
 
-    def __init__(self, dbos: "DBOS", url: str, evt: threading.Event):
+    def __init__(self, dbos: "DBOS", host: str, evt: threading.Event):
         super().__init__(daemon=True)
         self.websocket: Optional[ClientConnection] = None
-        self.url = url
         self.evt = evt
         self.dbos = dbos
+        self.org_id = "default"
+        self.app_name = dbos.config["name"]
+        self.url = urllib.parse.urljoin(
+            host, f"/{self.org_id}/applications/{self.app_name}"
+        )
 
     def run(self) -> None:
         while not self.evt.is_set():
