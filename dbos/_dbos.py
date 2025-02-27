@@ -155,6 +155,7 @@ class DBOSRegistry:
         self.pollers: list[RegisteredJob] = []
         self.dbos: Optional[DBOS] = None
         self.config: Optional[ConfigFile] = None
+        self.workflow_cancelled_map: dict[str, bool] = {}
 
     def register_wf_function(self, name: str, wrapped_func: F, functype: str) -> None:
         if name in self.function_type_map:
@@ -196,6 +197,15 @@ class DBOSRegistry:
                 )
         else:
             self.instance_info_map[fn] = inst
+
+    def cancel_workflow(self, workflow_id: str) -> None:
+        self.workflow_cancelled_map[workflow_id] = True
+
+    def is_workflow_cancelled(self, workflow_id: str) -> bool:
+        return self.workflow_cancelled_map.get(workflow_id, False)
+
+    def clear_workflow_cancelled(self, workflow_id: str) -> None:
+        self.workflow_cancelled_map.pop(workflow_id, None)
 
     def compute_app_version(self) -> str:
         """
@@ -844,11 +854,13 @@ class DBOS:
     def cancel_workflow(cls, workflow_id: str) -> None:
         """Cancel a workflow by ID."""
         _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
+        _get_or_create_dbos_registry().cancel_workflow(workflow_id)
 
     @classmethod
     def resume_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Resume a workflow by ID."""
         _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
+        _get_or_create_dbos_registry().clear_workflow_cancelled(workflow_id)
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id, False)
 
     @classproperty
