@@ -31,6 +31,9 @@ class ConductorWebsocket(threading.Thread):
                 self.websocket = connect(self.url)
                 while not self.evt.is_set():
                     message = self.websocket.recv()
+                    if not isinstance(message, str):
+                        self.dbos.logger.warning("Receieved unexpected non-str message")
+                        continue
                     base_message = p.BaseMessage.from_json(message)
                     type = base_message.type
                     if type == p.MessageType.EXECUTOR_INFO.value:
