@@ -174,7 +174,7 @@ _buffer_flush_interval_secs = 1.0
 
 class SystemDatabase:
 
-    def __init__(self, config: ConfigFile, debug_mode: bool = False):
+    def __init__(self, config: ConfigFile, *, debug_mode: bool = False):
         self.config = config
 
         sysdb_name = (

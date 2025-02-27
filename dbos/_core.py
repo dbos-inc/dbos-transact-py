@@ -182,7 +182,7 @@ def _init_workflow(
         inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
 
     wf_status = status["status"]
-    if dbos._debug_mode:
+    if dbos.debug_mode:
         get_status_result = dbos._sys_db.get_workflow_status(wfid)
         if get_status_result is None:
             raise DBOSNonExistentWorkflowError(wfid)
@@ -221,7 +221,7 @@ def _get_wf_invoke_func(
             output = func()
             status["status"] = "SUCCESS"
             status["output"] = _serialization.serialize(output)
-            if not dbos._debug_mode:
+            if not dbos.debug_mode:
                 if status["queue_name"] is not None:
                     queue = dbos._registry.queue_info_map[status["queue_name"]]
                     dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
@@ -428,7 +428,7 @@ def start_workflow(
     wf_status = status["status"]
 
     if not execute_workflow or (
-        not dbos._debug_mode
+        not dbos.debug_mode
         and (
             wf_status == WorkflowStatusString.ERROR.value
             or wf_status == WorkflowStatusString.SUCCESS.value
@@ -591,7 +591,7 @@ def decorate_transaction(
                                         ctx.function_id,
                                     )
                                 )
-                                if dbos._debug_mode and recorded_output is None:
+                                if dbos.debug_mode and recorded_output is None:
                                     raise DBOSException(
                                         "Transaction output not found in debug mode"
                                     )
@@ -771,7 +771,7 @@ def decorate_step(
                 recorded_output = dbos._sys_db.check_operation_execution(
                     ctx.workflow_id, ctx.function_id
                 )
-                if dbos._debug_mode and recorded_output is None:
+                if dbos.debug_mode and recorded_output is None:
                     raise DBOSException("Step output not found in debug mode")
                 if recorded_output:
                     dbos.logger.debug(

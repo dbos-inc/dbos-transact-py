@@ -27,7 +27,7 @@ class RecordedResult(TypedDict):
 
 class ApplicationDatabase:
 
-    def __init__(self, config: ConfigFile, debug_mode: bool = False):
+    def __init__(self, config: ConfigFile, *, debug_mode: bool = False):
         self.config = config
 
         app_db_name = config["database"]["app_db_name"]

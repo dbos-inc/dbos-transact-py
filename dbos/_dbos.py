@@ -300,6 +300,7 @@ class DBOS:
         dbos_logger.info("Initializing DBOS")
         self.config: ConfigFile = config
         self._launched: bool = False
+        self._debug_mode: bool = False
         self._sys_db_field: Optional[SystemDatabase] = None
         self._app_db_field: Optional[ApplicationDatabase] = None
         self._registry: DBOSRegistry = _get_or_create_dbos_registry()
@@ -311,7 +312,6 @@ class DBOS:
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
         self._executor_id: str = os.environ.get("DBOS__VMID", "local")
-        self._debug_wf_id: Optional[str] = os.getenv("DBOS_DEBUG_WORKFLOW_ID")
         self.app_version: str = os.environ.get("DBOS__APPVERSION", "")
 
         # If using FastAPI, set up middleware and lifecycle events
@@ -371,39 +371,31 @@ class DBOS:
         return rv
 
     @property
-    def _debug_mode(self) -> bool:
-        return self._debug_wf_id is not None
+    def debug_mode(self) -> bool:
+        return self._debug_mode
 
     @classmethod
-    def launch(cls) -> None:
+    def launch(cls, *, debug_mode: bool = False) -> None:
         if _dbos_global_instance is not None:
-            _dbos_global_instance._launch()
+            _dbos_global_instance._launch(debug_mode=debug_mode)
 
-    def _launch(self) -> None:
+    def _launch(self, *, debug_mode: bool = False) -> None:
         try:
             if self._launched:
                 dbos_logger.warning(f"DBOS was already launched")
                 return
             self._launched = True
+            self._debug_mode = debug_mode
             if self.app_version == "":
                 self.app_version = self._registry.compute_app_version()
             dbos_logger.info(f"Application version: {self.app_version}")
             dbos_tracer.app_version = self.app_version
             self._executor_field = ThreadPoolExecutor(max_workers=64)
-            self._sys_db_field = SystemDatabase(self.config, self._debug_mode)
-            self._app_db_field = ApplicationDatabase(self.config, self._debug_mode)
+            self._sys_db_field = SystemDatabase(self.config, debug_mode=debug_mode)
+            self._app_db_field = ApplicationDatabase(self.config, debug_mode=debug_mode)
 
-            if self._debug_wf_id is not None:
-                dbos_logger.info(f"Debugging workflow {self._debug_wf_id}")
-                handle = self.execute_workflow_id(self._debug_wf_id)
-                result = handle.get_result()
-                dbos_logger.info("Workflow Debugging complete. Exiting process.")
-                self._destroy()
-                if self.fastapi or self.flask:
-                    raise DBOSDebugModeCompleteError()
-                else:
-                    sys.exit(0)
-                    return  # return for cases where process.exit is mocked
+            if debug_mode:
+                return
 
             admin_port = self.config["runtimeConfig"].get("admin_port")
             if admin_port is None:
