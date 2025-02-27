@@ -87,7 +87,6 @@ from ._context import (
 from ._dbos_config import ConfigFile, load_config, set_env_vars
 from ._error import (
     DBOSConflictingRegistrationError,
-    DBOSDebugModeCompleteError,
     DBOSException,
     DBOSNonExistentWorkflowError,
 )
@@ -458,8 +457,6 @@ class DBOS:
             for handler in dbos_logger.handlers:
                 handler.flush()
             add_otlp_to_all_loggers(self.app_version)
-        except DBOSDebugModeCompleteError:
-            raise
         except Exception:
             dbos_logger.error(f"DBOS failed to launch: {traceback.format_exc()}")
             raise
