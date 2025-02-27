@@ -9,6 +9,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from dbos import DBOS
 from dbos._tracer import dbos_tracer
+from dbos._utils import GlobalParams
 
 
 def test_spans(dbos: DBOS) -> None:
@@ -36,7 +37,7 @@ def test_spans(dbos: DBOS) -> None:
 
     for span in spans:
         assert span.attributes is not None
-        assert span.attributes["applicationVersion"] == dbos.app_version
+        assert span.attributes["applicationVersion"] == GlobalParams.app_version
         assert span.context is not None
 
     assert spans[0].name == test_step.__name__
@@ -74,7 +75,7 @@ async def test_spans_async(dbos: DBOS) -> None:
 
     for span in spans:
         assert span.attributes is not None
-        assert span.attributes["applicationVersion"] == dbos.app_version
+        assert span.attributes["applicationVersion"] == GlobalParams.app_version
         assert span.context is not None
 
     assert spans[0].name == test_step.__name__
@@ -111,7 +112,7 @@ def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     for span in spans:
         assert span.attributes is not None
-        assert span.attributes["applicationVersion"] == dbos.app_version
+        assert span.attributes["applicationVersion"] == GlobalParams.app_version
         assert span.context is not None
 
     assert spans[0].name == test_step_endpoint.__name__

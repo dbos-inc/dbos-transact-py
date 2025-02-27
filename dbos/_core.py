@@ -22,6 +22,7 @@ from typing import (
 )
 
 from dbos._outcome import Immediate, NoResult, Outcome, Pending
+from dbos._utils import GlobalParams
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 
@@ -51,6 +52,7 @@ from ._error import (
     DBOSMaxStepRetriesExceeded,
     DBOSNonExistentWorkflowError,
     DBOSRecoveryError,
+    DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
     DBOSWorkflowFunctionNotFoundError,
 )
@@ -163,7 +165,7 @@ def _init_workflow(
         "output": None,
         "error": None,
         "app_id": ctx.app_id,
-        "app_version": dbos.app_version,
+        "app_version": GlobalParams.app_version,
         "executor_id": ctx.executor_id,
         "request": (
             _serialization.serialize(ctx.request) if ctx.request is not None else None
@@ -224,6 +226,8 @@ def _get_wf_invoke_func(
             )
             output = wf_handle.get_result()
             return output
+        except DBOSWorkflowCancelledError as error:
+            raise
         except Exception as error:
             status["status"] = "ERROR"
             status["error"] = _serialization.serialize_exception(error)
@@ -539,6 +543,13 @@ def decorate_transaction(
                 raise DBOSException(
                     f"Function {func.__name__} invoked before DBOS initialized"
                 )
+
+            ctx = assert_current_dbos_context()
+            if dbosreg.is_workflow_cancelled(ctx.workflow_id):
+                raise DBOSWorkflowCancelledError(
+                    f"Workflow {ctx.workflow_id} is cancelled. Aborting transaction {func.__name__}."
+                )
+
             dbos = dbosreg.dbos
             with dbos._app_db.sessionmaker() as session:
                 attributes: TracedAttributes = {
@@ -560,6 +571,12 @@ def decorate_transaction(
                     backoff_factor = 1.5
                     max_retry_wait_seconds = 2.0
                     while True:
+
+                        if dbosreg.is_workflow_cancelled(ctx.workflow_id):
+                            raise DBOSWorkflowCancelledError(
+                                f"Workflow {ctx.workflow_id} is cancelled. Aborting transaction {func.__name__}."
+                            )
+
                         has_recorded_error = False
                         txn_error: Optional[Exception] = None
                         try:
@@ -710,6 +727,13 @@ def decorate_step(
                 "operationType": OperationType.STEP.value,
             }
 
+            # Check if the workflow is cancelled
+            ctx = assert_current_dbos_context()
+            if dbosreg.is_workflow_cancelled(ctx.workflow_id):
+                raise DBOSWorkflowCancelledError(
+                    f"Workflow {ctx.workflow_id} is cancelled. Aborting step {func.__name__}."
+                )
+
             attempts = max_attempts if retries_allowed else 1
             max_retry_interval_seconds: float = 3600  # 1 Hour
 
@@ -800,6 +824,7 @@ def decorate_step(
             ctx = get_local_dbos_context()
             if ctx and ctx.is_step():
                 # Call the original function directly
+
                 return func(*args, **kwargs)
             if ctx and ctx.is_within_workflow():
                 assert ctx.is_workflow(), "Steps must be called from within workflows"
