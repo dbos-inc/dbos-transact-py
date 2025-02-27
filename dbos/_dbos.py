@@ -32,7 +32,7 @@ from typing import (
 
 from opentelemetry.trace import Span
 
-from dbos._conductor import ConductorWebsocket
+from dbos._conductor.conductor import ConductorWebsocket
 
 from ._classproperty import classproperty
 from ._core import (
