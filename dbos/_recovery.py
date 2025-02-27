@@ -4,6 +4,8 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Any, List
 
+from dbos._utils import GlobalParams
+
 from ._core import execute_workflow_by_id
 from ._error import DBOSWorkflowFunctionNotFoundError
 from ._sys_db import GetPendingWorkflowsOutput
@@ -45,7 +47,7 @@ def recover_pending_workflows(
     for executor_id in executor_ids:
         dbos.logger.debug(f"Recovering pending workflows for executor: {executor_id}")
         pending_workflows = dbos._sys_db.get_pending_workflows(
-            executor_id, dbos.app_version
+            executor_id, GlobalParams.app_version
         )
         for pending_workflow in pending_workflows:
             if (
@@ -64,6 +66,6 @@ def recover_pending_workflows(
                     execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
                 )
         dbos.logger.info(
-            f"Recovering {len(pending_workflows)} workflows from version {dbos.app_version}"
+            f"Recovering {len(pending_workflows)} workflows from version {GlobalParams.app_version}"
         )
     return workflow_handles

@@ -8,6 +8,8 @@ from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 
+from dbos._utils import GlobalParams
+
 if TYPE_CHECKING:
     from ._dbos_config import ConfigFile
 
@@ -19,13 +21,11 @@ class DBOSLogTransformer(logging.Filter):
     def __init__(self) -> None:
         super().__init__()
         self.app_id = os.environ.get("DBOS__APPID", "")
-        self.app_version = os.environ.get("DBOS__APPVERSION", "")
-        self.executor_id = os.environ.get("DBOS__VMID", "local")
 
     def filter(self, record: Any) -> bool:
         record.applicationID = self.app_id
-        record.applicationVersion = self.app_version
-        record.executorID = self.executor_id
+        record.applicationVersion = GlobalParams.app_version
+        record.executorID = GlobalParams.executor_id
         return True
 
 
@@ -86,9 +86,8 @@ def config_logger(config: "ConfigFile") -> None:
         dbos_logger.addFilter(_otlp_transformer)
 
 
-def add_otlp_to_all_loggers(app_version: str) -> None:
+def add_otlp_to_all_loggers() -> None:
     if _otlp_handler is not None and _otlp_transformer is not None:
-        _otlp_transformer.app_version = app_version
         root = logging.root
 
         root.addHandler(_otlp_handler)

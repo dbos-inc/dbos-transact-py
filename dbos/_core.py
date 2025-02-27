@@ -22,6 +22,7 @@ from typing import (
 )
 
 from dbos._outcome import Immediate, NoResult, Outcome, Pending
+from dbos._utils import GlobalParams
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 
@@ -164,7 +165,7 @@ def _init_workflow(
         "output": None,
         "error": None,
         "app_id": ctx.app_id,
-        "app_version": dbos.app_version,
+        "app_version": GlobalParams.app_version,
         "executor_id": ctx.executor_id,
         "request": (
             _serialization.serialize(ctx.request) if ctx.request is not None else None

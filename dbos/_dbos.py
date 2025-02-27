@@ -32,6 +32,8 @@ from typing import (
 
 from opentelemetry.trace import Span
 
+from dbos._utils import GlobalParams
+
 from ._classproperty import classproperty
 from ._core import (
     TEMP_SEND_WF_NAME,
@@ -319,8 +321,6 @@ class DBOS:
         self.flask: Optional["Flask"] = flask
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
-        self._executor_id: str = os.environ.get("DBOS__VMID", "local")
-        self.app_version: str = os.environ.get("DBOS__APPVERSION", "")
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
@@ -389,10 +389,9 @@ class DBOS:
                 dbos_logger.warning(f"DBOS was already launched")
                 return
             self._launched = True
-            if self.app_version == "":
-                self.app_version = self._registry.compute_app_version()
-            dbos_logger.info(f"Application version: {self.app_version}")
-            dbos_tracer.app_version = self.app_version
+            if GlobalParams.app_version == "":
+                GlobalParams.app_version = self._registry.compute_app_version()
+            dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             self._executor_field = ThreadPoolExecutor(max_workers=64)
             self._sys_db_field = SystemDatabase(self.config)
             self._app_db_field = ApplicationDatabase(self.config)
@@ -402,15 +401,15 @@ class DBOS:
             self._admin_server_field = AdminServer(dbos=self, port=admin_port)
 
             workflow_ids = self._sys_db.get_pending_workflows(
-                self._executor_id, self.app_version
+                GlobalParams.executor_id, GlobalParams.app_version
             )
             if (len(workflow_ids)) > 0:
                 self.logger.info(
-                    f"Recovering {len(workflow_ids)} workflows from application version {self.app_version}"
+                    f"Recovering {len(workflow_ids)} workflows from application version {GlobalParams.app_version}"
                 )
             else:
                 self.logger.info(
-                    f"No workflows to recover from application version {self.app_version}"
+                    f"No workflows to recover from application version {GlobalParams.app_version}"
                 )
 
             self._executor.submit(startup_recovery_thread, self, workflow_ids)
@@ -456,7 +455,7 @@ class DBOS:
             # to enable their export in DBOS Cloud
             for handler in dbos_logger.handlers:
                 handler.flush()
-            add_otlp_to_all_loggers(self.app_version)
+            add_otlp_to_all_loggers()
         except Exception:
             dbos_logger.error(f"DBOS failed to launch: {traceback.format_exc()}")
             raise
@@ -497,6 +496,8 @@ class DBOS:
             self._executor_field = None
         for bg_thread in self._background_threads:
             bg_thread.join()
+        GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
+        GlobalParams.executor_id = os.environ.get("DBOS__VMID", "local")
 
     @classmethod
     def register_instance(cls, inst: object) -> None:

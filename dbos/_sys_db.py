@@ -27,6 +27,8 @@ from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.sql import func
 
+from dbos._utils import GlobalParams
+
 from . import _serialization
 from ._dbos_config import ConfigFile
 from ._error import (
@@ -192,9 +194,7 @@ class SystemDatabase:
             port=config["database"]["port"],
             database="postgres",
             # fills the "application_name" column in pg_stat_activity
-            query={
-                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}"
-            },
+            query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
         )
         engine = sa.create_engine(postgres_db_url)
         with engine.connect() as conn:
@@ -203,7 +203,7 @@ class SystemDatabase:
                 sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
                 parameters={"db_name": sysdb_name},
             ).scalar():
-                conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
+                conn.execute(sa.text(f"CREATE DATABASE {GlobalParams.executor_id}"))
         engine.dispose()
 
         system_db_url = sa.URL.create(
@@ -214,9 +214,7 @@ class SystemDatabase:
             port=config["database"]["port"],
             database=sysdb_name,
             # fills the "application_name" column in pg_stat_activity
-            query={
-                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}"
-            },
+            query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
         )
 
         # Create a connection pool for the system database

@@ -7,6 +7,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from opentelemetry.trace import Span
 
+from dbos._utils import GlobalParams
+
 from ._dbos_config import ConfigFile
 
 if TYPE_CHECKING:
@@ -17,8 +19,6 @@ class DBOSTracer:
 
     def __init__(self) -> None:
         self.app_id = os.environ.get("DBOS__APPID", None)
-        self.app_version = os.environ.get("DBOS__APPVERSION", None)
-        self.executor_id = os.environ.get("DBOS__VMID", "local")
         self.provider: Optional[TracerProvider] = None
 
     def config(self, config: ConfigFile) -> None:
@@ -51,8 +51,8 @@ class DBOSTracer:
         context = trace.set_span_in_context(parent) if parent else None
         span: Span = tracer.start_span(name=attributes["name"], context=context)
         attributes["applicationID"] = self.app_id
-        attributes["applicationVersion"] = self.app_version
-        attributes["executorID"] = self.executor_id
+        attributes["applicationVersion"] = GlobalParams.app_version
+        attributes["executorID"] = GlobalParams.executor_id
         for k, v in attributes.items():
             if k != "name" and v is not None and isinstance(v, (str, bool, int, float)):
                 span.set_attribute(k, v)
