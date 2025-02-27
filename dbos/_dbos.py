@@ -292,6 +292,8 @@ class DBOS:
         if destroy_registry:
             global _dbos_global_registry
             _dbos_global_registry = None
+        GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
+        GlobalParams.executor_id = os.environ.get("DBOS__VMID", "local")
 
     def __init__(
         self,
@@ -496,8 +498,6 @@ class DBOS:
             self._executor_field = None
         for bg_thread in self._background_threads:
             bg_thread.join()
-        GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
-        GlobalParams.executor_id = os.environ.get("DBOS__VMID", "local")
 
     @classmethod
     def register_instance(cls, inst: object) -> None:
