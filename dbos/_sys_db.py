@@ -203,7 +203,7 @@ class SystemDatabase:
                 sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
                 parameters={"db_name": sysdb_name},
             ).scalar():
-                conn.execute(sa.text(f"CREATE DATABASE {GlobalParams.executor_id}"))
+                conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
         engine.dispose()
 
         system_db_url = sa.URL.create(
