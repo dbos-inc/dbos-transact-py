@@ -1,5 +1,6 @@
 from typing import List, Optional, cast
 
+import requests
 import typer
 
 from . import _serialization
@@ -122,18 +123,6 @@ def get_workflow(
     except Exception as e:
         typer.echo(f"Error getting workflow: {e}")
         return None
-    finally:
-        if sys_db:
-            sys_db.destroy()
-
-
-def cancel_workflow(config: ConfigFile, uuid: str) -> None:
-    try:
-        sys_db = SystemDatabase(config)
-        sys_db.cancel_workflow(uuid)
-    except Exception as e:
-        typer.echo(f"Failed to connect to DBOS system database: {e}")
-        raise e
     finally:
         if sys_db:
             sys_db.destroy()
