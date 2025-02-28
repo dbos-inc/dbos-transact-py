@@ -12,6 +12,8 @@ from typing import List, Literal, Optional, Type, TypedDict
 from opentelemetry.trace import Span, Status, StatusCode
 from sqlalchemy.orm import Session
 
+from dbos._utils import GlobalParams
+
 from ._logger import dbos_logger
 from ._request import Request
 from ._tracer import dbos_tracer
@@ -48,7 +50,7 @@ class TracedAttributes(TypedDict, total=False):
 
 class DBOSContext:
     def __init__(self) -> None:
-        self.executor_id = os.environ.get("DBOS__VMID", "local")
+        self.executor_id = GlobalParams.executor_id
         self.app_id = os.environ.get("DBOS__APPID", "")
 
         self.logger = dbos_logger

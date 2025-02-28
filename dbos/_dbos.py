@@ -32,6 +32,8 @@ from typing import (
 
 from opentelemetry.trace import Span
 
+from dbos._utils import GlobalParams
+
 from ._classproperty import classproperty
 from ._core import (
     TEMP_SEND_WF_NAME,
@@ -155,6 +157,7 @@ class DBOSRegistry:
         self.pollers: list[RegisteredJob] = []
         self.dbos: Optional[DBOS] = None
         self.config: Optional[ConfigFile] = None
+        self.workflow_cancelled_map: dict[str, bool] = {}
 
     def register_wf_function(self, name: str, wrapped_func: F, functype: str) -> None:
         if name in self.function_type_map:
@@ -196,6 +199,15 @@ class DBOSRegistry:
                 )
         else:
             self.instance_info_map[fn] = inst
+
+    def cancel_workflow(self, workflow_id: str) -> None:
+        self.workflow_cancelled_map[workflow_id] = True
+
+    def is_workflow_cancelled(self, workflow_id: str) -> bool:
+        return self.workflow_cancelled_map.get(workflow_id, False)
+
+    def clear_workflow_cancelled(self, workflow_id: str) -> None:
+        self.workflow_cancelled_map.pop(workflow_id, None)
 
     def compute_app_version(self) -> str:
         """
@@ -280,6 +292,8 @@ class DBOS:
         if destroy_registry:
             global _dbos_global_registry
             _dbos_global_registry = None
+        GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
+        GlobalParams.executor_id = os.environ.get("DBOS__VMID", "local")
 
     def __init__(
         self,
@@ -310,8 +324,6 @@ class DBOS:
         self.flask: Optional["Flask"] = flask
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
-        self._executor_id: str = os.environ.get("DBOS__VMID", "local")
-        self.app_version: str = os.environ.get("DBOS__APPVERSION", "")
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
@@ -385,10 +397,9 @@ class DBOS:
                 return
             self._launched = True
             self._debug_mode = debug_mode
-            if self.app_version == "":
-                self.app_version = self._registry.compute_app_version()
-            dbos_logger.info(f"Application version: {self.app_version}")
-            dbos_tracer.app_version = self.app_version
+            if GlobalParams.app_version == "":
+                GlobalParams.app_version = self._registry.compute_app_version()
+            dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             self._executor_field = ThreadPoolExecutor(max_workers=64)
             self._sys_db_field = SystemDatabase(self.config, debug_mode=debug_mode)
             self._app_db_field = ApplicationDatabase(self.config, debug_mode=debug_mode)
@@ -402,15 +413,15 @@ class DBOS:
             self._admin_server_field = AdminServer(dbos=self, port=admin_port)
 
             workflow_ids = self._sys_db.get_pending_workflows(
-                self._executor_id, self.app_version
+                GlobalParams.executor_id, GlobalParams.app_version
             )
             if (len(workflow_ids)) > 0:
                 self.logger.info(
-                    f"Recovering {len(workflow_ids)} workflows from application version {self.app_version}"
+                    f"Recovering {len(workflow_ids)} workflows from application version {GlobalParams.app_version}"
                 )
             else:
                 self.logger.info(
-                    f"No workflows to recover from application version {self.app_version}"
+                    f"No workflows to recover from application version {GlobalParams.app_version}"
                 )
 
             self._executor.submit(startup_recovery_thread, self, workflow_ids)
@@ -456,7 +467,7 @@ class DBOS:
             # to enable their export in DBOS Cloud
             for handler in dbos_logger.handlers:
                 handler.flush()
-            add_otlp_to_all_loggers(self.app_version)
+            add_otlp_to_all_loggers()
         except Exception:
             dbos_logger.error(f"DBOS failed to launch: {traceback.format_exc()}")
             raise
@@ -854,11 +865,13 @@ class DBOS:
     def cancel_workflow(cls, workflow_id: str) -> None:
         """Cancel a workflow by ID."""
         _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
+        _get_or_create_dbos_registry().cancel_workflow(workflow_id)
 
     @classmethod
     def resume_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Resume a workflow by ID."""
         _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
+        _get_or_create_dbos_registry().clear_workflow_cancelled(workflow_id)
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id, False)
 
     @classproperty

@@ -3,9 +3,13 @@ import time
 import uuid
 
 import requests
+import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, ConfigFile, Queue, SetWorkflowID, _workflow_commands
+from dbos._schemas.system_database import SystemSchema
+from dbos._sys_db import WorkflowStatusString
+from dbos._utils import GlobalParams
 
 
 def test_admin_endpoints(dbos: DBOS) -> None:
@@ -59,10 +63,13 @@ def test_admin_endpoints(dbos: DBOS) -> None:
         assert event.is_set(), "Event is not set!"
 
 
-def test_admin_recovery(dbos: DBOS) -> None:
+def test_admin_recovery(config: ConfigFile) -> None:
     os.environ["DBOS__VMID"] = "testexecutor"
     os.environ["DBOS__APPVERSION"] = "testversion"
     os.environ["DBOS__APPID"] = "testappid"
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    DBOS.launch()
 
     step_counter: int = 0
     wf_counter: int = 0
@@ -87,34 +94,25 @@ def test_admin_recovery(dbos: DBOS) -> None:
         assert test_workflow("bob", "bob") == "bob1bob"
 
     dbos._sys_db.wait_for_buffer_flush()
-    # Change the workflow status to pending
-    dbos._sys_db.update_workflow_status(
-        {
-            "workflow_uuid": wfuuid,
-            "status": "PENDING",
-            "name": test_workflow.__qualname__,
-            "class_name": None,
-            "config_name": None,
-            "output": None,
-            "error": None,
-            "executor_id": None,
-            "app_id": None,
-            "app_version": None,
-            "request": None,
-            "recovery_attempts": None,
-            "authenticated_user": None,
-            "authenticated_roles": None,
-            "assumed_role": None,
-            "queue_name": None,
-        }
-    )
+
+    # Manually update the database to pretend the workflow comes from another executor and is pending
+    with dbos._sys_db.engine.begin() as c:
+        query = (
+            sa.update(SystemSchema.workflow_status)
+            .values(
+                status=WorkflowStatusString.PENDING.value, executor_id="other-executor"
+            )
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
+        )
+        c.execute(query)
+
     status = dbos.get_workflow_status(wfuuid)
     assert (
         status is not None and status.status == "PENDING"
     ), "Workflow status not updated"
 
     # Test POST /dbos-workflow-recovery
-    data = ["testexecutor"]
+    data = ["other-executor"]
     response = requests.post(
         "http://localhost:3001/dbos-workflow-recovery", json=data, timeout=5
     )
@@ -127,6 +125,8 @@ def test_admin_recovery(dbos: DBOS) -> None:
     for attempt in range(max_retries):
         status = dbos.get_workflow_status(wfuuid)
         if status is not None and status.status == "SUCCESS":
+            assert status.status == "SUCCESS"
+            assert status.executor_id == "testexecutor"
             succeeded = True
             break
         else:
@@ -204,6 +204,17 @@ def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
     assert info is not None
     assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
 
+    # Manually update the database to pretend the workflow comes from another executor and is pending
+    with dbos._sys_db.engine.begin() as c:
+        query = (
+            sa.update(SystemSchema.workflow_status)
+            .values(
+                status=WorkflowStatusString.PENDING.value, executor_id="other-executor"
+            )
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfUuid)
+        )
+        c.execute(query)
+
     # Resume the workflow. Verify that it succeeds again.
     response = requests.post(
         f"http://localhost:3001/workflows/{wfUuid}/resume", json=[], timeout=5
@@ -214,6 +225,7 @@ def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
     info = _workflow_commands.get_workflow(config, wfUuid, True)
     assert info is not None
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
+    assert info.executor_id == GlobalParams.executor_id
 
     # Resume the workflow. Verify it does not run and status remains SUCCESS
     response = requests.post(

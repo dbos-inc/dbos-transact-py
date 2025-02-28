@@ -27,6 +27,8 @@ from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.sql import func
 
+from dbos._utils import GlobalParams
+
 from . import _serialization
 from ._dbos_config import ConfigFile
 from ._error import (
@@ -183,8 +185,8 @@ class SystemDatabase:
             else config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
         )
 
-        # If the system database does not already exist, create it
         if not debug_mode:
+            # If the system database does not already exist, create it
             postgres_db_url = sa.URL.create(
                 "postgresql+psycopg",
                 username=config["database"]["username"],
@@ -193,9 +195,7 @@ class SystemDatabase:
                 port=config["database"]["port"],
                 database="postgres",
                 # fills the "application_name" column in pg_stat_activity
-                query={
-                    "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}"
-                },
+                query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
             )
             engine = sa.create_engine(postgres_db_url)
             with engine.connect() as conn:
@@ -215,9 +215,7 @@ class SystemDatabase:
             port=config["database"]["port"],
             database=sysdb_name,
             # fills the "application_name" column in pg_stat_activity
-            query={
-                "application_name": f"dbos_transact_{os.environ.get('DBOS__VMID', 'local')}"
-            },
+            query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
         )
 
         # Create a connection pool for the system database
@@ -327,6 +325,7 @@ class SystemDatabase:
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
                 set_=dict(
+                    executor_id=status["executor_id"],
                     recovery_attempts=(
                         SystemSchema.workflow_status.c.recovery_attempts + 1
                     ),
