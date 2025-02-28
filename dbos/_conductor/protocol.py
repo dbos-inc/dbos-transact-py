@@ -15,6 +15,7 @@ T = TypeVar("T", bound="BaseMessage")
 @dataclass
 class BaseMessage:
     type: MessageType
+    request_id: str
 
     @classmethod
     def from_json(cls: Type[T], json_str: str) -> T:

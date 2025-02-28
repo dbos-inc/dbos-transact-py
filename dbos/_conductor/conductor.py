@@ -1,5 +1,6 @@
 import threading
 import time
+import traceback
 import urllib.parse
 from typing import TYPE_CHECKING, Optional
 
@@ -41,6 +42,7 @@ class ConductorWebsocket(threading.Thread):
                     if type == p.MessageType.EXECUTOR_INFO.value:
                         info_response = p.ExecutorInfoResponse(
                             type=p.MessageType.EXECUTOR_INFO,
+                            request_id=base_message.request_id,
                             executor_id=GlobalParams.executor_id,
                             application_version=GlobalParams.app_version,
                         )
@@ -48,9 +50,20 @@ class ConductorWebsocket(threading.Thread):
                         self.dbos.logger.info("Connected to DBOS conductor")
                     elif type == p.MessageType.RECOVERY:
                         recovery_message = p.RecoveryRequest.from_json(message)
-                        print(recovery_message)
+                        success = True
+                        try:
+                            self.dbos.recover_pending_workflows(
+                                recovery_message.executor_ids
+                            )
+                        except Exception as e:
+                            self.dbos.logger.error(
+                                f"Exception encountered when recovering workflows: {traceback.format_exc()}"
+                            )
+                            success = False
                         recovery_response = p.RecoveryResponse(
-                            type=p.MessageType.RECOVERY, success=True
+                            type=p.MessageType.RECOVERY,
+                            request_id=base_message.request_id,
+                            success=success,
                         )
                         self.websocket.send(recovery_response.to_json())
                     else:
