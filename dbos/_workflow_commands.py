@@ -1,6 +1,5 @@
 from typing import List, Optional, cast
 
-import requests
 import typer
 
 from . import _serialization
