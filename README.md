@@ -79,7 +79,7 @@ def step_two():
 def dbos_workflow():
     step_one()
     for _ in range(5):
-        print("Press Control + C to stop the app...")
+        print("Press Control + C twice to stop the app...")
         DBOS.sleep(1)
     step_two()
 
@@ -90,7 +90,7 @@ def fastapi_endpoint():
 
 Save the program into `main.py` and start it with `fastapi run`.
 Visit `localhost:8000` in your browser to start the workflow.
-When prompted, press `Control + C` (or `Control + \`, if `Control + C` is not effective in your environment) to force quit your application.
+When prompted, press `Control + C` (You may need to press `Control + C` twice quickly, or press `Control + \`, if `Control + C` is not effective in your environment) to force quit your application.
 It should crash midway through the workflow, having completed step one but not step two.
 Then, restart your app with `fastapi run`.
 It should resume the workflow from where it left off, completing step two without re-executing step one.
