@@ -15,10 +15,7 @@ def test_list_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
         print("Executed Simple workflow")
         return
 
-    # run the workflow
     simple_workflow()
-    time.sleep(1)  # wait for the workflow to complete
-    # get the workflow list
     output = _workflow_commands.list_workflows(sys_db)
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
     assert output[0] != None, "Expected output to be not None"
@@ -38,7 +35,6 @@ def test_list_workflow_limit(dbos: DBOS, sys_db: SystemDatabase) -> None:
     simple_workflow()
     simple_workflow()
     simple_workflow()
-    time.sleep(1)  # wait for the workflow to complete
     # get the workflow list
     output = _workflow_commands.list_workflows(sys_db, limit=2)
     assert len(output) == 2, f"Expected list length to be 1, but got {len(output)}"
@@ -52,25 +48,19 @@ def test_list_workflow_status_name(dbos: DBOS, sys_db: SystemDatabase) -> None:
         print("Executed Simple workflow")
         return
 
-    # run the workflow
     simple_workflow()
-    time.sleep(1)  # wait for the workflow to complete
-    # get the workflow list
+    dbos._sys_db._flush_workflow_status_buffer()
     output = _workflow_commands.list_workflows(sys_db, status="PENDING")
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
-    output = _workflow_commands.list_workflows(
-        sys_db, 10, None, None, None, "SUCCESS", False, None, None
-    )
+    output = _workflow_commands.list_workflows(sys_db, status="SUCCESS")
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
-    output = _workflow_commands.list_workflows(
-        sys_db, 10, None, None, None, None, False, None, "no"
-    )
+    output = _workflow_commands.list_workflows(sys_db, name="no")
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
     output = _workflow_commands.list_workflows(
-        sys_db, 10, None, None, None, None, False, None, simple_workflow.__qualname__
+        sys_db, name=simple_workflow.__qualname__
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
@@ -85,17 +75,11 @@ def test_list_workflow_start_end_times(dbos: DBOS, sys_db: SystemDatabase) -> No
 
     now = datetime.now()
     starttime = (now - timedelta(seconds=20)).isoformat()
-    print(starttime)
-
-    # run the workflow
     simple_workflow()
-    time.sleep(1)  # wait for the workflow to complete
-    # get the workflow list
     endtime = datetime.now().isoformat()
-    print(endtime)
 
     output = _workflow_commands.list_workflows(
-        sys_db, 10, None, starttime, endtime, None, False, None, None
+        sys_db, start_time=starttime, end_time=endtime
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
@@ -103,7 +87,9 @@ def test_list_workflow_start_end_times(dbos: DBOS, sys_db: SystemDatabase) -> No
     newendtime = starttime
 
     output = _workflow_commands.list_workflows(
-        sys_db, 10, None, newstarttime, newendtime, None, False, None, None
+        sys_db,
+        start_time=newstarttime,
+        end_time=newendtime,
     )
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
@@ -119,34 +105,26 @@ def test_list_workflow_end_times_positive(dbos: DBOS, sys_db: SystemDatabase) ->
     now = datetime.now()
 
     time_0 = (now - timedelta(seconds=40)).isoformat()
-
     time_1 = (now - timedelta(seconds=20)).isoformat()
-
-    # run the workflow
     simple_workflow()
-    time.sleep(1)  # wait for the workflow to complete
-    # get the workflow list
     time_2 = datetime.now().isoformat()
-
     simple_workflow()
-    time.sleep(1)  # wait for the workflow to complete
-    # get the workflow list
     time_3 = datetime.now().isoformat()
 
     output = _workflow_commands.list_workflows(
-        sys_db, 10, None, time_0, time_1, None, False, None, None
+        sys_db, 10, start_time=time_0, end_time=time_1
     )
-
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
     output = _workflow_commands.list_workflows(
-        sys_db, 10, None, time_1, time_2, None, False, None, None
+        sys_db, start_time=time_1, end_time=time_2
     )
-
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
     output = _workflow_commands.list_workflows(
-        sys_db, 10, None, time_1, time_3, None, False, None, None
+        sys_db,
+        start_time=time_1,
+        end_time=time_3,
     )
     assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
 
@@ -159,12 +137,9 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase) ->
         print("Executed Simple workflow")
         return
 
-    # run the workflow
     simple_workflow()
-    time.sleep(1)  # wait for the workflow to complete
-    # get the workflow list
     output = _workflow_commands.list_workflows(
-        sys_db, 10, None, None, None, None, False, None, None
+        sys_db,
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
