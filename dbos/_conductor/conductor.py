@@ -39,16 +39,22 @@ class ConductorWebsocket(threading.Thread):
                     base_message = p.BaseMessage.from_json(message)
                     type = base_message.type
                     if type == p.MessageType.EXECUTOR_INFO.value:
-                        response = p.ExecutorInfoResponse(
+                        info_response = p.ExecutorInfoResponse(
                             type=p.MessageType.EXECUTOR_INFO,
                             executor_id=GlobalParams.executor_id,
                             application_version=GlobalParams.app_version,
                         )
-                        self.websocket.send(response.to_json())
-                        pass
+                        self.websocket.send(info_response.to_json())
+                        self.dbos.logger.info("Connected to DBOS conductor")
+                    elif type == p.MessageType.RECOVERY:
+                        recovery_message = p.RecoveryRequest.from_json(message)
+                        print(recovery_message)
+                        recovery_response = p.RecoveryResponse(
+                            type=p.MessageType.RECOVERY, success=True
+                        )
+                        self.websocket.send(recovery_response.to_json())
                     else:
                         self.dbos.logger.warning(f"Unexpected message type: {type}")
-                    print(message)
             except ConnectionClosedOK:
                 self.dbos.logger.info("Conductor connection terminated")
                 break
