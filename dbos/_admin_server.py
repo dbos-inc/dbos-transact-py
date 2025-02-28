@@ -45,26 +45,55 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         self.dbos = dbos
         super().__init__(*args, **kwargs)
 
-    def _end_headers(self) -> None:
-        self.send_header("Content-type", "application/json")
+    # Same default as https://www.npmjs.com/package/@koa/cors
+    def _set_cors_headers(self) -> None:
+        origin = self.headers.get("Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header(
+            "Access-Control-Allow-Methods", "GET, HEAD, PUT, POST, DELETE, PATCH"
+        )
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            self.headers.get(
+                "Access-Control-Request-Headers", "Content-Type, Authorization"
+            ),
+        )
+        self.send_header(
+            "Access-Control-Expose-Headers", "Content-Length, X-Koa-Response-Time"
+        )
+        self.send_header("Access-Control-Max-Age", "86400")
+        self.send_header("Access-Control-Allow-Credentials", "false")
+        if self.headers.get("Access-Control-Request-Private-Network"):
+            self.send_header("Access-Control-Allow-Private-Network", "true")
+
+    def _send_json_response(self, data: Any, status: int = 200) -> None:
+        """Utility method to send a JSON response with CORS headers."""
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self._set_cors_headers()
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode("utf-8"))
+
+    def do_OPTIONS(self) -> None:
+        """Handles preflight CORS requests (needed for non-simple requests)."""
+        self.send_response(204)  # No content
+        self._set_cors_headers()
         self.end_headers()
 
     def do_HEAD(self) -> None:
-        self._end_headers()
+        """Handles HEAD requests (minimal response with headers only)."""
+        self.send_response(200)
+        self._set_cors_headers()
+        self.end_headers()
 
     def do_GET(self) -> None:
         if self.path == _health_check_path:
-            self.send_response(200)
-            self._end_headers()
-            self.wfile.write("healthy".encode("utf-8"))
+            self._send_json_response("healthy")
         elif self.path == _deactivate_path:
             # Stop all scheduled workflows, queues, and kafka loops
             for event in self.dbos.stop_events:
                 event.set()
-
-            self.send_response(200)
-            self._end_headers()
-            self.wfile.write("deactivated".encode("utf-8"))
+            self._send_json_response("deactivated")
         elif self.path == _workflow_queues_metadata_path:
             queue_metadata_array = []
             from ._dbos import _get_or_create_dbos_registry
@@ -82,12 +111,9 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                     k: v for k, v in queue_metadata.items() if v is not None
                 }
                 queue_metadata_array.append(queue_metadata)
-            self.send_response(200)
-            self._end_headers()
-            self.wfile.write(json.dumps(queue_metadata_array).encode("utf-8"))
+            self._send_json_response(queue_metadata_array)
         else:
-            self.send_response(404)
-            self._end_headers()
+            self._send_json_response({"error": "Not Found"}, status=404)
 
     def do_POST(self) -> None:
         content_length = int(
@@ -100,11 +126,8 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             dbos_logger.info("Recovering workflows for executors: %s", executor_ids)
             workflow_handles = recover_pending_workflows(self.dbos, executor_ids)
             workflow_ids = [handle.workflow_id for handle in workflow_handles]
-            self.send_response(200)
-            self._end_headers()
-            self.wfile.write(json.dumps(workflow_ids).encode("utf-8"))
+            self._send_json_response(workflow_ids)
         else:
-
             restart_match = re.match(
                 r"^/workflows/(?P<workflow_id>[^/]+)/restart$", self.path
             )
@@ -125,8 +148,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 workflow_id = cancel_match.group("workflow_id")
                 self._handle_cancel(workflow_id)
             else:
-                self.send_response(404)
-                self._end_headers()
+                self._send_json_response({"error": "Not Found"}, status=404)
 
     def log_message(self, format: str, *args: Any) -> None:
         return  # Disable admin server request logging
@@ -134,20 +156,17 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
     def _handle_restart(self, workflow_id: str) -> None:
         self.dbos.restart_workflow(workflow_id)
         print("Restarting workflow", workflow_id)
-        self.send_response(204)
-        self._end_headers()
+        self._send_json_response({}, status=204)
 
     def _handle_resume(self, workflow_id: str) -> None:
         print("Resuming workflow", workflow_id)
         self.dbos.resume_workflow(workflow_id)
-        self.send_response(204)
-        self._end_headers()
+        self._send_json_response({}, status=204)
 
     def _handle_cancel(self, workflow_id: str) -> None:
         print("Cancelling workflow", workflow_id)
         self.dbos.cancel_workflow(workflow_id)
-        self.send_response(204)
-        self._end_headers()
+        self._send_json_response({}, status=204)
 
 
 # Be consistent with DBOS-TS response.
