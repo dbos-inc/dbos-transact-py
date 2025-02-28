@@ -243,7 +243,7 @@ def reset(
 def debug(
     workflow_id: Annotated[str, typer.Argument(help="Workflow ID to debug")],
 ) -> None:
-    config = load_config(silent=True)
+    config = load_config(silent=True, use_db_wizard=False)
     start = config["runtimeConfig"]["start"]
     if not start:
         typer.echo("No start commands found in 'dbos-config.yaml'")
