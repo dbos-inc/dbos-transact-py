@@ -220,7 +220,7 @@ def load_config(
     dblocalsuffix_env = os.getenv("DBOS_DBLOCALSUFFIX")
     if dblocalsuffix_env:
         try:
-            dbos_dblocalsuffix = bool(dblocalsuffix_env)
+            dbos_dblocalsuffix = dblocalsuffix_env.casefold() == "true".casefold()
         except ValueError:
             pass
 
