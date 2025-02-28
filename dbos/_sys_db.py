@@ -305,6 +305,7 @@ class SystemDatabase:
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
                 set_=dict(
+                    executor_id=status["executor_id"],
                     recovery_attempts=(
                         SystemSchema.workflow_status.c.recovery_attempts + 1
                     ),
