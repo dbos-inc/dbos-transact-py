@@ -204,6 +204,17 @@ def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
     assert info is not None
     assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
 
+    # Manually update the database to pretend the workflow comes from another executor and is pending
+    with dbos._sys_db.engine.begin() as c:
+        query = (
+            sa.update(SystemSchema.workflow_status)
+            .values(
+                status=WorkflowStatusString.PENDING.value, executor_id="other-executor"
+            )
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfUuid)
+        )
+        c.execute(query)
+
     # Resume the workflow. Verify that it succeeds again.
     response = requests.post(
         f"http://localhost:3001/workflows/{wfUuid}/resume", json=[], timeout=5
@@ -214,6 +225,7 @@ def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
     info = _workflow_commands.get_workflow(config, wfUuid, True)
     assert info is not None
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
+    assert info.executor_id == GlobalParams.executor_id
 
     # Resume the workflow. Verify it does not run and status remains SUCCESS
     response = requests.post(
