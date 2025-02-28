@@ -51,6 +51,9 @@ You can use DBOS to add reliable background jobs or cron scheduling or queues to
 Install and configure with:
 
 ```shell
+python3 -m venv dbos-example/.venv
+cd dbos-example
+source .venv/bin/activate
 pip install dbos
 dbos init --config
 ```
@@ -87,7 +90,7 @@ def fastapi_endpoint():
 
 Save the program into `main.py` and start it with `fastapi run`.
 Visit `localhost:8000` in your browser to start the workflow.
-When prompted, press `Control + C` (or `Control + \`) to force quit your application.
+When prompted, press `Control + C` (or `Control + \`, if `Control + C` is not effective in your environment) to force quit your application.
 It should crash midway through the workflow, having completed step one but not step two.
 Then, restart your app with `fastapi run`.
 It should resume the workflow from where it left off, completing step two without re-executing step one.
