@@ -140,14 +140,17 @@ def get_workflow_info(
     winfo.workflowName = info["name"]
     winfo.workflowClassName = info["class_name"]
     winfo.workflowConfigName = info["config_name"]
+    winfo.authenticated_user = info["authenticated_user"]
+    winfo.assumed_role = info["assumed_role"]
+    winfo.authenticated_roles = info["authenticated_roles"]
+    winfo.request = info["request"]
+    winfo.created_at = None
+    winfo.updated_at = None
+    winfo.queue_name = info["queue_name"]
     winfo.executor_id = info["executor_id"]
     winfo.app_version = info["app_version"]
     winfo.app_id = info["app_id"]
     winfo.recovery_attempts = info["recovery_attempts"]
-    winfo.authenticated_user = info["authenticated_user"]
-    winfo.assumed_role = info["assumed_role"]
-    winfo.authenticated_roles = info["authenticated_roles"]
-    winfo.queue_name = info["queue_name"]
 
     # no input field
     input_data = sys_db.get_workflow_inputs(workflowUUID)
