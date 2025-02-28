@@ -58,9 +58,6 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 "Access-Control-Request-Headers", "Content-Type, Authorization"
             ),
         )
-        self.send_header(
-            "Access-Control-Expose-Headers", "Content-Length, X-Koa-Response-Time"
-        )
         self.send_header("Access-Control-Max-Age", "86400")
         self.send_header("Access-Control-Allow-Credentials", "false")
         if self.headers.get("Access-Control-Request-Private-Network"):
