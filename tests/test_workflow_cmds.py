@@ -184,35 +184,6 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile) -> None:
         assert info.workflowUUID == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
 
 
-def test_cancel_workflow(dbos: DBOS, config: ConfigFile) -> None:
-    print("Testing get_workflow")
-
-    @DBOS.workflow()
-    def simple_workflow() -> None:
-        time.sleep(3)
-        print("Executed Simple workflow")
-        return
-
-    # run the workflow
-    simple_workflow()
-    # get the workflow list
-    output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, None, False, None, None
-    )
-    # assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
-
-    print(output[0])
-    assert output[0] != None, "Expected output to be not None"
-    wfUuid = output[0].workflowUUID
-
-    _workflow_commands.cancel_workflow(config, wfUuid)
-
-    info = _workflow_commands.get_workflow(config, wfUuid, True)
-    assert info is not None, "Expected info to be not None"
-    if info is not None:
-        assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
-
-
 def test_queued_workflows(dbos: DBOS, config: ConfigFile) -> None:
     queued_steps = 5
     step_events = [threading.Event() for _ in range(queued_steps)]

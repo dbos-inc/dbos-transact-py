@@ -127,18 +127,6 @@ def get_workflow(
             sys_db.destroy()
 
 
-def cancel_workflow(config: ConfigFile, uuid: str) -> None:
-    try:
-        sys_db = SystemDatabase(config)
-        sys_db.cancel_workflow(uuid)
-    except Exception as e:
-        typer.echo(f"Failed to connect to DBOS system database: {e}")
-        raise e
-    finally:
-        if sys_db:
-            sys_db.destroy()
-
-
 def _get_workflow_info(
     sys_db: SystemDatabase, workflowUUID: str, getRequest: bool
 ) -> Optional[WorkflowInformation]:
