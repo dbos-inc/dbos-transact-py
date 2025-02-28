@@ -43,6 +43,7 @@ def startup_recovery_thread(
 def recover_pending_workflows(
     dbos: "DBOS", executor_ids: List[str] = ["local"]
 ) -> List["WorkflowHandle[Any]"]:
+    """Attempt to recover pending workflows for a list of specific executors and return workflow handles for them."""
     workflow_handles: List["WorkflowHandle[Any]"] = []
     for executor_id in executor_ids:
         dbos.logger.debug(f"Recovering pending workflows for executor: {executor_id}")
