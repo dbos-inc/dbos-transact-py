@@ -11,6 +11,7 @@ from flask import Flask
 
 from dbos import DBOS, ConfigFile
 from dbos._schemas.system_database import SystemSchema
+from dbos._sys_db import SystemDatabase
 
 
 @pytest.fixture(scope="session")
@@ -43,6 +44,13 @@ def default_config() -> ConfigFile:
 @pytest.fixture()
 def config() -> ConfigFile:
     return default_config()
+
+
+@pytest.fixture()
+def sys_db(config: ConfigFile) -> Generator[SystemDatabase, Any, None]:
+    sys_db = SystemDatabase(config)
+    yield sys_db
+    sys_db.destroy()
 
 
 @pytest.fixture(scope="session")

@@ -8,7 +8,7 @@ import sqlalchemy as sa
 # Public API
 from dbos import DBOS, ConfigFile, Queue, SetWorkflowID, _workflow_commands
 from dbos._schemas.system_database import SystemSchema
-from dbos._sys_db import WorkflowStatusString
+from dbos._sys_db import SystemDatabase, WorkflowStatusString
 from dbos._utils import GlobalParams
 
 
@@ -171,7 +171,9 @@ runtimeConfig:
         os.remove("dbos-config.yaml")
 
 
-def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
+def test_admin_workflow_resume(
+    dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase
+) -> None:
     counter: int = 0
 
     @DBOS.workflow()
@@ -186,7 +188,7 @@ def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
 
     # Verify the workflow has succeeded
     output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, None, False, None, None
+        sys_db, 10, None, None, None, None, False, None, None
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
     assert output[0] != None, "Expected output to be not None"
@@ -239,7 +241,9 @@ def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
     assert counter == 2
 
 
-def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
+def test_admin_workflow_restart(
+    dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase
+) -> None:
 
     @DBOS.workflow()
     def simple_workflow() -> None:
@@ -252,7 +256,7 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
 
     # get the workflow list
     output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, None, False, None, None
+        sys_db, 10, None, None, None, None, False, None, None
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
@@ -290,7 +294,7 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
         assert False, "Expected info to be not None"
 
     output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, None, False, None, None
+        sys_db, 10, None, None, None, None, False, None, None
     )
     assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
 

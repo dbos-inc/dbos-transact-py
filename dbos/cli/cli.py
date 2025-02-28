@@ -288,8 +288,9 @@ def list(
     ] = True,
 ) -> None:
     config = load_config(silent=True)
+    sys_db = SystemDatabase(config)
     workflows = list_workflows(
-        config, limit, user, starttime, endtime, status, request, appversion, name
+        sys_db, limit, user, starttime, endtime, status, request, appversion, name
     )
     print(jsonpickle.encode(workflows, unpicklable=False))
 

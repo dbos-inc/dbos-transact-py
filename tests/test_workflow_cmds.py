@@ -4,9 +4,10 @@ from datetime import datetime, timedelta, timezone
 
 # Public API
 from dbos import DBOS, ConfigFile, Queue, WorkflowStatusString, _workflow_commands
+from dbos._sys_db import SystemDatabase
 
 
-def test_list_workflow(dbos: DBOS, config: ConfigFile) -> None:
+def test_list_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
     print("Testing list_workflow")
 
     @DBOS.workflow()
@@ -18,16 +19,14 @@ def test_list_workflow(dbos: DBOS, config: ConfigFile) -> None:
     simple_workflow()
     time.sleep(1)  # wait for the workflow to complete
     # get the workflow list
-    output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, None, False, None, None
-    )
+    output = _workflow_commands.list_workflows(sys_db)
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
     assert output[0] != None, "Expected output to be not None"
     if output[0] != None:
         assert output[0].workflowUUID.strip(), "field_name is an empty string"
 
 
-def test_list_workflow_limit(dbos: DBOS, config: ConfigFile) -> None:
+def test_list_workflow_limit(dbos: DBOS, sys_db: SystemDatabase) -> None:
     print("Testing list_workflow")
 
     @DBOS.workflow()
@@ -41,13 +40,11 @@ def test_list_workflow_limit(dbos: DBOS, config: ConfigFile) -> None:
     simple_workflow()
     time.sleep(1)  # wait for the workflow to complete
     # get the workflow list
-    output = _workflow_commands.list_workflows(
-        config, 2, None, None, None, None, False, None, None
-    )
+    output = _workflow_commands.list_workflows(sys_db, limit=2)
     assert len(output) == 2, f"Expected list length to be 1, but got {len(output)}"
 
 
-def test_list_workflow_status_name(dbos: DBOS, config: ConfigFile) -> None:
+def test_list_workflow_status_name(dbos: DBOS, sys_db: SystemDatabase) -> None:
     print("Testing list_workflow")
 
     @DBOS.workflow()
@@ -59,28 +56,26 @@ def test_list_workflow_status_name(dbos: DBOS, config: ConfigFile) -> None:
     simple_workflow()
     time.sleep(1)  # wait for the workflow to complete
     # get the workflow list
-    output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, "PENDING", False, None, None
-    )
+    output = _workflow_commands.list_workflows(sys_db, status="PENDING")
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
     output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, "SUCCESS", False, None, None
+        sys_db, 10, None, None, None, "SUCCESS", False, None, None
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
     output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, None, False, None, "no"
+        sys_db, 10, None, None, None, None, False, None, "no"
     )
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
     output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, None, False, None, simple_workflow.__qualname__
+        sys_db, 10, None, None, None, None, False, None, simple_workflow.__qualname__
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
 
-def test_list_workflow_start_end_times(dbos: DBOS, config: ConfigFile) -> None:
+def test_list_workflow_start_end_times(dbos: DBOS, sys_db: SystemDatabase) -> None:
     print("Testing list_workflow")
 
     @DBOS.workflow()
@@ -100,7 +95,7 @@ def test_list_workflow_start_end_times(dbos: DBOS, config: ConfigFile) -> None:
     print(endtime)
 
     output = _workflow_commands.list_workflows(
-        config, 10, None, starttime, endtime, None, False, None, None
+        sys_db, 10, None, starttime, endtime, None, False, None, None
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
@@ -108,12 +103,12 @@ def test_list_workflow_start_end_times(dbos: DBOS, config: ConfigFile) -> None:
     newendtime = starttime
 
     output = _workflow_commands.list_workflows(
-        config, 10, None, newstarttime, newendtime, None, False, None, None
+        sys_db, 10, None, newstarttime, newendtime, None, False, None, None
     )
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
 
-def test_list_workflow_end_times_positive(dbos: DBOS, config: ConfigFile) -> None:
+def test_list_workflow_end_times_positive(dbos: DBOS, sys_db: SystemDatabase) -> None:
     print("Testing list_workflow")
 
     @DBOS.workflow()
@@ -139,24 +134,24 @@ def test_list_workflow_end_times_positive(dbos: DBOS, config: ConfigFile) -> Non
     time_3 = datetime.now().isoformat()
 
     output = _workflow_commands.list_workflows(
-        config, 10, None, time_0, time_1, None, False, None, None
+        sys_db, 10, None, time_0, time_1, None, False, None, None
     )
 
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
     output = _workflow_commands.list_workflows(
-        config, 10, None, time_1, time_2, None, False, None, None
+        sys_db, 10, None, time_1, time_2, None, False, None, None
     )
 
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
     output = _workflow_commands.list_workflows(
-        config, 10, None, time_1, time_3, None, False, None, None
+        sys_db, 10, None, time_1, time_3, None, False, None, None
     )
     assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
 
 
-def test_get_workflow(dbos: DBOS, config: ConfigFile) -> None:
+def test_get_workflow(dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase) -> None:
     print("Testing get_workflow")
 
     @DBOS.workflow()
@@ -169,7 +164,7 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile) -> None:
     time.sleep(1)  # wait for the workflow to complete
     # get the workflow list
     output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, None, False, None, None
+        sys_db, 10, None, None, None, None, False, None, None
     )
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 

@@ -4,6 +4,7 @@ import typer
 
 from . import _serialization
 from ._dbos_config import ConfigFile
+from ._logger import dbos_logger
 from ._sys_db import (
     GetQueuedWorkflowsInput,
     GetWorkflowsInput,
@@ -19,48 +20,48 @@ class WorkflowInformation:
     workflowName: str
     workflowClassName: Optional[str]
     workflowConfigName: Optional[str]
-    input: Optional[_serialization.WorkflowInputs]  # JSON (jsonpickle)
-    output: Optional[str] = None  # JSON (jsonpickle)
-    error: Optional[str] = None  # JSON (jsonpickle)
-    executor_id: Optional[str]
-    app_version: Optional[str]
-    app_id: Optional[str]
-    request: Optional[str]  # JSON (jsonpickle)
-    recovery_attempts: Optional[int]
     authenticated_user: Optional[str]
     assumed_role: Optional[str]
     authenticated_roles: Optional[str]  # JSON list of roles.
+    input: Optional[_serialization.WorkflowInputs]  # JSON (jsonpickle)
+    output: Optional[str] = None  # JSON (jsonpickle)
+    request: Optional[str]  # JSON (jsonpickle)
+    error: Optional[str] = None  # JSON (jsonpickle)
+    created_at: Optional[str]  # Unix epoch timestamp in ms
+    updated_at: Optional[str]  # Unix epoch timestamp in ms
     queue_name: Optional[str]
+    executor_id: Optional[str]
+    app_version: Optional[str]
+    app_id: Optional[str]
+    recovery_attempts: Optional[int]
 
 
 def list_workflows(
-    config: ConfigFile,
-    limit: int,
-    user: Optional[str],
-    starttime: Optional[str],
-    endtime: Optional[str],
-    status: Optional[str],
-    request: bool,
-    appversion: Optional[str],
-    name: Optional[str],
+    sys_db: SystemDatabase,
+    limit: Optional[int] = None,
+    user: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    status: Optional[str] = None,
+    request: bool = False,
+    app_version: Optional[str] = None,
+    name: Optional[str] = None,
 ) -> List[WorkflowInformation]:
     try:
-        sys_db = SystemDatabase(config)
-
         input = GetWorkflowsInput()
         input.authenticated_user = user
-        input.start_time = starttime
-        input.end_time = endtime
+        input.start_time = start_time
+        input.end_time = end_time
         if status is not None:
             input.status = cast(WorkflowStatuses, status)
-        input.application_version = appversion
+        input.application_version = app_version
         input.limit = limit
         input.name = name
 
         output: GetWorkflowsOutput = sys_db.get_workflows(input)
         infos: List[WorkflowInformation] = []
         for workflow_id in output.workflow_uuids:
-            info = _get_workflow_info(
+            info = get_workflow_info(
                 sys_db, workflow_id, request
             )  # Call the method for each ID
             if info is not None:
@@ -68,11 +69,8 @@ def list_workflows(
 
         return infos
     except Exception as e:
-        typer.echo(f"Error listing workflows: {e}")
+        dbos_logger.error(f"Error listing workflows: {e}")
         return []
-    finally:
-        if sys_db:
-            sys_db.destroy()
 
 
 def list_queued_workflows(
@@ -98,7 +96,7 @@ def list_queued_workflows(
         output: GetWorkflowsOutput = sys_db.get_queued_workflows(input)
         infos: List[WorkflowInformation] = []
         for workflow_id in output.workflow_uuids:
-            info = _get_workflow_info(
+            info = get_workflow_info(
                 sys_db, workflow_id, request
             )  # Call the method for each ID
             if info is not None:
@@ -117,7 +115,7 @@ def get_workflow(
 ) -> Optional[WorkflowInformation]:
     try:
         sys_db = SystemDatabase(config)
-        info = _get_workflow_info(sys_db, uuid, request)
+        info = get_workflow_info(sys_db, uuid, request)
         return info
     except Exception as e:
         typer.echo(f"Error getting workflow: {e}")
@@ -127,7 +125,7 @@ def get_workflow(
             sys_db.destroy()
 
 
-def _get_workflow_info(
+def get_workflow_info(
     sys_db: SystemDatabase, workflowUUID: str, getRequest: bool
 ) -> Optional[WorkflowInformation]:
 
