@@ -192,9 +192,7 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase) ->
         assert info.workflowUUID == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
 
 
-def test_queued_workflows(
-    dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase
-) -> None:
+def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
     queued_steps = 5
     step_events = [threading.Event() for _ in range(queued_steps)]
     event = threading.Event()
@@ -220,7 +218,7 @@ def test_queued_workflows(
         e.wait()
 
     # Verify all blocking steps are enqueued and have the right data
-    workflows = _workflow_commands.list_queued_workflows(config)
+    workflows = _workflow_commands.list_queued_workflows(sys_db)
     assert len(workflows) == queued_steps
     for i, workflow in enumerate(workflows):
         assert workflow.status == WorkflowStatusString.PENDING.value
@@ -257,45 +255,45 @@ def test_queued_workflows(
 
     # Test every filter
     workflows = _workflow_commands.list_queued_workflows(
-        config, status=WorkflowStatusString.PENDING.value
+        sys_db, status=WorkflowStatusString.PENDING.value
     )
     assert len(workflows) == queued_steps
     workflows = _workflow_commands.list_queued_workflows(
-        config, status=WorkflowStatusString.ENQUEUED.value
+        sys_db, status=WorkflowStatusString.ENQUEUED.value
     )
     assert len(workflows) == 0
-    workflows = _workflow_commands.list_queued_workflows(config, queue_name=queue.name)
+    workflows = _workflow_commands.list_queued_workflows(sys_db, queue_name=queue.name)
     assert len(workflows) == queued_steps
-    workflows = _workflow_commands.list_queued_workflows(config, queue_name="no")
+    workflows = _workflow_commands.list_queued_workflows(sys_db, queue_name="no")
     assert len(workflows) == 0
     workflows = _workflow_commands.list_queued_workflows(
-        config, name=f"<temp>.{blocking_step.__qualname__}"
+        sys_db, name=f"<temp>.{blocking_step.__qualname__}"
     )
     assert len(workflows) == queued_steps
-    workflows = _workflow_commands.list_queued_workflows(config, name="no")
+    workflows = _workflow_commands.list_queued_workflows(sys_db, name="no")
     assert len(workflows) == 0
     now = datetime.now(timezone.utc)
     start_time = (now - timedelta(seconds=10)).isoformat()
     end_time = (now + timedelta(seconds=10)).isoformat()
     workflows = _workflow_commands.list_queued_workflows(
-        config, start_time=start_time, end_time=end_time
+        sys_db, start_time=start_time, end_time=end_time
     )
     assert len(workflows) == queued_steps
     workflows = _workflow_commands.list_queued_workflows(
-        config, start_time=now.isoformat(), end_time=end_time
+        sys_db, start_time=now.isoformat(), end_time=end_time
     )
     assert len(workflows) == 0
-    workflows = _workflow_commands.list_queued_workflows(config, limit=2)
+    workflows = _workflow_commands.list_queued_workflows(sys_db, limit=2)
     assert len(workflows) == 2
-    workflows = _workflow_commands.list_queued_workflows(config, limit=2, offset=2)
+    workflows = _workflow_commands.list_queued_workflows(sys_db, limit=2, offset=2)
     assert len(workflows) == 2
     workflows = _workflow_commands.list_queued_workflows(
-        config, offset=queued_steps - 1
+        sys_db, offset=queued_steps - 1
     )
     assert len(workflows) == 1
 
     # Confirm the workflow finishes and nothing is enqueued afterwards
     event.set()
     assert handle.get_result() == [0, 1, 2, 3, 4]
-    workflows = _workflow_commands.list_queued_workflows(config)
+    workflows = _workflow_commands.list_queued_workflows(sys_db)
     assert len(workflows) == 0

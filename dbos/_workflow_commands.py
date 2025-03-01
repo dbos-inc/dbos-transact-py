@@ -79,7 +79,7 @@ def list_workflows(
 
 
 def list_queued_workflows(
-    config: ConfigFile,
+    sys_db: SystemDatabase,
     *,
     limit: Optional[int] = None,
     start_time: Optional[str] = None,
@@ -91,7 +91,6 @@ def list_queued_workflows(
     offset: Optional[int] = None,
 ) -> List[WorkflowInformation]:
     try:
-        sys_db = SystemDatabase(config)
         input: GetQueuedWorkflowsInput = {
             "queue_name": queue_name,
             "start_time": start_time,
@@ -111,11 +110,8 @@ def list_queued_workflows(
                 infos.append(info)
         return infos
     except Exception as e:
-        typer.echo(f"Error listing workflows: {e}")
+        dbos_logger.error(f"Error listing queued workflows: {e}")
         return []
-    finally:
-        if sys_db:
-            sys_db.destroy()
 
 
 def get_workflow(

@@ -435,8 +435,9 @@ def list_queue(
     ] = True,
 ) -> None:
     config = load_config(silent=True)
+    sys_db = SystemDatabase(config)
     workflows = list_queued_workflows(
-        config=config,
+        sys_db=sys_db,
         limit=limit,
         start_time=start_time,
         end_time=end_time,
