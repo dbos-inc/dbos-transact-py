@@ -2,7 +2,7 @@
 Initialize application database.
 
 Revision ID: c6b516e182b2
-Revises: 
+Revises:
 Create Date: 2024-07-31 18:06:42.500040
 """
 

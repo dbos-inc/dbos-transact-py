@@ -2,7 +2,7 @@
 Add system tables.
 
 Revision ID: 5c361fc04708
-Revises: 
+Revises:
 Create Date: 2024-07-21 13:06:13.724602
 # mypy: allow-untyped-defs, allow-untyped-calls
 """
