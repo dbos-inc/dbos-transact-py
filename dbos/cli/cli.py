@@ -290,7 +290,15 @@ def list(
     config = load_config(silent=True)
     sys_db = SystemDatabase(config)
     workflows = list_workflows(
-        sys_db, limit, user, starttime, endtime, status, request, appversion, name
+        sys_db,
+        limit=limit,
+        user=user,
+        start_time=starttime,
+        end_time=endtime,
+        status=status,
+        request=request,
+        app_version=appversion,
+        name=name,
     )
     print(jsonpickle.encode(workflows, unpicklable=False))
 

@@ -106,19 +106,12 @@ class GetWorkflowsInput:
     Structure for argument to `get_workflows` function.
 
     This specifies the search criteria for workflow retrieval by `get_workflows`.
-
-    Attributes:
-       name(str):  The name of the workflow function
-       authenticated_user(str):  The name of the user who invoked the function
-       start_time(str): Beginning of search range for time of invocation, in ISO 8601 format
-       end_time(str): End of search range for time of invocation, in ISO 8601 format
-       status(str): Current status of the workflow invocation (see `WorkflowStatusString`)
-       application_version(str): Application version that invoked the workflow
-       limit(int): Limit on number of returned records
-
     """
 
     def __init__(self) -> None:
+        self.workflow_ids: Optional[List[str]] = (
+            None  # Search only in these workflow IDs
+        )
         self.name: Optional[str] = None  # The name of the workflow function
         self.authenticated_user: Optional[str] = None  # The user who ran the workflow.
         self.start_time: Optional[str] = None  # Timestamp in ISO 8601 format
@@ -129,6 +122,9 @@ class GetWorkflowsInput:
         )
         self.limit: Optional[int] = (
             None  # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
+        )
+        self.offset: Optional[int] = (
+            None  # Offset into the matching records from which to return, for pagination
         )
 
 
@@ -667,14 +663,20 @@ class SystemDatabase:
                 SystemSchema.workflow_status.c.application_version
                 == input.application_version
             )
+        if input.workflow_ids:
+            query = query.where(
+                SystemSchema.workflow_status.c.workflow_uuid.in_(input.workflow_ids)
+            )
         if input.limit:
             query = query.limit(input.limit)
+        if input.offset:
+            query = query.offset(input.offset)
 
         with self.engine.begin() as c:
             rows = c.execute(query)
-        workflow_uuids = [row[0] for row in rows]
+        workflow_ids = [row[0] for row in rows]
 
-        return GetWorkflowsOutput(workflow_uuids)
+        return GetWorkflowsOutput(workflow_ids)
 
     def get_queued_workflows(
         self, input: GetQueuedWorkflowsInput

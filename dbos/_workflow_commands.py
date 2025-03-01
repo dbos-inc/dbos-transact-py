@@ -38,7 +38,7 @@ class WorkflowInformation:
 
 def list_workflows(
     sys_db: SystemDatabase,
-    limit: Optional[int] = None,
+    workflow_ids: Optional[List[str]] = None,
     user: Optional[str] = None,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
@@ -46,9 +46,12 @@ def list_workflows(
     request: bool = False,
     app_version: Optional[str] = None,
     name: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
 ) -> List[WorkflowInformation]:
     try:
         input = GetWorkflowsInput()
+        input.workflow_ids = workflow_ids
         input.authenticated_user = user
         input.start_time = start_time
         input.end_time = end_time
@@ -57,6 +60,7 @@ def list_workflows(
         input.application_version = app_version
         input.limit = limit
         input.name = name
+        input.offset = offset
 
         output: GetWorkflowsOutput = sys_db.get_workflows(input)
         infos: List[WorkflowInformation] = []

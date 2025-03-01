@@ -47,20 +47,59 @@ def test_list_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert output.app_id == ""
     assert output.recovery_attempts == 1
 
+    # Test searching by status
+    outputs = _workflow_commands.list_workflows(sys_db, status="PENDING")
+    assert len(outputs) == 0
+    outputs = _workflow_commands.list_workflows(sys_db, status="SUCCESS")
+    assert len(outputs) == 1
+
+    # Test searching by workflow name
+    outputs = _workflow_commands.list_workflows(sys_db, name="no")
+    assert len(outputs) == 0
+    outputs = _workflow_commands.list_workflows(
+        sys_db, name=simple_workflow.__qualname__
+    )
+    assert len(outputs) == 1
+
+    # Test searching by workflow ID
+    outputs = _workflow_commands.list_workflows(sys_db, workflow_ids=["no"])
+    assert len(outputs) == 0
+    outputs = _workflow_commands.list_workflows(sys_db, workflow_ids=[wfid, "no"])
+    assert len(outputs) == 1
+
+    # Test searching by application version
+    outputs = _workflow_commands.list_workflows(sys_db, app_version="no")
+    assert len(outputs) == 0
+    outputs = _workflow_commands.list_workflows(
+        sys_db, app_version=GlobalParams.app_version
+    )
+    assert len(outputs) == 1
+
 
 def test_list_workflow_limit(dbos: DBOS, sys_db: SystemDatabase) -> None:
     @DBOS.workflow()
     def simple_workflow() -> None:
-        print("Executed Simple workflow")
         return
 
-    # run the workflow
-    simple_workflow()
-    simple_workflow()
-    simple_workflow()
-    # get the workflow list
-    output = _workflow_commands.list_workflows(sys_db, limit=2)
-    assert len(output) == 2, f"Expected list length to be 1, but got {len(output)}"
+    num_workflows = 5
+    for i in range(num_workflows):
+        with SetWorkflowID(str(i)):
+            simple_workflow()
+
+    outputs = _workflow_commands.list_workflows(sys_db)
+    assert len(outputs) == num_workflows
+    outputs = _workflow_commands.list_workflows(sys_db, limit=2)
+    assert len(outputs) == 2
+    for i, output in enumerate(outputs):
+        assert output.workflowUUID == str(i)
+    outputs = _workflow_commands.list_workflows(sys_db, limit=2, offset=2)
+    assert len(outputs) == 2
+    for i, output in enumerate(outputs):
+        assert output.workflowUUID == str(i + 2)
+    outputs = _workflow_commands.list_workflows(sys_db, offset=4)
+    assert len(outputs) == 1
+    for i, output in enumerate(outputs):
+        assert output.workflowUUID == str(i + 4)
 
 
 def test_list_workflow_status_name(dbos: DBOS, sys_db: SystemDatabase) -> None:
@@ -129,7 +168,7 @@ def test_list_workflow_end_times_positive(dbos: DBOS, sys_db: SystemDatabase) ->
     time_3 = datetime.now().isoformat()
 
     output = _workflow_commands.list_workflows(
-        sys_db, 10, start_time=time_0, end_time=time_1
+        sys_db, start_time=time_0, end_time=time_1
     )
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
