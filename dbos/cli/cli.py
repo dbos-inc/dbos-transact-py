@@ -305,14 +305,17 @@ def list(
 
 @workflow.command(help="Retrieve the status of a workflow")
 def get(
-    uuid: Annotated[str, typer.Argument()],
+    workflow_id: Annotated[str, typer.Argument()],
     request: Annotated[
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
-    ] = True,
+    ] = False,
 ) -> None:
     config = load_config(silent=True)
-    print(jsonpickle.encode(get_workflow(config, uuid, request), unpicklable=False))
+    sys_db = SystemDatabase(config)
+    print(
+        jsonpickle.encode(get_workflow(sys_db, workflow_id, request), unpicklable=False)
+    )
 
 
 @workflow.command(

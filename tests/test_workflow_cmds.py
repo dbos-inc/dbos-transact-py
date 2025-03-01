@@ -185,7 +185,7 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase) ->
 
     wfUuid = output[0].workflow_id
 
-    info = _workflow_commands.get_workflow(config, wfUuid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfUuid, True)
     assert info is not None, "Expected output to be not None"
 
     if info is not None:

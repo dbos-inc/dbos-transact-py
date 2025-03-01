@@ -65,9 +65,7 @@ def list_workflows(
     output: GetWorkflowsOutput = sys_db.get_workflows(input)
     infos: List[WorkflowInformation] = []
     for workflow_id in output.workflow_uuids:
-        info = get_workflow_info(
-            sys_db, workflow_id, request
-        )  # Call the method for each ID
+        info = get_workflow(sys_db, workflow_id, request)  # Call the method for each ID
         if info is not None:
             infos.append(info)
     return infos
@@ -97,30 +95,13 @@ def list_queued_workflows(
     output: GetWorkflowsOutput = sys_db.get_queued_workflows(input)
     infos: List[WorkflowInformation] = []
     for workflow_id in output.workflow_uuids:
-        info = get_workflow_info(
-            sys_db, workflow_id, request
-        )  # Call the method for each ID
+        info = get_workflow(sys_db, workflow_id, request)  # Call the method for each ID
         if info is not None:
             infos.append(info)
     return infos
 
 
 def get_workflow(
-    config: ConfigFile, uuid: str, request: bool
-) -> Optional[WorkflowInformation]:
-    try:
-        sys_db = SystemDatabase(config)
-        info = get_workflow_info(sys_db, uuid, request)
-        return info
-    except Exception as e:
-        typer.echo(f"Error getting workflow: {e}")
-        return None
-    finally:
-        if sys_db:
-            sys_db.destroy()
-
-
-def get_workflow_info(
     sys_db: SystemDatabase, workflowUUID: str, getRequest: bool
 ) -> Optional[WorkflowInformation]:
 
