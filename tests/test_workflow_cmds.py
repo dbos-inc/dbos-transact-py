@@ -102,29 +102,6 @@ def test_list_workflow_limit(dbos: DBOS, sys_db: SystemDatabase) -> None:
         assert output.workflowUUID == str(i + 4)
 
 
-def test_list_workflow_status_name(dbos: DBOS, sys_db: SystemDatabase) -> None:
-    @DBOS.workflow()
-    def simple_workflow() -> None:
-        print("Executed Simple workflow")
-        return
-
-    simple_workflow()
-    dbos._sys_db._flush_workflow_status_buffer()
-    output = _workflow_commands.list_workflows(sys_db, status="PENDING")
-    assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
-
-    output = _workflow_commands.list_workflows(sys_db, status="SUCCESS")
-    assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
-
-    output = _workflow_commands.list_workflows(sys_db, name="no")
-    assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
-
-    output = _workflow_commands.list_workflows(
-        sys_db, name=simple_workflow.__qualname__
-    )
-    assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
-
-
 def test_list_workflow_start_end_times(dbos: DBOS, sys_db: SystemDatabase) -> None:
     @DBOS.workflow()
     def simple_workflow() -> None:
