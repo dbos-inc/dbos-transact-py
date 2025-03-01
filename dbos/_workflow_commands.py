@@ -50,32 +50,27 @@ def list_workflows(
     limit: Optional[int] = None,
     offset: Optional[int] = None,
 ) -> List[WorkflowInformation]:
-    try:
-        input = GetWorkflowsInput()
-        input.workflow_ids = workflow_ids
-        input.authenticated_user = user
-        input.start_time = start_time
-        input.end_time = end_time
-        if status is not None:
-            input.status = cast(WorkflowStatuses, status)
-        input.application_version = app_version
-        input.limit = limit
-        input.name = name
-        input.offset = offset
+    input = GetWorkflowsInput()
+    input.workflow_ids = workflow_ids
+    input.authenticated_user = user
+    input.start_time = start_time
+    input.end_time = end_time
+    if status is not None:
+        input.status = cast(WorkflowStatuses, status)
+    input.application_version = app_version
+    input.limit = limit
+    input.name = name
+    input.offset = offset
 
-        output: GetWorkflowsOutput = sys_db.get_workflows(input)
-        infos: List[WorkflowInformation] = []
-        for workflow_id in output.workflow_uuids:
-            info = get_workflow_info(
-                sys_db, workflow_id, request
-            )  # Call the method for each ID
-            if info is not None:
-                infos.append(info)
-
-        return infos
-    except Exception as e:
-        dbos_logger.error(f"Error listing workflows: {e}")
-        return []
+    output: GetWorkflowsOutput = sys_db.get_workflows(input)
+    infos: List[WorkflowInformation] = []
+    for workflow_id in output.workflow_uuids:
+        info = get_workflow_info(
+            sys_db, workflow_id, request
+        )  # Call the method for each ID
+        if info is not None:
+            infos.append(info)
+    return infos
 
 
 def list_queued_workflows(
@@ -90,28 +85,24 @@ def list_queued_workflows(
     request: bool = False,
     offset: Optional[int] = None,
 ) -> List[WorkflowInformation]:
-    try:
-        input: GetQueuedWorkflowsInput = {
-            "queue_name": queue_name,
-            "start_time": start_time,
-            "end_time": end_time,
-            "status": status,
-            "limit": limit,
-            "name": name,
-            "offset": offset,
-        }
-        output: GetWorkflowsOutput = sys_db.get_queued_workflows(input)
-        infos: List[WorkflowInformation] = []
-        for workflow_id in output.workflow_uuids:
-            info = get_workflow_info(
-                sys_db, workflow_id, request
-            )  # Call the method for each ID
-            if info is not None:
-                infos.append(info)
-        return infos
-    except Exception as e:
-        dbos_logger.error(f"Error listing queued workflows: {e}")
-        return []
+    input: GetQueuedWorkflowsInput = {
+        "queue_name": queue_name,
+        "start_time": start_time,
+        "end_time": end_time,
+        "status": status,
+        "limit": limit,
+        "name": name,
+        "offset": offset,
+    }
+    output: GetWorkflowsOutput = sys_db.get_queued_workflows(input)
+    infos: List[WorkflowInformation] = []
+    for workflow_id in output.workflow_uuids:
+        info = get_workflow_info(
+            sys_db, workflow_id, request
+        )  # Call the method for each ID
+        if info is not None:
+            infos.append(info)
+    return infos
 
 
 def get_workflow(
