@@ -169,7 +169,9 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase) ->
         assert info.workflowUUID == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
 
 
-def test_queued_workflows(dbos: DBOS, config: ConfigFile) -> None:
+def test_queued_workflows(
+    dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase
+) -> None:
     queued_steps = 5
     step_events = [threading.Event() for _ in range(queued_steps)]
     event = threading.Event()
@@ -206,6 +208,29 @@ def test_queued_workflows(dbos: DBOS, config: ConfigFile) -> None:
         assert workflow.output is None
         assert workflow.error is None
         assert "blocking_step" in workflow.workflowName
+        assert workflow.executor_id == GlobalParams.executor_id
+        assert workflow.app_version == GlobalParams.app_version
+        assert workflow.created_at is not None and workflow.created_at > 0
+        assert workflow.updated_at is not None and workflow.updated_at > 0
+        assert workflow.recovery_attempts == 1
+
+    # Verify list_workflows also properly lists the blocking steps
+    workflows = _workflow_commands.list_workflows(sys_db)
+    assert len(workflows) == queued_steps + 1
+    for i, workflow in enumerate(workflows[1:]):
+        assert workflow.status == WorkflowStatusString.PENDING.value
+        assert workflow.queue_name == queue.name
+        assert workflow.input is not None
+        # Verify oldest queue entries appear first
+        assert workflow.input["args"][0] == i
+        assert workflow.output is None
+        assert workflow.error is None
+        assert "blocking_step" in workflow.workflowName
+        assert workflow.executor_id == GlobalParams.executor_id
+        assert workflow.app_version == GlobalParams.app_version
+        assert workflow.created_at is not None and workflow.created_at > 0
+        assert workflow.updated_at is not None and workflow.updated_at > 0
+        assert workflow.recovery_attempts == 1
 
     # Test every filter
     workflows = _workflow_commands.list_queued_workflows(
