@@ -124,16 +124,17 @@ class GetWorkflowsInput:
             None  # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
         )
         self.offset: Optional[int] = (
-            None  # Offset into the matching records from which to return, for pagination
+            None  # Offset into the matching records for pagination
         )
 
 
 class GetQueuedWorkflowsInput(TypedDict):
-    queue_name: Optional[str]
-    status: Optional[str]
+    queue_name: Optional[str]  # Get workflows belonging to this queue
+    status: Optional[str]  # Get workflows with this status
     start_time: Optional[str]  # Timestamp in ISO 8601 format
     end_time: Optional[str]  # Timestamp in ISO 8601 format
     limit: Optional[int]  # Return up to this many workflows IDs.
+    offset: Optional[int]  # Offset into the matching records for pagination
     name: Optional[str]  # The name of the workflow function
 
 
@@ -717,6 +718,8 @@ class SystemDatabase:
             )
         if input.get("limit"):
             query = query.limit(input["limit"])
+        if input.get("offset"):
+            query = query.offset(input["offset"])
 
         with self.engine.begin() as c:
             rows = c.execute(query)

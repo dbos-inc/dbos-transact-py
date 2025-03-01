@@ -38,6 +38,7 @@ class WorkflowInformation:
 
 def list_workflows(
     sys_db: SystemDatabase,
+    *,
     workflow_ids: Optional[List[str]] = None,
     user: Optional[str] = None,
     start_time: Optional[str] = None,
@@ -79,6 +80,7 @@ def list_workflows(
 
 def list_queued_workflows(
     config: ConfigFile,
+    *,
     limit: Optional[int] = None,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
@@ -86,6 +88,7 @@ def list_queued_workflows(
     status: Optional[str] = None,
     name: Optional[str] = None,
     request: bool = False,
+    offset: Optional[int] = None,
 ) -> List[WorkflowInformation]:
     try:
         sys_db = SystemDatabase(config)
@@ -96,6 +99,7 @@ def list_queued_workflows(
             "status": status,
             "limit": limit,
             "name": name,
+            "offset": offset,
         }
         output: GetWorkflowsOutput = sys_db.get_queued_workflows(input)
         infos: List[WorkflowInformation] = []

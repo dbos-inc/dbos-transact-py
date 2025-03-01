@@ -285,6 +285,14 @@ def test_queued_workflows(
         config, start_time=now.isoformat(), end_time=end_time
     )
     assert len(workflows) == 0
+    workflows = _workflow_commands.list_queued_workflows(config, limit=2)
+    assert len(workflows) == 2
+    workflows = _workflow_commands.list_queued_workflows(config, limit=2, offset=2)
+    assert len(workflows) == 2
+    workflows = _workflow_commands.list_queued_workflows(
+        config, offset=queued_steps - 1
+    )
+    assert len(workflows) == 1
 
     # Confirm the workflow finishes and nothing is enqueued afterwards
     event.set()
