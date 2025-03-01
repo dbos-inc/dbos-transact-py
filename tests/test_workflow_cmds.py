@@ -86,17 +86,24 @@ def test_list_workflow_limit(dbos: DBOS, sys_db: SystemDatabase) -> None:
         with SetWorkflowID(str(i)):
             simple_workflow()
 
+    # Test all workflows appear
     outputs = _workflow_commands.list_workflows(sys_db)
     assert len(outputs) == num_workflows
+
+    # Test LIMIT 2 returns the first two
     outputs = _workflow_commands.list_workflows(sys_db, limit=2)
     assert len(outputs) == 2
     for i, output in enumerate(outputs):
         assert output.workflowUUID == str(i)
+
+    # Test LIMIT 2 OFFSET 2 returns the third and fourth
     outputs = _workflow_commands.list_workflows(sys_db, limit=2, offset=2)
     assert len(outputs) == 2
     for i, output in enumerate(outputs):
         assert output.workflowUUID == str(i + 2)
-    outputs = _workflow_commands.list_workflows(sys_db, offset=4)
+
+    # Test OFFSET 4 returns only the fifth entry
+    outputs = _workflow_commands.list_workflows(sys_db, offset=num_workflows - 1)
     assert len(outputs) == 1
     for i, output in enumerate(outputs):
         assert output.workflowUUID == str(i + 4)
