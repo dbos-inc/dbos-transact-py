@@ -66,6 +66,22 @@ class ConductorWebsocket(threading.Thread):
                             success=success,
                         )
                         self.websocket.send(recovery_response.to_json())
+                    elif type == p.MessageType.CANCEL:
+                        cancel_message = p.CancelRequest.from_json(message)
+                        success = True
+                        try:
+                            self.dbos.cancel_workflow(cancel_message.workflow_id)
+                        except Exception as e:
+                            self.dbos.logger.error(
+                                f"Exception encountered when cancelling workflow {cancel_message.workflow_id}: {traceback.format_exc()}"
+                            )
+                            success = False
+                        cancel_response = p.RecoveryResponse(
+                            type=p.MessageType.CANCEL,
+                            request_id=base_message.request_id,
+                            success=success,
+                        )
+                        self.websocket.send(cancel_response.to_json())
                     else:
                         self.dbos.logger.warning(f"Unexpected message type: {type}")
             except ConnectionClosedOK:

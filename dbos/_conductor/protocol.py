@@ -7,6 +7,7 @@ from typing import List, Type, TypeVar
 class MessageType(str, Enum):
     EXECUTOR_INFO = "executor_info"
     RECOVERY = "recovery"
+    CANCEL = "cancel"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -54,4 +55,14 @@ class RecoveryRequest(BaseMessage):
 
 @dataclass
 class RecoveryResponse(BaseMessage):
+    success: bool
+
+
+@dataclass
+class CancelRequest(BaseMessage):
+    workflow_id: str
+
+
+@dataclass
+class CancelResponse(BaseMessage):
     success: bool
