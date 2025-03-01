@@ -285,7 +285,7 @@ def list(
     request: Annotated[
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
-    ] = True,
+    ] = False,
 ) -> None:
     config = load_config(silent=True)
     sys_db = SystemDatabase(config)
@@ -432,7 +432,7 @@ def list_queue(
     request: Annotated[
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
-    ] = True,
+    ] = False,
 ) -> None:
     config = load_config(silent=True)
     sys_db = SystemDatabase(config)
