@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 import uuid
 
@@ -175,9 +176,11 @@ def test_admin_workflow_resume(
     dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase
 ) -> None:
     counter: int = 0
+    event = threading.Event()
 
     @DBOS.workflow()
     def simple_workflow() -> None:
+        event.set()
         nonlocal counter
         counter += 1
 
@@ -216,10 +219,12 @@ def test_admin_workflow_resume(
         c.execute(query)
 
     # Resume the workflow. Verify that it succeeds again.
+    event.clear()
     response = requests.post(
         f"http://localhost:3001/workflows/{wfUuid}/resume", json=[], timeout=5
     )
     assert response.status_code == 204
+    assert event.wait(timeout=5)
     dbos._sys_db.wait_for_buffer_flush()
     assert counter == 2
     info = _workflow_commands.get_workflow(config, wfUuid, True)
