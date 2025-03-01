@@ -15,11 +15,11 @@ from ._sys_db import (
 
 
 class WorkflowInformation:
-    workflowUUID: str
+    workflow_id: str
     status: WorkflowStatuses
-    workflowName: str
-    workflowClassName: Optional[str]
-    workflowConfigName: Optional[str]
+    workflow_name: str
+    workflow_class_name: Optional[str]
+    workflow_config_name: Optional[str]
     authenticated_user: Optional[str]
     assumed_role: Optional[str]
     authenticated_roles: Optional[str]  # JSON list of roles.
@@ -130,11 +130,11 @@ def get_workflow_info(
 
     winfo = WorkflowInformation()
 
-    winfo.workflowUUID = workflowUUID
+    winfo.workflow_id = workflowUUID
     winfo.status = info["status"]
-    winfo.workflowName = info["name"]
-    winfo.workflowClassName = info["class_name"]
-    winfo.workflowConfigName = info["config_name"]
+    winfo.workflow_name = info["name"]
+    winfo.workflow_class_name = info["class_name"]
+    winfo.workflow_config_name = info["config_name"]
     winfo.authenticated_user = info["authenticated_user"]
     winfo.assumed_role = info["assumed_role"]
     winfo.authenticated_roles = info["authenticated_roles"]

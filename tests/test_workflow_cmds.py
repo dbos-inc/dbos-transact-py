@@ -30,11 +30,11 @@ def test_list_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
     outputs = _workflow_commands.list_workflows(sys_db)
     assert len(outputs) == 1
     output = outputs[0]
-    assert output.workflowUUID == wfid
+    assert output.workflow_id == wfid
     assert output.status == "SUCCESS"
-    assert output.workflowName == simple_workflow.__qualname__
-    assert output.workflowClassName == None
-    assert output.workflowConfigName == None
+    assert output.workflow_name == simple_workflow.__qualname__
+    assert output.workflow_class_name == None
+    assert output.workflow_config_name == None
     assert output.authenticated_user == None
     assert output.assumed_role == None
     assert output.authenticated_roles == None
@@ -94,19 +94,19 @@ def test_list_workflow_limit(dbos: DBOS, sys_db: SystemDatabase) -> None:
     outputs = _workflow_commands.list_workflows(sys_db, limit=2)
     assert len(outputs) == 2
     for i, output in enumerate(outputs):
-        assert output.workflowUUID == str(i)
+        assert output.workflow_id == str(i)
 
     # Test LIMIT 2 OFFSET 2 returns the third and fourth
     outputs = _workflow_commands.list_workflows(sys_db, limit=2, offset=2)
     assert len(outputs) == 2
     for i, output in enumerate(outputs):
-        assert output.workflowUUID == str(i + 2)
+        assert output.workflow_id == str(i + 2)
 
     # Test OFFSET 4 returns only the fifth entry
     outputs = _workflow_commands.list_workflows(sys_db, offset=num_workflows - 1)
     assert len(outputs) == 1
     for i, output in enumerate(outputs):
-        assert output.workflowUUID == str(i + 4)
+        assert output.workflow_id == str(i + 4)
 
 
 def test_list_workflow_start_end_times(dbos: DBOS, sys_db: SystemDatabase) -> None:
@@ -183,13 +183,13 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase) ->
 
     assert output[0] != None, "Expected output to be not None"
 
-    wfUuid = output[0].workflowUUID
+    wfUuid = output[0].workflow_id
 
     info = _workflow_commands.get_workflow(config, wfUuid, True)
     assert info is not None, "Expected output to be not None"
 
     if info is not None:
-        assert info.workflowUUID == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
+        assert info.workflow_id == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
 
 
 def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
@@ -228,7 +228,7 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
         assert workflow.input["args"][0] == i
         assert workflow.output is None
         assert workflow.error is None
-        assert "blocking_step" in workflow.workflowName
+        assert "blocking_step" in workflow.workflow_name
         assert workflow.executor_id == GlobalParams.executor_id
         assert workflow.app_version == GlobalParams.app_version
         assert workflow.created_at is not None and workflow.created_at > 0
@@ -246,7 +246,7 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
         assert workflow.input["args"][0] == i
         assert workflow.output is None
         assert workflow.error is None
-        assert "blocking_step" in workflow.workflowName
+        assert "blocking_step" in workflow.workflow_name
         assert workflow.executor_id == GlobalParams.executor_id
         assert workflow.app_version == GlobalParams.app_version
         assert workflow.created_at is not None and workflow.created_at > 0

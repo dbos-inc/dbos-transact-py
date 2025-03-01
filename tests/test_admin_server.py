@@ -193,7 +193,7 @@ def test_admin_workflow_resume(
     output = _workflow_commands.list_workflows(sys_db)
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
     assert output[0] != None, "Expected output to be not None"
-    wfUuid = output[0].workflowUUID
+    wfUuid = output[0].workflow_id
     info = _workflow_commands.get_workflow(config, wfUuid, True)
     assert info is not None, "Expected output to be not None"
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
@@ -263,7 +263,7 @@ def test_admin_workflow_restart(
 
     assert output[0] != None, "Expected output to be not None"
 
-    wfUuid = output[0].workflowUUID
+    wfUuid = output[0].workflow_id
 
     info = _workflow_commands.get_workflow(config, wfUuid, True)
     assert info is not None, "Expected output to be not None"
@@ -297,10 +297,10 @@ def test_admin_workflow_restart(
     output = _workflow_commands.list_workflows(sys_db)
     assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
 
-    if output[0].workflowUUID == wfUuid:
-        new_wfUuid = output[1].workflowUUID
+    if output[0].workflow_id == wfUuid:
+        new_wfUuid = output[1].workflow_id
     else:
-        new_wfUuid = output[0].workflowUUID
+        new_wfUuid = output[0].workflow_id
 
     info = _workflow_commands.get_workflow(config, new_wfUuid, True)
     if info is not None:
