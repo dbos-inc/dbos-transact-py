@@ -154,6 +154,8 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
             "authenticated_roles": None,
             "assumed_role": None,
             "queue_name": None,
+            "created_at": None,
+            "updated_at": None,
         }
     )
 

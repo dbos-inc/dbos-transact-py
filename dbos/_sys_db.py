@@ -68,17 +68,19 @@ class WorkflowStatusInternal(TypedDict):
     name: str
     class_name: Optional[str]
     config_name: Optional[str]
+    authenticated_user: Optional[str]
+    assumed_role: Optional[str]
+    authenticated_roles: Optional[str]  # JSON list of roles
     output: Optional[str]  # JSON (jsonpickle)
+    request: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
+    created_at: Optional[int]  # Unix epoch timestamp in ms
+    updated_at: Optional[int]  # Unix epoch timestamp in ms
+    queue_name: Optional[str]
     executor_id: Optional[str]
     app_version: Optional[str]
     app_id: Optional[str]
-    request: Optional[str]  # JSON (jsonpickle)
     recovery_attempts: Optional[int]
-    authenticated_user: Optional[str]
-    assumed_role: Optional[str]
-    authenticated_roles: Optional[str]  # JSON list of roles.
-    queue_name: Optional[str]
 
 
 class RecordedResult(TypedDict):
@@ -104,19 +106,12 @@ class GetWorkflowsInput:
     Structure for argument to `get_workflows` function.
 
     This specifies the search criteria for workflow retrieval by `get_workflows`.
-
-    Attributes:
-       name(str):  The name of the workflow function
-       authenticated_user(str):  The name of the user who invoked the function
-       start_time(str): Beginning of search range for time of invocation, in ISO 8601 format
-       end_time(str): End of search range for time of invocation, in ISO 8601 format
-       status(str): Current status of the workflow invocation (see `WorkflowStatusString`)
-       application_version(str): Application version that invoked the workflow
-       limit(int): Limit on number of returned records
-
     """
 
     def __init__(self) -> None:
+        self.workflow_ids: Optional[List[str]] = (
+            None  # Search only in these workflow IDs
+        )
         self.name: Optional[str] = None  # The name of the workflow function
         self.authenticated_user: Optional[str] = None  # The user who ran the workflow.
         self.start_time: Optional[str] = None  # Timestamp in ISO 8601 format
@@ -128,14 +123,18 @@ class GetWorkflowsInput:
         self.limit: Optional[int] = (
             None  # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
         )
+        self.offset: Optional[int] = (
+            None  # Offset into the matching records for pagination
+        )
 
 
 class GetQueuedWorkflowsInput(TypedDict):
-    queue_name: Optional[str]
-    status: Optional[str]
+    queue_name: Optional[str]  # Get workflows belonging to this queue
+    status: Optional[str]  # Get workflows with this status
     start_time: Optional[str]  # Timestamp in ISO 8601 format
     end_time: Optional[str]  # Timestamp in ISO 8601 format
     limit: Optional[int]  # Return up to this many workflows IDs.
+    offset: Optional[int]  # Offset into the matching records for pagination
     name: Optional[str]  # The name of the workflow function
 
 
@@ -489,27 +488,33 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.assumed_role,
                     SystemSchema.workflow_status.c.queue_name,
                     SystemSchema.workflow_status.c.executor_id,
+                    SystemSchema.workflow_status.c.created_at,
+                    SystemSchema.workflow_status.c.updated_at,
+                    SystemSchema.workflow_status.c.application_version,
+                    SystemSchema.workflow_status.c.application_id,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
                 return None
             status: WorkflowStatusInternal = {
                 "workflow_uuid": workflow_uuid,
-                "status": row[0],
-                "name": row[1],
-                "class_name": row[5],
-                "config_name": row[4],
                 "output": None,
                 "error": None,
-                "app_id": None,
-                "app_version": None,
-                "executor_id": row[10],
+                "status": row[0],
+                "name": row[1],
                 "request": row[2],
                 "recovery_attempts": row[3],
+                "config_name": row[4],
+                "class_name": row[5],
                 "authenticated_user": row[6],
                 "authenticated_roles": row[7],
                 "assumed_role": row[8],
                 "queue_name": row[9],
+                "executor_id": row[10],
+                "created_at": row[11],
+                "updated_at": row[12],
+                "app_version": row[13],
+                "app_id": row[14],
             }
             return status
 
@@ -537,47 +542,6 @@ class SystemDatabase:
             }
         )
         return stat
-
-    def get_workflow_status_w_outputs(
-        self, workflow_uuid: str
-    ) -> Optional[WorkflowStatusInternal]:
-        with self.engine.begin() as c:
-            row = c.execute(
-                sa.select(
-                    SystemSchema.workflow_status.c.status,
-                    SystemSchema.workflow_status.c.name,
-                    SystemSchema.workflow_status.c.request,
-                    SystemSchema.workflow_status.c.output,
-                    SystemSchema.workflow_status.c.error,
-                    SystemSchema.workflow_status.c.config_name,
-                    SystemSchema.workflow_status.c.class_name,
-                    SystemSchema.workflow_status.c.authenticated_user,
-                    SystemSchema.workflow_status.c.authenticated_roles,
-                    SystemSchema.workflow_status.c.assumed_role,
-                    SystemSchema.workflow_status.c.queue_name,
-                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
-            ).fetchone()
-            if row is None:
-                return None
-            status: WorkflowStatusInternal = {
-                "workflow_uuid": workflow_uuid,
-                "status": row[0],
-                "name": row[1],
-                "config_name": row[5],
-                "class_name": row[6],
-                "output": row[3],
-                "error": row[4],
-                "app_id": None,
-                "app_version": None,
-                "executor_id": None,
-                "request": row[2],
-                "recovery_attempts": None,
-                "authenticated_user": row[7],
-                "authenticated_roles": row[8],
-                "assumed_role": row[9],
-                "queue_name": row[10],
-            }
-            return status
 
     def await_workflow_result_internal(self, workflow_uuid: str) -> dict[str, Any]:
         polling_interval_secs: float = 1.000
@@ -624,21 +588,6 @@ class SystemDatabase:
         elif status == str(WorkflowStatusString.ERROR.value):
             raise _serialization.deserialize_exception(stat["error"])
         return None
-
-    def get_workflow_info(
-        self, workflow_uuid: str, get_request: bool
-    ) -> Optional[WorkflowInformation]:
-        stat = self.get_workflow_status_w_outputs(workflow_uuid)
-        if stat is None:
-            return None
-        info = cast(WorkflowInformation, stat)
-        input = self.get_workflow_inputs(workflow_uuid)
-        if input is not None:
-            info["input"] = input
-        if not get_request:
-            info.pop("request", None)
-
-        return info
 
     def update_workflow_inputs(
         self, workflow_uuid: str, inputs: str, conn: Optional[sa.Connection] = None
@@ -715,14 +664,20 @@ class SystemDatabase:
                 SystemSchema.workflow_status.c.application_version
                 == input.application_version
             )
+        if input.workflow_ids:
+            query = query.where(
+                SystemSchema.workflow_status.c.workflow_uuid.in_(input.workflow_ids)
+            )
         if input.limit:
             query = query.limit(input.limit)
+        if input.offset:
+            query = query.offset(input.offset)
 
         with self.engine.begin() as c:
             rows = c.execute(query)
-        workflow_uuids = [row[0] for row in rows]
+        workflow_ids = [row[0] for row in rows]
 
-        return GetWorkflowsOutput(workflow_uuids)
+        return GetWorkflowsOutput(workflow_ids)
 
     def get_queued_workflows(
         self, input: GetQueuedWorkflowsInput
@@ -763,6 +718,8 @@ class SystemDatabase:
             )
         if input.get("limit"):
             query = query.limit(input["limit"])
+        if input.get("offset"):
+            query = query.offset(input["offset"])
 
         with self.engine.begin() as c:
             rows = c.execute(query)
