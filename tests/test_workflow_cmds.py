@@ -17,7 +17,7 @@ from dbos._utils import GlobalParams
 
 def test_list_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
     @DBOS.workflow()
-    def simple_workflow(x: int) -> None:
+    def simple_workflow(x: int) -> int:
         return x + 1
 
     # Run a simple workflow
@@ -39,8 +39,8 @@ def test_list_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert output.assumed_role == None
     assert output.authenticated_roles == None
     assert output.request == None
-    assert output.created_at > 0
-    assert output.updated_at > 0
+    assert output.created_at is not None and output.created_at > 0
+    assert output.updated_at is not None and output.updated_at > 0
     assert output.queue_name == None
     assert output.executor_id == GlobalParams.executor_id
     assert output.app_version == GlobalParams.app_version

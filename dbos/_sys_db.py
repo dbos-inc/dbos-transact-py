@@ -74,8 +74,8 @@ class WorkflowStatusInternal(TypedDict):
     output: Optional[str]  # JSON (jsonpickle)
     request: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
-    created_at: Optional[str]  # Unix epoch timestamp in ms
-    updated_at: Optional[str]  # Unix epoch timestamp in ms
+    created_at: Optional[int]  # Unix epoch timestamp in ms
+    updated_at: Optional[int]  # Unix epoch timestamp in ms
     queue_name: Optional[str]
     executor_id: Optional[str]
     app_version: Optional[str]
