@@ -177,6 +177,8 @@ def _init_workflow(
         ),
         "assumed_role": ctx.assumed_role,
         "queue_name": queue,
+        "created_at": None,
+        "updated_at": None,
     }
 
     # If we have a class name, the first arg is the instance and do not serialize

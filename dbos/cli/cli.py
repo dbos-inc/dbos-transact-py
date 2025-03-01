@@ -288,25 +288,37 @@ def list(
     request: Annotated[
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
-    ] = True,
+    ] = False,
 ) -> None:
     config = load_config(silent=True)
+    sys_db = SystemDatabase(config)
     workflows = list_workflows(
-        config, limit, user, starttime, endtime, status, request, appversion, name
+        sys_db,
+        limit=limit,
+        user=user,
+        start_time=starttime,
+        end_time=endtime,
+        status=status,
+        request=request,
+        app_version=appversion,
+        name=name,
     )
     print(jsonpickle.encode(workflows, unpicklable=False))
 
 
 @workflow.command(help="Retrieve the status of a workflow")
 def get(
-    uuid: Annotated[str, typer.Argument()],
+    workflow_id: Annotated[str, typer.Argument()],
     request: Annotated[
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
-    ] = True,
+    ] = False,
 ) -> None:
     config = load_config(silent=True)
-    print(jsonpickle.encode(get_workflow(config, uuid, request), unpicklable=False))
+    sys_db = SystemDatabase(config)
+    print(
+        jsonpickle.encode(get_workflow(sys_db, workflow_id, request), unpicklable=False)
+    )
 
 
 @workflow.command(
@@ -426,11 +438,12 @@ def list_queue(
     request: Annotated[
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
-    ] = True,
+    ] = False,
 ) -> None:
     config = load_config(silent=True)
+    sys_db = SystemDatabase(config)
     workflows = list_queued_workflows(
-        config=config,
+        sys_db=sys_db,
         limit=limit,
         start_time=start_time,
         end_time=end_time,
