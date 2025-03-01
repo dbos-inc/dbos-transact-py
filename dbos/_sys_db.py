@@ -493,29 +493,31 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.executor_id,
                     SystemSchema.workflow_status.c.created_at,
                     SystemSchema.workflow_status.c.updated_at,
+                    SystemSchema.workflow_status.c.application_version,
+                    SystemSchema.workflow_status.c.application_id,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
                 return None
             status: WorkflowStatusInternal = {
                 "workflow_uuid": workflow_uuid,
-                "status": row[0],
-                "name": row[1],
-                "class_name": row[5],
-                "config_name": row[4],
                 "output": None,
                 "error": None,
-                "app_id": None,
-                "app_version": None,
-                "executor_id": row[10],
+                "status": row[0],
+                "name": row[1],
                 "request": row[2],
                 "recovery_attempts": row[3],
+                "config_name": row[4],
+                "class_name": row[5],
                 "authenticated_user": row[6],
                 "authenticated_roles": row[7],
                 "assumed_role": row[8],
                 "queue_name": row[9],
-                "created_at": row[10],
-                "updated_at": row[11],
+                "executor_id": row[10],
+                "created_at": row[11],
+                "updated_at": row[12],
+                "app_version": row[13],
+                "app_id": row[14],
             }
             return status
 

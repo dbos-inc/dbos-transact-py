@@ -1,31 +1,54 @@
 import threading
-import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 # Public API
-from dbos import DBOS, ConfigFile, Queue, WorkflowStatusString, _workflow_commands
+from dbos import (
+    DBOS,
+    ConfigFile,
+    Queue,
+    SetWorkflowID,
+    WorkflowStatusString,
+    _workflow_commands,
+)
 from dbos._sys_db import SystemDatabase
+from dbos._utils import GlobalParams
 
 
 def test_list_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
-    print("Testing list_workflow")
-
     @DBOS.workflow()
-    def simple_workflow() -> None:
-        print("Executed Simple workflow")
-        return
+    def simple_workflow(x: int) -> None:
+        return x + 1
 
-    simple_workflow()
-    output = _workflow_commands.list_workflows(sys_db)
-    assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
-    assert output[0] != None, "Expected output to be not None"
-    if output[0] != None:
-        assert output[0].workflowUUID.strip(), "field_name is an empty string"
+    # Run a simple workflow
+    wfid = str(uuid.uuid4)
+    with SetWorkflowID(wfid):
+        assert simple_workflow(1) == 2
+    dbos._sys_db._flush_workflow_status_buffer()
+
+    # List the workflow, then test every output
+    outputs = _workflow_commands.list_workflows(sys_db)
+    assert len(outputs) == 1
+    output = outputs[0]
+    assert output.workflowUUID == wfid
+    assert output.status == "SUCCESS"
+    assert output.workflowName == simple_workflow.__qualname__
+    assert output.workflowClassName == None
+    assert output.workflowConfigName == None
+    assert output.authenticated_user == None
+    assert output.assumed_role == None
+    assert output.authenticated_roles == None
+    assert output.request == None
+    assert output.created_at > 0
+    assert output.updated_at > 0
+    assert output.queue_name == None
+    assert output.executor_id == GlobalParams.executor_id
+    assert output.app_version == GlobalParams.app_version
+    assert output.app_id == ""
+    assert output.recovery_attempts == 1
 
 
 def test_list_workflow_limit(dbos: DBOS, sys_db: SystemDatabase) -> None:
-    print("Testing list_workflow")
-
     @DBOS.workflow()
     def simple_workflow() -> None:
         print("Executed Simple workflow")
@@ -41,8 +64,6 @@ def test_list_workflow_limit(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
 
 def test_list_workflow_status_name(dbos: DBOS, sys_db: SystemDatabase) -> None:
-    print("Testing list_workflow")
-
     @DBOS.workflow()
     def simple_workflow() -> None:
         print("Executed Simple workflow")
@@ -66,8 +87,6 @@ def test_list_workflow_status_name(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
 
 def test_list_workflow_start_end_times(dbos: DBOS, sys_db: SystemDatabase) -> None:
-    print("Testing list_workflow")
-
     @DBOS.workflow()
     def simple_workflow() -> None:
         print("Executed Simple workflow")
@@ -95,8 +114,6 @@ def test_list_workflow_start_end_times(dbos: DBOS, sys_db: SystemDatabase) -> No
 
 
 def test_list_workflow_end_times_positive(dbos: DBOS, sys_db: SystemDatabase) -> None:
-    print("Testing list_workflow")
-
     @DBOS.workflow()
     def simple_workflow() -> None:
         print("Executed Simple workflow")
@@ -130,8 +147,6 @@ def test_list_workflow_end_times_positive(dbos: DBOS, sys_db: SystemDatabase) ->
 
 
 def test_get_workflow(dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase) -> None:
-    print("Testing get_workflow")
-
     @DBOS.workflow()
     def simple_workflow() -> None:
         print("Executed Simple workflow")

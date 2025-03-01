@@ -144,8 +144,8 @@ def get_workflow_info(
     winfo.assumed_role = info["assumed_role"]
     winfo.authenticated_roles = info["authenticated_roles"]
     winfo.request = info["request"]
-    winfo.created_at = None
-    winfo.updated_at = None
+    winfo.created_at = info["created_at"]
+    winfo.updated_at = info["updated_at"]
     winfo.queue_name = info["queue_name"]
     winfo.executor_id = info["executor_id"]
     winfo.app_version = info["app_version"]
