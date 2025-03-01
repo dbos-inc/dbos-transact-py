@@ -15,6 +15,8 @@ from rich import print
 from rich.prompt import IntPrompt
 from typing_extensions import Annotated
 
+from dbos._debug import debug_workflow, parse_start_command
+
 from .. import load_config
 from .._app_db import ApplicationDatabase
 from .._dbos_config import _is_valid_app_name
@@ -230,6 +232,22 @@ def reset(
     except sa.exc.SQLAlchemyError as e:
         typer.echo(f"Error resetting system database: {str(e)}")
         return
+
+
+@app.command(help="Replay Debug a DBOS workflow")
+def debug(
+    workflow_id: Annotated[str, typer.Argument(help="Workflow ID to debug")],
+) -> None:
+    config = load_config(silent=True, use_db_wizard=False)
+    start = config["runtimeConfig"]["start"]
+    if not start:
+        typer.echo("No start commands found in 'dbos-config.yaml'")
+        raise typer.Exit(code=1)
+    if len(start) > 1:
+        typer.echo("Multiple start commands found in 'dbos-config.yaml'")
+        raise typer.Exit(code=1)
+    entrypoint = parse_start_command(start[0])
+    debug_workflow(workflow_id, entrypoint)
 
 
 @workflow.command(help="List workflows for your application")
