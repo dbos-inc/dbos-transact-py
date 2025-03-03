@@ -100,6 +100,7 @@ class WorkflowsOutput:
     CreatedAt: Optional[str]
     UpdatedAt: Optional[str]
     QueueName: Optional[str]
+    ApplicationVersion: Optional[str]
 
     @classmethod
     def from_workflow_information(cls, info: WorkflowInformation) -> "WorkflowsOutput":
@@ -124,6 +125,7 @@ class WorkflowsOutput:
             CreatedAt=created_at_str,
             UpdatedAt=updated_at_str,
             QueueName=info.queue_name,
+            ApplicationVersion=info.app_version,
         )
 
 
