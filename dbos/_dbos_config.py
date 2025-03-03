@@ -247,13 +247,15 @@ def load_config(
         or os.environ.get("PGPASSWORD")
         or "dbos"
     )
-    data["database"]["local_suffix"] = False
+
+    local_suffix = False
     if db_connection.get("local_suffix") is not None:
-        data["database"]["local_suffix"] = db_connection["local_suffix"]
+        local_suffix = db_connection["local_suffix"]
     if data["database"].get("local_suffix") is not None:
-        data["database"]["local_suffix"] = data["database"]["local_suffix"]
+        local_suffix = data["database"]["local_suffix"]
     if dbos_dblocalsuffix is not None:
-        data["database"]["local_suffix"] = dbos_dblocalsuffix
+        local_suffix = dbos_dblocalsuffix
+    data["database"]["local_suffix"] = local_suffix
 
     # Configure the DBOS logger
     config_logger(data)
