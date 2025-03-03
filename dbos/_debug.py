@@ -12,7 +12,7 @@ class PythonModule:
 
 def debug_workflow(workflow_id: str, entrypoint: Union[str, PythonModule]) -> None:
     if isinstance(entrypoint, str):
-        runpy.run_path("app/main.py")
+        runpy.run_path(entrypoint)
     elif isinstance(entrypoint, PythonModule):
         runpy.run_module(entrypoint.module_name)
     else:
