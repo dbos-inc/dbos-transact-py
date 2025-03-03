@@ -1,13 +1,14 @@
 import json
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import List, Type, TypeVar
+from typing import List, Optional, Type, TypeVar
 
 
 class MessageType(str, Enum):
     EXECUTOR_INFO = "executor_info"
     RECOVERY = "recovery"
     CANCEL = "cancel"
+    LIST_WORKFLOWS = "list_workflows"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -66,3 +67,45 @@ class CancelRequest(BaseMessage):
 @dataclass
 class CancelResponse(BaseMessage):
     success: bool
+
+
+@dataclass
+class ListWorkflowsBody:
+    workflow_uuids: List[str]
+    workflow_name: Optional[str]
+    authenticated_user: Optional[str]
+    start_time: Optional[str]
+    end_time: Optional[str]
+    status: Optional[str]
+    application_version: Optional[str]
+    limit: Optional[int]
+    offset: Optional[int]
+
+
+@dataclass
+class WorkflowsOutput:
+    WorkflowUUID: str
+    Status: Optional[str]
+    WorkflowName: Optional[str]
+    WorkflowClassName: Optional[str]
+    WorkflowConfigName: Optional[str]
+    AuthenticatedUser: Optional[str]
+    AssumedRole: Optional[str]
+    AuthenticatedRoles: Optional[str]
+    Input: Optional[str]
+    Output: Optional[str]
+    Request: Optional[str]
+    Error: Optional[str]
+    CreatedAt: Optional[str]
+    UpdatedAt: Optional[str]
+    QueueName: Optional[str]
+
+
+@dataclass
+class ListWorkflowsRequest(BaseMessage):
+    body: ListWorkflowsBody
+
+
+@dataclass
+class ListWorkflowsResponse(BaseMessage):
+    output: List[WorkflowsOutput]

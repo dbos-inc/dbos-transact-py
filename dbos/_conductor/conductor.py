@@ -82,6 +82,17 @@ class ConductorWebsocket(threading.Thread):
                             success=success,
                         )
                         self.websocket.send(cancel_response.to_json())
+                    elif type == p.MessageType.LIST_WORKFLOWS:
+                        list_workflows_message = p.ListWorkflowsRequest.from_json(
+                            message
+                        )
+                        print(list_workflows_message)
+                        list_workflows_response = p.ListWorkflowsResponse(
+                            type=p.MessageType.LIST_WORKFLOWS,
+                            request_id=base_message.request_id,
+                            output=[],
+                        )
+                        self.websocket.send(list_workflows_response.to_json())
                     else:
                         self.dbos.logger.warning(f"Unexpected message type: {type}")
             except ConnectionClosedOK:
