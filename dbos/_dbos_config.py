@@ -249,8 +249,9 @@ def load_config(
     )
 
     local_suffix = False
-    if db_connection.get("local_suffix") is not None:
-        local_suffix = db_connection["local_suffix"]
+    dbcon_local_suffix = db_connection.get("local_suffix")
+    if dbcon_local_suffix is not None:
+        local_suffix = dbcon_local_suffix
     if data["database"].get("local_suffix") is not None:
         local_suffix = data["database"].get("local_suffix")
     if dbos_dblocalsuffix is not None:
