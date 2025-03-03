@@ -1,7 +1,9 @@
 import json
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import List, Optional, Type, TypeVar
+from typing import List, Optional, Type, TypedDict, TypeVar
+
+from dbos._workflow_commands import WorkflowInformation
 
 
 class MessageType(str, Enum):
@@ -69,8 +71,7 @@ class CancelResponse(BaseMessage):
     success: bool
 
 
-@dataclass
-class ListWorkflowsBody:
+class ListWorkflowsBody(TypedDict):
     workflow_uuids: List[str]
     workflow_name: Optional[str]
     authenticated_user: Optional[str]
@@ -99,6 +100,31 @@ class WorkflowsOutput:
     CreatedAt: Optional[str]
     UpdatedAt: Optional[str]
     QueueName: Optional[str]
+
+    @classmethod
+    def from_workflow_information(cls, info: WorkflowInformation) -> "WorkflowsOutput":
+        # Convert fields to strings as needed
+        created_at_str = str(info.created_at) if info.created_at is not None else None
+        updated_at_str = str(info.updated_at) if info.updated_at is not None else None
+        inputs_str = str(info.input) if info.input is not None else None
+
+        return cls(
+            WorkflowUUID=info.workflow_id,
+            Status=info.status,
+            WorkflowName=info.workflow_name,
+            WorkflowClassName=info.workflow_class_name,
+            WorkflowConfigName=info.workflow_config_name,
+            AuthenticatedUser=info.authenticated_user,
+            AssumedRole=info.assumed_role,
+            AuthenticatedRoles=info.authenticated_roles,
+            Input=inputs_str,
+            Output=info.output,
+            Request=info.request,
+            Error=info.error,
+            CreatedAt=created_at_str,
+            UpdatedAt=updated_at_str,
+            QueueName=info.queue_name,
+        )
 
 
 @dataclass

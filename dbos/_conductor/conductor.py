@@ -8,6 +8,7 @@ from websockets import ConnectionClosed, ConnectionClosedOK
 from websockets.sync.client import ClientConnection, connect
 
 from dbos._utils import GlobalParams
+from dbos._workflow_commands import list_workflows
 
 from . import protocol as p
 
@@ -86,11 +87,27 @@ class ConductorWebsocket(threading.Thread):
                         list_workflows_message = p.ListWorkflowsRequest.from_json(
                             message
                         )
-                        print(list_workflows_message)
+                        b = list_workflows_message.body
+                        infos = list_workflows(
+                            self.dbos._sys_db,
+                            workflow_ids=b["workflow_uuids"],
+                            user=b["authenticated_user"],
+                            start_time=b["start_time"],
+                            end_time=b["end_time"],
+                            status=b["status"],
+                            request=False,
+                            app_version=b["application_version"],
+                            name=b["workflow_name"],
+                            limit=b["limit"],
+                            offset=b["offset"],
+                        )
                         list_workflows_response = p.ListWorkflowsResponse(
                             type=p.MessageType.LIST_WORKFLOWS,
                             request_id=base_message.request_id,
-                            output=[],
+                            output=[
+                                p.WorkflowsOutput.from_workflow_information(i)
+                                for i in infos
+                            ],
                         )
                         self.websocket.send(list_workflows_response.to_json())
                     else:
