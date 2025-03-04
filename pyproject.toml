@@ -44,6 +44,10 @@ distribution = true
 source = "scm"
 version_format = "version:format_version"
 
+[tool.pdm.dev-dependencies]
+dev = [
+    "mypy>=1.15.0",
+]
 [tool.black]
 line-length = 88
 
