@@ -12,6 +12,8 @@ class MessageType(str, Enum):
     CANCEL = "cancel"
     LIST_WORKFLOWS = "list_workflows"
     LIST_QUEUED_WORKFLOWS = "list_queued_workflows"
+    RESUME = "resume"
+    RESTART = "restart"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -69,6 +71,26 @@ class CancelRequest(BaseMessage):
 
 @dataclass
 class CancelResponse(BaseMessage):
+    success: bool
+
+
+@dataclass
+class ResumeRequest(BaseMessage):
+    workflow_id: str
+
+
+@dataclass
+class ResumeResponse(BaseMessage):
+    success: bool
+
+
+@dataclass
+class RestartRequest(BaseMessage):
+    workflow_id: str
+
+
+@dataclass
+class RestartResponse(BaseMessage):
     success: bool
 
 

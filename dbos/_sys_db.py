@@ -124,7 +124,9 @@ class GetWorkflowsInput:
         self.offset: Optional[int] = (
             None  # Offset into the matching records for pagination
         )
-        self.sort_desc: bool = False  # If true, sort by created_at in DESC order. Default false (in ASC order).
+        self.sort_desc: bool = (
+            False  # If true, sort by created_at in DESC order. Default false (in ASC order).
+        )
 
 
 class GetQueuedWorkflowsInput(TypedDict):

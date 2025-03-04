@@ -77,12 +77,44 @@ class ConductorWebsocket(threading.Thread):
                                 f"Exception encountered when cancelling workflow {cancel_message.workflow_id}: {traceback.format_exc()}"
                             )
                             success = False
-                        cancel_response = p.RecoveryResponse(
+                        cancel_response = p.CancelResponse(
                             type=p.MessageType.CANCEL,
                             request_id=base_message.request_id,
                             success=success,
                         )
                         self.websocket.send(cancel_response.to_json())
+                    elif type == p.MessageType.RESUME:
+                        resume_message = p.ResumeRequest.from_json(message)
+                        success = True
+                        try:
+                            self.dbos.resume_workflow(resume_message.workflow_id)
+                        except Exception as e:
+                            self.dbos.logger.error(
+                                f"Exception encountered when resuming workflow {resume_message.workflow_id}: {traceback.format_exc()}"
+                            )
+                            success = False
+                        resume_response = p.ResumeResponse(
+                            type=p.MessageType.RESUME,
+                            request_id=base_message.request_id,
+                            success=success,
+                        )
+                        self.websocket.send(resume_response.to_json())
+                    elif type == p.MessageType.RESTART:
+                        restart_message = p.RestartRequest.from_json(message)
+                        success = True
+                        try:
+                            self.dbos.restart_workflow(restart_message.workflow_id)
+                        except Exception as e:
+                            self.dbos.logger.error(
+                                f"Exception encountered when restarting workflow {restart_message.workflow_id}: {traceback.format_exc()}"
+                            )
+                            success = False
+                        restart_response = p.RestartResponse(
+                            type=p.MessageType.RESTART,
+                            request_id=base_message.request_id,
+                            success=success,
+                        )
+                        self.websocket.send(restart_response.to_json())
                     elif type == p.MessageType.LIST_WORKFLOWS:
                         list_workflows_message = p.ListWorkflowsRequest.from_json(
                             message
