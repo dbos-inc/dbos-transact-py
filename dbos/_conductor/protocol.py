@@ -11,6 +11,7 @@ class MessageType(str, Enum):
     RECOVERY = "recovery"
     CANCEL = "cancel"
     LIST_WORKFLOWS = "list_workflows"
+    LIST_QUEUED_WORKFLOWS = "list_queued_workflows"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -136,4 +137,24 @@ class ListWorkflowsRequest(BaseMessage):
 
 @dataclass
 class ListWorkflowsResponse(BaseMessage):
+    output: List[WorkflowsOutput]
+
+
+class ListQueuedWorkflowsBody(TypedDict):
+    workflow_name: Optional[str]
+    start_time: Optional[str]
+    end_time: Optional[str]
+    status: Optional[str]
+    queue_name: Optional[str]
+    limit: Optional[int]
+    offset: Optional[int]
+
+
+@dataclass
+class ListQueuedWorkflowsRequest(BaseMessage):
+    body: ListQueuedWorkflowsBody
+
+
+@dataclass
+class ListQueuedWorkflowsResponse(BaseMessage):
     output: List[WorkflowsOutput]

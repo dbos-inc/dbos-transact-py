@@ -8,7 +8,7 @@ from websockets import ConnectionClosed, ConnectionClosedOK
 from websockets.sync.client import ClientConnection, connect
 
 from dbos._utils import GlobalParams
-from dbos._workflow_commands import list_workflows
+from dbos._workflow_commands import list_queued_workflows, list_workflows
 
 from . import protocol as p
 
@@ -110,6 +110,31 @@ class ConductorWebsocket(threading.Thread):
                             ],
                         )
                         self.websocket.send(list_workflows_response.to_json())
+                    elif type == p.MessageType.LIST_QUEUED_WORKFLOWS:
+                        list_queued_workflows_message = (
+                            p.ListQueuedWorkflowsRequest.from_json(message)
+                        )
+                        q = list_queued_workflows_message.body
+                        infos = list_queued_workflows(
+                            self.dbos._sys_db,
+                            start_time=q["start_time"],
+                            end_time=q["end_time"],
+                            status=q["status"],
+                            request=False,
+                            name=q["workflow_name"],
+                            limit=q["limit"],
+                            offset=q["offset"],
+                            queue_name=q["queue_name"],
+                        )
+                        list_queued_workflows_response = p.ListQueuedWorkflowsResponse(
+                            type=p.MessageType.LIST_QUEUED_WORKFLOWS,
+                            request_id=base_message.request_id,
+                            output=[
+                                p.WorkflowsOutput.from_workflow_information(i)
+                                for i in infos
+                            ],
+                        )
+                        self.websocket.send(list_queued_workflows_response.to_json())
                     else:
                         self.dbos.logger.warning(f"Unexpected message type: {type}")
             except ConnectionClosedOK:
