@@ -247,6 +247,7 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert len(workflows) == queued_steps
     for i, workflow in enumerate(workflows):
         # Verify newest queue entries appear first
+        assert workflow.input is not None
         assert workflow.input["args"][0] == queued_steps - i - 1
 
     # Verify list_workflows also properly lists the blocking steps
