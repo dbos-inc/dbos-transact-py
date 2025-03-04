@@ -100,6 +100,7 @@ class ConductorWebsocket(threading.Thread):
                             name=b["workflow_name"],
                             limit=b["limit"],
                             offset=b["offset"],
+                            sort_desc=b["sort_desc"],
                         )
                         list_workflows_response = p.ListWorkflowsResponse(
                             type=p.MessageType.LIST_WORKFLOWS,
@@ -125,6 +126,7 @@ class ConductorWebsocket(threading.Thread):
                             limit=q["limit"],
                             offset=q["offset"],
                             queue_name=q["queue_name"],
+                            sort_desc=q["sort_desc"],
                         )
                         list_queued_workflows_response = p.ListQueuedWorkflowsResponse(
                             type=p.MessageType.LIST_QUEUED_WORKFLOWS,

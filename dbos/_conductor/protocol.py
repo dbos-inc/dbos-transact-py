@@ -82,6 +82,7 @@ class ListWorkflowsBody(TypedDict):
     application_version: Optional[str]
     limit: Optional[int]
     offset: Optional[int]
+    sort_desc: bool
 
 
 @dataclass
@@ -148,6 +149,7 @@ class ListQueuedWorkflowsBody(TypedDict):
     queue_name: Optional[str]
     limit: Optional[int]
     offset: Optional[int]
+    sort_desc: bool
 
 
 @dataclass
