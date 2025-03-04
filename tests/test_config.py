@@ -4,6 +4,7 @@ import os
 from unittest.mock import mock_open
 
 import pytest
+import pytest_mock
 
 # Public API
 from dbos import load_config
@@ -422,3 +423,40 @@ def test_no_db_wizard(mocker):
     with pytest.raises(DBOSInitializationError) as exc_info:
         load_config(mock_filename)
     assert "Could not connect" in str(exc_info.value)
+
+
+def test_debug_override(mocker: pytest_mock.MockFixture):
+    mock_config = """
+        name: "some-app"
+        language: "python"
+        runtimeConfig:
+            start:
+                - "python3 main.py"
+        database:
+          hostname: 'localhost'
+          port: 5432
+          username: 'postgres'
+          password: 'super-secret-password'
+          local_suffix: true
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
+    )
+
+    mocker.patch.dict(
+        os.environ,
+        {
+            "DBOS_DBHOST": "fakehost",
+            "DBOS_DBPORT": "1234",
+            "DBOS_DBUSER": "fakeuser",
+            "DBOS_DBPASSWORD": "fakepassword",
+            "DBOS_DBLOCALSUFFIX": "false",
+        },
+    )
+
+    configFile = load_config(mock_filename, use_db_wizard=False)
+    assert configFile["database"]["hostname"] == "fakehost"
+    assert configFile["database"]["port"] == 1234
+    assert configFile["database"]["username"] == "fakeuser"
+    assert configFile["database"]["password"] == "fakepassword"
+    assert configFile["database"]["local_suffix"] == False
