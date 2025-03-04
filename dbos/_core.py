@@ -242,10 +242,11 @@ def _get_wf_invoke_func(
         except Exception as error:
             status["status"] = "ERROR"
             status["error"] = _serialization.serialize_exception(error)
-            if status["queue_name"] is not None:
-                queue = dbos._registry.queue_info_map[status["queue_name"]]
-                dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-            dbos._sys_db.update_workflow_status(status)
+            if not dbos.debug_mode:
+                if status["queue_name"] is not None:
+                    queue = dbos._registry.queue_info_map[status["queue_name"]]
+                    dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
+                dbos._sys_db.update_workflow_status(status)
             raise
 
     return persist
