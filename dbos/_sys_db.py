@@ -14,9 +14,7 @@ from typing import (
     Optional,
     Sequence,
     Set,
-    Tuple,
     TypedDict,
-    cast,
 )
 
 import psycopg
@@ -147,25 +145,6 @@ class GetPendingWorkflowsOutput:
     def __init__(self, *, workflow_uuid: str, queue_name: Optional[str] = None):
         self.workflow_uuid: str = workflow_uuid
         self.queue_name: Optional[str] = queue_name
-
-
-class WorkflowInformation(TypedDict, total=False):
-    workflow_uuid: str
-    status: WorkflowStatuses  # The status of the workflow.
-    name: str  # The name of the workflow function.
-    workflow_class_name: str  # The class name holding the workflow function.
-    workflow_config_name: (
-        str  # The name of the configuration, if the class needs configuration
-    )
-    authenticated_user: str  # The user who ran the workflow. Empty string if not set.
-    assumed_role: str
-    # The role used to run this workflow.  Empty string if authorization is not required.
-    authenticated_roles: List[str]
-    # All roles the authenticated user has, if any.
-    input: Optional[_serialization.WorkflowInputs]
-    output: Optional[str]
-    error: Optional[str]
-    request: Optional[str]
 
 
 _dbos_null_topic = "__null__topic__"
