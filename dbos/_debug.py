@@ -1,5 +1,6 @@
 import re
 import runpy
+import sys
 from typing import Union
 
 from dbos import DBOS
@@ -11,6 +12,10 @@ class PythonModule:
 
 
 def debug_workflow(workflow_id: str, entrypoint: Union[str, PythonModule]) -> None:
+    # include the current directory (represented by empty string) in the search path
+    # if it not already included
+    if "" not in sys.path:
+        sys.path.insert(0, "")
     if isinstance(entrypoint, str):
         runpy.run_path(entrypoint)
     elif isinstance(entrypoint, PythonModule):
