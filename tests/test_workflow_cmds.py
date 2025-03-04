@@ -242,6 +242,13 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
         assert workflow.updated_at is not None and workflow.updated_at > 0
         assert workflow.recovery_attempts == 1
 
+    # Test sort_desc inverts the order
+    workflows = _workflow_commands.list_queued_workflows(sys_db, sort_desc=True)
+    assert len(workflows) == queued_steps
+    for i, workflow in enumerate(workflows):
+        # Verify newest queue entries appear first
+        assert workflow.input["args"][0] == queued_steps - i - 1
+
     # Verify list_workflows also properly lists the blocking steps
     workflows = _workflow_commands.list_workflows(sys_db)
     assert len(workflows) == queued_steps + 1
