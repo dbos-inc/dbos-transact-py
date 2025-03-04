@@ -14,9 +14,7 @@ from typing import (
     Optional,
     Sequence,
     Set,
-    Tuple,
     TypedDict,
-    cast,
 )
 
 import psycopg
@@ -126,6 +124,7 @@ class GetWorkflowsInput:
         self.offset: Optional[int] = (
             None  # Offset into the matching records for pagination
         )
+        self.sort_desc: bool = False  # If true, sort by created_at in DESC order. Default false (in ASC order).
 
 
 class GetQueuedWorkflowsInput(TypedDict):
@@ -136,6 +135,7 @@ class GetQueuedWorkflowsInput(TypedDict):
     limit: Optional[int]  # Return up to this many workflows IDs.
     offset: Optional[int]  # Offset into the matching records for pagination
     name: Optional[str]  # The name of the workflow function
+    sort_desc: Optional[bool]  # Sort by created_at in DESC or ASC order
 
 
 class GetWorkflowsOutput:
@@ -147,25 +147,6 @@ class GetPendingWorkflowsOutput:
     def __init__(self, *, workflow_uuid: str, queue_name: Optional[str] = None):
         self.workflow_uuid: str = workflow_uuid
         self.queue_name: Optional[str] = queue_name
-
-
-class WorkflowInformation(TypedDict, total=False):
-    workflow_uuid: str
-    status: WorkflowStatuses  # The status of the workflow.
-    name: str  # The name of the workflow function.
-    workflow_class_name: str  # The class name holding the workflow function.
-    workflow_config_name: (
-        str  # The name of the configuration, if the class needs configuration
-    )
-    authenticated_user: str  # The user who ran the workflow. Empty string if not set.
-    assumed_role: str
-    # The role used to run this workflow.  Empty string if authorization is not required.
-    authenticated_roles: List[str]
-    # All roles the authenticated user has, if any.
-    input: Optional[_serialization.WorkflowInputs]
-    output: Optional[str]
-    error: Optional[str]
-    request: Optional[str]
 
 
 _dbos_null_topic = "__null__topic__"
@@ -637,9 +618,11 @@ class SystemDatabase:
             return inputs
 
     def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
-        query = sa.select(SystemSchema.workflow_status.c.workflow_uuid).order_by(
-            SystemSchema.workflow_status.c.created_at.asc()
-        )
+        query = sa.select(SystemSchema.workflow_status.c.workflow_uuid)
+        if input.sort_desc:
+            query = query.order_by(SystemSchema.workflow_status.c.created_at.desc())
+        else:
+            query = query.order_by(SystemSchema.workflow_status.c.created_at.asc())
         if input.name:
             query = query.where(SystemSchema.workflow_status.c.name == input.name)
         if input.authenticated_user:
@@ -683,15 +666,15 @@ class SystemDatabase:
         self, input: GetQueuedWorkflowsInput
     ) -> GetWorkflowsOutput:
 
-        query = (
-            sa.select(SystemSchema.workflow_queue.c.workflow_uuid)
-            .join(
-                SystemSchema.workflow_status,
-                SystemSchema.workflow_queue.c.workflow_uuid
-                == SystemSchema.workflow_status.c.workflow_uuid,
-            )
-            .order_by(SystemSchema.workflow_status.c.created_at.asc())
+        query = sa.select(SystemSchema.workflow_queue.c.workflow_uuid).join(
+            SystemSchema.workflow_status,
+            SystemSchema.workflow_queue.c.workflow_uuid
+            == SystemSchema.workflow_status.c.workflow_uuid,
         )
+        if input["sort_desc"]:
+            query = query.order_by(SystemSchema.workflow_status.c.created_at.desc())
+        else:
+            query = query.order_by(SystemSchema.workflow_status.c.created_at.asc())
 
         if input.get("name"):
             query = query.where(SystemSchema.workflow_status.c.name == input["name"])
