@@ -89,6 +89,13 @@ def test_list_workflow_limit(dbos: DBOS, sys_db: SystemDatabase) -> None:
     # Test all workflows appear
     outputs = _workflow_commands.list_workflows(sys_db)
     assert len(outputs) == num_workflows
+    for i, output in enumerate(outputs):
+        assert output.workflow_id == str(i)
+
+    # Test sort_desc inverts the order:
+    outputs = _workflow_commands.list_workflows(sys_db, sort_desc=True)
+    for i, output in enumerate(outputs):
+        assert output.workflow_id == str(num_workflows - i - 1)
 
     # Test LIMIT 2 returns the first two
     outputs = _workflow_commands.list_workflows(sys_db, limit=2)
