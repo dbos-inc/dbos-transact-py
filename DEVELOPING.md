@@ -53,7 +53,7 @@ one, run:
 
 ```bash
 export PGPASSWORD=dbos
-python3 dbos/_templates/hello/start_postgres_docker.py
+python3 dbos/_templates/dbos-db-starter/start_postgres_docker.py
 ```
 
 A successful test run results in the following output:

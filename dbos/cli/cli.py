@@ -21,12 +21,7 @@ from .. import load_config
 from .._app_db import ApplicationDatabase
 from .._dbos_config import _is_valid_app_name
 from .._sys_db import SystemDatabase, reset_system_database
-from .._workflow_commands import (
-    cancel_workflow,
-    get_workflow,
-    list_queued_workflows,
-    list_workflows,
-)
+from .._workflow_commands import get_workflow, list_queued_workflows, list_workflows
 from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
 
@@ -308,25 +303,37 @@ def list(
     request: Annotated[
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
-    ] = True,
+    ] = False,
 ) -> None:
     config = load_config(silent=True)
+    sys_db = SystemDatabase(config)
     workflows = list_workflows(
-        config, limit, user, starttime, endtime, status, request, appversion, name
+        sys_db,
+        limit=limit,
+        user=user,
+        start_time=starttime,
+        end_time=endtime,
+        status=status,
+        request=request,
+        app_version=appversion,
+        name=name,
     )
     print(jsonpickle.encode(workflows, unpicklable=False))
 
 
 @workflow.command(help="Retrieve the status of a workflow")
 def get(
-    uuid: Annotated[str, typer.Argument()],
+    workflow_id: Annotated[str, typer.Argument()],
     request: Annotated[
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
-    ] = True,
+    ] = False,
 ) -> None:
     config = load_config(silent=True)
-    print(jsonpickle.encode(get_workflow(config, uuid, request), unpicklable=False))
+    sys_db = SystemDatabase(config)
+    print(
+        jsonpickle.encode(get_workflow(sys_db, workflow_id, request), unpicklable=False)
+    )
 
 
 @workflow.command(
@@ -334,10 +341,23 @@ def get(
 )
 def cancel(
     uuid: Annotated[str, typer.Argument()],
+    host: Annotated[
+        typing.Optional[str],
+        typer.Option("--host", "-H", help="Specify the admin host"),
+    ] = "localhost",
+    port: Annotated[
+        typing.Optional[int],
+        typer.Option("--port", "-p", help="Specify the admin port"),
+    ] = 3001,
 ) -> None:
-    config = load_config()
-    cancel_workflow(config, uuid)
-    print(f"Workflow {uuid} has been cancelled")
+    response = requests.post(
+        f"http://{host}:{port}/workflows/{uuid}/cancel", json=[], timeout=5
+    )
+
+    if response.status_code == 204:
+        print(f"Workflow {uuid} has been cancelled")
+    else:
+        print(f"Failed to cancel workflow {uuid}. Status code: {response.status_code}")
 
 
 @workflow.command(help="Resume a workflow that has been cancelled")
@@ -345,7 +365,7 @@ def resume(
     uuid: Annotated[str, typer.Argument()],
     host: Annotated[
         typing.Optional[str],
-        typer.Option("--host", "-h", help="Specify the admin host"),
+        typer.Option("--host", "-H", help="Specify the admin host"),
     ] = "localhost",
     port: Annotated[
         typing.Optional[int],
@@ -356,7 +376,7 @@ def resume(
         f"http://{host}:{port}/workflows/{uuid}/resume", json=[], timeout=5
     )
 
-    if response.status_code == 200:
+    if response.status_code == 204:
         print(f"Workflow {uuid} has been resumed")
     else:
         print(f"Failed to resume workflow {uuid}. Status code: {response.status_code}")
@@ -367,7 +387,7 @@ def restart(
     uuid: Annotated[str, typer.Argument()],
     host: Annotated[
         typing.Optional[str],
-        typer.Option("--host", "-h", help="Specify the admin host"),
+        typer.Option("--host", "-H", help="Specify the admin host"),
     ] = "localhost",
     port: Annotated[
         typing.Optional[int],
@@ -378,7 +398,7 @@ def restart(
         f"http://{host}:{port}/workflows/{uuid}/restart", json=[], timeout=5
     )
 
-    if response.status_code == 200:
+    if response.status_code == 204:
         print(f"Workflow {uuid} has been restarted")
     else:
         print(f"Failed to resume workflow {uuid}. Status code: {response.status_code}")
@@ -433,11 +453,12 @@ def list_queue(
     request: Annotated[
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
-    ] = True,
+    ] = False,
 ) -> None:
     config = load_config(silent=True)
+    sys_db = SystemDatabase(config)
     workflows = list_queued_workflows(
-        config=config,
+        sys_db=sys_db,
         limit=limit,
         start_time=start_time,
         end_time=end_time,

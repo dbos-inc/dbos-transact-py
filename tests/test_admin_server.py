@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 import uuid
 
@@ -8,7 +9,7 @@ import sqlalchemy as sa
 # Public API
 from dbos import DBOS, ConfigFile, Queue, SetWorkflowID, _workflow_commands
 from dbos._schemas.system_database import SystemSchema
-from dbos._sys_db import WorkflowStatusString
+from dbos._sys_db import SystemDatabase, WorkflowStatusString
 from dbos._utils import GlobalParams
 
 
@@ -171,11 +172,13 @@ runtimeConfig:
         os.remove("dbos-config.yaml")
 
 
-def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
+def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
     counter: int = 0
+    event = threading.Event()
 
     @DBOS.workflow()
     def simple_workflow() -> None:
+        event.set()
         nonlocal counter
         counter += 1
 
@@ -185,13 +188,11 @@ def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
     dbos._sys_db.wait_for_buffer_flush()
 
     # Verify the workflow has succeeded
-    output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, None, False, None, None
-    )
+    output = _workflow_commands.list_workflows(sys_db)
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
     assert output[0] != None, "Expected output to be not None"
-    wfUuid = output[0].workflowUUID
-    info = _workflow_commands.get_workflow(config, wfUuid, True)
+    wfUuid = output[0].workflow_id
+    info = _workflow_commands.get_workflow(sys_db, wfUuid, True)
     assert info is not None, "Expected output to be not None"
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
 
@@ -200,7 +201,7 @@ def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
         f"http://localhost:3001/workflows/{wfUuid}/cancel", json=[], timeout=5
     )
     assert response.status_code == 204
-    info = _workflow_commands.get_workflow(config, wfUuid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfUuid, True)
     assert info is not None
     assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
 
@@ -216,13 +217,15 @@ def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
         c.execute(query)
 
     # Resume the workflow. Verify that it succeeds again.
+    event.clear()
     response = requests.post(
         f"http://localhost:3001/workflows/{wfUuid}/resume", json=[], timeout=5
     )
     assert response.status_code == 204
+    assert event.wait(timeout=5)
     dbos._sys_db.wait_for_buffer_flush()
     assert counter == 2
-    info = _workflow_commands.get_workflow(config, wfUuid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfUuid, True)
     assert info is not None
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
     assert info.executor_id == GlobalParams.executor_id
@@ -233,13 +236,13 @@ def test_admin_workflow_resume(dbos: DBOS, config: ConfigFile) -> None:
     )
     assert response.status_code == 204
     dbos._sys_db.wait_for_buffer_flush()
-    info = _workflow_commands.get_workflow(config, wfUuid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfUuid, True)
     assert info is not None
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
     assert counter == 2
 
 
-def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
+def test_admin_workflow_restart(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     @DBOS.workflow()
     def simple_workflow() -> None:
@@ -251,16 +254,14 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
     time.sleep(1)
 
     # get the workflow list
-    output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, None, False, None, None
-    )
+    output = _workflow_commands.list_workflows(sys_db)
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
     assert output[0] != None, "Expected output to be not None"
 
-    wfUuid = output[0].workflowUUID
+    wfUuid = output[0].workflow_id
 
-    info = _workflow_commands.get_workflow(config, wfUuid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfUuid, True)
     assert info is not None, "Expected output to be not None"
 
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
@@ -270,7 +271,7 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
     )
     assert response.status_code == 204
 
-    info = _workflow_commands.get_workflow(config, wfUuid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfUuid, True)
     if info is not None:
         assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
     else:
@@ -283,23 +284,21 @@ def test_admin_workflow_restart(dbos: DBOS, config: ConfigFile) -> None:
 
     time.sleep(1)
 
-    info = _workflow_commands.get_workflow(config, wfUuid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfUuid, True)
     if info is not None:
         assert info.status == "CANCELLED", f"Expected status to be CANCELLED"
     else:
         assert False, "Expected info to be not None"
 
-    output = _workflow_commands.list_workflows(
-        config, 10, None, None, None, None, False, None, None
-    )
+    output = _workflow_commands.list_workflows(sys_db)
     assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
 
-    if output[0].workflowUUID == wfUuid:
-        new_wfUuid = output[1].workflowUUID
+    if output[0].workflow_id == wfUuid:
+        new_wfUuid = output[1].workflow_id
     else:
-        new_wfUuid = output[0].workflowUUID
+        new_wfUuid = output[0].workflow_id
 
-    info = _workflow_commands.get_workflow(config, new_wfUuid, True)
+    info = _workflow_commands.get_workflow(sys_db, new_wfUuid, True)
     if info is not None:
         assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
     else:
