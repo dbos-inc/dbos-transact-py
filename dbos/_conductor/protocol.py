@@ -132,6 +132,8 @@ class WorkflowsOutput:
         created_at_str = str(info.created_at) if info.created_at is not None else None
         updated_at_str = str(info.updated_at) if info.updated_at is not None else None
         inputs_str = str(info.input) if info.input is not None else None
+        outputs_str = str(info.output) if info.output is not None else None
+        request_str = str(info.request) if info.request is not None else None
 
         return cls(
             WorkflowUUID=info.workflow_id,
@@ -143,8 +145,8 @@ class WorkflowsOutput:
             AssumedRole=info.assumed_role,
             AuthenticatedRoles=info.authenticated_roles,
             Input=inputs_str,
-            Output=info.output,
-            Request=info.request,
+            Output=outputs_str,
+            Request=request_str,
             Error=info.error,
             CreatedAt=created_at_str,
             UpdatedAt=updated_at_str,
