@@ -27,7 +27,6 @@ class ConductorWebsocket(threading.Thread):
         self.dbos = dbos
         self.app_name = dbos.config["name"]
         self.url = conductor_url.rstrip("/") + f"/websocket/{self.app_name}/{token}"
-        print("URL:", self.url)
 
     def run(self) -> None:
         while not self.evt.is_set():
