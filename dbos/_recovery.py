@@ -66,6 +66,6 @@ def recover_pending_workflows(
                     execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
                 )
         dbos.logger.info(
-            f"Recovering {len(pending_workflows)} workflows from version {GlobalParams.app_version} for executor {executor_id}"
+            f"Recovering {len(pending_workflows)} workflows for executor {executor_id} from version {GlobalParams.app_version}"
         )
     return workflow_handles
