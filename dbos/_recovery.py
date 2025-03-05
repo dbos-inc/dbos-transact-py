@@ -46,7 +46,6 @@ def recover_pending_workflows(
     """Attempt to recover pending workflows for a list of specific executors and return workflow handles for them."""
     workflow_handles: List["WorkflowHandle[Any]"] = []
     for executor_id in executor_ids:
-        dbos.logger.debug(f"Recovering pending workflows for executor: {executor_id}")
         pending_workflows = dbos._sys_db.get_pending_workflows(
             executor_id, GlobalParams.app_version
         )
@@ -67,6 +66,6 @@ def recover_pending_workflows(
                     execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
                 )
         dbos.logger.info(
-            f"Recovering {len(pending_workflows)} workflows from version {GlobalParams.app_version}"
+            f"Recovering {len(pending_workflows)} workflows from version {GlobalParams.app_version} for executor {executor_id}"
         )
     return workflow_handles
