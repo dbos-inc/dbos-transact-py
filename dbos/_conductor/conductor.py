@@ -26,7 +26,7 @@ class ConductorWebsocket(threading.Thread):
         self.org_id = "default"
         self.app_name = dbos.config["name"]
         self.url = urllib.parse.urljoin(
-            host, f"/{self.org_id}/applications/{self.app_name}/websocket"
+            host, f"websocket/{self.org_id}/applications/{self.app_name}/"
         )
 
     def run(self) -> None:
