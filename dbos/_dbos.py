@@ -464,12 +464,12 @@ class DBOS:
             self._background_threads.append(bg_queue_thread)
 
             # Start the conductor thread if requested
-            evt = threading.Event()
-            self.stop_events.append(evt)
             if self.conductor_token is not None:
                 if self.conductor_url is None:
                     dbos_domain = os.environ.get("DBOS_DOMAIN", "cloud.dbos.dev")
                     self.conductor_url = f"wss://{dbos_domain}/conductor/v1alpha1"
+                evt = threading.Event()
+                self.stop_events.append(evt)
                 self.conductor_websocket = ConductorWebsocket(
                     self,
                     conductor_url=self.conductor_url,
