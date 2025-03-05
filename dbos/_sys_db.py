@@ -158,7 +158,7 @@ _buffer_flush_interval_secs = 1.0
 
 class SystemDatabase:
 
-    def __init__(self, config: ConfigFile):
+    def __init__(self, config: ConfigFile, *, debug_mode: bool = False):
         self.config = config
 
         sysdb_name = (
@@ -167,26 +167,27 @@ class SystemDatabase:
             else config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
         )
 
-        # If the system database does not already exist, create it
-        postgres_db_url = sa.URL.create(
-            "postgresql+psycopg",
-            username=config["database"]["username"],
-            password=config["database"]["password"],
-            host=config["database"]["hostname"],
-            port=config["database"]["port"],
-            database="postgres",
-            # fills the "application_name" column in pg_stat_activity
-            query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
-        )
-        engine = sa.create_engine(postgres_db_url)
-        with engine.connect() as conn:
-            conn.execution_options(isolation_level="AUTOCOMMIT")
-            if not conn.execute(
-                sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
-                parameters={"db_name": sysdb_name},
-            ).scalar():
-                conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
-        engine.dispose()
+        if not debug_mode:
+            # If the system database does not already exist, create it
+            postgres_db_url = sa.URL.create(
+                "postgresql+psycopg",
+                username=config["database"]["username"],
+                password=config["database"]["password"],
+                host=config["database"]["hostname"],
+                port=config["database"]["port"],
+                database="postgres",
+                # fills the "application_name" column in pg_stat_activity
+                query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
+            )
+            engine = sa.create_engine(postgres_db_url)
+            with engine.connect() as conn:
+                conn.execution_options(isolation_level="AUTOCOMMIT")
+                if not conn.execute(
+                    sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
+                    parameters={"db_name": sysdb_name},
+                ).scalar():
+                    conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
+            engine.dispose()
 
         system_db_url = sa.URL.create(
             "postgresql+psycopg",
@@ -205,25 +206,41 @@ class SystemDatabase:
         )
 
         # Run a schema migration for the system database
-        migration_dir = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), "_migrations"
-        )
-        alembic_cfg = Config()
-        alembic_cfg.set_main_option("script_location", migration_dir)
-        logging.getLogger("alembic").setLevel(logging.WARNING)
-        # Alembic requires the % in URL-escaped parameters to itself be escaped to %%.
-        escaped_conn_string = re.sub(
-            r"%(?=[0-9A-Fa-f]{2})",
-            "%%",
-            self.engine.url.render_as_string(hide_password=False),
-        )
-        alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
-        try:
-            command.upgrade(alembic_cfg, "head")
-        except Exception as e:
-            dbos_logger.warning(
-                f"Exception during system database construction. This is most likely because the system database was configured using a later version of DBOS: {e}"
+        if not debug_mode:
+            migration_dir = os.path.join(
+                os.path.dirname(os.path.realpath(__file__)), "_migrations"
             )
+            alembic_cfg = Config()
+            alembic_cfg.set_main_option("script_location", migration_dir)
+            logging.getLogger("alembic").setLevel(logging.WARNING)
+            # Alembic requires the % in URL-escaped parameters to itself be escaped to %%.
+            escaped_conn_string = re.sub(
+                r"%(?=[0-9A-Fa-f]{2})",
+                "%%",
+                self.engine.url.render_as_string(hide_password=False),
+            )
+            alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
+            try:
+                command.upgrade(alembic_cfg, "head")
+            except Exception as e:
+                dbos_logger.warning(
+                    f"Exception during system database construction. This is most likely because the system database was configured using a later version of DBOS: {e}"
+                )
+                alembic_cfg = Config()
+                alembic_cfg.set_main_option("script_location", migration_dir)
+                # Alembic requires the % in URL-escaped parameters to itself be escaped to %%.
+                escaped_conn_string = re.sub(
+                    r"%(?=[0-9A-Fa-f]{2})",
+                    "%%",
+                    self.engine.url.render_as_string(hide_password=False),
+                )
+                alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
+                try:
+                    command.upgrade(alembic_cfg, "head")
+                except Exception as e:
+                    dbos_logger.warning(
+                        f"Exception during system database construction. This is most likely because the system database was configured using a later version of DBOS: {e}"
+                    )
 
         self.notification_conn: Optional[psycopg.connection.Connection] = None
         self.notifications_map: Dict[str, threading.Condition] = {}
@@ -239,6 +256,7 @@ class SystemDatabase:
 
         # Now we can run background processes
         self._run_background_processes = True
+        self._debug_mode = debug_mode
 
     # Destroy the pool when finished
     def destroy(self) -> None:
@@ -260,6 +278,8 @@ class SystemDatabase:
         *,
         max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
     ) -> WorkflowStatuses:
+        if self._debug_mode:
+            raise Exception("called insert_workflow_status in debug mode")
         wf_status: WorkflowStatuses = status["status"]
 
         cmd = (
@@ -359,6 +379,8 @@ class SystemDatabase:
         *,
         conn: Optional[sa.Connection] = None,
     ) -> None:
+        if self._debug_mode:
+            raise Exception("called update_workflow_status in debug mode")
         wf_status: WorkflowStatuses = status["status"]
 
         cmd = (
@@ -408,6 +430,8 @@ class SystemDatabase:
         self,
         workflow_id: str,
     ) -> None:
+        if self._debug_mode:
+            raise Exception("called cancel_workflow in debug mode")
         with self.engine.begin() as c:
             # Remove the workflow from the queues table so it does not block the table
             c.execute(
@@ -428,6 +452,8 @@ class SystemDatabase:
         self,
         workflow_id: str,
     ) -> None:
+        if self._debug_mode:
+            raise Exception("called resume_workflow in debug mode")
         with self.engine.begin() as c:
             # Check the status of the workflow. If it is complete, do nothing.
             row = c.execute(
@@ -575,6 +601,9 @@ class SystemDatabase:
     def update_workflow_inputs(
         self, workflow_uuid: str, inputs: str, conn: Optional[sa.Connection] = None
     ) -> None:
+        if self._debug_mode:
+            raise Exception("called update_workflow_inputs in debug mode")
+
         cmd = (
             pg.insert(SystemSchema.workflow_inputs)
             .values(
@@ -739,6 +768,8 @@ class SystemDatabase:
     def record_operation_result(
         self, result: OperationResultInternal, conn: Optional[sa.Connection] = None
     ) -> None:
+        if self._debug_mode:
+            raise Exception("called record_operation_result in debug mode")
         error = result["error"]
         output = result["output"]
         assert error is None or output is None, "Only one of error or output can be set"
@@ -798,6 +829,11 @@ class SystemDatabase:
             recorded_output = self.check_operation_execution(
                 workflow_uuid, function_id, conn=c
             )
+            if self._debug_mode and recorded_output is None:
+                raise Exception(
+                    "called send in debug mode without a previous execution"
+                )
+
             if recorded_output is not None:
                 dbos_logger.debug(
                     f"Replaying send, id: {function_id}, destination_uuid: {destination_uuid}, topic: {topic}"
@@ -841,6 +877,8 @@ class SystemDatabase:
 
         # First, check for previous executions.
         recorded_output = self.check_operation_execution(workflow_uuid, function_id)
+        if self._debug_mode and recorded_output is None:
+            raise Exception("called recv in debug mode without a previous execution")
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying recv, id: {function_id}, topic: {topic}")
             if recorded_output["output"] is not None:
@@ -990,6 +1028,9 @@ class SystemDatabase:
     ) -> float:
         recorded_output = self.check_operation_execution(workflow_uuid, function_id)
         end_time: float
+        if self._debug_mode and recorded_output is None:
+            raise Exception("called sleep in debug mode without a previous execution")
+
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying sleep, id: {function_id}, seconds: {seconds}")
             assert recorded_output["output"] is not None, "no recorded end time"
@@ -1024,6 +1065,10 @@ class SystemDatabase:
             recorded_output = self.check_operation_execution(
                 workflow_uuid, function_id, conn=c
             )
+            if self._debug_mode and recorded_output is None:
+                raise Exception(
+                    "called set_event in debug mode without a previous execution"
+                )
             if recorded_output is not None:
                 dbos_logger.debug(f"Replaying set_event, id: {function_id}, key: {key}")
                 return  # Already sent before
@@ -1068,6 +1113,10 @@ class SystemDatabase:
             recorded_output = self.check_operation_execution(
                 caller_ctx["workflow_uuid"], caller_ctx["function_id"]
             )
+            if self._debug_mode and recorded_output is None:
+                raise Exception(
+                    "called get_event in debug mode without a previous execution"
+                )
             if recorded_output is not None:
                 dbos_logger.debug(
                     f"Replaying get_event, id: {caller_ctx['function_id']}, key: {key}"
@@ -1130,6 +1179,9 @@ class SystemDatabase:
         return value
 
     def _flush_workflow_status_buffer(self) -> None:
+        if self._debug_mode:
+            raise Exception("called _flush_workflow_status_buffer in debug mode")
+
         """Export the workflow status buffer to the database, up to the batch size."""
         if len(self._workflow_status_buffer) == 0:
             return
@@ -1160,6 +1212,9 @@ class SystemDatabase:
                     break
 
     def _flush_workflow_inputs_buffer(self) -> None:
+        if self._debug_mode:
+            raise Exception("called _flush_workflow_inputs_buffer in debug mode")
+
         """Export the workflow inputs buffer to the database, up to the batch size."""
         if len(self._workflow_inputs_buffer) == 0:
             return
@@ -1224,6 +1279,8 @@ class SystemDatabase:
         )
 
     def enqueue(self, workflow_id: str, queue_name: str) -> None:
+        if self._debug_mode:
+            raise Exception("called enqueue in debug mode")
         with self.engine.begin() as c:
             c.execute(
                 pg.insert(SystemSchema.workflow_queue)
@@ -1235,6 +1292,9 @@ class SystemDatabase:
             )
 
     def start_queued_workflows(self, queue: "Queue", executor_id: str) -> List[str]:
+        if self._debug_mode:
+            return []
+
         start_time_ms = int(time.time() * 1000)
         if queue.limiter is not None:
             limiter_period_ms = int(queue.limiter["period"] * 1000)
@@ -1385,6 +1445,9 @@ class SystemDatabase:
             return ret_ids
 
     def remove_from_queue(self, workflow_id: str, queue: "Queue") -> None:
+        if self._debug_mode:
+            raise Exception("called remove_from_queue in debug mode")
+
         with self.engine.begin() as c:
             if queue.limiter is None:
                 c.execute(
@@ -1400,6 +1463,8 @@ class SystemDatabase:
                 )
 
     def clear_queue_assignment(self, workflow_id: str) -> None:
+        if self._debug_mode:
+            raise Exception("called clear_queue_assignment in debug mode")
         with self.engine.begin() as c:
             c.execute(
                 sa.update(SystemSchema.workflow_queue)

@@ -317,6 +317,7 @@ class DBOS:
         dbos_logger.info("Initializing DBOS")
         self.config: ConfigFile = config
         self._launched: bool = False
+        self._debug_mode: bool = False
         self._sys_db_field: Optional[SystemDatabase] = None
         self._app_db_field: Optional[ApplicationDatabase] = None
         self._registry: DBOSRegistry = _get_or_create_dbos_registry()
@@ -386,17 +387,22 @@ class DBOS:
         rv: AdminServer = self._admin_server_field
         return rv
 
-    @classmethod
-    def launch(cls) -> None:
-        if _dbos_global_instance is not None:
-            _dbos_global_instance._launch()
+    @property
+    def debug_mode(self) -> bool:
+        return self._debug_mode
 
-    def _launch(self) -> None:
+    @classmethod
+    def launch(cls, *, debug_mode: bool = False) -> None:
+        if _dbos_global_instance is not None:
+            _dbos_global_instance._launch(debug_mode=debug_mode)
+
+    def _launch(self, *, debug_mode: bool = False) -> None:
         try:
             if self._launched:
                 dbos_logger.warning(f"DBOS was already launched")
                 return
             self._launched = True
+            self._debug_mode = debug_mode
             if GlobalParams.app_version == "":
                 GlobalParams.app_version = self._registry.compute_app_version()
             if self.conductor_url is not None:
@@ -405,8 +411,12 @@ class DBOS:
                 dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             self._executor_field = ThreadPoolExecutor(max_workers=64)
-            self._sys_db_field = SystemDatabase(self.config)
-            self._app_db_field = ApplicationDatabase(self.config)
+            self._sys_db_field = SystemDatabase(self.config, debug_mode=debug_mode)
+            self._app_db_field = ApplicationDatabase(self.config, debug_mode=debug_mode)
+
+            if debug_mode:
+                return
+
             admin_port = self.config["runtimeConfig"].get("admin_port")
             if admin_port is None:
                 admin_port = 3001
