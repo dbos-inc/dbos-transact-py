@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 import traceback
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from logging import Logger
@@ -32,6 +33,7 @@ from typing import (
 
 from opentelemetry.trace import Span
 
+from dbos._conductor.conductor import ConductorWebsocket
 from dbos._utils import GlobalParams
 
 from ._classproperty import classproperty
@@ -258,6 +260,8 @@ class DBOS:
         config: Optional[ConfigFile] = None,
         fastapi: Optional["FastAPI"] = None,
         flask: Optional["Flask"] = None,
+        conductor_url: Optional[str] = None,
+        conductor_key: Optional[str] = None,
     ) -> DBOS:
         global _dbos_global_instance
         global _dbos_global_registry
@@ -273,7 +277,7 @@ class DBOS:
                 config = _dbos_global_registry.config
 
             _dbos_global_instance = super().__new__(cls)
-            _dbos_global_instance.__init__(fastapi=fastapi, config=config, flask=flask)  # type: ignore
+            _dbos_global_instance.__init__(fastapi=fastapi, config=config, flask=flask, conductor_url=conductor_url, conductor_key=conductor_key)  # type: ignore
         else:
             if (config is not None and _dbos_global_instance.config is not config) or (
                 _dbos_global_instance.fastapi is not fastapi
@@ -301,6 +305,8 @@ class DBOS:
         config: Optional[ConfigFile] = None,
         fastapi: Optional["FastAPI"] = None,
         flask: Optional["Flask"] = None,
+        conductor_url: Optional[str] = None,
+        conductor_key: Optional[str] = None,
     ) -> None:
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -324,6 +330,9 @@ class DBOS:
         self.flask: Optional["Flask"] = flask
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
+        self.conductor_url: Optional[str] = conductor_url
+        self.conductor_key: Optional[str] = conductor_key
+        self.conductor_websocket: Optional[ConductorWebsocket] = None
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
@@ -399,6 +408,9 @@ class DBOS:
             self._debug_mode = debug_mode
             if GlobalParams.app_version == "":
                 GlobalParams.app_version = self._registry.compute_app_version()
+            if self.conductor_key is not None:
+                GlobalParams.executor_id = str(uuid.uuid4())
+            dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             self._executor_field = ThreadPoolExecutor(max_workers=64)
             self._sys_db_field = SystemDatabase(self.config, debug_mode=debug_mode)
@@ -451,6 +463,22 @@ class DBOS:
             bg_queue_thread.start()
             self._background_threads.append(bg_queue_thread)
 
+            # Start the conductor thread if requested
+            if self.conductor_key is not None:
+                if self.conductor_url is None:
+                    dbos_domain = os.environ.get("DBOS_DOMAIN", "cloud.dbos.dev")
+                    self.conductor_url = f"wss://{dbos_domain}/conductor/v1alpha1"
+                evt = threading.Event()
+                self.stop_events.append(evt)
+                self.conductor_websocket = ConductorWebsocket(
+                    self,
+                    conductor_url=self.conductor_url,
+                    conductor_key=self.conductor_key,
+                    evt=evt,
+                )
+                self.conductor_websocket.start()
+                self._background_threads.append(self.conductor_websocket)
+
             # Grab any pollers that were deferred and start them
             for evt, func, args, kwargs in self._registry.pollers:
                 self.stop_events.append(evt)
@@ -501,6 +529,11 @@ class DBOS:
         if self._admin_server_field is not None:
             self._admin_server_field.stop()
             self._admin_server_field = None
+        if (
+            self.conductor_websocket is not None
+            and self.conductor_websocket.websocket is not None
+        ):
+            self.conductor_websocket.websocket.close()
         # CB - This needs work, some things ought to stop before DBs are tossed out,
         #  on the other hand it hangs to move it
         if self._executor_field is not None:
@@ -864,12 +897,14 @@ class DBOS:
     @classmethod
     def cancel_workflow(cls, workflow_id: str) -> None:
         """Cancel a workflow by ID."""
+        dbos_logger.info(f"Cancelling workflow: {workflow_id}")
         _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
         _get_or_create_dbos_registry().cancel_workflow(workflow_id)
 
     @classmethod
     def resume_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Resume a workflow by ID."""
+        dbos_logger.info(f"Resuming workflow: {workflow_id}")
         _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
         _get_or_create_dbos_registry().clear_workflow_cancelled(workflow_id)
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id, False)

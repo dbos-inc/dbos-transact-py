@@ -75,7 +75,10 @@ def start() -> None:
 
             # If the child is still running, force kill it
             if process.poll() is None:
-                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                except Exception:
+                    pass
 
             # Exit immediately
             os._exit(process.returncode if process.returncode is not None else 1)
