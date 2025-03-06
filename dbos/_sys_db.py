@@ -1460,21 +1460,29 @@ class SystemDatabase:
                     .values(completed_at_epoch_ms=int(time.time() * 1000))
                 )
 
+
     def clear_queue_assignment(self, workflow_id: str) -> None:
         if self._debug_mode:
             raise Exception("called clear_queue_assignment in debug mode")
-        with self.engine.begin() as c:
-            c.execute(
-                sa.update(SystemSchema.workflow_queue)
-                .where(SystemSchema.workflow_queue.c.workflow_uuid == workflow_id)
-                .values(executor_id=None, started_at_epoch_ms=None)
-            )
-            c.execute(
-                sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-                .values(executor_id=None, status=WorkflowStatusString.ENQUEUED.value)
-            )
 
+        with self.engine.connect() as conn:
+            with conn.begin() as transaction:
+                res = conn.execute(
+                    sa.update(SystemSchema.workflow_queue)
+                    .where(SystemSchema.workflow_queue.c.workflow_uuid == workflow_id)
+                    .values(executor_id=None, started_at_epoch_ms=None)
+                )
+
+                # If no rows were affected, the workflow is not anymore in the queue
+                if res.rowcount == 0:
+                    transaction.rollback()
+                    return
+
+                conn.execute(
+                    sa.update(SystemSchema.workflow_status)
+                    .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                    .values(executor_id=None, status=WorkflowStatusString.ENQUEUED.value)
+                )
 
 def reset_system_database(config: ConfigFile) -> None:
     sysdb_name = (

@@ -19,7 +19,7 @@ from dbos import (
     WorkflowHandle,
 )
 from dbos._schemas.system_database import SystemSchema
-from dbos._sys_db import WorkflowStatusString
+from dbos._sys_db import WorkflowStatusString, _buffer_flush_interval_secs
 from tests.conftest import default_config, queue_entries_are_cleaned_up
 
 
@@ -898,6 +898,38 @@ def test_resuming_queued_workflows(dbos: DBOS) -> None:
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
+
+
+# Test a race condition between removing a task from the queue and flushing the status buffer
+def test_resuming_already_completed_queue_workflow(dbos: DBOS) -> None:
+    _buffer_flush_interval_secs = 999999 # Disable buffer flush
+
+    start_event = threading.Event()
+    counter = 0
+    @DBOS.step()
+    def test_step() -> None:
+        start_event.set()
+        nonlocal counter
+        counter += 1
+    
+    queue = Queue("test_queue")
+    handle = queue.enqueue(test_step)
+    start_event.wait()
+    assert handle.get_status().status == WorkflowStatusString.PENDING.value # Not flushed
+    assert counter == 1 # But, really, it's completed
+
+    # Should no nothing
+    recovered_ids = DBOS.recover_pending_workflows()
+    assert len(recovered_ids) == 1
+    assert recovered_ids[0].get_workflow_id() == handle.get_workflow_id()
+    assert handle.get_status().status == WorkflowStatusString.PENDING.value # Not re-enqueued
+    assert handle.get_status().executor_id == "local" # executor assignement not cleared
+    time.sleep(2) # Wait for the queue to dequeue some
+    assert counter == 1 # Not re-executed by the queue (because already assigned to itself)
+
+    # Manually flush
+    dbos._sys_db._flush_workflow_status_buffer()
+    assert handle.get_status().status == WorkflowStatusString.SUCCESS.value
 
 
 def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
