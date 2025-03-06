@@ -919,11 +919,14 @@ def test_resuming_already_completed_queue_workflow(dbos: DBOS) -> None:
     time.sleep(_buffer_flush_interval_secs)
     assert handle.get_status().status == WorkflowStatusString.PENDING.value # Not flushed
     assert counter == 1 # But, really, it's completed
+    dbos._sys_db._workflow_status_buffer = {} # Clear buffer (simulates a process restart)
 
     # Recovery picks up on the workflow and recovers it
     recovered_ids = DBOS.recover_pending_workflows()
     assert len(recovered_ids) == 1
     assert recovered_ids[0].get_workflow_id() == handle.get_workflow_id()
+    start_event.wait()
+    assert counter == 2 # The workflow ran again
     dbos._sys_db._flush_workflow_status_buffer() # Manually flush
     assert handle.get_status().status == WorkflowStatusString.SUCCESS.value # Is recovered
     assert handle.get_status().executor_id == "local"
