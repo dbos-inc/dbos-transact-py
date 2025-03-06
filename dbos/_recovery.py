@@ -27,7 +27,7 @@ def startup_recovery_thread(
                     pending_workflow.queue_name
                     and pending_workflow.queue_name != "_dbos_internal_queue"
                 ):
-                    cleared: bool = dbos._sys_db.clear_queue_assignment(pending_workflow.workflow_uuid)
+                    cleared = dbos._sys_db.clear_queue_assignment(pending_workflow.workflow_uuid)
                     if cleared:
                         continue
                 execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
@@ -57,7 +57,7 @@ def recover_pending_workflows(
                 and pending_workflow.queue_name != "_dbos_internal_queue"
             ):
                 try:
-                    cleared: bool = dbos._sys_db.clear_queue_assignment(pending_workflow.workflow_uuid)
+                    cleared = dbos._sys_db.clear_queue_assignment(pending_workflow.workflow_uuid)
                     if cleared:
                         workflow_handles.append(
                             dbos.retrieve_workflow(pending_workflow.workflow_uuid)
