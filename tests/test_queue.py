@@ -911,25 +911,20 @@ def test_resuming_already_completed_queue_workflow(dbos: DBOS) -> None:
         start_event.set()
         nonlocal counter
         counter += 1
-    
+
     queue = Queue("test_queue")
     handle = queue.enqueue(test_step)
     start_event.wait()
     assert handle.get_status().status == WorkflowStatusString.PENDING.value # Not flushed
     assert counter == 1 # But, really, it's completed
 
-    # Should no nothing
+    # Recovery picks up on the workflow and recovers it
     recovered_ids = DBOS.recover_pending_workflows()
     assert len(recovered_ids) == 1
     assert recovered_ids[0].get_workflow_id() == handle.get_workflow_id()
-    assert handle.get_status().status == WorkflowStatusString.PENDING.value # Not re-enqueued
-    assert handle.get_status().executor_id == "local" # executor assignement not cleared
-    time.sleep(2) # Wait for the queue to dequeue some
-    assert counter == 1 # Not re-executed by the queue (because already assigned to itself)
-
-    # Manually flush
-    dbos._sys_db._flush_workflow_status_buffer()
-    assert handle.get_status().status == WorkflowStatusString.SUCCESS.value
+    time.sleep(2) # Wait for dequeue
+    assert handle.get_status().status == WorkflowStatusString.SUCCESS.value # Is recovered
+    assert handle.get_status().executor_id == "local"
 
 
 def test_dlq_enqueued_workflows(dbos: DBOS) -> None:

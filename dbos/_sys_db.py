@@ -1461,12 +1461,14 @@ class SystemDatabase:
                 )
 
 
-    def clear_queue_assignment(self, workflow_id: str) -> None:
+    def clear_queue_assignment(self, workflow_id: str) -> bool:
         if self._debug_mode:
             raise Exception("called clear_queue_assignment in debug mode")
 
         with self.engine.connect() as conn:
             with conn.begin() as transaction:
+                conn.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
+
                 res = conn.execute(
                     sa.update(SystemSchema.workflow_queue)
                     .where(SystemSchema.workflow_queue.c.workflow_uuid == workflow_id)
@@ -1476,13 +1478,19 @@ class SystemDatabase:
                 # If no rows were affected, the workflow is not anymore in the queue
                 if res.rowcount == 0:
                     transaction.rollback()
-                    return
+                    return False
 
-                conn.execute(
+                res = conn.execute(
                     sa.update(SystemSchema.workflow_status)
                     .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
                     .values(executor_id=None, status=WorkflowStatusString.ENQUEUED.value)
                 )
+                if res.rowcount == 0:
+                    # This should never happen
+                    raise Exception(
+                        f"UNREACHABLE: Workflow {workflow_id} is found in the workflow_queue table but not found in the workflow_status table"
+                    )
+                return True
 
 def reset_system_database(config: ConfigFile) -> None:
     sysdb_name = (
