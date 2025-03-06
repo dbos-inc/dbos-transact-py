@@ -442,7 +442,7 @@ def start_workflow(
         )
     ):
         dbos.logger.debug(
-            f"Workflow {new_wf_id} being enqueued or already completed with status {wf_status}. Directly returning a workflow handle."
+            f"Workflow {new_wf_id} already completed with status {wf_status}. Directly returning a workflow handle."
         )
         return WorkflowHandlePolling(new_wf_id, dbos)
 
