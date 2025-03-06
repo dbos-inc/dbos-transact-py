@@ -1467,8 +1467,6 @@ class SystemDatabase:
 
         with self.engine.connect() as conn:
             with conn.begin() as transaction:
-                conn.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
-
                 res = conn.execute(
                     sa.update(SystemSchema.workflow_queue)
                     .where(SystemSchema.workflow_queue.c.workflow_uuid == workflow_id)
