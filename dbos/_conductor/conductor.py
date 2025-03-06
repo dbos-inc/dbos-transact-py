@@ -31,8 +31,7 @@ class ConductorWebsocket(threading.Thread):
     def run(self) -> None:
         while not self.evt.is_set():
             try:
-                self.websocket = connect(self.url)
-                while not self.evt.is_set():
+                with connect(self.url) as self.websocket:
                     message = self.websocket.recv()
                     if not isinstance(message, str):
                         self.dbos.logger.warning("Receieved unexpected non-str message")
