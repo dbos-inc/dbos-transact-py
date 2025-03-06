@@ -906,7 +906,7 @@ def test_resuming_already_completed_queue_workflow(dbos: DBOS) -> None:
 
     start_event = threading.Event()
     counter = 0
-    @DBOS.step()
+    @DBOS.workflow()
     def test_step() -> None:
         start_event.set()
         nonlocal counter
@@ -927,6 +927,7 @@ def test_resuming_already_completed_queue_workflow(dbos: DBOS) -> None:
     assert recovered_ids[0].get_workflow_id() == handle.get_workflow_id()
     start_event.wait()
     assert counter == 2 # The workflow ran again
+    time.sleep(_buffer_flush_interval_secs) # This is actually to wait that _get_wf_invoke_func buffers the status
     dbos._sys_db._flush_workflow_status_buffer() # Manually flush
     assert handle.get_status().status == WorkflowStatusString.SUCCESS.value # Is recovered
     assert handle.get_status().executor_id == "local"
