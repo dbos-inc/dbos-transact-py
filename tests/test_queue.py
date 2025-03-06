@@ -19,7 +19,7 @@ from dbos import (
     WorkflowHandle,
 )
 from dbos._schemas.system_database import SystemSchema
-from dbos._sys_db import WorkflowStatusString
+from dbos._sys_db import WorkflowStatusString, _buffer_flush_interval_secs
 from tests.conftest import default_config, queue_entries_are_cleaned_up
 
 
@@ -902,7 +902,7 @@ def test_resuming_queued_workflows(dbos: DBOS) -> None:
 
 # Test a race condition between removing a task from the queue and flushing the status buffer
 def test_resuming_already_completed_queue_workflow(dbos: DBOS) -> None:
-    dbos._sys_db._buffer_flush_interval_secs = 999999 # Disable buffer flush
+    _buffer_flush_interval_secs = 999999 # Disable buffer flush
 
     start_event = threading.Event()
     counter = 0
