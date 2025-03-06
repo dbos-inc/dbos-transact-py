@@ -19,14 +19,16 @@ if TYPE_CHECKING:
 class ConductorWebsocket(threading.Thread):
 
     def __init__(
-        self, dbos: "DBOS", conductor_url: str, token: str, evt: threading.Event
+        self, dbos: "DBOS", conductor_url: str, conductor_key: str, evt: threading.Event
     ):
         super().__init__(daemon=True)
         self.websocket: Optional[Connection] = None
         self.evt = evt
         self.dbos = dbos
         self.app_name = dbos.config["name"]
-        self.url = conductor_url.rstrip("/") + f"/websocket/{self.app_name}/{token}"
+        self.url = (
+            conductor_url.rstrip("/") + f"/websocket/{self.app_name}/{conductor_key}"
+        )
 
     def run(self) -> None:
         while not self.evt.is_set():

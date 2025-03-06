@@ -261,7 +261,7 @@ class DBOS:
         fastapi: Optional["FastAPI"] = None,
         flask: Optional["Flask"] = None,
         conductor_url: Optional[str] = None,
-        conductor_token: Optional[str] = None,
+        conductor_key: Optional[str] = None,
     ) -> DBOS:
         global _dbos_global_instance
         global _dbos_global_registry
@@ -277,7 +277,7 @@ class DBOS:
                 config = _dbos_global_registry.config
 
             _dbos_global_instance = super().__new__(cls)
-            _dbos_global_instance.__init__(fastapi=fastapi, config=config, flask=flask, conductor_url=conductor_url, conductor_token=conductor_token)  # type: ignore
+            _dbos_global_instance.__init__(fastapi=fastapi, config=config, flask=flask, conductor_url=conductor_url, conductor_key=conductor_key)  # type: ignore
         else:
             if (config is not None and _dbos_global_instance.config is not config) or (
                 _dbos_global_instance.fastapi is not fastapi
@@ -306,7 +306,7 @@ class DBOS:
         fastapi: Optional["FastAPI"] = None,
         flask: Optional["Flask"] = None,
         conductor_url: Optional[str] = None,
-        conductor_token: Optional[str] = None,
+        conductor_key: Optional[str] = None,
     ) -> None:
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -331,7 +331,7 @@ class DBOS:
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
         self.conductor_url: Optional[str] = conductor_url
-        self.conductor_token: Optional[str] = conductor_token
+        self.conductor_key: Optional[str] = conductor_key
         self.conductor_websocket: Optional[ConductorWebsocket] = None
 
         # If using FastAPI, set up middleware and lifecycle events
@@ -408,7 +408,7 @@ class DBOS:
             self._debug_mode = debug_mode
             if GlobalParams.app_version == "":
                 GlobalParams.app_version = self._registry.compute_app_version()
-            if self.conductor_token is not None:
+            if self.conductor_key is not None:
                 GlobalParams.executor_id = str(uuid.uuid4())
             dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
@@ -464,7 +464,7 @@ class DBOS:
             self._background_threads.append(bg_queue_thread)
 
             # Start the conductor thread if requested
-            if self.conductor_token is not None:
+            if self.conductor_key is not None:
                 if self.conductor_url is None:
                     dbos_domain = os.environ.get("DBOS_DOMAIN", "cloud.dbos.dev")
                     self.conductor_url = f"wss://{dbos_domain}/conductor/v1alpha1"
@@ -473,7 +473,7 @@ class DBOS:
                 self.conductor_websocket = ConductorWebsocket(
                     self,
                     conductor_url=self.conductor_url,
-                    token=self.conductor_token,
+                    conductor_key=self.conductor_key,
                     evt=evt,
                 )
                 self.conductor_websocket.start()
