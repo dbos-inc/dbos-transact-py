@@ -44,10 +44,6 @@ distribution = true
 source = "scm"
 version_format = "version:format_version"
 
-[tool.pdm.dev-dependencies]
-dev = [
-    "mypy>=1.15.0",
-]
 [tool.black]
 line-length = 88
 
@@ -66,4 +62,4 @@ log_cli_level = "INFO"
 log_cli = true
 
 [dependency-groups]
-dev = ["pytest>=8.3.3", "mypy>=1.12.0", "pytest-mock>=3.14.0", "types-PyYAML>=6.0.12.20240808", "types-jsonschema>=4.23.0.20240813", "black>=24.10.0", "pre-commit>=4.0.1", "isort>=5.13.2", "requests>=2.32.3", "types-requests>=2.32.0.20240914", "httpx>=0.27.2", "pytz>=2024.2", "GitPython>=3.1.43", "confluent-kafka>=2.6.0", "types-confluent-kafka>=1.2.2", "flask>=3.0.3", "pytest-order>=1.3.0", "pdm-backend>=2.4.2", "pytest-asyncio>=0.25.0"]
+dev = ["pytest>=8.3.3", "mypy>=1.15.0", "pytest-mock>=3.14.0", "types-PyYAML>=6.0.12.20240808", "types-jsonschema>=4.23.0.20240813", "black>=24.10.0", "pre-commit>=4.0.1", "isort>=5.13.2", "requests>=2.32.3", "types-requests>=2.32.0.20240914", "httpx>=0.27.2", "pytz>=2024.2", "GitPython>=3.1.43", "confluent-kafka>=2.6.0", "types-confluent-kafka>=1.2.2", "flask>=3.0.3", "pytest-order>=1.3.0", "pdm-backend>=2.4.2", "pytest-asyncio>=0.25.0"]
