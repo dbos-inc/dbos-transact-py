@@ -44,7 +44,7 @@ class ConductorWebsocket(threading.Thread):
                             continue
                         base_message = p.BaseMessage.from_json(message)
                         type = base_message.type
-                        if type == p.MessageType.EXECUTOR_INFO.value:
+                        if type == p.MessageType.EXECUTOR_INFO:
                             info_response = p.ExecutorInfoResponse(
                                 type=p.MessageType.EXECUTOR_INFO,
                                 request_id=base_message.request_id,
@@ -123,20 +123,20 @@ class ConductorWebsocket(threading.Thread):
                             list_workflows_message = p.ListWorkflowsRequest.from_json(
                                 message
                             )
-                            b = list_workflows_message.body
+                            body = list_workflows_message.body
                             infos = list_workflows(
                                 self.dbos._sys_db,
-                                workflow_ids=b["workflow_uuids"],
-                                user=b["authenticated_user"],
-                                start_time=b["start_time"],
-                                end_time=b["end_time"],
-                                status=b["status"],
+                                workflow_ids=body["workflow_uuids"],
+                                user=body["authenticated_user"],
+                                start_time=body["start_time"],
+                                end_time=body["end_time"],
+                                status=body["status"],
                                 request=False,
-                                app_version=b["application_version"],
-                                name=b["workflow_name"],
-                                limit=b["limit"],
-                                offset=b["offset"],
-                                sort_desc=b["sort_desc"],
+                                app_version=body["application_version"],
+                                name=body["workflow_name"],
+                                limit=body["limit"],
+                                offset=body["offset"],
+                                sort_desc=body["sort_desc"],
                             )
                             list_workflows_response = p.ListWorkflowsResponse(
                                 type=p.MessageType.LIST_WORKFLOWS,
@@ -151,18 +151,18 @@ class ConductorWebsocket(threading.Thread):
                             list_queued_workflows_message = (
                                 p.ListQueuedWorkflowsRequest.from_json(message)
                             )
-                            q = list_queued_workflows_message.body
+                            q_body = list_queued_workflows_message.body
                             infos = list_queued_workflows(
                                 self.dbos._sys_db,
-                                start_time=q["start_time"],
-                                end_time=q["end_time"],
-                                status=q["status"],
+                                start_time=q_body["start_time"],
+                                end_time=q_body["end_time"],
+                                status=q_body["status"],
                                 request=False,
-                                name=q["workflow_name"],
-                                limit=q["limit"],
-                                offset=q["offset"],
-                                queue_name=q["queue_name"],
-                                sort_desc=q["sort_desc"],
+                                name=q_body["workflow_name"],
+                                limit=q_body["limit"],
+                                offset=q_body["offset"],
+                                queue_name=q_body["queue_name"],
+                                sort_desc=q_body["sort_desc"],
                             )
                             list_queued_workflows_response = (
                                 p.ListQueuedWorkflowsResponse(
@@ -188,7 +188,7 @@ class ConductorWebsocket(threading.Thread):
                 continue
             except Exception as e:
                 self.dbos.logger.error(
-                    f"Unexpected exception in connection to conductor: {e}"
+                    f"Unexpected exception in connection to conductor. Reconnecting: {e}"
                 )
                 time.sleep(1)
                 continue
