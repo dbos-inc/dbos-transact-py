@@ -902,7 +902,7 @@ def test_resuming_queued_workflows(dbos: DBOS) -> None:
 
 # Test a race condition between removing a task from the queue and flushing the status buffer
 def test_resuming_already_completed_queue_workflow(dbos: DBOS) -> None:
-    _buffer_flush_interval_secs = 999999 # Disable buffer flush
+    dbos._sys_db._run_background_processes = False # Disable buffer flush
 
     start_event = threading.Event()
     counter = 0
@@ -915,6 +915,8 @@ def test_resuming_already_completed_queue_workflow(dbos: DBOS) -> None:
     queue = Queue("test_queue")
     handle = queue.enqueue(test_step)
     start_event.wait()
+    start_event.clear()
+    time.sleep(_buffer_flush_interval_secs)
     assert handle.get_status().status == WorkflowStatusString.PENDING.value # Not flushed
     assert counter == 1 # But, really, it's completed
 
@@ -922,9 +924,10 @@ def test_resuming_already_completed_queue_workflow(dbos: DBOS) -> None:
     recovered_ids = DBOS.recover_pending_workflows()
     assert len(recovered_ids) == 1
     assert recovered_ids[0].get_workflow_id() == handle.get_workflow_id()
-    time.sleep(2) # Wait for dequeue
+    dbos._sys_db._flush_workflow_status_buffer() # Manually flush
     assert handle.get_status().status == WorkflowStatusString.SUCCESS.value # Is recovered
     assert handle.get_status().executor_id == "local"
+    assert handle.get_status().recovery_attempts == 2
 
 
 def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
