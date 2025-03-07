@@ -14,7 +14,9 @@ if TYPE_CHECKING:
     from ._dbos import DBOS, WorkflowHandle
 
 
-def _recover_workflow(dbos: "DBOS", workflow: GetPendingWorkflowsOutput):
+def _recover_workflow(
+    dbos: "DBOS", workflow: GetPendingWorkflowsOutput
+) -> "WorkflowHandle[Any]":
     if workflow.queue_name and workflow.queue_name != "_dbos_internal_queue":
         cleared = dbos._sys_db.clear_queue_assignment(workflow.workflow_uuid)
         if cleared:
@@ -31,7 +33,7 @@ def startup_recovery_thread(
     while not stop_event.is_set() and len(pending_workflows) > 0:
         try:
             for pending_workflow in list(pending_workflows):
-                _recover_workflow(pending_workflow)
+                _recover_workflow(dbos, pending_workflow)
                 pending_workflows.remove(pending_workflow)
         except DBOSWorkflowFunctionNotFoundError:
             time.sleep(1)
@@ -53,7 +55,7 @@ def recover_pending_workflows(
         )
         for pending_workflow in pending_workflows:
             try:
-                handle = _recover_workflow(pending_workflow)
+                handle = _recover_workflow(dbos, pending_workflow)
                 workflow_handles.append(handle)
             except Exception:
                 dbos.logger.error(
