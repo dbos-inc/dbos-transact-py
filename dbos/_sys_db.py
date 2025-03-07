@@ -1346,7 +1346,7 @@ class SystemDatabase:
                 .where(
                     SystemSchema.workflow_queue.c.completed_at_epoch_ms.is_(
                         None
-                    )  # Task is not completed. This should always be true if the task is not started
+                    )  # Task is not completed.
                 )
                 .group_by(SystemSchema.workflow_status.c.executor_id)
             )
@@ -1358,12 +1358,6 @@ class SystemDatabase:
 
             max_tasks = float("inf")
             if queue.worker_concurrency is not None:
-                # Worker local concurrency limit should always be >= running_tasks_for_this_worker
-                # This should never happen but a check + warning doesn't hurt
-                if running_tasks_for_this_worker > queue.worker_concurrency:
-                    dbos_logger.warning(
-                        f"Number of tasks on this worker ({running_tasks_for_this_worker}) exceeds the worker concurrency limit ({queue.worker_concurrency})"
-                    )
                 max_tasks = max(
                     0, queue.worker_concurrency - running_tasks_for_this_worker
                 )
