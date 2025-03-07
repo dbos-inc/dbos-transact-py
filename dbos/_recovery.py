@@ -57,10 +57,11 @@ def recover_pending_workflows(
             try:
                 handle = _recover_workflow(dbos, pending_workflow)
                 workflow_handles.append(handle)
-            except Exception:
+            except Exception as e:
                 dbos.logger.error(
                     f"Exception encountered when recovering workflows: {traceback.format_exc()}"
                 )
+                raise e
         dbos.logger.info(
             f"Recovering {len(pending_workflows)} workflows for executor {executor_id} from version {GlobalParams.app_version}"
         )
