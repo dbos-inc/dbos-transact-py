@@ -14,6 +14,14 @@ if TYPE_CHECKING:
     from ._dbos import DBOS, WorkflowHandle
 
 
+def _recover_workflow(dbos: "DBOS", workflow: GetPendingWorkflowsOutput):
+    if workflow.queue_name and workflow.queue_name != "_dbos_internal_queue":
+        cleared = dbos._sys_db.clear_queue_assignment(workflow.workflow_uuid)
+        if cleared:
+            return dbos.retrieve_workflow(workflow.workflow_uuid)
+    return execute_workflow_by_id(dbos, workflow.workflow_uuid)
+
+
 def startup_recovery_thread(
     dbos: "DBOS", pending_workflows: List[GetPendingWorkflowsOutput]
 ) -> None:
@@ -23,14 +31,7 @@ def startup_recovery_thread(
     while not stop_event.is_set() and len(pending_workflows) > 0:
         try:
             for pending_workflow in list(pending_workflows):
-                if (
-                    pending_workflow.queue_name
-                    and pending_workflow.queue_name != "_dbos_internal_queue"
-                ):
-                    cleared = dbos._sys_db.clear_queue_assignment(pending_workflow.workflow_uuid)
-                    if cleared:
-                        continue
-                execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
+                _recover_workflow(pending_workflow)
                 pending_workflows.remove(pending_workflow)
         except DBOSWorkflowFunctionNotFoundError:
             time.sleep(1)
@@ -51,25 +52,12 @@ def recover_pending_workflows(
             executor_id, GlobalParams.app_version
         )
         for pending_workflow in pending_workflows:
-            if (
-                pending_workflow.queue_name
-                and pending_workflow.queue_name != "_dbos_internal_queue"
-            ):
-                try:
-                    cleared = dbos._sys_db.clear_queue_assignment(pending_workflow.workflow_uuid)
-                    if cleared:
-                        workflow_handles.append(
-                            dbos.retrieve_workflow(pending_workflow.workflow_uuid)
-                        )
-                    else:
-                        workflow_handles.append(
-                            execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
-                        )
-                except Exception as e:
-                    dbos.logger.error(e)
-            else:
-                workflow_handles.append(
-                    execute_workflow_by_id(dbos, pending_workflow.workflow_uuid)
+            try:
+                handle = _recover_workflow(pending_workflow)
+                workflow_handles.append(handle)
+            except Exception:
+                dbos.logger.error(
+                    f"Exception encountered when recovering workflows: {traceback.format_exc()}"
                 )
         dbos.logger.info(
             f"Recovering {len(pending_workflows)} workflows for executor {executor_id} from version {GlobalParams.app_version}"
