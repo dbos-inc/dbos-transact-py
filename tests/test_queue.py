@@ -902,10 +902,11 @@ def test_resuming_queued_workflows(dbos: DBOS) -> None:
 
 # Test a race condition between removing a task from the queue and flushing the status buffer
 def test_resuming_already_completed_queue_workflow(dbos: DBOS) -> None:
-    dbos._sys_db._run_background_processes = False # Disable buffer flush
+    dbos._sys_db._run_background_processes = False  # Disable buffer flush
 
     start_event = threading.Event()
     counter = 0
+
     @DBOS.workflow()
     def test_step() -> None:
         start_event.set()
@@ -917,19 +918,27 @@ def test_resuming_already_completed_queue_workflow(dbos: DBOS) -> None:
     start_event.wait()
     start_event.clear()
     time.sleep(_buffer_flush_interval_secs)
-    assert handle.get_status().status == WorkflowStatusString.PENDING.value # Not flushed
-    assert counter == 1 # But, really, it's completed
-    dbos._sys_db._workflow_status_buffer = {} # Clear buffer (simulates a process restart)
+    assert (
+        handle.get_status().status == WorkflowStatusString.PENDING.value
+    )  # Not flushed
+    assert counter == 1  # But, really, it's completed
+    dbos._sys_db._workflow_status_buffer = (
+        {}
+    )  # Clear buffer (simulates a process restart)
 
     # Recovery picks up on the workflow and recovers it
     recovered_ids = DBOS.recover_pending_workflows()
     assert len(recovered_ids) == 1
     assert recovered_ids[0].get_workflow_id() == handle.get_workflow_id()
     start_event.wait()
-    assert counter == 2 # The workflow ran again
-    time.sleep(_buffer_flush_interval_secs) # This is actually to wait that _get_wf_invoke_func buffers the status
-    dbos._sys_db._flush_workflow_status_buffer() # Manually flush
-    assert handle.get_status().status == WorkflowStatusString.SUCCESS.value # Is recovered
+    assert counter == 2  # The workflow ran again
+    time.sleep(
+        _buffer_flush_interval_secs
+    )  # This is actually to wait that _get_wf_invoke_func buffers the status
+    dbos._sys_db._flush_workflow_status_buffer()  # Manually flush
+    assert (
+        handle.get_status().status == WorkflowStatusString.SUCCESS.value
+    )  # Is recovered
     assert handle.get_status().executor_id == "local"
     assert handle.get_status().recovery_attempts == 2
 
