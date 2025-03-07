@@ -8,7 +8,7 @@ from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
 from dbos._utils import GlobalParams
-from dbos._workflow_commands import get_workflow, list_queued_workflows, list_workflows
+from dbos._workflow_commands import list_queued_workflows, list_workflows
 
 from . import protocol as p
 
@@ -175,25 +175,6 @@ class ConductorWebsocket(threading.Thread):
                                 )
                             )
                             websocket.send(list_queued_workflows_response.to_json())
-                        elif type == p.MessageType.GET_WORKFLOW:
-                            get_workflow_message = p.GetWorkflowRequest.from_json(
-                                message
-                            )
-                            info = get_workflow(
-                                self.dbos._sys_db,
-                                get_workflow_message.workflow_id,
-                                getRequest=False,
-                            )
-                            get_workflow_response = p.GetWorkflowResponse(
-                                type=p.MessageType.GET_WORKFLOW,
-                                request_id=base_message.request_id,
-                                output=(
-                                    p.WorkflowsOutput.from_workflow_information(info)
-                                    if info is not None
-                                    else None
-                                ),
-                            )
-                            websocket.send(get_workflow_response.to_json())
                         else:
                             self.dbos.logger.warning(f"Unexpected message type: {type}")
             except ConnectionClosedOK:

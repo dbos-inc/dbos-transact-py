@@ -14,7 +14,6 @@ class MessageType(str, Enum):
     LIST_QUEUED_WORKFLOWS = "list_queued_workflows"
     RESUME = "resume"
     RESTART = "restart"
-    GET_WORKFLOW = "get_workflow"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -185,13 +184,3 @@ class ListQueuedWorkflowsRequest(BaseMessage):
 @dataclass
 class ListQueuedWorkflowsResponse(BaseMessage):
     output: List[WorkflowsOutput]
-
-
-@dataclass
-class GetWorkflowRequest(BaseMessage):
-    workflow_id: str
-
-
-@dataclass
-class GetWorkflowResponse(BaseMessage):
-    output: Optional[WorkflowsOutput]
