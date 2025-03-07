@@ -1324,24 +1324,31 @@ class SystemDatabase:
             # If there is a global or local concurrency limit N, select only the N oldest enqueued
             # functions, else select all of them.
 
-            # First lets figure out how many tasks the worker can dequeue
+            # First lets figure out how many tasks are eligible for dequeue.
+            # This means figuring out how many unstarted tasks are within the local and global concurrency limits
             running_tasks_query = (
                 sa.select(
-                    SystemSchema.workflow_queue.c.executor_id,
+                    SystemSchema.workflow_status.c.executor_id,
                     sa.func.count().label("task_count"),
+                )
+                .select_from(
+                    SystemSchema.workflow_queue.join(
+                        SystemSchema.workflow_status,
+                        SystemSchema.workflow_queue.c.workflow_id == SystemSchema.workflow_status.c.workflow_id
+                    )
                 )
                 .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
                 .where(
-                    SystemSchema.workflow_queue.c.executor_id.isnot(
+                    SystemSchema.workflow_queue.c.start_time_ms.isnot(
                         None
-                    )  # Task is dequeued
+                    )  # Task is started
                 )
                 .where(
                     SystemSchema.workflow_queue.c.completed_at_epoch_ms.is_(
                         None
-                    )  # Task is not completed
+                    )  # Task is not completed. This should always be true if the task is not started
                 )
-                .group_by(SystemSchema.workflow_queue.c.executor_id)
+                .group_by(SystemSchema.workflow_status.c.executor_id)
             )
             running_tasks_result = c.execute(running_tasks_query).fetchall()
             running_tasks_result_dict = {row[0]: row[1] for row in running_tasks_result}
@@ -1371,16 +1378,14 @@ class SystemDatabase:
                 available_tasks = max(0, queue.concurrency - total_running_tasks)
                 max_tasks = min(max_tasks, available_tasks)
 
-            # Lookup tasks
+            # Lookup unstarted/uncompleted tasks (not running)
             query = (
                 sa.select(
                     SystemSchema.workflow_queue.c.workflow_uuid,
-                    SystemSchema.workflow_queue.c.started_at_epoch_ms,
-                    SystemSchema.workflow_queue.c.executor_id,
                 )
                 .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
+                .where(SystemSchema.workflow_queue.c.started_at_epoch_ms == None)
                 .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms == None)
-                .where(SystemSchema.workflow_queue.c.executor_id == None)
                 .order_by(SystemSchema.workflow_queue.c.created_at_epoch_ms.asc())
                 .with_for_update(nowait=True)  # Error out early
             )
@@ -1423,7 +1428,7 @@ class SystemDatabase:
                 c.execute(
                     SystemSchema.workflow_queue.update()
                     .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
-                    .values(started_at_epoch_ms=start_time_ms, executor_id=executor_id)
+                    .values(started_at_epoch_ms=start_time_ms)
                 )
                 ret_ids.append(id)
 
@@ -1468,23 +1473,24 @@ class SystemDatabase:
 
         with self.engine.connect() as conn:
             with conn.begin() as transaction:
+                # Reset the start time in the queue to mark it as not started
                 res = conn.execute(
                     sa.update(SystemSchema.workflow_queue)
                     .where(SystemSchema.workflow_queue.c.workflow_uuid == workflow_id)
-                    .values(executor_id=None, started_at_epoch_ms=None)
+                    .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms.is_(None))
+                    .values(started_at_epoch_ms=None)
                 )
 
-                # If no rows were affected, the workflow is not anymore in the queue
+                # If no rows were affected, the workflow is not anymore in the queue or was already completed
                 if res.rowcount == 0:
                     transaction.rollback()
                     return False
 
+                # Reset the status of the task to "ENQUEUED"
                 res = conn.execute(
                     sa.update(SystemSchema.workflow_status)
                     .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-                    .values(
-                        executor_id=None, status=WorkflowStatusString.ENQUEUED.value
-                    )
+                    .values(status=WorkflowStatusString.ENQUEUED.value)
                 )
                 if res.rowcount == 0:
                     # This should never happen
