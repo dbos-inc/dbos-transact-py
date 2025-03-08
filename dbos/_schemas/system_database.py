@@ -154,7 +154,7 @@ class SystemSchema:
             nullable=False,
             primary_key=True,
         ),
-        Column("executor_id", Text),
+        # Column("executor_id", Text), # This column is deprecated. Do *not* use it.
         Column("queue_name", Text, nullable=False),
         Column(
             "created_at_epoch_ms",
