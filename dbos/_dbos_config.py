@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, TypedDict, TypeGuard, cast
 import yaml
 from jsonschema import ValidationError, validate
 from rich import print
-from sqlalchemy import URL
+from sqlalchemy import URL, make_url
 
 from ._db_wizard import db_wizard, load_db_connection
 from ._error import DBOSInitializationError
@@ -51,8 +51,7 @@ class DatabaseConfig(TypedDict, total=False):
 
 
 def parse_db_string_to_dbconfig(db_string: str) -> DatabaseConfig:
-    db_url = URL.create(db_string)
-    print(db_url)
+    db_url = make_url(db_string)
     db_config = {
         "hostname": db_url.host,
         "port": db_url.port,
