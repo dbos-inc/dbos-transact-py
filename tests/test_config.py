@@ -8,7 +8,7 @@ import pytest_mock
 
 # Public API
 from dbos import load_config
-from dbos._dbos_config import set_env_vars
+from dbos._dbos_config import parse_db_string_to_dbconfig, set_env_vars
 from dbos._error import DBOSInitializationError
 
 mock_filename = "test.yaml"
@@ -460,3 +460,28 @@ def test_debug_override(mocker: pytest_mock.MockFixture):
     assert configFile["database"]["username"] == "fakeuser"
     assert configFile["database"]["password"] == "fakepassword"
     assert configFile["database"]["local_suffix"] == False
+
+
+# New DBOSConfig tests
+
+
+def test_parse_db_string_to_dbconfig():
+    db_string = "postgresql://user:password@localhost:5432/dbname"
+    db_config = parse_db_string_to_dbconfig(db_string)
+    assert db_config["hostname"] == "localhost"
+    assert db_config["port"] == 5432
+    assert db_config["username"] == "user"
+    assert db_config["password"] == "password"
+    assert db_config["app_db_name"] == "dbname"
+    assert db_config["ssl"] == False
+    assert db_config["ssl_ca"] == ""
+    assert db_config["sys_db_name"] == ""
+    assert db_config["local_suffix"] == False
+    assert db_config["migrate"] == []
+    assert db_config["rollback"] == []
+
+    db_string = "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslcert=ca.pem"
+    db_config = parse_db_string_to_dbconfig(db_string)
+    assert db_config["ssl"] == True
+    assert db_config["ssl_ca"] == "ca.pem"
+    assert db_config["connectionTimeoutMillis"] == 10000

@@ -88,13 +88,20 @@ from ._context import (
     assert_current_dbos_context,
     get_local_dbos_context,
 )
-from ._dbos_config import ConfigFile, load_config, set_env_vars
+from ._dbos_config import (
+    ConfigFile,
+    DBOSConfig,
+    is_config_file,
+    load_config,
+    parse_db_string_to_dbconfig,
+    set_env_vars,
+)
 from ._error import (
     DBOSConflictingRegistrationError,
     DBOSException,
     DBOSNonExistentWorkflowError,
 )
-from ._logger import add_otlp_to_all_loggers, dbos_logger
+from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger
 from ._sys_db import SystemDatabase
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
@@ -158,7 +165,7 @@ class DBOSRegistry:
         self.queue_info_map: dict[str, Queue] = {}
         self.pollers: list[RegisteredJob] = []
         self.dbos: Optional[DBOS] = None
-        self.config: Optional[ConfigFile] = None
+        self.config: Optional[Union[DBOSConfig, ConfigFile]] = None
         self.workflow_cancelled_map: dict[str, bool] = {}
 
     def register_wf_function(self, name: str, wrapped_func: F, functype: str) -> None:
@@ -257,7 +264,7 @@ class DBOS:
     def __new__(
         cls: Type[DBOS],
         *,
-        config: Optional[ConfigFile] = None,
+        config: Optional[Union[ConfigFile, DBOSConfig]] = None,
         fastapi: Optional["FastAPI"] = None,
         flask: Optional["Flask"] = None,
         conductor_url: Optional[str] = None,
@@ -302,7 +309,7 @@ class DBOS:
     def __init__(
         self,
         *,
-        config: Optional[ConfigFile] = None,
+        config: Optional[Union[DBOSConfig, ConfigFile]] = None,
         fastapi: Optional["FastAPI"] = None,
         flask: Optional["Flask"] = None,
         conductor_url: Optional[str] = None,
@@ -312,12 +319,43 @@ class DBOS:
             return
 
         self._initialized: bool = True
+        # If no config is provided, load it from the environment and convert to DBOSConfig
         if config is None:
             config = load_config()
-        set_env_vars(config)
-        dbos_tracer.config(config)
+            set_env_vars(cast(ConfigFile, config))
+            self.config: ConfigFile = config
+        # If a ConfigFile structure is provided, do the missing bits of load_config()
+        elif is_config_file(config):
+            set_env_vars(config)
+            self.config: ConfigFile = config
+        # If the new struct is provided, convert it to ConfigFile
+        elif isinstance(config, DBOSConfig):
+            db_config = parse_db_string_to_dbconfig(config.db_string)
+            db_config.sys_db_name = config.sys_db_name
+            self.config: ConfigFile = {
+                "name": config.name,
+                "database": db_config,
+                "runtimeConfig": {
+                    "admin_port": config.admin_port,
+                },
+                "telemetry": {
+                    "OTLPExporter": {
+                        "otlp_traces_endpoint": config.otlp_traces_endpoints[0],
+                    },
+                    "logs": {
+                        "logLevel": config.log_level,
+                    },
+                },
+            }
+
+        # TODO: when running in DBOS Cloud, override specific variables from dbos-config.yaml
+        # OTLP traces: Add ours to theirs
+        # Database parameters: substitute theirs for ours
+
+        config_logger(self.config)
+        dbos_tracer.config(self.config)
         dbos_logger.info("Initializing DBOS")
-        self.config: ConfigFile = config
+
         self._launched: bool = False
         self._debug_mode: bool = False
         self._sys_db_field: Optional[SystemDatabase] = None

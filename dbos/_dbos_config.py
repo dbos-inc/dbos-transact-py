@@ -2,7 +2,7 @@ import json
 import os
 import re
 from importlib import resources
-from typing import Any, Dict, List, Optional, TypedDict, cast
+from typing import Any, Dict, List, Optional, TypedDict, TypeGuard, cast
 
 import yaml
 from jsonschema import ValidationError, validate
@@ -14,6 +14,19 @@ from ._error import DBOSInitializationError
 from ._logger import config_logger, dbos_logger, init_logger
 
 DBOS_CONFIG_PATH = "dbos-config.yaml"
+
+
+class DBOSConfig:
+    """
+    Data structure containing the DBOS library configuration.
+    """
+
+    name: str
+    db_string: str
+    sys_db_name: Optional[str]
+    log_level: Optional[str]
+    otlp_traces_endpoints: Optional[List[str]]
+    admin_port: Optional[int]
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -33,9 +46,28 @@ class DatabaseConfig(TypedDict, total=False):
     ssl: Optional[bool]
     ssl_ca: Optional[str]
     local_suffix: Optional[bool]
-    app_db_client: Optional[str]
     migrate: Optional[List[str]]
     rollback: Optional[List[str]]
+
+
+def parse_db_string_to_dbconfig(db_string: str) -> DatabaseConfig:
+    db_url = URL.create(db_string)
+    print(db_url)
+    db_config = {
+        "hostname": db_url.host,
+        "port": db_url.port,
+        "username": db_url.username,
+        "password": db_url.password,
+        "app_db_name": db_url.database,
+    }
+    for key, value in db_url.query.items():
+        if key == "connect_timeout":
+            db_config["connectionTimeoutMillis"] = int(value) * 1000
+        elif key == "sslmode":
+            db_config["ssl"] = value == "require"
+        elif key == "sslcert":
+            db_config["ssl_ca"] = value
+    return db_config
 
 
 class OTLPExporterConfig(TypedDict, total=False):
@@ -71,12 +103,22 @@ class ConfigFile(TypedDict, total=False):
     """
 
     name: str
-    language: str
     runtimeConfig: RuntimeConfig
     database: DatabaseConfig
     telemetry: Optional[TelemetryConfig]
     env: Dict[str, str]
-    application: Dict[str, Any]
+    application: Dict[str, Any]  # This is already ununed...: REMOVE?
+
+
+def is_config_file(obj: object) -> TypeGuard[ConfigFile]:
+    return (
+        isinstance(obj, dict)
+        and "name" in obj
+        and "language" in obj
+        and "runtimeConfig" in obj
+        and isinstance(obj.get("name"), str)
+        and isinstance(obj.get("runtimeConfig"), dict)
+    )
 
 
 def _substitute_env_vars(content: str) -> str:
@@ -257,9 +299,6 @@ def load_config(
     if dbos_dblocalsuffix is not None:
         local_suffix = dbos_dblocalsuffix
     data["database"]["local_suffix"] = local_suffix
-
-    # Configure the DBOS logger
-    config_logger(data)
 
     # Check the connectivity to the database and make sure it's properly configured
     # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)
