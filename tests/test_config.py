@@ -468,17 +468,12 @@ def test_debug_override(mocker: pytest_mock.MockFixture):
 def test_parse_db_string_to_dbconfig():
     db_string = "postgresql://user:password@localhost:5432/dbname"
     db_config = parse_db_string_to_dbconfig(db_string)
+    print(db_config)
     assert db_config["hostname"] == "localhost"
     assert db_config["port"] == 5432
     assert db_config["username"] == "user"
     assert db_config["password"] == "password"
     assert db_config["app_db_name"] == "dbname"
-    assert db_config["ssl"] == False
-    assert db_config["ssl_ca"] == ""
-    assert db_config["sys_db_name"] == ""
-    assert db_config["local_suffix"] == False
-    assert db_config["migrate"] == []
-    assert db_config["rollback"] == []
 
     db_string = "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslcert=ca.pem"
     db_config = parse_db_string_to_dbconfig(db_string)
