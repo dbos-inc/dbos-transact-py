@@ -1334,7 +1334,8 @@ class SystemDatabase:
                 .select_from(
                     SystemSchema.workflow_queue.join(
                         SystemSchema.workflow_status,
-                        SystemSchema.workflow_queue.c.workflow_uuid == SystemSchema.workflow_status.c.workflow_uuid
+                        SystemSchema.workflow_queue.c.workflow_uuid
+                        == SystemSchema.workflow_status.c.workflow_uuid,
                     )
                 )
                 .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
@@ -1461,7 +1462,6 @@ class SystemDatabase:
                     .values(completed_at_epoch_ms=int(time.time() * 1000))
                 )
 
-
     def clear_queue_assignment(self, workflow_id: str) -> bool:
         if self._debug_mode:
             raise Exception("called clear_queue_assignment in debug mode")
@@ -1472,7 +1472,9 @@ class SystemDatabase:
                 res = conn.execute(
                     sa.update(SystemSchema.workflow_queue)
                     .where(SystemSchema.workflow_queue.c.workflow_uuid == workflow_id)
-                    .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms.is_(None))
+                    .where(
+                        SystemSchema.workflow_queue.c.completed_at_epoch_ms.is_(None)
+                    )
                     .values(started_at_epoch_ms=None)
                 )
 
@@ -1493,6 +1495,7 @@ class SystemDatabase:
                         f"UNREACHABLE: Workflow {workflow_id} is found in the workflow_queue table but not found in the workflow_status table"
                     )
                 return True
+
 
 def reset_system_database(config: ConfigFile) -> None:
     sysdb_name = (
