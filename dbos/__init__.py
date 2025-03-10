@@ -8,6 +8,7 @@ from ._sys_db import GetWorkflowsInput, WorkflowStatusString
 
 __all__ = [
     "ConfigFile",
+    "DBOSConfig",
     "DBOS",
     "DBOSConfiguredInstance",
     "DBOSContextEnsure",
