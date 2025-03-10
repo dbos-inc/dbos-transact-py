@@ -535,13 +535,13 @@ def test_dbosconfig():
 
     dbos.destroy()
 
+    # Give an empty OTLP traces endpoint list
     config: DBOSConfig = {
         "name": "test-app",
         "db_string": "postgresql://user:password@localhost:5432/dbname",
-        "otlp_traces_endpoints": [],  # Empty list
+        "otlp_traces_endpoints": [],
     }
     dbos = DBOS(config=config)
-    # Should handle empty values correctly
     assert "telemetry" not in dbos.config
     dbos.destroy()
 
@@ -555,8 +555,3 @@ def test_dbosconfig():
         finally:
             if dbos is not None:
                 dbos.destroy()
-
-
-"""
-DBOS_DBHOST takes precedence
-"""

@@ -184,6 +184,42 @@ def is_config_file(obj: object) -> TypeGuard[ConfigFile]:
     )
 
 
+def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
+    db_config = parse_db_string_to_dbconfig(config["db_string"])
+    if "sys_db_name" in config:
+        db_config["sys_db_name"] = config.get("sys_db_name")
+    otlp_trace_endpoints = config.get("otlp_traces_endpoints", [])
+
+    # Start with the mandatory fields
+    translated_config: ConfigFile = {
+        "language": "python",
+        "name": config["name"],
+        "database": db_config,
+        "runtimeConfig": {
+            "start": config.get(
+                "start", []
+            ),  # Always include this with default empty list
+        },
+    }
+    # Add admin_port to runtimeConfig if present
+    if "admin_port" in config:
+        translated_config["runtimeConfig"]["admin_port"] = config["admin_port"]
+    # Add telemetry section only if needed
+    telemetry = {}
+    # Add OTLPExporter if traces endpoints exist
+    otlp_trace_endpoints = config.get("otlp_traces_endpoints", [])
+    if otlp_trace_endpoints:
+        telemetry["OTLPExporter"] = {"tracesEndpoint": otlp_trace_endpoints[0]}
+    # Add logs section if log_level exists
+    if "log_level" in config:
+        telemetry["logs"] = {"logLevel": config["log_level"]}
+    # Only add telemetry section if it has content
+    if telemetry:
+        translated_config["telemetry"] = telemetry
+
+    return translated_config
+
+
 def _substitute_env_vars(content: str) -> str:
     regex = r"\$\{([^}]+)\}"  # Regex to match ${VAR_NAME} style placeholders
 
