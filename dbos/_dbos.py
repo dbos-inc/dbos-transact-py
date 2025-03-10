@@ -92,8 +92,10 @@ from ._dbos_config import (
     ConfigFile,
     DBOSConfig,
     is_config_file,
+    is_dbos_config,
     load_config,
     parse_db_string_to_dbconfig,
+    process_config,
     set_env_vars,
 )
 from ._error import (
@@ -101,7 +103,7 @@ from ._error import (
     DBOSException,
     DBOSNonExistentWorkflowError,
 )
-from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger
+from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
 from ._sys_db import SystemDatabase
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
@@ -319,34 +321,54 @@ class DBOS:
             return
 
         self._initialized: bool = True
+
         # If no config is provided, load it from the environment and convert to DBOSConfig
         if config is None:
             config = load_config()
-            set_env_vars(cast(ConfigFile, config))
             self.config: ConfigFile = config
-        # If a ConfigFile structure is provided, do the missing bits of load_config()
+            set_env_vars(self.config)
+        # If a ConfigFile structure is provided, take it as-is
         elif is_config_file(config):
-            set_env_vars(config)
-            self.config: ConfigFile = config
+            init_logger()
+            self.config: ConfigFile = process_config(data=config)
+            set_env_vars(self.config)
         # If the new struct is provided, convert it to ConfigFile
-        elif isinstance(config, DBOSConfig):
-            db_config = parse_db_string_to_dbconfig(config.db_string)
-            db_config.sys_db_name = config.sys_db_name
-            self.config: ConfigFile = {
-                "name": config.name,
+        elif is_dbos_config(config):
+            init_logger()
+            db_config = parse_db_string_to_dbconfig(config["db_string"])
+            if "sys_db_name" in config:
+                db_config["sys_db_name"] = config.get("sys_db_name")
+            otlp_trace_endpoints = config.get("otlp_traces_endpoints", [])
+
+            # Start with the mandatory fields
+            dbos_unvalidated_config: ConfigFile = {
+                "language": "python",
+                "name": config["name"],
                 "database": db_config,
                 "runtimeConfig": {
-                    "admin_port": config.admin_port,
-                },
-                "telemetry": {
-                    "OTLPExporter": {
-                        "otlp_traces_endpoint": config.otlp_traces_endpoints[0],
-                    },
-                    "logs": {
-                        "logLevel": config.log_level,
-                    },
+                    "start": config.get(
+                        "start", []
+                    ),  # Always include this with default empty list
                 },
             }
+            # Add admin_port to runtimeConfig if present
+            if "admin_port" in config:
+                dbos_unvalidated_config["runtimeConfig"]["admin_port"] = config[
+                    "admin_port"
+                ]
+            # Add telemetry section only if needed
+            telemetry = {}
+            # Add OTLPExporter if traces endpoints exist
+            otlp_trace_endpoints = config.get("otlp_traces_endpoints", [])
+            if otlp_trace_endpoints:
+                telemetry["OTLPExporter"] = {"tracesEndpoint": otlp_trace_endpoints[0]}
+            # Add logs section if log_level exists
+            if "log_level" in config:
+                telemetry["logs"] = {"logLevel": config["log_level"]}
+            # Only add telemetry section if it has content
+            if telemetry:
+                dbos_unvalidated_config["telemetry"] = telemetry
+            self.config: ConfigFile = process_config(data=dbos_unvalidated_config)
 
         # TODO: when running in DBOS Cloud, override specific variables from dbos-config.yaml
         # OTLP traces: Add ours to theirs

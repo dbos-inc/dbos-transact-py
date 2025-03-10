@@ -7,8 +7,8 @@ import pytest
 import pytest_mock
 
 # Public API
-from dbos import load_config
-from dbos._dbos_config import parse_db_string_to_dbconfig, set_env_vars
+from dbos import DBOS, load_config
+from dbos._dbos_config import DBOSConfig, parse_db_string_to_dbconfig, set_env_vars
 from dbos._error import DBOSInitializationError
 
 mock_filename = "test.yaml"
@@ -462,13 +462,9 @@ def test_debug_override(mocker: pytest_mock.MockFixture):
     assert configFile["database"]["local_suffix"] == False
 
 
-# New DBOSConfig tests
-
-
 def test_parse_db_string_to_dbconfig():
     db_string = "postgresql://user:password@localhost:5432/dbname"
     db_config = parse_db_string_to_dbconfig(db_string)
-    print(db_config)
     assert db_config["hostname"] == "localhost"
     assert db_config["port"] == 5432
     assert db_config["username"] == "user"
@@ -480,3 +476,87 @@ def test_parse_db_string_to_dbconfig():
     assert db_config["ssl"] == True
     assert db_config["ssl_ca"] == "ca.pem"
     assert db_config["connectionTimeoutMillis"] == 10000
+
+    # Test unusual but valid DB strings
+    db_string = "postgresql://user:complex%23password@hostname.with.dots:5432/dbname?sslmode=require&application_name=myapp"
+    db_config = parse_db_string_to_dbconfig(db_string)
+    assert db_config["hostname"] == "hostname.with.dots"
+    assert db_config["password"] == "complex#password"  # Ensure URL decoding works
+
+    # Missing required field
+    with pytest.raises(Exception):
+        db_string = "invalid"
+        parse_db_string_to_dbconfig(db_string)
+
+
+def test_dbosconfig():
+    # Give all fields
+    config: DBOSConfig = {
+        "name": "test-app",
+        "db_string": "postgresql://user:password@localhost:5432/dbname",
+        "sys_db_name": "sysdb",
+        "log_level": "DEBUG",
+        "otlp_traces_endpoints": ["http://otel:7777", "notused"],
+        "admin_port": 8001,
+    }
+    dbos = DBOS(config=config)
+    assert dbos.config["name"] == "test-app"
+    assert dbos.config["database"]["hostname"] == "localhost"
+    assert dbos.config["database"]["port"] == 5432
+    assert dbos.config["database"]["username"] == "user"
+    assert dbos.config["database"]["password"] == "password"
+    assert dbos.config["database"]["app_db_name"] == "dbname"
+    assert dbos.config["database"]["sys_db_name"] == "sysdb"
+    assert dbos.config["telemetry"]["logs"]["logLevel"] == "DEBUG"
+    assert (
+        dbos.config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "http://otel:7777"
+    )
+    assert dbos.config["runtimeConfig"]["admin_port"] == 8001
+    assert dbos.config["runtimeConfig"]["start"] == []
+
+    dbos.destroy()
+
+    # Give only mandatory fields
+    config: DBOSConfig = {
+        "name": "test-app",
+        "db_string": "postgresql://user:password@localhost:5432/dbname",
+    }
+    dbos = DBOS(config=config)
+    assert dbos.config["name"] == "test-app"
+    assert dbos.config["database"]["hostname"] == "localhost"
+    assert dbos.config["database"]["port"] == 5432
+    assert dbos.config["database"]["username"] == "user"
+    assert dbos.config["database"]["password"] == "password"
+    assert dbos.config["database"]["app_db_name"] == "dbname"
+    assert "sys_db_name" not in dbos.config["database"]
+    assert "telemetry" not in dbos.config
+    assert "admin_port" not in dbos.config["runtimeConfig"]
+    assert dbos.config["runtimeConfig"]["start"] == []
+
+    dbos.destroy()
+
+    config: DBOSConfig = {
+        "name": "test-app",
+        "db_string": "postgresql://user:password@localhost:5432/dbname",
+        "otlp_traces_endpoints": [],  # Empty list
+    }
+    dbos = DBOS(config=config)
+    # Should handle empty values correctly
+    assert "telemetry" not in dbos.config
+    dbos.destroy()
+
+    # Missing required field
+    with pytest.raises(Exception):
+        config: DBOSConfig = {
+            "db_string": "postgresql://user:password@localhost:5432/dbname"
+        }
+        try:
+            dbos = DBOS(config=config)
+        finally:
+            if dbos is not None:
+                dbos.destroy()
+
+
+"""
+DBOS_DBHOST takes precedence
+"""
