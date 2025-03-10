@@ -11,12 +11,12 @@ from sqlalchemy import URL, make_url
 
 from ._db_wizard import db_wizard, load_db_connection
 from ._error import DBOSInitializationError
-from ._logger import config_logger, dbos_logger, init_logger
+from ._logger import dbos_logger, init_logger
 
 DBOS_CONFIG_PATH = "dbos-config.yaml"
 
 
-class DBOSConfig:
+class DBOSConfig(TypedDict):
     """
     Data structure containing the DBOS library configuration.
     """
@@ -27,6 +27,70 @@ class DBOSConfig:
     log_level: Optional[str]
     otlp_traces_endpoints: Optional[List[str]]
     admin_port: Optional[int]
+
+
+def is_dbos_config(obj: Any) -> TypeGuard[DBOSConfig]:
+    """
+    Type guard to check if an object is a valid DBOSConfig.
+
+    Args:
+        obj: Any object to check
+
+    Returns:
+        True if the object is a valid DBOSConfig, False otherwise
+    """
+    if not isinstance(obj, dict):
+        return False
+
+    # Check required fields
+    if not isinstance(obj.get("name"), str):
+        return False
+    if not isinstance(obj.get("db_string"), str):
+        return False
+
+    # Check optional fields
+    if (
+        "sys_db_name" in obj
+        and obj["sys_db_name"] is not None
+        and not isinstance(obj["sys_db_name"], str)
+    ):
+        return False
+
+    if (
+        "log_level" in obj
+        and obj["log_level"] is not None
+        and not isinstance(obj["log_level"], str)
+    ):
+        return False
+
+    if "otlp_traces_endpoints" in obj:
+        endpoints = obj["otlp_traces_endpoints"]
+        if endpoints is not None:
+            if not isinstance(endpoints, list):
+                return False
+            if not all(isinstance(endpoint, str) for endpoint in endpoints):
+                return False
+
+    if (
+        "admin_port" in obj
+        and obj["admin_port"] is not None
+        and not isinstance(obj["admin_port"], int)
+    ):
+        return False
+
+    # Check for unexpected keys
+    valid_keys = {
+        "name",
+        "db_string",
+        "sys_db_name",
+        "log_level",
+        "otlp_traces_endpoints",
+        "admin_port",
+    }
+    if not all(key in valid_keys for key in obj):
+        return False
+
+    return True
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -189,6 +253,25 @@ def load_config(
         substituted_content = _substitute_env_vars(content)
         data = yaml.safe_load(substituted_content)
 
+    data = process_config(data=data, silent=silent, use_db_wizard=use_db_wizard)
+    # Check the connectivity to the database and make sure it's properly configured
+    # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)
+    debugWorkflowId = os.getenv("DBOS_DEBUG_WORKFLOW_ID")
+    if use_db_wizard and debugWorkflowId is None:
+        data = db_wizard(data, config_file_path)
+
+    if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
+        data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"
+
+    return data
+
+
+def process_config(
+    *,
+    data: Dict[str, Any],
+    use_db_wizard: bool = True,
+    silent: bool = False,
+) -> ConfigFile:
     # Load the JSON schema relative to the package root
     schema_file = resources.files("dbos").joinpath("dbos-config.schema.json")
     with schema_file.open("r") as f:
@@ -298,15 +381,6 @@ def load_config(
     if dbos_dblocalsuffix is not None:
         local_suffix = dbos_dblocalsuffix
     data["database"]["local_suffix"] = local_suffix
-
-    # Check the connectivity to the database and make sure it's properly configured
-    # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)
-    debugWorkflowId = os.getenv("DBOS_DEBUG_WORKFLOW_ID")
-    if use_db_wizard and debugWorkflowId is None:
-        data = db_wizard(data, config_file_path)
-
-    if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
-        data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"
 
     # Return data as ConfigFile type
     return data  # type: ignore
