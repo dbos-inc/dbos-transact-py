@@ -196,9 +196,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         "name": config["name"],
         "database": db_config,
         "runtimeConfig": {
-            "start": config.get(
-                "start", []
-            ),  # Always include this with default empty list
+            "start": [],
         },
     }
     # Add admin_port to runtimeConfig if present
@@ -211,11 +209,11 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     if otlp_trace_endpoints:
         telemetry["OTLPExporter"] = {"tracesEndpoint": otlp_trace_endpoints[0]}
     # Add logs section if log_level exists
-    if "log_level" in config:
+    if "log_level" in config and config["log_level"]:
         telemetry["logs"] = {"logLevel": config["log_level"]}
     # Only add telemetry section if it has content
     if telemetry:
-        translated_config["telemetry"] = telemetry
+        translated_config["telemetry"] = cast(TelemetryConfig, telemetry)
 
     return translated_config
 
