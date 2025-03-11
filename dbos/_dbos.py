@@ -167,7 +167,7 @@ class DBOSRegistry:
         self.queue_info_map: dict[str, Queue] = {}
         self.pollers: list[RegisteredJob] = []
         self.dbos: Optional[DBOS] = None
-        self.config: Optional[Union[DBOSConfig, ConfigFile]] = None
+        self.config: Optional[ConfigFile] = None
         self.workflow_cancelled_map: dict[str, bool] = {}
 
     def register_wf_function(self, name: str, wrapped_func: F, functype: str) -> None:

@@ -2,7 +2,7 @@ import json
 import os
 import re
 from importlib import resources
-from typing import Any, Dict, List, Optional, TypedDict, TypeGuard, cast
+from typing import Any, Dict, List, Optional, TypedDict, TypeGuard, Union, cast
 
 import yaml
 from jsonschema import ValidationError, validate
@@ -287,23 +287,22 @@ def load_config(
         substituted_content = _substitute_env_vars(content)
         data = yaml.safe_load(substituted_content)
 
-    data = process_config(data=data, silent=silent, use_db_wizard=use_db_wizard)
+    config: ConfigFile = process_config(data=data, silent=silent)
     # Check the connectivity to the database and make sure it's properly configured
     # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)
     debugWorkflowId = os.getenv("DBOS_DEBUG_WORKFLOW_ID")
     if use_db_wizard and debugWorkflowId is None:
-        data = db_wizard(data, config_file_path)
+        config = db_wizard(config, config_file_path)
 
-    if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
-        data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"
+    if "local_suffix" in config["database"] and config["database"]["local_suffix"]:
+        config["database"]["app_db_name"] = f"{config['database']['app_db_name']}_local"
 
-    return data
+    return config
 
 
 def process_config(
     *,
-    data: Dict[str, Any],
-    use_db_wizard: bool = True,
+    data: Union[ConfigFile, Dict[str, Any]],
     silent: bool = False,
 ) -> ConfigFile:
     # Load the JSON schema relative to the package root
@@ -400,14 +399,14 @@ def process_config(
     dbcon_local_suffix = db_connection.get("local_suffix")
     if dbcon_local_suffix is not None:
         local_suffix = dbcon_local_suffix
-    if data["database"].get("local_suffix") is not None:
-        local_suffix = data["database"].get("local_suffix")
+    db_local_suffix = data["database"].get("local_suffix")
+    if db_local_suffix is not None:
+        local_suffix = db_local_suffix
     if dbos_dblocalsuffix is not None:
         local_suffix = dbos_dblocalsuffix
     data["database"]["local_suffix"] = local_suffix
-
     # Return data as ConfigFile type
-    return data  # type: ignore
+    return data
 
 
 def _is_valid_app_name(name: str) -> bool:

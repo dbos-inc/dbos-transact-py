@@ -10,7 +10,6 @@ def my_function(foo: str) -> str:
 def default_config() -> ConfigFile:
     return {
         "name": "forgot-launch",
-        "language": "python",
         "database": {
             "hostname": "localhost",
             "port": 5432,
