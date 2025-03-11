@@ -5,7 +5,7 @@ import sys
 from importlib import resources
 from typing import Any, Dict, List, Optional, TypedDict, Union, cast
 
-if sys.version_info > (3, 9):
+if sys.version_info >= (3, 10):
     from typing import TypeGuard
 else:
     from typing_extensions import TypeGuard
