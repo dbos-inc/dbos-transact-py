@@ -178,7 +178,6 @@ def is_config_file(obj: object) -> TypeGuard[ConfigFile]:
     return (
         isinstance(obj, dict)
         and "name" in obj
-        and "language" in obj
         and "runtimeConfig" in obj
         and isinstance(obj.get("name"), str)
         and isinstance(obj.get("runtimeConfig"), dict)
