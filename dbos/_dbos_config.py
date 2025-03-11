@@ -1,8 +1,14 @@
 import json
 import os
 import re
+import sys
 from importlib import resources
-from typing import Any, Dict, List, Optional, TypedDict, TypeGuard, Union, cast
+from typing import Any, Dict, List, Optional, TypedDict, Union, cast
+
+if sys.version_info > (3, 9):
+    from typing import TypeGuard
+else:
+    from typing_extensions import TypeGuard
 
 import yaml
 from jsonschema import ValidationError, validate
