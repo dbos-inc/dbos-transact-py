@@ -124,13 +124,14 @@ def parse_db_string_to_dbconfig(db_string: str) -> DatabaseConfig:
         "app_db_name": db_url.database,
     }
     for key, value in db_url.query.items():
+        str_value = value[0] if isinstance(value, tuple) else value
         if key == "connect_timeout":
-            db_config["connectionTimeoutMillis"] = int(value) * 1000
+            db_config["connectionTimeoutMillis"] = int(str_value) * 1000
         elif key == "sslmode":
-            db_config["ssl"] = value == "require"
+            db_config["ssl"] = str_value == "require"
         elif key == "sslcert":
-            db_config["ssl_ca"] = value
-    return db_config
+            db_config["ssl_ca"] = str_value
+    return cast(DatabaseConfig, db_config)
 
 
 class OTLPExporterConfig(TypedDict, total=False):
