@@ -193,7 +193,6 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
 
     # Start with the mandatory fields
     translated_config: ConfigFile = {
-        "language": "python",
         "name": config["name"],
         "database": db_config,
         "runtimeConfig": {
@@ -326,16 +325,6 @@ def process_config(
     if "name" not in data:
         raise DBOSInitializationError(
             f"dbos-config.yaml must specify an application name"
-        )
-
-    if "language" not in data:
-        raise DBOSInitializationError(
-            f"dbos-config.yaml must specify the application language is Python"
-        )
-
-    if data["language"] != "python":
-        raise DBOSInitializationError(
-            f'dbos-config.yaml specifies invalid language { data["language"] }'
         )
 
     if "runtimeConfig" not in data or "start" not in data["runtimeConfig"]:
