@@ -26,15 +26,19 @@ def scheduler_loop(
             f'Cannot run scheduled function {func.__name__}. Invalid crontab "{cron}"'
         )
     while not stop_event.is_set():
+        dbos_logger.info("Scheduling workflow")
         nextExecTime = iter.get_next(datetime)
         sleepTime = nextExecTime - datetime.now(timezone.utc)
         if stop_event.wait(timeout=sleepTime.total_seconds()):
             return
+        dbos_logger.info("Scheduling workflow after sleep")
         with SetWorkflowID(f"sched-{func.__qualname__}-{nextExecTime.isoformat()}"):
             try:
                 scheduler_queue.enqueue(func, nextExecTime, datetime.now(timezone.utc))
             except Exception as e:
                 dbos_logger.warning(f"Error scheduling workflow: ", e)
+        dbos_logger.info("Scheduling workflow done")
+    dbos_logger.info("Scheduling workflow exiting!!!!")
 
 
 def scheduled(
