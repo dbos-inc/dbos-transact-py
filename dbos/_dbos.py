@@ -312,7 +312,7 @@ class DBOS:
     def __init__(
         self,
         *,
-        config: Optional[Union[DBOSConfig, ConfigFile]] = None,
+        config: Optional[Union[ConfigFile, DBOSConfig]] = None,
         fastapi: Optional["FastAPI"] = None,
         flask: Optional["Flask"] = None,
         conductor_url: Optional[str] = None,
