@@ -92,3 +92,4 @@ jobs:
       working-directory: ./
       env:
         PGPASSWORD: a!b@c$d()e*_,/:;=?@ff[]22
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
