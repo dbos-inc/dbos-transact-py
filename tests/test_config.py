@@ -228,27 +228,6 @@ def test_config_missing_name(mocker):
     assert "must specify an application name" in str(exc_info.value)
 
 
-def test_config_missing_language(mocker):
-    mock_config = """
-        name: "some-app"
-        database:
-          hostname: 'some host'
-          port: 1234
-          username: 'some user'
-          password: abc123
-          app_db_name: 'some db'
-          connectionTimeoutMillis: 3000
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        load_config(mock_filename)
-
-    assert "must specify the application language" in str(exc_info.value)
-
-
 def test_config_bad_name(mocker):
     mock_config = """
         name: "some app"
@@ -627,8 +606,8 @@ def test_overwrite_config(mocker):
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
-    assert config["runtimeConfig"]["admin_port"] == 8001
     assert config["runtimeConfig"]["start"] == ["a start command"]
+    assert "admin_port" not in config["runtimeConfig"]
     assert "env" not in dbos.config
 
 

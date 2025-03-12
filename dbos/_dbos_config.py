@@ -486,9 +486,10 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     provided_config["runtimeConfig"]["start"] = config_from_file["runtimeConfig"][
         "start"
     ]
-    del provided_config["runtimeConfig"][
-        "admin_port"
-    ]  # Admin port is expected to be 3001 in hosting provider
+    if "admin_port" in provided_config["runtimeConfig"]:
+        del provided_config["runtimeConfig"][
+            "admin_port"
+        ]  # Admin port is expected to be 3001 in hosting provider
 
     # Env should be set from the hosting provider
     if "env" in provided_config:
