@@ -341,8 +341,8 @@ class DBOS:
 
         # If no config is provided, load it from dbos-config.yaml
         if config is None:
-            config = load_config()
             dbos_logger.debug("No config provided: loading dbos-config.yaml")
+            config = load_config()
             self.config: ConfigFile = config
             set_env_vars(self.config)
         # If a ConfigFile structure is provided, take it as-is but validate it using process_config()
