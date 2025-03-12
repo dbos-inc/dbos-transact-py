@@ -361,7 +361,7 @@ class DBOS:
             unvalidated_config = translate_dbos_config_to_config_file(config)
             if os.environ.get("DBOS__CLOUD") == "true":
                 dbos_logger.debug("Overwriting config with dbos-config.yaml")
-                config = overwrite_config(unvalidated_config)
+                unvalidated_config = overwrite_config(unvalidated_config)
             self.config: ConfigFile = process_config(data=unvalidated_config)
 
         config_logger(self.config)
