@@ -341,26 +341,26 @@ class DBOS:
 
         # If no config is provided, load it from dbos-config.yaml
         if config is None:
-            dbos_logger.debug("No config provided: loading dbos-config.yaml")
+            print("No config provided: loading dbos-config.yaml")
             config = load_config()
             self.config: ConfigFile = config
             set_env_vars(self.config)
         # If a ConfigFile structure is provided, take it as-is but validate it using process_config()
         elif is_config_file(config):
             init_logger()
-            dbos_logger.debug("Initializing DBOS from ConfigFile")
+            print("Initializing DBOS from ConfigFile")
             if os.environ.get("DBOS__CLOUD") == "true":
-                dbos_logger.debug("Overwriting config with dbos-config.yaml")
+                print("Overwriting config with dbos-config.yaml")
                 config = overwrite_config(config)
             self.config: ConfigFile = process_config(data=config)
             set_env_vars(self.config)
         # If a DBOSConfig struct is provided, convert it to ConfigFile and validate it using process_config()
         elif is_dbos_config(config):
             init_logger()
-            dbos_logger.debug("Initializing DBOS from DBOSConfig")
+            print("Initializing DBOS from DBOSConfig")
             unvalidated_config = translate_dbos_config_to_config_file(config)
             if os.environ.get("DBOS__CLOUD") == "true":
-                dbos_logger.debug("Overwriting config with dbos-config.yaml")
+                print("Overwriting config with dbos-config.yaml")
                 unvalidated_config = overwrite_config(unvalidated_config)
             self.config: ConfigFile = process_config(data=unvalidated_config)
 
