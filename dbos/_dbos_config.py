@@ -481,12 +481,10 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     ]["OTLPExporter"]["logsEndpoint"]
 
     # Runtime config
-    if "runtimeConfig" not in provided_config:
-        provided_config["runtimeConfig"] = {}
-    provided_config["runtimeConfig"]["start"] = config_from_file["runtimeConfig"][
-        "start"
-    ]
-    if "admin_port" in provided_config["runtimeConfig"]:
+    if (
+        "runtimeConfig" in provided_config
+        and "admin_port" in provided_config["runtimeConfig"]
+    ):
         del provided_config["runtimeConfig"][
             "admin_port"
         ]  # Admin port is expected to be 3001 in hosting provider

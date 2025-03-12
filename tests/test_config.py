@@ -606,9 +606,8 @@ def test_overwrite_config(mocker):
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
-    assert config["runtimeConfig"]["start"] == ["a start command"]
     assert "admin_port" not in config["runtimeConfig"]
-    assert "env" not in dbos.config
+    assert "env" not in config
 
 
 def test_overwrite_config_minimal(mocker):
@@ -663,8 +662,7 @@ def test_overwrite_config_minimal(mocker):
     assert config["database"]["ssl_ca"] == "cert.pem"
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
-    assert "admin_port" not in config["runtimeConfig"]
-    assert config["runtimeConfig"]["start"] == ["a start command"]
+    assert "runtimeConfig" not in config
     assert "env" not in config
 
 
@@ -722,6 +720,5 @@ def test_overwrite_config_has_telemetry(mocker):
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
-    assert "admin_port" not in config["runtimeConfig"]
-    assert config["runtimeConfig"]["start"] == ["a start command"]
+    assert "runtimeConfig" not in config
     assert "env" not in config
