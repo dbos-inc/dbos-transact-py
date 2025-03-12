@@ -177,7 +177,6 @@ class ConfigFile(TypedDict, total=False):
     database: DatabaseConfig
     telemetry: Optional[TelemetryConfig]
     env: Dict[str, str]
-    application: Dict[str, Any]  # This is already ununed...: REMOVE?
 
 
 def is_config_file(obj: object) -> TypeGuard[ConfigFile]:
@@ -215,7 +214,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     # Add logs section if log_level exists
     log_level = config.get("log_level", "")
     if log_level:
-        telemetry["logs"] = {"logLevel": config["log_level"]}
+        telemetry["logs"] = {"logLevel": log_level}
     # Only add telemetry section if it has content
     if telemetry:
         translated_config["telemetry"] = cast(TelemetryConfig, telemetry)
@@ -271,6 +270,12 @@ def parse_config_file(config_file_path: str = DBOS_CONFIG_PATH) -> Dict[str, Any
         content = file.read()
         substituted_content = _substitute_env_vars(content)
         data = yaml.safe_load(substituted_content)
+
+    if not isinstance(data, dict):
+        raise DBOSInitializationError(
+            f"dbos-config.yaml must contain a dictionary, not {type(data)}"
+        )
+    data = cast(Dict[str, Any], data)
 
     # Load the JSON schema relative to the package root
     schema_file = resources.files("dbos").joinpath("dbos-config.schema.json")
@@ -446,8 +451,10 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # 2. OTLP traces endpoints (add the config data to the provided config)
     # 3. Custom setup steps (sub the file data to the provided config)
     # ? Name
+    # ? logs level: right now this code ignores log level from the config file.
 
     config_from_file = parse_config_file()
+    # Be defensive
     if config_from_file is None:
         return provided_config
 
@@ -466,19 +473,31 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     provided_config["database"]["ssl_ca"] = config_from_file["database"]["ssl_ca"]
 
     # Telemetry config
-    if "telemetry" not in provided_config:
+    if "telemetry" not in provided_config or provided_config["telemetry"] is None:
         provided_config["telemetry"] = {
             "OTLPExporter": {},
         }
     elif "OTLPExporter" not in provided_config["telemetry"]:
         provided_config["telemetry"]["OTLPExporter"] = {}
 
-    provided_config["telemetry"]["OTLPExporter"]["tracesEndpoint"] = config_from_file[
-        "telemetry"
-    ]["OTLPExporter"]["tracesEndpoint"]
-    provided_config["telemetry"]["OTLPExporter"]["logsEndpoint"] = config_from_file[
-        "telemetry"
-    ]["OTLPExporter"]["logsEndpoint"]
+    # This is a super messy from a typing perspective.
+    # Some of ConfigFile keys are optional -- but in practice they'll always be present in hosted environments
+    # So, for Mypy, we have to (1) check the keys are present in config_from_file and (2) cast telemetry/otlp_exporters to Dict[str, Any]
+    # (2) is required because, even tho we resolved these keys earlier, mypy doesn't remember that
+    if (
+        config_from_file.get("telemetry")
+        and config_from_file["telemetry"]
+        and config_from_file["telemetry"].get("OTLPExporter")
+    ):
+
+        telemetry = cast(Dict[str, Any], provided_config["telemetry"])
+        otlp_exporter = cast(Dict[str, Any], telemetry["OTLPExporter"])
+
+        source_otlp = config_from_file["telemetry"]["OTLPExporter"]
+        if "tracesEndpoint" in source_otlp:
+            otlp_exporter["tracesEndpoint"] = source_otlp["tracesEndpoint"]
+        if "logsEndpoint" in source_otlp:
+            otlp_exporter["logsEndpoint"] = source_otlp["logsEndpoint"]
 
     # Runtime config
     if (
@@ -487,9 +506,9 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     ):
         del provided_config["runtimeConfig"][
             "admin_port"
-        ]  # Admin port is expected to be 3001 in hosting provider
+        ]  # Admin port is expected to be 3001 (the default in dbos/_admin_server.py::__init__ ) by DBOS Cloud
 
-    # Env should be set from the hosting provider
+    # Env should be set from the hosting provider (e.g., DBOS Cloud)
     if "env" in provided_config:
         del provided_config["env"]
 
