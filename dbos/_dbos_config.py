@@ -212,7 +212,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     if otlp_trace_endpoints:
         telemetry["OTLPExporter"] = {"tracesEndpoint": otlp_trace_endpoints[0]}
     # Add logs section if log_level exists
-    log_level = config.get("log_level", "info")
+    log_level = config.get("log_level", "INFO")
     if log_level:
         telemetry["logs"] = {"logLevel": log_level}
     # Only add telemetry section if it has content
