@@ -323,32 +323,6 @@ class DBOS:
 
         self._initialized: bool = True
 
-        # If no config is provided, load it from the environment and convert to DBOSConfig
-        if config is None:
-            config = load_config()
-            self.config: ConfigFile = config
-            set_env_vars(self.config)
-        # If a ConfigFile structure is provided, take it as-is
-        elif is_config_file(config):
-            init_logger()
-            if os.environ.get("DBOS__CLOUD") == "true":
-                config = overwrite_config(config)
-            self.config: ConfigFile = process_config(data=config)
-            set_env_vars(self.config)
-        # If the new struct is provided, convert it to ConfigFile and validate
-        elif is_dbos_config(config):
-            init_logger()
-            unvalidated_config: ConfigFile = translate_dbos_config_to_config_file(
-                config
-            )
-            if os.environ.get("DBOS__CLOUD") == "true":
-                config = overwrite_config(unvalidated_config)
-            self.config: ConfigFile = process_config(data=unvalidated_config)
-
-        config_logger(self.config)
-        dbos_tracer.config(self.config)
-        dbos_logger.info("Initializing DBOS")
-
         self._launched: bool = False
         self._debug_mode: bool = False
         self._sys_db_field: Optional[SystemDatabase] = None
@@ -364,6 +338,30 @@ class DBOS:
         self.conductor_url: Optional[str] = conductor_url
         self.conductor_key: Optional[str] = conductor_key
         self.conductor_websocket: Optional[ConductorWebsocket] = None
+
+        # If no config is provided, load it from dbos-config.yaml
+        if config is None:
+            config = load_config()
+            self.config: ConfigFile = config
+            set_env_vars(self.config)
+        # If a ConfigFile structure is provided, take it as-is but validate it using process_config()
+        elif is_config_file(config):
+            init_logger()
+            if os.environ.get("DBOS__CLOUD") == "true":
+                config = overwrite_config(config)
+            self.config: ConfigFile = process_config(data=config)
+            set_env_vars(self.config)
+        # If a DBOSConfig struct is provided, convert it to ConfigFile and validate it using process_config()
+        elif is_dbos_config(config):
+            init_logger()
+            unvalidated_config = translate_dbos_config_to_config_file(config)
+            if os.environ.get("DBOS__CLOUD") == "true":
+                config = overwrite_config(unvalidated_config)
+            self.config: ConfigFile = process_config(data=unvalidated_config)
+
+        config_logger(self.config)
+        dbos_tracer.config(self.config)
+        dbos_logger.info("Initializing DBOS")
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
