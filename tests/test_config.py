@@ -498,8 +498,8 @@ def test_dbosconfig_minimal():
     assert dbos.config["database"]["username"] == "user"
     assert dbos.config["database"]["password"] == "password"
     assert dbos.config["database"]["app_db_name"] == "dbname"
+    assert dbos.config["telemetry"]["logs"]["logLevel"] == "INFO"
     assert "sys_db_name" not in dbos.config["database"]
-    assert "telemetry" not in dbos.config
     assert "env" not in dbos.config
     assert "admin_port" not in dbos.config["runtimeConfig"]
     assert dbos.config["runtimeConfig"]["start"] == []
@@ -515,7 +515,8 @@ def test_dbosconfig_empty_otlp_traces_endpoints():
         "otlp_traces_endpoints": [],
     }
     dbos = DBOS(config=config)
-    assert "telemetry" not in dbos.config
+    assert "OTLPExporter" not in dbos.config["telemetry"]
+    assert dbos.config["telemetry"]["logs"]["logLevel"] == "INFO"
     dbos.destroy()
 
 
