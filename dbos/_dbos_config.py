@@ -450,7 +450,7 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # 1. The database connection parameters (sub the file data to the provided config)
     # 2. OTLP traces endpoints (add the config data to the provided config)
     # 3. Custom setup steps (sub the file data to the provided config)
-    # ? Name
+    # ? Name: should we override it with the config file ?
     # ? logs level: right now this code ignores log level from the config file.
 
     config_from_file = parse_config_file()
