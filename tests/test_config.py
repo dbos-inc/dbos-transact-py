@@ -12,6 +12,7 @@ from dbos._dbos_config import (
     ConfigFile,
     DBOSConfig,
     overwrite_config,
+    parse_config_file,
     parse_db_string_to_dbconfig,
     set_env_vars,
 )
@@ -722,3 +723,139 @@ def test_overwrite_config_has_telemetry(mocker):
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert "runtimeConfig" not in config
     assert "env" not in config
+
+
+# Not expected in practice, but exercise the code path
+def test_overwrite_config_no_telemetry_in_file(mocker):
+    mock_config = """
+    name: "stock-prices"
+    language: "python"
+    database:
+        hostname: "hostname"
+        port: 1234
+        username: dbosadmin
+        password: pwd
+        app_db_name: appdbname
+        sys_db_name: sysdbname
+        ssl: true
+        ssl_ca: cert.pem
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
+    )
+
+    provided_config: ConfigFile = {
+        "name": "test-app",
+        "database": {
+            "hostname": "localhost",
+            "port": 5432,
+            "username": "postgres",
+            "password": "dbos",
+            "app_db_name": "dbostestpy",
+        },
+        "telemetry": {"logs": {"logLevel": "DEBUG"}},
+    }
+
+    config = overwrite_config(provided_config)
+    # Test that telemetry from provided_config is preserved
+    assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
+    assert config["telemetry"]["OTLPExporter"] == {}
+
+
+# Not expected in practice, but exercise the code path
+def test_overwrite_config_no_otlp_in_file(mocker):
+    mock_config = """
+    name: "stock-prices"
+    language: "python"
+    database:
+        hostname: "hostname"
+        port: 1234
+        username: dbosadmin
+        password: pwd
+        app_db_name: appdbname
+        sys_db_name: sysdbname
+        ssl: true
+        ssl_ca: cert.pem
+    telemetry:
+        logs:
+            logLevel: INFO
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
+    )
+
+    provided_config: ConfigFile = {
+        "name": "test-app",
+        "database": {
+            "hostname": "localhost",
+            "port": 5432,
+            "username": "postgres",
+            "password": "dbos",
+            "app_db_name": "dbostestpy",
+        },
+        "telemetry": {
+            "OTLPExporter": {
+                "tracesEndpoint": "original-trace",
+                "logsEndpoint": "original-log",
+            }
+        },
+    }
+
+    config = overwrite_config(provided_config)
+    # Test that OTLPExporter from provided_config is preserved
+    assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "original-trace"
+    assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "original-log"
+    assert "logs" not in config["telemetry"]
+
+
+def test_parse_config_file_not_a_dict(mocker):
+    """Test handling when YAML doesn't parse to a dictionary."""
+    mock_config = "just a string"
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
+    )
+
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        parse_config_file()
+
+    assert "must contain a dictionary" in str(exc_info.value)
+
+
+def test_parse_config_file_schema_validation_error(mocker):
+    """Test handling when the config fails schema validation."""
+    mock_config = """
+    name: "test-app"
+    invalid_field: "this shouldn't be here"
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
+    )
+
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        parse_config_file()
+
+    assert "Validation error" in str(exc_info.value)
+
+
+def test_parse_config_file_open_error(mocker):
+    """Test handling when the config file can't be opened."""
+    mocker.patch("builtins.open", side_effect=FileNotFoundError("File not found"))
+
+    with pytest.raises(FileNotFoundError):
+        parse_config_file()
+
+
+def test_parse_config_file_custom_path():
+    """Test parsing a config file from a custom path."""
+    mock_config = """
+    name: "test-app"
+    database:
+        hostname: "localhost"
+    """
+    custom_path = "/custom/path/dbos-config.yaml"
+    from unittest.mock import mock_open, patch
+
+    with patch("builtins.open", mock_open(read_data=mock_config)) as mock_file:
+        result = parse_config_file(custom_path)
+        mock_file.assert_called_with(custom_path, "r")
+        assert result["name"] == "test-app"
