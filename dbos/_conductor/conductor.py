@@ -3,7 +3,7 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Optional
 
-from websockets import ConnectionClosed, ConnectionClosedOK
+from websockets import ConnectionClosed, ConnectionClosedOK, InvalidStatus
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
@@ -204,6 +204,14 @@ class ConductorWebsocket(threading.Thread):
             except ConnectionClosed as e:
                 self.dbos.logger.warning(
                     f"Connection to conductor lost. Reconnecting: {e}"
+                )
+                time.sleep(1)
+                continue
+            except InvalidStatus as e:
+                # This happens when it cannot open a connection to the conductor. E.g., the conductor rejects the request
+                json_data = e.response.body.decode("utf-8")
+                self.dbos.logger.error(
+                    f"Failed to connect to conductor. Retrying: {str(e) }. Details: {json_data}"
                 )
                 time.sleep(1)
                 continue
