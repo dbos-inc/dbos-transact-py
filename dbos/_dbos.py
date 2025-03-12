@@ -94,6 +94,7 @@ from ._dbos_config import (
     is_config_file,
     is_dbos_config,
     load_config,
+    overwrite_config,
     process_config,
     set_env_vars,
     translate_dbos_config_to_config_file,
@@ -330,6 +331,8 @@ class DBOS:
         # If a ConfigFile structure is provided, take it as-is
         elif is_config_file(config):
             init_logger()
+            if os.environ.get("DBOS__CLOUD") == "true":
+                config = overwrite_config(config)
             self.config: ConfigFile = process_config(data=config)
             set_env_vars(self.config)
         # If the new struct is provided, convert it to ConfigFile and validate
@@ -338,11 +341,9 @@ class DBOS:
             unvalidated_config: ConfigFile = translate_dbos_config_to_config_file(
                 config
             )
+            if os.environ.get("DBOS__CLOUD") == "true":
+                config = overwrite_config(unvalidated_config)
             self.config: ConfigFile = process_config(data=unvalidated_config)
-
-        # TODO: when running in DBOS Cloud, override specific variables from dbos-config.yaml
-        # OTLP traces: Add ours to theirs
-        # Database parameters: substitute theirs for ours
 
         config_logger(self.config)
         dbos_tracer.config(self.config)

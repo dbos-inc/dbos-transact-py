@@ -555,3 +555,126 @@ def test_dbosconfig():
         finally:
             if dbos is not None:
                 dbos.destroy()
+
+
+def test_dbos_config_overwrite(mocker):
+    os.environ["DBOS__CLOUD"] = "true"
+
+    # Setup a typical dbos-config.yaml file
+    mock_config = """
+    name: "stock-prices"
+    language: "python"
+    database:
+        hostname: "hostname"
+        port: 1234
+        username: dbosadmin
+        password: pwd
+        app_db_name: appdbname
+        sys_db_name: sysdbname
+        ssl: true
+        ssl_ca: cert.pem
+        migrate:
+            - alembic upgrade head
+    telemetry:
+        logs:
+            logLevel: INFO
+        OTLPExporter:
+            logsEndpoint: thelogsendpoint
+            tracesEndpoint:  thetracesendpoint
+    env:
+        KEY: "VALUE"
+    runtimeConfig:
+        start:
+            - "a start command"
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
+    )
+
+    # Give all fields
+    config: DBOSConfig = {
+        "name": "test-app",
+        "db_string": "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslcert=ca.pem",
+        "sys_db_name": "sysdb",
+        "log_level": "DEBUG",
+        "otlp_traces_endpoints": ["http://otel:7777", "notused"],
+        "admin_port": 8001,
+    }
+    dbos = DBOS(config=config)
+
+    assert dbos.config["name"] == "test-app"
+    assert dbos.config["database"]["hostname"] == "hostname"
+    assert dbos.config["database"]["port"] == 1234
+    assert dbos.config["database"]["username"] == "dbosadmin"
+    assert dbos.config["database"]["password"] == "pwd"
+    assert dbos.config["database"]["app_db_name"] == "appdbname"
+    assert dbos.config["database"]["sys_db_name"] == "sysdbname"
+    assert dbos.config["database"]["ssl"] == True
+    assert dbos.config["database"]["ssl_ca"] == "cert.pem"
+    assert dbos.config["database"]["connectionTimeoutMillis"] == 10000
+    assert dbos.config["telemetry"]["logs"]["logLevel"] == "DEBUG"
+    assert (
+        dbos.config["telemetry"]["OTLPExporter"]["tracesEndpoint"]
+        == "thetracesendpoint"
+    )
+    assert dbos.config["runtimeConfig"]["admin_port"] == 8001
+    assert dbos.config["runtimeConfig"]["start"] == ["a start command"]
+    assert dbos.config["env"]["KEY"] == "VALUE"
+
+    # Provide custom setup steps
+    dbos.destroy()
+
+    mock_config = """
+    name: "stock-prices"
+    language: "python"
+    database:
+        hostname: "hostname"
+        port: 1234
+        username: dbosadmin
+        password: pwd
+        app_db_name: appdbname
+        sys_db_name: sysdbname
+        ssl: true
+        ssl_ca: cert.pem
+        migrate:
+            - alembic upgrade head
+    telemetry:
+        OTLPExporter:
+            logsEndpoint: thelogsendpoint
+            tracesEndpoint:  thetracesendpoint
+    runtimeConfig:
+        start:
+            - "a start command"
+        setup:
+            - "echo 'hello'"
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
+    )
+
+    # Give all fields
+    config: DBOSConfig = {
+        "name": "test-app",
+        "db_string": "postgresql://user:password@localhost:5432/dbname",
+    }
+    dbos = DBOS(config=config)
+
+    assert dbos.config["name"] == "test-app"
+    assert dbos.config["database"]["hostname"] == "hostname"
+    assert dbos.config["database"]["port"] == 1234
+    assert dbos.config["database"]["username"] == "dbosadmin"
+    assert dbos.config["database"]["password"] == "pwd"
+    assert dbos.config["database"]["app_db_name"] == "appdbname"
+    assert dbos.config["database"]["sys_db_name"] == "sysdbname"
+    assert dbos.config["database"]["ssl"] == True
+    assert dbos.config["database"]["ssl_ca"] == "cert.pem"
+    assert (
+        dbos.config["telemetry"]["OTLPExporter"]["tracesEndpoint"]
+        == "thetracesendpoint"
+    )
+    assert "admin_port" not in dbos.config["runtimeConfig"]
+    assert dbos.config["runtimeConfig"]["setup"] == ["echo 'hello'"]
+    assert dbos.config["runtimeConfig"]["start"] == ["a start command"]
+    assert "env" not in dbos.config
+
+    del os.environ["DBOS__CLOUD"]

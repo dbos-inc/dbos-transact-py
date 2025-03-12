@@ -266,6 +266,13 @@ def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
     return db_url.render_as_string(hide_password=False)
 
 
+def parse_config_file(config_file_path: str = DBOS_CONFIG_PATH) -> Dict[str, Any]:
+    with open(config_file_path, "r") as file:
+        content = file.read()
+        substituted_content = _substitute_env_vars(content)
+        return yaml.safe_load(substituted_content)
+
+
 def load_config(
     config_file_path: str = DBOS_CONFIG_PATH,
     *,
@@ -287,10 +294,7 @@ def load_config(
 
     init_logger()
 
-    with open(config_file_path, "r") as file:
-        content = file.read()
-        substituted_content = _substitute_env_vars(content)
-        data = yaml.safe_load(substituted_content)
+    data = parse_config_file(config_file_path)
 
     config: ConfigFile = process_config(data=data, silent=silent)
     # Check the connectivity to the database and make sure it's properly configured
@@ -310,6 +314,7 @@ def process_config(
     data: Union[ConfigFile, Dict[str, Any]],
     silent: bool = False,
 ) -> ConfigFile:
+
     # Load the JSON schema relative to the package root
     schema_file = resources.files("dbos").joinpath("dbos-config.schema.json")
     with schema_file.open("r") as f:
@@ -431,3 +436,45 @@ def set_env_vars(config: ConfigFile) -> None:
     for env, value in config.get("env", {}).items():
         if value is not None:
             os.environ[env] = str(value)
+
+
+def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
+    # Load the DBOS configuration file and force the use of:
+    # 1. The database connection parameters (sub the file data to the provided config)
+    # 2. OTLP traces endpoints (add the config data to the provided config)
+    # 3. Custom setup steps (sub the file data to the provided config)
+    # ? Name
+
+    config_from_file = parse_config_file()
+    if config_from_file is None:
+        return provided_config
+
+    provided_config["database"]["hostname"] = config_from_file["database"]["hostname"]
+    provided_config["database"]["port"] = config_from_file["database"]["port"]
+    provided_config["database"]["username"] = config_from_file["database"]["username"]
+    provided_config["database"]["password"] = config_from_file["database"]["password"]
+    provided_config["database"]["app_db_name"] = config_from_file["database"][
+        "app_db_name"
+    ]
+    provided_config["database"]["ssl"] = config_from_file["database"]["ssl"]
+    provided_config["database"]["ssl_ca"] = config_from_file["database"]["ssl_ca"]
+    provided_config["database"]["sys_db_name"] = config_from_file["database"][
+        "sys_db_name"
+    ]
+
+    # FIXME: handle the case were telemetry was missing from provided config
+    provided_config["telemetry"]["OTLPExporter"]["tracesEndpoint"] = config_from_file[
+        "telemetry"
+    ]["OTLPExporter"]["tracesEndpoint"]
+
+    if "setup" in config_from_file["runtimeConfig"]:
+        provided_config["runtimeConfig"]["setup"] = config_from_file["runtimeConfig"][
+            "setup"
+        ]
+    provided_config["runtimeConfig"]["start"] = config_from_file["runtimeConfig"][
+        "start"
+    ]
+
+    provided_config["env"] = config_from_file["env"]
+
+    return provided_config
