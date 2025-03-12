@@ -39,12 +39,12 @@ class ConductorWebsocket(threading.Thread):
                         message = websocket.recv()
                         if not isinstance(message, str):
                             self.dbos.logger.warning(
-                                "Receieved unexpected non-str message"
+                                "Received unexpected non-str message"
                             )
                             continue
                         base_message = p.BaseMessage.from_json(message)
-                        type = base_message.type
-                        if type == p.MessageType.EXECUTOR_INFO:
+                        msg_type = base_message.type
+                        if msg_type == p.MessageType.EXECUTOR_INFO:
                             info_response = p.ExecutorInfoResponse(
                                 type=p.MessageType.EXECUTOR_INFO,
                                 request_id=base_message.request_id,
@@ -53,7 +53,7 @@ class ConductorWebsocket(threading.Thread):
                             )
                             websocket.send(info_response.to_json())
                             self.dbos.logger.info("Connected to DBOS conductor")
-                        elif type == p.MessageType.RECOVERY:
+                        elif msg_type == p.MessageType.RECOVERY:
                             recovery_message = p.RecoveryRequest.from_json(message)
                             success = True
                             try:
@@ -71,7 +71,7 @@ class ConductorWebsocket(threading.Thread):
                                 success=success,
                             )
                             websocket.send(recovery_response.to_json())
-                        elif type == p.MessageType.CANCEL:
+                        elif msg_type == p.MessageType.CANCEL:
                             cancel_message = p.CancelRequest.from_json(message)
                             success = True
                             try:
@@ -87,7 +87,7 @@ class ConductorWebsocket(threading.Thread):
                                 success=success,
                             )
                             websocket.send(cancel_response.to_json())
-                        elif type == p.MessageType.RESUME:
+                        elif msg_type == p.MessageType.RESUME:
                             resume_message = p.ResumeRequest.from_json(message)
                             success = True
                             try:
@@ -103,7 +103,7 @@ class ConductorWebsocket(threading.Thread):
                                 success=success,
                             )
                             websocket.send(resume_response.to_json())
-                        elif type == p.MessageType.RESTART:
+                        elif msg_type == p.MessageType.RESTART:
                             restart_message = p.RestartRequest.from_json(message)
                             success = True
                             try:
@@ -119,7 +119,7 @@ class ConductorWebsocket(threading.Thread):
                                 success=success,
                             )
                             websocket.send(restart_response.to_json())
-                        elif type == p.MessageType.LIST_WORKFLOWS:
+                        elif msg_type == p.MessageType.LIST_WORKFLOWS:
                             list_workflows_message = p.ListWorkflowsRequest.from_json(
                                 message
                             )
@@ -147,7 +147,7 @@ class ConductorWebsocket(threading.Thread):
                                 ],
                             )
                             websocket.send(list_workflows_response.to_json())
-                        elif type == p.MessageType.LIST_QUEUED_WORKFLOWS:
+                        elif msg_type == p.MessageType.LIST_QUEUED_WORKFLOWS:
                             list_queued_workflows_message = (
                                 p.ListQueuedWorkflowsRequest.from_json(message)
                             )
@@ -175,7 +175,7 @@ class ConductorWebsocket(threading.Thread):
                                 )
                             )
                             websocket.send(list_queued_workflows_response.to_json())
-                        elif type == p.MessageType.GET_WORKFLOW:
+                        elif msg_type == p.MessageType.GET_WORKFLOW:
                             get_workflow_message = p.GetWorkflowRequest.from_json(
                                 message
                             )
@@ -195,7 +195,9 @@ class ConductorWebsocket(threading.Thread):
                             )
                             websocket.send(get_workflow_response.to_json())
                         else:
-                            self.dbos.logger.warning(f"Unexpected message type: {type}")
+                            self.dbos.logger.warning(
+                                f"Unexpected message type: {msg_type}"
+                            )
             except ConnectionClosedOK:
                 self.dbos.logger.info("Conductor connection terminated")
                 break
