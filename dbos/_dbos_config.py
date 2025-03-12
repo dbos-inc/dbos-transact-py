@@ -124,7 +124,7 @@ def parse_db_string_to_dbconfig(db_string: str) -> DatabaseConfig:
     db_url = make_url(db_string)
     db_config = {
         "hostname": db_url.host,
-        "port": db_url.port,
+        "port": db_url.port or 5432,
         "username": db_url.username,
         "password": db_url.password,
         "app_db_name": db_url.database,
