@@ -36,6 +36,7 @@ def debug_workflow(workflow_id: str, entrypoint: Union[str, PythonModule]) -> No
 def parse_start_command(command: str) -> Union[str, PythonModule]:
     match = re.match(r"fastapi\s+run\s+(\.?[\w/]+\.py)", command)
     if match:
+        # Mirror the logic in fastapi's run command by converting the path argument to a module
         mod_data = get_module_data_from_path(Path(match.group(1)))
         sys.path.insert(0, str(mod_data.extra_sys_path))
         return PythonModule(mod_data.module_import_str)
