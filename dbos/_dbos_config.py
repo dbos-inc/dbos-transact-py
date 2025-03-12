@@ -194,7 +194,6 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     db_config = parse_db_string_to_dbconfig(config["db_string"])
     if "sys_db_name" in config:
         db_config["sys_db_name"] = config.get("sys_db_name")
-    otlp_trace_endpoints = config.get("otlp_traces_endpoints", [])
 
     # Start with the mandatory fields
     translated_config: ConfigFile = {
@@ -214,7 +213,8 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     if otlp_trace_endpoints:
         telemetry["OTLPExporter"] = {"tracesEndpoint": otlp_trace_endpoints[0]}
     # Add logs section if log_level exists
-    if "log_level" in config and config["log_level"]:
+    log_level = config.get("log_level", "")
+    if log_level:
         telemetry["logs"] = {"logLevel": config["log_level"]}
     # Only add telemetry section if it has content
     if telemetry:
@@ -270,7 +270,20 @@ def parse_config_file(config_file_path: str = DBOS_CONFIG_PATH) -> Dict[str, Any
     with open(config_file_path, "r") as file:
         content = file.read()
         substituted_content = _substitute_env_vars(content)
-        return yaml.safe_load(substituted_content)
+        data = yaml.safe_load(substituted_content)
+
+    # Load the JSON schema relative to the package root
+    schema_file = resources.files("dbos").joinpath("dbos-config.schema.json")
+    with schema_file.open("r") as f:
+        schema = json.load(f)
+
+    # Validate the data against the schema
+    try:
+        validate(instance=data, schema=schema)
+    except ValidationError as e:
+        raise DBOSInitializationError(f"Validation error: {e}")
+
+    return data
 
 
 def load_config(
@@ -314,17 +327,6 @@ def process_config(
     data: Union[ConfigFile, Dict[str, Any]],
     silent: bool = False,
 ) -> ConfigFile:
-
-    # Load the JSON schema relative to the package root
-    schema_file = resources.files("dbos").joinpath("dbos-config.schema.json")
-    with schema_file.open("r") as f:
-        schema = json.load(f)
-
-    # Validate the data against the schema
-    try:
-        validate(instance=data, schema=schema)
-    except ValidationError as e:
-        raise DBOSInitializationError(f"Validation error: {e}")
 
     if "database" not in data:
         data["database"] = {}
@@ -449,6 +451,7 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     if config_from_file is None:
         return provided_config
 
+    # Database config
     provided_config["database"]["hostname"] = config_from_file["database"]["hostname"]
     provided_config["database"]["port"] = config_from_file["database"]["port"]
     provided_config["database"]["username"] = config_from_file["database"]["username"]
@@ -456,25 +459,39 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     provided_config["database"]["app_db_name"] = config_from_file["database"][
         "app_db_name"
     ]
-    provided_config["database"]["ssl"] = config_from_file["database"]["ssl"]
-    provided_config["database"]["ssl_ca"] = config_from_file["database"]["ssl_ca"]
     provided_config["database"]["sys_db_name"] = config_from_file["database"][
         "sys_db_name"
     ]
+    provided_config["database"]["ssl"] = config_from_file["database"]["ssl"]
+    provided_config["database"]["ssl_ca"] = config_from_file["database"]["ssl_ca"]
 
-    # FIXME: handle the case were telemetry was missing from provided config
+    # Telemetry config
+    if "telemetry" not in provided_config:
+        provided_config["telemetry"] = {
+            "OTLPExporter": {},
+        }
+    elif "OTLPExporter" not in provided_config["telemetry"]:
+        provided_config["telemetry"]["OTLPExporter"] = {}
+
     provided_config["telemetry"]["OTLPExporter"]["tracesEndpoint"] = config_from_file[
         "telemetry"
     ]["OTLPExporter"]["tracesEndpoint"]
+    provided_config["telemetry"]["OTLPExporter"]["logsEndpoint"] = config_from_file[
+        "telemetry"
+    ]["OTLPExporter"]["logsEndpoint"]
 
-    if "setup" in config_from_file["runtimeConfig"]:
-        provided_config["runtimeConfig"]["setup"] = config_from_file["runtimeConfig"][
-            "setup"
-        ]
+    # Runtime config
+    if "runtimeConfig" not in provided_config:
+        provided_config["runtimeConfig"] = {}
     provided_config["runtimeConfig"]["start"] = config_from_file["runtimeConfig"][
         "start"
     ]
+    del provided_config["runtimeConfig"][
+        "admin_port"
+    ]  # Admin port is expected to be 3001 in hosting provider
 
-    provided_config["env"] = config_from_file["env"]
+    # Env should be set from the hosting provider
+    if "env" in provided_config:
+        del provided_config["env"]
 
     return provided_config

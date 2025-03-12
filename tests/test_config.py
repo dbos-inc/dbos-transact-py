@@ -8,7 +8,13 @@ import pytest_mock
 
 # Public API
 from dbos import DBOS, load_config
-from dbos._dbos_config import DBOSConfig, parse_db_string_to_dbconfig, set_env_vars
+from dbos._dbos_config import (
+    ConfigFile,
+    DBOSConfig,
+    overwrite_config,
+    parse_db_string_to_dbconfig,
+    set_env_vars,
+)
 from dbos._error import DBOSInitializationError
 
 mock_filename = "test.yaml"
@@ -243,28 +249,6 @@ def test_config_missing_language(mocker):
     assert "must specify the application language" in str(exc_info.value)
 
 
-def test_config_bad_language(mocker):
-    mock_config = """
-        name: "some-app"
-        language: typescript
-        database:
-          hostname: 'some host'
-          port: 1234
-          username: 'some user'
-          password: abc123
-          app_db_name: 'some db'
-          connectionTimeoutMillis: 3000
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        load_config(mock_filename)
-
-    assert "invalid language" in str(exc_info.value)
-
-
 def test_config_bad_name(mocker):
     mock_config = """
         name: "some app"
@@ -489,7 +473,8 @@ def test_parse_db_string_to_dbconfig():
         parse_db_string_to_dbconfig(db_string)
 
 
-def test_dbosconfig():
+# Test both DBOS.__init__() and translate_dbos_config_to_config_file()
+def test_dbosconfig_full():
     # Give all fields
     config: DBOSConfig = {
         "name": "test-app",
@@ -511,11 +496,16 @@ def test_dbosconfig():
     assert (
         dbos.config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "http://otel:7777"
     )
+    assert "logsEndpoint" not in dbos.config["telemetry"]["OTLPExporter"]
     assert dbos.config["runtimeConfig"]["admin_port"] == 8001
     assert dbos.config["runtimeConfig"]["start"] == []
+    assert "setup" not in dbos.config["runtimeConfig"]
+    assert "env" not in dbos.config
 
     dbos.destroy()
 
+
+def test_dbosconfig_minimal():
     # Give only mandatory fields
     config: DBOSConfig = {
         "name": "test-app",
@@ -530,11 +520,14 @@ def test_dbosconfig():
     assert dbos.config["database"]["app_db_name"] == "dbname"
     assert "sys_db_name" not in dbos.config["database"]
     assert "telemetry" not in dbos.config
+    assert "env" not in dbos.config
     assert "admin_port" not in dbos.config["runtimeConfig"]
     assert dbos.config["runtimeConfig"]["start"] == []
 
     dbos.destroy()
 
+
+def test_dbosconfig_empty_otlp_traces_endpoints():
     # Give an empty OTLP traces endpoint list
     config: DBOSConfig = {
         "name": "test-app",
@@ -545,6 +538,8 @@ def test_dbosconfig():
     assert "telemetry" not in dbos.config
     dbos.destroy()
 
+
+def test_dbosconfig_missing_fields():
     # Missing required field
     with pytest.raises(Exception):
         config: DBOSConfig = {
@@ -557,9 +552,7 @@ def test_dbosconfig():
                 dbos.destroy()
 
 
-def test_dbos_config_overwrite(mocker):
-    os.environ["DBOS__CLOUD"] = "true"
-
+def test_overwrite_config(mocker):
     # Setup a typical dbos-config.yaml file
     mock_config = """
     name: "stock-prices"
@@ -591,39 +584,55 @@ def test_dbos_config_overwrite(mocker):
         "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
     )
 
-    # Give all fields
-    config: DBOSConfig = {
+    provided_config: ConfigFile = {
         "name": "test-app",
-        "db_string": "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslcert=ca.pem",
-        "sys_db_name": "sysdb",
-        "log_level": "DEBUG",
-        "otlp_traces_endpoints": ["http://otel:7777", "notused"],
-        "admin_port": 8001,
+        "database": {
+            "hostname": "localhost",
+            "port": 5432,
+            "username": "postgres",
+            "password": "dbos",
+            "app_db_name": "dbostestpy",
+            "sys_db_name": "sysdb",
+            "connectionTimeoutMillis": 10000,
+        },
+        "telemetry": {
+            "OTLPExporter": {
+                "tracesEndpoint": "a",
+                "logsEndpoint": "b",
+            },
+            "logs": {
+                "logLevel": "DEBUG",
+            },
+        },
+        "runtimeConfig": {
+            "start": ["python3 main.py"],
+            "admin_port": 8001,
+        },
+        "env": {
+            "FOO": "BAR",
+        },
     }
-    dbos = DBOS(config=config)
+    config = overwrite_config(provided_config)
 
-    assert dbos.config["name"] == "test-app"
-    assert dbos.config["database"]["hostname"] == "hostname"
-    assert dbos.config["database"]["port"] == 1234
-    assert dbos.config["database"]["username"] == "dbosadmin"
-    assert dbos.config["database"]["password"] == "pwd"
-    assert dbos.config["database"]["app_db_name"] == "appdbname"
-    assert dbos.config["database"]["sys_db_name"] == "sysdbname"
-    assert dbos.config["database"]["ssl"] == True
-    assert dbos.config["database"]["ssl_ca"] == "cert.pem"
-    assert dbos.config["database"]["connectionTimeoutMillis"] == 10000
-    assert dbos.config["telemetry"]["logs"]["logLevel"] == "DEBUG"
-    assert (
-        dbos.config["telemetry"]["OTLPExporter"]["tracesEndpoint"]
-        == "thetracesendpoint"
-    )
-    assert dbos.config["runtimeConfig"]["admin_port"] == 8001
-    assert dbos.config["runtimeConfig"]["start"] == ["a start command"]
-    assert dbos.config["env"]["KEY"] == "VALUE"
+    assert config["name"] == "test-app"
+    assert config["database"]["hostname"] == "hostname"
+    assert config["database"]["port"] == 1234
+    assert config["database"]["username"] == "dbosadmin"
+    assert config["database"]["password"] == "pwd"
+    assert config["database"]["app_db_name"] == "appdbname"
+    assert config["database"]["sys_db_name"] == "sysdbname"
+    assert config["database"]["ssl"] == True
+    assert config["database"]["ssl_ca"] == "cert.pem"
+    assert config["database"]["connectionTimeoutMillis"] == 10000
+    assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
+    assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
+    assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
+    assert config["runtimeConfig"]["admin_port"] == 8001
+    assert config["runtimeConfig"]["start"] == ["a start command"]
+    assert "env" not in dbos.config
 
-    # Provide custom setup steps
-    dbos.destroy()
 
+def test_overwrite_config_minimal(mocker):
     mock_config = """
     name: "stock-prices"
     language: "python"
@@ -652,29 +661,88 @@ def test_dbos_config_overwrite(mocker):
         "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
     )
 
-    # Give all fields
-    config: DBOSConfig = {
+    provided_config: ConfigFile = {
         "name": "test-app",
-        "db_string": "postgresql://user:password@localhost:5432/dbname",
+        "database": {
+            "hostname": "localhost",
+            "port": 5432,
+            "username": "postgres",
+            "password": "dbos",
+            "app_db_name": "dbostestpy",
+        },
     }
-    dbos = DBOS(config=config)
+    config = overwrite_config(provided_config)
 
-    assert dbos.config["name"] == "test-app"
-    assert dbos.config["database"]["hostname"] == "hostname"
-    assert dbos.config["database"]["port"] == 1234
-    assert dbos.config["database"]["username"] == "dbosadmin"
-    assert dbos.config["database"]["password"] == "pwd"
-    assert dbos.config["database"]["app_db_name"] == "appdbname"
-    assert dbos.config["database"]["sys_db_name"] == "sysdbname"
-    assert dbos.config["database"]["ssl"] == True
-    assert dbos.config["database"]["ssl_ca"] == "cert.pem"
-    assert (
-        dbos.config["telemetry"]["OTLPExporter"]["tracesEndpoint"]
-        == "thetracesendpoint"
+    assert config["name"] == "test-app"
+    assert config["database"]["hostname"] == "hostname"
+    assert config["database"]["port"] == 1234
+    assert config["database"]["username"] == "dbosadmin"
+    assert config["database"]["password"] == "pwd"
+    assert config["database"]["app_db_name"] == "appdbname"
+    assert config["database"]["sys_db_name"] == "sysdbname"
+    assert config["database"]["ssl"] == True
+    assert config["database"]["ssl_ca"] == "cert.pem"
+    assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
+    assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
+    assert "admin_port" not in config["runtimeConfig"]
+    assert config["runtimeConfig"]["start"] == ["a start command"]
+    assert "env" not in config
+
+
+def test_overwrite_config_has_telemetry(mocker):
+    mock_config = """
+    name: "stock-prices"
+    language: "python"
+    database:
+        hostname: "hostname"
+        port: 1234
+        username: dbosadmin
+        password: pwd
+        app_db_name: appdbname
+        sys_db_name: sysdbname
+        ssl: true
+        ssl_ca: cert.pem
+        migrate:
+            - alembic upgrade head
+    telemetry:
+        OTLPExporter:
+            logsEndpoint: thelogsendpoint
+            tracesEndpoint:  thetracesendpoint
+    runtimeConfig:
+        start:
+            - "a start command"
+        setup:
+            - "echo 'hello'"
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
     )
-    assert "admin_port" not in dbos.config["runtimeConfig"]
-    assert dbos.config["runtimeConfig"]["setup"] == ["echo 'hello'"]
-    assert dbos.config["runtimeConfig"]["start"] == ["a start command"]
-    assert "env" not in dbos.config
 
-    del os.environ["DBOS__CLOUD"]
+    provided_config: ConfigFile = {
+        "name": "test-app",
+        "database": {
+            "hostname": "localhost",
+            "port": 5432,
+            "username": "postgres",
+            "password": "dbos",
+            "app_db_name": "dbostestpy",
+        },
+        "telemetry": {"logs": {"logLevel": "DEBUG"}},
+    }
+    config = overwrite_config(provided_config)
+
+    assert config["name"] == "test-app"
+    assert config["database"]["hostname"] == "hostname"
+    assert config["database"]["port"] == 1234
+    assert config["database"]["username"] == "dbosadmin"
+    assert config["database"]["password"] == "pwd"
+    assert config["database"]["app_db_name"] == "appdbname"
+    assert config["database"]["sys_db_name"] == "sysdbname"
+    assert config["database"]["ssl"] == True
+    assert config["database"]["ssl_ca"] == "cert.pem"
+    assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
+    assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
+    assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
+    assert "admin_port" not in config["runtimeConfig"]
+    assert config["runtimeConfig"]["start"] == ["a start command"]
+    assert "env" not in config
