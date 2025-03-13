@@ -87,6 +87,7 @@ if TYPE_CHECKING:
         IsolationLevel,
     )
 
+from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, InvalidRequestError
 
 P = ParamSpec("P")  # A generic type for workflow parameters
@@ -622,11 +623,12 @@ def decorate_transaction(
                                     if dbos._debug_mode == DebugMode.TIME_TRAVEL:
                                         txn_id = (
                                             ""
-                                            if recorded_output.txn_id is None
-                                            else recorded_output.txn_id
+                                            if recorded_output["txn_id"] is None
+                                            else recorded_output["txn_id"]
                                         )
+                                        txn_snapshot = recorded_output["txn_snapshot"]
                                         session.execute(
-                                            f"--proxy:${txn_id}:${recorded_output.txn_snapshot}`"
+                                            text(f"--proxy:${txn_id}:${txn_snapshot}`")
                                         )
                                     else:
                                         if recorded_output["error"]:
@@ -652,6 +654,7 @@ def decorate_transaction(
 
                                 output = func(*args, **kwargs)
                                 if dbos.debug_mode:
+                                    assert recorded_output is not None
                                     if recorded_output["error"]:
                                         deserialized_error = (
                                             _serialization.deserialize_exception(
