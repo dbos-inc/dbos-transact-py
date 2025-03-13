@@ -21,10 +21,9 @@ from typing import (
     overload,
 )
 
-from dbos._outcome import Immediate, NoResult, Outcome, Pending
-from dbos._utils import GlobalParams
-
 from ._app_db import ApplicationDatabase, TransactionResultInternal
+from ._outcome import Immediate, NoResult, Outcome, Pending
+from ._utils import GlobalParams
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec
@@ -47,6 +46,7 @@ from ._context import (
     assert_current_dbos_context,
     get_local_dbos_context,
 )
+from ._dbos import DebugMode
 from ._error import (
     DBOSException,
     DBOSMaxStepRetriesExceeded,
@@ -619,6 +619,39 @@ def decorate_transaction(
                                     dbos.logger.debug(
                                         f"Replaying transaction, id: {ctx.function_id}, name: {attributes['name']}"
                                     )
+                                    if dbos._debug_mode == DebugMode.TIME_TRAVEL:
+                                        txn_id = (
+                                            ""
+                                            if recorded_output.txn_id is None
+                                            else recorded_output.txn_id
+                                        )
+                                        session.execute(
+                                            f"--proxy:${txn_id}:${recorded_output.txn_snapshot}`"
+                                        )
+                                    else:
+                                        if recorded_output["error"]:
+                                            deserialized_error = (
+                                                _serialization.deserialize_exception(
+                                                    recorded_output["error"]
+                                                )
+                                            )
+                                            has_recorded_error = True
+                                            raise deserialized_error
+                                        elif recorded_output["output"]:
+                                            return _serialization.deserialize(
+                                                recorded_output["output"]
+                                            )
+                                        else:
+                                            raise Exception(
+                                                "Output and error are both None"
+                                            )
+                                else:
+                                    dbos.logger.debug(
+                                        f"Running transaction, id: {ctx.function_id}, name: {attributes['name']}"
+                                    )
+
+                                output = func(*args, **kwargs)
+                                if dbos.debug_mode:
                                     if recorded_output["error"]:
                                         deserialized_error = (
                                             _serialization.deserialize_exception(
@@ -635,12 +668,7 @@ def decorate_transaction(
                                         raise Exception(
                                             "Output and error are both None"
                                         )
-                                else:
-                                    dbos.logger.debug(
-                                        f"Running transaction, id: {ctx.function_id}, name: {attributes['name']}"
-                                    )
 
-                                output = func(*args, **kwargs)
                                 txn_output["output"] = _serialization.serialize(output)
                                 assert (
                                     ctx.sql_session is not None
@@ -675,7 +703,11 @@ def decorate_transaction(
                             raise
                         finally:
                             # Don't record the error if it was already recorded
-                            if txn_error and not has_recorded_error:
+                            if (
+                                txn_error
+                                and not has_recorded_error
+                                and not dbos.debug_mode
+                            ):
                                 txn_output["error"] = (
                                     _serialization.serialize_exception(txn_error)
                                 )

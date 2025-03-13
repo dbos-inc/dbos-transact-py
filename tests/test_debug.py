@@ -4,7 +4,7 @@ import pytest
 import sqlalchemy as sa
 
 from dbos import DBOS, ConfigFile, SetWorkflowID
-from dbos._dbos import _get_dbos_instance
+from dbos._dbos import DebugMode, _get_dbos_instance
 from dbos._debug import PythonModule, parse_start_command
 from dbos._schemas.system_database import SystemSchema
 
@@ -89,7 +89,7 @@ def test_wf_debug(dbos: DBOS, config: ConfigFile) -> None:
 
     DBOS.destroy()
     DBOS(config=config)
-    DBOS.launch(debug_mode=True)
+    DBOS.launch(debug_mode=DebugMode.ENABLED)
 
     handle = DBOS.execute_workflow_id(wfuuid)
     result = handle.get_result()
@@ -134,7 +134,7 @@ def test_wf_debug_exception(dbos: DBOS, config: ConfigFile) -> None:
 
     DBOS.destroy()
     DBOS(config=config)
-    DBOS.launch(debug_mode=True)
+    DBOS.launch(debug_mode=DebugMode.ENABLED)
 
     handle = DBOS.execute_workflow_id(wfuuid)
     with pytest.raises(Exception) as excinfo:

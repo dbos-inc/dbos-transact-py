@@ -12,6 +12,7 @@ import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from enum import Enum
 from logging import Logger
 from typing import (
     TYPE_CHECKING,
@@ -228,6 +229,12 @@ class DBOSRegistry:
         return hasher.hexdigest()
 
 
+class DebugMode(Enum):
+    DISABLED = 0
+    ENABLED = 1
+    TIME_TRAVEL = 2
+
+
 class DBOS:
     """
     Main access class for DBOS functionality.
@@ -319,7 +326,7 @@ class DBOS:
         dbos_logger.info("Initializing DBOS")
         self.config: ConfigFile = config
         self._launched: bool = False
-        self._debug_mode: bool = False
+        self._debug_mode: DebugMode = DebugMode.DISABLED
         self._sys_db_field: Optional[SystemDatabase] = None
         self._app_db_field: Optional[ApplicationDatabase] = None
         self._registry: DBOSRegistry = _get_or_create_dbos_registry()
@@ -392,14 +399,17 @@ class DBOS:
 
     @property
     def debug_mode(self) -> bool:
-        return self._debug_mode
+        return (
+            self._debug_mode == DebugMode.ENABLED
+            or self._debug_mode == DebugMode.TIME_TRAVEL
+        )
 
     @classmethod
-    def launch(cls, *, debug_mode: bool = False) -> None:
+    def launch(cls, *, debug_mode: DebugMode = DebugMode.DISABLED) -> None:
         if _dbos_global_instance is not None:
             _dbos_global_instance._launch(debug_mode=debug_mode)
 
-    def _launch(self, *, debug_mode: bool = False) -> None:
+    def _launch(self, *, debug_mode: DebugMode = DebugMode.DISABLED) -> None:
         try:
             if self._launched:
                 dbos_logger.warning(f"DBOS was already launched")
@@ -413,8 +423,10 @@ class DBOS:
             dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             self._executor_field = ThreadPoolExecutor(max_workers=64)
-            self._sys_db_field = SystemDatabase(self.config, debug_mode=debug_mode)
-            self._app_db_field = ApplicationDatabase(self.config, debug_mode=debug_mode)
+            self._sys_db_field = SystemDatabase(self.config, debug_mode=self.debug_mode)
+            self._app_db_field = ApplicationDatabase(
+                self.config, debug_mode=self.debug_mode
+            )
 
             if debug_mode:
                 return

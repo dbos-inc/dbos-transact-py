@@ -23,6 +23,8 @@ class TransactionResultInternal(TypedDict):
 class RecordedResult(TypedDict):
     output: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
+    txn_id: Optional[str]
+    txn_snapshot: str
 
 
 class ApplicationDatabase:
@@ -135,6 +137,8 @@ class ApplicationDatabase:
             sa.select(
                 ApplicationSchema.transaction_outputs.c.output,
                 ApplicationSchema.transaction_outputs.c.error,
+                ApplicationSchema.transaction_outputs.c.txn_snapshot,
+                ApplicationSchema.transaction_outputs.c.txn_id,
             ).where(
                 ApplicationSchema.transaction_outputs.c.workflow_uuid == workflow_uuid,
                 ApplicationSchema.transaction_outputs.c.function_id == function_id,
@@ -145,5 +149,7 @@ class ApplicationDatabase:
         result: RecordedResult = {
             "output": rows[0][0],
             "error": rows[0][1],
+            "txn_snapshot": rows[0][2],
+            "txn_id": rows[0][3],
         }
         return result

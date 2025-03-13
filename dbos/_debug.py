@@ -1,20 +1,25 @@
 import re
 import runpy
 import sys
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Union
 
 from fastapi_cli.discover import get_module_data_from_path
 
 from dbos import DBOS
+from dbos._dbos import DebugMode
 
 
+@dataclass
 class PythonModule:
-    def __init__(self, module_name: str):
-        self.module_name = module_name
+    module_name: str
 
 
-def debug_workflow(workflow_id: str, entrypoint: Union[str, PythonModule]) -> None:
+def debug_workflow(
+    workflow_id: str, entrypoint: Union[str, PythonModule], time_travel: bool
+) -> None:
     # include the current directory (represented by empty string) in the search path
     # if it not already included
     if "" not in sys.path:
@@ -27,7 +32,7 @@ def debug_workflow(workflow_id: str, entrypoint: Union[str, PythonModule]) -> No
         raise ValueError("Invalid entrypoint type. Must be a string or PythonModule.")
 
     DBOS.logger.info(f"Debugging workflow {workflow_id}...")
-    DBOS.launch(debug_mode=True)
+    DBOS.launch(debug_mode=DebugMode.TIME_TRAVEL if time_travel else DebugMode.ENABLED)
     handle = DBOS.execute_workflow_id(workflow_id)
     handle.get_result()
     DBOS.logger.info("Workflow Debugging complete. Exiting process.")
