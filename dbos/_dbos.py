@@ -398,7 +398,7 @@ class DBOS:
         return rv
 
     @property
-    def debug_mode(self) -> bool:
+    def is_debugging(self) -> bool:
         return (
             self._debug_mode == DebugMode.ENABLED
             or self._debug_mode == DebugMode.TIME_TRAVEL
@@ -423,9 +423,11 @@ class DBOS:
             dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             self._executor_field = ThreadPoolExecutor(max_workers=64)
-            self._sys_db_field = SystemDatabase(self.config, debug_mode=self.debug_mode)
+            self._sys_db_field = SystemDatabase(
+                self.config, debug_mode=self.is_debugging
+            )
             self._app_db_field = ApplicationDatabase(
-                self.config, debug_mode=self.debug_mode
+                self.config, debug_mode=self.is_debugging
             )
 
             if debug_mode:
