@@ -9,7 +9,12 @@ from typing import Union
 from fastapi_cli.discover import get_module_data_from_path
 
 from dbos import DBOS
-from dbos._dbos import DebugMode
+
+
+class DebugMode(Enum):
+    DISABLED = 0
+    ENABLED = 1
+    TIME_TRAVEL = 2
 
 
 @dataclass

@@ -4,8 +4,8 @@ import pytest
 import sqlalchemy as sa
 
 from dbos import DBOS, ConfigFile, SetWorkflowID
-from dbos._dbos import DebugMode, _get_dbos_instance
-from dbos._debug import PythonModule, parse_start_command
+from dbos._dbos import _get_dbos_instance
+from dbos._debug import DebugMode, PythonModule, parse_start_command
 from dbos._schemas.system_database import SystemSchema
 
 

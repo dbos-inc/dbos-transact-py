@@ -12,7 +12,6 @@ import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from enum import Enum
 from logging import Logger
 from typing import (
     TYPE_CHECKING,
@@ -35,6 +34,7 @@ from typing import (
 from opentelemetry.trace import Span
 
 from dbos._conductor.conductor import ConductorWebsocket
+from dbos._debug import DebugMode
 from dbos._utils import GlobalParams
 
 from ._classproperty import classproperty
@@ -227,12 +227,6 @@ class DBOSRegistry:
         for source in sources:
             hasher.update(source.encode("utf-8"))
         return hasher.hexdigest()
-
-
-class DebugMode(Enum):
-    DISABLED = 0
-    ENABLED = 1
-    TIME_TRAVEL = 2
 
 
 class DBOS:

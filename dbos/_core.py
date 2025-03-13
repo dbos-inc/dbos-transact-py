@@ -46,7 +46,7 @@ from ._context import (
     assert_current_dbos_context,
     get_local_dbos_context,
 )
-from ._dbos import DebugMode
+from ._debug import DebugMode
 from ._error import (
     DBOSException,
     DBOSMaxStepRetriesExceeded,
