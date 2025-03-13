@@ -240,6 +240,10 @@ def reset(
 @app.command(help="Replay Debug a DBOS workflow")
 def debug(
     workflow_id: Annotated[str, typer.Argument(help="Workflow ID to debug")],
+    time_travel: Annotated[
+        bool,
+        typer.Option("--time-travel", help="Enable Time Travel Debugging"),
+    ] = False,
 ) -> None:
     config = load_config(silent=True, use_db_wizard=False)
     start = config["runtimeConfig"]["start"]
@@ -250,7 +254,7 @@ def debug(
         typer.echo("Multiple start commands found in 'dbos-config.yaml'")
         raise typer.Exit(code=1)
     entrypoint = parse_start_command(start[0])
-    debug_workflow(workflow_id, entrypoint)
+    debug_workflow(workflow_id, entrypoint, time_travel)
 
 
 @workflow.command(help="List workflows for your application")
