@@ -34,12 +34,12 @@ from typing import (
 from opentelemetry.trace import Span
 
 from dbos._conductor.conductor import ConductorWebsocket
-from dbos._debug import DebugMode
 from dbos._utils import GlobalParams
 
 from ._classproperty import classproperty
 from ._core import (
     TEMP_SEND_WF_NAME,
+    DebugMode,
     WorkflowHandlePolling,
     decorate_step,
     decorate_transaction,

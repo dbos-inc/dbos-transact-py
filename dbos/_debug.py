@@ -2,7 +2,6 @@ import re
 import runpy
 import sys
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Union
 
@@ -10,11 +9,7 @@ from fastapi_cli.discover import get_module_data_from_path
 
 from dbos import DBOS
 
-
-class DebugMode(Enum):
-    DISABLED = 0
-    ENABLED = 1
-    TIME_TRAVEL = 2
+from ._core import DebugMode
 
 
 @dataclass

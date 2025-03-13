@@ -6,6 +6,7 @@ import sys
 import time
 import traceback
 from concurrent.futures import Future
+from enum import Enum
 from functools import wraps
 from typing import (
     TYPE_CHECKING,
@@ -46,7 +47,6 @@ from ._context import (
     assert_current_dbos_context,
     get_local_dbos_context,
 )
-from ._debug import DebugMode
 from ._error import (
     DBOSException,
     DBOSMaxStepRetriesExceeded,
@@ -95,6 +95,12 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 F = TypeVar("F", bound=Callable[..., Any])
 
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
+
+
+class DebugMode(Enum):
+    DISABLED = 0
+    ENABLED = 1
+    TIME_TRAVEL = 2
 
 
 class WorkflowHandleFuture(Generic[R]):
