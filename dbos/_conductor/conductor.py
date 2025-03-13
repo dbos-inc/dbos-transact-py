@@ -194,6 +194,22 @@ class ConductorWebsocket(threading.Thread):
                                 ),
                             )
                             websocket.send(get_workflow_response.to_json())
+                        elif msg_type == p.MessageType.EXIST_PENDING_WORKFLOWS:
+                            exist_pending_workflows_message = (
+                                p.ExistPendingWorkflowsRequest.from_json(message)
+                            )
+                            pending_wfs = self.dbos._sys_db.get_pending_workflows(
+                                exist_pending_workflows_message.executor_id,
+                                exist_pending_workflows_message.application_version,
+                            )
+                            exist_pending_workflows_response = (
+                                p.ExistPendingWorkflowsResponse(
+                                    type=p.MessageType.EXIST_PENDING_WORKFLOWS,
+                                    request_id=base_message.request_id,
+                                    exist=len(pending_wfs) > 0,
+                                )
+                            )
+                            websocket.send(exist_pending_workflows_response.to_json())
                         else:
                             self.dbos.logger.warning(
                                 f"Unexpected message type: {msg_type}"

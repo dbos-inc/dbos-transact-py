@@ -15,6 +15,7 @@ class MessageType(str, Enum):
     RESUME = "resume"
     RESTART = "restart"
     GET_WORKFLOW = "get_workflow"
+    EXIST_PENDING_WORKFLOWS = "exist_pending_workflows"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -195,3 +196,14 @@ class GetWorkflowRequest(BaseMessage):
 @dataclass
 class GetWorkflowResponse(BaseMessage):
     output: Optional[WorkflowsOutput]
+
+
+@dataclass
+class ExistPendingWorkflowsRequest(BaseMessage):
+    executor_id: str
+    application_version: str
+
+
+@dataclass
+class ExistPendingWorkflowsResponse(BaseMessage):
+    exist: bool
