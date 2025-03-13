@@ -12,13 +12,14 @@ from dbos._dbos_config import (
     ConfigFile,
     DBOSConfig,
     overwrite_config,
-    parse_config_file,
     parse_db_string_to_dbconfig,
+    process_config,
     set_env_vars,
+    translate_dbos_config_to_config_file,
 )
 from dbos._error import DBOSInitializationError
 
-mock_filename = "test.yaml"
+mock_filename = "dbos-config.yaml"
 original_open = __builtins__["open"]
 
 
@@ -38,7 +39,17 @@ def generate_mock_open(filenames, mock_files):
     return conditional_mock_open
 
 
-def test_valid_config(mocker):
+"""
+Test all the possible ways to configure DBOS.
+- First test the "switches" in the DBOS.__init__() method, ensuring they find the config from the right place
+- Then test each of the individual functions that process the config (load_config, overwrite_config, translate_dbos_config_to_config_file, process_config)
+"""
+
+
+####################
+# SWITCHES
+####################
+def test_no_config_provided(mocker):
     mock_config = """
         name: "some-app"
         language: "python"
@@ -64,9 +75,91 @@ def test_valid_config(mocker):
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
     )
 
+    dbos = DBOS()
+    assert dbos.config["name"] == "some-app"
+    assert dbos.config["language"] == "python"
+    assert dbos.config["database"]["hostname"] == "localhost"
+    assert dbos.config["database"]["port"] == 5432
+    assert dbos.config["database"]["username"] == "postgres"
+    assert dbos.config["database"]["password"] == os.environ["PGPASSWORD"]
+    assert dbos.config["database"]["app_db_name"] == "some db"
+    assert dbos.config["database"]["connectionTimeoutMillis"] == 3000
+    assert dbos.config["env"]["foo"] == "FOOFOO"
+    assert dbos.config["env"]["bob"] is None  # Unset environment variable
+    assert dbos.config["env"]["test_number"] == 123
+
+    set_env_vars(dbos.config)
+    assert os.environ["bazbaz"] == "BAZBAZ"
+    assert os.environ["foo"] == "FOOFOO"
+    assert os.environ["test_number"] == "123"
+    assert "bob" not in os.environ
+
+    dbos.destroy()
+
+
+def test_configfile_type_provided():
+    config: ConfigFile = {
+        "name": "some-app",
+        "database": {
+            "hostname": "localhost",
+        },
+    }
+    dbos = DBOS(config=config)
+    assert dbos.config["name"] == "some-app"
+    assert dbos.config["database"]["hostname"] == "localhost"
+    assert dbos.config["database"]["port"] == 5432
+    assert dbos.config["database"]["username"] == "postgres"
+    assert dbos.config["database"]["password"] == "dbos"
+    assert dbos.config["database"]["app_db_name"] == "some_app"
+    dbos.destroy()
+
+
+def test_dbosconfig_type_provided(mocker):
+    config: DBOSConfig = {
+        "name": "some-app",
+    }
+    dbos = DBOS(config=config)
+    assert dbos.config["name"] == "some-app"
+    assert dbos.config["database"]["hostname"] == "localhost"
+    assert dbos.config["database"]["port"] == 5432
+    assert dbos.config["database"]["username"] == "postgres"
+    assert dbos.config["database"]["password"] == "dbos"
+    assert dbos.config["database"]["app_db_name"] == "some_app"
+    dbos.destroy()
+
+
+####################
+# LOAD CONFIG
+####################
+
+
+def test_load_valid_config_file(mocker):
+    mock_config = """
+        name: "some-app"
+        runtimeConfig:
+            start:
+                - "python3 main.py"
+            admin_port: 8001
+        database:
+          hostname: 'localhost'
+          port: 5432
+          username: 'postgres'
+          password: ${PGPASSWORD}
+          app_db_name: 'some db'
+          connectionTimeoutMillis: 3000
+        env:
+            foo: ${BARBAR}
+            bazbaz: BAZBAZ
+            bob: ${BOBBOB}
+            test_number: 123
+    """
+    os.environ["BARBAR"] = "FOOFOO"
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
+    )
+
     configFile = load_config(mock_filename)
     assert configFile["name"] == "some-app"
-    assert configFile["language"] == "python"
     assert configFile["database"]["hostname"] == "localhost"
     assert configFile["database"]["port"] == 5432
     assert configFile["database"]["username"] == "postgres"
@@ -84,52 +177,171 @@ def test_valid_config(mocker):
     assert "bob" not in os.environ
 
 
-def test_valid_config_without_appdbname(mocker):
-    mock_config = """
-        name: "some-app"
-        language: "python"
-        runtimeConfig:
-            start:
-                - "python3 main.py"
-            admin_port: 8001
-        database:
-          hostname: 'localhost'
-          port: 5432
-          username: 'postgres'
-          password: ${PGPASSWORD}
-          connectionTimeoutMillis: 3000
-    """
-    os.environ["BARBAR"] = "FOOFOO"
+def test_load_config_file_open_error(mocker):
+    """Test handling when the config file can't be opened."""
+    mocker.patch("builtins.open", side_effect=FileNotFoundError("File not found"))
+
+    with pytest.raises(FileNotFoundError):
+        load_config()
+
+
+def test_load_config_file_not_a_dict(mocker):
+    """Test handling when YAML doesn't parse to a dictionary."""
+    mock_config = "just a string"
     mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
+        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
     )
 
-    configFile = load_config(mock_filename)
-    assert configFile["database"]["app_db_name"] == "some_app"
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        load_config()
+
+    assert "must contain a dictionary" in str(exc_info.value)
 
 
-def test_config_load_defaults(mocker):
+def test_load_config_file_schema_validation_error(mocker):
+    """Test handling when the config fails schema validation."""
     mock_config = """
-        name: "some-app"
-        language: "python"
-        runtimeConfig:
-            start:
-                - "python3 main.py"
+    name: "test-app"
+    invalid_field: "this shouldn't be here"
     """
     mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
+        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
     )
 
-    configFile = load_config(mock_filename)
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        load_config()
+
+    assert (
+        "Validation error: Additional properties are not allowed ('invalid_field' was unexpected)"
+        in str(exc_info.value)
+    )
+
+
+def test_load_config_file_custom_path():
+    """Test parsing a config file from a custom path."""
+    mock_config = """
+    name: "test-app"
+    database:
+        hostname: "localhost"
+    """
+    custom_path = "/custom/path/dbos-config.yaml"
+    from unittest.mock import mock_open, patch
+
+    with patch("builtins.open", mock_open(read_data=mock_config)) as mock_file:
+        result = load_config(custom_path)
+        mock_file.assert_called_with(custom_path, "r")
+        assert result["name"] == "test-app"
+
+
+####################
+# PROCESS CONFIG
+####################
+
+
+# Full config provided
+def test_process_config_full():
+    config: ConfigFile = {
+        "name": "some-app",
+        "database": {
+            "hostname": "example.com",
+            "port": 2345,
+            "username": "example",
+            "password": "password",
+            "connectionTimeoutMillis": 3000,
+            "app_db_name": "example_db",
+            "sys_db_name": "sys_db",
+            "ssl": True,
+            "ssl_ca": "ca.pem",
+            "local_suffix": False,
+            "migrate": ["alembic upgrade head"],
+            "rollback": ["alembic downgrade base"],
+        },
+        "runtimeConfig": {
+            "start": ["python3 main.py"],
+            "admin_port": 8001,
+            "setup": ["echo 'hello'"],
+        },
+        "telemetry": {
+            "logs": {
+                "logLevel": "DEBUG",
+            },
+            "OTLPExporter": {
+                "logsEndpoint": "thelogsendpoint",
+                "tracesEndpoint": "thetracesendpoint",
+            },
+        },
+        "env": {
+            "FOO": "BAR",
+        },
+    }
+
+    configFile = process_config(data=config, use_db_wizard=False)
     assert configFile["name"] == "some-app"
-    assert configFile["language"] == "python"
-    assert configFile["database"]["hostname"] == "localhost"
-    assert configFile["database"]["port"] == 5432
-    assert configFile["database"]["username"] == "postgres"
-    assert configFile["database"]["password"] == os.environ.get("PGPASSWORD", "dbos")
+    assert configFile["database"]["hostname"] == "example.com"
+    assert configFile["database"]["port"] == 2345
+    assert configFile["database"]["username"] == "example"
+    assert configFile["database"]["password"] == "password"
+    assert configFile["database"]["connectionTimeoutMillis"] == 3000
+    assert configFile["database"]["app_db_name"] == "example_db"
+    assert configFile["database"]["sys_db_name"] == "sys_db"
+    assert configFile["database"]["ssl"] == True
+    assert configFile["database"]["ssl_ca"] == "ca.pem"
+    assert configFile["database"]["local_suffix"] == False
+    assert configFile["database"]["migrate"] == ["alembic upgrade head"]
+    assert configFile["database"]["rollback"] == ["alembic downgrade base"]
+    assert configFile["runtimeConfig"]["start"] == ["python3 main.py"]
+    assert configFile["runtimeConfig"]["admin_port"] == 8001
+    assert configFile["runtimeConfig"]["setup"] == ["echo 'hello'"]
+    assert configFile["telemetry"]["logs"]["logLevel"] == "DEBUG"
+    assert configFile["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
+    assert (
+        configFile["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
+    )
+    assert configFile["env"]["FOO"] == "BAR"
 
 
-def test_config_load_db_connection(mocker):
+# Note this exercise going through the db wizard
+def test_process_config_load_defaults():
+    config: ConfigFile = {
+        "name": "some-app",
+    }
+    processed_config = process_config(data=config)
+    assert processed_config["name"] == "some-app"
+    assert processed_config["database"]["app_db_name"] == "some_app"
+    assert processed_config["database"]["hostname"] == "localhost"
+    assert processed_config["database"]["port"] == 5432
+    assert processed_config["database"]["username"] == "postgres"
+    assert processed_config["database"]["password"] == os.environ.get(
+        "PGPASSWORD", "dbos"
+    )
+
+
+def test_config_missing_name():
+    config = {
+        "database": {
+            "hostname": "localhost",
+            "port": 5432,
+            "username": "postgres",
+            "password": "dbos",
+            "app_db_name": "dbostestpy",
+        },
+    }
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        process_config(data=config)
+
+    assert "must specify an application name" in str(exc_info.value)
+
+
+def test_config_bad_name():
+    config: ConfigFile = {
+        "name": "some app",
+    }
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        process_config(data=config)
+    assert "Invalid app name" in str(exc_info.value)
+
+
+def test_load_config_load_db_connection(mocker):
     mock_config = """
         name: "some-app"
         language: "python"
@@ -147,9 +359,14 @@ def test_config_load_db_connection(mocker):
         ),
     )
 
-    configFile = load_config(mock_filename, use_db_wizard=False)
+    config = {
+        "name": "some-app",
+    }
+
+    configFile = process_config(
+        data=config, config_file_path=mock_filename, use_db_wizard=False
+    )
     assert configFile["name"] == "some-app"
-    assert configFile["language"] == "python"
     assert configFile["database"]["hostname"] == "example.com"
     assert configFile["database"]["port"] == 2345
     assert configFile["database"]["username"] == "example"
@@ -158,255 +375,25 @@ def test_config_load_db_connection(mocker):
     assert configFile["database"]["app_db_name"] == "some_app_local"
 
 
-def test_config_mixed_params(mocker):
-    mock_config = """
-        name: "some-app"
-        language: "python"
-        runtimeConfig:
-            start:
-                - "python3 main.py"
-        database:
-          port: 1234
-          username: 'some user'
-          password: abc123
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
+def test_config_mixed_params():
+    config = {
+        "name": "some-app",
+        "database": {
+            "port": 1234,
+            "username": "some user",
+            "password": "abc123",
+        },
+    }
 
-    configFile = load_config(mock_filename, use_db_wizard=False)
+    configFile = process_config(data=config, use_db_wizard=False)
     assert configFile["name"] == "some-app"
-    assert configFile["language"] == "python"
     assert configFile["database"]["hostname"] == "localhost"
     assert configFile["database"]["port"] == 1234
     assert configFile["database"]["username"] == "some user"
     assert configFile["database"]["password"] == "abc123"
 
 
-def test_config_extra_params(mocker):
-    mock_config = """
-        name: "some-app"
-        database:
-          hostname: 'some host'
-          port: 1234
-          username: 'some user'
-          password: abc123
-          app_db_name: 'some db'
-          connectionTimeoutMillis: 3000
-        bob: 5555
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        load_config(mock_filename)
-
-    assert (
-        "Validation error: Additional properties are not allowed ('bob' was unexpected)"
-        in str(exc_info.value)
-    )
-
-
-def test_config_missing_name(mocker):
-    mock_config = """
-        language: python
-        database:
-          hostname: 'some host'
-          port: 1234
-          username: 'some user'
-          password: abc123
-          app_db_name: 'some db'
-          connectionTimeoutMillis: 3000
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        load_config(mock_filename)
-
-    assert "must specify an application name" in str(exc_info.value)
-
-
-def test_config_bad_name(mocker):
-    mock_config = """
-        name: "some app"
-        language: python
-        runtimeConfig:
-            start:
-                - "python3 main.py"
-        database:
-          hostname: 'some host'
-          port: 1234
-          username: 'some user'
-          password: abc123
-          app_db_name: 'some db'
-          connectionTimeoutMillis: 3000
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        load_config(mock_filename)
-
-    assert "Invalid app name" in str(exc_info.value)
-
-
-def test_config_no_start(mocker):
-    mock_config = """
-        name: "some-app"
-        language: python
-        database:
-          hostname: 'some host'
-          port: 1234
-          username: 'some user'
-          password: abc123
-          app_db_name: 'some db'
-          connectionTimeoutMillis: 3000
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        load_config(mock_filename)
-
-    assert "start command" in str(exc_info.value)
-
-
-def test_local_config(mocker):
-    mock_config = """
-        name: "some-app"
-        language: "python"
-        runtimeConfig:
-            start:
-                - "python3 main.py"
-            admin_port: 8001
-        database:
-          hostname: 'localhost'
-          port: 5432
-          username: 'postgres'
-          password: ${PGPASSWORD}
-          app_db_name: 'some_db'
-          connectionTimeoutMillis: 3000
-          local_suffix: true
-    """
-    os.environ["BARBAR"] = "FOOFOO"
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-
-    configFile = load_config(mock_filename)
-    assert configFile["name"] == "some-app"
-    assert configFile["database"]["local_suffix"] == True
-    assert configFile["language"] == "python"
-    assert configFile["database"]["hostname"] == "localhost"
-    assert configFile["database"]["port"] == 5432
-    assert configFile["database"]["username"] == "postgres"
-    assert configFile["database"]["password"] == os.environ["PGPASSWORD"]
-    assert configFile["database"]["app_db_name"] == "some_db_local"
-    assert configFile["database"]["connectionTimeoutMillis"] == 3000
-
-
-def test_local_config_without_name(mocker):
-    mock_config = """
-        name: "some-app"
-        language: "python"
-        runtimeConfig:
-            start:
-                - "python3 main.py"
-            admin_port: 8001
-        database:
-          hostname: 'localhost'
-          port: 5432
-          username: 'postgres'
-          password: ${PGPASSWORD}
-          connectionTimeoutMillis: 3000
-          local_suffix: true
-    """
-    os.environ["BARBAR"] = "FOOFOO"
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-
-    configFile = load_config(mock_filename)
-    assert configFile["name"] == "some-app"
-    assert configFile["database"]["local_suffix"] == True
-    assert configFile["language"] == "python"
-    assert configFile["database"]["hostname"] == "localhost"
-    assert configFile["database"]["port"] == 5432
-    assert configFile["database"]["username"] == "postgres"
-    assert configFile["database"]["password"] == os.environ["PGPASSWORD"]
-    assert configFile["database"]["app_db_name"] == "some_app_local"
-    assert configFile["database"]["connectionTimeoutMillis"] == 3000
-
-
-def test_db_connect_failed(mocker):
-    mock_config = """
-        name: "some-app"
-        language: "python"
-        runtimeConfig:
-            start:
-                - "python3 main.py"
-        database:
-          hostname: 'example.com'
-          port: 5432
-          username: 'pgu'
-          password: ${PGPASSWORD}
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        load_config(mock_filename)
-
-    assert "Could not connect to the database" in str(exc_info.value)
-
-
-def test_no_db_wizard(mocker):
-    mock_config = """
-        name: "some-app"
-        language: "python"
-        runtimeConfig:
-            start:
-                - "python3 main.py"
-        database:
-          hostname: 'localhost'
-          port: 5432
-          username: 'postgres'
-          password: 'somerandom'
-
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        load_config(mock_filename)
-    assert "Could not connect" in str(exc_info.value)
-
-
 def test_debug_override(mocker: pytest_mock.MockFixture):
-    mock_config = """
-        name: "some-app"
-        language: "python"
-        runtimeConfig:
-            start:
-                - "python3 main.py"
-        database:
-          hostname: 'localhost'
-          port: 5432
-          username: 'postgres'
-          password: 'super-secret-password'
-          local_suffix: true
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-
     mocker.patch.dict(
         os.environ,
         {
@@ -418,7 +405,10 @@ def test_debug_override(mocker: pytest_mock.MockFixture):
         },
     )
 
-    configFile = load_config(mock_filename, use_db_wizard=False)
+    config: Configfile = {
+        "name": "some-app",
+    }
+    configFile = process_config(data=config, use_db_wizard=False)
     assert configFile["database"]["hostname"] == "fakehost"
     assert configFile["database"]["port"] == 1234
     assert configFile["database"]["username"] == "fakeuser"
@@ -426,7 +416,62 @@ def test_debug_override(mocker: pytest_mock.MockFixture):
     assert configFile["database"]["local_suffix"] == False
 
 
-def test_parse_db_string_to_dbconfig():
+def test_local_config():
+    config: ConfigFile = {
+        "name": "some-app",
+        "database": {
+            "hostname": "localhost",
+            "port": 5432,
+            "username": "postgres",
+            "password": os.environ["PGPASSWORD"],
+            "app_db_name": "some_db",
+            "connectionTimeoutMillis": 3000,
+            "local_suffix": True,
+        },
+    }
+    processed_config = process_config(data=config)
+
+    assert processed_config["name"] == "some-app"
+    assert processed_config["database"]["local_suffix"] == True
+    assert processed_config["database"]["hostname"] == "localhost"
+    assert processed_config["database"]["port"] == 5432
+    assert processed_config["database"]["username"] == "postgres"
+    assert processed_config["database"]["password"] == os.environ["PGPASSWORD"]
+    assert processed_config["database"]["app_db_name"] == "some_db_local"
+    assert processed_config["database"]["connectionTimeoutMillis"] == 3000
+
+
+def test_local_config_without_name(mocker):
+    config: ConfigFile = {
+        "name": "some-app",
+        "database": {
+            "hostname": "localhost",
+            "port": 5432,
+            "username": "postgres",
+            "password": os.environ["PGPASSWORD"],
+            "connectionTimeoutMillis": 3000,
+            "local_suffix": True,
+        },
+    }
+    processed_config = process_config(data=config)
+
+    assert processed_config["name"] == "some-app"
+    assert processed_config["database"]["local_suffix"] == True
+    assert processed_config["database"]["hostname"] == "localhost"
+    assert processed_config["database"]["port"] == 5432
+    assert processed_config["database"]["username"] == "postgres"
+    assert processed_config["database"]["password"] == os.environ["PGPASSWORD"]
+    assert processed_config["database"]["app_db_name"] == "some_app_local"
+    assert processed_config["database"]["connectionTimeoutMillis"] == 3000
+
+
+####################
+# DB STRING PARSING
+####################
+
+
+# FIXME: break into multiple tests
+def test_load_db_string_to_dbconfig():
     db_string = "postgresql://user:password@localhost:5432/dbname"
     db_config = parse_db_string_to_dbconfig(db_string)
     assert db_config["hostname"] == "localhost"
@@ -453,65 +498,77 @@ def test_parse_db_string_to_dbconfig():
         parse_db_string_to_dbconfig(db_string)
 
 
-# Test both DBOS.__init__() and translate_dbos_config_to_config_file()
-def test_dbosconfig_full():
+####################
+# TRANSLATE DBOSConfig to ConfigFile
+####################
+
+
+def test_translate_dbosconfig_full_input():
     # Give all fields
     config: DBOSConfig = {
         "name": "test-app",
-        "db_string": "postgresql://user:password@localhost:5432/dbname",
+        "db_string": "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslcert=ca.pem",
         "sys_db_name": "sysdb",
         "log_level": "DEBUG",
         "otlp_traces_endpoints": ["http://otel:7777", "notused"],
         "admin_port": 8001,
     }
-    dbos = DBOS(config=config)
-    assert dbos.config["name"] == "test-app"
-    assert dbos.config["database"]["hostname"] == "localhost"
-    assert dbos.config["database"]["port"] == 5432
-    assert dbos.config["database"]["username"] == "user"
-    assert dbos.config["database"]["password"] == "password"
-    assert dbos.config["database"]["app_db_name"] == "dbname"
-    assert dbos.config["database"]["sys_db_name"] == "sysdb"
-    assert dbos.config["telemetry"]["logs"]["logLevel"] == "DEBUG"
+
+    translated_config = translate_dbos_config_to_config_file(config)
+
+    assert translated_config["name"] == "test-app"
+    assert translated_config["database"]["hostname"] == "localhost"
+    assert translated_config["database"]["port"] == 5432
+    assert translated_config["database"]["username"] == "user"
+    assert translated_config["database"]["password"] == "password"
+    assert translated_config["database"]["ssl"] == True
+    assert translated_config["database"]["ssl_ca"] == "ca.pem"
+    assert translated_config["database"]["connectionTimeoutMillis"] == 10000
+    assert translated_config["database"]["app_db_name"] == "dbname"
+    assert translated_config["database"]["sys_db_name"] == "sysdb"
+    assert translated_config["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert (
-        dbos.config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "http://otel:7777"
+        translated_config["telemetry"]["OTLPExporter"]["tracesEndpoint"]
+        == "http://otel:7777"
     )
-    assert "logsEndpoint" not in dbos.config["telemetry"]["OTLPExporter"]
-    assert dbos.config["runtimeConfig"]["admin_port"] == 8001
-    assert dbos.config["runtimeConfig"]["start"] == []
-    assert "setup" not in dbos.config["runtimeConfig"]
-    assert "env" not in dbos.config
-
-    dbos.destroy()
+    assert "logsEndpoint" not in translated_config["telemetry"]["OTLPExporter"]
+    assert translated_config["runtimeConfig"]["admin_port"] == 8001
+    assert "start" not in translated_config["runtimeConfig"]
+    assert "setup" not in translated_config["runtimeConfig"]
+    assert "env" not in translated_config
 
 
-def test_dbosconfig_minimal():
-    # Give only mandatory fields
+def test_translate_dbosconfig_minimal_input():
     config: DBOSConfig = {
         "name": "test-app",
-        "db_string": "postgresql://user:password@localhost:5432/dbname",
     }
-    dbos = DBOS(config=config)
-    assert dbos.config["name"] == "test-app"
-    assert dbos.config["database"]["hostname"] == "localhost"
-    assert dbos.config["database"]["port"] == 5432
-    assert dbos.config["database"]["username"] == "user"
-    assert dbos.config["database"]["password"] == "password"
-    assert dbos.config["database"]["app_db_name"] == "dbname"
-    assert dbos.config["telemetry"]["logs"]["logLevel"] == "INFO"
-    assert "sys_db_name" not in dbos.config["database"]
-    assert "env" not in dbos.config
-    assert "admin_port" not in dbos.config["runtimeConfig"]
-    assert dbos.config["runtimeConfig"]["start"] == []
+    translated_config = translate_dbos_config_to_config_file(config)
 
-    dbos.destroy()
+    assert translated_config["name"] == "test-app"
+    assert translated_config["telemetry"]["logs"]["logLevel"] == "INFO"
+    assert "database" not in translated_config
+    assert "env" not in translated_config
+    assert "runtimeConfig" not in translated_config
 
 
-def test_dbosconfig_empty_otlp_traces_endpoints():
+def test_translate_dbosconfig_just_sys_db_name():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "sys_db_name": "sysdb",
+    }
+    translated_config = translate_dbos_config_to_config_file(config)
+
+    assert translated_config["name"] == "test-app"
+    assert translated_config["telemetry"]["logs"]["logLevel"] == "INFO"
+    assert translated_config["database"]["sys_db_name"] == "sysdb"
+    assert "env" not in translated_config
+    assert "runtimeConfig" not in translated_config
+
+
+def test_translate_empty_otlp_traces_endpoints():
     # Give an empty OTLP traces endpoint list
     config: DBOSConfig = {
         "name": "test-app",
-        "db_string": "postgresql://user:password@localhost:5432/dbname",
         "otlp_traces_endpoints": [],
     }
     dbos = DBOS(config=config)
@@ -520,17 +577,15 @@ def test_dbosconfig_empty_otlp_traces_endpoints():
     dbos.destroy()
 
 
-def test_dbosconfig_missing_fields():
-    # Missing required field
-    with pytest.raises(Exception):
-        config: DBOSConfig = {
-            "db_string": "postgresql://user:password@localhost:5432/dbname"
-        }
-        try:
-            dbos = DBOS(config=config)
-        finally:
-            if dbos is not None:
-                dbos.destroy()
+def test_translate_missing_name():
+    with pytest.raises(KeyError) as exc_info:
+        translate_dbos_config_to_config_file({})
+    assert str(exc_info.value) == "'name'"
+
+
+####################
+# CONFIG OVERWRITE
+####################
 
 
 def test_overwrite_config(mocker):
@@ -586,7 +641,6 @@ def test_overwrite_config(mocker):
             },
         },
         "runtimeConfig": {
-            "start": ["python3 main.py"],
             "admin_port": 8001,
         },
         "env": {
@@ -807,56 +861,3 @@ def test_overwrite_config_no_otlp_in_file(mocker):
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "original-trace"
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "original-log"
     assert "logs" not in config["telemetry"]
-
-
-def test_parse_config_file_not_a_dict(mocker):
-    """Test handling when YAML doesn't parse to a dictionary."""
-    mock_config = "just a string"
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
-    )
-
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        parse_config_file()
-
-    assert "must contain a dictionary" in str(exc_info.value)
-
-
-def test_parse_config_file_schema_validation_error(mocker):
-    """Test handling when the config fails schema validation."""
-    mock_config = """
-    name: "test-app"
-    invalid_field: "this shouldn't be here"
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
-    )
-
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        parse_config_file()
-
-    assert "Validation error" in str(exc_info.value)
-
-
-def test_parse_config_file_open_error(mocker):
-    """Test handling when the config file can't be opened."""
-    mocker.patch("builtins.open", side_effect=FileNotFoundError("File not found"))
-
-    with pytest.raises(FileNotFoundError):
-        parse_config_file()
-
-
-def test_parse_config_file_custom_path():
-    """Test parsing a config file from a custom path."""
-    mock_config = """
-    name: "test-app"
-    database:
-        hostname: "localhost"
-    """
-    custom_path = "/custom/path/dbos-config.yaml"
-    from unittest.mock import mock_open, patch
-
-    with patch("builtins.open", mock_open(read_data=mock_config)) as mock_file:
-        result = parse_config_file(custom_path)
-        mock_file.assert_called_with(custom_path, "r")
-        assert result["name"] == "test-app"
