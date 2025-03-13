@@ -653,6 +653,8 @@ def decorate_transaction(
                                     )
 
                                 output = func(*args, **kwargs)
+                                txn_output["output"] = _serialization.serialize(output)
+
                                 if dbos.is_debugging:
                                     assert recorded_output is not None
                                     if recorded_output["error"]:
@@ -664,6 +666,13 @@ def decorate_transaction(
                                         has_recorded_error = True
                                         raise deserialized_error
                                     elif recorded_output["output"]:
+                                        if (
+                                            txn_output["output"]
+                                            != recorded_output["output"]
+                                        ):
+                                            dbos.logger.error(
+                                                f'Detected different transaction output than the original one!\n Result: {txn_output["output"]}\n Original: {recorded_output["output"]}'
+                                            )
                                         return _serialization.deserialize(
                                             recorded_output["output"]
                                         )
@@ -672,7 +681,6 @@ def decorate_transaction(
                                             "Output and error are both None"
                                         )
 
-                                txn_output["output"] = _serialization.serialize(output)
                                 assert (
                                     ctx.sql_session is not None
                                 ), "Cannot find a database connection"
@@ -705,7 +713,7 @@ def decorate_transaction(
                             txn_error = error
                             raise
                         finally:
-                            # Don't record the error if it was already recorded
+                            # Don't record the error if it was already recorded or we're in debug mode
                             if (
                                 txn_error
                                 and not has_recorded_error
