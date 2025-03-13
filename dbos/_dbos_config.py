@@ -379,13 +379,15 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # 1. The database connection parameters (sub the file data to the provided config)
     # 2. OTLP traces endpoints (add the config data to the provided config)
     # 3. Custom setup steps (sub the file data to the provided config)
-    # ? Name: should we override it with the config file ?
-    # ? logs level: right now this code ignores log level from the config file.
+    # 4. Use the application name from the file. This is a defensive measure to ensure the application name is whatever it was registered with in the cloud
 
     config_from_file = load_config()
     # Be defensive
     if config_from_file is None:
         return provided_config
+
+    # Name
+    provided_config["name"] = config_from_file["name"]
 
     # Database config
     provided_config["database"]["hostname"] = config_from_file["database"]["hostname"]

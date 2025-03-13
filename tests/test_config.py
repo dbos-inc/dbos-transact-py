@@ -698,7 +698,7 @@ def test_overwrite_config(mocker):
     }
     config = overwrite_config(provided_config)
 
-    assert config["name"] == "test-app"
+    assert config["name"] == "stock-prices"
     assert config["database"]["hostname"] == "hostname"
     assert config["database"]["port"] == 1234
     assert config["database"]["username"] == "dbosadmin"
@@ -756,7 +756,7 @@ def test_overwrite_config_minimal(mocker):
     }
     config = overwrite_config(provided_config)
 
-    assert config["name"] == "test-app"
+    assert config["name"] == "stock-prices"
     assert config["database"]["hostname"] == "hostname"
     assert config["database"]["port"] == 1234
     assert config["database"]["username"] == "dbosadmin"
@@ -813,7 +813,7 @@ def test_overwrite_config_has_telemetry(mocker):
     }
     config = overwrite_config(provided_config)
 
-    assert config["name"] == "test-app"
+    assert config["name"] == "stock-prices"
     assert config["database"]["hostname"] == "hostname"
     assert config["database"]["port"] == 1234
     assert config["database"]["username"] == "dbosadmin"
