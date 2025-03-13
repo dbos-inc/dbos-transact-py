@@ -28,6 +28,9 @@ class DatabaseConnection(TypedDict):
     local_suffix: Optional[bool]
 
 
+# This function first checks connectivity to the database configured in Transact
+# If it fails, it first determines whether the error is due to incorrect configuration or the database not existing
+# If the error is due to the database not existing, it will help the user start a database
 def db_wizard(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
     # 1. Check the connectivity to the database. Return if successful. If cannot connect, continue to the following steps.
     db_connection_error = _check_db_connectivity(config)
@@ -46,25 +49,43 @@ def db_wizard(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
         )
     db_config = config["database"]
 
-    # Read the config file and check if the database hostname/port/username are set. If so, skip the wizard.
-    with open(config_file_path, "r") as file:
-        content = file.read()
-        local_config = yaml.safe_load(content)
-        if "database" not in local_config:
-            local_config["database"] = {}
-        local_config = cast("ConfigFile", local_config)
+    # Read the config file and check if the database hostname/port/username are set
+    # If so, assume the library has incorrect connection information in the input config, surface the error and exit
+    try:
+        with open(config_file_path, "r") as file:
+            content = file.read()
+            local_config = yaml.safe_load(content)
+            if "database" not in local_config:
+                local_config["database"] = {}
+            local_config = cast("ConfigFile", local_config)
 
+            if (
+                local_config["database"].get("hostname")
+                or local_config["database"].get("port")
+                or local_config["database"].get("username")
+            ):
+                raise DBOSInitializationError(
+                    f"Could not connect to the database. Exception: {db_connection_error}"
+                )
+    except FileNotFoundError:
+        # Ignore the error if the file doesn't exist
+        pass
+    except Exception as e:
+        # Raise other exceptions
+        raise e
+
+    # Finally, check if the database config is the default one. If not, surface the error and exit.
     if (
-        local_config["database"].get("hostname")
-        or local_config["database"].get("port")
-        or local_config["database"].get("username")
-        or db_config["hostname"] != "localhost"
+        db_config["hostname"] != "localhost"
         or db_config["port"] != 5432
         or db_config["username"] != "postgres"
     ):
         raise DBOSInitializationError(
             f"Could not connect to the database. Exception: {db_connection_error}"
         )
+
+    # At this point we are confident the connection error is due to the desired databased not existing / being available
+
     print("[yellow]Postgres not detected locally[/yellow]")
 
     # 3. If the database config is the default one, check if the user has Docker properly installed.
