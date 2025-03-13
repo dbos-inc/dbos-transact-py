@@ -470,29 +470,78 @@ def test_local_config_without_name(mocker):
 ####################
 
 
-# FIXME: break into multiple tests
-def test_load_db_string_to_dbconfig():
+def test_basic_fields_mapping():
+    """Test that basic fields from db_url are correctly mapped to db_config."""
     db_string = "postgresql://user:password@localhost:5432/dbname"
     db_config = parse_db_string_to_dbconfig(db_string)
+
     assert db_config["hostname"] == "localhost"
     assert db_config["port"] == 5432
     assert db_config["username"] == "user"
     assert db_config["password"] == "password"
     assert db_config["app_db_name"] == "dbname"
 
-    db_string = "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslcert=ca.pem"
+
+def test_default_port():
+    """Test that default port (5432) is used when port is not specified."""
+    db_string = "postgresql://user:password@localhost/dbname"
     db_config = parse_db_string_to_dbconfig(db_string)
-    assert db_config["ssl"] == True
-    assert db_config["ssl_ca"] == "ca.pem"
+    assert db_config["port"] == 5432
+
+
+def test_query_parameters():
+    """Test processing of various query parameters."""
+
+    # Test connect_timeout conversion
+    db_string = "postgresql://user:password@localhost:5432/dbname?connect_timeout=10"
+    db_config = parse_db_string_to_dbconfig(db_string)
     assert db_config["connectionTimeoutMillis"] == 10000
 
-    # Test unusual but valid DB strings
-    db_string = "postgresql://user:complex%23password@hostname.with.dots:5432/dbname?sslmode=require&application_name=myapp"
+    # Test sslmode=require (should set ssl=True)
+    db_string = "postgresql://user:password@localhost:5432/dbname?sslmode=require"
+    db_config = parse_db_string_to_dbconfig(db_string)
+    assert db_config["ssl"] == True
+
+    # Test sslmode=disable (should set ssl=False)
+    db_string = "postgresql://user:password@localhost:5432/dbname?sslmode=disable"
+    db_config = parse_db_string_to_dbconfig(db_string)
+    assert db_config["ssl"] == False
+
+    # Test sslmode=prefer (should set ssl=False as it's not 'require')
+    db_string = "postgresql://user:password@localhost:5432/dbname?sslmode=prefer"
+    db_config = parse_db_string_to_dbconfig(db_string)
+    assert db_config["ssl"] == False
+
+    # Test sslcert mapping to ssl_ca
+    db_string = "postgresql://user:password@localhost:5432/dbname?sslcert=ca.pem"
+    db_config = parse_db_string_to_dbconfig(db_string)
+    assert db_config["ssl_ca"] == "ca.pem"
+
+    # Test multiple parameters together
+    db_string = "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslcert=ca.pem&application_name=myapp"
+    db_config = parse_db_string_to_dbconfig(db_string)
+    assert db_config["connectionTimeoutMillis"] == 10000
+    assert db_config["ssl"] == True
+    assert db_config["ssl_ca"] == "ca.pem"
+    assert "application_name" not in db_config
+
+
+def test_complex_password():
+    """Test handling of complex passwords with special characters."""
+    db_string = "postgresql://user:complex%23password@localhost:5432/dbname"
+    db_config = parse_db_string_to_dbconfig(db_string)
+    assert db_config["password"] == "complex#password"
+
+
+def test_hostname_with_dots():
+    """Test handling of hostnames with dots."""
+    db_string = "postgresql://user:password@hostname.with.dots:5432/dbname"
     db_config = parse_db_string_to_dbconfig(db_string)
     assert db_config["hostname"] == "hostname.with.dots"
-    assert db_config["password"] == "complex#password"  # Ensure URL decoding works
 
-    # Missing required field
+
+def test_invalid_string():
+    """Test handling of invalid db strings."""
     with pytest.raises(Exception):
         db_string = "invalid"
         parse_db_string_to_dbconfig(db_string)
