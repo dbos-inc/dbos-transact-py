@@ -3,7 +3,7 @@ import os
 import re
 import sys
 from importlib import resources
-from typing import Any, Dict, List, Optional, TypedDict, Union, cast
+from typing import Any, Dict, List, Optional, TypedDict, cast
 
 if sys.version_info >= (3, 10):
     from typing import TypeGuard
@@ -25,78 +25,21 @@ DBOS_CONFIG_PATH = "dbos-config.yaml"
 class DBOSConfig(TypedDict):
     """
     Data structure containing the DBOS library configuration.
+
+    Attributes:
+        name (str): Application name
+        db_string (str): Database connection string
+        sys_db_name (str): System database name
+        log_level (str): Log level
+        otlp_traces_endpoints: List[str]: OTLP traces endpoints
     """
 
     name: str
-    db_string: str
+    db_string: Optional[str]
     sys_db_name: Optional[str]
     log_level: Optional[str]
     otlp_traces_endpoints: Optional[List[str]]
     admin_port: Optional[int]
-
-
-def is_dbos_config(obj: Any) -> TypeGuard[DBOSConfig]:
-    """
-    Type guard to check if an object is a valid DBOSConfig.
-
-    Args:
-        obj: Any object to check
-
-    Returns:
-        True if the object is a valid DBOSConfig, False otherwise
-    """
-    if not isinstance(obj, dict):
-        return False
-
-    # Check required fields
-    if not isinstance(obj.get("name"), str):
-        return False
-    if not isinstance(obj.get("db_string"), str):
-        return False
-
-    # Check optional fields
-    if (
-        "sys_db_name" in obj
-        and obj["sys_db_name"] is not None
-        and not isinstance(obj["sys_db_name"], str)
-    ):
-        return False
-
-    if (
-        "log_level" in obj
-        and obj["log_level"] is not None
-        and not isinstance(obj["log_level"], str)
-    ):
-        return False
-
-    if "otlp_traces_endpoints" in obj:
-        endpoints = obj["otlp_traces_endpoints"]
-        if endpoints is not None:
-            if not isinstance(endpoints, list):
-                return False
-            if not all(isinstance(endpoint, str) for endpoint in endpoints):
-                return False
-
-    if (
-        "admin_port" in obj
-        and obj["admin_port"] is not None
-        and not isinstance(obj["admin_port"], int)
-    ):
-        return False
-
-    # Check for unexpected keys
-    valid_keys = {
-        "name",
-        "db_string",
-        "sys_db_name",
-        "log_level",
-        "otlp_traces_endpoints",
-        "admin_port",
-    }
-    if not all(key in valid_keys for key in obj):
-        return False
-
-    return True
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -163,7 +106,6 @@ class ConfigFile(TypedDict, total=False):
 
     Attributes:
         name (str): Application name
-        language (str): The app language (probably `python`)
         runtimeConfig (RuntimeConfig): Configuration for request serving
         database (DatabaseConfig): Configuration for the application and system databases
         telemetry (TelemetryConfig): Configuration for tracing / logging
@@ -179,33 +121,35 @@ class ConfigFile(TypedDict, total=False):
     env: Dict[str, str]
 
 
-def is_config_file(obj: object) -> TypeGuard[ConfigFile]:
-    return (
-        isinstance(obj, dict)
-        and "name" in obj
-        and "runtimeConfig" in obj
-        and isinstance(obj.get("name"), str)
-        and isinstance(obj.get("runtimeConfig"), dict)
+def is_dbos_configfile(data: Dict[str, Any]) -> bool:
+    return "name" in data and (
+        "runtimeConfig" in data
+        or "database" in data
+        or "env" in data
+        or "telemetry" in data
     )
 
 
 def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
-    db_config = parse_db_string_to_dbconfig(config["db_string"])
-    if "sys_db_name" in config:
-        db_config["sys_db_name"] = config.get("sys_db_name")
-
     # Start with the mandatory fields
     translated_config: ConfigFile = {
         "name": config["name"],
-        "database": db_config,
-        "runtimeConfig": {
-            "start": [],
-        },
     }
-    # Add admin_port to runtimeConfig if present
+
+    # Database config
+    db_config = {}
+    if "db_string" in config:
+        db_config = parse_db_string_to_dbconfig(config["db_string"])
+    if "sys_db_name" in config:
+        db_config["sys_db_name"] = config.get("sys_db_name")
+    if db_config:
+        translated_config["database"] = db_config
+
+    # Admin port
     if "admin_port" in config:
-        translated_config["runtimeConfig"]["admin_port"] = config["admin_port"]
-    # Add telemetry section only if needed
+        translated_config["runtimeConfig"] = {"admin_port": config["admin_port"]}
+
+    # Telemetry config
     telemetry = {}
     # Add OTLPExporter if traces endpoints exist
     otlp_trace_endpoints = config.get("otlp_traces_endpoints", [])
@@ -215,7 +159,6 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     log_level = config.get("log_level", "INFO")
     if log_level:
         telemetry["logs"] = {"logLevel": log_level}
-    # Only add telemetry section if it has content
     if telemetry:
         translated_config["telemetry"] = cast(TelemetryConfig, telemetry)
 
@@ -265,7 +208,22 @@ def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
     return db_url.render_as_string(hide_password=False)
 
 
-def parse_config_file(config_file_path: str = DBOS_CONFIG_PATH) -> Dict[str, Any]:
+def load_config(
+    config_file_path: str = DBOS_CONFIG_PATH,
+) -> ConfigFile:
+    """
+    Load the DBOS `ConfigFile` from the specified path (typically `dbos-config.yaml`).
+
+    The configuration is also validated against the configuration file schema.
+
+    Args:
+        config_file_path (str): The path to the yaml configuration file.
+
+    Returns:
+        ConfigFile: The loaded configuration
+
+    """
+
     with open(config_file_path, "r") as file:
         content = file.read()
         substituted_content = _substitute_env_vars(content)
@@ -288,48 +246,14 @@ def parse_config_file(config_file_path: str = DBOS_CONFIG_PATH) -> Dict[str, Any
     except ValidationError as e:
         raise DBOSInitializationError(f"Validation error: {e}")
 
-    return data
-
-
-def load_config(
-    config_file_path: str = DBOS_CONFIG_PATH,
-    *,
-    use_db_wizard: bool = True,
-    silent: bool = False,
-) -> ConfigFile:
-    """
-    Load the DBOS `ConfigFile` from the specified path (typically `dbos-config.yaml`).
-
-    The configuration is also validated against the configuration file schema.
-
-    Args:
-        config_file_path (str): The path to the yaml configuration file.
-
-    Returns:
-        ConfigFile: The loaded configuration
-
-    """
-
-    init_logger()
-
-    data = parse_config_file(config_file_path)
-
-    config: ConfigFile = process_config(data=data, silent=silent)
-    # Check the connectivity to the database and make sure it's properly configured
-    # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)
-    debugWorkflowId = os.getenv("DBOS_DEBUG_WORKFLOW_ID")
-    if use_db_wizard and debugWorkflowId is None:
-        config = db_wizard(config, config_file_path)
-
-    if "local_suffix" in config["database"] and config["database"]["local_suffix"]:
-        config["database"]["app_db_name"] = f"{config['database']['app_db_name']}_local"
-
-    return config
+    return cast(ConfigFile, data)
 
 
 def process_config(
     *,
-    data: Union[ConfigFile, Dict[str, Any]],
+    use_db_wizard: bool = True,
+    config_file_path: str = DBOS_CONFIG_PATH,
+    data: ConfigFile,
     silent: bool = False,
 ) -> ConfigFile:
 
@@ -337,12 +261,7 @@ def process_config(
         data["database"] = {}
 
     if "name" not in data:
-        raise DBOSInitializationError(
-            f"dbos-config.yaml must specify an application name"
-        )
-
-    if "runtimeConfig" not in data or "start" not in data["runtimeConfig"]:
-        raise DBOSInitializationError(f"dbos-config.yaml must specify a start command")
+        raise DBOSInitializationError(f"Configuration must specify an application name")
 
     if not _is_valid_app_name(data["name"]):
         raise DBOSInitializationError(
@@ -422,6 +341,16 @@ def process_config(
     if dbos_dblocalsuffix is not None:
         local_suffix = dbos_dblocalsuffix
     data["database"]["local_suffix"] = local_suffix
+
+    # Check the connectivity to the database and make sure it's properly configured
+    # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)
+    debugWorkflowId = os.getenv("DBOS_DEBUG_WORKFLOW_ID")
+    if use_db_wizard and debugWorkflowId is None:
+        data = db_wizard(data, config_file_path)
+
+    if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
+        data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"
+
     # Return data as ConfigFile type
     return data
 
@@ -453,7 +382,7 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # ? Name: should we override it with the config file ?
     # ? logs level: right now this code ignores log level from the config file.
 
-    config_from_file = parse_config_file()
+    config_from_file = load_config()
     # Be defensive
     if config_from_file is None:
         return provided_config

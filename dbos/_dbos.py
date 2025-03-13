@@ -91,8 +91,7 @@ from ._context import (
 from ._dbos_config import (
     ConfigFile,
     DBOSConfig,
-    is_config_file,
-    is_dbos_config,
+    is_dbos_configfile,
     load_config,
     overwrite_config,
     process_config,
@@ -339,26 +338,31 @@ class DBOS:
         self.conductor_key: Optional[str] = conductor_key
         self.conductor_websocket: Optional[ConductorWebsocket] = None
 
-        # If no config is provided, load it from dbos-config.yaml
+        init_logger()
+
+        unvalidated_config: Optional[ConfigFile] = None
+
         if config is None:
-            config = load_config()
-            self.config: ConfigFile = config
-            set_env_vars(self.config)
-        # If a ConfigFile structure is provided, take it as-is but validate it using process_config()
-        elif is_config_file(config):
-            init_logger()
+            # If no config is provided, load it from dbos-config.yaml
+            unvalidated_config: ConfigFile = load_config()
+        elif is_dbos_configfile(config):
+            unvalidated_config: ConfigFile = config
             if os.environ.get("DBOS__CLOUD") == "true":
-                config = overwrite_config(config)
-            self.config: ConfigFile = process_config(data=config)
-            set_env_vars(self.config)
-        # If a DBOSConfig struct is provided, convert it to ConfigFile and validate it using process_config()
-        elif is_dbos_config(config):
-            init_logger()
-            unvalidated_config = translate_dbos_config_to_config_file(config)
+                unvalidated_config = overwrite_config(config)
+        else:
+            unvalidated_config: ConfigFile = translate_dbos_config_to_config_file(
+                config
+            )
             if os.environ.get("DBOS__CLOUD") == "true":
                 unvalidated_config = overwrite_config(unvalidated_config)
-            self.config: ConfigFile = process_config(data=unvalidated_config)
 
+        if unvalidated_config is not None:
+            self.config: ConfigFile = process_config(data=unvalidated_config)
+        else:
+            raise ValueError("No valid configuration was loaded.")
+
+        self.config: ConfigFile = process_config(data=unvalidated_config)
+        set_env_vars(self.config)
         config_logger(self.config)
         dbos_tracer.config(self.config)
         dbos_logger.info("Initializing DBOS")
