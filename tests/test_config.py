@@ -316,6 +316,44 @@ def test_process_config_load_defaults():
     )
 
 
+def test_process_config_with_not_non_but_None_app_db_name():
+    config: ConfigFile = {
+        "name": "some-app",
+        "database": {
+            "app_db_name": None,
+        },
+    }
+    processed_config = process_config(data=config)
+    print(processed_config)
+    assert processed_config["name"] == "some-app"
+    assert processed_config["database"]["app_db_name"] == "some_app"
+    assert processed_config["database"]["hostname"] == "localhost"
+    assert processed_config["database"]["port"] == 5432
+    assert processed_config["database"]["username"] == "postgres"
+    assert processed_config["database"]["password"] == os.environ.get(
+        "PGPASSWORD", "dbos"
+    )
+
+
+def test_process_config_with_not_non_but_empty_app_db_name():
+    config: ConfigFile = {
+        "name": "some-app",
+        "database": {
+            "app_db_name": "",
+        },
+    }
+    processed_config = process_config(data=config)
+    print(processed_config)
+    assert processed_config["name"] == "some-app"
+    assert processed_config["database"]["app_db_name"] == "some_app"
+    assert processed_config["database"]["hostname"] == "localhost"
+    assert processed_config["database"]["port"] == 5432
+    assert processed_config["database"]["username"] == "postgres"
+    assert processed_config["database"]["password"] == os.environ.get(
+        "PGPASSWORD", "dbos"
+    )
+
+
 def test_config_missing_name():
     config = {
         "database": {
@@ -469,6 +507,28 @@ def test_basic_fields_mapping():
     assert db_config["username"] == "user"
     assert db_config["password"] == "password"
     assert db_config["app_db_name"] == "dbname"
+
+
+def test_no_db_name():
+    """Test that an exception is raised when dbname is not provided."""
+    database_url = "postgresql://user:password@localhost:5432"
+    db_config = parse_database_url_to_dbconfig(database_url)
+    assert db_config["hostname"] == "localhost"
+    assert db_config["port"] == 5432
+    assert db_config["username"] == "user"
+    assert db_config["password"] == "password"
+    assert db_config["app_db_name"] == None
+
+
+def test_no_db_name_end_with_slash():
+    """Test that an exception is raised when dbname is not provided."""
+    database_url = "postgresql://user:password@localhost:5432/"
+    db_config = parse_database_url_to_dbconfig(database_url)
+    assert db_config["hostname"] == "localhost"
+    assert db_config["port"] == 5432
+    assert db_config["username"] == "user"
+    assert db_config["password"] == "password"
+    assert db_config["app_db_name"] == ""
 
 
 def test_default_port():

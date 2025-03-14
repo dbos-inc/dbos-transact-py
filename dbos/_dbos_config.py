@@ -270,7 +270,10 @@ def process_config(
             f'Invalid app name {data["name"]}.  App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores.'
         )
 
-    if "app_db_name" not in data["database"]:
+    if "app_db_name" not in data["database"] or data["database"]["app_db_name"] in (
+        "",
+        None,
+    ):
         data["database"]["app_db_name"] = _app_name_to_db_name(data["name"])
 
     # Load the DB connection file. Use its values for missing fields from dbos-config.yaml. Use defaults otherwise.
