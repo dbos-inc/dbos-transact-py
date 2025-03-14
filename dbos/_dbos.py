@@ -361,7 +361,6 @@ class DBOS:
         else:
             raise ValueError("No valid configuration was loaded.")
 
-        self.config: ConfigFile = process_config(data=unvalidated_config)
         set_env_vars(self.config)
         config_logger(self.config)
         dbos_tracer.config(self.config)
