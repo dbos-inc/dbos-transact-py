@@ -151,7 +151,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     otlp_trace_endpoints = config.get("otlp_traces_endpoints")
     if otlp_trace_endpoints:
         telemetry["OTLPExporter"] = {"tracesEndpoint": otlp_trace_endpoints[0]}
-    # Add logs section if log_level exists
+    # Default to INFO -- the logging seems to default to WARN otherwise.
     log_level = config.get("log_level", "INFO")
     if log_level:
         telemetry["logs"] = {"logLevel": log_level}
@@ -373,8 +373,7 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Load the DBOS configuration file and force the use of:
     # 1. The database connection parameters (sub the file data to the provided config)
     # 2. OTLP traces endpoints (add the config data to the provided config)
-    # 3. Custom setup steps (sub the file data to the provided config)
-    # 4. Use the application name from the file. This is a defensive measure to ensure the application name is whatever it was registered with in the cloud
+    # 3. Use the application name from the file. This is a defensive measure to ensure the application name is whatever it was registered with in the cloud
 
     config_from_file = load_config()
     # Be defensive
