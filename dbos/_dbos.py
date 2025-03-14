@@ -344,14 +344,14 @@ class DBOS:
 
         if config is None:
             # If no config is provided, load it from dbos-config.yaml
-            unvalidated_config: ConfigFile = load_config()
+            unvalidated_config = load_config()
         elif is_dbos_configfile(config):
-            unvalidated_config: ConfigFile = config
+            unvalidated_config = cast(ConfigFile, config)
             if os.environ.get("DBOS__CLOUD") == "true":
-                unvalidated_config = overwrite_config(config)
+                unvalidated_config = overwrite_config(unvalidated_config)
         else:
-            unvalidated_config: ConfigFile = translate_dbos_config_to_config_file(
-                config
+            unvalidated_config = translate_dbos_config_to_config_file(
+                cast(DBOSConfig, config)
             )
             if os.environ.get("DBOS__CLOUD") == "true":
                 unvalidated_config = overwrite_config(unvalidated_config)

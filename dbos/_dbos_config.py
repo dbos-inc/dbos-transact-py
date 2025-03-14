@@ -121,7 +121,7 @@ class ConfigFile(TypedDict, total=False):
     env: Dict[str, str]
 
 
-def is_dbos_configfile(data: Dict[str, Any]) -> bool:
+def is_dbos_configfile(data: ConfigFile | DBOSConfig) -> bool:
     return "name" in data and (
         "runtimeConfig" in data
         or "database" in data
@@ -137,9 +137,10 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     }
 
     # Database config
-    db_config = {}
-    if "db_string" in config:
-        db_config = parse_db_string_to_dbconfig(config["db_string"])
+    db_config: DatabaseConfig = {}
+    db_string = config.get("db_string")
+    if db_string:
+        db_config = parse_db_string_to_dbconfig(db_string)
     if "sys_db_name" in config:
         db_config["sys_db_name"] = config.get("sys_db_name")
     if db_config:
@@ -272,7 +273,6 @@ def process_config(
         data["database"]["app_db_name"] = _app_name_to_db_name(data["name"])
 
     # Load the DB connection file. Use its values for missing fields from dbos-config.yaml. Use defaults otherwise.
-    data = cast(ConfigFile, data)
     db_connection = load_db_connection()
     if not silent:
         if os.getenv("DBOS_DBHOST"):
@@ -425,10 +425,13 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
         otlp_exporter = cast(Dict[str, Any], telemetry["OTLPExporter"])
 
         source_otlp = config_from_file["telemetry"]["OTLPExporter"]
-        if "tracesEndpoint" in source_otlp:
-            otlp_exporter["tracesEndpoint"] = source_otlp["tracesEndpoint"]
-        if "logsEndpoint" in source_otlp:
-            otlp_exporter["logsEndpoint"] = source_otlp["logsEndpoint"]
+        if source_otlp:
+            tracesEndpoint = source_otlp.get("tracesEndpoint")
+            if tracesEndpoint:
+                otlp_exporter["tracesEndpoint"] = tracesEndpoint
+            logsEndpoint = source_otlp.get("logsEndpoint")
+            if logsEndpoint:
+                otlp_exporter["logsEndpoint"] = logsEndpoint
 
     # Runtime config
     if (

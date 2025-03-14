@@ -4,7 +4,8 @@ from unittest.mock import mock_open, patch
 import pytest
 import yaml
 
-from dbos._dbos_config import ConfigFile, db_wizard
+from dbos._db_wizard import db_wizard
+from dbos._dbos_config import ConfigFile
 from dbos._error import DBOSInitializationError
 
 
@@ -66,7 +67,9 @@ class TestDbWizardIntegration:
             },
         }
 
-    def test_successful_connection_postgres_db(self, standard_config):
+    def test_successful_connection_postgres_db(
+        self, standard_config: ConfigFile
+    ) -> None:
         """Test when connection to postgres database is successful."""
         result = db_wizard(standard_config, "config.yaml")
         assert result == standard_config
@@ -80,7 +83,9 @@ class TestDbWizardIntegration:
         assert "password authentication failed" in str(exc_info.value)
     '''
 
-    def test_non_default_config_in_file(self, non_existent_db_config):
+    def test_non_default_config_in_file(
+        self, non_existent_db_config: ConfigFile
+    ) -> None:
         """Test when config file contains custom database settings."""
         # Mock a config file with custom settings
         mock_file_content = yaml.dump(
@@ -102,7 +107,7 @@ class TestDbWizardIntegration:
             # Verify error message
             assert "Could not connect to the database" in str(exc_info.value)
 
-    def test_non_default_config_settings(self, non_default_config):
+    def test_non_default_config_settings(self, non_default_config: ConfigFile) -> None:
         """Test with non-default database configuration."""
         mock_file_content = yaml.dump(
             {"name": "test-app"}
