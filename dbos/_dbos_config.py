@@ -380,6 +380,8 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # 1. The database connection parameters (sub the file data to the provided config)
     # 2. OTLP traces endpoints (add the config data to the provided config)
     # 3. Use the application name from the file. This is a defensive measure to ensure the application name is whatever it was registered with in the cloud
+    # 4. Remove admin_port is provided in code
+    # 5. Remove env vars if provided in code
 
     config_from_file = load_config(run_process_config=False)
     # Be defensive
