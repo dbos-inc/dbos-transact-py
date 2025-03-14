@@ -47,7 +47,6 @@ def db_wizard(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
         raise DBOSInitializationError(
             f"Could not connect to Postgres: password authentication failed: {db_connection_error}"
         )
-    db_config = config["database"]
 
     # Read the config file and check if the database hostname/port/username are set
     # If so, assume the library has incorrect connection information in the input config, surface the error and exit
@@ -75,6 +74,7 @@ def db_wizard(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
         raise e
 
     # Finally, check if the database config is the default one. If not, surface the error and exit.
+    db_config = config["database"]  # FIXME: what if database is not in config?
     if (
         db_config["hostname"] != "localhost"
         or db_config["port"] != 5432
