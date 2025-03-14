@@ -206,6 +206,7 @@ def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
 
 def load_config(
     config_file_path: str = DBOS_CONFIG_PATH,
+    *,
     run_process_config: bool = True,
     use_db_wizard: bool = True,
     silent: bool = False,
