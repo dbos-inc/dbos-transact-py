@@ -206,6 +206,9 @@ def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
 
 def load_config(
     config_file_path: str = DBOS_CONFIG_PATH,
+    process_config: bool = True,
+    use_db_wizard: bool = True,
+    silent: bool = False,
 ) -> ConfigFile:
     """
     Load the DBOS `ConfigFile` from the specified path (typically `dbos-config.yaml`).
@@ -242,7 +245,10 @@ def load_config(
     except ValidationError as e:
         raise DBOSInitializationError(f"Validation error: {e}")
 
-    return cast(ConfigFile, data)
+    data = cast(ConfigFile, data)
+    if process_config:
+        return process_config(data=data, use_db_wizard=use_db_wizard, silent=silent)
+    return data
 
 
 def process_config(
@@ -375,7 +381,7 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # 2. OTLP traces endpoints (add the config data to the provided config)
     # 3. Use the application name from the file. This is a defensive measure to ensure the application name is whatever it was registered with in the cloud
 
-    config_from_file = load_config()
+    config_from_file = load_config(process_config=False)
     # Be defensive
     if config_from_file is None:
         return provided_config

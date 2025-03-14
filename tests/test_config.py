@@ -158,7 +158,7 @@ def test_load_valid_config_file(mocker):
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
     )
 
-    configFile = load_config(mock_filename)
+    configFile = load_config(mock_filename, process_config=False)
     assert configFile["name"] == "some-app"
     assert configFile["database"]["hostname"] == "localhost"
     assert configFile["database"]["port"] == 5432
@@ -228,7 +228,7 @@ def test_load_config_file_custom_path():
     from unittest.mock import mock_open, patch
 
     with patch("builtins.open", mock_open(read_data=mock_config)) as mock_file:
-        result = load_config(custom_path)
+        result = load_config(custom_path, process_config=False)
         mock_file.assert_called_with(custom_path, "r")
         assert result["name"] == "test-app"
 
@@ -342,30 +342,19 @@ def test_config_bad_name():
 
 
 def test_load_config_load_db_connection(mocker):
-    mock_config = """
-        name: "some-app"
-        language: "python"
-        runtimeConfig:
-            start:
-                - "python3 main.py"
-    """
     mock_db_connection = """
     {"hostname": "example.com", "port": 2345, "username": "example", "password": "password", "local_suffix": true}
     """
     mocker.patch(
         "builtins.open",
-        side_effect=generate_mock_open(
-            [mock_filename, ".dbos/db_connection"], [mock_config, mock_db_connection]
-        ),
+        side_effect=generate_mock_open([".dbos/db_connection"], [mock_db_connection]),
     )
 
     config = {
         "name": "some-app",
     }
 
-    configFile = process_config(
-        data=config, config_file_path=mock_filename, use_db_wizard=False
-    )
+    configFile = process_config(data=config, use_db_wizard=False)
     assert configFile["name"] == "some-app"
     assert configFile["database"]["hostname"] == "example.com"
     assert configFile["database"]["port"] == 2345

@@ -344,7 +344,7 @@ class DBOS:
 
         if config is None:
             # If no config is provided, load it from dbos-config.yaml
-            unvalidated_config = load_config()
+            unvalidated_config = load_config(process_config=False)
         elif is_dbos_configfile(config):
             unvalidated_config = cast(ConfigFile, config)
             if os.environ.get("DBOS__CLOUD") == "true":
@@ -955,7 +955,9 @@ class DBOS:
         reg = _get_or_create_dbos_registry()
         if reg.config is not None:
             return reg.config
-        config = load_config()
+        config = (
+            load_config()
+        )  # This will return the processed & validated config (with defaults)
         reg.config = config
         return config
 
