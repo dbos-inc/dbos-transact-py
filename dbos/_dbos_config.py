@@ -247,8 +247,8 @@ def load_config(
 
     data = cast(ConfigFile, data)
     if run_process_config:
-        return process_config(data=data, use_db_wizard=use_db_wizard, silent=silent)
-    return data
+        data = process_config(data=data, use_db_wizard=use_db_wizard, silent=silent)
+    return data  # type: ignore
 
 
 def process_config(
