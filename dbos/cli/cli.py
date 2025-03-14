@@ -17,7 +17,7 @@ from typing_extensions import Annotated
 
 from dbos._debug import debug_workflow, parse_start_command
 
-from .. import load_config
+from .. import load_config, process_config
 from .._app_db import ApplicationDatabase
 from .._dbos_config import _is_valid_app_name
 from .._sys_db import SystemDatabase, reset_system_database
@@ -41,7 +41,7 @@ def _on_windows() -> bool:
     help="Start your DBOS application using the start commands in 'dbos-config.yaml'"
 )
 def start() -> None:
-    config = load_config()
+    config = process_config(data=load_config())
     start_commands = config["runtimeConfig"]["start"]
     typer.echo("Executing start commands from 'dbos-config.yaml'")
     for command in start_commands:
@@ -170,7 +170,7 @@ def init(
     help="Run your database schema migrations using the migration commands in 'dbos-config.yaml'"
 )
 def migrate() -> None:
-    config = load_config()
+    config = process_config(data=load_config())
     if not config["database"]["password"]:
         typer.echo(
             "DBOS configuration does not contain database password, please check your config file and retry!"
@@ -229,7 +229,7 @@ def reset(
         if not confirm:
             typer.echo("Operation cancelled.")
             raise typer.Exit()
-    config = load_config()
+    config = process_config(data=load_config())
     try:
         reset_system_database(config)
     except sa.exc.SQLAlchemyError as e:
@@ -241,7 +241,7 @@ def reset(
 def debug(
     workflow_id: Annotated[str, typer.Argument(help="Workflow ID to debug")],
 ) -> None:
-    config = load_config(silent=True, use_db_wizard=False)
+    config = process_config(data=load_config(), silent=True, use_db_wizard=False)
     start = config["runtimeConfig"]["start"]
     if not start:
         typer.echo("No start commands found in 'dbos-config.yaml'")
@@ -308,7 +308,7 @@ def list(
         typer.Option("--request", help="Retrieve workflow request information"),
     ] = False,
 ) -> None:
-    config = load_config(silent=True)
+    config = process_config(data=load_config(), silent=True)
     sys_db = SystemDatabase(config)
     workflows = list_workflows(
         sys_db,
@@ -332,7 +332,7 @@ def get(
         typer.Option("--request", help="Retrieve workflow request information"),
     ] = False,
 ) -> None:
-    config = load_config(silent=True)
+    config = process_config(data=load_config(), silent=True)
     sys_db = SystemDatabase(config)
     print(
         jsonpickle.encode(get_workflow(sys_db, workflow_id, request), unpicklable=False)
@@ -458,7 +458,7 @@ def list_queue(
         typer.Option("--request", help="Retrieve workflow request information"),
     ] = False,
 ) -> None:
-    config = load_config(silent=True)
+    config = process_config(data=load_config(), silent=True)
     sys_db = SystemDatabase(config)
     workflows = list_queued_workflows(
         sys_db=sys_db,
