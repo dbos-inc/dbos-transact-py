@@ -451,7 +451,7 @@ class DBOS:
             if debug_mode:
                 return
 
-            admin_port = self.config["runtimeConfig"].get("admin_port")
+            admin_port = self.config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:
                 admin_port = 3001
             self._admin_server_field = AdminServer(dbos=self, port=admin_port)

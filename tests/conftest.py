@@ -32,11 +32,6 @@ def default_config() -> ConfigFile:
             "password": os.environ["PGPASSWORD"],
             "app_db_name": "dbostestpy",
         },
-        "runtimeConfig": {
-            "start": ["python3 main.py"],
-        },
-        "telemetry": {},
-        "env": {},
     }
 
 
