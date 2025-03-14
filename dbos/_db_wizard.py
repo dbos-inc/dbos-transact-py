@@ -48,7 +48,7 @@ def db_wizard(config: "ConfigFile") -> "ConfigFile":
             f"Could not connect to Postgres: password authentication failed: {db_connection_error}"
         )
 
-    # Finally, check if the database config is the default one. If not, surface the error and exit.
+    # If the database config is not the default one, surface the error and exit.
     db_config = config["database"]  # FIXME: what if database is not in config?
     if (
         db_config["hostname"] != "localhost"
@@ -59,7 +59,7 @@ def db_wizard(config: "ConfigFile") -> "ConfigFile":
             f"Could not connect to the database. Exception: {db_connection_error}"
         )
 
-    # At this point we are confident the connection error is due to the desired databased not existing / being available
+    # At this point we are confident the connection error is due to the desired databased not existing / being unavailable
 
     print("[yellow]Postgres not detected locally[/yellow]")
 
