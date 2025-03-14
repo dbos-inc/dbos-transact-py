@@ -58,7 +58,7 @@ class TestDbWizardIntegration:
         self, standard_config: ConfigFile
     ) -> None:
         """Test when connection to postgres database is successful."""
-        result = db_wizard(standard_config, "config.yaml")
+        result = db_wizard(standard_config)
         assert result == standard_config
 
     '''
@@ -78,7 +78,7 @@ class TestDbWizardIntegration:
         with patch("builtins.open", mock_open(read_data=mock_file_content)):
             # Should raise error because config has non-default database settings
             with pytest.raises(DBOSInitializationError) as exc_info:
-                db_wizard(non_default_config, "config.yaml")
+                db_wizard(non_default_config)
 
             # Verify error message
             assert "Could not connect to the database" in str(exc_info.value)
