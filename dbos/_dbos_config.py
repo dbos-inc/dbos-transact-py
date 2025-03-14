@@ -192,7 +192,7 @@ def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
         str: Database URL for the application database
 
     """
-    dbos_config = process_config(load_config(data=config_file_path))
+    dbos_config = process_config(data=load_config(config_file_path))
     db_url = URL.create(
         "postgresql+psycopg",
         username=dbos_config["database"]["username"],
