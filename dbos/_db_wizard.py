@@ -31,7 +31,7 @@ class DatabaseConnection(TypedDict):
 # This function first checks connectivity to the database configured in Transact
 # If it fails, it first determines whether the error is due to incorrect credentials or if the database (likely) does not existing
 # If the error is due to the database not existing, it will help the user start a database
-def db_wizard(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
+def db_wizard(config: "ConfigFile") -> "ConfigFile":
     # 1. Check the connectivity to the database. Return if successful. If cannot connect, continue to the following steps.
     db_connection_error = _check_db_connectivity(config)
     if db_connection_error is None:

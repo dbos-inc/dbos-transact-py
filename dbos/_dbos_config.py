@@ -254,7 +254,6 @@ def load_config(
 def process_config(
     *,
     use_db_wizard: bool = True,
-    config_file_path: str = DBOS_CONFIG_PATH,
     data: ConfigFile,
     silent: bool = False,
 ) -> ConfigFile:
@@ -347,7 +346,7 @@ def process_config(
     # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)
     debugWorkflowId = os.getenv("DBOS_DEBUG_WORKFLOW_ID")
     if use_db_wizard and debugWorkflowId is None:
-        data = db_wizard(data, config_file_path)
+        data = db_wizard(data)
 
     if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
         data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"
