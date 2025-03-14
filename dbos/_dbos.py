@@ -344,7 +344,7 @@ class DBOS:
 
         if config is None:
             # If no config is provided, load it from dbos-config.yaml
-            unvalidated_config = load_config(process_config=False)
+            unvalidated_config = load_config(run_process_config=False)
         elif is_dbos_configfile(config):
             unvalidated_config = cast(ConfigFile, config)
             if os.environ.get("DBOS__CLOUD") == "true":
