@@ -158,7 +158,7 @@ def test_load_valid_config_file(mocker):
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
     )
 
-    configFile = load_config(mock_filename, process_config=False)
+    configFile = load_config(mock_filename, run_process_config=False)
     assert configFile["name"] == "some-app"
     assert configFile["database"]["hostname"] == "localhost"
     assert configFile["database"]["port"] == 5432
@@ -228,7 +228,7 @@ def test_load_config_file_custom_path():
     from unittest.mock import mock_open, patch
 
     with patch("builtins.open", mock_open(read_data=mock_config)) as mock_file:
-        result = load_config(custom_path, process_config=False)
+        result = load_config(custom_path, run_process_config=False)
         mock_file.assert_called_with(custom_path, "r")
         assert result["name"] == "test-app"
 
