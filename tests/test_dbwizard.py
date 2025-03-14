@@ -54,19 +54,6 @@ class TestDbWizardIntegration:
             },
         }
 
-    @pytest.fixture
-    def non_existent_db_config(self) -> ConfigFile:
-        """Configuration with correct credentials but non-existent database."""
-        return {
-            "name": "test-app",
-            "database": {
-                "hostname": "localhost",
-                "port": 5433,  # Wrong port
-                "username": "postgres",
-                "password": os.environ.get("PGPASSWORD", "dbos"),
-            },
-        }
-
     def test_successful_connection_postgres_db(
         self, standard_config: ConfigFile
     ) -> None:
@@ -82,30 +69,6 @@ class TestDbWizardIntegration:
             db_wizard(wrong_password_config, "config.yaml")
         assert "password authentication failed" in str(exc_info.value)
     '''
-
-    def test_non_default_config_in_file(
-        self, non_existent_db_config: ConfigFile
-    ) -> None:
-        """Test when config file contains custom database settings."""
-        # Mock a config file with custom settings
-        mock_file_content = yaml.dump(
-            {
-                "name": "test-app",
-                "database": {
-                    "hostname": "custom-host-in-file",
-                    "port": 5433,
-                    "username": "custom-user-in-file",
-                },
-            }
-        )
-
-        with patch("builtins.open", mock_open(read_data=mock_file_content)):
-            # Should raise error because config file has custom database settings
-            with pytest.raises(DBOSInitializationError) as exc_info:
-                db_wizard(non_existent_db_config, "config.yaml")
-
-            # Verify error message
-            assert "Could not connect to the database" in str(exc_info.value)
 
     def test_non_default_config_settings(self, non_default_config: ConfigFile) -> None:
         """Test with non-default database configuration."""
