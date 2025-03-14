@@ -23,14 +23,14 @@ class DBOSConfig(TypedDict):
 
     Attributes:
         name (str): Application name
-        db_string (str): Database connection string
+        database_url (str): Database connection string
         sys_db_name (str): System database name
         log_level (str): Log level
         otlp_traces_endpoints: List[str]: OTLP traces endpoints
     """
 
     name: str
-    db_string: Optional[str]
+    database_url: Optional[str]
     sys_db_name: Optional[str]
     log_level: Optional[str]
     otlp_traces_endpoints: Optional[List[str]]
@@ -58,8 +58,8 @@ class DatabaseConfig(TypedDict, total=False):
     rollback: Optional[List[str]]
 
 
-def parse_db_string_to_dbconfig(db_string: str) -> DatabaseConfig:
-    db_url = make_url(db_string)
+def parse_database_url_to_dbconfig(database_url: str) -> DatabaseConfig:
+    db_url = make_url(database_url)
     db_config = {
         "hostname": db_url.host,
         "port": db_url.port or 5432,
@@ -133,9 +133,9 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
 
     # Database config
     db_config: DatabaseConfig = {}
-    db_string = config.get("db_string")
-    if db_string:
-        db_config = parse_db_string_to_dbconfig(db_string)
+    database_url = config.get("database_url")
+    if database_url:
+        db_config = parse_database_url_to_dbconfig(database_url)
     if "sys_db_name" in config:
         db_config["sys_db_name"] = config.get("sys_db_name")
     if db_config:
