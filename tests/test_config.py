@@ -795,13 +795,6 @@ def test_overwrite_config_minimal(mocker):
 
     provided_config: ConfigFile = {
         "name": "test-app",
-        "database": {
-            "hostname": "localhost",
-            "port": 5432,
-            "username": "postgres",
-            "password": "dbos",
-            "app_db_name": "dbostestpy",
-        },
     }
     config = overwrite_config(provided_config)
 

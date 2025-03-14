@@ -395,6 +395,8 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     provided_config["name"] = config_from_file["name"]
 
     # Database config
+    if "database" not in provided_config:
+        provided_config["database"] = {}
     provided_config["database"]["hostname"] = config_from_file["database"]["hostname"]
     provided_config["database"]["port"] = config_from_file["database"]["port"]
     provided_config["database"]["username"] = config_from_file["database"]["username"]
