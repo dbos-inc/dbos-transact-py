@@ -3,12 +3,7 @@ import os
 import re
 import sys
 from importlib import resources
-from typing import Any, Dict, List, Optional, TypedDict, cast
-
-if sys.version_info >= (3, 10):
-    from typing import TypeGuard
-else:
-    from typing_extensions import TypeGuard
+from typing import Any, Dict, List, Optional, TypedDict, Union, cast
 
 import yaml
 from jsonschema import ValidationError, validate
@@ -121,7 +116,7 @@ class ConfigFile(TypedDict, total=False):
     env: Dict[str, str]
 
 
-def is_dbos_configfile(data: ConfigFile | DBOSConfig) -> bool:
+def is_dbos_configfile(data: Union[ConfigFile, DBOSConfig]) -> bool:
     return "name" in data and (
         "runtimeConfig" in data
         or "database" in data
