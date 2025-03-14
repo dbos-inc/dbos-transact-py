@@ -109,7 +109,7 @@ def test_configfile_type_provided():
     assert dbos.config["database"]["hostname"] == "localhost"
     assert dbos.config["database"]["port"] == 5432
     assert dbos.config["database"]["username"] == "postgres"
-    assert dbos.config["database"]["password"] == "dbos"
+    assert dbos.config["database"]["password"] == os.environ["PGPASSWORD"]
     assert dbos.config["database"]["app_db_name"] == "some_app"
     dbos.destroy()
 
@@ -123,7 +123,7 @@ def test_dbosconfig_type_provided(mocker):
     assert dbos.config["database"]["hostname"] == "localhost"
     assert dbos.config["database"]["port"] == 5432
     assert dbos.config["database"]["username"] == "postgres"
-    assert dbos.config["database"]["password"] == "dbos"
+    assert dbos.config["database"]["password"] == os.environ["PGPASSWORD"]
     assert dbos.config["database"]["app_db_name"] == "some_app"
     dbos.destroy()
 
