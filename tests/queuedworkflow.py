@@ -7,7 +7,6 @@ from dbos import DBOS, ConfigFile, Queue, SetWorkflowID
 def default_config() -> ConfigFile:
     return {
         "name": "test-app",
-        "language": "python",
         "database": {
             "hostname": "localhost",
             "port": 5432,

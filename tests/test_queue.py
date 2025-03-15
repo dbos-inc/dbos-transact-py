@@ -423,7 +423,6 @@ def run_dbos_test_in_process(
 ) -> None:
     dbos_config: ConfigFile = {
         "name": "test-app",
-        "language": "python",
         "database": {
             "hostname": "localhost",
             "port": 5432,
@@ -437,7 +436,6 @@ def run_dbos_test_in_process(
         },
         "telemetry": {},
         "env": {},
-        "application": {},
     }
     dbos = DBOS(config=dbos_config)
     DBOS.launch()

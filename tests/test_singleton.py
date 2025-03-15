@@ -168,14 +168,11 @@ def test_config_before_singleton(cleanup_test_databases: None) -> None:
         #    then imports more
         from tests.classdefs import DBOSTestClass
 
-        x = DBOS.config.get("language")
-        assert x == "python"
-        y = DBOS.config["language"]
-        assert y == "python"
-        url = DBOS.config["application"]["service_url"]
-        assert url == "https://service.org"
-        port = DBOS.config["application"]["service_config"]["port"]
-        assert port == 80
+        port = DBOS.config["database"]["hostname"]
+        assert port == "localhost"
+
+        name = DBOS.config["name"]
+        assert name == "test-app"
 
         # This is OK, it meant load_config anyway
         dbos: DBOS = DBOS()
