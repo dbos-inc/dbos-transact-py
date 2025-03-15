@@ -92,6 +92,7 @@ class TelemetryConfig(TypedDict, total=False):
     OTLPExporter: Optional[OTLPExporterConfig]
 
 
+# FIXME: we should remove total=False and make database & runtimeConfig optional.
 class ConfigFile(TypedDict, total=False):
     """
     Data structure containing the DBOS Configuration.
@@ -103,6 +104,7 @@ class ConfigFile(TypedDict, total=False):
         name (str): Application name
         runtimeConfig (RuntimeConfig): Configuration for request serving
         database (DatabaseConfig): Configuration for the application and system databases
+        database_url (str): Database connection string
         telemetry (TelemetryConfig): Configuration for tracing / logging
         env (Dict[str,str]): Environment varialbes
         application (Dict[str, Any]): Application-specific configuration section
@@ -112,6 +114,7 @@ class ConfigFile(TypedDict, total=False):
     name: str
     runtimeConfig: RuntimeConfig
     database: DatabaseConfig
+    database_url: Optional[str]
     telemetry: Optional[TelemetryConfig]
     env: Dict[str, str]
 
@@ -262,6 +265,18 @@ def process_config(
     if "database" not in data:
         data["database"] = {}
 
+    # database_url takes precedence over database config, but we need to preserve rollback and migrate if they exist
+    # FIXME: do we also need to preserve local_suffix?
+    migrate = data["database"].get("migrate", False)
+    rollback = data["database"].get("rollback", False)
+    if data.get("database_url"):
+        dbconfig = parse_database_url_to_dbconfig(data["database_url"])
+        if migrate:
+            dbconfig["migrate"] = migrate
+        if rollback:
+            dbconfig["rollback"] = rollback
+        data["database"] = dbconfig
+
     if "name" not in data:
         raise DBOSInitializationError(f"Configuration must specify an application name")
 
@@ -270,10 +285,7 @@ def process_config(
             f'Invalid app name {data["name"]}.  App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores.'
         )
 
-    if "app_db_name" not in data["database"] or data["database"]["app_db_name"] in (
-        "",
-        None,
-    ):
+    if "app_db_name" not in data["database"] or not (data["database"]["app_db_name"]):
         data["database"]["app_db_name"] = _app_name_to_db_name(data["name"])
 
     # Load the DB connection file. Use its values for missing fields from dbos-config.yaml. Use defaults otherwise.
@@ -385,6 +397,7 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # 3. Use the application name from the file. This is a defensive measure to ensure the application name is whatever it was registered with in the cloud
     # 4. Remove admin_port is provided in code
     # 5. Remove env vars if provided in code
+    # Optimistically assume that expected fields in config_from_file are present
 
     config_from_file = load_config(run_process_config=False)
     # Be defensive
@@ -394,7 +407,7 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Name
     provided_config["name"] = config_from_file["name"]
 
-    # Database config
+    # Database config. Note we disregard a potential database_url in config_from_file because it is not expected from DBOS Cloud
     if "database" not in provided_config:
         provided_config["database"] = {}
     provided_config["database"]["hostname"] = config_from_file["database"]["hostname"]
