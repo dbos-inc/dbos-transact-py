@@ -270,11 +270,11 @@ def process_config(
     migrate = data["database"].get("migrate", False)
     rollback = data["database"].get("rollback", False)
     if data.get("database_url"):
-        dbconfig = parse_database_url_to_dbconfig(data["database_url"])
+        dbconfig = parse_database_url_to_dbconfig(cast(str, data["database_url"]))
         if migrate:
-            dbconfig["migrate"] = migrate
+            dbconfig["migrate"] = cast(List[str], migrate)
         if rollback:
-            dbconfig["rollback"] = rollback
+            dbconfig["rollback"] = cast(List[str], rollback)
         data["database"] = dbconfig
 
     if "name" not in data:
