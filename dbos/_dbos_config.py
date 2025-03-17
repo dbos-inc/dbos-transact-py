@@ -152,7 +152,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     telemetry = {}
     # Add OTLPExporter if traces endpoints exist
     otlp_trace_endpoints = config.get("otlp_traces_endpoints")
-    if otlp_trace_endpoints:
+    if isinstance(otlp_trace_endpoints, list) and len(otlp_trace_endpoints) > 0:
         telemetry["OTLPExporter"] = {"tracesEndpoint": otlp_trace_endpoints[0]}
     # Default to INFO -- the logging seems to default to WARN otherwise.
     log_level = config.get("log_level", "INFO")

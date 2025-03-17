@@ -787,10 +787,20 @@ def test_translate_empty_otlp_traces_endpoints():
         "name": "test-app",
         "otlp_traces_endpoints": [],
     }
-    dbos = DBOS(config=config)
-    assert "OTLPExporter" not in dbos.config["telemetry"]
-    assert dbos.config["telemetry"]["logs"]["logLevel"] == "INFO"
-    dbos.destroy()
+    translated_config = translate_dbos_config_to_config_file(config)
+    assert "OTLPExporter" not in translated_config["telemetry"]
+    assert translated_config["telemetry"]["logs"]["logLevel"] == "INFO"
+
+
+def test_translate_ignores_otlp_traces_not_list():
+    # Give an empty OTLP traces endpoint list
+    config: DBOSConfig = {
+        "name": "test-app",
+        "otlp_traces_endpoints": "http://otel:7777",
+    }
+    translated_config = translate_dbos_config_to_config_file(config)
+    assert translated_config["name"] == "test-app"
+    assert "OTLPExporter" not in translated_config["telemetry"]
 
 
 def test_translate_missing_name():
