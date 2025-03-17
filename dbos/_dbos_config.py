@@ -477,7 +477,7 @@ def check_config_consistency(
     *,
     name: str,
     config_file_path: str = DBOS_CONFIG_PATH,
-):
+) -> None:
     # First load the config file and check whether it is present
     try:
         config = load_config(config_file_path)
