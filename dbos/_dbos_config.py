@@ -278,12 +278,15 @@ def process_config(
     # database_url takes precedence over database config, but we need to preserve rollback and migrate if they exist
     migrate = data["database"].get("migrate", False)
     rollback = data["database"].get("rollback", False)
+    local_suffix = data["database"].get("local_suffix", False)
     if data.get("database_url"):
         dbconfig = parse_database_url_to_dbconfig(cast(str, data["database_url"]))
         if migrate:
             dbconfig["migrate"] = cast(List[str], migrate)
         if rollback:
             dbconfig["rollback"] = cast(List[str], rollback)
+        if local_suffix:
+            dbconfig["local_suffix"] = cast(bool, local_suffix)
         data["database"] = dbconfig
 
     if "app_db_name" not in data["database"] or not (data["database"]["app_db_name"]):

@@ -364,6 +364,7 @@ def test_process_config_with_db_url():
     assert processed_config["database"]["connectionTimeoutMillis"] == 1000
     assert processed_config["database"]["ssl"] == True
     assert processed_config["database"]["ssl_ca"] == "ca.pem"
+    assert processed_config["database"]["local_suffix"] == False
     assert "rollback" not in processed_config["database"]
     assert "migrate" not in processed_config["database"]
 
@@ -393,9 +394,10 @@ def test_process_config_with_db_url_taking_precedence_over_database():
     assert processed_config["database"]["port"] == 7777
     assert processed_config["database"]["username"] == "boo"
     assert processed_config["database"]["password"] == "whoisdiz"
-    assert processed_config["database"]["app_db_name"] == "takesprecedence"
+    assert processed_config["database"]["app_db_name"] == "takesprecedence_local"
     assert processed_config["database"]["migrate"] == ["alembic upgrade head"]
     assert processed_config["database"]["rollback"] == ["alembic downgrade base"]
+    assert processed_config["database"]["local_suffix"] == True
     assert "connectionTimeoutMillis" not in processed_config["database"]
     assert "ssl" not in processed_config["database"]
     assert "ssl_ca" not in processed_config["database"]
