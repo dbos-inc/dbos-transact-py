@@ -29,8 +29,8 @@ class DatabaseConnection(TypedDict):
 
 
 # This function first checks connectivity to the database configured in Transact
-# If it fails, it first determines whether the error is due to incorrect credentials or if the database (likely) does not existing
-# If the error is due to the database not existing, it will help the user start a database
+# If it fails, it determines whether the error is due to incorrect credentials or if the database likely does not exist because connection information are the default ones
+# Else, the function will help the user start a database
 def db_wizard(config: "ConfigFile") -> "ConfigFile":
     # 1. Check the connectivity to the database. Return if successful. If cannot connect, continue to the following steps.
     db_connection_error = _check_db_connectivity(config)
@@ -58,8 +58,6 @@ def db_wizard(config: "ConfigFile") -> "ConfigFile":
         raise DBOSInitializationError(
             f"Could not connect to the database. Exception: {db_connection_error}"
         )
-
-    # At this point we are confident the connection error is due to the desired databased not existing / being unavailable
 
     print("[yellow]Postgres not detected locally[/yellow]")
 
