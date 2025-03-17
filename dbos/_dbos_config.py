@@ -73,7 +73,7 @@ def parse_database_url_to_dbconfig(database_url: str) -> DatabaseConfig:
             db_config["connectionTimeoutMillis"] = int(str_value) * 1000
         elif key == "sslmode":
             db_config["ssl"] = str_value == "require"
-        elif key == "sslcert":
+        elif key == "sslrootcert":
             db_config["ssl_ca"] = str_value
     return cast(DatabaseConfig, db_config)
 

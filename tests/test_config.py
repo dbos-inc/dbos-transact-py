@@ -182,7 +182,7 @@ def test_load_valid_config_file(mocker):
 def test_load_config_database_url(mocker):
     mock_config = """
         name: "some-app"
-        database_url: "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslcert=ca.pem"
+        database_url: "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
     """
     mocker.patch(
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
@@ -192,7 +192,7 @@ def test_load_config_database_url(mocker):
     assert configFile["name"] == "some-app"
     assert (
         configFile["database_url"]
-        == "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslcert=ca.pem"
+        == "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
     )
     assert "database" not in configFile
 
@@ -200,7 +200,7 @@ def test_load_config_database_url(mocker):
 def test_load_config_database_url_and_database(mocker):
     mock_config = """
         name: "some-app"
-        database_url: "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslcert=ca.pem"
+        database_url: "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
         database:
             hostname: 'localhost'
             port: 5432
@@ -217,7 +217,7 @@ def test_load_config_database_url_and_database(mocker):
     assert configFile["name"] == "some-app"
     assert (
         configFile["database_url"]
-        == "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslcert=ca.pem"
+        == "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
     )
     assert configFile["database"]["hostname"] == "localhost"
     assert configFile["database"]["port"] == 5432
@@ -353,7 +353,7 @@ def test_process_config_full():
 def test_process_config_with_db_url():
     config: ConfigFile = {
         "name": "some-app",
-        "database_url": "postgresql://user:password@localhost:7777/dbn?connect_timeout=1&sslmode=require&sslcert=ca.pem",
+        "database_url": "postgresql://user:password@localhost:7777/dbn?connect_timeout=1&sslmode=require&sslrootcert=ca.pem",
     }
     processed_config = process_config(data=config, use_db_wizard=False)
     assert processed_config["name"] == "some-app"
@@ -681,13 +681,13 @@ def test_query_parameters():
     db_config = parse_database_url_to_dbconfig(database_url)
     assert db_config["ssl"] == False
 
-    # Test sslcert mapping to ssl_ca
-    database_url = "postgresql://user:password@localhost:5432/dbname?sslcert=ca.pem"
+    # Test sslrootcert mapping to ssl_ca
+    database_url = "postgresql://user:password@localhost:5432/dbname?sslrootcert=ca.pem"
     db_config = parse_database_url_to_dbconfig(database_url)
     assert db_config["ssl_ca"] == "ca.pem"
 
     # Test multiple parameters together
-    database_url = "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslcert=ca.pem&application_name=myapp"
+    database_url = "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem&application_name=myapp"
     db_config = parse_database_url_to_dbconfig(database_url)
     assert db_config["connectionTimeoutMillis"] == 10000
     assert db_config["ssl"] == True
@@ -724,7 +724,7 @@ def test_translate_dbosconfig_full_input():
     # Give all fields
     config: DBOSConfig = {
         "name": "test-app",
-        "database_url": "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslcert=ca.pem",
+        "database_url": "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem",
         "sys_db_name": "sysdb",
         "log_level": "DEBUG",
         "otlp_traces_endpoints": ["http://otel:7777", "notused"],
