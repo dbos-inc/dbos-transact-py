@@ -101,7 +101,6 @@ def test_init_config() -> None:
         "language": "python",
         "runtimeConfig": {"start": ["fastapi run ./main.py"]},
         "database": {"migrate": ["echo 'No migrations specified'"]},
-        "telemetry": {"logs": {"logLevel": "INFO"}},
     }
     with tempfile.TemporaryDirectory() as temp_path:
         subprocess.check_call(
