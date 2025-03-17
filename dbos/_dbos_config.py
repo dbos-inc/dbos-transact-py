@@ -274,7 +274,6 @@ def process_config(
         data["database"] = {}
 
     # database_url takes precedence over database config, but we need to preserve rollback and migrate if they exist
-    # FIXME: do we also need to preserve local_suffix?
     migrate = data["database"].get("migrate", False)
     rollback = data["database"].get("rollback", False)
     if data.get("database_url"):
