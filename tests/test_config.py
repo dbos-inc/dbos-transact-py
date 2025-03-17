@@ -266,6 +266,19 @@ def test_load_config_file_schema_validation_error(mocker):
     )
 
 
+def test_load_config_file_not_dict(mocker):
+    """Test handling when YAML doesn't parse to a dictionary."""
+    mock_config = "just a string"
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
+    )
+
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        load_config()
+
+    assert "dbos-config.yaml must contain a dictionary" in str(exc_info.value)
+
+
 def test_load_config_file_custom_path():
     """Test parsing a config file from a custom path."""
     mock_config = """
