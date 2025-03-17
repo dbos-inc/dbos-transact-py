@@ -262,6 +262,14 @@ def process_config(
     silent: bool = False,
 ) -> ConfigFile:
 
+    if "name" not in data:
+        raise DBOSInitializationError(f"Configuration must specify an application name")
+
+    if not _is_valid_app_name(data["name"]):
+        raise DBOSInitializationError(
+            f'Invalid app name {data["name"]}.  App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores.'
+        )
+
     if "database" not in data:
         data["database"] = {}
 
@@ -276,14 +284,6 @@ def process_config(
         if rollback:
             dbconfig["rollback"] = cast(List[str], rollback)
         data["database"] = dbconfig
-
-    if "name" not in data:
-        raise DBOSInitializationError(f"Configuration must specify an application name")
-
-    if not _is_valid_app_name(data["name"]):
-        raise DBOSInitializationError(
-            f'Invalid app name {data["name"]}.  App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores.'
-        )
 
     if "app_db_name" not in data["database"] or not (data["database"]["app_db_name"]):
         data["database"]["app_db_name"] = _app_name_to_db_name(data["name"])
