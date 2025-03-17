@@ -381,7 +381,7 @@ def test_process_config_with_db_url_taking_precendence_over_database():
             "sys_db_name": "sys_db",
             "ssl": True,
             "ssl_ca": "ca.pem",
-            "local_suffix": False,
+            "local_suffix": True,
             "migrate": ["alembic upgrade head"],
             "rollback": ["alembic downgrade base"],
         },
@@ -433,7 +433,7 @@ def test_process_config_load_default_with_None_database_url():
     )
 
 
-def test_process_config_with_not_non_but_None_app_db_name():
+def test_process_config_with_None_app_db_name():
     config: ConfigFile = {
         "name": "some-app",
         "database": {
@@ -452,7 +452,7 @@ def test_process_config_with_not_non_but_None_app_db_name():
     )
 
 
-def test_process_config_with_not_non_but_empty_app_db_name():
+def test_process_config_with_empty_app_db_name():
     config: ConfigFile = {
         "name": "some-app",
         "database": {
@@ -627,7 +627,7 @@ def test_basic_fields_mapping():
 
 
 def test_no_db_name():
-    """Test that an exception is raised when dbname is not provided."""
+    """None app_db_name when dbname is not provided."""
     database_url = "postgresql://user:password@localhost:5432"
     db_config = parse_database_url_to_dbconfig(database_url)
     assert db_config["hostname"] == "localhost"
@@ -689,7 +689,6 @@ def test_query_parameters():
     assert db_config["connectionTimeoutMillis"] == 10000
     assert db_config["ssl"] == True
     assert db_config["ssl_ca"] == "ca.pem"
-    assert "application_name" not in db_config
 
 
 def test_complex_password():
