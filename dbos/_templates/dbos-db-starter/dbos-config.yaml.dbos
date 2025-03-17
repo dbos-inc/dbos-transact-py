@@ -11,6 +11,3 @@ runtimeConfig:
 database:
   migrate:
     - ${migration_command}
-telemetry:
-  logs:
-    logLevel: INFO
