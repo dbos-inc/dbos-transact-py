@@ -11,6 +11,7 @@ from dbos import DBOS, load_config
 from dbos._dbos_config import (
     ConfigFile,
     DBOSConfig,
+    check_config_consistency,
     overwrite_config,
     parse_database_url_to_dbconfig,
     process_config,
@@ -1135,3 +1136,38 @@ def test_overwrite_config_with_provided_database_url(mocker):
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
     assert "runtimeConfig" not in config
     assert "env" not in config
+
+
+####################
+# PROVIDED CONFIGS vs CONFIG FILE
+####################
+
+
+def test_no_discrepancy(mocker):
+    mock_config = """
+    name: "stock-prices" \
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
+    )
+    check_config_consistency(name="stock-prices")
+
+
+def test_name_does_no_match(mocker):
+    mock_config = """
+    name: "stock-prices" \
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
+    )
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        check_config_consistency(name="stock-prices-wrong")
+    assert (
+        "Provided app name 'stock-prices-wrong' does not match the app name 'stock-prices' in dbos-config.yaml"
+        in str(exc_info.value)
+    )
+
+
+def test_no_config_file():
+    # Handles FileNotFoundError
+    check_config_consistency(name="stock-prices")

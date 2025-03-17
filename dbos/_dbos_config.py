@@ -12,7 +12,7 @@ from sqlalchemy import URL, make_url
 
 from ._db_wizard import db_wizard, load_db_connection
 from ._error import DBOSInitializationError
-from ._logger import dbos_logger, init_logger
+from ._logger import dbos_logger
 
 DBOS_CONFIG_PATH = "dbos-config.yaml"
 
@@ -471,3 +471,26 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
         del provided_config["env"]
 
     return provided_config
+
+
+def check_config_consistency(
+    *,
+    name: str,
+    config_file_path: str = DBOS_CONFIG_PATH,
+):
+    # First load the config file and check whether it is present
+    try:
+        config = load_config(config_file_path)
+    except FileNotFoundError:
+        dbos_logger.debug(
+            f"No configuration file {config_file_path} found. Skipping consistency check with provided config."
+        )
+        return
+    except Exception as e:
+        raise e
+
+    # Check the name
+    if name != config["name"]:
+        raise DBOSInitializationError(
+            f"Provided app name '{name}' does not match the app name '{config['name']}' in {config_file_path}."
+        )
