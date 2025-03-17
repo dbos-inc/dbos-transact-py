@@ -368,7 +368,7 @@ def test_process_config_with_db_url():
     assert "migrate" not in processed_config["database"]
 
 
-def test_process_config_with_db_url_taking_precendence_over_database():
+def test_process_config_with_db_url_taking_precedence_over_database():
     config: ConfigFile = {
         "name": "some-app",
         "database": {
@@ -803,9 +803,12 @@ def test_translate_ignores_otlp_traces_not_list():
 
 
 def test_translate_missing_name():
-    with pytest.raises(KeyError) as exc_info:
+    with pytest.raises(DBOSInitializationError) as exc_info:
         translate_dbos_config_to_config_file({})
-    assert str(exc_info.value) == "'name'"
+    assert (
+        "Error initializing DBOS Transact: Configuration must specify an application name"
+        in str(exc_info.value)
+    )
 
 
 ####################

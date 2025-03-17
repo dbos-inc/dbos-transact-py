@@ -129,7 +129,9 @@ def is_dbos_configfile(data: Union[ConfigFile, DBOSConfig]) -> bool:
 
 
 def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
-    # Start with the mandatory fields
+    if "name" not in config:
+        raise DBOSInitializationError(f"Configuration must specify an application name")
+
     translated_config: ConfigFile = {
         "name": config["name"],
     }
