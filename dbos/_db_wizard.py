@@ -28,10 +28,20 @@ class DatabaseConnection(TypedDict):
     local_suffix: Optional[bool]
 
 
-# This function first checks connectivity to the database configured in Transact
-# If it fails, it determines whether the error is due to incorrect credentials or if the database likely does not exist because connection information are the default ones
-# Else, the function will help the user start a database
 def db_wizard(config: "ConfigFile") -> "ConfigFile":
+    """Checks database connectivity and helps the user start a database if needed
+
+    First, check connectivity to the database configured in the provided `config` object.
+    If it fails:
+     - Return an error if the connection failed due to incorrect credentials.
+     - Return an error if it detects a non-default configuration.
+     - Otherwise assume the configured database is not running and guide the user through setting it up.
+
+     The wizard will first attempt to start a local Postgres instance using Docker.
+     If Docker is not available, it will prompt the user to connect to a DBOS Cloud database.
+
+     Finally, if a database was configured, its connection details will be saved in the local `.dbos/db_connection` file.
+    """
     # 1. Check the connectivity to the database. Return if successful. If cannot connect, continue to the following steps.
     db_connection_error = _check_db_connectivity(config)
     if db_connection_error is None:
