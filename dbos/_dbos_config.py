@@ -92,7 +92,6 @@ class TelemetryConfig(TypedDict, total=False):
     OTLPExporter: Optional[OTLPExporterConfig]
 
 
-# FIXME: we should remove total=False and make database & runtimeConfig optional.
 class ConfigFile(TypedDict, total=False):
     """
     Data structure containing the DBOS Configuration.
