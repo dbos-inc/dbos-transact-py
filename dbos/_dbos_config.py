@@ -338,6 +338,7 @@ def process_config(
 
     # Load the DB connection file. Use its values for missing fields from dbos-config.yaml. Use defaults otherwise.
     db_connection = load_db_connection()
+    # Pretty-print where we're loading database connection information from, respecting the log level
     if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
         if os.getenv("DBOS_DBHOST"):
             print(
