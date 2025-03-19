@@ -1,7 +1,7 @@
 """Errors thrown by DBOS."""
 
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 
 class DBOSException(Exception):
@@ -124,7 +124,7 @@ class DBOSNotAuthorizedError(DBOSException):
 class DBOSMaxStepRetriesExceeded(DBOSException):
     """Exception raised when a step was retried the maximimum number of times without success."""
 
-    def __init__(self, step_name: str, max_retries: str) -> None:
+    def __init__(self, step_name: str, max_retries: int) -> None:
         self.step_name = step_name
         self.max_retries = max_retries
         super().__init__(
@@ -132,7 +132,7 @@ class DBOSMaxStepRetriesExceeded(DBOSException):
             dbos_error_code=DBOSErrorCode.MaxStepRetriesExceeded.value,
         )
 
-    def __reduce__(self):
+    def __reduce__(self) -> Any:
         # Tell jsonpickle how to reconstruct this object
         return (self.__class__, (self.step_name, self.max_retries))
 

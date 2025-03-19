@@ -272,17 +272,17 @@ def test_step_retries(dbos: DBOS) -> None:
     max_attempts = 2
 
     @DBOS.step(retries_allowed=True, interval_seconds=0, max_attempts=max_attempts)
-    def failing_step():
+    def failing_step() -> None:
         nonlocal step_counter
         step_counter += 1
         raise Exception("fail")
 
     @DBOS.workflow()
-    def failing_workflow():
+    def failing_workflow() -> None:
         failing_step()
 
     @DBOS.workflow()
-    def enqueue_failing_step():
+    def enqueue_failing_step() -> None:
         queue.enqueue(failing_step).get_result()
 
     error_message = f"Step {failing_step.__name__} has exceeded its maximum of {max_attempts} retries"
