@@ -130,6 +130,10 @@ class DBOSMaxStepRetriesExceeded(DBOSException):
             dbos_error_code=DBOSErrorCode.MaxStepRetriesExceeded.value,
         )
 
+    # Tell pickle to reconstruct the exception without calling its constructor
+    def __reduce__(self):
+        return (self.__class__, ())
+
 
 class DBOSWorkflowCancelledError(DBOSException):
     """Exception raised when the workflow has already been cancelled."""
