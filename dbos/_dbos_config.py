@@ -22,30 +22,38 @@ from ._logger import dbos_logger
 DBOS_CONFIG_PATH = "dbos-config.yaml"
 
 
-class DBOSConfig(TypedDict):
+class DBOSConfig(TypedDict, total=False):
     """
     Data structure containing the DBOS library configuration.
 
     Attributes:
         name (str): Application name
         database_url (str): Database connection string
+        app_db_pool_size (int): Application database pool size
         sys_db_name (str): System database name
+        sys_db_pool_size (int): System database pool size
         log_level (str): Log level
         otlp_traces_endpoints: List[str]: OTLP traces endpoints
+        admin_port (int): Admin port
+        run_admin_server (bool): Whether to run the DBOS admin server
     """
 
     name: str
     database_url: Optional[str]
+    app_db_pool_size: Optional[int]
     sys_db_name: Optional[str]
+    sys_db_pool_size: Optional[int]
     log_level: Optional[str]
     otlp_traces_endpoints: Optional[List[str]]
     admin_port: Optional[int]
+    run_admin_server: Optional[bool]
 
 
 class RuntimeConfig(TypedDict, total=False):
     start: List[str]
     setup: Optional[List[str]]
     admin_port: Optional[int]
+    run_admin_server: Optional[bool]
 
 
 class DatabaseConfig(TypedDict, total=False):
@@ -55,7 +63,9 @@ class DatabaseConfig(TypedDict, total=False):
     password: str
     connectionTimeoutMillis: Optional[int]
     app_db_name: str
+    app_db_pool_size: Optional[int]
     sys_db_name: Optional[str]
+    sys_db_pool_size: Optional[int]
     ssl: Optional[bool]
     ssl_ca: Optional[str]
     local_suffix: Optional[bool]
@@ -160,12 +170,21 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         db_config = parse_database_url_to_dbconfig(database_url)
     if "sys_db_name" in config:
         db_config["sys_db_name"] = config.get("sys_db_name")
+    if "app_db_pool_size" in config:
+        db_config["app_db_pool_size"] = config.get("app_db_pool_size")
+    if "sys_db_pool_size" in config:
+        db_config["sys_db_pool_size"] = config.get("sys_db_pool_size")
     if db_config:
         translated_config["database"] = db_config
 
-    # Admin port
+    # Runtime config
+    translated_config["runtimeConfig"] = {"run_admin_server": True}
     if "admin_port" in config:
-        translated_config["runtimeConfig"] = {"admin_port": config["admin_port"]}
+        translated_config["runtimeConfig"]["admin_port"] = config["admin_port"]
+    if "run_admin_server" in config:
+        translated_config["runtimeConfig"]["run_admin_server"] = config[
+            "run_admin_server"
+        ]
 
     # Telemetry config
     telemetry = {}
@@ -289,6 +308,15 @@ def process_config(
             f'Invalid app name {data["name"]}.  App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores.'
         )
 
+    if data.get("telemetry") is None:
+        data["telemetry"] = {}
+    telemetry = cast(TelemetryConfig, data["telemetry"])
+    if telemetry.get("logs") is None:
+        telemetry["logs"] = {}
+    logs = cast(LoggerConfig, telemetry["logs"])
+    if logs.get("logLevel") is None:
+        logs["logLevel"] = "INFO"
+
     if "database" not in data:
         data["database"] = {}
 
@@ -378,6 +406,20 @@ def process_config(
     if dbos_dblocalsuffix is not None:
         local_suffix = dbos_dblocalsuffix
     data["database"]["local_suffix"] = local_suffix
+
+    if not data["database"].get("app_db_pool_size"):
+        data["database"]["app_db_pool_size"] = 20
+    if not data["database"].get("sys_db_pool_size"):
+        data["database"]["sys_db_pool_size"] = 20
+    if not data["database"].get("connectionTimeoutMillis"):
+        data["database"]["connectionTimeoutMillis"] = 10000
+
+    if not data.get("runtimeConfig"):
+        data["runtimeConfig"] = {
+            "run_admin_server": True,
+        }
+    elif "run_admin_server" not in data["runtimeConfig"]:
+        data["runtimeConfig"]["run_admin_server"] = True
 
     # Check the connectivity to the database and make sure it's properly configured
     # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)
@@ -475,13 +517,13 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
                 otlp_exporter["logsEndpoint"] = logsEndpoint
 
     # Runtime config
-    if (
-        "runtimeConfig" in provided_config
-        and "admin_port" in provided_config["runtimeConfig"]
-    ):
-        del provided_config["runtimeConfig"][
-            "admin_port"
-        ]  # Admin port is expected to be 3001 (the default in dbos/_admin_server.py::__init__ ) by DBOS Cloud
+    if "runtimeConfig" in provided_config:
+        if "admin_port" in provided_config["runtimeConfig"]:
+            del provided_config["runtimeConfig"][
+                "admin_port"
+            ]  # Admin port is expected to be 3001 (the default in dbos/_admin_server.py::__init__ ) by DBOS Cloud
+        if "run_admin_server" in provided_config["runtimeConfig"]:
+            del provided_config["runtimeConfig"]["run_admin_server"]
 
     # Env should be set from the hosting provider (e.g., DBOS Cloud)
     if "env" in provided_config:

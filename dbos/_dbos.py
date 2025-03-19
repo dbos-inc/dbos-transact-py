@@ -457,7 +457,14 @@ class DBOS:
             admin_port = self.config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:
                 admin_port = 3001
-            self._admin_server_field = AdminServer(dbos=self, port=admin_port)
+            run_admin_server = self.config.get("runtimeConfig", {}).get(
+                "run_admin_server"
+            )
+            if run_admin_server:
+                try:
+                    self._admin_server_field = AdminServer(dbos=self, port=admin_port)
+                except Exception as e:
+                    dbos_logger.warning(f"Failed to start admin server: {e}")
 
             workflow_ids = self._sys_db.get_pending_workflows(
                 GlobalParams.executor_id, GlobalParams.app_version

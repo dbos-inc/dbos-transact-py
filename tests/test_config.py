@@ -5,6 +5,7 @@ from unittest.mock import mock_open
 
 import pytest
 import pytest_mock
+from sqlalchemy import event
 
 # Public API
 from dbos import DBOS, load_config
@@ -313,7 +314,9 @@ def test_process_config_full():
             "password": "password",
             "connectionTimeoutMillis": 3000,
             "app_db_name": "example_db",
+            "app_db_pool_size": 45,
             "sys_db_name": "sys_db",
+            "sys_db_pool_size": 27,
             "ssl": True,
             "ssl_ca": "ca.pem",
             "local_suffix": False,
@@ -323,6 +326,7 @@ def test_process_config_full():
         "runtimeConfig": {
             "start": ["python3 main.py"],
             "admin_port": 8001,
+            "run_admin_server": False,
             "setup": ["echo 'hello'"],
         },
         "telemetry": {
@@ -353,8 +357,11 @@ def test_process_config_full():
     assert configFile["database"]["local_suffix"] == False
     assert configFile["database"]["migrate"] == ["alembic upgrade head"]
     assert configFile["database"]["rollback"] == ["alembic downgrade base"]
+    assert configFile["database"]["app_db_pool_size"] == 45
+    assert configFile["database"]["sys_db_pool_size"] == 27
     assert configFile["runtimeConfig"]["start"] == ["python3 main.py"]
     assert configFile["runtimeConfig"]["admin_port"] == 8001
+    assert configFile["runtimeConfig"]["run_admin_server"] == False
     assert configFile["runtimeConfig"]["setup"] == ["echo 'hello'"]
     assert configFile["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert configFile["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
@@ -380,8 +387,11 @@ def test_process_config_with_db_url():
     assert processed_config["database"]["ssl"] == True
     assert processed_config["database"]["ssl_ca"] == "ca.pem"
     assert processed_config["database"]["local_suffix"] == False
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
     assert "rollback" not in processed_config["database"]
     assert "migrate" not in processed_config["database"]
+    assert processed_config["runtimeConfig"]["run_admin_server"] == True
 
 
 def test_process_config_with_db_url_taking_precedence_over_database():
@@ -413,9 +423,12 @@ def test_process_config_with_db_url_taking_precedence_over_database():
     assert processed_config["database"]["migrate"] == ["alembic upgrade head"]
     assert processed_config["database"]["rollback"] == ["alembic downgrade base"]
     assert processed_config["database"]["local_suffix"] == True
-    assert "connectionTimeoutMillis" not in processed_config["database"]
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
+    assert processed_config["database"]["connectionTimeoutMillis"] == 10000
     assert "ssl" not in processed_config["database"]
     assert "ssl_ca" not in processed_config["database"]
+    assert processed_config["runtimeConfig"]["run_admin_server"] == True
 
 
 # Note this exercise going through the db wizard
@@ -432,6 +445,11 @@ def test_process_config_load_defaults():
     assert processed_config["database"]["password"] == os.environ.get(
         "PGPASSWORD", "dbos"
     )
+    assert processed_config["database"]["connectionTimeoutMillis"] == 10000
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
+    assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
+    assert processed_config["runtimeConfig"]["run_admin_server"] == True
 
 
 def test_process_config_load_default_with_None_database_url():
@@ -448,6 +466,9 @@ def test_process_config_load_default_with_None_database_url():
     assert processed_config["database"]["password"] == os.environ.get(
         "PGPASSWORD", "dbos"
     )
+    assert processed_config["database"]["connectionTimeoutMillis"] == 10000
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
 
 
 def test_process_config_with_None_app_db_name():
@@ -467,6 +488,9 @@ def test_process_config_with_None_app_db_name():
     assert processed_config["database"]["password"] == os.environ.get(
         "PGPASSWORD", "dbos"
     )
+    assert processed_config["database"]["connectionTimeoutMillis"] == 10000
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
 
 
 def test_process_config_with_empty_app_db_name():
@@ -486,6 +510,9 @@ def test_process_config_with_empty_app_db_name():
     assert processed_config["database"]["password"] == os.environ.get(
         "PGPASSWORD", "dbos"
     )
+    assert processed_config["database"]["connectionTimeoutMillis"] == 10000
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
 
 
 def test_config_missing_name():
@@ -534,6 +561,9 @@ def test_load_config_load_db_connection(mocker):
     assert configFile["database"]["password"] == "password"
     assert configFile["database"]["local_suffix"] == True
     assert configFile["database"]["app_db_name"] == "some_app_local"
+    assert configFile["database"]["app_db_pool_size"] == 20
+    assert configFile["database"]["sys_db_pool_size"] == 20
+    assert configFile["database"]["connectionTimeoutMillis"] == 10000
 
 
 def test_config_mixed_params():
@@ -543,6 +573,7 @@ def test_config_mixed_params():
             "port": 1234,
             "username": "some user",
             "password": "abc123",
+            "app_db_pool_size": 3,
         },
     }
 
@@ -552,6 +583,9 @@ def test_config_mixed_params():
     assert configFile["database"]["port"] == 1234
     assert configFile["database"]["username"] == "some user"
     assert configFile["database"]["password"] == "abc123"
+    assert configFile["database"]["app_db_pool_size"] == 3
+    assert configFile["database"]["sys_db_pool_size"] == 20
+    assert configFile["database"]["connectionTimeoutMillis"] == 10000
 
 
 def test_debug_override(mocker: pytest_mock.MockFixture):
@@ -575,6 +609,9 @@ def test_debug_override(mocker: pytest_mock.MockFixture):
     assert configFile["database"]["username"] == "fakeuser"
     assert configFile["database"]["password"] == "fakepassword"
     assert configFile["database"]["local_suffix"] == False
+    assert configFile["database"]["app_db_pool_size"] == 20
+    assert configFile["database"]["sys_db_pool_size"] == 20
+    assert configFile["database"]["connectionTimeoutMillis"] == 10000
 
 
 def test_local_config():
@@ -600,6 +637,8 @@ def test_local_config():
     assert processed_config["database"]["password"] == os.environ["PGPASSWORD"]
     assert processed_config["database"]["app_db_name"] == "some_db_local"
     assert processed_config["database"]["connectionTimeoutMillis"] == 3000
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
 
 
 def test_local_config_without_name(mocker):
@@ -624,6 +663,8 @@ def test_local_config_without_name(mocker):
     assert processed_config["database"]["password"] == os.environ["PGPASSWORD"]
     assert processed_config["database"]["app_db_name"] == "some_app_local"
     assert processed_config["database"]["connectionTimeoutMillis"] == 3000
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
 
 
 ####################
@@ -676,9 +717,9 @@ def test_query_parameters():
     """Test processing of various query parameters."""
 
     # Test connect_timeout conversion
-    database_url = "postgresql://user:password@localhost:5432/dbname?connect_timeout=10"
+    database_url = "postgresql://user:password@localhost:5432/dbname?connect_timeout=7"
     db_config = parse_database_url_to_dbconfig(database_url)
-    assert db_config["connectionTimeoutMillis"] == 10000
+    assert db_config["connectionTimeoutMillis"] == 7000
 
     # Test sslmode=require (should set ssl=True)
     database_url = "postgresql://user:password@localhost:5432/dbname?sslmode=require"
@@ -701,9 +742,9 @@ def test_query_parameters():
     assert db_config["ssl_ca"] == "ca.pem"
 
     # Test multiple parameters together
-    database_url = "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem&application_name=myapp"
+    database_url = "postgresql://user:password@localhost:5432/dbname?connect_timeout=8&sslmode=require&sslrootcert=ca.pem&application_name=myapp"
     db_config = parse_database_url_to_dbconfig(database_url)
-    assert db_config["connectionTimeoutMillis"] == 10000
+    assert db_config["connectionTimeoutMillis"] == 8000
     assert db_config["ssl"] == True
     assert db_config["ssl_ca"] == "ca.pem"
 
@@ -739,10 +780,13 @@ def test_translate_dbosconfig_full_input():
     config: DBOSConfig = {
         "name": "test-app",
         "database_url": "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem",
+        "app_db_pool_size": 45,
         "sys_db_name": "sysdb",
+        "sys_db_pool_size": 27,
         "log_level": "DEBUG",
         "otlp_traces_endpoints": ["http://otel:7777", "notused"],
         "admin_port": 8001,
+        "run_admin_server": False,
     }
 
     translated_config = translate_dbos_config_to_config_file(config)
@@ -757,6 +801,8 @@ def test_translate_dbosconfig_full_input():
     assert translated_config["database"]["connectionTimeoutMillis"] == 10000
     assert translated_config["database"]["app_db_name"] == "dbname"
     assert translated_config["database"]["sys_db_name"] == "sysdb"
+    assert translated_config["database"]["app_db_pool_size"] == 45
+    assert translated_config["database"]["sys_db_pool_size"] == 27
     assert "database_url" not in translated_config
     assert translated_config["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert (
@@ -765,6 +811,7 @@ def test_translate_dbosconfig_full_input():
     )
     assert "logsEndpoint" not in translated_config["telemetry"]["OTLPExporter"]
     assert translated_config["runtimeConfig"]["admin_port"] == 8001
+    assert translated_config["runtimeConfig"]["run_admin_server"] == False
     assert "start" not in translated_config["runtimeConfig"]
     assert "setup" not in translated_config["runtimeConfig"]
     assert "env" not in translated_config
@@ -778,9 +825,10 @@ def test_translate_dbosconfig_minimal_input():
 
     assert translated_config["name"] == "test-app"
     assert translated_config["telemetry"]["logs"]["logLevel"] == "INFO"
+    assert translated_config["runtimeConfig"]["run_admin_server"] == True
+    assert "admin_port" not in translated_config["runtimeConfig"]
     assert "database" not in translated_config
     assert "env" not in translated_config
-    assert "runtimeConfig" not in translated_config
 
 
 def test_translate_dbosconfig_just_sys_db_name():
@@ -790,11 +838,66 @@ def test_translate_dbosconfig_just_sys_db_name():
     }
     translated_config = translate_dbos_config_to_config_file(config)
 
+    assert translated_config["database"]["sys_db_name"] == "sysdb"
+    assert "app_db_pool_size" not in translated_config["database"]
+    assert "sys_db_pool_size" not in translated_config["database"]
+    assert "env" not in translated_config
+    assert "admin_port" not in translated_config["runtimeConfig"]
+
+
+def test_translate_dbosconfig_just_app_db_pool_size():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "app_db_pool_size": 45,
+    }
+    translated_config = translate_dbos_config_to_config_file(config)
+
+    assert translated_config["database"]["app_db_pool_size"] == 45
+    assert "sys_db_name" not in translated_config["database"]
+    assert "sys_db_pool_size" not in translated_config["database"]
+    assert "env" not in translated_config
+    assert "admin_port" not in translated_config["runtimeConfig"]
+
+
+def test_translate_dbosconfig_just_sys_db_pool_size():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "sys_db_pool_size": 27,
+    }
+    translated_config = translate_dbos_config_to_config_file(config)
+
+    assert translated_config["database"]["sys_db_pool_size"] == 27
+    assert "app_db_pool_size" not in translated_config["database"]
+    assert "sys_db_name" not in translated_config["database"]
+    assert "env" not in translated_config
+
+
+def test_translate_dbosconfig_just_admin_port():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "admin_port": 8001,
+    }
+    translated_config = translate_dbos_config_to_config_file(config)
+
+    assert translated_config["runtimeConfig"]["admin_port"] == 8001
+    assert translated_config["runtimeConfig"]["run_admin_server"] == True
+    assert "env" not in translated_config
+    assert "database" not in translated_config
+
+
+def test_translate_dbosconfig_just_run_admin_server():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "run_admin_server": True,
+    }
+    translated_config = translate_dbos_config_to_config_file(config)
+
     assert translated_config["name"] == "test-app"
     assert translated_config["telemetry"]["logs"]["logLevel"] == "INFO"
-    assert translated_config["database"]["sys_db_name"] == "sysdb"
+    assert translated_config["runtimeConfig"]["run_admin_server"] == True
+    assert "admin_port" not in translated_config["runtimeConfig"]
     assert "env" not in translated_config
-    assert "runtimeConfig" not in translated_config
+    assert "database" not in translated_config
 
 
 def test_translate_empty_otlp_traces_endpoints():
@@ -875,6 +978,7 @@ def test_overwrite_config(mocker):
             "app_db_name": "dbostestpy",
             "sys_db_name": "sysdb",
             "connectionTimeoutMillis": 10000,
+            "app_db_pool_size": 10,
         },
         "telemetry": {
             "OTLPExporter": {
@@ -887,6 +991,7 @@ def test_overwrite_config(mocker):
         },
         "runtimeConfig": {
             "admin_port": 8001,
+            "run_admin_server": True,
         },
         "env": {
             "FOO": "BAR",
@@ -904,10 +1009,13 @@ def test_overwrite_config(mocker):
     assert config["database"]["ssl"] == True
     assert config["database"]["ssl_ca"] == "cert.pem"
     assert config["database"]["connectionTimeoutMillis"] == 10000
+    assert config["database"]["app_db_pool_size"] == 10
+    assert "sys_db_pool_size" not in config["database"]
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
     assert "admin_port" not in config["runtimeConfig"]
+    assert "run_admin_server" not in config["runtimeConfig"]
     assert "env" not in config
 
 
@@ -1185,3 +1293,71 @@ def test_name_does_no_match(mocker):
 def test_no_config_file():
     # Handles FileNotFoundError
     check_config_consistency(name="stock-prices")
+
+
+####################
+# DATABASES CONNECTION POOLS
+####################
+
+
+def test_configured_pool_sizes():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "app_db_pool_size": 42,
+        "sys_db_pool_size": 43,
+    }
+
+    dbos = DBOS(config=config)
+    dbos.launch()
+    assert dbos._app_db.engine.pool._pool.maxsize == 42
+    assert dbos._sys_db.engine.pool._pool.maxsize == 43
+    dbos.destroy()
+
+
+def test_default_pool_params():
+    config: DBOSConfig = {
+        "name": "test-app",
+    }
+
+    dbos = DBOS(config=config)
+    dbos.launch()
+    app_db_engine = dbos._app_db.engine
+    assert app_db_engine.pool._pool.maxsize == 20
+
+    # force the release of connections so we can intercept on connect.
+    app_db_engine.dispose()
+
+    @event.listens_for(app_db_engine, "connect")
+    def inspect_connection(dbapi_connection, connection_record):
+        connect_timeout = dbapi_connection.info.get_parameters()["connect_timeout"]
+        assert connect_timeout == "10"
+
+    with app_db_engine.connect() as conn:
+        pass
+
+    assert dbos._sys_db.engine.pool._pool.maxsize == 20
+    dbos.destroy()
+
+
+def test_configured_app_db_connect_timeout():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "database_url": f"postgresql://postgres:@localhost:5432/dbname?connect_timeout=7",
+    }
+
+    dbos = DBOS(config=config)
+    dbos.launch()
+    app_db_engine = dbos._app_db.engine
+
+    # force the release of connections so we can intercept on connect.
+    app_db_engine.dispose()
+
+    @event.listens_for(app_db_engine, "connect")
+    def inspect_connection(dbapi_connection, connection_record):
+        connect_timeout = dbapi_connection.info.get_parameters()["connect_timeout"]
+        assert connect_timeout == "7"
+
+    with app_db_engine.connect() as conn:
+        pass
+
+    dbos.destroy()

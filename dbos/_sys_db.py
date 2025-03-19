@@ -203,8 +203,8 @@ class SystemDatabase:
         # Create a connection pool for the system database
         self.engine = sa.create_engine(
             system_db_url,
-            pool_size=20,
-            max_overflow=5,
+            pool_size=config["database"]["sys_db_pool_size"],
+            max_overflow=0,
             pool_timeout=30,
             connect_args={"connect_timeout": 10},
         )

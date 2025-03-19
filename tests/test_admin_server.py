@@ -1,13 +1,16 @@
 import os
+import socket
 import threading
 import time
 import uuid
 
+import pytest
 import requests
 import sqlalchemy as sa
+from requests.exceptions import ConnectionError
 
 # Public API
-from dbos import DBOS, ConfigFile, Queue, SetWorkflowID, _workflow_commands
+from dbos import DBOS, ConfigFile, DBOSConfig, Queue, SetWorkflowID, _workflow_commands
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase, WorkflowStatusString
 from dbos._utils import GlobalParams
@@ -170,6 +173,75 @@ runtimeConfig:
         # Clean up after the test
         DBOS.destroy()
         os.remove("dbos-config.yaml")
+
+
+def test_disable_admin_server(cleanup_test_databases: None) -> None:
+    # Initialize singleton
+    DBOS.destroy()  # In case of other tests leaving it
+
+    config: DBOSConfig = {
+        "name": "test-app",
+        "run_admin_server": False,
+    }
+    try:
+        DBOS(config=config)
+        DBOS.launch()
+
+        with pytest.raises(ConnectionError):
+            requests.get("http://localhost:3001/dbos-healthz", timeout=1)
+    finally:
+        # Clean up after the test
+        DBOS.destroy()
+
+
+def test_busy_admin_server_port_does_not_throw() -> None:
+    # Initialize singleton
+    DBOS.destroy()  # In case of other tests leaving it
+
+    config: DBOSConfig = {
+        "name": "test-app",
+    }
+    server_thread = None
+    stop_event = threading.Event()
+    try:
+
+        def start_dummy_server(port: int, stop_event: threading.Event) -> None:
+            """Starts a simple TCP server on the given port."""
+            server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_socket.bind(("0.0.0.0", port))
+            server_socket.listen(1)
+            # We need to call accept for the port to be considered busy by the OS...
+            while not stop_event.is_set():
+                try:
+                    server_socket.settimeout(
+                        1
+                    )  # Timeout for accept in case the thread is stopped.
+                    client_socket, _ = server_socket.accept()
+                    client_socket.close()
+                except socket.timeout:
+                    pass
+            server_socket.close()
+
+        port_to_block = 3001
+        server_thread = threading.Thread(
+            target=start_dummy_server, args=(port_to_block, stop_event)
+        )
+        server_thread.daemon = (
+            True  # Allows the thread to be terminated when the main thread exits
+        )
+        server_thread.start()
+
+        DBOS(config=config)
+        DBOS.launch()
+    finally:
+        # Clean up after the test
+        DBOS.destroy()
+        if server_thread and server_thread.is_alive():
+            stop_event.set()
+            server_thread.join(2)
+            if server_thread.is_alive():
+                print("Warning: Server thread did not terminate gracefully.")
 
 
 def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:

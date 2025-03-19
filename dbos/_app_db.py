@@ -5,7 +5,7 @@ import sqlalchemy.dialects.postgresql as pg
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
-from ._dbos_config import ConfigFile
+from ._dbos_config import ConfigFile, DatabaseConfig
 from ._error import DBOSWorkflowConflictIDError
 from ._schemas.application_database import ApplicationSchema
 
@@ -61,8 +61,22 @@ class ApplicationDatabase:
             port=config["database"]["port"],
             database=app_db_name,
         )
+
+        connect_args = {}
+        if (
+            "connectionTimeoutMillis" in config["database"]
+            and config["database"]["connectionTimeoutMillis"]
+        ):
+            connect_args["connect_timeout"] = int(
+                config["database"]["connectionTimeoutMillis"] / 1000
+            )
+
         self.engine = sa.create_engine(
-            app_db_url, pool_size=20, max_overflow=5, pool_timeout=30
+            app_db_url,
+            pool_size=config["database"]["app_db_pool_size"],
+            max_overflow=0,
+            pool_timeout=30,
+            connect_args=connect_args,
         )
         self.sessionmaker = sessionmaker(bind=self.engine)
         self.debug_mode = debug_mode
