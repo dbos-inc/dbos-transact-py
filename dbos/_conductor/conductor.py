@@ -44,6 +44,7 @@ class ConductorWebsocket(threading.Thread):
                             continue
                         base_message = p.BaseMessage.from_json(message)
                         msg_type = base_message.type
+                        error_message = None
                         if msg_type == p.MessageType.EXECUTOR_INFO:
                             info_response = p.ExecutorInfoResponse(
                                 type=p.MessageType.EXECUTOR_INFO,
@@ -61,14 +62,14 @@ class ConductorWebsocket(threading.Thread):
                                     recovery_message.executor_ids
                                 )
                             except Exception as e:
-                                self.dbos.logger.error(
-                                    f"Exception encountered when recovering workflows: {traceback.format_exc()}"
-                                )
+                                error_message = f"Exception encountered when recovering workflows: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
                                 success = False
                             recovery_response = p.RecoveryResponse(
                                 type=p.MessageType.RECOVERY,
                                 request_id=base_message.request_id,
                                 success=success,
+                                error_message=error_message,
                             )
                             websocket.send(recovery_response.to_json())
                         elif msg_type == p.MessageType.CANCEL:
@@ -77,14 +78,14 @@ class ConductorWebsocket(threading.Thread):
                             try:
                                 self.dbos.cancel_workflow(cancel_message.workflow_id)
                             except Exception as e:
-                                self.dbos.logger.error(
-                                    f"Exception encountered when cancelling workflow {cancel_message.workflow_id}: {traceback.format_exc()}"
-                                )
+                                error_message = f"Exception encountered when cancelling workflow {cancel_message.workflow_id}: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
                                 success = False
                             cancel_response = p.CancelResponse(
                                 type=p.MessageType.CANCEL,
                                 request_id=base_message.request_id,
                                 success=success,
+                                error_message=error_message,
                             )
                             websocket.send(cancel_response.to_json())
                         elif msg_type == p.MessageType.RESUME:
@@ -93,14 +94,14 @@ class ConductorWebsocket(threading.Thread):
                             try:
                                 self.dbos.resume_workflow(resume_message.workflow_id)
                             except Exception as e:
-                                self.dbos.logger.error(
-                                    f"Exception encountered when resuming workflow {resume_message.workflow_id}: {traceback.format_exc()}"
-                                )
+                                error_message = f"Exception encountered when resuming workflow {resume_message.workflow_id}: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
                                 success = False
                             resume_response = p.ResumeResponse(
                                 type=p.MessageType.RESUME,
                                 request_id=base_message.request_id,
                                 success=success,
+                                error_message=error_message,
                             )
                             websocket.send(resume_response.to_json())
                         elif msg_type == p.MessageType.RESTART:
@@ -109,14 +110,14 @@ class ConductorWebsocket(threading.Thread):
                             try:
                                 self.dbos.restart_workflow(restart_message.workflow_id)
                             except Exception as e:
-                                self.dbos.logger.error(
-                                    f"Exception encountered when restarting workflow {restart_message.workflow_id}: {traceback.format_exc()}"
-                                )
+                                error_message = f"Exception encountered when restarting workflow {restart_message.workflow_id}: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
                                 success = False
                             restart_response = p.RestartResponse(
                                 type=p.MessageType.RESTART,
                                 request_id=base_message.request_id,
                                 success=success,
+                                error_message=error_message,
                             )
                             websocket.send(restart_response.to_json())
                         elif msg_type == p.MessageType.LIST_WORKFLOWS:
@@ -124,20 +125,26 @@ class ConductorWebsocket(threading.Thread):
                                 message
                             )
                             body = list_workflows_message.body
-                            infos = list_workflows(
-                                self.dbos._sys_db,
-                                workflow_ids=body["workflow_uuids"],
-                                user=body["authenticated_user"],
-                                start_time=body["start_time"],
-                                end_time=body["end_time"],
-                                status=body["status"],
-                                request=False,
-                                app_version=body["application_version"],
-                                name=body["workflow_name"],
-                                limit=body["limit"],
-                                offset=body["offset"],
-                                sort_desc=body["sort_desc"],
-                            )
+                            infos = []
+                            try:
+                                infos = list_workflows(
+                                    self.dbos._sys_db,
+                                    workflow_ids=body["workflow_uuids"],
+                                    user=body["authenticated_user"],
+                                    start_time=body["start_time"],
+                                    end_time=body["end_time"],
+                                    status=body["status"],
+                                    request=False,
+                                    app_version=body["application_version"],
+                                    name=body["workflow_name"],
+                                    limit=body["limit"],
+                                    offset=body["offset"],
+                                    sort_desc=body["sort_desc"],
+                                )
+                            except Exception as e:
+                                error_message = f"Exception encountered when listing workflows: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+
                             list_workflows_response = p.ListWorkflowsResponse(
                                 type=p.MessageType.LIST_WORKFLOWS,
                                 request_id=base_message.request_id,
@@ -145,6 +152,7 @@ class ConductorWebsocket(threading.Thread):
                                     p.WorkflowsOutput.from_workflow_information(i)
                                     for i in infos
                                 ],
+                                error_message=error_message,
                             )
                             websocket.send(list_workflows_response.to_json())
                         elif msg_type == p.MessageType.LIST_QUEUED_WORKFLOWS:
@@ -152,18 +160,24 @@ class ConductorWebsocket(threading.Thread):
                                 p.ListQueuedWorkflowsRequest.from_json(message)
                             )
                             q_body = list_queued_workflows_message.body
-                            infos = list_queued_workflows(
-                                self.dbos._sys_db,
-                                start_time=q_body["start_time"],
-                                end_time=q_body["end_time"],
-                                status=q_body["status"],
-                                request=False,
-                                name=q_body["workflow_name"],
-                                limit=q_body["limit"],
-                                offset=q_body["offset"],
-                                queue_name=q_body["queue_name"],
-                                sort_desc=q_body["sort_desc"],
-                            )
+                            infos = []
+                            try:
+                                infos = list_queued_workflows(
+                                    self.dbos._sys_db,
+                                    start_time=q_body["start_time"],
+                                    end_time=q_body["end_time"],
+                                    status=q_body["status"],
+                                    request=False,
+                                    name=q_body["workflow_name"],
+                                    limit=q_body["limit"],
+                                    offset=q_body["offset"],
+                                    queue_name=q_body["queue_name"],
+                                    sort_desc=q_body["sort_desc"],
+                                )
+                            except Exception as e:
+                                error_message = f"Exception encountered when listing queued workflows: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+
                             list_queued_workflows_response = (
                                 p.ListQueuedWorkflowsResponse(
                                     type=p.MessageType.LIST_QUEUED_WORKFLOWS,
@@ -172,6 +186,7 @@ class ConductorWebsocket(threading.Thread):
                                         p.WorkflowsOutput.from_workflow_information(i)
                                         for i in infos
                                     ],
+                                    error_message=error_message,
                                 )
                             )
                             websocket.send(list_queued_workflows_response.to_json())
@@ -179,11 +194,17 @@ class ConductorWebsocket(threading.Thread):
                             get_workflow_message = p.GetWorkflowRequest.from_json(
                                 message
                             )
-                            info = get_workflow(
-                                self.dbos._sys_db,
-                                get_workflow_message.workflow_id,
-                                getRequest=False,
-                            )
+                            info = None
+                            try:
+                                info = get_workflow(
+                                    self.dbos._sys_db,
+                                    get_workflow_message.workflow_id,
+                                    getRequest=False,
+                                )
+                            except Exception as e:
+                                error_message = f"Exception encountered when getting workflow {get_workflow_message.workflow_id}: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+
                             get_workflow_response = p.GetWorkflowResponse(
                                 type=p.MessageType.GET_WORKFLOW,
                                 request_id=base_message.request_id,
@@ -192,21 +213,29 @@ class ConductorWebsocket(threading.Thread):
                                     if info is not None
                                     else None
                                 ),
+                                error_message=error_message,
                             )
                             websocket.send(get_workflow_response.to_json())
                         elif msg_type == p.MessageType.EXIST_PENDING_WORKFLOWS:
                             exist_pending_workflows_message = (
                                 p.ExistPendingWorkflowsRequest.from_json(message)
                             )
-                            pending_wfs = self.dbos._sys_db.get_pending_workflows(
-                                exist_pending_workflows_message.executor_id,
-                                exist_pending_workflows_message.application_version,
-                            )
+                            pending_wfs = []
+                            try:
+                                pending_wfs = self.dbos._sys_db.get_pending_workflows(
+                                    exist_pending_workflows_message.executor_id,
+                                    exist_pending_workflows_message.application_version,
+                                )
+                            except Exception as e:
+                                error_message = f"Exception encountered when checking for pending workflows: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+
                             exist_pending_workflows_response = (
                                 p.ExistPendingWorkflowsResponse(
                                     type=p.MessageType.EXIST_PENDING_WORKFLOWS,
                                     request_id=base_message.request_id,
                                     exist=len(pending_wfs) > 0,
+                                    error_message=error_message,
                                 )
                             )
                             websocket.send(exist_pending_workflows_response.to_json())
@@ -214,6 +243,13 @@ class ConductorWebsocket(threading.Thread):
                             self.dbos.logger.warning(
                                 f"Unexpected message type: {msg_type}"
                             )
+                            unknown_message = p.BaseMessage(
+                                request_id=base_message.request_id,
+                                type=msg_type,
+                                error_message="Unknown message type",
+                            )
+                            # Still need to send a response to the conductor
+                            websocket.send(unknown_message.to_json())
             except ConnectionClosedOK:
                 self.dbos.logger.info("Conductor connection terminated")
                 break
