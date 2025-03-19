@@ -341,19 +341,17 @@ def process_config(
     if not silent:
         if os.getenv("DBOS_DBHOST"):
             print(
-                "[bold blue]Loading database connection parameters from debug environment variables[/bold blue]"
+                "[bold blue]Loading database connection string from debug environment variables[/bold blue]"
             )
         elif data["database"].get("hostname"):
-            print(
-                "[bold blue]Using provided database connection parameters[/bold blue]"
-            )
+            print("[bold blue]Using provided database connection string[/bold blue]")
         elif db_connection.get("hostname"):
             print(
-                "[bold blue]Loading database connection parameters from .dbos/db_connection[/bold blue]"
+                "[bold blue]Loading database connection string from .dbos/db_connection[/bold blue]"
             )
         else:
             print(
-                "[bold blue]Using default database connection parameters (localhost)[/bold blue]"
+                f"[bold blue]Using default database connection string: postgresql://postgres:dbos@localhost:5432/{data['name']}[/bold blue]"
             )
 
     dbos_dbport: Optional[int] = None
