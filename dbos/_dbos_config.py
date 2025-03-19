@@ -202,7 +202,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     return translated_config
 
 
-def _substitute_env_vars(content: str) -> str:
+def _substitute_env_vars(content: str, silent=False) -> str:
     regex = r"\$\{([^}]+)\}"  # Regex to match ${VAR_NAME} style placeholders
 
     def replace_func(match: re.Match[str]) -> str:
@@ -210,7 +210,7 @@ def _substitute_env_vars(content: str) -> str:
         value = os.environ.get(
             var_name, ""
         )  # If the env variable is not set, return an empty string
-        if value == "":
+        if value == "" and not silent:
             dbos_logger.warning(
                 f"Variable {var_name} would be substituted from the process environment into dbos-config.yaml, but is not defined"
             )
@@ -267,7 +267,7 @@ def load_config(
 
     with open(config_file_path, "r") as file:
         content = file.read()
-        substituted_content = _substitute_env_vars(content)
+        substituted_content = _substitute_env_vars(content, silent=silent)
         data = yaml.safe_load(substituted_content)
 
     if not isinstance(data, dict):
@@ -299,7 +299,6 @@ def process_config(
     data: ConfigFile,
     silent: bool = False,
 ) -> ConfigFile:
-
     if "name" not in data:
         raise DBOSInitializationError(f"Configuration must specify an application name")
 
@@ -346,7 +345,7 @@ def process_config(
             )
         elif data["database"].get("hostname"):
             print(
-                "[bold blue]Loading database connection parameters from dbos-config.yaml[/bold blue]"
+                "[bold blue]Using provided database connection parameters[/bold blue]"
             )
         elif db_connection.get("hostname"):
             print(
@@ -539,7 +538,7 @@ def check_config_consistency(
 ) -> None:
     # First load the config file and check whether it is present
     try:
-        config = load_config(config_file_path)
+        config = load_config(config_file_path, silent=True, run_process_config=False)
     except FileNotFoundError:
         dbos_logger.debug(
             f"No configuration file {config_file_path} found. Skipping consistency check with provided config."

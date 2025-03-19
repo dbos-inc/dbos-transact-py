@@ -41,7 +41,7 @@ def _on_windows() -> bool:
     help="Start your DBOS application using the start commands in 'dbos-config.yaml'"
 )
 def start() -> None:
-    config = load_config()
+    config = load_config(run_process_config=False, silent=True)
     start_commands = config["runtimeConfig"]["start"]
     typer.echo("Executing start commands from 'dbos-config.yaml'")
     for command in start_commands:
