@@ -289,6 +289,13 @@ def process_config(
             f'Invalid app name {data["name"]}.  App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores.'
         )
 
+    if not data.get("telemetry"):
+        data["telemetry"] = {}
+    if not data["telemetry"].get("logs"):
+        data["telemetry"]["logs"] = {}
+    if not data["telemetry"].get("logs"):
+        data["telemetry"]["logs"]["logLevel"] = "INFO"
+
     if "database" not in data:
         data["database"] = {}
 

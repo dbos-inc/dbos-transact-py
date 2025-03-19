@@ -432,6 +432,7 @@ def test_process_config_load_defaults():
     assert processed_config["database"]["password"] == os.environ.get(
         "PGPASSWORD", "dbos"
     )
+    assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
 
 
 def test_process_config_load_default_with_None_database_url():
