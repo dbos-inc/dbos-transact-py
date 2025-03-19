@@ -29,9 +29,13 @@ class DBOSConfig(TypedDict):
     Attributes:
         name (str): Application name
         database_url (str): Database connection string
+        app_db_pool_size (int): Application database pool size
         sys_db_name (str): System database name
+        sys_db_pool_size (int): System database pool size
         log_level (str): Log level
         otlp_traces_endpoints: List[str]: OTLP traces endpoints
+        admin_port (int): Admin port
+        disable_admin_server (bool): Disable admin server
     """
 
     name: str
