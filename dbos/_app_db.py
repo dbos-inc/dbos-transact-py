@@ -1,11 +1,11 @@
-from typing import Optional, TypedDict, cast
+from typing import Optional, TypedDict
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
-from ._dbos_config import ConfigFile
+from ._dbos_config import ConfigFile, DatabaseConfig
 from ._error import DBOSWorkflowConflictIDError
 from ._schemas.application_database import ApplicationSchema
 
@@ -63,11 +63,13 @@ class ApplicationDatabase:
         )
 
         connect_args = {}
-        if config["database"].get("connectionTimeoutMillis") is not None:
-            t = cast(
-                int, config["database"]["connectionTimeoutMillis"]
-            )  # mypy still thinks its an int | None
-            connect_args["connect_timeout"] = int(t / 1000)
+        if (
+            "connectionTimeoutMillis" in config["database"]
+            and config["database"]["connectionTimeoutMillis"]
+        ):
+            connect_args["connect_timeout"] = int(
+                config["database"]["connectionTimeoutMillis"] / 1000
+            )
 
         self.engine = sa.create_engine(
             app_db_url,
