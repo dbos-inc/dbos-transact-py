@@ -180,7 +180,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     # Runtime config
     runtimeConfig: RuntimeConfig = {}
     if "admin_port" in config:
-        runtimeConfig = {"admin_port": config["admin_port"]}
+        runtimeConfig["admin_port"] = config["admin_port"]
     if "disable_admin_server" in config:
         runtimeConfig["disable_admin_server"] = config["disable_admin_server"]
     if runtimeConfig:
