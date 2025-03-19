@@ -67,8 +67,7 @@ class ApplicationDatabase:
             t = cast(
                 int, config["database"]["connectionTimeoutMillis"]
             )  # mypy still thinks its an int | None
-            timeout = int(t / 1000)
-            connect_args["connect_timeout"] = timeout
+            connect_args["connect_timeout"] = int(t / 1000)
 
         self.engine = sa.create_engine(
             app_db_url,
