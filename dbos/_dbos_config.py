@@ -36,7 +36,9 @@ class DBOSConfig(TypedDict):
 
     name: str
     database_url: Optional[str]
+    app_db_pool_size: Optional[int]
     sys_db_name: Optional[str]
+    sys_db_pool_size: Optional[int]
     log_level: Optional[str]
     otlp_traces_endpoints: Optional[List[str]]
     admin_port: Optional[int]
@@ -55,7 +57,9 @@ class DatabaseConfig(TypedDict, total=False):
     password: str
     connectionTimeoutMillis: Optional[int]
     app_db_name: str
+    app_db_pool_size: Optional[int]
     sys_db_name: Optional[str]
+    sys_db_pool_size: Optional[int]
     ssl: Optional[bool]
     ssl_ca: Optional[str]
     local_suffix: Optional[bool]
@@ -160,6 +164,10 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         db_config = parse_database_url_to_dbconfig(database_url)
     if "sys_db_name" in config:
         db_config["sys_db_name"] = config.get("sys_db_name")
+    if "app_db_pool_size" in config:
+        db_config["app_db_pool_size"] = config.get("app_db_pool_size")
+    if "sys_db_pool_size" in config:
+        db_config["sys_db_pool_size"] = config.get("sys_db_pool_size")
     if db_config:
         translated_config["database"] = db_config
 
@@ -385,6 +393,11 @@ def process_config(
     if dbos_dblocalsuffix is not None:
         local_suffix = dbos_dblocalsuffix
     data["database"]["local_suffix"] = local_suffix
+
+    if not data["database"].get("app_db_pool_size"):
+        data["database"]["app_db_pool_size"] = 20
+    if not data["database"].get("sys_db_pool_size"):
+        data["database"]["sys_db_pool_size"] = 20
 
     # Check the connectivity to the database and make sure it's properly configured
     # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)

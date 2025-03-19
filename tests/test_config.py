@@ -313,7 +313,9 @@ def test_process_config_full():
             "password": "password",
             "connectionTimeoutMillis": 3000,
             "app_db_name": "example_db",
+            "app_db_pool_size": 45,
             "sys_db_name": "sys_db",
+            "sys_db_pool_size": 27,
             "ssl": True,
             "ssl_ca": "ca.pem",
             "local_suffix": False,
@@ -353,6 +355,8 @@ def test_process_config_full():
     assert configFile["database"]["local_suffix"] == False
     assert configFile["database"]["migrate"] == ["alembic upgrade head"]
     assert configFile["database"]["rollback"] == ["alembic downgrade base"]
+    assert configFile["database"]["app_db_pool_size"] == 45
+    assert configFile["database"]["sys_db_pool_size"] == 27
     assert configFile["runtimeConfig"]["start"] == ["python3 main.py"]
     assert configFile["runtimeConfig"]["admin_port"] == 8001
     assert configFile["runtimeConfig"]["setup"] == ["echo 'hello'"]
@@ -380,6 +384,8 @@ def test_process_config_with_db_url():
     assert processed_config["database"]["ssl"] == True
     assert processed_config["database"]["ssl_ca"] == "ca.pem"
     assert processed_config["database"]["local_suffix"] == False
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
     assert "rollback" not in processed_config["database"]
     assert "migrate" not in processed_config["database"]
 
@@ -413,6 +419,8 @@ def test_process_config_with_db_url_taking_precedence_over_database():
     assert processed_config["database"]["migrate"] == ["alembic upgrade head"]
     assert processed_config["database"]["rollback"] == ["alembic downgrade base"]
     assert processed_config["database"]["local_suffix"] == True
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
     assert "connectionTimeoutMillis" not in processed_config["database"]
     assert "ssl" not in processed_config["database"]
     assert "ssl_ca" not in processed_config["database"]
@@ -432,6 +440,8 @@ def test_process_config_load_defaults():
     assert processed_config["database"]["password"] == os.environ.get(
         "PGPASSWORD", "dbos"
     )
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
     assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
 
 
@@ -449,6 +459,8 @@ def test_process_config_load_default_with_None_database_url():
     assert processed_config["database"]["password"] == os.environ.get(
         "PGPASSWORD", "dbos"
     )
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
 
 
 def test_process_config_with_None_app_db_name():
@@ -468,6 +480,8 @@ def test_process_config_with_None_app_db_name():
     assert processed_config["database"]["password"] == os.environ.get(
         "PGPASSWORD", "dbos"
     )
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
 
 
 def test_process_config_with_empty_app_db_name():
@@ -487,6 +501,8 @@ def test_process_config_with_empty_app_db_name():
     assert processed_config["database"]["password"] == os.environ.get(
         "PGPASSWORD", "dbos"
     )
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
 
 
 def test_config_missing_name():
@@ -535,6 +551,8 @@ def test_load_config_load_db_connection(mocker):
     assert configFile["database"]["password"] == "password"
     assert configFile["database"]["local_suffix"] == True
     assert configFile["database"]["app_db_name"] == "some_app_local"
+    assert configFile["database"]["app_db_pool_size"] == 20
+    assert configFile["database"]["sys_db_pool_size"] == 20
 
 
 def test_config_mixed_params():
@@ -544,6 +562,7 @@ def test_config_mixed_params():
             "port": 1234,
             "username": "some user",
             "password": "abc123",
+            "app_db_pool_size": 3,
         },
     }
 
@@ -553,6 +572,8 @@ def test_config_mixed_params():
     assert configFile["database"]["port"] == 1234
     assert configFile["database"]["username"] == "some user"
     assert configFile["database"]["password"] == "abc123"
+    assert configFile["database"]["app_db_pool_size"] == 3
+    assert configFile["database"]["sys_db_pool_size"] == 20
 
 
 def test_debug_override(mocker: pytest_mock.MockFixture):
@@ -576,6 +597,8 @@ def test_debug_override(mocker: pytest_mock.MockFixture):
     assert configFile["database"]["username"] == "fakeuser"
     assert configFile["database"]["password"] == "fakepassword"
     assert configFile["database"]["local_suffix"] == False
+    assert configFile["database"]["app_db_pool_size"] == 20
+    assert configFile["database"]["sys_db_pool_size"] == 20
 
 
 def test_local_config():
@@ -601,6 +624,8 @@ def test_local_config():
     assert processed_config["database"]["password"] == os.environ["PGPASSWORD"]
     assert processed_config["database"]["app_db_name"] == "some_db_local"
     assert processed_config["database"]["connectionTimeoutMillis"] == 3000
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
 
 
 def test_local_config_without_name(mocker):
@@ -625,6 +650,8 @@ def test_local_config_without_name(mocker):
     assert processed_config["database"]["password"] == os.environ["PGPASSWORD"]
     assert processed_config["database"]["app_db_name"] == "some_app_local"
     assert processed_config["database"]["connectionTimeoutMillis"] == 3000
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
 
 
 ####################
@@ -740,7 +767,9 @@ def test_translate_dbosconfig_full_input():
     config: DBOSConfig = {
         "name": "test-app",
         "database_url": "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem",
+        "app_db_pool_size": 45,
         "sys_db_name": "sysdb",
+        "sys_db_pool_size": 27,
         "log_level": "DEBUG",
         "otlp_traces_endpoints": ["http://otel:7777", "notused"],
         "admin_port": 8001,
@@ -758,6 +787,8 @@ def test_translate_dbosconfig_full_input():
     assert translated_config["database"]["connectionTimeoutMillis"] == 10000
     assert translated_config["database"]["app_db_name"] == "dbname"
     assert translated_config["database"]["sys_db_name"] == "sysdb"
+    assert translated_config["database"]["app_db_pool_size"] == 45
+    assert translated_config["database"]["sys_db_pool_size"] == 27
     assert "database_url" not in translated_config
     assert translated_config["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert (
@@ -794,6 +825,8 @@ def test_translate_dbosconfig_just_sys_db_name():
     assert translated_config["name"] == "test-app"
     assert translated_config["telemetry"]["logs"]["logLevel"] == "INFO"
     assert translated_config["database"]["sys_db_name"] == "sysdb"
+    assert "app_db_pool_size" not in translated_config["database"]
+    assert "sys_db_pool_size" not in translated_config["database"]
     assert "env" not in translated_config
     assert "runtimeConfig" not in translated_config
 
@@ -876,6 +909,7 @@ def test_overwrite_config(mocker):
             "app_db_name": "dbostestpy",
             "sys_db_name": "sysdb",
             "connectionTimeoutMillis": 10000,
+            "app_db_pool_size": 10,
         },
         "telemetry": {
             "OTLPExporter": {
@@ -905,6 +939,8 @@ def test_overwrite_config(mocker):
     assert config["database"]["ssl"] == True
     assert config["database"]["ssl_ca"] == "cert.pem"
     assert config["database"]["connectionTimeoutMillis"] == 10000
+    assert config["database"]["app_db_pool_size"] == 10
+    assert "sys_db_pool_size" not in config["database"]
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
@@ -1186,3 +1222,22 @@ def test_name_does_no_match(mocker):
 def test_no_config_file():
     # Handles FileNotFoundError
     check_config_consistency(name="stock-prices")
+
+
+####################
+# DATABASES CONNECTION POOLS
+####################
+
+
+def test_configured_pool_sizes():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "app_db_pool_size": 42,
+        "sys_db_pool_size": 43,
+    }
+
+    dbos = DBOS(config=config)
+    dbos.launch()
+    assert dbos._app_db.engine.pool._pool.maxsize == 42
+    assert dbos._sys_db.engine.pool._pool.maxsize == 43
+    dbos.destroy()
