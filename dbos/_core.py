@@ -824,7 +824,9 @@ def decorate_step(
             stepOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
             if retries_allowed:
                 stepOutcome = stepOutcome.retry(
-                    max_attempts, on_exception, lambda i: DBOSMaxStepRetriesExceeded()
+                    max_attempts,
+                    on_exception,
+                    lambda i: DBOSMaxStepRetriesExceeded(func.__name__, i),
                 )
 
             outcome = (

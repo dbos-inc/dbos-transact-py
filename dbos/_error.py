@@ -124,15 +124,17 @@ class DBOSNotAuthorizedError(DBOSException):
 class DBOSMaxStepRetriesExceeded(DBOSException):
     """Exception raised when a step was retried the maximimum number of times without success."""
 
-    def __init__(self) -> None:
+    def __init__(self, step_name: str, max_retries: str) -> None:
+        self.step_name = step_name
+        self.max_retries = max_retries
         super().__init__(
-            "Step reached maximum retries.",
+            f"Step {step_name} has exceeded its maximum of {max_retries} retries",
             dbos_error_code=DBOSErrorCode.MaxStepRetriesExceeded.value,
         )
 
-    # Tell pickle to reconstruct the exception without calling its constructor
     def __reduce__(self):
-        return (self.__class__, ())
+        # Tell jsonpickle how to reconstruct this object
+        return (self.__class__, (self.step_name, self.max_retries))
 
 
 class DBOSWorkflowCancelledError(DBOSException):

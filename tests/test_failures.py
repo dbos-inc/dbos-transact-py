@@ -269,8 +269,9 @@ def test_step_retries(dbos: DBOS) -> None:
     step_counter = 0
 
     queue = Queue("test-queue")
+    max_attempts = 2
 
-    @DBOS.step(retries_allowed=True, interval_seconds=0, max_attempts=2)
+    @DBOS.step(retries_allowed=True, interval_seconds=0, max_attempts=max_attempts)
     def failing_step():
         nonlocal step_counter
         step_counter += 1
@@ -284,35 +285,42 @@ def test_step_retries(dbos: DBOS) -> None:
     def enqueue_failing_step():
         queue.enqueue(failing_step).get_result()
 
+    error_message = f"Step {failing_step.__name__} has exceeded its maximum of {max_attempts} retries"
+
     # Test calling the step directly
     with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:
         failing_step()
-    assert step_counter == 2
+    assert error_message in str(excinfo.value)
+    assert step_counter == max_attempts
 
     # Test calling the workflow
     step_counter = 0
     with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:
         failing_workflow()
-    assert step_counter == 2
+    assert error_message in str(excinfo.value)
+    assert step_counter == max_attempts
 
     # Test enqueueing the step
     step_counter = 0
     handle = queue.enqueue(failing_step)
     with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:
         handle.get_result()
-    assert step_counter == 2
+    assert error_message in str(excinfo.value)
+    assert step_counter == max_attempts
 
     # Test enqueuing the workflow
     step_counter = 0
     handle = queue.enqueue(failing_workflow)
     with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:
         handle.get_result()
-    assert step_counter == 2
+    assert error_message in str(excinfo.value)
+    assert step_counter == max_attempts
 
     # Test enqueuing the step from a workflow
     step_counter = 0
     with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:
         enqueue_failing_step()
-    assert step_counter == 2
+    assert error_message in str(excinfo.value)
+    assert step_counter == max_attempts
 
     assert queue_entries_are_cleaned_up(dbos)
