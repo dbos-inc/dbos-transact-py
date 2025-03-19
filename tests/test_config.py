@@ -239,7 +239,6 @@ def test_load_config_with_unset_database_url_env_var(mocker):
 
     configFile = load_config(mock_filename, run_process_config=False)
     assert configFile["name"] == "some-app"
-    print(configFile)
 
 
 def test_load_config_file_open_error(mocker):
