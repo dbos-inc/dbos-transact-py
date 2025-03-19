@@ -12,12 +12,11 @@
         "type": "string",
         "description": "The language used in your application",
         "enum": [
-          "typescript",
           "python"
         ]
       },
       "database_url": {
-        "type": "string",
+        "type": ["string", "null"],
         "description": "The URL of the application database"
       },
       "database": {

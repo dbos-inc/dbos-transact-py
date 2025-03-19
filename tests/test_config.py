@@ -227,6 +227,21 @@ def test_load_config_database_url_and_database(mocker):
     assert configFile["database"]["connectionTimeoutMillis"] == 3000
 
 
+def test_load_config_with_unset_database_url_env_var(mocker):
+    mock_config = """
+    name: "some-app"
+    database_url: ${UNSET}
+    """
+
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
+    )
+
+    configFile = load_config(mock_filename, run_process_config=False)
+    assert configFile["name"] == "some-app"
+    print(configFile)
+
+
 def test_load_config_file_open_error(mocker):
     """Test handling when the config file can't be opened."""
     mocker.patch("builtins.open", side_effect=FileNotFoundError("File not found"))
