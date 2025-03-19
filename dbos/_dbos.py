@@ -464,7 +464,7 @@ class DBOS:
                 try:
                     self._admin_server_field = AdminServer(dbos=self, port=admin_port)
                 except Exception as e:
-                    dbos_logger.error(f"Failed to start admin server: {e}")
+                    dbos_logger.warning(f"Failed to start admin server: {e}")
 
             workflow_ids = self._sys_db.get_pending_workflows(
                 GlobalParams.executor_id, GlobalParams.app_version
