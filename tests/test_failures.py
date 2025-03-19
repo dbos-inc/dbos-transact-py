@@ -8,10 +8,15 @@ import sqlalchemy as sa
 from psycopg.errors import SerializationFailure
 from sqlalchemy.exc import InvalidRequestError, OperationalError
 
-# Public API
-from dbos import DBOS, GetWorkflowsInput, SetWorkflowID
-from dbos._error import DBOSDeadLetterQueueError, DBOSException
+from dbos import DBOS, GetWorkflowsInput, Queue, SetWorkflowID
+from dbos._error import (
+    DBOSDeadLetterQueueError,
+    DBOSException,
+    DBOSMaxStepRetriesExceeded,
+)
 from dbos._sys_db import WorkflowStatusString
+
+from .conftest import queue_entries_are_cleaned_up
 
 
 def test_transaction_errors(dbos: DBOS) -> None:
@@ -258,3 +263,64 @@ def test_wfstatus_invalid(dbos: DBOS) -> None:
         with SetWorkflowID(wfuuid):
             non_deterministic_worklow()
     assert "Hint: Check if your workflow is deterministic." in str(exc_info.value)
+
+
+def test_step_retries(dbos: DBOS) -> None:
+    step_counter = 0
+
+    queue = Queue("test-queue")
+    max_attempts = 2
+
+    @DBOS.step(retries_allowed=True, interval_seconds=0, max_attempts=max_attempts)
+    def failing_step() -> None:
+        nonlocal step_counter
+        step_counter += 1
+        raise Exception("fail")
+
+    @DBOS.workflow()
+    def failing_workflow() -> None:
+        failing_step()
+
+    @DBOS.workflow()
+    def enqueue_failing_step() -> None:
+        queue.enqueue(failing_step).get_result()
+
+    error_message = f"Step {failing_step.__name__} has exceeded its maximum of {max_attempts} retries"
+
+    # Test calling the step directly
+    with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:
+        failing_step()
+    assert error_message in str(excinfo.value)
+    assert step_counter == max_attempts
+
+    # Test calling the workflow
+    step_counter = 0
+    with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:
+        failing_workflow()
+    assert error_message in str(excinfo.value)
+    assert step_counter == max_attempts
+
+    # Test enqueueing the step
+    step_counter = 0
+    handle = queue.enqueue(failing_step)
+    with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:
+        handle.get_result()
+    assert error_message in str(excinfo.value)
+    assert step_counter == max_attempts
+
+    # Test enqueuing the workflow
+    step_counter = 0
+    handle = queue.enqueue(failing_workflow)
+    with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:
+        handle.get_result()
+    assert error_message in str(excinfo.value)
+    assert step_counter == max_attempts
+
+    # Test enqueuing the step from a workflow
+    step_counter = 0
+    with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:
+        enqueue_failing_step()
+    assert error_message in str(excinfo.value)
+    assert step_counter == max_attempts
+
+    assert queue_entries_are_cleaned_up(dbos)
