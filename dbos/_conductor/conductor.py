@@ -33,7 +33,7 @@ class ConductorWebsocket(threading.Thread):
     def run(self) -> None:
         while not self.evt.is_set():
             try:
-                with connect(self.url) as websocket:
+                with connect(self.url, open_timeout=5) as websocket:
                     self.websocket = websocket
                     while not self.evt.is_set():
                         message = websocket.recv()
