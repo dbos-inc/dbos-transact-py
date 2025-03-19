@@ -336,7 +336,7 @@ def process_config(
     if "app_db_name" not in data["database"] or not (data["database"]["app_db_name"]):
         data["database"]["app_db_name"] = _app_name_to_db_name(data["name"])
 
-    # Load the DB connection file. Use its values for missing fields from dbos-config.yaml. Use defaults otherwise.
+    # Load the DB connection file. Use its values for missing connection parameters. Use defaults otherwise.
     db_connection = load_db_connection()
     # Pretty-print where we're loading database connection information from, respecting the log level
     if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
