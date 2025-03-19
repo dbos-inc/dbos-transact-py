@@ -35,7 +35,7 @@ class DBOSConfig(TypedDict):
         log_level (str): Log level
         otlp_traces_endpoints: List[str]: OTLP traces endpoints
         admin_port (int): Admin port
-        disable_admin_server (bool): Disable admin server
+        run_admin_server (bool): Whether to run the DBOS admin server
     """
 
     name: str
@@ -46,14 +46,14 @@ class DBOSConfig(TypedDict):
     log_level: Optional[str]
     otlp_traces_endpoints: Optional[List[str]]
     admin_port: Optional[int]
-    disable_admin_server: Optional[bool]
+    run_admin_server: Optional[bool]
 
 
 class RuntimeConfig(TypedDict, total=False):
     start: List[str]
     setup: Optional[List[str]]
     admin_port: Optional[int]
-    disable_admin_server: Optional[bool]
+    run_admin_server: Optional[bool]
 
 
 class DatabaseConfig(TypedDict, total=False):
@@ -178,13 +178,13 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         translated_config["database"] = db_config
 
     # Runtime config
-    runtimeConfig: RuntimeConfig = {}
+    translated_config["runtimeConfig"] = {"run_admin_server": True}
     if "admin_port" in config:
-        runtimeConfig["admin_port"] = config["admin_port"]
-    if "disable_admin_server" in config:
-        runtimeConfig["disable_admin_server"] = config["disable_admin_server"]
-    if runtimeConfig:
-        translated_config["runtimeConfig"] = runtimeConfig
+        translated_config["runtimeConfig"]["admin_port"] = config["admin_port"]
+    if "run_admin_server" in config:
+        translated_config["runtimeConfig"]["run_admin_server"] = config[
+            "run_admin_server"
+        ]
 
     # Telemetry config
     telemetry = {}
@@ -414,6 +414,13 @@ def process_config(
     if not data["database"].get("connectionTimeoutMillis"):
         data["database"]["connectionTimeoutMillis"] = 10000
 
+    if not data.get("runtimeConfig"):
+        data["runtimeConfig"] = {
+            "run_admin_server": True,
+        }
+    elif "run_admin_server" not in data["runtimeConfig"]:
+        data["runtimeConfig"]["run_admin_server"] = True
+
     # Check the connectivity to the database and make sure it's properly configured
     # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)
     debugWorkflowId = os.getenv("DBOS_DEBUG_WORKFLOW_ID")
@@ -515,8 +522,8 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
             del provided_config["runtimeConfig"][
                 "admin_port"
             ]  # Admin port is expected to be 3001 (the default in dbos/_admin_server.py::__init__ ) by DBOS Cloud
-        if "disable_admin_server" in provided_config["runtimeConfig"]:
-            del provided_config["runtimeConfig"]["disable_admin_server"]
+        if "run_admin_server" in provided_config["runtimeConfig"]:
+            del provided_config["runtimeConfig"]["run_admin_server"]
 
     # Env should be set from the hosting provider (e.g., DBOS Cloud)
     if "env" in provided_config:

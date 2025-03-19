@@ -457,10 +457,10 @@ class DBOS:
             admin_port = self.config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:
                 admin_port = 3001
-            disable_admin_server = self.config.get("runtimeConfig", {}).get(
-                "disable_admin_server"
+            run_admin_server = self.config.get("runtimeConfig", {}).get(
+                "run_admin_server"
             )
-            if not disable_admin_server:
+            if run_admin_server:
                 try:
                     self._admin_server_field = AdminServer(dbos=self, port=admin_port)
                 except Exception as e:

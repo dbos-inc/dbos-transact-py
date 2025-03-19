@@ -181,7 +181,7 @@ def test_disable_admin_server(cleanup_test_databases: None) -> None:
 
     config: DBOSConfig = {
         "name": "test-app",
-        "disable_admin_server": True,
+        "run_admin_server": False,
     }  # type: ignore
     try:
         DBOS(config=config)
