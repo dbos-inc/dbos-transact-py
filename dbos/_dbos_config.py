@@ -1,19 +1,45 @@
 import json
 import os
 import re
+import sys
 from importlib import resources
-from typing import Any, Dict, List, Optional, TypedDict, cast
+from typing import Any, Dict, List, Optional, TypedDict, Union, cast
+
+if sys.version_info < (3, 10):
+    from typing_extensions import TypeGuard
+else:
+    from typing import TypeGuard
 
 import yaml
 from jsonschema import ValidationError, validate
 from rich import print
-from sqlalchemy import URL
+from sqlalchemy import URL, make_url
 
 from ._db_wizard import db_wizard, load_db_connection
 from ._error import DBOSInitializationError
-from ._logger import config_logger, dbos_logger, init_logger
+from ._logger import dbos_logger
 
 DBOS_CONFIG_PATH = "dbos-config.yaml"
+
+
+class DBOSConfig(TypedDict):
+    """
+    Data structure containing the DBOS library configuration.
+
+    Attributes:
+        name (str): Application name
+        database_url (str): Database connection string
+        sys_db_name (str): System database name
+        log_level (str): Log level
+        otlp_traces_endpoints: List[str]: OTLP traces endpoints
+    """
+
+    name: str
+    database_url: Optional[str]
+    sys_db_name: Optional[str]
+    log_level: Optional[str]
+    otlp_traces_endpoints: Optional[List[str]]
+    admin_port: Optional[int]
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -33,9 +59,28 @@ class DatabaseConfig(TypedDict, total=False):
     ssl: Optional[bool]
     ssl_ca: Optional[str]
     local_suffix: Optional[bool]
-    app_db_client: Optional[str]
     migrate: Optional[List[str]]
     rollback: Optional[List[str]]
+
+
+def parse_database_url_to_dbconfig(database_url: str) -> DatabaseConfig:
+    db_url = make_url(database_url)
+    db_config = {
+        "hostname": db_url.host,
+        "port": db_url.port or 5432,
+        "username": db_url.username,
+        "password": db_url.password,
+        "app_db_name": db_url.database,
+    }
+    for key, value in db_url.query.items():
+        str_value = value[0] if isinstance(value, tuple) else value
+        if key == "connect_timeout":
+            db_config["connectionTimeoutMillis"] = int(str_value) * 1000
+        elif key == "sslmode":
+            db_config["ssl"] = str_value == "require"
+        elif key == "sslrootcert":
+            db_config["ssl_ca"] = str_value
+    return cast(DatabaseConfig, db_config)
 
 
 class OTLPExporterConfig(TypedDict, total=False):
@@ -61,9 +106,9 @@ class ConfigFile(TypedDict, total=False):
 
     Attributes:
         name (str): Application name
-        language (str): The app language (probably `python`)
         runtimeConfig (RuntimeConfig): Configuration for request serving
         database (DatabaseConfig): Configuration for the application and system databases
+        database_url (str): Database connection string
         telemetry (TelemetryConfig): Configuration for tracing / logging
         env (Dict[str,str]): Environment varialbes
         application (Dict[str, Any]): Application-specific configuration section
@@ -71,12 +116,71 @@ class ConfigFile(TypedDict, total=False):
     """
 
     name: str
-    language: str
     runtimeConfig: RuntimeConfig
     database: DatabaseConfig
+    database_url: Optional[str]
     telemetry: Optional[TelemetryConfig]
     env: Dict[str, str]
-    application: Dict[str, Any]
+
+
+def is_dbos_configfile(data: Union[ConfigFile, DBOSConfig]) -> TypeGuard[DBOSConfig]:
+    """
+    Type guard to check if the provided data is a DBOSConfig.
+
+    Args:
+        data: The configuration object to check
+
+    Returns:
+        True if the data is a DBOSConfig, False otherwise
+    """
+    return (
+        isinstance(data, dict)
+        and "name" in data
+        and (
+            "runtimeConfig" in data
+            or "database" in data
+            or "env" in data
+            or "telemetry" in data
+        )
+    )
+
+
+def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
+    if "name" not in config:
+        raise DBOSInitializationError(f"Configuration must specify an application name")
+
+    translated_config: ConfigFile = {
+        "name": config["name"],
+    }
+
+    # Database config
+    db_config: DatabaseConfig = {}
+    database_url = config.get("database_url")
+    if database_url:
+        db_config = parse_database_url_to_dbconfig(database_url)
+    if "sys_db_name" in config:
+        db_config["sys_db_name"] = config.get("sys_db_name")
+    if db_config:
+        translated_config["database"] = db_config
+
+    # Admin port
+    if "admin_port" in config:
+        translated_config["runtimeConfig"] = {"admin_port": config["admin_port"]}
+
+    # Telemetry config
+    telemetry = {}
+    # Add OTLPExporter if traces endpoints exist
+    otlp_trace_endpoints = config.get("otlp_traces_endpoints")
+    if isinstance(otlp_trace_endpoints, list) and len(otlp_trace_endpoints) > 0:
+        telemetry["OTLPExporter"] = {"tracesEndpoint": otlp_trace_endpoints[0]}
+    # Default to INFO -- the logging seems to default to WARN otherwise.
+    log_level = config.get("log_level", "INFO")
+    if log_level:
+        telemetry["logs"] = {"logLevel": log_level}
+    if telemetry:
+        translated_config["telemetry"] = cast(TelemetryConfig, telemetry)
+
+    return translated_config
 
 
 def _substitute_env_vars(content: str) -> str:
@@ -110,7 +214,7 @@ def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
         str: Database URL for the application database
 
     """
-    dbos_config = load_config(config_file_path)
+    dbos_config = process_config(data=load_config(config_file_path))
     db_url = URL.create(
         "postgresql+psycopg",
         username=dbos_config["database"]["username"],
@@ -125,6 +229,7 @@ def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
 def load_config(
     config_file_path: str = DBOS_CONFIG_PATH,
     *,
+    run_process_config: bool = True,
     use_db_wizard: bool = True,
     silent: bool = False,
 ) -> ConfigFile:
@@ -141,12 +246,16 @@ def load_config(
 
     """
 
-    init_logger()
-
     with open(config_file_path, "r") as file:
         content = file.read()
         substituted_content = _substitute_env_vars(content)
         data = yaml.safe_load(substituted_content)
+
+    if not isinstance(data, dict):
+        raise DBOSInitializationError(
+            f"dbos-config.yaml must contain a dictionary, not {type(data)}"
+        )
+    data = cast(Dict[str, Any], data)
 
     # Load the JSON schema relative to the package root
     schema_file = resources.files("dbos").joinpath("dbos-config.schema.json")
@@ -159,37 +268,48 @@ def load_config(
     except ValidationError as e:
         raise DBOSInitializationError(f"Validation error: {e}")
 
-    if "database" not in data:
-        data["database"] = {}
+    data = cast(ConfigFile, data)
+    if run_process_config:
+        data = process_config(data=data, use_db_wizard=use_db_wizard, silent=silent)
+    return data  # type: ignore
+
+
+def process_config(
+    *,
+    use_db_wizard: bool = True,
+    data: ConfigFile,
+    silent: bool = False,
+) -> ConfigFile:
 
     if "name" not in data:
-        raise DBOSInitializationError(
-            f"dbos-config.yaml must specify an application name"
-        )
-
-    if "language" not in data:
-        raise DBOSInitializationError(
-            f"dbos-config.yaml must specify the application language is Python"
-        )
-
-    if data["language"] != "python":
-        raise DBOSInitializationError(
-            f'dbos-config.yaml specifies invalid language { data["language"] }'
-        )
-
-    if "runtimeConfig" not in data or "start" not in data["runtimeConfig"]:
-        raise DBOSInitializationError(f"dbos-config.yaml must specify a start command")
+        raise DBOSInitializationError(f"Configuration must specify an application name")
 
     if not _is_valid_app_name(data["name"]):
         raise DBOSInitializationError(
             f'Invalid app name {data["name"]}.  App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores.'
         )
 
-    if "app_db_name" not in data["database"]:
+    if "database" not in data:
+        data["database"] = {}
+
+    # database_url takes precedence over database config, but we need to preserve rollback and migrate if they exist
+    migrate = data["database"].get("migrate", False)
+    rollback = data["database"].get("rollback", False)
+    local_suffix = data["database"].get("local_suffix", False)
+    if data.get("database_url"):
+        dbconfig = parse_database_url_to_dbconfig(cast(str, data["database_url"]))
+        if migrate:
+            dbconfig["migrate"] = cast(List[str], migrate)
+        if rollback:
+            dbconfig["rollback"] = cast(List[str], rollback)
+        if local_suffix:
+            dbconfig["local_suffix"] = cast(bool, local_suffix)
+        data["database"] = dbconfig
+
+    if "app_db_name" not in data["database"] or not (data["database"]["app_db_name"]):
         data["database"]["app_db_name"] = _app_name_to_db_name(data["name"])
 
     # Load the DB connection file. Use its values for missing fields from dbos-config.yaml. Use defaults otherwise.
-    data = cast(ConfigFile, data)
     db_connection = load_db_connection()
     if not silent:
         if os.getenv("DBOS_DBHOST"):
@@ -252,26 +372,24 @@ def load_config(
     dbcon_local_suffix = db_connection.get("local_suffix")
     if dbcon_local_suffix is not None:
         local_suffix = dbcon_local_suffix
-    if data["database"].get("local_suffix") is not None:
-        local_suffix = data["database"].get("local_suffix")
+    db_local_suffix = data["database"].get("local_suffix")
+    if db_local_suffix is not None:
+        local_suffix = db_local_suffix
     if dbos_dblocalsuffix is not None:
         local_suffix = dbos_dblocalsuffix
     data["database"]["local_suffix"] = local_suffix
-
-    # Configure the DBOS logger
-    config_logger(data)
 
     # Check the connectivity to the database and make sure it's properly configured
     # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)
     debugWorkflowId = os.getenv("DBOS_DEBUG_WORKFLOW_ID")
     if use_db_wizard and debugWorkflowId is None:
-        data = db_wizard(data, config_file_path)
+        data = db_wizard(data)
 
     if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
         data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"
 
     # Return data as ConfigFile type
-    return data  # type: ignore
+    return data
 
 
 def _is_valid_app_name(name: str) -> bool:
@@ -291,3 +409,105 @@ def set_env_vars(config: ConfigFile) -> None:
     for env, value in config.get("env", {}).items():
         if value is not None:
             os.environ[env] = str(value)
+
+
+def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
+    # Load the DBOS configuration file and force the use of:
+    # 1. The database connection parameters (sub the file data to the provided config)
+    # 2. OTLP traces endpoints (add the config data to the provided config)
+    # 3. Use the application name from the file. This is a defensive measure to ensure the application name is whatever it was registered with in the cloud
+    # 4. Remove admin_port is provided in code
+    # 5. Remove env vars if provided in code
+    # Optimistically assume that expected fields in config_from_file are present
+
+    config_from_file = load_config(run_process_config=False)
+    # Be defensive
+    if config_from_file is None:
+        return provided_config
+
+    # Name
+    provided_config["name"] = config_from_file["name"]
+
+    # Database config. Note we disregard a potential database_url in config_from_file because it is not expected from DBOS Cloud
+    if "database" not in provided_config:
+        provided_config["database"] = {}
+    provided_config["database"]["hostname"] = config_from_file["database"]["hostname"]
+    provided_config["database"]["port"] = config_from_file["database"]["port"]
+    provided_config["database"]["username"] = config_from_file["database"]["username"]
+    provided_config["database"]["password"] = config_from_file["database"]["password"]
+    provided_config["database"]["app_db_name"] = config_from_file["database"][
+        "app_db_name"
+    ]
+    provided_config["database"]["sys_db_name"] = config_from_file["database"][
+        "sys_db_name"
+    ]
+    provided_config["database"]["ssl"] = config_from_file["database"]["ssl"]
+    provided_config["database"]["ssl_ca"] = config_from_file["database"]["ssl_ca"]
+
+    # Telemetry config
+    if "telemetry" not in provided_config or provided_config["telemetry"] is None:
+        provided_config["telemetry"] = {
+            "OTLPExporter": {},
+        }
+    elif "OTLPExporter" not in provided_config["telemetry"]:
+        provided_config["telemetry"]["OTLPExporter"] = {}
+
+    # This is a super messy from a typing perspective.
+    # Some of ConfigFile keys are optional -- but in practice they'll always be present in hosted environments
+    # So, for Mypy, we have to (1) check the keys are present in config_from_file and (2) cast telemetry/otlp_exporters to Dict[str, Any]
+    # (2) is required because, even tho we resolved these keys earlier, mypy doesn't remember that
+    if (
+        config_from_file.get("telemetry")
+        and config_from_file["telemetry"]
+        and config_from_file["telemetry"].get("OTLPExporter")
+    ):
+
+        telemetry = cast(Dict[str, Any], provided_config["telemetry"])
+        otlp_exporter = cast(Dict[str, Any], telemetry["OTLPExporter"])
+
+        source_otlp = config_from_file["telemetry"]["OTLPExporter"]
+        if source_otlp:
+            tracesEndpoint = source_otlp.get("tracesEndpoint")
+            if tracesEndpoint:
+                otlp_exporter["tracesEndpoint"] = tracesEndpoint
+            logsEndpoint = source_otlp.get("logsEndpoint")
+            if logsEndpoint:
+                otlp_exporter["logsEndpoint"] = logsEndpoint
+
+    # Runtime config
+    if (
+        "runtimeConfig" in provided_config
+        and "admin_port" in provided_config["runtimeConfig"]
+    ):
+        del provided_config["runtimeConfig"][
+            "admin_port"
+        ]  # Admin port is expected to be 3001 (the default in dbos/_admin_server.py::__init__ ) by DBOS Cloud
+
+    # Env should be set from the hosting provider (e.g., DBOS Cloud)
+    if "env" in provided_config:
+        del provided_config["env"]
+
+    return provided_config
+
+
+def check_config_consistency(
+    *,
+    name: str,
+    config_file_path: str = DBOS_CONFIG_PATH,
+) -> None:
+    # First load the config file and check whether it is present
+    try:
+        config = load_config(config_file_path)
+    except FileNotFoundError:
+        dbos_logger.debug(
+            f"No configuration file {config_file_path} found. Skipping consistency check with provided config."
+        )
+        return
+    except Exception as e:
+        raise e
+
+    # Check the name
+    if name != config["name"]:
+        raise DBOSInitializationError(
+            f"Provided app name '{name}' does not match the app name '{config['name']}' in {config_file_path}."
+        )

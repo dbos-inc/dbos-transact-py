@@ -88,13 +88,23 @@ from ._context import (
     assert_current_dbos_context,
     get_local_dbos_context,
 )
-from ._dbos_config import ConfigFile, load_config, set_env_vars
+from ._dbos_config import (
+    ConfigFile,
+    DBOSConfig,
+    check_config_consistency,
+    is_dbos_configfile,
+    load_config,
+    overwrite_config,
+    process_config,
+    set_env_vars,
+    translate_dbos_config_to_config_file,
+)
 from ._error import (
     DBOSConflictingRegistrationError,
     DBOSException,
     DBOSNonExistentWorkflowError,
 )
-from ._logger import add_otlp_to_all_loggers, dbos_logger
+from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
 from ._sys_db import SystemDatabase
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
@@ -257,7 +267,7 @@ class DBOS:
     def __new__(
         cls: Type[DBOS],
         *,
-        config: Optional[ConfigFile] = None,
+        config: Optional[Union[ConfigFile, DBOSConfig]] = None,
         fastapi: Optional["FastAPI"] = None,
         flask: Optional["Flask"] = None,
         conductor_url: Optional[str] = None,
@@ -302,7 +312,7 @@ class DBOS:
     def __init__(
         self,
         *,
-        config: Optional[ConfigFile] = None,
+        config: Optional[Union[ConfigFile, DBOSConfig]] = None,
         fastapi: Optional["FastAPI"] = None,
         flask: Optional["Flask"] = None,
         conductor_url: Optional[str] = None,
@@ -312,12 +322,7 @@ class DBOS:
             return
 
         self._initialized: bool = True
-        if config is None:
-            config = load_config()
-        set_env_vars(config)
-        dbos_tracer.config(config)
-        dbos_logger.info("Initializing DBOS")
-        self.config: ConfigFile = config
+
         self._launched: bool = False
         self._debug_mode: bool = False
         self._sys_db_field: Optional[SystemDatabase] = None
@@ -333,6 +338,36 @@ class DBOS:
         self.conductor_url: Optional[str] = conductor_url
         self.conductor_key: Optional[str] = conductor_key
         self.conductor_websocket: Optional[ConductorWebsocket] = None
+
+        init_logger()
+
+        unvalidated_config: Optional[ConfigFile] = None
+
+        if config is None:
+            # If no config is provided, load it from dbos-config.yaml
+            unvalidated_config = load_config(run_process_config=False)
+        elif is_dbos_configfile(config):
+            unvalidated_config = cast(ConfigFile, config)
+            if os.environ.get("DBOS__CLOUD") == "true":
+                unvalidated_config = overwrite_config(unvalidated_config)
+            check_config_consistency(name=unvalidated_config["name"])
+        else:
+            unvalidated_config = translate_dbos_config_to_config_file(
+                cast(DBOSConfig, config)
+            )
+            if os.environ.get("DBOS__CLOUD") == "true":
+                unvalidated_config = overwrite_config(unvalidated_config)
+            check_config_consistency(name=unvalidated_config["name"])
+
+        if unvalidated_config is not None:
+            self.config: ConfigFile = process_config(data=unvalidated_config)
+        else:
+            raise ValueError("No valid configuration was loaded.")
+
+        set_env_vars(self.config)
+        config_logger(self.config)
+        dbos_tracer.config(self.config)
+        dbos_logger.info("Initializing DBOS")
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
@@ -419,7 +454,7 @@ class DBOS:
             if debug_mode:
                 return
 
-            admin_port = self.config["runtimeConfig"].get("admin_port")
+            admin_port = self.config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:
                 admin_port = 3001
             self._admin_server_field = AdminServer(dbos=self, port=admin_port)
@@ -923,7 +958,9 @@ class DBOS:
         reg = _get_or_create_dbos_registry()
         if reg.config is not None:
             return reg.config
-        config = load_config()
+        config = (
+            load_config()
+        )  # This will return the processed & validated config (with defaults)
         reg.config = config
         return config
 

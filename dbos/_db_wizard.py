@@ -28,7 +28,20 @@ class DatabaseConnection(TypedDict):
     local_suffix: Optional[bool]
 
 
-def db_wizard(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
+def db_wizard(config: "ConfigFile") -> "ConfigFile":
+    """Checks database connectivity and helps the user start a database if needed
+
+    First, check connectivity to the database configured in the provided `config` object.
+    If it fails:
+     - Return an error if the connection failed due to incorrect credentials.
+     - Return an error if it detects a non-default configuration.
+     - Otherwise assume the configured database is not running and guide the user through setting it up.
+
+     The wizard will first attempt to start a local Postgres instance using Docker.
+     If Docker is not available, it will prompt the user to connect to a DBOS Cloud database.
+
+     Finally, if a database was configured, its connection details will be saved in the local `.dbos/db_connection` file.
+    """
     # 1. Check the connectivity to the database. Return if successful. If cannot connect, continue to the following steps.
     db_connection_error = _check_db_connectivity(config)
     if db_connection_error is None:
@@ -44,27 +57,18 @@ def db_wizard(config: "ConfigFile", config_file_path: str) -> "ConfigFile":
         raise DBOSInitializationError(
             f"Could not connect to Postgres: password authentication failed: {db_connection_error}"
         )
-    db_config = config["database"]
 
-    # Read the config file and check if the database hostname/port/username are set. If so, skip the wizard.
-    with open(config_file_path, "r") as file:
-        content = file.read()
-        local_config = yaml.safe_load(content)
-        if "database" not in local_config:
-            local_config["database"] = {}
-        local_config = cast("ConfigFile", local_config)
-
+    # If the database config is not the default one, surface the error and exit.
+    db_config = config["database"]  # FIXME: what if database is not in config?
     if (
-        local_config["database"].get("hostname")
-        or local_config["database"].get("port")
-        or local_config["database"].get("username")
-        or db_config["hostname"] != "localhost"
+        db_config["hostname"] != "localhost"
         or db_config["port"] != 5432
         or db_config["username"] != "postgres"
     ):
         raise DBOSInitializationError(
             f"Could not connect to the database. Exception: {db_connection_error}"
         )
+
     print("[yellow]Postgres not detected locally[/yellow]")
 
     # 3. If the database config is the default one, check if the user has Docker properly installed.

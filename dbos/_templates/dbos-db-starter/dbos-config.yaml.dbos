@@ -8,9 +8,7 @@ language: python
 runtimeConfig:
   start:
     - "fastapi run ${package_name}/main.py"
+database_url: ${DBOS_DATABASE_URL}
 database:
   migrate:
     - ${migration_command}
-telemetry:
-  logs:
-    logLevel: INFO

@@ -101,9 +101,10 @@ def test_init_config() -> None:
         "language": "python",
         "runtimeConfig": {"start": ["fastapi run ./main.py"]},
         "database": {"migrate": ["echo 'No migrations specified'"]},
-        "telemetry": {"logs": {"logLevel": "INFO"}},
+        "database_url": "${DBOS_DATABASE_URL}",
     }
     with tempfile.TemporaryDirectory() as temp_path:
+
         subprocess.check_call(
             ["dbos", "init", app_name, "--config"],
             cwd=temp_path,

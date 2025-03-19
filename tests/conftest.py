@@ -25,7 +25,6 @@ def build_wheel() -> str:
 def default_config() -> ConfigFile:
     return {
         "name": "test-app",
-        "language": "python",
         "database": {
             "hostname": "localhost",
             "port": 5432,
@@ -33,11 +32,6 @@ def default_config() -> ConfigFile:
             "password": os.environ["PGPASSWORD"],
             "app_db_name": "dbostestpy",
         },
-        "runtimeConfig": {
-            "start": ["python3 main.py"],
-        },
-        "telemetry": {},
-        "env": {},
     }
 
 
