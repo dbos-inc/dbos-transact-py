@@ -1,4 +1,4 @@
-from typing import Optional, TypedDict
+from typing import Optional, TypedDict, cast
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
@@ -61,16 +61,21 @@ class ApplicationDatabase:
             port=config["database"]["port"],
             database=app_db_name,
         )
+
+        connect_args = {}
+        if config["database"].get("connectionTimeoutMillis") is not None:
+            t = cast(
+                int, config["database"]["connectionTimeoutMillis"]
+            )  # mypy still thinks its an int | None
+            timeout = int(t / 1000)
+            connect_args["connect_timeout"] = timeout
+
         self.engine = sa.create_engine(
             app_db_url,
             pool_size=config["database"]["app_db_pool_size"],
             max_overflow=0,
             pool_timeout=30,
-            connect_args={
-                "connect_timeout": int(
-                    config["database"]["connectionTimeoutMillis"] / 1000
-                )
-            },
+            connect_args=connect_args,
         )
         self.sessionmaker = sessionmaker(bind=self.engine)
         self.debug_mode = debug_mode

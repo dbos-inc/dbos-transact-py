@@ -3,11 +3,13 @@ import threading
 import time
 import uuid
 
+import pytest
 import requests
 import sqlalchemy as sa
+from requests.exceptions import ConnectionError
 
 # Public API
-from dbos import DBOS, ConfigFile, Queue, SetWorkflowID, _workflow_commands
+from dbos import DBOS, ConfigFile, DBOSConfig, Queue, SetWorkflowID, _workflow_commands
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase, WorkflowStatusString
 from dbos._utils import GlobalParams
@@ -170,6 +172,25 @@ runtimeConfig:
         # Clean up after the test
         DBOS.destroy()
         os.remove("dbos-config.yaml")
+
+
+def test_disable_admin_server(cleanup_test_databases: None) -> None:
+    # Initialize singleton
+    DBOS.destroy()  # In case of other tests leaving it
+
+    config: DBOSConfig = {
+        "name": "test-app",
+        "disable_admin_server": True,
+    }  # type: ignore
+    try:
+        DBOS(config=config)
+        DBOS.launch()
+
+        with pytest.raises(ConnectionError):
+            requests.get("http://localhost:3001/dbos-healthz", timeout=1)
+    finally:
+        # Clean up after the test
+        DBOS.destroy()
 
 
 def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:

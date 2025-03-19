@@ -457,7 +457,11 @@ class DBOS:
             admin_port = self.config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:
                 admin_port = 3001
-            self._admin_server_field = AdminServer(dbos=self, port=admin_port)
+            disable_admin_server = self.config.get("runtimeConfig", {}).get(
+                "disable_admin_server"
+            )
+            if not disable_admin_server:
+                self._admin_server_field = AdminServer(dbos=self, port=admin_port)
 
             workflow_ids = self._sys_db.get_pending_workflows(
                 GlobalParams.executor_id, GlobalParams.app_version

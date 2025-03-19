@@ -326,6 +326,7 @@ def test_process_config_full():
         "runtimeConfig": {
             "start": ["python3 main.py"],
             "admin_port": 8001,
+            "disable_admin_server": True,
             "setup": ["echo 'hello'"],
         },
         "telemetry": {
@@ -360,6 +361,7 @@ def test_process_config_full():
     assert configFile["database"]["sys_db_pool_size"] == 27
     assert configFile["runtimeConfig"]["start"] == ["python3 main.py"]
     assert configFile["runtimeConfig"]["admin_port"] == 8001
+    assert configFile["runtimeConfig"]["disable_admin_server"] == True
     assert configFile["runtimeConfig"]["setup"] == ["echo 'hello'"]
     assert configFile["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert configFile["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
@@ -389,6 +391,7 @@ def test_process_config_with_db_url():
     assert processed_config["database"]["sys_db_pool_size"] == 20
     assert "rollback" not in processed_config["database"]
     assert "migrate" not in processed_config["database"]
+    assert "runtimeConfig" not in processed_config
 
 
 def test_process_config_with_db_url_taking_precedence_over_database():
@@ -781,6 +784,7 @@ def test_translate_dbosconfig_full_input():
         "log_level": "DEBUG",
         "otlp_traces_endpoints": ["http://otel:7777", "notused"],
         "admin_port": 8001,
+        "disable_admin_server": True,
     }
 
     translated_config = translate_dbos_config_to_config_file(config)
@@ -805,6 +809,7 @@ def test_translate_dbosconfig_full_input():
     )
     assert "logsEndpoint" not in translated_config["telemetry"]["OTLPExporter"]
     assert translated_config["runtimeConfig"]["admin_port"] == 8001
+    assert translated_config["runtimeConfig"]["disable_admin_server"] == True
     assert "start" not in translated_config["runtimeConfig"]
     assert "setup" not in translated_config["runtimeConfig"]
     assert "env" not in translated_config
@@ -830,13 +835,67 @@ def test_translate_dbosconfig_just_sys_db_name():
     }
     translated_config = translate_dbos_config_to_config_file(config)
 
-    assert translated_config["name"] == "test-app"
-    assert translated_config["telemetry"]["logs"]["logLevel"] == "INFO"
     assert translated_config["database"]["sys_db_name"] == "sysdb"
     assert "app_db_pool_size" not in translated_config["database"]
     assert "sys_db_pool_size" not in translated_config["database"]
     assert "env" not in translated_config
     assert "runtimeConfig" not in translated_config
+
+
+def test_translate_dbosconfig_just_app_db_pool_size():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "app_db_pool_size": 45,
+    }
+    translated_config = translate_dbos_config_to_config_file(config)
+
+    assert translated_config["database"]["app_db_pool_size"] == 45
+    assert "sys_db_name" not in translated_config["database"]
+    assert "sys_db_pool_size" not in translated_config["database"]
+    assert "env" not in translated_config
+    assert "runtimeConfig" not in translated_config
+
+
+def test_translate_dbosconfig_just_sys_db_pool_size():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "sys_db_pool_size": 27,
+    }
+    translated_config = translate_dbos_config_to_config_file(config)
+
+    assert translated_config["database"]["sys_db_pool_size"] == 27
+    assert "app_db_pool_size" not in translated_config["database"]
+    assert "sys_db_name" not in translated_config["database"]
+    assert "env" not in translated_config
+    assert "runtimeConfig" not in translated_config
+
+
+def test_translate_dbosconfig_just_admin_port():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "admin_port": 8001,
+    }
+    translated_config = translate_dbos_config_to_config_file(config)
+
+    assert translated_config["runtimeConfig"]["admin_port"] == 8001
+    assert "disable_admin_server" not in translated_config["runtimeConfig"]
+    assert "env" not in translated_config
+    assert "database" not in translated_config
+
+
+def test_translate_dbosconfig_just_disable_admin_server():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "disable_admin_server": True,
+    }
+    translated_config = translate_dbos_config_to_config_file(config)
+
+    assert translated_config["name"] == "test-app"
+    assert translated_config["telemetry"]["logs"]["logLevel"] == "INFO"
+    assert translated_config["runtimeConfig"]["disable_admin_server"] == True
+    assert "admin_port" not in translated_config["runtimeConfig"]
+    assert "env" not in translated_config
+    assert "database" not in translated_config
 
 
 def test_translate_empty_otlp_traces_endpoints():
@@ -930,6 +989,7 @@ def test_overwrite_config(mocker):
         },
         "runtimeConfig": {
             "admin_port": 8001,
+            "disable_admin_server": True,
         },
         "env": {
             "FOO": "BAR",
@@ -953,6 +1013,7 @@ def test_overwrite_config(mocker):
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
     assert "admin_port" not in config["runtimeConfig"]
+    assert "disable_admin_server" not in config["runtimeConfig"]
     assert "env" not in config
 
 

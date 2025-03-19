@@ -46,12 +46,14 @@ class DBOSConfig(TypedDict):
     log_level: Optional[str]
     otlp_traces_endpoints: Optional[List[str]]
     admin_port: Optional[int]
+    disable_admin_server: Optional[bool]
 
 
 class RuntimeConfig(TypedDict, total=False):
     start: List[str]
     setup: Optional[List[str]]
     admin_port: Optional[int]
+    disable_admin_server: Optional[bool]
 
 
 class DatabaseConfig(TypedDict, total=False):
@@ -175,9 +177,14 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     if db_config:
         translated_config["database"] = db_config
 
-    # Admin port
+    # Runtime config
+    runtimeConfig: RuntimeConfig = {}
     if "admin_port" in config:
-        translated_config["runtimeConfig"] = {"admin_port": config["admin_port"]}
+        runtimeConfig = {"admin_port": config["admin_port"]}
+    if "disable_admin_server" in config:
+        runtimeConfig["disable_admin_server"] = config["disable_admin_server"]
+    if runtimeConfig:
+        translated_config["runtimeConfig"] = runtimeConfig
 
     # Telemetry config
     telemetry = {}
@@ -503,13 +510,13 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
                 otlp_exporter["logsEndpoint"] = logsEndpoint
 
     # Runtime config
-    if (
-        "runtimeConfig" in provided_config
-        and "admin_port" in provided_config["runtimeConfig"]
-    ):
-        del provided_config["runtimeConfig"][
-            "admin_port"
-        ]  # Admin port is expected to be 3001 (the default in dbos/_admin_server.py::__init__ ) by DBOS Cloud
+    if "runtimeConfig" in provided_config:
+        if "admin_port" in provided_config["runtimeConfig"]:
+            del provided_config["runtimeConfig"][
+                "admin_port"
+            ]  # Admin port is expected to be 3001 (the default in dbos/_admin_server.py::__init__ ) by DBOS Cloud
+        if "disable_admin_server" in provided_config["runtimeConfig"]:
+            del provided_config["runtimeConfig"]["disable_admin_server"]
 
     # Env should be set from the hosting provider (e.g., DBOS Cloud)
     if "env" in provided_config:
