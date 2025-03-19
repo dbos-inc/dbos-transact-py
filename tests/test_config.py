@@ -5,6 +5,7 @@ from unittest.mock import mock_open
 
 import pytest
 import pytest_mock
+from sqlalchemy import event
 
 # Public API
 from dbos import DBOS, load_config
@@ -421,7 +422,7 @@ def test_process_config_with_db_url_taking_precedence_over_database():
     assert processed_config["database"]["local_suffix"] == True
     assert processed_config["database"]["app_db_pool_size"] == 20
     assert processed_config["database"]["sys_db_pool_size"] == 20
-    assert "connectionTimeoutMillis" not in processed_config["database"]
+    assert processed_config["database"]["connectionTimeoutMillis"] == 10000
     assert "ssl" not in processed_config["database"]
     assert "ssl_ca" not in processed_config["database"]
 
@@ -440,6 +441,7 @@ def test_process_config_load_defaults():
     assert processed_config["database"]["password"] == os.environ.get(
         "PGPASSWORD", "dbos"
     )
+    assert processed_config["database"]["connectionTimeoutMillis"] == 10000
     assert processed_config["database"]["app_db_pool_size"] == 20
     assert processed_config["database"]["sys_db_pool_size"] == 20
     assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
@@ -459,6 +461,7 @@ def test_process_config_load_default_with_None_database_url():
     assert processed_config["database"]["password"] == os.environ.get(
         "PGPASSWORD", "dbos"
     )
+    assert processed_config["database"]["connectionTimeoutMillis"] == 10000
     assert processed_config["database"]["app_db_pool_size"] == 20
     assert processed_config["database"]["sys_db_pool_size"] == 20
 
@@ -480,6 +483,7 @@ def test_process_config_with_None_app_db_name():
     assert processed_config["database"]["password"] == os.environ.get(
         "PGPASSWORD", "dbos"
     )
+    assert processed_config["database"]["connectionTimeoutMillis"] == 10000
     assert processed_config["database"]["app_db_pool_size"] == 20
     assert processed_config["database"]["sys_db_pool_size"] == 20
 
@@ -501,6 +505,7 @@ def test_process_config_with_empty_app_db_name():
     assert processed_config["database"]["password"] == os.environ.get(
         "PGPASSWORD", "dbos"
     )
+    assert processed_config["database"]["connectionTimeoutMillis"] == 10000
     assert processed_config["database"]["app_db_pool_size"] == 20
     assert processed_config["database"]["sys_db_pool_size"] == 20
 
@@ -553,6 +558,7 @@ def test_load_config_load_db_connection(mocker):
     assert configFile["database"]["app_db_name"] == "some_app_local"
     assert configFile["database"]["app_db_pool_size"] == 20
     assert configFile["database"]["sys_db_pool_size"] == 20
+    assert configFile["database"]["connectionTimeoutMillis"] == 10000
 
 
 def test_config_mixed_params():
@@ -574,6 +580,7 @@ def test_config_mixed_params():
     assert configFile["database"]["password"] == "abc123"
     assert configFile["database"]["app_db_pool_size"] == 3
     assert configFile["database"]["sys_db_pool_size"] == 20
+    assert configFile["database"]["connectionTimeoutMillis"] == 10000
 
 
 def test_debug_override(mocker: pytest_mock.MockFixture):
@@ -599,6 +606,7 @@ def test_debug_override(mocker: pytest_mock.MockFixture):
     assert configFile["database"]["local_suffix"] == False
     assert configFile["database"]["app_db_pool_size"] == 20
     assert configFile["database"]["sys_db_pool_size"] == 20
+    assert configFile["database"]["connectionTimeoutMillis"] == 10000
 
 
 def test_local_config():
@@ -704,9 +712,9 @@ def test_query_parameters():
     """Test processing of various query parameters."""
 
     # Test connect_timeout conversion
-    database_url = "postgresql://user:password@localhost:5432/dbname?connect_timeout=10"
+    database_url = "postgresql://user:password@localhost:5432/dbname?connect_timeout=7"
     db_config = parse_database_url_to_dbconfig(database_url)
-    assert db_config["connectionTimeoutMillis"] == 10000
+    assert db_config["connectionTimeoutMillis"] == 7000
 
     # Test sslmode=require (should set ssl=True)
     database_url = "postgresql://user:password@localhost:5432/dbname?sslmode=require"
@@ -729,9 +737,9 @@ def test_query_parameters():
     assert db_config["ssl_ca"] == "ca.pem"
 
     # Test multiple parameters together
-    database_url = "postgresql://user:password@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem&application_name=myapp"
+    database_url = "postgresql://user:password@localhost:5432/dbname?connect_timeout=8&sslmode=require&sslrootcert=ca.pem&application_name=myapp"
     db_config = parse_database_url_to_dbconfig(database_url)
-    assert db_config["connectionTimeoutMillis"] == 10000
+    assert db_config["connectionTimeoutMillis"] == 8000
     assert db_config["ssl"] == True
     assert db_config["ssl_ca"] == "ca.pem"
 
@@ -1240,4 +1248,53 @@ def test_configured_pool_sizes():
     dbos.launch()
     assert dbos._app_db.engine.pool._pool.maxsize == 42
     assert dbos._sys_db.engine.pool._pool.maxsize == 43
+    dbos.destroy()
+
+
+def test_default_pool_params():
+    config: DBOSConfig = {
+        "name": "test-app",
+    }
+
+    dbos = DBOS(config=config)
+    dbos.launch()
+    app_db_engine = dbos._app_db.engine
+    assert app_db_engine.pool._pool.maxsize == 20
+
+    # force the release of connections so we can intercept on connect.
+    app_db_engine.dispose()
+
+    @event.listens_for(app_db_engine, "connect")
+    def inspect_connection(dbapi_connection, connection_record):
+        connect_timeout = dbapi_connection.info.get_parameters()["connect_timeout"]
+        assert connect_timeout == "10"
+
+    with app_db_engine.connect() as conn:
+        pass
+
+    assert dbos._sys_db.engine.pool._pool.maxsize == 20
+    dbos.destroy()
+
+
+def test_configured_app_db_connect_timeout():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "database_url": f"postgresql://postgres:@localhost:5432/dbname?connect_timeout=7",
+    }
+
+    dbos = DBOS(config=config)
+    dbos.launch()
+    app_db_engine = dbos._app_db.engine
+
+    # force the release of connections so we can intercept on connect.
+    app_db_engine.dispose()
+
+    @event.listens_for(app_db_engine, "connect")
+    def inspect_connection(dbapi_connection, connection_record):
+        connect_timeout = dbapi_connection.info.get_parameters()["connect_timeout"]
+        assert connect_timeout == "7"
+
+    with app_db_engine.connect() as conn:
+        pass
+
     dbos.destroy()

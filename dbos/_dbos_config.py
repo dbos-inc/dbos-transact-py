@@ -400,6 +400,8 @@ def process_config(
         data["database"]["app_db_pool_size"] = 20
     if not data["database"].get("sys_db_pool_size"):
         data["database"]["sys_db_pool_size"] = 20
+    if not data["database"].get("connectionTimeoutMillis"):
+        data["database"]["connectionTimeoutMillis"] = 10000
 
     # Check the connectivity to the database and make sure it's properly configured
     # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)

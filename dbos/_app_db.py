@@ -66,6 +66,11 @@ class ApplicationDatabase:
             pool_size=config["database"]["app_db_pool_size"],
             max_overflow=0,
             pool_timeout=30,
+            connect_args={
+                "connect_timeout": int(
+                    config["database"]["connectionTimeoutMillis"] / 1000
+                )
+            },
         )
         self.sessionmaker = sessionmaker(bind=self.engine)
         self.debug_mode = debug_mode
