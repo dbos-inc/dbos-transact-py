@@ -182,7 +182,7 @@ def test_disable_admin_server(cleanup_test_databases: None) -> None:
     config: DBOSConfig = {
         "name": "test-app",
         "run_admin_server": False,
-    }  # type: ignore
+    }
     try:
         DBOS(config=config)
         DBOS.launch()
@@ -200,7 +200,7 @@ def test_busy_admin_server_port_does_not_throw() -> None:
 
     config: DBOSConfig = {
         "name": "test-app",
-    }  # type: ignore
+    }
     server_thread = None
     stop_event = threading.Event()
     try:

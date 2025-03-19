@@ -22,7 +22,7 @@ from ._logger import dbos_logger
 DBOS_CONFIG_PATH = "dbos-config.yaml"
 
 
-class DBOSConfig(TypedDict):
+class DBOSConfig(TypedDict, total=False):
     """
     Data structure containing the DBOS library configuration.
 
