@@ -329,3 +329,42 @@ async def test_async_step_temp(dbos: DBOS) -> None:
         assert result == "alicestep1"
 
     assert step_counter == 1
+
+
+@pytest.mark.asyncio
+async def test_start_workflow_async(dbos: DBOS) -> None:
+    wf_counter: int = 0
+    step_counter: int = 0
+    wfuuid = f"test_start_workflow_async-{time.time_ns()}"
+
+    @DBOS.workflow()
+    async def test_workflow(var1: str, var2: str) -> str:
+        nonlocal wf_counter
+        wf_counter += 1
+        res2 = test_step(var2)
+        DBOS.logger.info("I'm test_workflow")
+        return var1 + res2
+
+    @DBOS.step()
+    def test_step(var: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
+        DBOS.logger.info("I'm test_step")
+        return var + f"step{step_counter}"
+
+    with SetWorkflowID(wfuuid):
+        handle = await DBOS.start_workflow_async(test_workflow, "alice", "bob")
+
+    assert handle.get_workflow_id() == wfuuid
+    result = await handle.get_result()
+    assert result == "alicebobstep1"
+
+    with SetWorkflowID(wfuuid):
+        handle = await DBOS.start_workflow_async(test_workflow, "alice", "bob")
+
+    assert handle.get_workflow_id() == wfuuid
+    result = await handle.get_result()
+    assert result == "alicebobstep1"
+
+    assert wf_counter == 2
+    assert step_counter == 1

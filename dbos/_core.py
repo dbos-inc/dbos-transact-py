@@ -82,6 +82,7 @@ if TYPE_CHECKING:
         DBOS,
         Workflow,
         WorkflowHandle,
+        WorkflowHandleAsync,
         WorkflowStatus,
         DBOSRegistry,
         IsolationLevel,
@@ -131,6 +132,48 @@ class WorkflowHandlePolling(Generic[R]):
 
     def get_status(self) -> "WorkflowStatus":
         stat = self.dbos.get_workflow_status(self.workflow_id)
+        if stat is None:
+            raise DBOSNonExistentWorkflowError(self.workflow_id)
+        return stat
+
+
+class WorkflowHandleAsyncTask(Generic[R]):
+
+    def __init__(self, workflow_id: str, task: asyncio.Task[R], dbos: "DBOS"):
+        self.workflow_id = workflow_id
+        self.task = task
+        self.dbos = dbos
+
+    def get_workflow_id(self) -> str:
+        return self.workflow_id
+
+    async def get_result(self) -> R:
+        return await self.task
+
+    async def get_status(self) -> "WorkflowStatus":
+        stat = await asyncio.to_thread(self.dbos.get_workflow_status, self.workflow_id)
+        if stat is None:
+            raise DBOSNonExistentWorkflowError(self.workflow_id)
+        return stat
+
+
+class WorkflowHandleAsyncPolling(Generic[R]):
+
+    def __init__(self, workflow_id: str, dbos: "DBOS"):
+        self.workflow_id = workflow_id
+        self.dbos = dbos
+
+    def get_workflow_id(self) -> str:
+        return self.workflow_id
+
+    async def get_result(self) -> R:
+        res: R = await asyncio.to_thread(
+            self.dbos._sys_db.await_workflow_result, self.workflow_id
+        )
+        return res
+
+    async def get_status(self) -> "WorkflowStatus":
+        stat = await asyncio.to_thread(self.dbos.get_workflow_status, self.workflow_id)
         if stat is None:
             raise DBOSNonExistentWorkflowError(self.workflow_id)
         return stat
@@ -278,6 +321,32 @@ def _execute_workflow_wthread(
                     return cast(Immediate[R], result)()
                 else:
                     return asyncio.run(cast(Pending[R], result)())
+            except Exception:
+                dbos.logger.error(
+                    f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
+                )
+                raise
+
+
+async def _execute_workflow_async(
+    dbos: "DBOS",
+    status: WorkflowStatusInternal,
+    func: "Workflow[P, Coroutine[Any, Any, R]]",
+    ctx: DBOSContext,
+    *args: Any,
+    **kwargs: Any,
+) -> R:
+    attributes: TracedAttributes = {
+        "name": func.__name__,
+        "operationType": OperationType.WORKFLOW.value,
+    }
+    with DBOSContextSwap(ctx):
+        with EnterDBOSWorkflow(attributes):
+            try:
+                result = Pending[R](functools.partial(func, *args, **kwargs)).then(
+                    _get_wf_invoke_func(dbos, status)
+                )
+                return await result()
             except Exception:
                 dbos.logger.error(
                     f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
@@ -456,6 +525,87 @@ def start_workflow(
         **kwargs,
     )
     return WorkflowHandleFuture(new_wf_id, future, dbos)
+
+
+async def start_workflow_async(
+    dbos: "DBOS",
+    func: "Workflow[P, Coroutine[Any, Any, R]]",
+    queue_name: Optional[str],
+    execute_workflow: bool,
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> "WorkflowHandleAsync[R]":
+    # If the function has a class, add the class object as its first argument
+    fself: Optional[object] = None
+    if hasattr(func, "__self__"):
+        fself = func.__self__
+    if fself is not None:
+        args = (fself,) + args  # type: ignore
+
+    fi = get_func_info(func)
+    if fi is None:
+        raise DBOSWorkflowFunctionNotFoundError(
+            "<NONE>", f"start_workflow: function {func.__name__} is not registered"
+        )
+
+    func = cast("Workflow[P, R]", func.__orig_func)  # type: ignore
+
+    inputs: WorkflowInputs = {
+        "args": args,
+        "kwargs": kwargs,
+    }
+
+    # Sequence of events for starting a workflow:
+    #   First - is there a WF already running?
+    #      (and not in step as that is an error)
+    #   Assign an ID to the workflow, if it doesn't have an app-assigned one
+    #      If this is a root workflow, assign a new ID
+    #      If this is a child workflow, assign parent wf id with call# suffix
+    #   Make a (system) DB record for the workflow
+    #   Pass the new context to a worker thread that will run the wf function
+    cur_ctx = get_local_dbos_context()
+    if cur_ctx is not None and cur_ctx.is_within_workflow():
+        assert cur_ctx.is_workflow()  # Not in a step
+        cur_ctx.function_id += 1
+        if len(cur_ctx.id_assigned_for_next_workflow) == 0:
+            cur_ctx.id_assigned_for_next_workflow = (
+                cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
+            )
+
+    new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
+    new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
+    new_wf_id = new_wf_ctx.id_assigned_for_next_workflow
+
+    status = await asyncio.to_thread(
+        _init_workflow,
+        dbos,
+        new_wf_ctx,
+        inputs=inputs,
+        wf_name=get_dbos_func_name(func),
+        class_name=get_dbos_class_name(fi, func, args),
+        config_name=get_config_name(fi, func, args),
+        temp_wf_type=get_temp_workflow_type(func),
+        queue=queue_name,
+        max_recovery_attempts=fi.max_recovery_attempts,
+    )
+
+    wf_status = status["status"]
+
+    if not execute_workflow or (
+        not dbos.debug_mode
+        and (
+            wf_status == WorkflowStatusString.ERROR.value
+            or wf_status == WorkflowStatusString.SUCCESS.value
+        )
+    ):
+        dbos.logger.debug(
+            f"Workflow {new_wf_id} already completed with status {wf_status}. Directly returning a workflow handle."
+        )
+        return WorkflowHandleAsyncPolling(new_wf_id, dbos)
+
+    coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, *args, **kwargs)
+    task = asyncio.create_task(coro)
+    return WorkflowHandleAsyncTask(new_wf_id, task, dbos)
 
 
 if sys.version_info < (3, 12):

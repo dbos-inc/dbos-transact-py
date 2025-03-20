@@ -49,6 +49,7 @@ from ._core import (
     send,
     set_event,
     start_workflow,
+    start_workflow_async,
     workflow_wrapper,
 )
 from ._queue import Queue, queue_thread
@@ -728,9 +729,19 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
-        return cast(
-            WorkflowHandle[R],
-            start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs),
+        handle = start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs)
+        return cast(WorkflowHandle[R], handle)
+
+    @classmethod
+    async def start_workflow_async(
+        cls,
+        func: Workflow[P, Coroutine[Any, Any, R]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> WorkflowHandleAsync[R]:
+        """Invoke a workflow function on the event loop, returning a handle to the ongoing execution."""
+        return await start_workflow_async(
+            _get_dbos_instance(), func, None, True, *args, **kwargs
         )
 
     @classmethod
@@ -1103,6 +1114,35 @@ class WorkflowHandle(Generic[R], Protocol):
         ...
 
     def get_status(self) -> WorkflowStatus:
+        """Return the current workflow function invocation status as `WorkflowStatus`."""
+        ...
+
+
+class WorkflowHandleAsync(Generic[R], Protocol):
+    """
+    Handle to a workflow function.
+
+    `WorkflowHandleAsync` represents a current or previous workflow function invocation,
+    allowing its status and result to be accessed.
+
+    Attributes:
+        workflow_id(str): Workflow ID of the function invocation
+
+    """
+
+    def __init__(self, workflow_id: str) -> None: ...
+
+    workflow_id: str
+
+    def get_workflow_id(self) -> str:
+        """Return the applicable workflow ID."""
+        ...
+
+    async def get_result(self) -> R:
+        """Return the result of the workflow function invocation, waiting if necessary."""
+        ...
+
+    async def get_status(self) -> WorkflowStatus:
         """Return the current workflow function invocation status as `WorkflowStatus`."""
         ...
 
