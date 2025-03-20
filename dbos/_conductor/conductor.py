@@ -243,7 +243,7 @@ class ConductorWebsocket(threading.Thread):
                             self.dbos.logger.warning(
                                 f"Unexpected message type: {msg_type}"
                             )
-                            unknown_message = p.BaseMessage(
+                            unknown_message = p.BaseResponse(
                                 request_id=base_message.request_id,
                                 type=msg_type,
                                 error_message="Unknown message type",

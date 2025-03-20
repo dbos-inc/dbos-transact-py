@@ -46,6 +46,11 @@ class BaseMessage:
 
 
 @dataclass
+class BaseResponse(BaseMessage):
+    error_message: Optional[str] = None
+
+
+@dataclass
 class ExecutorInfoRequest(BaseMessage):
     pass
 
