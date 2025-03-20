@@ -2,6 +2,7 @@
 
 import os
 from unittest.mock import mock_open
+from urllib.parse import quote
 
 import pytest
 import pytest_mock
@@ -1379,7 +1380,7 @@ def test_get_dbos_database_url(mocker):
 
     assert (
         get_dbos_database_url()
-        == f"postgresql+psycopg://postgres:dbos@localhost:5432/some_db"
+        == f"postgresql+psycopg://postgres:{quote(os.environ.get('PGPASSWORD'))}@localhost:5432/some_db"
     )
 
 
@@ -1400,5 +1401,5 @@ def test_get_dbos_database_url_local_suffix(mocker):
 
     assert (
         get_dbos_database_url()
-        == f"postgresql+psycopg://postgres:dbos@localhost:5432/some_db_local"
+        == f"postgresql+psycopg://postgres:{quote(os.environ.get('PGPASSWORD'))}@localhost:5432/some_db_local"
     )
