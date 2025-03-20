@@ -202,7 +202,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     return translated_config
 
 
-def _substitute_env_vars(content: str, silent=False) -> str:
+def _substitute_env_vars(content: str, silent: bool = False) -> str:
     regex = r"\$\{([^}]+)\}"  # Regex to match ${VAR_NAME} style placeholders
 
     def replace_func(match: re.Match[str]) -> str:
