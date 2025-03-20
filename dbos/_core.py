@@ -423,7 +423,7 @@ def _start_wf_init(
     func: "Workflow[P, R]",
     *args: P.args,
     **kwargs: P.kwargs,
-) -> tuple[DBOSContext, str, WorkflowInputs, Workflow[P, R], DBOSFuncInfo]:
+) -> tuple[DBOSContext, str, WorkflowInputs, "Workflow[P, R]", DBOSFuncInfo]:
     # If the function has a class, add the class object as its first argument
     fself: Optional[object] = None
     if hasattr(func, "__self__"):
