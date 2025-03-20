@@ -468,28 +468,6 @@ def _start_wf_init(
     return new_wf_ctx, new_wf_id, inputs, func, fi
 
 
-@overload
-def start_workflow(
-    dbos: "DBOS",
-    func: "Workflow[P, Coroutine[Any, Any, R]]",
-    queue_name: Optional[str],
-    execute_workflow: bool,
-    *args: P.args,
-    **kwargs: P.kwargs,
-) -> "WorkflowHandle[R]": ...
-
-
-@overload
-def start_workflow(
-    dbos: "DBOS",
-    func: "Workflow[P, R]",
-    queue_name: Optional[str],
-    execute_workflow: bool,
-    *args: P.args,
-    **kwargs: P.kwargs,
-) -> "WorkflowHandle[R]": ...
-
-
 def start_workflow(
     dbos: "DBOS",
     func: "Workflow[P, Union[R, Coroutine[Any, Any, R]]]",

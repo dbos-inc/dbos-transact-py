@@ -145,7 +145,7 @@ async def test_send_recv_async(dbos: DBOS) -> None:
     )
 
     with SetWorkflowID(dest_uuid):
-        handle = dbos.start_workflow(test_recv_workflow, "testtopic")
+        handle = await dbos.start_workflow_async(test_recv_workflow, "testtopic")
         assert handle.get_workflow_id() == dest_uuid
 
     send_uuid = str(uuid.uuid4())
@@ -153,7 +153,7 @@ async def test_send_recv_async(dbos: DBOS) -> None:
         res = await test_send_workflow(handle.get_workflow_id(), "testtopic")
         assert res == dest_uuid
     begin_time = time.time()
-    assert handle.get_result() == "test2-test1-test3"
+    assert (await handle.get_result()) == "test2-test1-test3"
     duration = time.time() - begin_time
     assert duration < 3.0  # Shouldn't take more than 3 seconds to run
 
