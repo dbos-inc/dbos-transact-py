@@ -419,11 +419,15 @@ def execute_workflow_by_id(
                 )
 
 
-def _start_wf_init(
-    func: "Workflow[P, R]",
+def start_workflow(
+    dbos: "DBOS",
+    func: "Workflow[P, Union[R, Coroutine[Any, Any, R]]]",
+    queue_name: Optional[str],
+    execute_workflow: bool,
     *args: P.args,
     **kwargs: P.kwargs,
-) -> tuple[DBOSContext, str, WorkflowInputs, "Workflow[P, R]", DBOSFuncInfo]:
+) -> "WorkflowHandle[R]":
+
     # If the function has a class, add the class object as its first argument
     fself: Optional[object] = None
     if hasattr(func, "__self__"):
@@ -464,20 +468,6 @@ def _start_wf_init(
     new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
     new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
     new_wf_id = new_wf_ctx.id_assigned_for_next_workflow
-
-    return new_wf_ctx, new_wf_id, inputs, func, fi
-
-
-def start_workflow(
-    dbos: "DBOS",
-    func: "Workflow[P, Union[R, Coroutine[Any, Any, R]]]",
-    queue_name: Optional[str],
-    execute_workflow: bool,
-    *args: P.args,
-    **kwargs: P.kwargs,
-) -> "WorkflowHandle[R]":
-
-    new_wf_ctx, new_wf_id, inputs, func, fi = _start_wf_init(func, *args, **kwargs)
 
     status = _init_workflow(
         dbos,
@@ -525,7 +515,47 @@ async def start_workflow_async(
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> "WorkflowHandleAsync[R]":
-    new_wf_ctx, new_wf_id, inputs, func, fi = _start_wf_init(func, *args, **kwargs)
+
+    # If the function has a class, add the class object as its first argument
+    fself: Optional[object] = None
+    if hasattr(func, "__self__"):
+        fself = func.__self__
+    if fself is not None:
+        args = (fself,) + args  # type: ignore
+
+    fi = get_func_info(func)
+    if fi is None:
+        raise DBOSWorkflowFunctionNotFoundError(
+            "<NONE>", f"start_workflow: function {func.__name__} is not registered"
+        )
+
+    func = cast("Workflow[P, R]", func.__orig_func)  # type: ignore
+
+    inputs: WorkflowInputs = {
+        "args": args,
+        "kwargs": kwargs,
+    }
+
+    # Sequence of events for starting a workflow:
+    #   First - is there a WF already running?
+    #      (and not in step as that is an error)
+    #   Assign an ID to the workflow, if it doesn't have an app-assigned one
+    #      If this is a root workflow, assign a new ID
+    #      If this is a child workflow, assign parent wf id with call# suffix
+    #   Make a (system) DB record for the workflow
+    #   Pass the new context to a worker thread that will run the wf function
+    cur_ctx = get_local_dbos_context()
+    if cur_ctx is not None and cur_ctx.is_within_workflow():
+        assert cur_ctx.is_workflow()  # Not in a step
+        cur_ctx.function_id += 1
+        if len(cur_ctx.id_assigned_for_next_workflow) == 0:
+            cur_ctx.id_assigned_for_next_workflow = (
+                cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
+            )
+
+    new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
+    new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
+    new_wf_id = new_wf_ctx.id_assigned_for_next_workflow
 
     status = await asyncio.to_thread(
         _init_workflow,
