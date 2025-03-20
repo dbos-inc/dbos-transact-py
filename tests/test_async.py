@@ -336,9 +336,12 @@ async def test_start_workflow_async(dbos: DBOS) -> None:
     wf_counter: int = 0
     step_counter: int = 0
     wfuuid = f"test_start_workflow_async-{time.time_ns()}"
+    inner_el_id: int = 0
 
     @DBOS.workflow()
     async def test_workflow(var1: str, var2: str) -> str:
+        nonlocal inner_el_id
+        inner_el_id = id(asyncio.get_running_loop())
         nonlocal wf_counter
         wf_counter += 1
         res2 = test_step(var2)
@@ -368,3 +371,4 @@ async def test_start_workflow_async(dbos: DBOS) -> None:
 
     assert wf_counter == 2
     assert step_counter == 1
+    assert inner_el_id == id(asyncio.get_running_loop())
