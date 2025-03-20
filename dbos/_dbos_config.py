@@ -202,7 +202,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     return translated_config
 
 
-def _substitute_env_vars(content: str) -> str:
+def _substitute_env_vars(content: str, silent: bool = False) -> str:
     regex = r"\$\{([^}]+)\}"  # Regex to match ${VAR_NAME} style placeholders
 
     def replace_func(match: re.Match[str]) -> str:
@@ -210,7 +210,7 @@ def _substitute_env_vars(content: str) -> str:
         value = os.environ.get(
             var_name, ""
         )  # If the env variable is not set, return an empty string
-        if value == "":
+        if value == "" and not silent:
             dbos_logger.warning(
                 f"Variable {var_name} would be substituted from the process environment into dbos-config.yaml, but is not defined"
             )
@@ -233,7 +233,7 @@ def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
         str: Database URL for the application database
 
     """
-    dbos_config = process_config(data=load_config(config_file_path))
+    dbos_config = load_config(config_file_path, run_process_config=True)
     db_url = URL.create(
         "postgresql+psycopg",
         username=dbos_config["database"]["username"],
@@ -267,7 +267,7 @@ def load_config(
 
     with open(config_file_path, "r") as file:
         content = file.read()
-        substituted_content = _substitute_env_vars(content)
+        substituted_content = _substitute_env_vars(content, silent=silent)
         data = yaml.safe_load(substituted_content)
 
     if not isinstance(data, dict):
@@ -299,7 +299,6 @@ def process_config(
     data: ConfigFile,
     silent: bool = False,
 ) -> ConfigFile:
-
     if "name" not in data:
         raise DBOSInitializationError(f"Configuration must specify an application name")
 
@@ -337,25 +336,9 @@ def process_config(
     if "app_db_name" not in data["database"] or not (data["database"]["app_db_name"]):
         data["database"]["app_db_name"] = _app_name_to_db_name(data["name"])
 
-    # Load the DB connection file. Use its values for missing fields from dbos-config.yaml. Use defaults otherwise.
+    # Load the DB connection file. Use its values for missing connection parameters. Use defaults otherwise.
     db_connection = load_db_connection()
-    if not silent:
-        if os.getenv("DBOS_DBHOST"):
-            print(
-                "[bold blue]Loading database connection parameters from debug environment variables[/bold blue]"
-            )
-        elif data["database"].get("hostname"):
-            print(
-                "[bold blue]Loading database connection parameters from dbos-config.yaml[/bold blue]"
-            )
-        elif db_connection.get("hostname"):
-            print(
-                "[bold blue]Loading database connection parameters from .dbos/db_connection[/bold blue]"
-            )
-        else:
-            print(
-                "[bold blue]Using default database connection parameters (localhost)[/bold blue]"
-            )
+    connection_passed_in = data["database"].get("hostname", None) is not None
 
     dbos_dbport: Optional[int] = None
     dbport_env = os.getenv("DBOS_DBPORT")
@@ -424,6 +407,28 @@ def process_config(
     # Check the connectivity to the database and make sure it's properly configured
     # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)
     debugWorkflowId = os.getenv("DBOS_DEBUG_WORKFLOW_ID")
+
+    # Pretty-print where we've loaded database connection information from, respecting the log level
+    if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
+        d = data["database"]
+        conn_string = f"postgresql://{d['username']}:*****@{d['hostname']}:{d['port']}/{d['app_db_name']}"
+        if os.getenv("DBOS_DBHOST"):
+            print(
+                f"[bold blue]Loading database connection string from debug environment variables: {conn_string}[/bold blue]"
+            )
+        elif connection_passed_in:
+            print(
+                f"[bold blue]Using database connection string: {conn_string}[/bold blue]"
+            )
+        elif db_connection.get("hostname"):
+            print(
+                f"[bold blue]Loading database connection string from .dbos/db_connection: {conn_string}[/bold blue]"
+            )
+        else:
+            print(
+                f"[bold blue]Using default database connection string: {conn_string}[/bold blue]"
+            )
+
     if use_db_wizard and debugWorkflowId is None:
         data = db_wizard(data)
 
@@ -539,7 +544,7 @@ def check_config_consistency(
 ) -> None:
     # First load the config file and check whether it is present
     try:
-        config = load_config(config_file_path)
+        config = load_config(config_file_path, silent=True, run_process_config=False)
     except FileNotFoundError:
         dbos_logger.debug(
             f"No configuration file {config_file_path} found. Skipping consistency check with provided config."
