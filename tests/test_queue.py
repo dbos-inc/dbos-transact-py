@@ -670,7 +670,10 @@ def test_duplicate_workflow_id(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> 
         # We want to see the warning message, but the result is non-deterministic
         # TODO: in the future, we may want to always use the recorded inputs.
         assert res == "abc" or res == "def"
-    assert f"Workflow inputs for {wfid} changed since the first call" in caplog.text
+    assert (
+        f"Workflow {wfid} has been called multiple times with different inputs"
+        in caplog.text
+    )
 
     assert origHandle.get_result() == "abc"
     assert same_handle.get_result() == "abc"
