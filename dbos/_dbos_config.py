@@ -338,22 +338,7 @@ def process_config(
 
     # Load the DB connection file. Use its values for missing connection parameters. Use defaults otherwise.
     db_connection = load_db_connection()
-    # Pretty-print where we're loading database connection information from, respecting the log level
-    if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
-        if os.getenv("DBOS_DBHOST"):
-            print(
-                "[bold blue]Loading database connection string from debug environment variables[/bold blue]"
-            )
-        elif data["database"].get("hostname"):
-            print("[bold blue]Using provided database connection string[/bold blue]")
-        elif db_connection.get("hostname"):
-            print(
-                "[bold blue]Loading database connection string from .dbos/db_connection[/bold blue]"
-            )
-        else:
-            print(
-                f"[bold blue]Using default database connection string: postgresql://postgres:dbos@localhost:5432/{data['name']}[/bold blue]"
-            )
+    connection_passed_in = data["database"].get("hostname", None) is not None
 
     dbos_dbport: Optional[int] = None
     dbport_env = os.getenv("DBOS_DBPORT")
@@ -422,6 +407,28 @@ def process_config(
     # Check the connectivity to the database and make sure it's properly configured
     # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)
     debugWorkflowId = os.getenv("DBOS_DEBUG_WORKFLOW_ID")
+
+    # Pretty-print where we've loaded database connection information from, respecting the log level
+    if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
+        d = data["database"]
+        conn_string = f"postgresql://{d['username']}:*****@{d['hostname']}:{d['port']}/{d['app_db_name']}"
+        if os.getenv("DBOS_DBHOST"):
+            print(
+                f"[bold blue]Loading database connection string from debug environment variables: {conn_string}[/bold blue]"
+            )
+        elif connection_passed_in:
+            print(
+                f"[bold blue]Using database connection string: {conn_string}[/bold blue]"
+            )
+        elif db_connection.get("hostname"):
+            print(
+                f"[bold blue]Loading database connection string from .dbos/db_connection: {conn_string}[/bold blue]"
+            )
+        else:
+            print(
+                f"[bold blue]Using default database connection string: {conn_string}[/bold blue]"
+            )
+
     if use_db_wizard and debugWorkflowId is None:
         data = db_wizard(data)
 
