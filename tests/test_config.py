@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 import pytest
 import pytest_mock
-from sqlalchemy import event
+from sqlalchemy import URL, event
 
 # Public API
 from dbos import DBOS, get_dbos_database_url, load_config
@@ -1378,10 +1378,15 @@ def test_get_dbos_database_url(mocker):
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
     )
 
-    assert (
-        get_dbos_database_url()
-        == f"postgresql+psycopg://postgres:{quote(os.environ.get('PGPASSWORD'))}@localhost:5432/some_db"
-    )
+    expected_url = URL.create(
+        "postgresql+psycopg",
+        username="postgres",
+        password=os.environ.get("PGPASSWORD"),
+        host="localhost",
+        port=5432,
+        database="some_db",
+    ).render_as_string(hide_password=False)
+    assert get_dbos_database_url() == expected_url
 
 
 def test_get_dbos_database_url_local_suffix(mocker):
@@ -1398,8 +1403,12 @@ def test_get_dbos_database_url_local_suffix(mocker):
     mocker.patch(
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
     )
-
-    assert (
-        get_dbos_database_url()
-        == f"postgresql+psycopg://postgres:{quote(os.environ.get('PGPASSWORD'))}@localhost:5432/some_db_local"
-    )
+    expected_url = URL.create(
+        "postgresql+psycopg",
+        username="postgres",
+        password=os.environ.get("PGPASSWORD"),
+        host="localhost",
+        port=5432,
+        database="some_db_local",
+    ).render_as_string(hide_password=False)
+    assert get_dbos_database_url() == expected_url
