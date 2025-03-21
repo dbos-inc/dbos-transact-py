@@ -419,6 +419,31 @@ def execute_workflow_by_id(
                 )
 
 
+def _get_new_wf() -> tuple[str, DBOSContext]:
+    # Sequence of events for starting a workflow:
+    #   First - is there a WF already running?
+    #      (and not in step as that is an error)
+    #   Assign an ID to the workflow, if it doesn't have an app-assigned one
+    #      If this is a root workflow, assign a new ID
+    #      If this is a child workflow, assign parent wf id with call# suffix
+    #   Make a (system) DB record for the workflow
+    #   Pass the new context to a worker thread that will run the wf function
+    cur_ctx = get_local_dbos_context()
+    if cur_ctx is not None and cur_ctx.is_within_workflow():
+        assert cur_ctx.is_workflow()  # Not in a step
+        cur_ctx.function_id += 1
+        if len(cur_ctx.id_assigned_for_next_workflow) == 0:
+            cur_ctx.id_assigned_for_next_workflow = (
+                cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
+            )
+
+    new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
+    new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
+    new_wf_id = new_wf_ctx.id_assigned_for_next_workflow
+
+    return (new_wf_id, new_wf_ctx)
+
+
 def start_workflow(
     dbos: "DBOS",
     func: "Workflow[P, Union[R, Coroutine[Any, Any, R]]]",
@@ -448,26 +473,7 @@ def start_workflow(
         "kwargs": kwargs,
     }
 
-    # Sequence of events for starting a workflow:
-    #   First - is there a WF already running?
-    #      (and not in step as that is an error)
-    #   Assign an ID to the workflow, if it doesn't have an app-assigned one
-    #      If this is a root workflow, assign a new ID
-    #      If this is a child workflow, assign parent wf id with call# suffix
-    #   Make a (system) DB record for the workflow
-    #   Pass the new context to a worker thread that will run the wf function
-    cur_ctx = get_local_dbos_context()
-    if cur_ctx is not None and cur_ctx.is_within_workflow():
-        assert cur_ctx.is_workflow()  # Not in a step
-        cur_ctx.function_id += 1
-        if len(cur_ctx.id_assigned_for_next_workflow) == 0:
-            cur_ctx.id_assigned_for_next_workflow = (
-                cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
-            )
-
-    new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
-    new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
-    new_wf_id = new_wf_ctx.id_assigned_for_next_workflow
+    new_wf_id, new_wf_ctx = _get_new_wf()
 
     status = _init_workflow(
         dbos,
@@ -536,26 +542,7 @@ async def start_workflow_async(
         "kwargs": kwargs,
     }
 
-    # Sequence of events for starting a workflow:
-    #   First - is there a WF already running?
-    #      (and not in step as that is an error)
-    #   Assign an ID to the workflow, if it doesn't have an app-assigned one
-    #      If this is a root workflow, assign a new ID
-    #      If this is a child workflow, assign parent wf id with call# suffix
-    #   Make a (system) DB record for the workflow
-    #   Pass the new context to a worker thread that will run the wf function
-    cur_ctx = get_local_dbos_context()
-    if cur_ctx is not None and cur_ctx.is_within_workflow():
-        assert cur_ctx.is_workflow()  # Not in a step
-        cur_ctx.function_id += 1
-        if len(cur_ctx.id_assigned_for_next_workflow) == 0:
-            cur_ctx.id_assigned_for_next_workflow = (
-                cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
-            )
-
-    new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
-    new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
-    new_wf_id = new_wf_ctx.id_assigned_for_next_workflow
+    new_wf_id, new_wf_ctx = _get_new_wf()
 
     status = await asyncio.to_thread(
         _init_workflow,
