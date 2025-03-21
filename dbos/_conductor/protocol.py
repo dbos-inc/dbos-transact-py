@@ -46,6 +46,11 @@ class BaseMessage:
 
 
 @dataclass
+class BaseResponse(BaseMessage):
+    error_message: Optional[str] = None
+
+
+@dataclass
 class ExecutorInfoRequest(BaseMessage):
     pass
 
@@ -54,6 +59,7 @@ class ExecutorInfoRequest(BaseMessage):
 class ExecutorInfoResponse(BaseMessage):
     executor_id: str
     application_version: str
+    error_message: Optional[str] = None
 
 
 @dataclass
@@ -64,6 +70,7 @@ class RecoveryRequest(BaseMessage):
 @dataclass
 class RecoveryResponse(BaseMessage):
     success: bool
+    error_message: Optional[str] = None
 
 
 @dataclass
@@ -74,6 +81,7 @@ class CancelRequest(BaseMessage):
 @dataclass
 class CancelResponse(BaseMessage):
     success: bool
+    error_message: Optional[str] = None
 
 
 @dataclass
@@ -84,6 +92,7 @@ class ResumeRequest(BaseMessage):
 @dataclass
 class ResumeResponse(BaseMessage):
     success: bool
+    error_message: Optional[str] = None
 
 
 @dataclass
@@ -94,6 +103,7 @@ class RestartRequest(BaseMessage):
 @dataclass
 class RestartResponse(BaseMessage):
     success: bool
+    error_message: Optional[str] = None
 
 
 class ListWorkflowsBody(TypedDict):
@@ -165,6 +175,7 @@ class ListWorkflowsRequest(BaseMessage):
 @dataclass
 class ListWorkflowsResponse(BaseMessage):
     output: List[WorkflowsOutput]
+    error_message: Optional[str] = None
 
 
 class ListQueuedWorkflowsBody(TypedDict):
@@ -186,6 +197,7 @@ class ListQueuedWorkflowsRequest(BaseMessage):
 @dataclass
 class ListQueuedWorkflowsResponse(BaseMessage):
     output: List[WorkflowsOutput]
+    error_message: Optional[str] = None
 
 
 @dataclass
@@ -196,6 +208,7 @@ class GetWorkflowRequest(BaseMessage):
 @dataclass
 class GetWorkflowResponse(BaseMessage):
     output: Optional[WorkflowsOutput]
+    error_message: Optional[str] = None
 
 
 @dataclass
@@ -207,3 +220,4 @@ class ExistPendingWorkflowsRequest(BaseMessage):
 @dataclass
 class ExistPendingWorkflowsResponse(BaseMessage):
     exist: bool
+    error_message: Optional[str] = None

@@ -626,9 +626,11 @@ class SystemDatabase:
             with self.engine.begin() as c:
                 row = c.execute(cmd).fetchone()
         if row is not None and row[0] != inputs:
-            dbos_logger.warning(
-                f"Workflow inputs for {workflow_uuid} changed since the first call! Use the original inputs."
-            )
+            # In a distributed environment, scheduled workflows are enqueued multiple times with slightly different timestamps
+            if not workflow_uuid.startswith("sched-"):
+                dbos_logger.warning(
+                    f"Workflow {workflow_uuid} has been called multiple times with different inputs"
+                )
             # TODO: actually changing the input
         if workflow_uuid in self._temp_txn_wf_ids:
             # Clean up the single-transaction tracking sets
