@@ -34,6 +34,7 @@ class DBOSConfig(TypedDict, total=False):
         sys_db_pool_size (int): System database pool size
         log_level (str): Log level
         otlp_traces_endpoints: List[str]: OTLP traces endpoints
+        otlp_logs_endpoints: List[str]: OTLP logs endpoints
         admin_port (int): Admin port
         run_admin_server (bool): Whether to run the DBOS admin server
     """
@@ -99,6 +100,7 @@ class OTLPExporterConfig(TypedDict, total=False):
     tracesEndpoint: Optional[str]
     mergedLogsEndpoints: Optional[List[str]]
     mergedTracesEndpoints: Optional[List[str]]
+
 
 class LoggerConfig(TypedDict, total=False):
     logLevel: Optional[str]
@@ -189,10 +191,9 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         ]
 
     # Telemetry config
-    telemetry = { "OTLPExporter": {
-        "mergedTracesEndpoints":[],
-        "mergedLogsEndpoints":  []
-    } }
+    telemetry = {
+        "OTLPExporter": {"mergedTracesEndpoints": [], "mergedLogsEndpoints": []}
+    }
     # Add OTLPExporter if traces endpoints exist
     otlp_trace_endpoints = config.get("otlp_traces_endpoints")
     if isinstance(otlp_trace_endpoints, list) and len(otlp_trace_endpoints) > 0:
@@ -504,16 +505,13 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Telemetry config
     if "telemetry" not in provided_config or provided_config["telemetry"] is None:
         provided_config["telemetry"] = {
-            "OTLPExporter": {
-                "mergedTracesEndpoints": [],
-                "mergedLogsEndpoints": []
-            },
+            "OTLPExporter": {"mergedTracesEndpoints": [], "mergedLogsEndpoints": []},
         }
     elif "OTLPExporter" not in provided_config["telemetry"]:
         provided_config["telemetry"]["OTLPExporter"] = {
-                "mergedTracesEndpoints": [],
-                "mergedLogsEndpoints": []
-            }
+            "mergedTracesEndpoints": [],
+            "mergedLogsEndpoints": [],
+        }
 
     # This is a super messy from a typing perspective.
     # Some of ConfigFile keys are optional -- but in practice they'll always be present in hosted environments
@@ -528,9 +526,9 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
         telemetry = cast(Dict[str, Any], provided_config["telemetry"])
         otlp_exporter = cast(Dict[str, Any], telemetry["OTLPExporter"])
 
-        #The file may contain one tracesEndpoint and one logsEndpoint, not more.
-        #The existing config may contain a list.
-        #Add what's in the file to the list.
+        # The file may contain one tracesEndpoint and one logsEndpoint, not more.
+        # The existing config may contain a list.
+        # Add what's in the file to the list.
         source_otlp = config_from_file["telemetry"]["OTLPExporter"]
         if source_otlp:
             tracesEndpoint = source_otlp.get("tracesEndpoint")
