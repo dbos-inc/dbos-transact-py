@@ -191,9 +191,11 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         ]
 
     # Telemetry config
-    telemetry = {
+    telemetry: TelemetryConfig = {
         "OTLPExporter": {"mergedTracesEndpoints": [], "mergedLogsEndpoints": []}
     }
+    assert telemetry["OTLPExporter"] is not None, "This is to make mypy happy"
+
     # Add OTLPExporter if traces endpoints exist
     otlp_trace_endpoints = config.get("otlp_traces_endpoints")
     if isinstance(otlp_trace_endpoints, list) and len(otlp_trace_endpoints) > 0:
@@ -208,7 +210,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     if log_level:
         telemetry["logs"] = {"logLevel": log_level}
     if telemetry:
-        translated_config["telemetry"] = cast(TelemetryConfig, telemetry)
+        translated_config["telemetry"] = telemetry
 
     return translated_config
 
