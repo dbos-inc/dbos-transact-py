@@ -151,6 +151,18 @@ class GetPendingWorkflowsOutput:
         self.queue_name: Optional[str] = queue_name
 
 
+class StepFunction:
+    def __init__(self, function_id: int, function_name: str):
+        self.function_id = function_id
+        self.function_name = function_name
+
+
+class WorkflowSteps:
+    def __init__(self, workflow_uuid: str, steps: List[StepFunction]):
+        self.workflow_uuid = workflow_uuid
+        self.steps = steps
+
+
 _dbos_null_topic = "__null__topic__"
 _buffer_flush_batch_size = 100
 _buffer_flush_interval_secs = 1.0
@@ -770,6 +782,22 @@ class SystemDatabase:
                 )
                 for row in rows
             ]
+
+    def get_workflow_steps(self, workflow_id: str) -> WorkflowSteps:
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.operation_outputs.c.function_id,
+                    SystemSchema.operation_outputs.c.function_name,
+                ).where(SystemSchema.operation_output.c.workflow_uuid == workflow_id)
+            ).fetchall()
+            return WorkflowSteps(
+                workflow_uuid=workflow_id,
+                steps=[
+                    StepFunction(function_id=row[0], function_name=row[1])
+                    for row in rows
+                ],
+            )
 
     def record_operation_result(
         self, result: OperationResultInternal, conn: Optional[sa.Connection] = None
