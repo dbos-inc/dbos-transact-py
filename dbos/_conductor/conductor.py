@@ -1,3 +1,4 @@
+import socket
 import threading
 import time
 import traceback
@@ -51,6 +52,7 @@ class ConductorWebsocket(threading.Thread):
                                 request_id=base_message.request_id,
                                 executor_id=GlobalParams.executor_id,
                                 application_version=GlobalParams.app_version,
+                                hostname=socket.gethostname(),
                             )
                             websocket.send(info_response.to_json())
                             self.dbos.logger.info("Connected to DBOS conductor")

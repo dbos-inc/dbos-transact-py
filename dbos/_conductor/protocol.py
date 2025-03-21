@@ -59,6 +59,7 @@ class ExecutorInfoRequest(BaseMessage):
 class ExecutorInfoResponse(BaseMessage):
     executor_id: str
     application_version: str
+    hostname: Optional[str]
     error_message: Optional[str] = None
 
 
