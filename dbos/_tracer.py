@@ -27,14 +27,15 @@ class DBOSTracer:
             if os.environ.get("DBOS__CONSOLE_TRACES", None) is not None:
                 processor = BatchSpanProcessor(ConsoleSpanExporter())
                 provider.add_span_processor(processor)
-            otlp_traces_endpoint = (
-                config.get("telemetry", {}).get("OTLPExporter", {}).get("tracesEndpoint")  # type: ignore
+            otlp_traces_endpoints = (
+                config.get("telemetry", {}).get("OTLPExporter", {}).get("mergedTracesEndpoints")  # type: ignore
             )
-            if otlp_traces_endpoint:
-                processor = BatchSpanProcessor(
-                    OTLPSpanExporter(endpoint=otlp_traces_endpoint)
-                )
-                provider.add_span_processor(processor)
+            if otlp_traces_endpoints:
+                for e in otlp_traces_endpoints:
+                    processor = BatchSpanProcessor(
+                        OTLPSpanExporter(endpoint = e)
+                    )
+                    provider.add_span_processor(processor)
             trace.set_tracer_provider(provider)
 
     def set_provider(self, provider: Optional[TracerProvider]) -> None:
