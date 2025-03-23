@@ -1,16 +1,16 @@
 import threading
 import traceback
-from typing import TYPE_CHECKING, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, Coroutine, Optional, TypedDict
 
 from psycopg import errors
 from sqlalchemy.exc import OperationalError
 
 from dbos._utils import GlobalParams
 
-from ._core import P, R, execute_workflow_by_id, start_workflow
+from ._core import P, R, execute_workflow_by_id, start_workflow, start_workflow_async
 
 if TYPE_CHECKING:
-    from ._dbos import DBOS, Workflow, WorkflowHandle
+    from ._dbos import DBOS, Workflow, WorkflowHandle, WorkflowHandleAsync
 
 
 class QueueRateLimit(TypedDict):
@@ -65,6 +65,17 @@ class Queue:
 
         dbos = _get_dbos_instance()
         return start_workflow(dbos, func, self.name, False, *args, **kwargs)
+
+    async def enqueue_async(
+        self,
+        func: "Workflow[P, Coroutine[Any, Any, R]]",
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> "WorkflowHandleAsync[R]":
+        from ._dbos import _get_dbos_instance
+
+        dbos = _get_dbos_instance()
+        return await start_workflow_async(dbos, func, self.name, False, *args, **kwargs)
 
 
 def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
