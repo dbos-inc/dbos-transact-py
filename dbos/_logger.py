@@ -57,7 +57,7 @@ def config_logger(config: "ConfigFile") -> None:
 
     # Log to the OTLP endpoint if provided
     otlp_logs_endpoints = (
-        config.get("telemetry", {}).get("OTLPExporter", {}).get("mergedLogsEndpoints")  # type: ignore
+        config.get("telemetry", {}).get("OTLPExporter", {}).get("logsEndpoint")  # type: ignore
     )
     if otlp_logs_endpoints:
         log_provider = PatchedOTLPLoggerProvider(

@@ -96,10 +96,8 @@ def parse_database_url_to_dbconfig(database_url: str) -> DatabaseConfig:
 
 
 class OTLPExporterConfig(TypedDict, total=False):
-    logsEndpoint: Optional[str]
-    tracesEndpoint: Optional[str]
-    mergedLogsEndpoints: Optional[List[str]]
-    mergedTracesEndpoints: Optional[List[str]]
+    logsEndpoint: Optional[List[str]]
+    tracesEndpoint: Optional[List[str]]
 
 
 class LoggerConfig(TypedDict, total=False):
@@ -192,18 +190,18 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
 
     # Telemetry config
     telemetry: TelemetryConfig = {
-        "OTLPExporter": {"mergedTracesEndpoints": [], "mergedLogsEndpoints": []}
+        "OTLPExporter": {"tracesEndpoint": [], "logsEndpoint": []}
     }
     assert telemetry["OTLPExporter"] is not None, "This is to make mypy happy"
 
     # Add OTLPExporter if traces endpoints exist
     otlp_trace_endpoints = config.get("otlp_traces_endpoints")
     if isinstance(otlp_trace_endpoints, list) and len(otlp_trace_endpoints) > 0:
-        telemetry["OTLPExporter"]["mergedTracesEndpoints"] = otlp_trace_endpoints
+        telemetry["OTLPExporter"]["tracesEndpoint"] = otlp_trace_endpoints
     # Same for the logs
     otlp_logs_endpoints = config.get("otlp_logs_endpoints")
     if isinstance(otlp_logs_endpoints, list) and len(otlp_logs_endpoints) > 0:
-        telemetry["OTLPExporter"]["mergedLogsEndpoints"] = otlp_logs_endpoints
+        telemetry["OTLPExporter"]["logsEndpoint"] = otlp_logs_endpoints
 
     # Default to INFO -- the logging seems to default to WARN otherwise.
     log_level = config.get("log_level", "INFO")
@@ -299,6 +297,17 @@ def load_config(
         validate(instance=data, schema=schema)
     except ValidationError as e:
         raise DBOSInitializationError(f"Validation error: {e}")
+
+    # Special case: convert logsEndpoint and tracesEndpoint from strings to lists of strings, if present
+    if "telemetry" in data and "OTLPExporter" in data["telemetry"]:
+        if "logsEndpoint" in data["telemetry"]["OTLPExporter"]:
+            data["telemetry"]["OTLPExporter"]["logsEndpoint"] = [
+                data["telemetry"]["OTLPExporter"]["logsEndpoint"]
+            ]
+        if "tracesEndpoint" in data["telemetry"]["OTLPExporter"]:
+            data["telemetry"]["OTLPExporter"]["tracesEndpoint"] = [
+                data["telemetry"]["OTLPExporter"]["tracesEndpoint"]
+            ]
 
     data = cast(ConfigFile, data)
     if run_process_config:
@@ -507,12 +516,12 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Telemetry config
     if "telemetry" not in provided_config or provided_config["telemetry"] is None:
         provided_config["telemetry"] = {
-            "OTLPExporter": {"mergedTracesEndpoints": [], "mergedLogsEndpoints": []},
+            "OTLPExporter": {"tracesEndpoint": [], "logsEndpoint": []},
         }
     elif "OTLPExporter" not in provided_config["telemetry"]:
         provided_config["telemetry"]["OTLPExporter"] = {
-            "mergedTracesEndpoints": [],
-            "mergedLogsEndpoints": [],
+            "tracesEndpoint": [],
+            "logsEndpoint": [],
         }
 
     # This is a super messy from a typing perspective.
@@ -528,17 +537,15 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
         telemetry = cast(Dict[str, Any], provided_config["telemetry"])
         otlp_exporter = cast(Dict[str, Any], telemetry["OTLPExporter"])
 
-        # The file may contain one tracesEndpoint and one logsEndpoint, not more.
-        # The existing config may contain a list.
-        # Add what's in the file to the list.
+        # Merge the logsEndpoint and tracesEndpoint lists from the file with what we have
         source_otlp = config_from_file["telemetry"]["OTLPExporter"]
         if source_otlp:
             tracesEndpoint = source_otlp.get("tracesEndpoint")
             if tracesEndpoint:
-                otlp_exporter["mergedTracesEndpoints"].append(tracesEndpoint)
+                otlp_exporter["tracesEndpoint"].extend(tracesEndpoint)
             logsEndpoint = source_otlp.get("logsEndpoint")
             if logsEndpoint:
-                otlp_exporter["mergedLogsEndpoints"].append(logsEndpoint)
+                otlp_exporter["logsEndpoint"].extend(logsEndpoint)
 
     # Runtime config
     if "runtimeConfig" in provided_config:

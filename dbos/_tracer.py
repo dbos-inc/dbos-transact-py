@@ -28,13 +28,11 @@ class DBOSTracer:
                 processor = BatchSpanProcessor(ConsoleSpanExporter())
                 provider.add_span_processor(processor)
             otlp_traces_endpoints = (
-                config.get("telemetry", {}).get("OTLPExporter", {}).get("mergedTracesEndpoints")  # type: ignore
+                config.get("telemetry", {}).get("OTLPExporter", {}).get("tracesEndpoint")  # type: ignore
             )
             if otlp_traces_endpoints:
                 for e in otlp_traces_endpoints:
-                    processor = BatchSpanProcessor(
-                        OTLPSpanExporter(endpoint = e)
-                    )
+                    processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=e))
                     provider.add_span_processor(processor)
             trace.set_tracer_provider(provider)
 
