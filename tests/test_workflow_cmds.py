@@ -351,3 +351,34 @@ def test_list_2steps_sleep(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert wfsteps.steps[0].function_name == "stepOne"
     assert wfsteps.steps[1].function_name == "stepTwo"
     assert wfsteps.steps[2].function_name == "DBOS.sleep"
+
+
+def test_send_recv(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def send_workflow(target: str) -> None:
+        DBOS.send(target, "Hello, World!")
+        return
+
+    @DBOS.workflow()
+    def recv_workflow() -> str:
+        return DBOS.recv(timeout_seconds=1)
+
+    wfid_r = str(uuid.uuid4())
+    with SetWorkflowID(wfid_r):
+        recv_workflow()
+
+    wfid_s = str(uuid.uuid4())
+    with SetWorkflowID(wfid_s):
+        send_workflow(wfid_r)
+
+    wfsteps_send = _workflow_commands.list_workflow_steps(sys_db, wfid_s)
+    assert wfsteps_send.workflow_uuid == wfid_s
+    assert len(wfsteps_send.steps) == 1
+    assert wfsteps_send.steps[0].function_name == "DBOS.send"
+
+    wfsteps_recv = _workflow_commands.list_workflow_steps(sys_db, wfid_r)
+    assert wfsteps_recv.workflow_uuid == wfid_r
+    assert len(wfsteps_recv.steps) == 2
+    assert wfsteps_recv.steps[0].function_name == "DBOS.sleep"
+    assert wfsteps_recv.steps[1].function_name == "DBOS.recv"
