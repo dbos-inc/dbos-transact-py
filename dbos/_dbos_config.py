@@ -192,7 +192,8 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     telemetry: TelemetryConfig = {
         "OTLPExporter": {"tracesEndpoint": [], "logsEndpoint": []}
     }
-    assert telemetry["OTLPExporter"] is not None, "This is to make mypy happy"
+    # For mypy
+    assert telemetry["OTLPExporter"] is not None
 
     # Add OTLPExporter if traces endpoints exist
     otlp_trace_endpoints = config.get("otlp_traces_endpoints")
