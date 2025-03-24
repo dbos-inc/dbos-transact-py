@@ -53,7 +53,7 @@ jobs:
           --health-retries 5
       # Kafka service container
       kafka:
-        image: bitnami/kafka
+        image: bitnami/kafka:3.9.0
         ports:
           - 9092:9092
         options: >-

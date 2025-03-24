@@ -56,10 +56,10 @@ def config_logger(config: "ConfigFile") -> None:
         dbos_logger.setLevel(log_level)
 
     # Log to the OTLP endpoint if provided
-    otlp_logs_endpoint = (
+    otlp_logs_endpoints = (
         config.get("telemetry", {}).get("OTLPExporter", {}).get("logsEndpoint")  # type: ignore
     )
-    if otlp_logs_endpoint:
+    if otlp_logs_endpoints:
         log_provider = PatchedOTLPLoggerProvider(
             Resource.create(
                 attributes={
@@ -68,12 +68,13 @@ def config_logger(config: "ConfigFile") -> None:
             )
         )
         set_logger_provider(log_provider)
-        log_provider.add_log_record_processor(
-            BatchLogRecordProcessor(
-                OTLPLogExporter(endpoint=otlp_logs_endpoint),
-                export_timeout_millis=5000,
+        for e in otlp_logs_endpoints:
+            log_provider.add_log_record_processor(
+                BatchLogRecordProcessor(
+                    OTLPLogExporter(endpoint=e),
+                    export_timeout_millis=5000,
+                )
             )
-        )
         global _otlp_handler
         _otlp_handler = LoggingHandler(logger_provider=log_provider)
 

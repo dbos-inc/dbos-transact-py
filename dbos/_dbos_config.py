@@ -34,6 +34,7 @@ class DBOSConfig(TypedDict, total=False):
         sys_db_pool_size (int): System database pool size
         log_level (str): Log level
         otlp_traces_endpoints: List[str]: OTLP traces endpoints
+        otlp_logs_endpoints: List[str]: OTLP logs endpoints
         admin_port (int): Admin port
         run_admin_server (bool): Whether to run the DBOS admin server
     """
@@ -45,6 +46,7 @@ class DBOSConfig(TypedDict, total=False):
     sys_db_pool_size: Optional[int]
     log_level: Optional[str]
     otlp_traces_endpoints: Optional[List[str]]
+    otlp_logs_endpoints: Optional[List[str]]
     admin_port: Optional[int]
     run_admin_server: Optional[bool]
 
@@ -94,8 +96,8 @@ def parse_database_url_to_dbconfig(database_url: str) -> DatabaseConfig:
 
 
 class OTLPExporterConfig(TypedDict, total=False):
-    logsEndpoint: Optional[str]
-    tracesEndpoint: Optional[str]
+    logsEndpoint: Optional[List[str]]
+    tracesEndpoint: Optional[List[str]]
 
 
 class LoggerConfig(TypedDict, total=False):
@@ -187,17 +189,27 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         ]
 
     # Telemetry config
-    telemetry = {}
+    telemetry: TelemetryConfig = {
+        "OTLPExporter": {"tracesEndpoint": [], "logsEndpoint": []}
+    }
+    # For mypy
+    assert telemetry["OTLPExporter"] is not None
+
     # Add OTLPExporter if traces endpoints exist
     otlp_trace_endpoints = config.get("otlp_traces_endpoints")
     if isinstance(otlp_trace_endpoints, list) and len(otlp_trace_endpoints) > 0:
-        telemetry["OTLPExporter"] = {"tracesEndpoint": otlp_trace_endpoints[0]}
+        telemetry["OTLPExporter"]["tracesEndpoint"] = otlp_trace_endpoints
+    # Same for the logs
+    otlp_logs_endpoints = config.get("otlp_logs_endpoints")
+    if isinstance(otlp_logs_endpoints, list) and len(otlp_logs_endpoints) > 0:
+        telemetry["OTLPExporter"]["logsEndpoint"] = otlp_logs_endpoints
+
     # Default to INFO -- the logging seems to default to WARN otherwise.
     log_level = config.get("log_level", "INFO")
     if log_level:
         telemetry["logs"] = {"logLevel": log_level}
     if telemetry:
-        translated_config["telemetry"] = cast(TelemetryConfig, telemetry)
+        translated_config["telemetry"] = telemetry
 
     return translated_config
 
@@ -286,6 +298,17 @@ def load_config(
         validate(instance=data, schema=schema)
     except ValidationError as e:
         raise DBOSInitializationError(f"Validation error: {e}")
+
+    # Special case: convert logsEndpoint and tracesEndpoint from strings to lists of strings, if present
+    if "telemetry" in data and "OTLPExporter" in data["telemetry"]:
+        if "logsEndpoint" in data["telemetry"]["OTLPExporter"]:
+            data["telemetry"]["OTLPExporter"]["logsEndpoint"] = [
+                data["telemetry"]["OTLPExporter"]["logsEndpoint"]
+            ]
+        if "tracesEndpoint" in data["telemetry"]["OTLPExporter"]:
+            data["telemetry"]["OTLPExporter"]["tracesEndpoint"] = [
+                data["telemetry"]["OTLPExporter"]["tracesEndpoint"]
+            ]
 
     data = cast(ConfigFile, data)
     if run_process_config:
@@ -494,10 +517,13 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Telemetry config
     if "telemetry" not in provided_config or provided_config["telemetry"] is None:
         provided_config["telemetry"] = {
-            "OTLPExporter": {},
+            "OTLPExporter": {"tracesEndpoint": [], "logsEndpoint": []},
         }
     elif "OTLPExporter" not in provided_config["telemetry"]:
-        provided_config["telemetry"]["OTLPExporter"] = {}
+        provided_config["telemetry"]["OTLPExporter"] = {
+            "tracesEndpoint": [],
+            "logsEndpoint": [],
+        }
 
     # This is a super messy from a typing perspective.
     # Some of ConfigFile keys are optional -- but in practice they'll always be present in hosted environments
@@ -512,14 +538,15 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
         telemetry = cast(Dict[str, Any], provided_config["telemetry"])
         otlp_exporter = cast(Dict[str, Any], telemetry["OTLPExporter"])
 
+        # Merge the logsEndpoint and tracesEndpoint lists from the file with what we have
         source_otlp = config_from_file["telemetry"]["OTLPExporter"]
         if source_otlp:
             tracesEndpoint = source_otlp.get("tracesEndpoint")
             if tracesEndpoint:
-                otlp_exporter["tracesEndpoint"] = tracesEndpoint
+                otlp_exporter["tracesEndpoint"].extend(tracesEndpoint)
             logsEndpoint = source_otlp.get("logsEndpoint")
             if logsEndpoint:
-                otlp_exporter["logsEndpoint"] = logsEndpoint
+                otlp_exporter["logsEndpoint"].extend(logsEndpoint)
 
     # Runtime config
     if "runtimeConfig" in provided_config:

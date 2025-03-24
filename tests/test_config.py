@@ -155,6 +155,10 @@ def test_load_valid_config_file(mocker):
             bazbaz: BAZBAZ
             bob: ${BOBBOB}
             test_number: 123
+        telemetry:
+            OTLPExporter:
+                logsEndpoint: 'fooLogs'
+                tracesEndpoint: 'fooTraces'
     """
     os.environ["BARBAR"] = "FOOFOO"
     mocker.patch(
@@ -179,6 +183,9 @@ def test_load_valid_config_file(mocker):
     assert os.environ["foo"] == "FOOFOO"
     assert os.environ["test_number"] == "123"
     assert "bob" not in os.environ
+
+    assert configFile["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["fooLogs"]
+    assert configFile["telemetry"]["OTLPExporter"]["tracesEndpoint"] == ["fooTraces"]
 
 
 def test_load_config_database_url(mocker):
@@ -335,8 +342,8 @@ def test_process_config_full():
                 "logLevel": "DEBUG",
             },
             "OTLPExporter": {
-                "logsEndpoint": "thelogsendpoint",
-                "tracesEndpoint": "thetracesendpoint",
+                "logsEndpoint": ["thelogsendpoint"],
+                "tracesEndpoint": ["thetracesendpoint"],
             },
         },
         "env": {
@@ -365,10 +372,12 @@ def test_process_config_full():
     assert configFile["runtimeConfig"]["run_admin_server"] == False
     assert configFile["runtimeConfig"]["setup"] == ["echo 'hello'"]
     assert configFile["telemetry"]["logs"]["logLevel"] == "DEBUG"
-    assert configFile["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
-    assert (
-        configFile["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
-    )
+    assert configFile["telemetry"]["OTLPExporter"]["logsEndpoint"] == [
+        "thelogsendpoint"
+    ]
+    assert configFile["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
+        "thetracesendpoint"
+    ]
     assert configFile["env"]["FOO"] == "BAR"
 
 
@@ -806,11 +815,11 @@ def test_translate_dbosconfig_full_input():
     assert translated_config["database"]["sys_db_pool_size"] == 27
     assert "database_url" not in translated_config
     assert translated_config["telemetry"]["logs"]["logLevel"] == "DEBUG"
-    assert (
-        translated_config["telemetry"]["OTLPExporter"]["tracesEndpoint"]
-        == "http://otel:7777"
-    )
-    assert "logsEndpoint" not in translated_config["telemetry"]["OTLPExporter"]
+    assert translated_config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
+        "http://otel:7777",
+        "notused",
+    ]
+    assert translated_config["telemetry"]["OTLPExporter"]["logsEndpoint"] == []
     assert translated_config["runtimeConfig"]["admin_port"] == 8001
     assert translated_config["runtimeConfig"]["run_admin_server"] == False
     assert "start" not in translated_config["runtimeConfig"]
@@ -908,7 +917,8 @@ def test_translate_empty_otlp_traces_endpoints():
         "otlp_traces_endpoints": [],
     }
     translated_config = translate_dbos_config_to_config_file(config)
-    assert "OTLPExporter" not in translated_config["telemetry"]
+    assert len(translated_config["telemetry"]["OTLPExporter"]["logsEndpoint"]) == 0
+    assert len(translated_config["telemetry"]["OTLPExporter"]["tracesEndpoint"]) == 0
     assert translated_config["telemetry"]["logs"]["logLevel"] == "INFO"
 
 
@@ -920,7 +930,8 @@ def test_translate_ignores_otlp_traces_not_list():
     }
     translated_config = translate_dbos_config_to_config_file(config)
     assert translated_config["name"] == "test-app"
-    assert "OTLPExporter" not in translated_config["telemetry"]
+    assert len(translated_config["telemetry"]["OTLPExporter"]["logsEndpoint"]) == 0
+    assert len(translated_config["telemetry"]["OTLPExporter"]["tracesEndpoint"]) == 0
 
 
 def test_translate_missing_name():
@@ -983,8 +994,8 @@ def test_overwrite_config(mocker):
         },
         "telemetry": {
             "OTLPExporter": {
-                "tracesEndpoint": "a",
-                "logsEndpoint": "b",
+                "tracesEndpoint": ["a"],
+                "logsEndpoint": ["b"],
             },
             "logs": {
                 "logLevel": "DEBUG",
@@ -1013,8 +1024,14 @@ def test_overwrite_config(mocker):
     assert config["database"]["app_db_pool_size"] == 10
     assert "sys_db_pool_size" not in config["database"]
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
-    assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
-    assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
+    assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
+        "a",
+        "thetracesendpoint",
+    ]
+    assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == [
+        "b",
+        "thelogsendpoint",
+    ]
     assert "admin_port" not in config["runtimeConfig"]
     assert "run_admin_server" not in config["runtimeConfig"]
     assert "env" not in config
@@ -1063,8 +1080,10 @@ def test_overwrite_config_minimal(mocker):
     assert config["database"]["sys_db_name"] == "sysdbname"
     assert config["database"]["ssl"] == True
     assert config["database"]["ssl_ca"] == "cert.pem"
-    assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
-    assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
+    assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
+        "thetracesendpoint"
+    ]
+    assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["thelogsendpoint"]
     assert "runtimeConfig" not in config
     assert "env" not in config
 
@@ -1120,8 +1139,10 @@ def test_overwrite_config_has_telemetry(mocker):
     assert config["database"]["sys_db_name"] == "sysdbname"
     assert config["database"]["ssl"] == True
     assert config["database"]["ssl_ca"] == "cert.pem"
-    assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
-    assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
+    assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
+        "thetracesendpoint"
+    ]
+    assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["thelogsendpoint"]
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert "runtimeConfig" not in config
     assert "env" not in config
@@ -1161,7 +1182,10 @@ def test_overwrite_config_no_telemetry_in_file(mocker):
     config = overwrite_config(provided_config)
     # Test that telemetry from provided_config is preserved
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
-    assert config["telemetry"]["OTLPExporter"] == {}
+    assert config["telemetry"]["OTLPExporter"] == {
+        "tracesEndpoint": [],
+        "logsEndpoint": [],
+    }
 
 
 # Not expected in practice, but exercise the code path
@@ -1197,16 +1221,16 @@ def test_overwrite_config_no_otlp_in_file(mocker):
         },
         "telemetry": {
             "OTLPExporter": {
-                "tracesEndpoint": "original-trace",
-                "logsEndpoint": "original-log",
+                "tracesEndpoint": ["original-trace"],
+                "logsEndpoint": ["original-log"],
             }
         },
     }
 
     config = overwrite_config(provided_config)
     # Test that OTLPExporter from provided_config is preserved
-    assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "original-trace"
-    assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "original-log"
+    assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == ["original-trace"]
+    assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["original-log"]
     assert "logs" not in config["telemetry"]
 
 
@@ -1255,8 +1279,10 @@ def test_overwrite_config_with_provided_database_url(mocker):
     assert config["database"]["sys_db_name"] == "sysdbname"
     assert config["database"]["ssl"] == True
     assert config["database"]["ssl_ca"] == "cert.pem"
-    assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == "thetracesendpoint"
-    assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == "thelogsendpoint"
+    assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
+        "thetracesendpoint"
+    ]
+    assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["thelogsendpoint"]
     assert "runtimeConfig" not in config
     assert "env" not in config
 
