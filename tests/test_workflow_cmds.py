@@ -382,3 +382,30 @@ def test_send_recv(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert len(wfsteps_recv.steps) == 2
     assert wfsteps_recv.steps[0].function_name == "DBOS.sleep"
     assert wfsteps_recv.steps[1].function_name == "DBOS.recv"
+
+
+def test_set_get_event(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def set_get_workflow() -> None:
+        DBOS.set_event("key", "Hello, World!")
+        stepOne()
+        DBOS.get_event("wfid", "key", 1)
+        return
+
+    @DBOS.step()
+    def stepOne() -> None:
+        print("Executed stepOne")
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        set_get_workflow()
+
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert wfsteps.workflow_uuid == wfid
+    assert len(wfsteps.steps) == 4
+    assert wfsteps.steps[0].function_name == "DBOS.setEvent"
+    assert wfsteps.steps[1].function_name == "stepOne"
+    assert wfsteps.steps[2].function_name == "DBOS.sleep"
+    assert wfsteps.steps[3].function_name == "DBOS.getEvent"
