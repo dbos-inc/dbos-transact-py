@@ -897,6 +897,7 @@ def decorate_step(
                 step_output: OperationResultInternal = {
                     "workflow_uuid": ctx.workflow_id,
                     "function_id": ctx.function_id,
+                    "function_name": get_dbos_func_name(func),
                     "output": None,
                     "error": None,
                 }

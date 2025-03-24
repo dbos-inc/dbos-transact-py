@@ -89,6 +89,7 @@ class RecordedResult(TypedDict):
 class OperationResultInternal(TypedDict):
     workflow_uuid: str
     function_id: int
+    function_name: str
     output: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
 
@@ -562,6 +563,7 @@ class SystemDatabase:
             {
                 "workflow_uuid": calling_wf,
                 "function_id": calling_wf_fn,
+                "function_name": "getStatus",
                 "output": _serialization.serialize(stat),
                 "error": None,
             }
@@ -810,6 +812,7 @@ class SystemDatabase:
         sql = pg.insert(SystemSchema.operation_outputs).values(
             workflow_uuid=result["workflow_uuid"],
             function_id=result["function_id"],
+            function_name=result["function_name"],
             output=output,
             error=error,
         )
@@ -894,6 +897,7 @@ class SystemDatabase:
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
+                "function_name": "DBOS.send",
                 "output": None,
                 "error": None,
             }
@@ -987,6 +991,7 @@ class SystemDatabase:
                 {
                     "workflow_uuid": workflow_uuid,
                     "function_id": function_id,
+                    "function_name": "DBOS.recv",
                     "output": _serialization.serialize(
                         message
                     ),  # None will be serialized to 'null'
@@ -1077,6 +1082,7 @@ class SystemDatabase:
                     {
                         "workflow_uuid": workflow_uuid,
                         "function_id": function_id,
+                        "function_name": "DBOS.sleep",
                         "output": _serialization.serialize(end_time),
                         "error": None,
                     }
@@ -1124,6 +1130,7 @@ class SystemDatabase:
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
+                "function_name": "DBOS.setEvent",
                 "output": None,
                 "error": None,
             }
@@ -1204,6 +1211,7 @@ class SystemDatabase:
                 {
                     "workflow_uuid": caller_ctx["workflow_uuid"],
                     "function_id": caller_ctx["function_id"],
+                    "function_name": "DBOS.getEvent",
                     "output": _serialization.serialize(
                         value
                     ),  # None will be serialized to 'null'
