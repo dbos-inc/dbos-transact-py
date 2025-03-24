@@ -312,3 +312,42 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert handle.get_result() == [0, 1, 2, 3, 4]
     workflows = _workflow_commands.list_queued_workflows(sys_db)
     assert len(workflows) == 0
+
+
+def test_list_2steps_sleep(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        stepOne()
+        stepTwo()
+        DBOS.sleep(1)
+        print("Executed Simple workflow")
+        return
+
+    @DBOS.step()
+    def stepOne() -> None:
+        print("Executed stepOne")
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        print("Executed stepTwo")
+        return
+
+    wfid = str(uuid.uuid4())
+    print(wfid)
+    with SetWorkflowID(wfid):
+        simple_workflow()
+
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert len(wfsteps.steps) == 3
+    assert wfsteps.workflow_uuid == wfid
+    print(wfsteps.workflow_uuid)
+    print(wfsteps.steps[0].function_id)
+    print(wfsteps.steps[0].function_name)
+    print(wfsteps.steps[1].function_name)
+    print(wfsteps.steps[2].function_name)
+
+    assert wfsteps.steps[0].function_name == "stepOne"
+    assert wfsteps.steps[1].function_name == "stepTwo"
+    assert wfsteps.steps[2].function_name == "DBOS.sleep"

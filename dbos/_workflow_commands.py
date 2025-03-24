@@ -7,6 +7,7 @@ from ._sys_db import (
     GetWorkflowsOutput,
     SystemDatabase,
     WorkflowStatuses,
+    WorkflowSteps,
 )
 
 
@@ -145,4 +146,10 @@ def get_workflow(
     if not getRequest:
         winfo.request = None
 
+    print(winfo)
     return winfo
+
+
+def list_workflow_steps(sys_db: SystemDatabase, workflow_uuid: str) -> WorkflowSteps:
+    output: WorkflowSteps = sys_db.get_workflow_steps(workflow_uuid)
+    return output

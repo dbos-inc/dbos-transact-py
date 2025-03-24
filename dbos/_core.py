@@ -853,6 +853,9 @@ def decorate_step(
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
 
+        stepName = func.__name__
+        print("Decorating step", stepName)
+
         def invoke_step(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:
                 raise DBOSException(
@@ -897,7 +900,7 @@ def decorate_step(
                 step_output: OperationResultInternal = {
                     "workflow_uuid": ctx.workflow_id,
                     "function_id": ctx.function_id,
-                    "function_name": get_dbos_func_name(func),
+                    "function_name": stepName,
                     "output": None,
                     "error": None,
                 }

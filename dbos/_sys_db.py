@@ -791,7 +791,7 @@ class SystemDatabase:
                 sa.select(
                     SystemSchema.operation_outputs.c.function_id,
                     SystemSchema.operation_outputs.c.function_name,
-                ).where(SystemSchema.operation_output.c.workflow_uuid == workflow_id)
+                ).where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
             ).fetchall()
             return WorkflowSteps(
                 workflow_uuid=workflow_id,
