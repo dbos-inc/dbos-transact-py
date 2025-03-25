@@ -673,6 +673,15 @@ def workflow_wrapper(
         wfOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
 
         def init_wf() -> Callable[[Callable[[], R]], R]:
+
+            def recorded_result(
+                c_wfid: str, dbos: "DBOS"
+            ) -> Callable[[Callable[[], R]], R]:
+                def recorded_result_inner(func: Callable[[], R]) -> R:
+                    return WorkflowHandlePolling(c_wfid, dbos).get_result()
+
+                return recorded_result_inner
+
             ctx = assert_current_dbos_context()  # Now the child ctx
 
             # print("called from init_wf", funcName, ctx.workflow_id)
@@ -704,7 +713,8 @@ def workflow_wrapper(
                     ctx.parent_workflow_id, ctx.parent_workflow_fid
                 )
                 if child_workflow_id is not None:
-                    return WorkflowHandle(child_workflow_id)
+                    # return WorkflowHandlePolling(child_workflow_id,dbos).get_result()
+                    return recorded_result(child_workflow_id, dbos)
                 else:
                     dbos._sys_db.record_child_workflow(
                         ctx.parent_workflow_id,

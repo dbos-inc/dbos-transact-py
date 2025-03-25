@@ -510,3 +510,26 @@ def test_callchild_rerun_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> Non
         res2 = handle.get_result()
 
     assert res1 == res2
+
+
+def test_callchild_rerun_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def parentWorkflow() -> str:
+        childwfid = str(uuid.uuid4())
+        with SetWorkflowID(childwfid):
+            return child_workflow(childwfid)
+
+    @DBOS.workflow()
+    def child_workflow(id: str) -> str:
+        print("Executed child workflow")
+        return id
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        res1 = parentWorkflow()
+
+    with SetWorkflowID(wfid):
+        res2 = parentWorkflow()
+
+    assert res1 == res2
