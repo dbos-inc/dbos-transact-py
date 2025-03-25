@@ -28,6 +28,7 @@ from sqlalchemy.sql import func
 from dbos._utils import GlobalParams
 
 from . import _serialization
+from ._context import get_local_dbos_context
 from ._dbos_config import ConfigFile
 from ._error import (
     DBOSConflictingWorkflowError,
@@ -547,7 +548,10 @@ class SystemDatabase:
     def get_workflow_status_within_wf(
         self, workflow_uuid: str, calling_wf: str, calling_wf_fn: int
     ) -> Optional[WorkflowStatusInternal]:
-        res = self.check_operation_execution(calling_wf, calling_wf_fn)
+        ctx = get_local_dbos_context()
+        nextFuncId = ctx.get_next_function_id()
+
+        res = self.check_operation_execution(calling_wf, nextFuncId)
         if res is not None:
             if res["output"]:
                 resstat: WorkflowStatusInternal = _serialization.deserialize(
@@ -562,7 +566,7 @@ class SystemDatabase:
         self.record_operation_result(
             {
                 "workflow_uuid": calling_wf,
-                "function_id": calling_wf_fn,
+                "function_id": nextFuncId,
                 "function_name": "getStatus",
                 "output": _serialization.serialize(stat),
                 "error": None,
@@ -827,6 +831,34 @@ class SystemDatabase:
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
             raise
 
+    def record_child_workflow(
+        self,
+        parentUUID: str,
+        childUUID: str,
+        functionID: str,
+        functionName: str,
+        conn: Optional[sa.Connection] = None,
+    ) -> None:
+        if self._debug_mode:
+            raise Exception("called record_child_workflow in debug mode")
+
+        sql = pg.insert(SystemSchema.operation_outputs).values(
+            workflow_uuid=parentUUID,
+            function_id=functionID,
+            function_name=functionName,
+            child_workflow_id=childUUID,
+        )
+        try:
+            if conn is not None:
+                conn.execute(sql)
+            else:
+                with self.engine.begin() as c:
+                    c.execute(sql)
+        except DBAPIError as dbapi_error:
+            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
+                raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+            raise
+
     def check_operation_execution(
         self, workflow_uuid: str, function_id: int, conn: Optional[sa.Connection] = None
     ) -> Optional[RecordedResult]:
@@ -852,6 +884,27 @@ class SystemDatabase:
             "error": rows[0][1],
         }
         return result
+
+    def check_child_workflow(
+        self, workflow_uuid: str, function_id: int, conn: Optional[sa.Connection] = None
+    ) -> Optional[str]:
+        print("Checking child workflow", workflow_uuid, function_id)
+        sql = sa.select(SystemSchema.operation_outputs.c.child_workflow_id).where(
+            SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
+            SystemSchema.operation_outputs.c.function_id == function_id,
+        )
+
+        # If in a transaction, use the provided connection
+        rows: Sequence[Any]
+        if conn is not None:
+            rows = conn.execute(sql).all()
+        else:
+            with self.engine.begin() as c:
+                rows = c.execute(sql).all()
+        if len(rows) == 0:
+            return None
+
+        return rows[0][0]
 
     def send(
         self,

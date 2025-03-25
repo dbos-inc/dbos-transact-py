@@ -409,3 +409,39 @@ def test_set_get_event(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert wfsteps.steps[1].function_name == "stepOne"
     assert wfsteps.steps[2].function_name == "DBOS.sleep"
     assert wfsteps.steps[3].function_name == "DBOS.getEvent"
+
+
+def test_callchild_first(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def parentWorkflow() -> None:
+        child_workflow()
+        stepOne()
+        stepTwo()
+        return
+
+    @DBOS.step()
+    def stepOne() -> None:
+        print("Executed stepOne")
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        print("Executed stepOne")
+        return
+
+    @DBOS.workflow()
+    def child_workflow() -> None:
+        print("Executed child workflow")
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        parentWorkflow()
+
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert wfsteps.workflow_uuid == wfid
+    assert len(wfsteps.steps) == 3
+    assert wfsteps.steps[0].function_name == "child_workflow"
+    assert wfsteps.steps[1].function_name == "stepOne"
+    assert wfsteps.steps[2].function_name == "stepTwo"

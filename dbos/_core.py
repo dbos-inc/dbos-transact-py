@@ -453,6 +453,8 @@ def start_workflow(
     **kwargs: P.kwargs,
 ) -> "WorkflowHandle[R]":
 
+    dbos.logger.info(f"Starting workflow {get_dbos_func_name(func)}")
+    print("start_workflow", get_dbos_func_name(func))
     # If the function has a class, add the class object as its first argument
     fself: Optional[object] = None
     if hasattr(func, "__self__"):
@@ -467,6 +469,24 @@ def start_workflow(
         )
 
     func = cast("Workflow[P, R]", func.__orig_func)  # type: ignore
+
+    ctx = get_local_dbos_context()
+    if ctx and ctx.parent_workflow_id != "":
+        print("parent_workflow_id", ctx.parent_workflow_id)
+        child_workflow_id = dbos.sys_db.child_workflow_id(
+            ctx.parent_workflow_id, ctx.workflow_id, ctx.parent_workflow_fid
+        )
+        if child_workflow_id is not None:
+            return WorkflowHandle(child_workflow_id)
+        else:
+            dbos._sys_db.record_child_workflow(
+                ctx.parent_workflow_id,
+                ctx.workflow_id,
+                ctx.parent_workflow_fid,
+                get_dbos_func_name(func),
+            )
+    else:
+        print("No parent_workflow_id")
 
     inputs: WorkflowInputs = {
         "args": args,
@@ -521,6 +541,9 @@ async def start_workflow_async(
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> "WorkflowHandleAsync[R]":
+
+    dbos.logger.info(f"Starting workflow {get_dbos_func_name(func)}")
+    print("start_workflow_async", get_dbos_func_name(func))
 
     # If the function has a class, add the class object as its first argument
     fself: Optional[object] = None
@@ -599,6 +622,8 @@ def workflow_wrapper(
 ) -> Callable[P, R]:
     func.__orig_func = func  # type: ignore
 
+    funcName = func.__name__
+
     fi = get_or_create_func_info(func)
     fi.max_recovery_attempts = max_recovery_attempts
 
@@ -630,6 +655,31 @@ def workflow_wrapper(
 
         def init_wf() -> Callable[[Callable[[], R]], R]:
             ctx = assert_current_dbos_context()  # Now the child ctx
+
+            print("called from init_wf", funcName, ctx.workflow_id)
+
+            if ctx and ctx.parent_workflow_id != "":
+                print(
+                    "parent_workflow ",
+                    ctx.parent_workflow_id,
+                    ctx.parent_workflow_fid,
+                    ctx.workflow_id,
+                )
+                child_workflow_id = dbos._sys_db.check_child_workflow(
+                    ctx.parent_workflow_id, ctx.parent_workflow_fid
+                )
+                if child_workflow_id is not None:
+                    return WorkflowHandle(child_workflow_id)
+                else:
+                    dbos._sys_db.record_child_workflow(
+                        ctx.parent_workflow_id,
+                        ctx.workflow_id,
+                        ctx.parent_workflow_fid,
+                        funcName,
+                    )
+            else:
+                print("No parent_workflow_id")
+
             status = _init_workflow(
                 dbos,
                 ctx,

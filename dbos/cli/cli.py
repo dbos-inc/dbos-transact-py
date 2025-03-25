@@ -339,6 +339,15 @@ def get(
     )
 
 
+@workflow.command(help="List the steps of a workflow")
+def list(
+    workflow_id: Annotated[str, typer.Argument()],
+) -> None:
+    config = load_config(silent=True)
+    sys_db = SystemDatabase(config)
+    print(jsonpickle.encode(get_workflow(sys_db, workflow_id), unpicklable=False))
+
+
 @workflow.command(
     help="Cancel a workflow so it is no longer automatically retried or restarted"
 )

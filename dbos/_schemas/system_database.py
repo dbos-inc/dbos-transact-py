@@ -74,6 +74,7 @@ class SystemSchema:
         Column("function_name", Text, nullable=False, default=""),
         Column("output", Text, nullable=True),
         Column("error", Text, nullable=True),
+        Column("child_workflow_id", Text, nullable=True),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
     )
 
