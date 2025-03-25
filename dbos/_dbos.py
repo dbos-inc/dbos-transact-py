@@ -982,7 +982,7 @@ class DBOS:
         return ctx.workflow_id
 
     @classproperty
-    def step_id(cls) -> str:
+    def step_id(cls) -> int:
         """Return the step ID for the current context. This is a unique identifier of the current step within the workflow."""
         ctx = assert_current_dbos_context()
         assert (
