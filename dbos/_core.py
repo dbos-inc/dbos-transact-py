@@ -430,13 +430,20 @@ def _get_new_wf() -> tuple[str, DBOSContext]:
     #   Make a (system) DB record for the workflow
     #   Pass the new context to a worker thread that will run the wf function
     cur_ctx = get_local_dbos_context()
+    if cur_ctx is None:
+        print("cur_ctx is None")
+
     if cur_ctx is not None and cur_ctx.is_within_workflow():
+        print("cur_ctx is not None")
         assert cur_ctx.is_workflow()  # Not in a step
         cur_ctx.function_id += 1
+        print(cur_ctx.id_assigned_for_next_workflow)
         if len(cur_ctx.id_assigned_for_next_workflow) == 0:
             cur_ctx.id_assigned_for_next_workflow = (
                 cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
             )
+        else:
+            print("zero check failed")
 
     new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
     new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
@@ -477,6 +484,7 @@ def start_workflow(
     }
 
     new_wf_id, new_wf_ctx = _get_new_wf()
+    print("workflow_id child before init", new_wf_ctx.workflow_id)
 
     status = _init_workflow(
         dbos,
@@ -492,18 +500,27 @@ def start_workflow(
 
     wf_status = status["status"]
 
+    print("workflow_id child after init", new_wf_ctx.workflow_id)
     ctx = new_wf_ctx
+    new_child_workflow_id = ctx.id_assigned_for_next_workflow
+    print("better child_workflow_id", new_child_workflow_id)
     if ctx and ctx.parent_workflow_id != "":
         print("parent_workflow_id", ctx.parent_workflow_id)
         child_workflow_id = dbos._sys_db.check_child_workflow(
             ctx.parent_workflow_id, ctx.parent_workflow_fid
         )
+        print("child_workflow_id", child_workflow_id)
         if child_workflow_id is not None:
-            return WorkflowHandle(child_workflow_id)
+            return WorkflowHandlePolling(child_workflow_id, dbos)
         else:
-            dbos._sys_db.record_child_workflow(
+            print(
+                "record_child_workflow",
                 ctx.parent_workflow_id,
                 ctx.workflow_id,
+            )
+            dbos._sys_db.record_child_workflow(
+                ctx.parent_workflow_id,
+                new_child_workflow_id,
                 ctx.parent_workflow_fid,
                 func.__name__,
             )

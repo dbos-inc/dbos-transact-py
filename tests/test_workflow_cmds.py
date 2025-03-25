@@ -484,3 +484,29 @@ def test_callchild_first_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> Non
     # assert wfsteps.steps[0].function_name == "test_callchild_first_async_thread.<locals>.child_workflow"
     assert wfsteps.steps[1].function_name == "stepOne"
     assert wfsteps.steps[2].function_name == "stepTwo"
+
+
+def test_callchild_rerun_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def parentWorkflow() -> str:
+        childwfid = str(uuid.uuid4())
+        with SetWorkflowID(childwfid):
+            handle = dbos.start_workflow(child_workflow, childwfid)
+            return handle.get_result()
+
+    @DBOS.workflow()
+    def child_workflow(id: str) -> str:
+        print("Executed child workflow")
+        return id
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = dbos.start_workflow(parentWorkflow)
+        res1 = handle.get_result()
+
+    with SetWorkflowID(wfid):
+        handle = dbos.start_workflow(parentWorkflow)
+        res2 = handle.get_result()
+
+    assert res1 == res2
