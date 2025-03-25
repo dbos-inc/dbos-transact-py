@@ -484,7 +484,18 @@ def start_workflow(
     }
 
     new_wf_id, new_wf_ctx = _get_new_wf()
-    print("workflow_id child before init", new_wf_ctx.workflow_id)
+
+    ctx = new_wf_ctx
+    new_child_workflow_id = ctx.id_assigned_for_next_workflow
+
+    if ctx and ctx.parent_workflow_id != "":
+        print("parent_workflow_id", ctx.parent_workflow_id)
+        child_workflow_id = dbos._sys_db.check_child_workflow(
+            ctx.parent_workflow_id, ctx.parent_workflow_fid
+        )
+        print("child_workflow_id", child_workflow_id)
+        if child_workflow_id is not None:
+            return WorkflowHandlePolling(child_workflow_id, dbos)
 
     status = _init_workflow(
         dbos,
@@ -500,32 +511,26 @@ def start_workflow(
 
     wf_status = status["status"]
 
-    print("workflow_id child after init", new_wf_ctx.workflow_id)
-    ctx = new_wf_ctx
-    new_child_workflow_id = ctx.id_assigned_for_next_workflow
-    print("better child_workflow_id", new_child_workflow_id)
+    # ctx = new_wf_ctx
+    # new_child_workflow_id = ctx.id_assigned_for_next_workflow
+
+    # if ctx and ctx.parent_workflow_id != "":
+    #    print("parent_workflow_id", ctx.parent_workflow_id)
+    #    child_workflow_id = dbos._sys_db.check_child_workflow(
+    #        ctx.parent_workflow_id, ctx.parent_workflow_fid
+    #    )
+    #    print("child_workflow_id", child_workflow_id)
+    #    if child_workflow_id is not None:
+    #        return WorkflowHandlePolling(child_workflow_id, dbos)
+    #    else:
+
     if ctx and ctx.parent_workflow_id != "":
-        print("parent_workflow_id", ctx.parent_workflow_id)
-        child_workflow_id = dbos._sys_db.check_child_workflow(
-            ctx.parent_workflow_id, ctx.parent_workflow_fid
+        dbos._sys_db.record_child_workflow(
+            ctx.parent_workflow_id,
+            new_child_workflow_id,
+            ctx.parent_workflow_fid,
+            func.__name__,
         )
-        print("child_workflow_id", child_workflow_id)
-        if child_workflow_id is not None:
-            return WorkflowHandlePolling(child_workflow_id, dbos)
-        else:
-            print(
-                "record_child_workflow",
-                ctx.parent_workflow_id,
-                ctx.workflow_id,
-            )
-            dbos._sys_db.record_child_workflow(
-                ctx.parent_workflow_id,
-                new_child_workflow_id,
-                ctx.parent_workflow_fid,
-                func.__name__,
-            )
-    else:
-        print("No parent_workflow_id")
 
     if not execute_workflow or (
         not dbos.debug_mode
@@ -686,6 +691,20 @@ def workflow_wrapper(
 
             # print("called from init_wf", funcName, ctx.workflow_id)
 
+            if ctx and ctx.parent_workflow_id != "":
+                print(
+                    "parent_workflow ",
+                    ctx.parent_workflow_id,
+                    ctx.parent_workflow_fid,
+                    ctx.workflow_id,
+                )
+                child_workflow_id = dbos._sys_db.check_child_workflow(
+                    ctx.parent_workflow_id, ctx.parent_workflow_fid
+                )
+                if child_workflow_id is not None:
+                    # return WorkflowHandlePolling(child_workflow_id,dbos).get_result()
+                    return recorded_result(child_workflow_id, dbos)
+
             status = _init_workflow(
                 dbos,
                 ctx,
@@ -702,28 +721,29 @@ def workflow_wrapper(
                 f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
             )
 
+            # if ctx and ctx.parent_workflow_id != "":
+            #    print(
+            #        "parent_workflow ",
+            #        ctx.parent_workflow_id,
+            #        ctx.parent_workflow_fid,
+            #        ctx.workflow_id,
+            #    )
+            #    child_workflow_id = dbos._sys_db.check_child_workflow(
+            #        ctx.parent_workflow_id, ctx.parent_workflow_fid
+            #    )
+            #    if child_workflow_id is not None:
+            #        # return WorkflowHandlePolling(child_workflow_id,dbos).get_result()
+            #        return recorded_result(child_workflow_id, dbos)
+            #    else:
             if ctx and ctx.parent_workflow_id != "":
-                print(
-                    "parent_workflow ",
+                dbos._sys_db.record_child_workflow(
                     ctx.parent_workflow_id,
-                    ctx.parent_workflow_fid,
                     ctx.workflow_id,
+                    ctx.parent_workflow_fid,
+                    funcName,
                 )
-                child_workflow_id = dbos._sys_db.check_child_workflow(
-                    ctx.parent_workflow_id, ctx.parent_workflow_fid
-                )
-                if child_workflow_id is not None:
-                    # return WorkflowHandlePolling(child_workflow_id,dbos).get_result()
-                    return recorded_result(child_workflow_id, dbos)
-                else:
-                    dbos._sys_db.record_child_workflow(
-                        ctx.parent_workflow_id,
-                        ctx.workflow_id,
-                        ctx.parent_workflow_fid,
-                        funcName,
-                    )
-            else:
-                print("No parent_workflow_id")
+            # else:
+            #    print("No parent_workflow_id")
 
             return _get_wf_invoke_func(dbos, status)
 

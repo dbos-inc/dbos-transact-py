@@ -517,6 +517,7 @@ def test_callchild_rerun_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
     @DBOS.workflow()
     def parentWorkflow() -> str:
         childwfid = str(uuid.uuid4())
+        print("generated childwfid: ", childwfid)
         with SetWorkflowID(childwfid):
             return child_workflow(childwfid)
 
