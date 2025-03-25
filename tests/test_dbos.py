@@ -38,6 +38,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     @DBOS.transaction(isolation_level="REPEATABLE READ")
     def test_transaction(var2: str) -> str:
+        assert DBOS.step_id == 1
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
@@ -46,6 +47,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     @DBOS.step()
     def test_step(var: str) -> str:
+        assert DBOS.step_id == 2
         nonlocal step_counter
         step_counter += 1
         DBOS.logger.info("I'm test_step")

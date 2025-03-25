@@ -982,6 +982,15 @@ class DBOS:
         return ctx.workflow_id
 
     @classproperty
+    def step_id(cls) -> str:
+        """Return the step ID for the current context. This is a unique identifier of the current step within the workflow."""
+        ctx = assert_current_dbos_context()
+        assert (
+            ctx.is_within_workflow()
+        ), "step_id is only available within a DBOS workflow."
+        return ctx.function_id
+
+    @classproperty
     def parent_workflow_id(cls) -> str:
         """
         Return the workflow ID for the parent workflow.
