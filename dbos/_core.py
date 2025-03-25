@@ -257,6 +257,7 @@ def _init_workflow(
             dbos._sys_db.enqueue(wfid, queue)
 
     status["status"] = wf_status
+
     return status
 
 
@@ -477,6 +478,20 @@ def start_workflow(
 
     new_wf_id, new_wf_ctx = _get_new_wf()
 
+    status = _init_workflow(
+        dbos,
+        new_wf_ctx,
+        inputs=inputs,
+        wf_name=get_dbos_func_name(func),
+        class_name=get_dbos_class_name(fi, func, args),
+        config_name=get_config_name(fi, func, args),
+        temp_wf_type=get_temp_workflow_type(func),
+        queue=queue_name,
+        max_recovery_attempts=fi.max_recovery_attempts,
+    )
+
+    wf_status = status["status"]
+
     ctx = new_wf_ctx
     if ctx and ctx.parent_workflow_id != "":
         print("parent_workflow_id", ctx.parent_workflow_id)
@@ -494,20 +509,6 @@ def start_workflow(
             )
     else:
         print("No parent_workflow_id")
-
-    status = _init_workflow(
-        dbos,
-        new_wf_ctx,
-        inputs=inputs,
-        wf_name=get_dbos_func_name(func),
-        class_name=get_dbos_class_name(fi, func, args),
-        config_name=get_config_name(fi, func, args),
-        temp_wf_type=get_temp_workflow_type(func),
-        queue=queue_name,
-        max_recovery_attempts=fi.max_recovery_attempts,
-    )
-
-    wf_status = status["status"]
 
     if not execute_workflow or (
         not dbos.debug_mode
@@ -578,6 +579,7 @@ async def start_workflow_async(
         temp_wf_type=get_temp_workflow_type(func),
         queue=queue_name,
         max_recovery_attempts=fi.max_recovery_attempts,
+        operationName=func.__name__,
     )
 
     wf_status = status["status"]
@@ -656,7 +658,23 @@ def workflow_wrapper(
         def init_wf() -> Callable[[Callable[[], R]], R]:
             ctx = assert_current_dbos_context()  # Now the child ctx
 
-            print("called from init_wf", funcName, ctx.workflow_id)
+            # print("called from init_wf", funcName, ctx.workflow_id)
+
+            status = _init_workflow(
+                dbos,
+                ctx,
+                inputs=inputs,
+                wf_name=get_dbos_func_name(func),
+                class_name=get_dbos_class_name(fi, func, args),
+                config_name=get_config_name(fi, func, args),
+                temp_wf_type=get_temp_workflow_type(func),
+                max_recovery_attempts=max_recovery_attempts,
+            )
+
+            # TODO: maybe modify the parameters if they've been changed by `_init_workflow`
+            dbos.logger.debug(
+                f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
+            )
 
             if ctx and ctx.parent_workflow_id != "":
                 print(
@@ -679,21 +697,6 @@ def workflow_wrapper(
                     )
             else:
                 print("No parent_workflow_id")
-
-            status = _init_workflow(
-                dbos,
-                ctx,
-                inputs=inputs,
-                wf_name=get_dbos_func_name(func),
-                class_name=get_dbos_class_name(fi, func, args),
-                config_name=get_config_name(fi, func, args),
-                temp_wf_type=get_temp_workflow_type(func),
-                max_recovery_attempts=max_recovery_attempts,
-            )
-            # TODO: maybe modify the parameters if they've been changed by `_init_workflow`
-            dbos.logger.debug(
-                f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
-            )
 
             return _get_wf_invoke_func(dbos, status)
 

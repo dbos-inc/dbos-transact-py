@@ -2,6 +2,8 @@ import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 # Public API
 from dbos import (
     DBOS,
@@ -411,7 +413,7 @@ def test_set_get_event(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert wfsteps.steps[3].function_name == "DBOS.getEvent"
 
 
-def test_callchild_first(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_callchild_first_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     @DBOS.workflow()
     def parentWorkflow() -> None:
@@ -447,7 +449,7 @@ def test_callchild_first(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert wfsteps.steps[2].function_name == "stepTwo"
 
 
-def test_callchild_first_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_callchild_first_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     @DBOS.workflow()
     def parentWorkflow() -> None:
@@ -479,5 +481,6 @@ def test_callchild_first_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert wfsteps.workflow_uuid == wfid
     assert len(wfsteps.steps) == 3
     assert wfsteps.steps[0].function_name == "child_workflow"
+    # assert wfsteps.steps[0].function_name == "test_callchild_first_async_thread.<locals>.child_workflow"
     assert wfsteps.steps[1].function_name == "stepOne"
     assert wfsteps.steps[2].function_name == "stepTwo"
