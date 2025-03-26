@@ -364,7 +364,7 @@ def test_send_recv(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     @DBOS.workflow()
     def recv_workflow() -> str:
-        return DBOS.recv(timeout_seconds=1)
+        return str(DBOS.recv(timeout_seconds=1))
 
     wfid_r = str(uuid.uuid4())
     with SetWorkflowID(wfid_r):

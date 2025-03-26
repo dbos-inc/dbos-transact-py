@@ -548,10 +548,14 @@ class SystemDatabase:
     def get_workflow_status_within_wf(
         self, workflow_uuid: str, calling_wf: str, calling_wf_fn: int
     ) -> Optional[WorkflowStatusInternal]:
-        ctx = get_local_dbos_context()
-        nextFuncId = ctx.get_next_function_id()
+        # ctx = get_local_dbos_context()
+        # if ctx is not None:
+        #    nextFuncId = ctx.get_next_function_id()
+        # else:
+        #    nextFuncId = calling_wf_fn
 
-        res = self.check_operation_execution(calling_wf, nextFuncId)
+        # res = self.check_operation_execution(calling_wf, nextFuncId)
+        res = self.check_operation_execution(calling_wf, calling_wf_fn)
         if res is not None:
             if res["output"]:
                 resstat: WorkflowStatusInternal = _serialization.deserialize(
@@ -566,7 +570,7 @@ class SystemDatabase:
         self.record_operation_result(
             {
                 "workflow_uuid": calling_wf,
-                "function_id": nextFuncId,
+                "function_id": calling_wf_fn,
                 "function_name": "getStatus",
                 "output": _serialization.serialize(stat),
                 "error": None,
@@ -835,13 +839,10 @@ class SystemDatabase:
         self,
         parentUUID: str,
         childUUID: str,
-        functionID: str,
+        functionID: int,
         functionName: str,
         conn: Optional[sa.Connection] = None,
     ) -> None:
-        print(
-            "Recording child workflow", parentUUID, childUUID, functionID, functionName
-        )
         if self._debug_mode:
             raise Exception("called record_child_workflow in debug mode")
 
@@ -859,7 +860,7 @@ class SystemDatabase:
                     c.execute(sql)
         except DBAPIError as dbapi_error:
             if dbapi_error.orig.sqlstate == "23505":  # type: ignore
-                raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+                raise DBOSWorkflowConflictIDError(parentUUID)
             raise
 
     def check_operation_execution(
@@ -907,7 +908,7 @@ class SystemDatabase:
         if len(rows) == 0:
             return None
 
-        return rows[0][0]
+        return str(rows[0][0])
 
     def send(
         self,
