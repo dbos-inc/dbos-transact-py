@@ -196,6 +196,7 @@ def _init_workflow(
         if len(ctx.workflow_id) > 0
         else ctx.id_assigned_for_next_workflow
     )
+    print("In init workflow .....wfid", wfid)
     status: WorkflowStatusInternal = {
         "workflow_uuid": wfid,
         "status": (
@@ -240,15 +241,23 @@ def _init_workflow(
             # Synchronously record the status and inputs for workflows and single-step workflows
             # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
             # TODO: Make this transactional (and with the queue step below)
+            print("inserting workflow status")
             wf_status = dbos._sys_db.insert_workflow_status(
                 status, max_recovery_attempts=max_recovery_attempts
             )
+            print("inserted workflow status")
+            print("inserting workflow inputs")
             # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
-            dbos._sys_db.update_workflow_inputs(
-                wfid, _serialization.serialize_args(inputs)
-            )
+            try:
+                dbos._sys_db.update_workflow_inputs(
+                    wfid, _serialization.serialize_args(inputs)
+                )
+            except Exception as e:
+                print("Exception in update_workflow_inputs", e)
+            print("inserted workflow inputs")
         else:
             # Buffer the inputs for single-transaction workflows, but don't buffer the status
+
             dbos._sys_db.buffer_workflow_inputs(
                 wfid, _serialization.serialize_args(inputs)
             )
@@ -257,6 +266,7 @@ def _init_workflow(
             dbos._sys_db.enqueue(wfid, queue)
 
     status["status"] = wf_status
+    print("exiting init workflow")
 
     return status
 
@@ -602,7 +612,7 @@ async def start_workflow_async(
         )
         print("child_workflow_id", child_workflow_id)
         if child_workflow_id is not None:
-            return WorkflowHandlePolling(child_workflow_id, dbos)
+            return WorkflowHandleAsyncPolling(child_workflow_id, dbos)
 
     status = await asyncio.to_thread(
         _init_workflow,
