@@ -777,10 +777,14 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
     assert stat.recovery_attempts == 2
     stat = dbos.get_workflow_status("run_this_once_a")
     assert stat
-    assert stat.recovery_attempts == 2
+    assert (
+        stat.recovery_attempts == 1
+    )  # because we now return based on parent child reln
     stat = dbos.get_workflow_status("run_this_once_b")
     assert stat
-    assert stat.recovery_attempts == 2
+    assert (
+        stat.recovery_attempts == 1
+    )  # because we now return based on parent child reln
 
 
 def test_sleep(dbos: DBOS) -> None:

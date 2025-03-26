@@ -453,7 +453,8 @@ def test_callchild_first_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> Non
 
     @DBOS.workflow()
     def parentWorkflow() -> None:
-        dbos.start_workflow(child_workflow)
+        handle = dbos.start_workflow(child_workflow)
+        handle.get_status()
         stepOne()
         stepTwo()
         return
@@ -479,11 +480,11 @@ def test_callchild_first_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> Non
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
     assert wfsteps.workflow_uuid == wfid
-    assert len(wfsteps.steps) == 3
+    assert len(wfsteps.steps) == 4
     assert wfsteps.steps[0].function_name == "child_workflow"
-    # assert wfsteps.steps[0].function_name == "test_callchild_first_async_thread.<locals>.child_workflow"
-    assert wfsteps.steps[1].function_name == "stepOne"
-    assert wfsteps.steps[2].function_name == "stepTwo"
+    assert wfsteps.steps[1].function_name == "getStatus"
+    assert wfsteps.steps[2].function_name == "stepOne"
+    assert wfsteps.steps[3].function_name == "stepTwo"
 
 
 @pytest.mark.asyncio
