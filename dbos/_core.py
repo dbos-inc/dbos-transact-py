@@ -6,6 +6,7 @@ import sys
 import time
 import traceback
 from concurrent.futures import Future
+from enum import Enum
 from functools import wraps
 from typing import (
     TYPE_CHECKING,
@@ -21,10 +22,9 @@ from typing import (
     overload,
 )
 
-from dbos._outcome import Immediate, NoResult, Outcome, Pending
-from dbos._utils import GlobalParams
-
 from ._app_db import ApplicationDatabase, TransactionResultInternal
+from ._outcome import Immediate, NoResult, Outcome, Pending
+from ._utils import GlobalParams
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec
@@ -89,6 +89,7 @@ if TYPE_CHECKING:
         IsolationLevel,
     )
 
+from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, InvalidRequestError
 
 P = ParamSpec("P")  # A generic type for workflow parameters
@@ -96,6 +97,12 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 F = TypeVar("F", bound=Callable[..., Any])
 
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
+
+
+class DebugMode(Enum):
+    DISABLED = 0
+    ENABLED = 1
+    TIME_TRAVEL = 2
 
 
 class WorkflowHandleFuture(Generic[R]):
@@ -230,7 +237,7 @@ def _init_workflow(
         inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
 
     wf_status = status["status"]
-    if dbos.debug_mode:
+    if dbos.is_debugging:
         get_status_result = dbos._sys_db.get_workflow_status(wfid)
         if get_status_result is None:
             raise DBOSNonExistentWorkflowError(wfid)
@@ -269,7 +276,7 @@ def _get_wf_invoke_func(
             output = func()
             status["status"] = "SUCCESS"
             status["output"] = _serialization.serialize(output)
-            if not dbos.debug_mode:
+            if not dbos.is_debugging:
                 if status["queue_name"] is not None:
                     queue = dbos._registry.queue_info_map[status["queue_name"]]
                     dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
@@ -288,7 +295,7 @@ def _get_wf_invoke_func(
         except Exception as error:
             status["status"] = "ERROR"
             status["error"] = _serialization.serialize_exception(error)
-            if not dbos.debug_mode:
+            if not dbos.is_debugging:
                 if status["queue_name"] is not None:
                     queue = dbos._registry.queue_info_map[status["queue_name"]]
                     dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
@@ -490,7 +497,7 @@ def start_workflow(
     wf_status = status["status"]
 
     if not execute_workflow or (
-        not dbos.debug_mode
+        not dbos.is_debugging
         and (
             wf_status == WorkflowStatusString.ERROR.value
             or wf_status == WorkflowStatusString.SUCCESS.value
@@ -729,7 +736,7 @@ def decorate_transaction(
                                         ctx.function_id,
                                     )
                                 )
-                                if dbos.debug_mode and recorded_output is None:
+                                if dbos.is_debugging and recorded_output is None:
                                     raise DBOSException(
                                         "Transaction output not found in debug mode"
                                     )
@@ -737,6 +744,43 @@ def decorate_transaction(
                                     dbos.logger.debug(
                                         f"Replaying transaction, id: {ctx.function_id}, name: {attributes['name']}"
                                     )
+                                    if dbos._debug_mode == DebugMode.TIME_TRAVEL:
+                                        txn_id = (
+                                            ""
+                                            if recorded_output["txn_id"] is None
+                                            else recorded_output["txn_id"]
+                                        )
+                                        txn_snapshot = recorded_output["txn_snapshot"]
+                                        session.execute(
+                                            text(f"--proxy:${txn_id}:${txn_snapshot}`")
+                                        )
+                                    else:
+                                        if recorded_output["error"]:
+                                            deserialized_error = (
+                                                _serialization.deserialize_exception(
+                                                    recorded_output["error"]
+                                                )
+                                            )
+                                            has_recorded_error = True
+                                            raise deserialized_error
+                                        elif recorded_output["output"]:
+                                            return _serialization.deserialize(
+                                                recorded_output["output"]
+                                            )
+                                        else:
+                                            raise Exception(
+                                                "Output and error are both None"
+                                            )
+                                else:
+                                    dbos.logger.debug(
+                                        f"Running transaction, id: {ctx.function_id}, name: {attributes['name']}"
+                                    )
+
+                                output = func(*args, **kwargs)
+                                txn_output["output"] = _serialization.serialize(output)
+
+                                if dbos.is_debugging:
+                                    assert recorded_output is not None
                                     if recorded_output["error"]:
                                         deserialized_error = (
                                             _serialization.deserialize_exception(
@@ -746,6 +790,13 @@ def decorate_transaction(
                                         has_recorded_error = True
                                         raise deserialized_error
                                     elif recorded_output["output"]:
+                                        if (
+                                            txn_output["output"]
+                                            != recorded_output["output"]
+                                        ):
+                                            dbos.logger.error(
+                                                f'Detected different transaction output than the original one!\n Result: {txn_output["output"]}\n Original: {recorded_output["output"]}'
+                                            )
                                         return _serialization.deserialize(
                                             recorded_output["output"]
                                         )
@@ -753,13 +804,7 @@ def decorate_transaction(
                                         raise Exception(
                                             "Output and error are both None"
                                         )
-                                else:
-                                    dbos.logger.debug(
-                                        f"Running transaction, id: {ctx.function_id}, name: {attributes['name']}"
-                                    )
 
-                                output = func(*args, **kwargs)
-                                txn_output["output"] = _serialization.serialize(output)
                                 assert (
                                     ctx.sql_session is not None
                                 ), "Cannot find a database connection"
@@ -792,8 +837,12 @@ def decorate_transaction(
                             txn_error = error
                             raise
                         finally:
-                            # Don't record the error if it was already recorded
-                            if txn_error and not has_recorded_error:
+                            # Don't record the error if it was already recorded or we're in debug mode
+                            if (
+                                txn_error
+                                and not has_recorded_error
+                                and not dbos.is_debugging
+                            ):
                                 txn_output["error"] = (
                                     _serialization.serialize_exception(txn_error)
                                 )
@@ -916,7 +965,7 @@ def decorate_step(
                 recorded_output = dbos._sys_db.check_operation_execution(
                     ctx.workflow_id, ctx.function_id
                 )
-                if dbos.debug_mode and recorded_output is None:
+                if dbos.is_debugging and recorded_output is None:
                     raise DBOSException("Step output not found in debug mode")
                 if recorded_output:
                     dbos.logger.debug(
