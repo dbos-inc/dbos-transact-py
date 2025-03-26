@@ -548,13 +548,6 @@ class SystemDatabase:
     def get_workflow_status_within_wf(
         self, workflow_uuid: str, calling_wf: str, calling_wf_fn: int
     ) -> Optional[WorkflowStatusInternal]:
-        # ctx = get_local_dbos_context()
-        # if ctx is not None:
-        #    nextFuncId = ctx.get_next_function_id()
-        # else:
-        #    nextFuncId = calling_wf_fn
-
-        # res = self.check_operation_execution(calling_wf, nextFuncId)
         res = self.check_operation_execution(calling_wf, calling_wf_fn)
         if res is not None:
             if res["output"]:
@@ -892,7 +885,6 @@ class SystemDatabase:
     def check_child_workflow(
         self, workflow_uuid: str, function_id: int, conn: Optional[sa.Connection] = None
     ) -> Optional[str]:
-        print("Checking child workflow", workflow_uuid, function_id)
         sql = sa.select(SystemSchema.operation_outputs.c.child_workflow_id).where(
             SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
             SystemSchema.operation_outputs.c.function_id == function_id,

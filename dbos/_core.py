@@ -929,7 +929,6 @@ def decorate_step(
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
 
         stepName = func.__name__
-        print("Decorating step", stepName)
 
         def invoke_step(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:

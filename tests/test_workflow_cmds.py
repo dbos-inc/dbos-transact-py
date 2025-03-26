@@ -337,19 +337,12 @@ def test_list_2steps_sleep(dbos: DBOS, sys_db: SystemDatabase) -> None:
         return
 
     wfid = str(uuid.uuid4())
-    print(wfid)
     with SetWorkflowID(wfid):
         simple_workflow()
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
     assert len(wfsteps.steps) == 3
     assert wfsteps.workflow_uuid == wfid
-    print(wfsteps.workflow_uuid)
-    print(wfsteps.steps[0].function_id)
-    print(wfsteps.steps[0].function_name)
-    print(wfsteps.steps[1].function_name)
-    print(wfsteps.steps[2].function_name)
-
     assert wfsteps.steps[0].function_name == "stepOne"
     assert wfsteps.steps[1].function_name == "stepTwo"
     assert wfsteps.steps[2].function_name == "DBOS.sleep"
@@ -516,8 +509,7 @@ async def test_callchild_first_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> No
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         handle = await dbos.start_workflow_async(parentWorkflow)
-        # print(await handle.get_result())
-        res = await handle.get_result()
+        print(await handle.get_result())
 
     dbos._sys_db._flush_workflow_status_buffer()
 
@@ -598,8 +590,6 @@ async def test_callchild_rerun_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> No
     with SetWorkflowID(wfid):
         handle = await dbos.start_workflow_async(parentWorkflow)
         res1 = await handle.get_result()
-
-    print("Rerunning the workflow")
 
     with SetWorkflowID(wfid):
         handle = await dbos.start_workflow_async(parentWorkflow)

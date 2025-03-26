@@ -436,7 +436,6 @@ class DBOS:
             _dbos_global_instance._launch(debug_mode=debug_mode)
 
     def _launch(self, *, debug_mode: bool = False) -> None:
-        print("starting my local build of dbos")
         try:
             if self._launched:
                 dbos_logger.warning(f"DBOS was already launched")
@@ -712,7 +711,6 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
-        print("mjjjjjjjjj")
         return start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs)
 
     @classmethod
@@ -723,7 +721,6 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandleAsync[R]:
         """Invoke a workflow function on the event loop, returning a handle to the ongoing execution."""
-        print("mjjjjjjjjj")
         return await start_workflow_async(
             _get_dbos_instance(), func, None, True, *args, **kwargs
         )
