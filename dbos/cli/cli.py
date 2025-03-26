@@ -21,7 +21,12 @@ from .. import load_config
 from .._app_db import ApplicationDatabase
 from .._dbos_config import _is_valid_app_name
 from .._sys_db import SystemDatabase, reset_system_database
-from .._workflow_commands import get_workflow, list_queued_workflows, list_workflows
+from .._workflow_commands import (
+    get_workflow,
+    list_queued_workflows,
+    list_workflow_steps,
+    list_workflows,
+)
 from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
 
@@ -340,12 +345,14 @@ def get(
 
 
 @workflow.command(help="List the steps of a workflow")
-def list(
+def liststeps(
     workflow_id: Annotated[str, typer.Argument()],
 ) -> None:
     config = load_config(silent=True)
     sys_db = SystemDatabase(config)
-    print(jsonpickle.encode(get_workflow(sys_db, workflow_id), unpicklable=False))
+    print(
+        jsonpickle.encode(list_workflow_steps(sys_db, workflow_id), unpicklable=False)
+    )
 
 
 @workflow.command(
