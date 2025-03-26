@@ -196,7 +196,6 @@ def _init_workflow(
         if len(ctx.workflow_id) > 0
         else ctx.id_assigned_for_next_workflow
     )
-    print("In init workflow .....wfid", wfid)
     status: WorkflowStatusInternal = {
         "workflow_uuid": wfid,
         "status": (
@@ -241,7 +240,6 @@ def _init_workflow(
             # Synchronously record the status and inputs for workflows and single-step workflows
             # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
             # TODO: Make this transactional (and with the queue step below)
-            print("inserting workflow status")
             wf_status = dbos._sys_db.insert_workflow_status(
                 status, max_recovery_attempts=max_recovery_attempts
             )
@@ -254,7 +252,6 @@ def _init_workflow(
                 )
             except Exception as e:
                 print("Exception in update_workflow_inputs", e)
-            print("inserted workflow inputs")
         else:
             # Buffer the inputs for single-transaction workflows, but don't buffer the status
 
@@ -266,8 +263,6 @@ def _init_workflow(
             dbos._sys_db.enqueue(wfid, queue)
 
     status["status"] = wf_status
-    print("exiting init workflow")
-
     return status
 
 
@@ -440,11 +435,7 @@ def _get_new_wf() -> tuple[str, DBOSContext]:
     #   Make a (system) DB record for the workflow
     #   Pass the new context to a worker thread that will run the wf function
     cur_ctx = get_local_dbos_context()
-    if cur_ctx is None:
-        print("cur_ctx is None")
-
     if cur_ctx is not None and cur_ctx.is_within_workflow():
-        print("cur_ctx is not None")
         assert cur_ctx.is_workflow()  # Not in a step
         cur_ctx.function_id += 1
         print(cur_ctx.id_assigned_for_next_workflow)
@@ -452,8 +443,6 @@ def _get_new_wf() -> tuple[str, DBOSContext]:
             cur_ctx.id_assigned_for_next_workflow = (
                 cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
             )
-        else:
-            print("zero check failed")
 
     new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
     new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
@@ -471,8 +460,6 @@ def start_workflow(
     **kwargs: P.kwargs,
 ) -> "WorkflowHandle[R]":
 
-    dbos.logger.info(f"Starting workflow sync {get_dbos_func_name(func)}")
-    print("start_workflow", get_dbos_func_name(func))
     # If the function has a class, add the class object as its first argument
     fself: Optional[object] = None
     if hasattr(func, "__self__"):
@@ -497,13 +484,10 @@ def start_workflow(
 
     ctx = new_wf_ctx
     new_child_workflow_id = ctx.id_assigned_for_next_workflow
-
     if ctx and ctx.parent_workflow_id != "":
-        print("parent_workflow_id", ctx.parent_workflow_id)
         child_workflow_id = dbos._sys_db.check_child_workflow(
             ctx.parent_workflow_id, ctx.parent_workflow_fid
         )
-        print("child_workflow_id", child_workflow_id)
         if child_workflow_id is not None:
             return WorkflowHandlePolling(child_workflow_id, dbos)
 
@@ -520,20 +504,6 @@ def start_workflow(
     )
 
     wf_status = status["status"]
-
-    # ctx = new_wf_ctx
-    # new_child_workflow_id = ctx.id_assigned_for_next_workflow
-
-    # if ctx and ctx.parent_workflow_id != "":
-    #    print("parent_workflow_id", ctx.parent_workflow_id)
-    #    child_workflow_id = dbos._sys_db.check_child_workflow(
-    #        ctx.parent_workflow_id, ctx.parent_workflow_fid
-    #    )
-    #    print("child_workflow_id", child_workflow_id)
-    #    if child_workflow_id is not None:
-    #        return WorkflowHandlePolling(child_workflow_id, dbos)
-    #    else:
-
     if ctx and ctx.parent_workflow_id != "":
         dbos._sys_db.record_child_workflow(
             ctx.parent_workflow_id,
@@ -575,9 +545,6 @@ async def start_workflow_async(
     **kwargs: P.kwargs,
 ) -> "WorkflowHandleAsync[R]":
 
-    dbos.logger.info(f"Starting workflow {get_dbos_func_name(func)}")
-    print("start_workflow_async", get_dbos_func_name(func))
-
     # If the function has a class, add the class object as its first argument
     fself: Optional[object] = None
     if hasattr(func, "__self__"):
@@ -602,15 +569,10 @@ async def start_workflow_async(
 
     ctx = new_wf_ctx
     new_child_workflow_id = ctx.id_assigned_for_next_workflow
-
-    print("new child workflow id", new_child_workflow_id)
-
     if ctx and ctx.parent_workflow_id != "":
-        print("parent_workflow_id", ctx.parent_workflow_id)
         child_workflow_id = dbos._sys_db.check_child_workflow(
             ctx.parent_workflow_id, ctx.parent_workflow_fid
         )
-        print("child_workflow_id", child_workflow_id)
         if child_workflow_id is not None:
             return WorkflowHandleAsyncPolling(child_workflow_id, dbos)
 
@@ -627,8 +589,6 @@ async def start_workflow_async(
         max_recovery_attempts=fi.max_recovery_attempts,
     )
 
-    print("After launching init parent_workflow_id", ctx.parent_workflow_id)
-
     if ctx and ctx.parent_workflow_id != "":
         print("After launching init parent_workflow_id", ctx.parent_workflow_id)
         dbos._sys_db.record_child_workflow(
@@ -637,8 +597,6 @@ async def start_workflow_async(
             ctx.parent_workflow_fid,
             func.__name__,
         )
-    else:
-        print("Not recording child workflow")
 
     wf_status = status["status"]
 
@@ -725,8 +683,6 @@ def workflow_wrapper(
 
             ctx = assert_current_dbos_context()  # Now the child ctx
 
-            # print("called from init_wf", funcName, ctx.workflow_id)
-
             if ctx and ctx.parent_workflow_id != "":
                 print(
                     "parent_workflow ",
@@ -738,7 +694,6 @@ def workflow_wrapper(
                     ctx.parent_workflow_id, ctx.parent_workflow_fid
                 )
                 if child_workflow_id is not None:
-                    # return WorkflowHandlePolling(child_workflow_id,dbos).get_result()
                     return recorded_result(child_workflow_id, dbos)
 
             status = _init_workflow(
@@ -757,20 +712,6 @@ def workflow_wrapper(
                 f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
             )
 
-            # if ctx and ctx.parent_workflow_id != "":
-            #    print(
-            #        "parent_workflow ",
-            #        ctx.parent_workflow_id,
-            #        ctx.parent_workflow_fid,
-            #        ctx.workflow_id,
-            #    )
-            #    child_workflow_id = dbos._sys_db.check_child_workflow(
-            #        ctx.parent_workflow_id, ctx.parent_workflow_fid
-            #    )
-            #    if child_workflow_id is not None:
-            #        # return WorkflowHandlePolling(child_workflow_id,dbos).get_result()
-            #        return recorded_result(child_workflow_id, dbos)
-            #    else:
             if ctx and ctx.parent_workflow_id != "":
                 dbos._sys_db.record_child_workflow(
                     ctx.parent_workflow_id,
@@ -778,8 +719,6 @@ def workflow_wrapper(
                     ctx.parent_workflow_fid,
                     funcName,
                 )
-            # else:
-            #    print("No parent_workflow_id")
 
             return _get_wf_invoke_func(dbos, status)
 
