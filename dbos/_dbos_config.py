@@ -512,7 +512,8 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
         "sys_db_name"
     ]
     provided_config["database"]["ssl"] = config_from_file["database"]["ssl"]
-    provided_config["database"]["ssl_ca"] = config_from_file["database"]["ssl_ca"]
+    if "ssl_ca" in config_from_file["database"]:
+        provided_config["database"]["ssl_ca"] = config_from_file["database"]["ssl_ca"]
 
     # Telemetry config
     if "telemetry" not in provided_config or provided_config["telemetry"] is None:

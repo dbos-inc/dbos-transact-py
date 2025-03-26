@@ -1049,7 +1049,6 @@ def test_overwrite_config_minimal(mocker):
         app_db_name: appdbname
         sys_db_name: sysdbname
         ssl: true
-        ssl_ca: cert.pem
         migrate:
             - alembic upgrade head
     telemetry:
@@ -1079,7 +1078,7 @@ def test_overwrite_config_minimal(mocker):
     assert config["database"]["app_db_name"] == "appdbname"
     assert config["database"]["sys_db_name"] == "sysdbname"
     assert config["database"]["ssl"] == True
-    assert config["database"]["ssl_ca"] == "cert.pem"
+    assert "ssl_ca" not in config["database"]
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
         "thetracesendpoint"
     ]
