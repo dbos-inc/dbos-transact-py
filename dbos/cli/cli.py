@@ -345,7 +345,7 @@ def get(
 
 
 @workflow.command(help="List the steps of a workflow")
-def liststeps(
+def steps(
     workflow_id: Annotated[str, typer.Argument()],
 ) -> None:
     config = load_config(silent=True)
