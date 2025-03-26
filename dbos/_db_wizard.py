@@ -49,6 +49,7 @@ def db_wizard(config: "ConfigFile") -> "ConfigFile":
 
     # 2. If the error is due to password authentication or the configuration is non-default, surface the error and exit.
     error_str = str(db_connection_error)
+    dbos_logger.debug(f"Error connecting to Postgres: {error_str}")
     if (
         "password authentication failed" in error_str
         or "28P01" in error_str
@@ -182,17 +183,12 @@ def _check_db_connectivity(config: "ConfigFile") -> Optional[Exception]:
         host=config["database"]["hostname"],
         port=config["database"]["port"],
         database="postgres",
-        query={"connect_timeout": "1"},
+        query={"connect_timeout": "2"},
     )
     postgres_db_engine = create_engine(postgres_db_url)
     try:
         with postgres_db_engine.connect() as conn:
-            val = conn.execute(text("SELECT 1")).scalar()
-            if val != 1:
-                dbos_logger.error(
-                    f"Unexpected value returned from database: expected 1, received {val}"
-                )
-                return Exception()
+            conn.execute(text("SELECT 1")).scalar()
     except Exception as e:
         return e
     finally:
