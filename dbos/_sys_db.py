@@ -839,6 +839,9 @@ class SystemDatabase:
         functionName: str,
         conn: Optional[sa.Connection] = None,
     ) -> None:
+        print(
+            "Recording child workflow", parentUUID, childUUID, functionID, functionName
+        )
         if self._debug_mode:
             raise Exception("called record_child_workflow in debug mode")
 

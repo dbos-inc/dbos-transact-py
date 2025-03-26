@@ -590,6 +590,20 @@ async def start_workflow_async(
 
     new_wf_id, new_wf_ctx = _get_new_wf()
 
+    ctx = new_wf_ctx
+    new_child_workflow_id = ctx.id_assigned_for_next_workflow
+
+    print("new child workflow id", new_child_workflow_id)
+
+    if ctx and ctx.parent_workflow_id != "":
+        print("parent_workflow_id", ctx.parent_workflow_id)
+        child_workflow_id = dbos._sys_db.check_child_workflow(
+            ctx.parent_workflow_id, ctx.parent_workflow_fid
+        )
+        print("child_workflow_id", child_workflow_id)
+        if child_workflow_id is not None:
+            return WorkflowHandlePolling(child_workflow_id, dbos)
+
     status = await asyncio.to_thread(
         _init_workflow,
         dbos,
@@ -601,8 +615,20 @@ async def start_workflow_async(
         temp_wf_type=get_temp_workflow_type(func),
         queue=queue_name,
         max_recovery_attempts=fi.max_recovery_attempts,
-        operationName=func.__name__,
     )
+
+    print("After launching init parent_workflow_id", ctx.parent_workflow_id)
+
+    if ctx and ctx.parent_workflow_id != "":
+        print("After launching init parent_workflow_id", ctx.parent_workflow_id)
+        dbos._sys_db.record_child_workflow(
+            ctx.parent_workflow_id,
+            new_child_workflow_id,
+            ctx.parent_workflow_fid,
+            func.__name__,
+        )
+    else:
+        print("Not recording child workflow")
 
     wf_status = status["status"]
 
