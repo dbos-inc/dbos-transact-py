@@ -243,15 +243,12 @@ def _init_workflow(
             wf_status = dbos._sys_db.insert_workflow_status(
                 status, max_recovery_attempts=max_recovery_attempts
             )
-            print("inserted workflow status")
-            print("inserting workflow inputs")
+
             # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
-            try:
-                dbos._sys_db.update_workflow_inputs(
-                    wfid, _serialization.serialize_args(inputs)
-                )
-            except Exception as e:
-                print("Exception in update_workflow_inputs", e)
+            dbos._sys_db.update_workflow_inputs(
+                wfid, _serialization.serialize_args(inputs)
+            )
+
         else:
             # Buffer the inputs for single-transaction workflows, but don't buffer the status
 
