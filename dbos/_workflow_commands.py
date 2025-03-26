@@ -146,7 +146,6 @@ def get_workflow(
     if not getRequest:
         winfo.request = None
 
-    print(winfo)
     return winfo
 
 
