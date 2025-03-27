@@ -903,13 +903,13 @@ def decorate_step(
 
                 try:
                     output = func()
-                    step_output["output"] = _serialization.serialize(output)
-                    dbos._sys_db.record_operation_result(step_output)
-                    return output
                 except Exception as error:
                     step_output["error"] = _serialization.serialize_exception(error)
                     dbos._sys_db.record_operation_result(step_output)
                     raise
+                step_output["output"] = _serialization.serialize(output)
+                dbos._sys_db.record_operation_result(step_output)
+                return output
 
             def check_existing_result() -> Union[NoResult, R]:
                 ctx = assert_current_dbos_context()
