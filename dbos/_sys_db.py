@@ -836,7 +836,6 @@ class SystemDatabase:
         childUUID: str,
         functionID: int,
         functionName: str,
-        conn: Optional[sa.Connection] = None,
     ) -> None:
         if self._debug_mode:
             raise Exception("called record_child_workflow in debug mode")
@@ -848,11 +847,8 @@ class SystemDatabase:
             child_workflow_id=childUUID,
         )
         try:
-            if conn is not None:
-                conn.execute(sql)
-            else:
-                with self.engine.begin() as c:
-                    c.execute(sql)
+            with self.engine.begin() as c:
+                c.execute(sql)
         except DBAPIError as dbapi_error:
             if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(parentUUID)
@@ -885,7 +881,7 @@ class SystemDatabase:
         return result
 
     def check_child_workflow(
-        self, workflow_uuid: str, function_id: int, conn: Optional[sa.Connection] = None
+        self, workflow_uuid: str, function_id: int
     ) -> Optional[str]:
         sql = sa.select(SystemSchema.operation_outputs.c.child_workflow_id).where(
             SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
@@ -894,11 +890,8 @@ class SystemDatabase:
 
         # If in a transaction, use the provided connection
         row: Any
-        if conn is not None:
-            row = conn.execute(sql).fetchone()
-        else:
-            with self.engine.begin() as c:
-                row = c.execute(sql).fetchone()
+        with self.engine.begin() as c:
+            row = c.execute(sql).fetchone()
 
         if row is None:
             return None
