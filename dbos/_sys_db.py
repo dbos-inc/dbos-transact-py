@@ -891,16 +891,16 @@ class SystemDatabase:
         )
 
         # If in a transaction, use the provided connection
-        rows: Sequence[Any]
+        row: Any
         if conn is not None:
-            rows = conn.execute(sql).all()
+            row = conn.execute(sql).fetchone()
         else:
             with self.engine.begin() as c:
-                rows = c.execute(sql).all()
-        if len(rows) == 0:
-            return None
+                row = c.execute(sql).fetchone()
 
-        return str(rows[0][0])
+        if row is None:
+            return None
+        return row[0]
 
     def send(
         self,
