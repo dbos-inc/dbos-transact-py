@@ -370,10 +370,11 @@ def test_keyboardinterrupt_during_retries(dbos: DBOS) -> None:
     @DBOS.workflow()
     def failing_workflow() -> None:
         failing_step()
+        return DBOS.workflow_id
 
     with pytest.raises(KeyboardInterrupt):
         failing_workflow()
     raise_interrupt = False
     recovery_handles = DBOS.recover_pending_workflows()
     assert len(recovery_handles) == 1
-    assert recovery_handles[0].get_result() is None
+    assert recovery_handles[0].get_result() == recovery_handles[0].workflow_id
