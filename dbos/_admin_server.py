@@ -22,7 +22,7 @@ _workflow_queues_metadata_path = "/dbos-workflow-queues-metadata"
 # /workflows/:workflow_id/cancel
 # /workflows/:workflow_id/resume
 # /workflows/:workflow_id/restart
-_workflow_steps_path = "/workflows/:workflow_id/steps"
+# /workflows/:workflow_id/steps
 
 
 class AdminServer:
