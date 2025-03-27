@@ -560,7 +560,7 @@ class SystemDatabase:
             {
                 "workflow_uuid": calling_wf,
                 "function_id": calling_wf_fn,
-                "function_name": "getStatus",
+                "function_name": "DBOS.getStatus",
                 "output": _serialization.serialize(stat),
                 "error": None,
             }
