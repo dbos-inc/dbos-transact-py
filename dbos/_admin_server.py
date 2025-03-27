@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import json
 import re
 import threading
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any, List, TypedDict
 
-# import json
 import jsonpickle  # type: ignore
 
 from ._logger import dbos_logger
