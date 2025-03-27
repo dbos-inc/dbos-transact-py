@@ -900,7 +900,7 @@ class SystemDatabase:
 
         if row is None:
             return None
-        return row[0]
+        return str(row[0])
 
     def send(
         self,

@@ -566,8 +566,10 @@ async def start_workflow_async(
     ctx = new_wf_ctx
     new_child_workflow_id = ctx.id_assigned_for_next_workflow
     if ctx and ctx.parent_workflow_id != "":
-        child_workflow_id = dbos._sys_db.check_child_workflow(
-            ctx.parent_workflow_id, ctx.parent_workflow_fid
+        child_workflow_id = await asyncio.to_thread(
+            dbos._sys_db.check_child_workflow,
+            ctx.parent_workflow_id,
+            ctx.parent_workflow_fid,
         )
         if child_workflow_id is not None:
             return WorkflowHandleAsyncPolling(child_workflow_id, dbos)
@@ -586,7 +588,8 @@ async def start_workflow_async(
     )
 
     if ctx and ctx.parent_workflow_id != "":
-        dbos._sys_db.record_child_workflow(
+        await asyncio.to_thread(
+            dbos._sys_db.record_child_workflow,
             ctx.parent_workflow_id,
             new_child_workflow_id,
             ctx.parent_workflow_fid,
@@ -679,12 +682,6 @@ def workflow_wrapper(
             ctx = assert_current_dbos_context()  # Now the child ctx
 
             if ctx and ctx.parent_workflow_id != "":
-                print(
-                    "parent_workflow ",
-                    ctx.parent_workflow_id,
-                    ctx.parent_workflow_fid,
-                    ctx.workflow_id,
-                )
                 child_workflow_id = dbos._sys_db.check_child_workflow(
                     ctx.parent_workflow_id, ctx.parent_workflow_fid
                 )
