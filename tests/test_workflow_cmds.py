@@ -323,17 +323,14 @@ def test_list_2steps_sleep(dbos: DBOS, sys_db: SystemDatabase) -> None:
         stepOne()
         stepTwo()
         DBOS.sleep(1)
-        print("Executed Simple workflow")
         return
 
     @DBOS.step()
     def stepOne() -> None:
-        print("Executed stepOne")
         return
 
     @DBOS.step()
     def stepTwo() -> None:
-        print("Executed stepTwo")
         return
 
     wfid = str(uuid.uuid4())
@@ -390,7 +387,6 @@ def test_set_get_event(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     @DBOS.step()
     def stepOne() -> None:
-        print("Executed stepOne")
         return
 
     wfid = str(uuid.uuid4())
@@ -417,17 +413,14 @@ def test_callchild_first_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     @DBOS.step()
     def stepOne() -> None:
-        print("Executed stepOne")
         return
 
     @DBOS.step()
     def stepTwo() -> None:
-        print("Executed stepOne")
         return
 
     @DBOS.workflow()
     def child_workflow() -> None:
-        print("Executed child workflow")
         return
 
     wfid = str(uuid.uuid4())
@@ -453,17 +446,14 @@ def test_callchild_last_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     @DBOS.step()
     def stepOne() -> None:
-        print("Executed stepOne")
         return
 
     @DBOS.step()
     def stepTwo() -> None:
-        print("Executed stepOne")
         return
 
     @DBOS.workflow()
     def child_workflow() -> None:
-        print("Executed child workflow")
         return
 
     wfid = str(uuid.uuid4())
@@ -490,17 +480,14 @@ def test_callchild_first_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> Non
 
     @DBOS.step()
     def stepOne() -> None:
-        print("Executed stepOne")
         return
 
     @DBOS.step()
     def stepTwo() -> None:
-        print("Executed stepOne")
         return
 
     @DBOS.workflow()
     def child_workflow() -> None:
-        print("Executed child workflow")
         return
 
     wfid = str(uuid.uuid4())
@@ -528,17 +515,14 @@ def test_callchild_middle_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> No
 
     @DBOS.step()
     def stepOne() -> None:
-        print("Executed stepOne")
         return
 
     @DBOS.step()
     def stepTwo() -> None:
-        print("Executed stepOne")
         return
 
     @DBOS.workflow()
     def child_workflow() -> None:
-        print("Executed child workflow")
         return
 
     wfid = str(uuid.uuid4())
@@ -560,30 +544,27 @@ async def test_callchild_first_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> No
     @DBOS.workflow()
     async def parentWorkflow() -> str:
         handle = await dbos.start_workflow_async(child_workflow)
-        print(await handle.get_result())
+        await handle.get_result()
         stepOne()
         stepTwo()
         return "done"
 
     @DBOS.step()
     def stepOne() -> None:
-        print("Executed stepOne")
         return
 
     @DBOS.step()
     def stepTwo() -> None:
-        print("Executed stepOne")
         return
 
     @DBOS.workflow()
     async def child_workflow() -> str:
-        print("Executed child workflow")
         return "done"
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         handle = await dbos.start_workflow_async(parentWorkflow)
-        print(await handle.get_result())
+        await handle.get_result()
 
     dbos._sys_db._flush_workflow_status_buffer()
 
@@ -606,7 +587,6 @@ def test_callchild_rerun_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> Non
 
     @DBOS.workflow()
     def child_workflow(id: str) -> str:
-        print("Executed child workflow")
         return id
 
     wfid = str(uuid.uuid4())
@@ -626,13 +606,11 @@ def test_callchild_rerun_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
     @DBOS.workflow()
     def parentWorkflow() -> str:
         childwfid = str(uuid.uuid4())
-        print("generated childwfid: ", childwfid)
         with SetWorkflowID(childwfid):
             return child_workflow(childwfid)
 
     @DBOS.workflow()
     def child_workflow(id: str) -> str:
-        print("Executed child workflow")
         return id
 
     wfid = str(uuid.uuid4())
@@ -657,7 +635,6 @@ async def test_callchild_rerun_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> No
 
     @DBOS.workflow()
     async def child_workflow(id: str) -> str:
-        print("Executed child workflow")
         return id
 
     wfid = str(uuid.uuid4())
