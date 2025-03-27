@@ -324,3 +324,57 @@ def test_step_retries(dbos: DBOS) -> None:
     assert step_counter == max_attempts
 
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_recovery_during_retries(dbos: DBOS) -> None:
+    step_counter = 0
+    start_event = threading.Event()
+    blocking_event = threading.Event()
+
+    max_attempts = 3
+
+    @DBOS.step(retries_allowed=True, interval_seconds=0, max_attempts=max_attempts)
+    def failing_step() -> None:
+        nonlocal step_counter
+        step_counter += 1
+        if step_counter < max_attempts:
+            raise Exception("fail")
+        else:
+            start_event.set()
+            blocking_event.wait()
+
+    @DBOS.workflow()
+    def failing_workflow() -> None:
+        failing_step()
+
+    handle = DBOS.start_workflow(failing_workflow)
+    start_event.wait()
+    recovery_handles = DBOS.recover_pending_workflows()
+    assert len(recovery_handles) == 1
+    blocking_event.set()
+    assert handle.get_result() is None
+    assert recovery_handles[0].get_result() is None
+
+
+def test_keyboardinterrupt_during_retries(dbos: DBOS) -> None:
+    # To test the issue raised in https://github.com/dbos-inc/dbos-transact-py/issues/260
+    raise_interrupt = True
+
+    max_attempts = 3
+
+    @DBOS.step(retries_allowed=True, interval_seconds=0, max_attempts=max_attempts)
+    def failing_step() -> None:
+        if raise_interrupt:
+            raise KeyboardInterrupt
+
+    @DBOS.workflow()
+    def failing_workflow() -> str:
+        failing_step()
+        return DBOS.workflow_id
+
+    with pytest.raises(KeyboardInterrupt):
+        failing_workflow()
+    raise_interrupt = False
+    recovery_handles = DBOS.recover_pending_workflows()
+    assert len(recovery_handles) == 1
+    assert recovery_handles[0].get_result() == recovery_handles[0].workflow_id

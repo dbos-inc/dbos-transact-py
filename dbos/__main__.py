@@ -4,6 +4,9 @@ from typing import NoReturn, Optional, Union
 
 from dbos.cli.cli import app
 
+# This is used by the debugger to execute DBOS as a module.
+# Never used otherwise.
+
 
 def main() -> NoReturn:
     # Modify sys.argv[0] to remove script or executable extensions
