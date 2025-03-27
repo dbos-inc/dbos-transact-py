@@ -368,7 +368,7 @@ def test_keyboardinterrupt_during_retries(dbos: DBOS) -> None:
             raise KeyboardInterrupt
 
     @DBOS.workflow()
-    def failing_workflow() -> None:
+    def failing_workflow() -> str:
         failing_step()
         return DBOS.workflow_id
 
