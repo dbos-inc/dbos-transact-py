@@ -8,6 +8,7 @@ import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, SetWorkflowID
+from dbos._dbos import WorkflowHandleAsync
 from dbos._dbos_config import ConfigFile
 from dbos._error import DBOSException
 
@@ -395,7 +396,7 @@ async def test_retrieve_workflow_async(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         await DBOS.start_workflow_async(test_workflow, "alice", "bob")
 
-    handle = await DBOS.retrieve_workflow_async(wfuuid)
+    handle: WorkflowHandleAsync[str] = await DBOS.retrieve_workflow_async(wfuuid)
     assert handle.get_workflow_id() == wfuuid
     result = await handle.get_result()
     assert result == "alicedbob"
