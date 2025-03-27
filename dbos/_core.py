@@ -435,7 +435,6 @@ def _get_new_wf() -> tuple[str, DBOSContext]:
     if cur_ctx is not None and cur_ctx.is_within_workflow():
         assert cur_ctx.is_workflow()  # Not in a step
         cur_ctx.function_id += 1
-        print(cur_ctx.id_assigned_for_next_workflow)
         if len(cur_ctx.id_assigned_for_next_workflow) == 0:
             cur_ctx.id_assigned_for_next_workflow = (
                 cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
@@ -587,7 +586,6 @@ async def start_workflow_async(
     )
 
     if ctx and ctx.parent_workflow_id != "":
-        print("After launching init parent_workflow_id", ctx.parent_workflow_id)
         dbos._sys_db.record_child_workflow(
             ctx.parent_workflow_id,
             new_child_workflow_id,
