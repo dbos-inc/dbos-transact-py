@@ -39,6 +39,7 @@ from dbos._utils import GlobalParams
 from ._classproperty import classproperty
 from ._core import (
     TEMP_SEND_WF_NAME,
+    WorkflowHandleAsyncPolling,
     WorkflowHandlePolling,
     decorate_step,
     decorate_transaction,
@@ -758,6 +759,44 @@ class DBOS:
         )
 
     @classmethod
+    async def get_workflow_status_async(
+        cls, workflow_id: str
+    ) -> Optional[WorkflowStatus]:
+        """Return the status of a workflow execution."""
+        ctx = get_local_dbos_context()
+        if ctx and ctx.is_within_workflow():
+            ctx.function_id += 1
+            stat = await asyncio.to_thread(
+                lambda: _get_dbos_instance()._sys_db.get_workflow_status_within_wf(
+                    workflow_id, ctx.workflow_id, ctx.function_id
+                )
+            )
+        else:
+            stat = await asyncio.to_thread(
+                lambda: _get_dbos_instance()._sys_db.get_workflow_status(workflow_id)
+            )
+        if stat is None:
+            return None
+
+        return WorkflowStatus(
+            workflow_id=workflow_id,
+            status=stat["status"],
+            name=stat["name"],
+            executor_id=stat["executor_id"],
+            recovery_attempts=stat["recovery_attempts"],
+            class_name=stat["class_name"],
+            config_name=stat["config_name"],
+            queue_name=stat["queue_name"],
+            authenticated_user=stat["authenticated_user"],
+            assumed_role=stat["assumed_role"],
+            authenticated_roles=(
+                json.loads(stat["authenticated_roles"])
+                if stat["authenticated_roles"] is not None
+                else None
+            ),
+        )
+
+    @classmethod
     def retrieve_workflow(
         cls, workflow_id: str, existing_workflow: bool = True
     ) -> WorkflowHandle[R]:
@@ -768,6 +807,18 @@ class DBOS:
             if stat is None:
                 raise DBOSNonExistentWorkflowError(workflow_id)
         return WorkflowHandlePolling(workflow_id, dbos)
+
+    @classmethod
+    async def retrieve_workflow_async(
+        cls, workflow_id: str, existing_workflow: bool = True
+    ) -> WorkflowHandleAsync[R]:
+        """Return a `WorkflowHandle` for a workflow execution."""
+        dbos = _get_dbos_instance()
+        if existing_workflow:
+            stat = await dbos.get_workflow_status_async(workflow_id)
+            if stat is None:
+                raise DBOSNonExistentWorkflowError(workflow_id)
+        return WorkflowHandleAsyncPolling(workflow_id, dbos)
 
     @classmethod
     def send(
