@@ -153,16 +153,12 @@ class GetPendingWorkflowsOutput:
         self.queue_name: Optional[str] = queue_name
 
 
-class StepFunction:
-    def __init__(self, function_id: int, function_name: str):
-        self.function_id = function_id
-        self.function_name = function_name
-
-
-class WorkflowSteps:
-    def __init__(self, workflow_uuid: str, steps: List[StepFunction]):
-        self.workflow_uuid = workflow_uuid
-        self.steps = steps
+class StepInfo(TypedDict):
+    function_id: int
+    function_name: str
+    output: Optional[str]  # JSON (jsonpickle)
+    error: Optional[str]  # JSON (jsonpickle)
+    child_workflow_id: Optional[str]
 
 
 _dbos_null_topic = "__null__topic__"
@@ -786,21 +782,27 @@ class SystemDatabase:
                 for row in rows
             ]
 
-    def get_workflow_steps(self, workflow_id: str) -> WorkflowSteps:
+    def get_workflow_steps(self, workflow_id: str) -> List[StepInfo]:
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(
                     SystemSchema.operation_outputs.c.function_id,
                     SystemSchema.operation_outputs.c.function_name,
+                    SystemSchema.operation_outputs.c.output,
+                    SystemSchema.operation_outputs.c.error,
+                    SystemSchema.operation_outputs.c.child_workflow_id,
                 ).where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
             ).fetchall()
-            return WorkflowSteps(
-                workflow_uuid=workflow_id,
-                steps=[
-                    StepFunction(function_id=row[0], function_name=row[1])
-                    for row in rows
-                ],
-            )
+            return [
+                StepInfo(
+                    function_id=row[0],
+                    function_name=row[1],
+                    output=row[2],  # Preserve JSON data
+                    error=row[3],
+                    child_workflow_id=row[4],
+                )
+                for row in rows
+            ]
 
     def record_operation_result(
         self, result: OperationResultInternal, conn: Optional[sa.Connection] = None

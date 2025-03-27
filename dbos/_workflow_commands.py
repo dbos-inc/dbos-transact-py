@@ -5,9 +5,9 @@ from ._sys_db import (
     GetQueuedWorkflowsInput,
     GetWorkflowsInput,
     GetWorkflowsOutput,
+    StepInfo,
     SystemDatabase,
     WorkflowStatuses,
-    WorkflowSteps,
 )
 
 
@@ -149,6 +149,6 @@ def get_workflow(
     return winfo
 
 
-def list_workflow_steps(sys_db: SystemDatabase, workflow_uuid: str) -> WorkflowSteps:
-    output: WorkflowSteps = sys_db.get_workflow_steps(workflow_uuid)
+def list_workflow_steps(sys_db: SystemDatabase, workflow_uuid: str) -> List[StepInfo]:
+    output = sys_db.get_workflow_steps(workflow_uuid)
     return output

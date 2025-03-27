@@ -338,11 +338,10 @@ def test_list_2steps_sleep(dbos: DBOS, sys_db: SystemDatabase) -> None:
         simple_workflow()
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
-    assert len(wfsteps.steps) == 3
-    assert wfsteps.workflow_uuid == wfid
-    assert wfsteps.steps[0].function_name == "stepOne"
-    assert wfsteps.steps[1].function_name == "stepTwo"
-    assert wfsteps.steps[2].function_name == "DBOS.sleep"
+    assert len(wfsteps) == 3
+    assert wfsteps[0]["function_name"] == "stepOne"
+    assert wfsteps[1]["function_name"] == "stepTwo"
+    assert wfsteps[2]["function_name"] == "DBOS.sleep"
 
 
 def test_send_recv(dbos: DBOS, sys_db: SystemDatabase) -> None:
@@ -365,15 +364,13 @@ def test_send_recv(dbos: DBOS, sys_db: SystemDatabase) -> None:
         send_workflow(wfid_r)
 
     wfsteps_send = _workflow_commands.list_workflow_steps(sys_db, wfid_s)
-    assert wfsteps_send.workflow_uuid == wfid_s
-    assert len(wfsteps_send.steps) == 1
-    assert wfsteps_send.steps[0].function_name == "DBOS.send"
+    assert len(wfsteps_send) == 1
+    assert wfsteps_send[0]["function_name"] == "DBOS.send"
 
     wfsteps_recv = _workflow_commands.list_workflow_steps(sys_db, wfid_r)
-    assert wfsteps_recv.workflow_uuid == wfid_r
-    assert len(wfsteps_recv.steps) == 2
-    assert wfsteps_recv.steps[0].function_name == "DBOS.sleep"
-    assert wfsteps_recv.steps[1].function_name == "DBOS.recv"
+    assert len(wfsteps_recv) == 2
+    assert wfsteps_recv[0]["function_name"] == "DBOS.sleep"
+    assert wfsteps_recv[1]["function_name"] == "DBOS.recv"
 
 
 def test_set_get_event(dbos: DBOS, sys_db: SystemDatabase) -> None:
@@ -394,12 +391,11 @@ def test_set_get_event(dbos: DBOS, sys_db: SystemDatabase) -> None:
         set_get_workflow()
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
-    assert wfsteps.workflow_uuid == wfid
-    assert len(wfsteps.steps) == 4
-    assert wfsteps.steps[0].function_name == "DBOS.setEvent"
-    assert wfsteps.steps[1].function_name == "stepOne"
-    assert wfsteps.steps[2].function_name == "DBOS.sleep"
-    assert wfsteps.steps[3].function_name == "DBOS.getEvent"
+    assert len(wfsteps) == 4
+    assert wfsteps[0]["function_name"] == "DBOS.setEvent"
+    assert wfsteps[1]["function_name"] == "stepOne"
+    assert wfsteps[2]["function_name"] == "DBOS.sleep"
+    assert wfsteps[3]["function_name"] == "DBOS.getEvent"
 
 
 def test_callchild_first_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
@@ -428,11 +424,10 @@ def test_callchild_first_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
         parentWorkflow()
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
-    assert wfsteps.workflow_uuid == wfid
-    assert len(wfsteps.steps) == 3
-    assert wfsteps.steps[0].function_name == "child_workflow"
-    assert wfsteps.steps[1].function_name == "stepOne"
-    assert wfsteps.steps[2].function_name == "stepTwo"
+    assert len(wfsteps) == 3
+    assert wfsteps[0]["function_name"] == "child_workflow"
+    assert wfsteps[1]["function_name"] == "stepOne"
+    assert wfsteps[2]["function_name"] == "stepTwo"
 
 
 def test_callchild_last_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
@@ -461,11 +456,10 @@ def test_callchild_last_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
         parentWorkflow()
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
-    assert wfsteps.workflow_uuid == wfid
-    assert len(wfsteps.steps) == 3
-    assert wfsteps.steps[0].function_name == "stepOne"
-    assert wfsteps.steps[1].function_name == "stepTwo"
-    assert wfsteps.steps[2].function_name == "child_workflow"
+    assert len(wfsteps) == 3
+    assert wfsteps[0]["function_name"] == "stepOne"
+    assert wfsteps[1]["function_name"] == "stepTwo"
+    assert wfsteps[2]["function_name"] == "child_workflow"
 
 
 def test_callchild_first_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
@@ -495,12 +489,11 @@ def test_callchild_first_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> Non
         parentWorkflow()
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
-    assert wfsteps.workflow_uuid == wfid
-    assert len(wfsteps.steps) == 4
-    assert wfsteps.steps[0].function_name == "child_workflow"
-    assert wfsteps.steps[1].function_name == "getStatus"
-    assert wfsteps.steps[2].function_name == "stepOne"
-    assert wfsteps.steps[3].function_name == "stepTwo"
+    assert len(wfsteps) == 4
+    assert wfsteps[0]["function_name"] == "child_workflow"
+    assert wfsteps[1]["function_name"] == "getStatus"
+    assert wfsteps[2]["function_name"] == "stepOne"
+    assert wfsteps[3]["function_name"] == "stepTwo"
 
 
 def test_callchild_middle_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
@@ -530,12 +523,10 @@ def test_callchild_middle_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> No
         parentWorkflow()
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
-    assert wfsteps.workflow_uuid == wfid
-    assert len(wfsteps.steps) == 4
-    assert wfsteps.steps[0].function_name == "stepOne"
-    assert wfsteps.steps[1].function_name == "child_workflow"
-    assert wfsteps.steps[2].function_name == "getStatus"
-    assert wfsteps.steps[3].function_name == "stepTwo"
+    assert wfsteps[0]["function_name"] == "stepOne"
+    assert wfsteps[1]["function_name"] == "child_workflow"
+    assert wfsteps[2]["function_name"] == "getStatus"
+    assert wfsteps[3]["function_name"] == "stepTwo"
 
 
 @pytest.mark.asyncio
@@ -569,11 +560,10 @@ async def test_callchild_first_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> No
     dbos._sys_db._flush_workflow_status_buffer()
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
-    assert wfsteps.workflow_uuid == wfid
-    assert len(wfsteps.steps) == 3
-    assert wfsteps.steps[0].function_name == "child_workflow"
-    assert wfsteps.steps[1].function_name == "stepOne"
-    assert wfsteps.steps[2].function_name == "stepTwo"
+    assert len(wfsteps) == 3
+    assert wfsteps[0]["function_name"] == "child_workflow"
+    assert wfsteps[1]["function_name"] == "stepOne"
+    assert wfsteps[2]["function_name"] == "stepTwo"
 
 
 def test_callchild_rerun_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
