@@ -442,6 +442,42 @@ def test_callchild_first_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert wfsteps.steps[2].function_name == "stepTwo"
 
 
+def test_callchild_last_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def parentWorkflow() -> None:
+        stepOne()
+        stepTwo()
+        child_workflow()
+        return
+
+    @DBOS.step()
+    def stepOne() -> None:
+        print("Executed stepOne")
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        print("Executed stepOne")
+        return
+
+    @DBOS.workflow()
+    def child_workflow() -> None:
+        print("Executed child workflow")
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        parentWorkflow()
+
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert wfsteps.workflow_uuid == wfid
+    assert len(wfsteps.steps) == 3
+    assert wfsteps.steps[0].function_name == "stepOne"
+    assert wfsteps.steps[1].function_name == "stepTwo"
+    assert wfsteps.steps[2].function_name == "child_workflow"
+
+
 def test_callchild_first_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     @DBOS.workflow()
@@ -477,6 +513,44 @@ def test_callchild_first_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> Non
     assert wfsteps.steps[0].function_name == "child_workflow"
     assert wfsteps.steps[1].function_name == "getStatus"
     assert wfsteps.steps[2].function_name == "stepOne"
+    assert wfsteps.steps[3].function_name == "stepTwo"
+
+
+def test_callchild_middle_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def parentWorkflow() -> None:
+        stepOne()
+        handle = dbos.start_workflow(child_workflow)
+        handle.get_status()
+        stepTwo()
+        return
+
+    @DBOS.step()
+    def stepOne() -> None:
+        print("Executed stepOne")
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        print("Executed stepOne")
+        return
+
+    @DBOS.workflow()
+    def child_workflow() -> None:
+        print("Executed child workflow")
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        parentWorkflow()
+
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert wfsteps.workflow_uuid == wfid
+    assert len(wfsteps.steps) == 4
+    assert wfsteps.steps[0].function_name == "stepOne"
+    assert wfsteps.steps[1].function_name == "child_workflow"
+    assert wfsteps.steps[2].function_name == "getStatus"
     assert wfsteps.steps[3].function_name == "stepTwo"
 
 
