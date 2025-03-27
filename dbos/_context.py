@@ -92,6 +92,9 @@ class DBOSContext:
         rv.assumed_role = self.assumed_role
         return rv
 
+    def has_parent(self) -> bool:
+        return len(self.parent_workflow_id) > 0
+
     def assign_workflow_id(self) -> str:
         if len(self.id_assigned_for_next_workflow) > 0:
             wfid = self.id_assigned_for_next_workflow

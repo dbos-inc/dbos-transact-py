@@ -480,7 +480,7 @@ def start_workflow(
 
     ctx = new_wf_ctx
     new_child_workflow_id = ctx.id_assigned_for_next_workflow
-    if ctx and ctx.parent_workflow_id != "":
+    if ctx.has_parent():
         child_workflow_id = dbos._sys_db.check_child_workflow(
             ctx.parent_workflow_id, ctx.parent_workflow_fid
         )
@@ -500,7 +500,7 @@ def start_workflow(
     )
 
     wf_status = status["status"]
-    if ctx and ctx.parent_workflow_id != "":
+    if ctx.has_parent():
         dbos._sys_db.record_child_workflow(
             ctx.parent_workflow_id,
             new_child_workflow_id,
@@ -565,7 +565,7 @@ async def start_workflow_async(
 
     ctx = new_wf_ctx
     new_child_workflow_id = ctx.id_assigned_for_next_workflow
-    if ctx and ctx.parent_workflow_id != "":
+    if ctx.has_parent():
         child_workflow_id = await asyncio.to_thread(
             dbos._sys_db.check_child_workflow,
             ctx.parent_workflow_id,
@@ -587,7 +587,7 @@ async def start_workflow_async(
         max_recovery_attempts=fi.max_recovery_attempts,
     )
 
-    if ctx and ctx.parent_workflow_id != "":
+    if ctx.has_parent():
         await asyncio.to_thread(
             dbos._sys_db.record_child_workflow,
             ctx.parent_workflow_id,
@@ -681,7 +681,7 @@ def workflow_wrapper(
 
             ctx = assert_current_dbos_context()  # Now the child ctx
 
-            if ctx and ctx.parent_workflow_id != "":
+            if ctx.has_parent():
                 child_workflow_id = dbos._sys_db.check_child_workflow(
                     ctx.parent_workflow_id, ctx.parent_workflow_fid
                 )
@@ -704,7 +704,7 @@ def workflow_wrapper(
                 f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
             )
 
-            if ctx and ctx.parent_workflow_id != "":
+            if ctx.has_parent():
                 dbos._sys_db.record_child_workflow(
                     ctx.parent_workflow_id,
                     ctx.workflow_id,
