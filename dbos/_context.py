@@ -56,8 +56,8 @@ class StepStatus:
 
     Attributes:
         step_id: The unique ID of this step in its workflow.
-        current_attempt: For steps with automatic retry configuration, indicates which attempt number (zero-indexed) is currently executing.
-        max_attempts: For steps with automatic retry configuration, the maximum number of attempts that will be made before the step fails.
+        current_attempt: For steps with automatic retries, which attempt number (zero-indexed) is currently executing.
+        max_attempts: For steps with automatic retries, the maximum number of attempts that will be made before the step fails.
 
     """
 
