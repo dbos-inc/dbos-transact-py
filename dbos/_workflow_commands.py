@@ -12,25 +12,44 @@ from ._sys_db import (
 
 
 class WorkflowInformation:
+    # The workflow ID
     workflow_id: str
-    status: WorkflowStatuses
+    # The workflow status. Must be one of ENQUEUED, PENDING, SUCCESS, ERROR, CANCELLED, or RETRIES_EXCEEDED
+    status: str
+    # The name of the workflow function
     workflow_name: str
+    # The name of the workflow's class, if any
     workflow_class_name: Optional[str]
+    # The name with which the workflow's class instance was configured, if any
     workflow_config_name: Optional[str]
+    # The user who ran the workflow, if specified
     authenticated_user: Optional[str]
+    # The role with which the workflow ran, if specified
     assumed_role: Optional[str]
-    authenticated_roles: Optional[str]  # JSON list of roles.
-    input: Optional[_serialization.WorkflowInputs]  # JSON (jsonpickle)
-    output: Optional[str] = None  # JSON (jsonpickle)
-    request: Optional[str]  # JSON (jsonpickle)
-    error: Optional[str] = None  # JSON (jsonpickle)
-    created_at: Optional[int]  # Unix epoch timestamp in ms
-    updated_at: Optional[int]  # Unix epoch timestamp in ms
+    # All roles which the authenticated user could assume
+    authenticated_roles: Optional[str]
+    # The deserialized workflow input object
+    input: Optional[_serialization.WorkflowInputs]
+    # The workflow's output, if any, serialized to JSON
+    output: Optional[str] = None
+    # The error the workflow threw, if any, serialized to JSON
+    error: Optional[str] = None
+    # Workflow start time, as a Unix epoch timestamp in ms
+    created_at: Optional[int]
+    # Last time the workflow status was updated, as a Unix epoch timestamp in ms
+    updated_at: Optional[int]
+    # If this workflow was enqueued, on which queue
     queue_name: Optional[str]
+    # The executor to most recently executed this workflow
     executor_id: Optional[str]
+    # The application version on which this workflow was started
     app_version: Optional[str]
+    # The ID of the application executing this workflow
     app_id: Optional[str]
+    # The number of times this workflow's execution has been attempted
     recovery_attempts: Optional[int]
+    # The HTTP request that triggered the workflow, if known
+    request: Optional[str]
 
 
 def list_workflows(
