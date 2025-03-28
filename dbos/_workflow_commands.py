@@ -56,16 +56,16 @@ def list_workflows(
     sys_db: SystemDatabase,
     *,
     workflow_ids: Optional[List[str]] = None,
-    user: Optional[str] = None,
+    status: Optional[str] = None,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
-    status: Optional[str] = None,
-    request: bool = False,
-    app_version: Optional[str] = None,
     name: Optional[str] = None,
+    app_version: Optional[str] = None,
+    user: Optional[str] = None,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
     sort_desc: bool = False,
+    request: bool = False,
 ) -> List[WorkflowInformation]:
     input = GetWorkflowsInput()
     input.workflow_ids = workflow_ids

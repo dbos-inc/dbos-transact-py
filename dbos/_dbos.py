@@ -35,6 +35,7 @@ from opentelemetry.trace import Span
 
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._utils import GlobalParams
+from dbos._workflow_commands import WorkflowInformation, list_workflows
 
 from ._classproperty import classproperty
 from ._core import (
@@ -994,6 +995,34 @@ class DBOS:
         _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
         _get_or_create_dbos_registry().clear_workflow_cancelled(workflow_id)
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id, False)
+
+    def list_workflows(
+        cls,
+        *,
+        workflow_ids: Optional[List[str]] = None,
+        status: Optional[str] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        name: Optional[str] = None,
+        app_version: Optional[str] = None,
+        user: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        sort_desc: bool = False,
+    ) -> List[WorkflowInformation]:
+        return list_workflows(
+            _get_dbos_instance()._sys_db,
+            workflow_ids=workflow_ids,
+            status=status,
+            start_time=start_time,
+            end_time=end_time,
+            name=name,
+            app_version=app_version,
+            user=user,
+            limit=limit,
+            offset=offset,
+            sort_desc=sort_desc,
+        )
 
     @classproperty
     def logger(cls) -> Logger:
