@@ -92,15 +92,15 @@ def list_workflows(
 def list_queued_workflows(
     sys_db: SystemDatabase,
     *,
-    limit: Optional[int] = None,
-    start_time: Optional[str] = None,
-    end_time: Optional[str] = None,
     queue_name: Optional[str] = None,
     status: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
     name: Optional[str] = None,
-    request: bool = False,
+    limit: Optional[int] = None,
     offset: Optional[int] = None,
     sort_desc: bool = False,
+    request: bool = False,
 ) -> List[WorkflowInformation]:
     input: GetQueuedWorkflowsInput = {
         "queue_name": queue_name,

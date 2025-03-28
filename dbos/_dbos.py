@@ -35,7 +35,11 @@ from opentelemetry.trace import Span
 
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._utils import GlobalParams
-from dbos._workflow_commands import WorkflowInformation, list_workflows
+from dbos._workflow_commands import (
+    WorkflowInformation,
+    list_queued_workflows,
+    list_workflows,
+)
 
 from ._classproperty import classproperty
 from ._core import (
@@ -1020,6 +1024,31 @@ class DBOS:
             name=name,
             app_version=app_version,
             user=user,
+            limit=limit,
+            offset=offset,
+            sort_desc=sort_desc,
+        )
+
+    @classmethod
+    def list_queued_workflows(
+        cls,
+        *,
+        queue_name: Optional[str] = None,
+        status: Optional[str] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        name: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        sort_desc: bool = False,
+    ) -> List[WorkflowInformation]:
+        return list_queued_workflows(
+            _get_dbos_instance()._sys_db,
+            queue_name=queue_name,
+            status=status,
+            start_time=start_time,
+            end_time=end_time,
+            name=name,
             limit=limit,
             offset=offset,
             sort_desc=sort_desc,
