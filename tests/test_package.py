@@ -99,8 +99,7 @@ def test_init_config() -> None:
     expected_yaml = {
         "name": app_name,
         "language": "python",
-        "runtimeConfig": {"start": ["fastapi run ./main.py"]},
-        "database": {"migrate": ["echo 'No migrations specified'"]},
+        "runtimeConfig": {"start": ["python3 main.py"]},
         "database_url": "${DBOS_DATABASE_URL}",
     }
     with tempfile.TemporaryDirectory() as temp_path:

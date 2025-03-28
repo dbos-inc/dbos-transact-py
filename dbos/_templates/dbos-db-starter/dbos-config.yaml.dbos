@@ -7,8 +7,6 @@ name: ${project_name}
 language: python
 runtimeConfig:
   start:
-    - "fastapi run ${package_name}/main.py"
+    - "${start_command}"
 database_url: ${DBOS_DATABASE_URL}
-database:
-  migrate:
-    - ${migration_command}
+${migration_section}

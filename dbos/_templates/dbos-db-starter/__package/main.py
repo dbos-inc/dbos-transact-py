@@ -6,6 +6,7 @@
 
 # First, let's do imports, create a FastAPI app, and initialize DBOS.
 
+import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
@@ -37,7 +38,7 @@ def example_transaction(name: str) -> str:
     return greeting
 
 
-# Finally, let's use FastAPI to serve an HTML + CSS readme
+# Now, let's use FastAPI to serve an HTML + CSS readme
 # from the root path.
 
 
@@ -66,14 +67,8 @@ def readme() -> HTMLResponse:
     return HTMLResponse(readme)
 
 
-# To deploy this app to DBOS Cloud:
-# - "npm i -g @dbos-inc/dbos-cloud@latest" to install the Cloud CLI (requires Node)
-# - "dbos-cloud app deploy" to deploy your app
-# - Deploy outputs a URL--visit it to see your app!
+# Finally, we'll launch DBOS then start the FastAPI server.
 
-
-# To run this app locally:
-# - Make sure you have a Postgres database to connect to
-# - "dbos migrate" to set up your database tables
-# - "dbos start" to start the app
-# - Visit localhost:8000 to see your app!
+if __name__ == "__main__":
+    DBOS.launch()
+    uvicorn.run(app, host="0.0.0.0", port=8000)
