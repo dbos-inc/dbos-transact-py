@@ -68,6 +68,8 @@ class LifespanMiddleware:
                     and not self.dbos._launched
                 ):
                     self.dbos._launch()
+                elif message["type"] == "lifespan.shutdown.complete":
+                    self.dbos._destroy()
                 await send(message)
 
             # Call the original app with our wrapped functions
