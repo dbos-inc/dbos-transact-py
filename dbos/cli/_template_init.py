@@ -58,15 +58,20 @@ def copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
     dst_dir = path.abspath(".")
 
     package_name = project_name.replace("-", "_")
+    default_migration_section = """database:
+  migrate:
+    - alembic upgrade head
+"""
     ctx = {
         "project_name": project_name,
         "package_name": package_name,
-        "migration_command": "alembic upgrade head",
+        "start_command": f"python3 -m {package_name}.main",
+        "migration_section": default_migration_section,
     }
 
     if config_mode:
-        ctx["package_name"] = "."
-        ctx["migration_command"] = "echo 'No migrations specified'"
+        ctx["start_command"] = "python3 main.py"
+        ctx["migration_section"] = ""
         _copy_dbos_template(
             os.path.join(src_dir, "dbos-config.yaml.dbos"),
             os.path.join(dst_dir, "dbos-config.yaml"),

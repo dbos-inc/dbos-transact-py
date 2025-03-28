@@ -63,7 +63,10 @@ class LifespanMiddleware:
         if scope["type"] == "lifespan":
 
             async def wrapped_send(message: MutableMapping[str, Any]) -> None:
-                if message["type"] == "lifespan.startup.complete":
+                if (
+                    message["type"] == "lifespan.startup.complete"
+                    and not self.dbos._launched
+                ):
                     self.dbos._launch()
                 elif message["type"] == "lifespan.shutdown.complete":
                     self.dbos._destroy()
