@@ -1,3 +1,4 @@
+import json
 from typing import List, Optional, cast
 
 from . import _serialization
@@ -27,7 +28,7 @@ class WorkflowStatus:
     # The role with which the workflow ran, if specified
     assumed_role: Optional[str]
     # All roles which the authenticated user could assume
-    authenticated_roles: Optional[str]
+    authenticated_roles: Optional[list[str]]
     # The deserialized workflow input object
     input: Optional[_serialization.WorkflowInputs]
     # The workflow's output, if any, serialized to JSON
@@ -138,7 +139,11 @@ def get_workflow(
     info.config_name = internal_status["config_name"]
     info.authenticated_user = internal_status["authenticated_user"]
     info.assumed_role = internal_status["assumed_role"]
-    info.authenticated_roles = internal_status["authenticated_roles"]
+    info.authenticated_roles = (
+        json.loads(internal_status["authenticated_roles"])
+        if internal_status["authenticated_roles"] is not None
+        else None
+    )
     info.request = internal_status["request"]
     info.created_at = internal_status["created_at"]
     info.updated_at = internal_status["updated_at"]

@@ -157,7 +157,7 @@ class WorkflowsOutput:
             WorkflowConfigName=info.config_name,
             AuthenticatedUser=info.authenticated_user,
             AssumedRole=info.assumed_role,
-            AuthenticatedRoles=info.authenticated_roles,
+            AuthenticatedRoles=str(info.authenticated_roles),
             Input=inputs_str,
             Output=outputs_str,
             Request=request_str,
