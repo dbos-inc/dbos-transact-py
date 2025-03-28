@@ -203,7 +203,7 @@ class ConductorWebsocket(threading.Thread):
                                 info = get_workflow(
                                     self.dbos._sys_db,
                                     get_workflow_message.workflow_id,
-                                    getRequest=False,
+                                    get_request=False,
                                 )
                             except Exception as e:
                                 error_message = f"Exception encountered when getting workflow {get_workflow_message.workflow_id}: {traceback.format_exc()}"

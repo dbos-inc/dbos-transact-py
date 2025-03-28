@@ -122,52 +122,51 @@ def list_queued_workflows(
 
 
 def get_workflow(
-    sys_db: SystemDatabase, workflowUUID: str, getRequest: bool
+    sys_db: SystemDatabase, workflow_id: str, get_request: bool
 ) -> Optional[WorkflowInformation]:
 
-    info = sys_db.get_workflow_status(workflowUUID)
-    if info is None:
+    internal_status = sys_db.get_workflow_status(workflow_id)
+    if internal_status is None:
         return None
 
-    winfo = WorkflowInformation()
+    info = WorkflowInformation()
 
-    winfo.workflow_id = workflowUUID
-    winfo.status = info["status"]
-    winfo.name = info["name"]
-    winfo.class_name = info["class_name"]
-    winfo.config_name = info["config_name"]
-    winfo.authenticated_user = info["authenticated_user"]
-    winfo.assumed_role = info["assumed_role"]
-    winfo.authenticated_roles = info["authenticated_roles"]
-    winfo.request = info["request"]
-    winfo.created_at = info["created_at"]
-    winfo.updated_at = info["updated_at"]
-    winfo.queue_name = info["queue_name"]
-    winfo.executor_id = info["executor_id"]
-    winfo.app_version = info["app_version"]
-    winfo.app_id = info["app_id"]
-    winfo.recovery_attempts = info["recovery_attempts"]
+    info.workflow_id = workflow_id
+    info.status = internal_status["status"]
+    info.name = internal_status["name"]
+    info.class_name = internal_status["class_name"]
+    info.config_name = internal_status["config_name"]
+    info.authenticated_user = internal_status["authenticated_user"]
+    info.assumed_role = internal_status["assumed_role"]
+    info.authenticated_roles = internal_status["authenticated_roles"]
+    info.request = internal_status["request"]
+    info.created_at = internal_status["created_at"]
+    info.updated_at = internal_status["updated_at"]
+    info.queue_name = internal_status["queue_name"]
+    info.executor_id = internal_status["executor_id"]
+    info.app_version = internal_status["app_version"]
+    info.app_id = internal_status["app_id"]
+    info.recovery_attempts = internal_status["recovery_attempts"]
 
-    # no input field
-    input_data = sys_db.get_workflow_inputs(workflowUUID)
+    input_data = sys_db.get_workflow_inputs(workflow_id)
     if input_data is not None:
-        winfo.input = input_data
+        info.input = input_data
 
-    if info.get("status") == "SUCCESS":
-        result = sys_db.await_workflow_result(workflowUUID)
-        winfo.output = result
-    elif info.get("status") == "ERROR":
+    if internal_status.get("status") == "SUCCESS":
+        result = sys_db.await_workflow_result(workflow_id)
+        info.output = result
+    elif internal_status.get("status") == "ERROR":
         try:
-            sys_db.await_workflow_result(workflowUUID)
+            sys_db.await_workflow_result(workflow_id)
         except Exception as e:
-            winfo.error = str(e)
+            info.error = str(e)
 
-    if not getRequest:
-        winfo.request = None
+    if not get_request:
+        info.request = None
 
-    return winfo
+    return info
 
 
-def list_workflow_steps(sys_db: SystemDatabase, workflow_uuid: str) -> List[StepInfo]:
-    output = sys_db.get_workflow_steps(workflow_uuid)
+def list_workflow_steps(sys_db: SystemDatabase, workflow_id: str) -> List[StepInfo]:
+    output = sys_db.get_workflow_steps(workflow_id)
     return output
