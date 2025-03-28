@@ -29,7 +29,7 @@ def test_list_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
     dbos._sys_db._flush_workflow_status_buffer()
 
     # List the workflow, then test every output
-    outputs = _workflow_commands.list_workflows(sys_db)
+    outputs = DBOS.list_workflows()
     assert len(outputs) == 1
     output = outputs[0]
     assert output.workflow_id == wfid
@@ -50,31 +50,27 @@ def test_list_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert output.recovery_attempts == 1
 
     # Test searching by status
-    outputs = _workflow_commands.list_workflows(sys_db, status="PENDING")
+    outputs = DBOS.list_workflows(status="PENDING")
     assert len(outputs) == 0
-    outputs = _workflow_commands.list_workflows(sys_db, status="SUCCESS")
+    outputs = DBOS.list_workflows(status="SUCCESS")
     assert len(outputs) == 1
 
     # Test searching by workflow name
-    outputs = _workflow_commands.list_workflows(sys_db, name="no")
+    outputs = DBOS.list_workflows(name="no")
     assert len(outputs) == 0
-    outputs = _workflow_commands.list_workflows(
-        sys_db, name=simple_workflow.__qualname__
-    )
+    outputs = DBOS.list_workflows(name=simple_workflow.__qualname__)
     assert len(outputs) == 1
 
     # Test searching by workflow ID
-    outputs = _workflow_commands.list_workflows(sys_db, workflow_ids=["no"])
+    outputs = DBOS.list_workflows(workflow_ids=["no"])
     assert len(outputs) == 0
-    outputs = _workflow_commands.list_workflows(sys_db, workflow_ids=[wfid, "no"])
+    outputs = DBOS.list_workflows(workflow_ids=[wfid, "no"])
     assert len(outputs) == 1
 
     # Test searching by application version
-    outputs = _workflow_commands.list_workflows(sys_db, app_version="no")
+    outputs = DBOS.list_workflows(app_version="no")
     assert len(outputs) == 0
-    outputs = _workflow_commands.list_workflows(
-        sys_db, app_version=GlobalParams.app_version
-    )
+    outputs = DBOS.list_workflows(app_version=GlobalParams.app_version)
     assert len(outputs) == 1
 
 
@@ -89,30 +85,30 @@ def test_list_workflow_limit(dbos: DBOS, sys_db: SystemDatabase) -> None:
             simple_workflow()
 
     # Test all workflows appear
-    outputs = _workflow_commands.list_workflows(sys_db)
+    outputs = DBOS.list_workflows()
     assert len(outputs) == num_workflows
     for i, output in enumerate(outputs):
         assert output.workflow_id == str(i)
 
     # Test sort_desc inverts the order:
-    outputs = _workflow_commands.list_workflows(sys_db, sort_desc=True)
+    outputs = DBOS.list_workflows(sort_desc=True)
     for i, output in enumerate(outputs):
         assert output.workflow_id == str(num_workflows - i - 1)
 
     # Test LIMIT 2 returns the first two
-    outputs = _workflow_commands.list_workflows(sys_db, limit=2)
+    outputs = DBOS.list_workflows(limit=2)
     assert len(outputs) == 2
     for i, output in enumerate(outputs):
         assert output.workflow_id == str(i)
 
     # Test LIMIT 2 OFFSET 2 returns the third and fourth
-    outputs = _workflow_commands.list_workflows(sys_db, limit=2, offset=2)
+    outputs = DBOS.list_workflows(limit=2, offset=2)
     assert len(outputs) == 2
     for i, output in enumerate(outputs):
         assert output.workflow_id == str(i + 2)
 
     # Test OFFSET 4 returns only the fifth entry
-    outputs = _workflow_commands.list_workflows(sys_db, offset=num_workflows - 1)
+    outputs = DBOS.list_workflows(offset=num_workflows - 1)
     assert len(outputs) == 1
     for i, output in enumerate(outputs):
         assert output.workflow_id == str(i + 4)
@@ -129,16 +125,13 @@ def test_list_workflow_start_end_times(dbos: DBOS, sys_db: SystemDatabase) -> No
     simple_workflow()
     endtime = datetime.now().isoformat()
 
-    output = _workflow_commands.list_workflows(
-        sys_db, start_time=starttime, end_time=endtime
-    )
+    output = DBOS.list_workflows(start_time=starttime, end_time=endtime)
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
     newstarttime = (now - timedelta(seconds=30)).isoformat()
     newendtime = starttime
 
-    output = _workflow_commands.list_workflows(
-        sys_db,
+    output = DBOS.list_workflows(
         start_time=newstarttime,
         end_time=newendtime,
     )
@@ -160,18 +153,13 @@ def test_list_workflow_end_times_positive(dbos: DBOS, sys_db: SystemDatabase) ->
     simple_workflow()
     time_3 = datetime.now().isoformat()
 
-    output = _workflow_commands.list_workflows(
-        sys_db, start_time=time_0, end_time=time_1
-    )
+    output = DBOS.list_workflows(start_time=time_0, end_time=time_1)
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
-    output = _workflow_commands.list_workflows(
-        sys_db, start_time=time_1, end_time=time_2
-    )
+    output = DBOS.list_workflows(start_time=time_1, end_time=time_2)
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
-    output = _workflow_commands.list_workflows(
-        sys_db,
+    output = DBOS.list_workflows(
         start_time=time_1,
         end_time=time_3,
     )
@@ -185,9 +173,7 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase) ->
         return
 
     simple_workflow()
-    output = _workflow_commands.list_workflows(
-        sys_db,
-    )
+    output = DBOS.list_workflows()
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
     assert output[0] != None, "Expected output to be not None"
@@ -253,7 +239,7 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
         assert workflow.input["args"][0] == queued_steps - i - 1
 
     # Verify list_workflows also properly lists the blocking steps
-    workflows = _workflow_commands.list_workflows(sys_db)
+    workflows = DBOS.list_workflows()
     assert len(workflows) == queued_steps + 1
     for i, workflow in enumerate(workflows[1:]):
         assert workflow.status == WorkflowStatusString.PENDING.value

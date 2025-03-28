@@ -996,6 +996,7 @@ class DBOS:
         _get_or_create_dbos_registry().clear_workflow_cancelled(workflow_id)
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id, False)
 
+    @classmethod
     def list_workflows(
         cls,
         *,
