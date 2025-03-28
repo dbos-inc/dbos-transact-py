@@ -152,9 +152,9 @@ class WorkflowsOutput:
         return cls(
             WorkflowUUID=info.workflow_id,
             Status=info.status,
-            WorkflowName=info.workflow_name,
-            WorkflowClassName=info.workflow_class_name,
-            WorkflowConfigName=info.workflow_config_name,
+            WorkflowName=info.name,
+            WorkflowClassName=info.class_name,
+            WorkflowConfigName=info.config_name,
             AuthenticatedUser=info.authenticated_user,
             AssumedRole=info.assumed_role,
             AuthenticatedRoles=info.authenticated_roles,

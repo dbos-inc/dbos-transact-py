@@ -17,11 +17,11 @@ class WorkflowInformation:
     # The workflow status. Must be one of ENQUEUED, PENDING, SUCCESS, ERROR, CANCELLED, or RETRIES_EXCEEDED
     status: str
     # The name of the workflow function
-    workflow_name: str
+    name: str
     # The name of the workflow's class, if any
-    workflow_class_name: Optional[str]
+    class_name: Optional[str]
     # The name with which the workflow's class instance was configured, if any
-    workflow_config_name: Optional[str]
+    config_name: Optional[str]
     # The user who ran the workflow, if specified
     authenticated_user: Optional[str]
     # The role with which the workflow ran, if specified
@@ -133,9 +133,9 @@ def get_workflow(
 
     winfo.workflow_id = workflowUUID
     winfo.status = info["status"]
-    winfo.workflow_name = info["name"]
-    winfo.workflow_class_name = info["class_name"]
-    winfo.workflow_config_name = info["config_name"]
+    winfo.name = info["name"]
+    winfo.class_name = info["class_name"]
+    winfo.config_name = info["config_name"]
     winfo.authenticated_user = info["authenticated_user"]
     winfo.assumed_role = info["assumed_role"]
     winfo.authenticated_roles = info["authenticated_roles"]

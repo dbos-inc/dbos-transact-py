@@ -34,9 +34,9 @@ def test_list_workflow(dbos: DBOS) -> None:
     output = outputs[0]
     assert output.workflow_id == wfid
     assert output.status == "SUCCESS"
-    assert output.workflow_name == simple_workflow.__qualname__
-    assert output.workflow_class_name == None
-    assert output.workflow_config_name == None
+    assert output.name == simple_workflow.__qualname__
+    assert output.class_name == None
+    assert output.config_name == None
     assert output.authenticated_user == None
     assert output.assumed_role == None
     assert output.authenticated_roles == None
@@ -223,7 +223,7 @@ def test_queued_workflows(dbos: DBOS) -> None:
         assert workflow.input["args"][0] == i
         assert workflow.output is None
         assert workflow.error is None
-        assert "blocking_step" in workflow.workflow_name
+        assert "blocking_step" in workflow.name
         assert workflow.executor_id == GlobalParams.executor_id
         assert workflow.app_version == GlobalParams.app_version
         assert workflow.created_at is not None and workflow.created_at > 0
@@ -249,7 +249,7 @@ def test_queued_workflows(dbos: DBOS) -> None:
         assert workflow.input["args"][0] == i
         assert workflow.output is None
         assert workflow.error is None
-        assert "blocking_step" in workflow.workflow_name
+        assert "blocking_step" in workflow.name
         assert workflow.executor_id == GlobalParams.executor_id
         assert workflow.app_version == GlobalParams.app_version
         assert workflow.created_at is not None and workflow.created_at > 0
