@@ -5,6 +5,7 @@ import os
 import uuid
 from contextlib import AbstractContextManager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from enum import Enum
 from types import TracebackType
 from typing import List, Literal, Optional, Type, TypedDict
@@ -48,6 +49,23 @@ class TracedAttributes(TypedDict, total=False):
     authenticatedUserAssumedRole: Optional[str]
 
 
+@dataclass
+class StepStatus:
+    """
+    Status of a step execution.
+
+    Attributes:
+        step_id: The unique ID of this step in its workflow.
+        current_attempt: For steps with automatic retry configuration, indicates which attempt number is currently executing.
+        max_attempts: For steps with automatic retry configuration, the maximum number of attempts that will be made before the step fails.
+
+    """
+
+    step_id: int
+    current_attempt: Optional[int]
+    max_attempts: Optional[int]
+
+
 class DBOSContext:
     def __init__(self) -> None:
         self.executor_id = GlobalParams.executor_id
@@ -73,6 +91,7 @@ class DBOSContext:
         self.authenticated_user: Optional[str] = None
         self.authenticated_roles: Optional[List[str]] = None
         self.assumed_role: Optional[str] = None
+        self.step_status: Optional[StepStatus] = None
 
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()
@@ -150,10 +169,12 @@ class DBOSContext:
         attributes: TracedAttributes,
     ) -> None:
         self.curr_step_function_id = fid
+        self.step_status = StepStatus(fid, None, None)
         self._start_span(attributes)
 
     def end_step(self, exc_value: Optional[BaseException]) -> None:
         self.curr_step_function_id = -1
+        self.step_status = None
         self._end_span(exc_value)
 
     def start_transaction(
@@ -429,6 +450,33 @@ class EnterDBOSStep:
         ctx = assert_current_dbos_context()
         assert ctx.is_step()
         ctx.end_step(exc_value)
+        return False  # Did not handle
+
+
+class EnterDBOSStepRetry:
+    def __init__(self, current_attempt: int, max_attempts: int) -> None:
+        self.current_attempt = current_attempt
+        self.max_attempts = max_attempts
+
+    def __enter__(self) -> DBOSContext:
+        ctx = assert_current_dbos_context()
+        assert ctx.is_step()
+        assert ctx.step_status is not None
+        ctx.step_status.current_attempt = self.current_attempt
+        ctx.step_status.max_attempts = self.max_attempts
+        return ctx
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        ctx = assert_current_dbos_context()
+        assert ctx.is_step()
+        assert ctx.step_status is not None
+        ctx.step_status.current_attempt = None
+        ctx.step_status.max_attempts = None
         return False  # Did not handle
 
 

@@ -48,6 +48,9 @@ def test_simple_workflow(dbos: DBOS) -> None:
     @DBOS.step()
     def test_step(var: str) -> str:
         assert DBOS.step_id == 2
+        assert DBOS.step_status.step_id == 2
+        assert DBOS.step_status.current_attempt is None
+        assert DBOS.step_status.max_attempts is None
         nonlocal step_counter
         step_counter += 1
         DBOS.logger.info("I'm test_step")

@@ -86,6 +86,7 @@ from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
 from ._context import (
     EnterDBOSStep,
+    StepStatus,
     TracedAttributes,
     assert_current_dbos_context,
     get_local_dbos_context,
@@ -1042,6 +1043,14 @@ class DBOS:
         return ctx.function_id
 
     @classproperty
+    def step_status(cls) -> StepStatus:
+        """Return the status of the currently executing step."""
+        ctx = assert_current_dbos_context()
+        assert ctx.is_step(), "step_status is only available within a DBOS step."
+        assert ctx.step_status is not None
+        return ctx.step_status
+
+    @classproperty
     def parent_workflow_id(cls) -> str:
         """
         Return the workflow ID for the parent workflow.
@@ -1128,23 +1137,6 @@ class WorkflowStatus:
     assumed_role: Optional[str]
     authenticated_roles: Optional[List[str]]
     recovery_attempts: Optional[int]
-
-
-@dataclass
-class StepStatus:
-    """
-    Status of a step execution.
-
-    Attributes:
-        step_id: The unique ID of this step in its workflow.
-        current_attempt: For steps with automatic retry configuration, indicates which attempt number is currently executing.
-        max_attempts: For steps with automatic retry configuration, the maximum number of attempts that will be made before the step fails.
-
-    """
-
-    step_id: int
-    current_attempt: Optional[int]
-    max_attempts: Optional[int]
 
 
 class WorkflowHandle(Generic[R], Protocol):
