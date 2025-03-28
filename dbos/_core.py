@@ -243,12 +243,15 @@ def _init_workflow(
             wf_status = dbos._sys_db.insert_workflow_status(
                 status, max_recovery_attempts=max_recovery_attempts
             )
+
             # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
             dbos._sys_db.update_workflow_inputs(
                 wfid, _serialization.serialize_args(inputs)
             )
+
         else:
             # Buffer the inputs for single-transaction workflows, but don't buffer the status
+
             dbos._sys_db.buffer_workflow_inputs(
                 wfid, _serialization.serialize_args(inputs)
             )
@@ -475,6 +478,15 @@ def start_workflow(
 
     new_wf_id, new_wf_ctx = _get_new_wf()
 
+    ctx = new_wf_ctx
+    new_child_workflow_id = ctx.id_assigned_for_next_workflow
+    if ctx.has_parent():
+        child_workflow_id = dbos._sys_db.check_child_workflow(
+            ctx.parent_workflow_id, ctx.parent_workflow_fid
+        )
+        if child_workflow_id is not None:
+            return WorkflowHandlePolling(child_workflow_id, dbos)
+
     status = _init_workflow(
         dbos,
         new_wf_ctx,
@@ -488,6 +500,13 @@ def start_workflow(
     )
 
     wf_status = status["status"]
+    if ctx.has_parent():
+        dbos._sys_db.record_child_workflow(
+            ctx.parent_workflow_id,
+            new_child_workflow_id,
+            ctx.parent_workflow_fid,
+            func.__name__,
+        )
 
     if not execute_workflow or (
         not dbos.debug_mode
@@ -544,6 +563,17 @@ async def start_workflow_async(
 
     new_wf_id, new_wf_ctx = _get_new_wf()
 
+    ctx = new_wf_ctx
+    new_child_workflow_id = ctx.id_assigned_for_next_workflow
+    if ctx.has_parent():
+        child_workflow_id = await asyncio.to_thread(
+            dbos._sys_db.check_child_workflow,
+            ctx.parent_workflow_id,
+            ctx.parent_workflow_fid,
+        )
+        if child_workflow_id is not None:
+            return WorkflowHandleAsyncPolling(child_workflow_id, dbos)
+
     status = await asyncio.to_thread(
         _init_workflow,
         dbos,
@@ -556,6 +586,15 @@ async def start_workflow_async(
         queue=queue_name,
         max_recovery_attempts=fi.max_recovery_attempts,
     )
+
+    if ctx.has_parent():
+        await asyncio.to_thread(
+            dbos._sys_db.record_child_workflow,
+            ctx.parent_workflow_id,
+            new_child_workflow_id,
+            ctx.parent_workflow_fid,
+            func.__name__,
+        )
 
     wf_status = status["status"]
 
@@ -599,6 +638,8 @@ def workflow_wrapper(
 ) -> Callable[P, R]:
     func.__orig_func = func  # type: ignore
 
+    funcName = func.__name__
+
     fi = get_or_create_func_info(func)
     fi.max_recovery_attempts = max_recovery_attempts
 
@@ -629,7 +670,24 @@ def workflow_wrapper(
         wfOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
 
         def init_wf() -> Callable[[Callable[[], R]], R]:
+
+            def recorded_result(
+                c_wfid: str, dbos: "DBOS"
+            ) -> Callable[[Callable[[], R]], R]:
+                def recorded_result_inner(func: Callable[[], R]) -> R:
+                    return WorkflowHandlePolling(c_wfid, dbos).get_result()
+
+                return recorded_result_inner
+
             ctx = assert_current_dbos_context()  # Now the child ctx
+
+            if ctx.has_parent():
+                child_workflow_id = dbos._sys_db.check_child_workflow(
+                    ctx.parent_workflow_id, ctx.parent_workflow_fid
+                )
+                if child_workflow_id is not None:
+                    return recorded_result(child_workflow_id, dbos)
+
             status = _init_workflow(
                 dbos,
                 ctx,
@@ -640,10 +698,19 @@ def workflow_wrapper(
                 temp_wf_type=get_temp_workflow_type(func),
                 max_recovery_attempts=max_recovery_attempts,
             )
+
             # TODO: maybe modify the parameters if they've been changed by `_init_workflow`
             dbos.logger.debug(
                 f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
             )
+
+            if ctx.has_parent():
+                dbos._sys_db.record_child_workflow(
+                    ctx.parent_workflow_id,
+                    ctx.workflow_id,
+                    ctx.parent_workflow_fid,
+                    funcName,
+                )
 
             return _get_wf_invoke_func(dbos, status)
 
@@ -853,6 +920,8 @@ def decorate_step(
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
 
+        stepName = func.__name__
+
         def invoke_step(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:
                 raise DBOSException(
@@ -897,6 +966,7 @@ def decorate_step(
                 step_output: OperationResultInternal = {
                     "workflow_uuid": ctx.workflow_id,
                     "function_id": ctx.function_id,
+                    "function_name": stepName,
                     "output": None,
                     "error": None,
                 }

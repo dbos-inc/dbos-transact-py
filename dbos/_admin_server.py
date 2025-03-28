@@ -7,6 +7,8 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any, List, TypedDict
 
+import jsonpickle  # type: ignore
+
 from ._logger import dbos_logger
 from ._recovery import recover_pending_workflows
 
@@ -20,6 +22,7 @@ _workflow_queues_metadata_path = "/dbos-workflow-queues-metadata"
 # /workflows/:workflow_id/cancel
 # /workflows/:workflow_id/resume
 # /workflows/:workflow_id/restart
+# /workflows/:workflow_id/steps
 
 
 class AdminServer:
@@ -86,8 +89,16 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self._end_headers()
             self.wfile.write(json.dumps(queue_metadata_array).encode("utf-8"))
         else:
-            self.send_response(404)
-            self._end_headers()
+            steps_match = re.match(
+                r"^/workflows/(?P<workflow_id>[^/]+)/steps$", self.path
+            )
+
+            if steps_match:
+                workflow_id = steps_match.group("workflow_id")
+                self._handle_steps(workflow_id)
+            else:
+                self.send_response(404)
+                self._end_headers()
 
     def do_POST(self) -> None:
         content_length = int(
@@ -148,6 +159,13 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         self.dbos.cancel_workflow(workflow_id)
         self.send_response(204)
         self._end_headers()
+
+    def _handle_steps(self, workflow_id: str) -> None:
+        steps = self.dbos._sys_db.get_workflow_steps(workflow_id)
+        json_steps = jsonpickle.encode(steps, unpicklable=False).encode("utf-8")
+        self.send_response(200)
+        self._end_headers()
+        self.wfile.write(json_steps)
 
 
 # Be consistent with DBOS-TS response.

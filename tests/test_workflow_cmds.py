@@ -2,6 +2,8 @@ import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 # Public API
 from dbos import (
     DBOS,
@@ -312,3 +314,326 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert handle.get_result() == [0, 1, 2, 3, 4]
     workflows = _workflow_commands.list_queued_workflows(sys_db)
     assert len(workflows) == 0
+
+
+def test_list_2steps_sleep(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        stepOne()
+        stepTwo()
+        DBOS.sleep(1)
+        return
+
+    @DBOS.step()
+    def stepOne() -> None:
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        simple_workflow()
+
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert len(wfsteps) == 3
+    assert wfsteps[0]["function_name"] == "stepOne"
+    assert wfsteps[1]["function_name"] == "stepTwo"
+    assert wfsteps[2]["function_name"] == "DBOS.sleep"
+
+
+def test_send_recv(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def send_workflow(target: str) -> None:
+        DBOS.send(target, "Hello, World!")
+        return
+
+    @DBOS.workflow()
+    def recv_workflow() -> str:
+        return str(DBOS.recv(timeout_seconds=1))
+
+    wfid_r = str(uuid.uuid4())
+    with SetWorkflowID(wfid_r):
+        recv_workflow()
+
+    wfid_s = str(uuid.uuid4())
+    with SetWorkflowID(wfid_s):
+        send_workflow(wfid_r)
+
+    wfsteps_send = _workflow_commands.list_workflow_steps(sys_db, wfid_s)
+    assert len(wfsteps_send) == 1
+    assert wfsteps_send[0]["function_name"] == "DBOS.send"
+
+    wfsteps_recv = _workflow_commands.list_workflow_steps(sys_db, wfid_r)
+    assert len(wfsteps_recv) == 2
+    assert wfsteps_recv[0]["function_name"] == "DBOS.sleep"
+    assert wfsteps_recv[1]["function_name"] == "DBOS.recv"
+
+
+def test_set_get_event(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def set_get_workflow() -> None:
+        DBOS.set_event("key", "Hello, World!")
+        stepOne()
+        DBOS.get_event("wfid", "key", 1)
+        return
+
+    @DBOS.step()
+    def stepOne() -> None:
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        set_get_workflow()
+
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert len(wfsteps) == 4
+    assert wfsteps[0]["function_name"] == "DBOS.setEvent"
+    assert wfsteps[1]["function_name"] == "stepOne"
+    assert wfsteps[2]["function_name"] == "DBOS.sleep"
+    assert wfsteps[3]["function_name"] == "DBOS.getEvent"
+
+
+def test_callchild_first_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def parentWorkflow() -> None:
+        child_workflow()
+        stepOne()
+        stepTwo()
+        return
+
+    @DBOS.step()
+    def stepOne() -> None:
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        return
+
+    @DBOS.workflow()
+    def child_workflow() -> None:
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        parentWorkflow()
+
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert len(wfsteps) == 3
+    assert wfsteps[0]["function_name"] == "child_workflow"
+    assert wfsteps[1]["function_name"] == "stepOne"
+    assert wfsteps[2]["function_name"] == "stepTwo"
+
+
+def test_callchild_last_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def parentWorkflow() -> None:
+        stepOne()
+        stepTwo()
+        child_workflow()
+        return
+
+    @DBOS.step()
+    def stepOne() -> None:
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        return
+
+    @DBOS.workflow()
+    def child_workflow() -> None:
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        parentWorkflow()
+
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert len(wfsteps) == 3
+    assert wfsteps[0]["function_name"] == "stepOne"
+    assert wfsteps[1]["function_name"] == "stepTwo"
+    assert wfsteps[2]["function_name"] == "child_workflow"
+
+
+def test_callchild_first_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def parentWorkflow() -> None:
+        handle = dbos.start_workflow(child_workflow)
+        handle.get_status()
+        stepOne()
+        stepTwo()
+        return
+
+    @DBOS.step()
+    def stepOne() -> None:
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        return
+
+    @DBOS.workflow()
+    def child_workflow() -> None:
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        parentWorkflow()
+
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert len(wfsteps) == 4
+    assert wfsteps[0]["function_name"] == "child_workflow"
+    assert wfsteps[1]["function_name"] == "DBOS.getStatus"
+    assert wfsteps[2]["function_name"] == "stepOne"
+    assert wfsteps[3]["function_name"] == "stepTwo"
+
+
+def test_callchild_middle_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def parentWorkflow() -> None:
+        stepOne()
+        handle = dbos.start_workflow(child_workflow)
+        handle.get_status()
+        stepTwo()
+        return
+
+    @DBOS.step()
+    def stepOne() -> None:
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        return
+
+    @DBOS.workflow()
+    def child_workflow() -> None:
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        parentWorkflow()
+
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert wfsteps[0]["function_name"] == "stepOne"
+    assert wfsteps[1]["function_name"] == "child_workflow"
+    assert wfsteps[2]["function_name"] == "DBOS.getStatus"
+    assert wfsteps[3]["function_name"] == "stepTwo"
+
+
+@pytest.mark.asyncio
+async def test_callchild_first_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    async def parentWorkflow() -> str:
+        handle = await dbos.start_workflow_async(child_workflow)
+        await handle.get_result()
+        stepOne()
+        stepTwo()
+        return "done"
+
+    @DBOS.step()
+    def stepOne() -> None:
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        return
+
+    @DBOS.workflow()
+    async def child_workflow() -> str:
+        return "done"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await dbos.start_workflow_async(parentWorkflow)
+        await handle.get_result()
+
+    dbos._sys_db._flush_workflow_status_buffer()
+
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert len(wfsteps) == 3
+    assert wfsteps[0]["function_name"] == "child_workflow"
+    assert wfsteps[1]["function_name"] == "stepOne"
+    assert wfsteps[2]["function_name"] == "stepTwo"
+
+
+def test_callchild_rerun_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def parentWorkflow() -> str:
+        childwfid = str(uuid.uuid4())
+        with SetWorkflowID(childwfid):
+            handle = dbos.start_workflow(child_workflow, childwfid)
+            return handle.get_result()
+
+    @DBOS.workflow()
+    def child_workflow(id: str) -> str:
+        return id
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = dbos.start_workflow(parentWorkflow)
+        res1 = handle.get_result()
+
+    with SetWorkflowID(wfid):
+        handle = dbos.start_workflow(parentWorkflow)
+        res2 = handle.get_result()
+
+    assert res1 == res2
+
+
+def test_callchild_rerun_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def parentWorkflow() -> str:
+        childwfid = str(uuid.uuid4())
+        with SetWorkflowID(childwfid):
+            return child_workflow(childwfid)
+
+    @DBOS.workflow()
+    def child_workflow(id: str) -> str:
+        return id
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        res1 = parentWorkflow()
+
+    with SetWorkflowID(wfid):
+        res2 = parentWorkflow()
+
+    assert res1 == res2
+
+
+@pytest.mark.asyncio
+async def test_callchild_rerun_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    async def parentWorkflow() -> str:
+        childwfid = str(uuid.uuid4())
+        with SetWorkflowID(childwfid):
+            handle = await dbos.start_workflow_async(child_workflow, childwfid)
+            return await handle.get_result()
+
+    @DBOS.workflow()
+    async def child_workflow(id: str) -> str:
+        return id
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await dbos.start_workflow_async(parentWorkflow)
+        res1 = await handle.get_result()
+
+    with SetWorkflowID(wfid):
+        handle = await dbos.start_workflow_async(parentWorkflow)
+        res2 = await handle.get_result()
+
+    assert res1 == res2

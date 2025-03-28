@@ -28,6 +28,7 @@ from sqlalchemy.sql import func
 from dbos._utils import GlobalParams
 
 from . import _serialization
+from ._context import get_local_dbos_context
 from ._dbos_config import ConfigFile
 from ._error import (
     DBOSConflictingWorkflowError,
@@ -89,6 +90,7 @@ class RecordedResult(TypedDict):
 class OperationResultInternal(TypedDict):
     workflow_uuid: str
     function_id: int
+    function_name: str
     output: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
 
@@ -149,6 +151,14 @@ class GetPendingWorkflowsOutput:
     def __init__(self, *, workflow_uuid: str, queue_name: Optional[str] = None):
         self.workflow_uuid: str = workflow_uuid
         self.queue_name: Optional[str] = queue_name
+
+
+class StepInfo(TypedDict):
+    function_id: int
+    function_name: str
+    output: Optional[str]  # JSON (jsonpickle)
+    error: Optional[str]  # JSON (jsonpickle)
+    child_workflow_id: Optional[str]
 
 
 _dbos_null_topic = "__null__topic__"
@@ -550,6 +560,7 @@ class SystemDatabase:
             {
                 "workflow_uuid": calling_wf,
                 "function_id": calling_wf_fn,
+                "function_name": "DBOS.getStatus",
                 "output": _serialization.serialize(stat),
                 "error": None,
             }
@@ -771,6 +782,28 @@ class SystemDatabase:
                 for row in rows
             ]
 
+    def get_workflow_steps(self, workflow_id: str) -> List[StepInfo]:
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.operation_outputs.c.function_id,
+                    SystemSchema.operation_outputs.c.function_name,
+                    SystemSchema.operation_outputs.c.output,
+                    SystemSchema.operation_outputs.c.error,
+                    SystemSchema.operation_outputs.c.child_workflow_id,
+                ).where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
+            ).fetchall()
+            return [
+                StepInfo(
+                    function_id=row[0],
+                    function_name=row[1],
+                    output=row[2],  # Preserve JSON data
+                    error=row[3],
+                    child_workflow_id=row[4],
+                )
+                for row in rows
+            ]
+
     def record_operation_result(
         self, result: OperationResultInternal, conn: Optional[sa.Connection] = None
     ) -> None:
@@ -782,6 +815,7 @@ class SystemDatabase:
         sql = pg.insert(SystemSchema.operation_outputs).values(
             workflow_uuid=result["workflow_uuid"],
             function_id=result["function_id"],
+            function_name=result["function_name"],
             output=output,
             error=error,
         )
@@ -794,6 +828,30 @@ class SystemDatabase:
         except DBAPIError as dbapi_error:
             if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+            raise
+
+    def record_child_workflow(
+        self,
+        parentUUID: str,
+        childUUID: str,
+        functionID: int,
+        functionName: str,
+    ) -> None:
+        if self._debug_mode:
+            raise Exception("called record_child_workflow in debug mode")
+
+        sql = pg.insert(SystemSchema.operation_outputs).values(
+            workflow_uuid=parentUUID,
+            function_id=functionID,
+            function_name=functionName,
+            child_workflow_id=childUUID,
+        )
+        try:
+            with self.engine.begin() as c:
+                c.execute(sql)
+        except DBAPIError as dbapi_error:
+            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
+                raise DBOSWorkflowConflictIDError(parentUUID)
             raise
 
     def check_operation_execution(
@@ -821,6 +879,23 @@ class SystemDatabase:
             "error": rows[0][1],
         }
         return result
+
+    def check_child_workflow(
+        self, workflow_uuid: str, function_id: int
+    ) -> Optional[str]:
+        sql = sa.select(SystemSchema.operation_outputs.c.child_workflow_id).where(
+            SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
+            SystemSchema.operation_outputs.c.function_id == function_id,
+        )
+
+        # If in a transaction, use the provided connection
+        row: Any
+        with self.engine.begin() as c:
+            row = c.execute(sql).fetchone()
+
+        if row is None:
+            return None
+        return str(row[0])
 
     def send(
         self,
@@ -866,6 +941,7 @@ class SystemDatabase:
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
+                "function_name": "DBOS.send",
                 "output": None,
                 "error": None,
             }
@@ -959,6 +1035,7 @@ class SystemDatabase:
                 {
                     "workflow_uuid": workflow_uuid,
                     "function_id": function_id,
+                    "function_name": "DBOS.recv",
                     "output": _serialization.serialize(
                         message
                     ),  # None will be serialized to 'null'
@@ -1049,6 +1126,7 @@ class SystemDatabase:
                     {
                         "workflow_uuid": workflow_uuid,
                         "function_id": function_id,
+                        "function_name": "DBOS.sleep",
                         "output": _serialization.serialize(end_time),
                         "error": None,
                     }
@@ -1096,6 +1174,7 @@ class SystemDatabase:
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
+                "function_name": "DBOS.setEvent",
                 "output": None,
                 "error": None,
             }
@@ -1176,6 +1255,7 @@ class SystemDatabase:
                 {
                     "workflow_uuid": caller_ctx["workflow_uuid"],
                     "function_id": caller_ctx["function_id"],
+                    "function_name": "DBOS.getEvent",
                     "output": _serialization.serialize(
                         value
                     ),  # None will be serialized to 'null'
