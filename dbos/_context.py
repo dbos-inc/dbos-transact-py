@@ -459,11 +459,10 @@ class EnterDBOSStepRetry:
         self.max_attempts = max_attempts
 
     def __enter__(self) -> DBOSContext:
-        ctx = assert_current_dbos_context()
-        assert ctx.is_step()
-        assert ctx.step_status is not None
-        ctx.step_status.current_attempt = self.current_attempt
-        ctx.step_status.max_attempts = self.max_attempts
+        ctx = get_local_dbos_context()
+        if ctx is not None and ctx.step_status is not None:
+            ctx.step_status.current_attempt = self.current_attempt
+            ctx.step_status.max_attempts = self.max_attempts
         return ctx
 
     def __exit__(
@@ -472,11 +471,10 @@ class EnterDBOSStepRetry:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        ctx = assert_current_dbos_context()
-        assert ctx.is_step()
-        assert ctx.step_status is not None
-        ctx.step_status.current_attempt = None
-        ctx.step_status.max_attempts = None
+        ctx = get_local_dbos_context()
+        if ctx is not None and ctx.step_status is not None:
+            ctx.step_status.current_attempt = None
+            ctx.step_status.max_attempts = None
         return False  # Did not handle
 
 
