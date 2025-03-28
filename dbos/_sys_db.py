@@ -116,7 +116,7 @@ class GetWorkflowsInput:
         self.authenticated_user: Optional[str] = None  # The user who ran the workflow.
         self.start_time: Optional[str] = None  # Timestamp in ISO 8601 format
         self.end_time: Optional[str] = None  # Timestamp in ISO 8601 format
-        self.status: Optional[WorkflowStatuses] = None
+        self.status: Optional[str] = None
         self.application_version: Optional[str] = (
             None  # The application version that ran this workflow. = None
         )

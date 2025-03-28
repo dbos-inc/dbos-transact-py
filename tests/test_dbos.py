@@ -680,6 +680,10 @@ def test_retrieve_workflow(dbos: DBOS) -> None:
         dbos.sleep(secs)
         raise Exception("Wake Up!")
 
+    @DBOS.workflow()
+    def test_workflow(x: int) -> int:
+        return x
+
     dest_uuid = "aaaa"
     with pytest.raises(Exception) as exc_info:
         dbos.retrieve_workflow(dest_uuid)
@@ -706,6 +710,7 @@ def test_retrieve_workflow(dbos: DBOS) -> None:
     istat = sleep_wfh.get_status()
     assert istat
     assert istat.status == str(WorkflowStatusString.SUCCESS.value)
+    assert istat.output == sleep_wfh.get_workflow_id()
 
     # These throw
     sleep_wfh = dbos.start_workflow(test_sleep_workthrow, 1.5)
@@ -721,6 +726,10 @@ def test_retrieve_workflow(dbos: DBOS) -> None:
     istat = sleep_pwfh.get_status()
     assert istat
     assert istat.status == str(WorkflowStatusString.ERROR.value)
+    assert istat.output is None
+    assert istat.error is not None
+    assert isinstance(istat.error, Exception)
+    assert str(istat.error) == "Wake Up!"
 
     with pytest.raises(Exception) as exc_info:
         sleep_wfh.get_result()
@@ -728,6 +737,17 @@ def test_retrieve_workflow(dbos: DBOS) -> None:
     istat = sleep_wfh.get_status()
     assert istat
     assert istat.status == str(WorkflowStatusString.ERROR.value)
+
+    # Validate the status properly stores the output of the workflow
+    x = 5
+    handle = DBOS.start_workflow(test_workflow, x)
+    assert handle.get_result() == x
+    retrieved_handle: WorkflowHandle[int] = DBOS.retrieve_workflow(
+        handle.get_workflow_id()
+    )
+    assert retrieved_handle.get_result() == x
+    assert retrieved_handle.get_status().output == x
+    assert retrieved_handle.get_status().error is None
 
 
 def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:

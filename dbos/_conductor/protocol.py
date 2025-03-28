@@ -147,6 +147,7 @@ class WorkflowsOutput:
         updated_at_str = str(info.updated_at) if info.updated_at is not None else None
         inputs_str = str(info.input) if info.input is not None else None
         outputs_str = str(info.output) if info.output is not None else None
+        error_str = str(info.error) if info.error is not None else None
         request_str = str(info.request) if info.request is not None else None
 
         return cls(
@@ -161,7 +162,7 @@ class WorkflowsOutput:
             Input=inputs_str,
             Output=outputs_str,
             Request=request_str,
-            Error=info.error,
+            Error=error_str,
             CreatedAt=created_at_str,
             UpdatedAt=updated_at_str,
             QueueName=info.queue_name,

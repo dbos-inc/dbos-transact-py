@@ -1,5 +1,5 @@
 import json
-from typing import List, Optional, cast
+from typing import Any, List, Optional
 
 from . import _serialization
 from ._sys_db import (
@@ -31,10 +31,10 @@ class WorkflowStatus:
     authenticated_roles: Optional[list[str]]
     # The deserialized workflow input object
     input: Optional[_serialization.WorkflowInputs]
-    # The workflow's output, if any, serialized to JSON
-    output: Optional[str] = None
-    # The error the workflow threw, if any, serialized to JSON
-    error: Optional[str] = None
+    # The workflow's output, if any
+    output: Optional[Any]
+    # The error the workflow threw, if any
+    error: Optional[Exception]
     # Workflow start time, as a Unix epoch timestamp in ms
     created_at: Optional[int]
     # Last time the workflow status was updated, as a Unix epoch timestamp in ms
@@ -73,8 +73,7 @@ def list_workflows(
     input.authenticated_user = user
     input.start_time = start_time
     input.end_time = end_time
-    if status is not None:
-        input.status = cast(WorkflowStatuses, status)
+    input.status = status
     input.application_version = app_version
     input.limit = limit
     input.name = name
@@ -160,11 +159,13 @@ def get_workflow(
     if internal_status.get("status") == "SUCCESS":
         result = sys_db.await_workflow_result(workflow_id)
         info.output = result
+        info.error = None
     elif internal_status.get("status") == "ERROR":
         try:
             sys_db.await_workflow_result(workflow_id)
         except Exception as e:
-            info.error = str(e)
+            info.output = None
+            info.error = e
 
     if not get_request:
         info.request = None
