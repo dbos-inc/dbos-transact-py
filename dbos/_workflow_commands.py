@@ -8,7 +8,6 @@ from ._sys_db import (
     GetWorkflowsOutput,
     StepInfo,
     SystemDatabase,
-    WorkflowStatuses,
 )
 
 
