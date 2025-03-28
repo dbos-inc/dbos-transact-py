@@ -11,7 +11,6 @@ import threading
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from logging import Logger
 from typing import (
     TYPE_CHECKING,
@@ -28,15 +27,15 @@ from typing import (
     TypeVar,
     Union,
     cast,
-    overload,
 )
 
 from opentelemetry.trace import Span
 
+from dbos import _serialization
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._utils import GlobalParams
 from dbos._workflow_commands import (
-    WorkflowInformation,
+    WorkflowStatus,
     list_queued_workflows,
     list_workflows,
 )
@@ -114,6 +113,7 @@ from ._error import (
 )
 from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
 from ._sys_db import SystemDatabase
+from ._workflow_commands import WorkflowStatus, get_workflow
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
@@ -735,72 +735,39 @@ class DBOS:
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
         """Return the status of a workflow execution."""
+        sys_db = _get_dbos_instance()._sys_db
         ctx = get_local_dbos_context()
         if ctx and ctx.is_within_workflow():
             ctx.function_id += 1
-            stat = _get_dbos_instance()._sys_db.get_workflow_status_within_wf(
-                workflow_id, ctx.workflow_id, ctx.function_id
-            )
-        else:
-            stat = _get_dbos_instance()._sys_db.get_workflow_status(workflow_id)
-        if stat is None:
-            return None
+            res = sys_db.check_operation_execution(ctx.workflow_id, ctx.function_id)
+            if res is not None:
+                if res["output"]:
+                    resstat: WorkflowStatus = _serialization.deserialize(res["output"])
+                    return resstat
+                else:
+                    raise DBOSException(
+                        "Workflow status record not found. This should not happen! \033[1m Hint: Check if your workflow is deterministic.\033[0m"
+                    )
+        stat = get_workflow(_get_dbos_instance()._sys_db, workflow_id, True)
 
-        return WorkflowStatus(
-            workflow_id=workflow_id,
-            status=stat["status"],
-            name=stat["name"],
-            executor_id=stat["executor_id"],
-            recovery_attempts=stat["recovery_attempts"],
-            class_name=stat["class_name"],
-            config_name=stat["config_name"],
-            queue_name=stat["queue_name"],
-            authenticated_user=stat["authenticated_user"],
-            assumed_role=stat["assumed_role"],
-            authenticated_roles=(
-                json.loads(stat["authenticated_roles"])
-                if stat["authenticated_roles"] is not None
-                else None
-            ),
-        )
+        if ctx and ctx.is_within_workflow():
+            sys_db.record_operation_result(
+                {
+                    "workflow_uuid": ctx.workflow_id,
+                    "function_id": ctx.function_id,
+                    "function_name": "DBOS.getStatus",
+                    "output": _serialization.serialize(stat),
+                    "error": None,
+                }
+            )
+        return stat
 
     @classmethod
     async def get_workflow_status_async(
         cls, workflow_id: str
     ) -> Optional[WorkflowStatus]:
         """Return the status of a workflow execution."""
-        ctx = get_local_dbos_context()
-        if ctx and ctx.is_within_workflow():
-            ctx.function_id += 1
-            stat = await asyncio.to_thread(
-                lambda: _get_dbos_instance()._sys_db.get_workflow_status_within_wf(
-                    workflow_id, ctx.workflow_id, ctx.function_id
-                )
-            )
-        else:
-            stat = await asyncio.to_thread(
-                lambda: _get_dbos_instance()._sys_db.get_workflow_status(workflow_id)
-            )
-        if stat is None:
-            return None
-
-        return WorkflowStatus(
-            workflow_id=workflow_id,
-            status=stat["status"],
-            name=stat["name"],
-            executor_id=stat["executor_id"],
-            recovery_attempts=stat["recovery_attempts"],
-            class_name=stat["class_name"],
-            config_name=stat["config_name"],
-            queue_name=stat["queue_name"],
-            authenticated_user=stat["authenticated_user"],
-            assumed_role=stat["assumed_role"],
-            authenticated_roles=(
-                json.loads(stat["authenticated_roles"])
-                if stat["authenticated_roles"] is not None
-                else None
-            ),
-        )
+        return await asyncio.to_thread(cls.get_workflow_status, workflow_id)
 
     @classmethod
     def retrieve_workflow(
@@ -1014,7 +981,7 @@ class DBOS:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
-    ) -> List[WorkflowInformation]:
+    ) -> List[WorkflowStatus]:
         return list_workflows(
             _get_dbos_instance()._sys_db,
             workflow_ids=workflow_ids,
@@ -1041,7 +1008,7 @@ class DBOS:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
-    ) -> List[WorkflowInformation]:
+    ) -> List[WorkflowStatus]:
         return list_queued_workflows(
             _get_dbos_instance()._sys_db,
             queue_name=queue_name,
@@ -1161,41 +1128,6 @@ class DBOS:
         ctx = assert_current_dbos_context()
         ctx.authenticated_user = authenticated_user
         ctx.authenticated_roles = authenticated_roles
-
-
-@dataclass
-class WorkflowStatus:
-    """
-    Status of workflow execution.
-
-    This captures the state of a workflow execution at a point in time.
-
-    Attributes:
-        workflow_id(str):  The ID of the workflow execution
-        status(str):  The status of the execution, from `WorkflowStatusString`
-        name(str): The workflow function name
-        executor_id(str): The ID of the executor running the workflow
-        class_name(str): For member functions, the name of the class containing the workflow function
-        config_name(str): For instance member functions, the name of the class instance for the execution
-        queue_name(str): For workflows that are or were queued, the queue name
-        authenticated_user(str): The user who invoked the workflow
-        assumed_role(str): The access role used by the user to allow access to the workflow function
-        authenticated_roles(List[str]): List of all access roles available to the authenticated user
-        recovery_attempts(int): Number of times the workflow has been restarted (usually by recovery)
-
-    """
-
-    workflow_id: str
-    status: str
-    name: str
-    executor_id: Optional[str]
-    class_name: Optional[str]
-    config_name: Optional[str]
-    queue_name: Optional[str]
-    authenticated_user: Optional[str]
-    assumed_role: Optional[str]
-    authenticated_roles: Optional[List[str]]
-    recovery_attempts: Optional[int]
 
 
 class WorkflowHandle(Generic[R], Protocol):

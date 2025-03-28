@@ -84,10 +84,10 @@ if TYPE_CHECKING:
         Workflow,
         WorkflowHandle,
         WorkflowHandleAsync,
-        WorkflowStatus,
         DBOSRegistry,
         IsolationLevel,
     )
+    from ._workflow_commands import WorkflowStatus
 
 from sqlalchemy.exc import DBAPIError, InvalidRequestError
 

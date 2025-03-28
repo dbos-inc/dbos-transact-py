@@ -541,32 +541,6 @@ class SystemDatabase:
             }
             return status
 
-    def get_workflow_status_within_wf(
-        self, workflow_uuid: str, calling_wf: str, calling_wf_fn: int
-    ) -> Optional[WorkflowStatusInternal]:
-        res = self.check_operation_execution(calling_wf, calling_wf_fn)
-        if res is not None:
-            if res["output"]:
-                resstat: WorkflowStatusInternal = _serialization.deserialize(
-                    res["output"]
-                )
-                return resstat
-            else:
-                raise DBOSException(
-                    "Workflow status record not found. This should not happen! \033[1m Hint: Check if your workflow is deterministic.\033[0m"
-                )
-        stat = self.get_workflow_status(workflow_uuid)
-        self.record_operation_result(
-            {
-                "workflow_uuid": calling_wf,
-                "function_id": calling_wf_fn,
-                "function_name": "DBOS.getStatus",
-                "output": _serialization.serialize(stat),
-                "error": None,
-            }
-        )
-        return stat
-
     def await_workflow_result_internal(self, workflow_uuid: str) -> dict[str, Any]:
         polling_interval_secs: float = 1.000
 

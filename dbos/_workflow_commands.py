@@ -11,7 +11,7 @@ from ._sys_db import (
 )
 
 
-class WorkflowInformation:
+class WorkflowStatus:
     # The workflow ID
     workflow_id: str
     # The workflow status. Must be one of ENQUEUED, PENDING, SUCCESS, ERROR, CANCELLED, or RETRIES_EXCEEDED
@@ -66,7 +66,7 @@ def list_workflows(
     offset: Optional[int] = None,
     sort_desc: bool = False,
     request: bool = False,
-) -> List[WorkflowInformation]:
+) -> List[WorkflowStatus]:
     input = GetWorkflowsInput()
     input.workflow_ids = workflow_ids
     input.authenticated_user = user
@@ -81,7 +81,7 @@ def list_workflows(
     input.sort_desc = sort_desc
 
     output: GetWorkflowsOutput = sys_db.get_workflows(input)
-    infos: List[WorkflowInformation] = []
+    infos: List[WorkflowStatus] = []
     for workflow_id in output.workflow_uuids:
         info = get_workflow(sys_db, workflow_id, request)  # Call the method for each ID
         if info is not None:
@@ -101,7 +101,7 @@ def list_queued_workflows(
     offset: Optional[int] = None,
     sort_desc: bool = False,
     request: bool = False,
-) -> List[WorkflowInformation]:
+) -> List[WorkflowStatus]:
     input: GetQueuedWorkflowsInput = {
         "queue_name": queue_name,
         "start_time": start_time,
@@ -113,7 +113,7 @@ def list_queued_workflows(
         "sort_desc": sort_desc,
     }
     output: GetWorkflowsOutput = sys_db.get_queued_workflows(input)
-    infos: List[WorkflowInformation] = []
+    infos: List[WorkflowStatus] = []
     for workflow_id in output.workflow_uuids:
         info = get_workflow(sys_db, workflow_id, request)  # Call the method for each ID
         if info is not None:
@@ -123,13 +123,13 @@ def list_queued_workflows(
 
 def get_workflow(
     sys_db: SystemDatabase, workflow_id: str, get_request: bool
-) -> Optional[WorkflowInformation]:
+) -> Optional[WorkflowStatus]:
 
     internal_status = sys_db.get_workflow_status(workflow_id)
     if internal_status is None:
         return None
 
-    info = WorkflowInformation()
+    info = WorkflowStatus()
 
     info.workflow_id = workflow_id
     info.status = internal_status["status"]
