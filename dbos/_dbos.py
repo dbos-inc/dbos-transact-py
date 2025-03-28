@@ -1130,6 +1130,23 @@ class WorkflowStatus:
     recovery_attempts: Optional[int]
 
 
+@dataclass
+class StepStatus:
+    """
+    Status of a step execution.
+
+    Attributes:
+        step_id: The unique ID of this step in its workflow.
+        current_attempt: For steps with automatic retry configuration, indicates which attempt number is currently executing.
+        max_attempts: For steps with automatic retry configuration, the maximum number of attempts that will be made before the step fails.
+
+    """
+
+    step_id: int
+    current_attempt: Optional[int]
+    max_attempts: Optional[int]
+
+
 class WorkflowHandle(Generic[R], Protocol):
     """
     Handle to a workflow function.
