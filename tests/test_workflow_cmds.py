@@ -17,7 +17,7 @@ from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
 
 
-def test_list_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_list_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
     def simple_workflow(x: int) -> int:
         return x + 1
@@ -74,7 +74,7 @@ def test_list_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert len(outputs) == 1
 
 
-def test_list_workflow_limit(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_list_workflow_limit(dbos: DBOS) -> None:
     @DBOS.workflow()
     def simple_workflow() -> None:
         return
@@ -114,7 +114,7 @@ def test_list_workflow_limit(dbos: DBOS, sys_db: SystemDatabase) -> None:
         assert output.workflow_id == str(i + 4)
 
 
-def test_list_workflow_start_end_times(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_list_workflow_start_end_times(dbos: DBOS) -> None:
     @DBOS.workflow()
     def simple_workflow() -> None:
         print("Executed Simple workflow")
@@ -138,7 +138,7 @@ def test_list_workflow_start_end_times(dbos: DBOS, sys_db: SystemDatabase) -> No
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
 
-def test_list_workflow_end_times_positive(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_list_workflow_end_times_positive(dbos: DBOS) -> None:
     @DBOS.workflow()
     def simple_workflow() -> None:
         print("Executed Simple workflow")
@@ -187,7 +187,7 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase) ->
         assert info.workflow_id == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
 
 
-def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_queued_workflows(dbos: DBOS) -> None:
     queued_steps = 5
     step_events = [threading.Event() for _ in range(queued_steps)]
     event = threading.Event()
@@ -213,7 +213,7 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
         e.wait()
 
     # Verify all blocking steps are enqueued and have the right data
-    workflows = _workflow_commands.list_queued_workflows(sys_db)
+    workflows = DBOS.list_queued_workflows()
     assert len(workflows) == queued_steps
     for i, workflow in enumerate(workflows):
         assert workflow.status == WorkflowStatusString.PENDING.value
@@ -231,7 +231,7 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
         assert workflow.recovery_attempts == 1
 
     # Test sort_desc inverts the order
-    workflows = _workflow_commands.list_queued_workflows(sys_db, sort_desc=True)
+    workflows = DBOS.list_queued_workflows(sort_desc=True)
     assert len(workflows) == queued_steps
     for i, workflow in enumerate(workflows):
         # Verify newest queue entries appear first
@@ -257,48 +257,38 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
         assert workflow.recovery_attempts == 1
 
     # Test every filter
-    workflows = _workflow_commands.list_queued_workflows(
-        sys_db, status=WorkflowStatusString.PENDING.value
-    )
+    workflows = DBOS.list_queued_workflows(status=WorkflowStatusString.PENDING.value)
     assert len(workflows) == queued_steps
-    workflows = _workflow_commands.list_queued_workflows(
-        sys_db, status=WorkflowStatusString.ENQUEUED.value
-    )
+    workflows = DBOS.list_queued_workflows(status=WorkflowStatusString.ENQUEUED.value)
     assert len(workflows) == 0
-    workflows = _workflow_commands.list_queued_workflows(sys_db, queue_name=queue.name)
+    workflows = DBOS.list_queued_workflows(queue_name=queue.name)
     assert len(workflows) == queued_steps
-    workflows = _workflow_commands.list_queued_workflows(sys_db, queue_name="no")
+    workflows = DBOS.list_queued_workflows(queue_name="no")
     assert len(workflows) == 0
-    workflows = _workflow_commands.list_queued_workflows(
-        sys_db, name=f"<temp>.{blocking_step.__qualname__}"
-    )
+    workflows = DBOS.list_queued_workflows(name=f"<temp>.{blocking_step.__qualname__}")
     assert len(workflows) == queued_steps
-    workflows = _workflow_commands.list_queued_workflows(sys_db, name="no")
+    workflows = DBOS.list_queued_workflows(name="no")
     assert len(workflows) == 0
     now = datetime.now(timezone.utc)
     start_time = (now - timedelta(seconds=10)).isoformat()
     end_time = (now + timedelta(seconds=10)).isoformat()
-    workflows = _workflow_commands.list_queued_workflows(
-        sys_db, start_time=start_time, end_time=end_time
-    )
+    workflows = DBOS.list_queued_workflows(start_time=start_time, end_time=end_time)
     assert len(workflows) == queued_steps
-    workflows = _workflow_commands.list_queued_workflows(
-        sys_db, start_time=now.isoformat(), end_time=end_time
+    workflows = DBOS.list_queued_workflows(
+        start_time=now.isoformat(), end_time=end_time
     )
     assert len(workflows) == 0
-    workflows = _workflow_commands.list_queued_workflows(sys_db, limit=2)
+    workflows = DBOS.list_queued_workflows(limit=2)
     assert len(workflows) == 2
-    workflows = _workflow_commands.list_queued_workflows(sys_db, limit=2, offset=2)
+    workflows = DBOS.list_queued_workflows(limit=2, offset=2)
     assert len(workflows) == 2
-    workflows = _workflow_commands.list_queued_workflows(
-        sys_db, offset=queued_steps - 1
-    )
+    workflows = DBOS.list_queued_workflows(offset=queued_steps - 1)
     assert len(workflows) == 1
 
     # Confirm the workflow finishes and nothing is enqueued afterwards
     event.set()
     assert handle.get_result() == [0, 1, 2, 3, 4]
-    workflows = _workflow_commands.list_queued_workflows(sys_db)
+    workflows = DBOS.list_queued_workflows()
     assert len(workflows) == 0
 
 
@@ -552,7 +542,7 @@ async def test_callchild_first_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> No
     assert wfsteps[2]["function_name"] == "stepTwo"
 
 
-def test_callchild_rerun_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_callchild_rerun_async_thread(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def parentWorkflow() -> str:
@@ -577,7 +567,7 @@ def test_callchild_rerun_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> Non
     assert res1 == res2
 
 
-def test_callchild_rerun_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_callchild_rerun_sync(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def parentWorkflow() -> str:
@@ -600,7 +590,7 @@ def test_callchild_rerun_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
 
 @pytest.mark.asyncio
-async def test_callchild_rerun_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> None:
+async def test_callchild_rerun_asyncio(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def parentWorkflow() -> str:
