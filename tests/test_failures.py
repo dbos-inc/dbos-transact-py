@@ -326,6 +326,30 @@ def test_step_retries(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def test_step_status(dbos: DBOS) -> None:
+    step_counter = 0
+
+    max_attempts = 5
+
+    @DBOS.step(retries_allowed=True, interval_seconds=0, max_attempts=max_attempts)
+    def failing_step() -> None:
+        nonlocal step_counter
+        assert DBOS.step_status.step_id == 1
+        assert DBOS.step_status.current_attempt == step_counter
+        assert DBOS.step_status.max_attempts == max_attempts
+        step_counter += 1
+        if step_counter < max_attempts:
+            raise Exception("fail")
+
+    @DBOS.workflow()
+    def failing_workflow() -> None:
+        failing_step()
+
+    assert failing_workflow() == None
+    step_counter = 0
+    assert failing_step() == None
+
+
 def test_recovery_during_retries(dbos: DBOS) -> None:
     step_counter = 0
     start_event = threading.Event()
