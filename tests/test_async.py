@@ -8,6 +8,7 @@ import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, SetWorkflowID
+from dbos._dbos import WorkflowHandleAsync
 from dbos._dbos_config import ConfigFile
 from dbos._error import DBOSException
 
@@ -376,3 +377,29 @@ async def test_start_workflow_async(dbos: DBOS) -> None:
     assert step_counter == 1
     assert wf_el_id == id(asyncio.get_running_loop())
     assert step_el_id == id(asyncio.get_running_loop())
+
+
+@pytest.mark.asyncio
+async def test_retrieve_workflow_async(dbos: DBOS) -> None:
+    wfuuid = f"test_retrieve_workflow_async-{time.time_ns()}"
+
+    @DBOS.workflow()
+    async def test_workflow(var1: str, var2: str) -> str:
+        var1 = await test_step(var1)
+        await DBOS.sleep_async(5)
+        return var1 + var2
+
+    @DBOS.step()
+    async def test_step(var: str) -> str:
+        return var + "d"
+
+    with SetWorkflowID(wfuuid):
+        await DBOS.start_workflow_async(test_workflow, "alice", "bob")
+
+    handle: WorkflowHandleAsync[str] = await DBOS.retrieve_workflow_async(wfuuid)
+    assert handle.get_workflow_id() == wfuuid
+    result = await handle.get_result()
+    assert result == "alicedbob"
+    wfstatus = await handle.get_status()
+    assert wfstatus.status == "SUCCESS"
+    assert wfstatus.workflow_id == wfuuid
