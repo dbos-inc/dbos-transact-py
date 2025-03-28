@@ -31,9 +31,9 @@ class WorkflowStatus:
     # The deserialized workflow input object
     input: Optional[_serialization.WorkflowInputs]
     # The workflow's output, if any
-    output: Optional[Any]
+    output: Optional[Any] = None
     # The error the workflow threw, if any
-    error: Optional[Exception]
+    error: Optional[Exception] = None
     # Workflow start time, as a Unix epoch timestamp in ms
     created_at: Optional[int]
     # Last time the workflow status was updated, as a Unix epoch timestamp in ms
@@ -158,12 +158,10 @@ def get_workflow(
     if internal_status.get("status") == "SUCCESS":
         result = sys_db.await_workflow_result(workflow_id)
         info.output = result
-        info.error = None
     elif internal_status.get("status") == "ERROR":
         try:
             sys_db.await_workflow_result(workflow_id)
         except Exception as e:
-            info.output = None
             info.error = e
 
     if not get_request:

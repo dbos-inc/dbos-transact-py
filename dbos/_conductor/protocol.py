@@ -149,6 +149,11 @@ class WorkflowsOutput:
         outputs_str = str(info.output) if info.output is not None else None
         error_str = str(info.error) if info.error is not None else None
         request_str = str(info.request) if info.request is not None else None
+        roles_str = (
+            str(info.authenticated_roles)
+            if info.authenticated_roles is not None
+            else None
+        )
 
         return cls(
             WorkflowUUID=info.workflow_id,
@@ -158,7 +163,7 @@ class WorkflowsOutput:
             WorkflowConfigName=info.config_name,
             AuthenticatedUser=info.authenticated_user,
             AssumedRole=info.assumed_role,
-            AuthenticatedRoles=str(info.authenticated_roles),
+            AuthenticatedRoles=roles_str,
             Input=inputs_str,
             Output=outputs_str,
             Request=request_str,
