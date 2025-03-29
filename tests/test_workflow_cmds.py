@@ -17,7 +17,7 @@ from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
 
 
-def test_list_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_list_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
     def simple_workflow(x: int) -> int:
         return x + 1
@@ -29,14 +29,14 @@ def test_list_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
     dbos._sys_db._flush_workflow_status_buffer()
 
     # List the workflow, then test every output
-    outputs = _workflow_commands.list_workflows(sys_db)
+    outputs = DBOS.list_workflows()
     assert len(outputs) == 1
     output = outputs[0]
     assert output.workflow_id == wfid
     assert output.status == "SUCCESS"
-    assert output.workflow_name == simple_workflow.__qualname__
-    assert output.workflow_class_name == None
-    assert output.workflow_config_name == None
+    assert output.name == simple_workflow.__qualname__
+    assert output.class_name == None
+    assert output.config_name == None
     assert output.authenticated_user == None
     assert output.assumed_role == None
     assert output.authenticated_roles == None
@@ -50,35 +50,31 @@ def test_list_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert output.recovery_attempts == 1
 
     # Test searching by status
-    outputs = _workflow_commands.list_workflows(sys_db, status="PENDING")
+    outputs = DBOS.list_workflows(status="PENDING")
     assert len(outputs) == 0
-    outputs = _workflow_commands.list_workflows(sys_db, status="SUCCESS")
+    outputs = DBOS.list_workflows(status="SUCCESS")
     assert len(outputs) == 1
 
     # Test searching by workflow name
-    outputs = _workflow_commands.list_workflows(sys_db, name="no")
+    outputs = DBOS.list_workflows(name="no")
     assert len(outputs) == 0
-    outputs = _workflow_commands.list_workflows(
-        sys_db, name=simple_workflow.__qualname__
-    )
+    outputs = DBOS.list_workflows(name=simple_workflow.__qualname__)
     assert len(outputs) == 1
 
     # Test searching by workflow ID
-    outputs = _workflow_commands.list_workflows(sys_db, workflow_ids=["no"])
+    outputs = DBOS.list_workflows(workflow_ids=["no"])
     assert len(outputs) == 0
-    outputs = _workflow_commands.list_workflows(sys_db, workflow_ids=[wfid, "no"])
+    outputs = DBOS.list_workflows(workflow_ids=[wfid, "no"])
     assert len(outputs) == 1
 
     # Test searching by application version
-    outputs = _workflow_commands.list_workflows(sys_db, app_version="no")
+    outputs = DBOS.list_workflows(app_version="no")
     assert len(outputs) == 0
-    outputs = _workflow_commands.list_workflows(
-        sys_db, app_version=GlobalParams.app_version
-    )
+    outputs = DBOS.list_workflows(app_version=GlobalParams.app_version)
     assert len(outputs) == 1
 
 
-def test_list_workflow_limit(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_list_workflow_limit(dbos: DBOS) -> None:
     @DBOS.workflow()
     def simple_workflow() -> None:
         return
@@ -89,36 +85,36 @@ def test_list_workflow_limit(dbos: DBOS, sys_db: SystemDatabase) -> None:
             simple_workflow()
 
     # Test all workflows appear
-    outputs = _workflow_commands.list_workflows(sys_db)
+    outputs = DBOS.list_workflows()
     assert len(outputs) == num_workflows
     for i, output in enumerate(outputs):
         assert output.workflow_id == str(i)
 
     # Test sort_desc inverts the order:
-    outputs = _workflow_commands.list_workflows(sys_db, sort_desc=True)
+    outputs = DBOS.list_workflows(sort_desc=True)
     for i, output in enumerate(outputs):
         assert output.workflow_id == str(num_workflows - i - 1)
 
     # Test LIMIT 2 returns the first two
-    outputs = _workflow_commands.list_workflows(sys_db, limit=2)
+    outputs = DBOS.list_workflows(limit=2)
     assert len(outputs) == 2
     for i, output in enumerate(outputs):
         assert output.workflow_id == str(i)
 
     # Test LIMIT 2 OFFSET 2 returns the third and fourth
-    outputs = _workflow_commands.list_workflows(sys_db, limit=2, offset=2)
+    outputs = DBOS.list_workflows(limit=2, offset=2)
     assert len(outputs) == 2
     for i, output in enumerate(outputs):
         assert output.workflow_id == str(i + 2)
 
     # Test OFFSET 4 returns only the fifth entry
-    outputs = _workflow_commands.list_workflows(sys_db, offset=num_workflows - 1)
+    outputs = DBOS.list_workflows(offset=num_workflows - 1)
     assert len(outputs) == 1
     for i, output in enumerate(outputs):
         assert output.workflow_id == str(i + 4)
 
 
-def test_list_workflow_start_end_times(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_list_workflow_start_end_times(dbos: DBOS) -> None:
     @DBOS.workflow()
     def simple_workflow() -> None:
         print("Executed Simple workflow")
@@ -129,23 +125,20 @@ def test_list_workflow_start_end_times(dbos: DBOS, sys_db: SystemDatabase) -> No
     simple_workflow()
     endtime = datetime.now().isoformat()
 
-    output = _workflow_commands.list_workflows(
-        sys_db, start_time=starttime, end_time=endtime
-    )
+    output = DBOS.list_workflows(start_time=starttime, end_time=endtime)
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
     newstarttime = (now - timedelta(seconds=30)).isoformat()
     newendtime = starttime
 
-    output = _workflow_commands.list_workflows(
-        sys_db,
+    output = DBOS.list_workflows(
         start_time=newstarttime,
         end_time=newendtime,
     )
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
 
-def test_list_workflow_end_times_positive(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_list_workflow_end_times_positive(dbos: DBOS) -> None:
     @DBOS.workflow()
     def simple_workflow() -> None:
         print("Executed Simple workflow")
@@ -160,18 +153,13 @@ def test_list_workflow_end_times_positive(dbos: DBOS, sys_db: SystemDatabase) ->
     simple_workflow()
     time_3 = datetime.now().isoformat()
 
-    output = _workflow_commands.list_workflows(
-        sys_db, start_time=time_0, end_time=time_1
-    )
+    output = DBOS.list_workflows(start_time=time_0, end_time=time_1)
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
-    output = _workflow_commands.list_workflows(
-        sys_db, start_time=time_1, end_time=time_2
-    )
+    output = DBOS.list_workflows(start_time=time_1, end_time=time_2)
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
-    output = _workflow_commands.list_workflows(
-        sys_db,
+    output = DBOS.list_workflows(
         start_time=time_1,
         end_time=time_3,
     )
@@ -185,9 +173,7 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase) ->
         return
 
     simple_workflow()
-    output = _workflow_commands.list_workflows(
-        sys_db,
-    )
+    output = DBOS.list_workflows()
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
     assert output[0] != None, "Expected output to be not None"
@@ -201,7 +187,7 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase) ->
         assert info.workflow_id == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
 
 
-def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_queued_workflows(dbos: DBOS) -> None:
     queued_steps = 5
     step_events = [threading.Event() for _ in range(queued_steps)]
     event = threading.Event()
@@ -227,7 +213,7 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
         e.wait()
 
     # Verify all blocking steps are enqueued and have the right data
-    workflows = _workflow_commands.list_queued_workflows(sys_db)
+    workflows = DBOS.list_queued_workflows()
     assert len(workflows) == queued_steps
     for i, workflow in enumerate(workflows):
         assert workflow.status == WorkflowStatusString.PENDING.value
@@ -237,7 +223,7 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
         assert workflow.input["args"][0] == i
         assert workflow.output is None
         assert workflow.error is None
-        assert "blocking_step" in workflow.workflow_name
+        assert "blocking_step" in workflow.name
         assert workflow.executor_id == GlobalParams.executor_id
         assert workflow.app_version == GlobalParams.app_version
         assert workflow.created_at is not None and workflow.created_at > 0
@@ -245,7 +231,7 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
         assert workflow.recovery_attempts == 1
 
     # Test sort_desc inverts the order
-    workflows = _workflow_commands.list_queued_workflows(sys_db, sort_desc=True)
+    workflows = DBOS.list_queued_workflows(sort_desc=True)
     assert len(workflows) == queued_steps
     for i, workflow in enumerate(workflows):
         # Verify newest queue entries appear first
@@ -253,7 +239,7 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
         assert workflow.input["args"][0] == queued_steps - i - 1
 
     # Verify list_workflows also properly lists the blocking steps
-    workflows = _workflow_commands.list_workflows(sys_db)
+    workflows = DBOS.list_workflows()
     assert len(workflows) == queued_steps + 1
     for i, workflow in enumerate(workflows[1:]):
         assert workflow.status == WorkflowStatusString.PENDING.value
@@ -263,7 +249,7 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
         assert workflow.input["args"][0] == i
         assert workflow.output is None
         assert workflow.error is None
-        assert "blocking_step" in workflow.workflow_name
+        assert "blocking_step" in workflow.name
         assert workflow.executor_id == GlobalParams.executor_id
         assert workflow.app_version == GlobalParams.app_version
         assert workflow.created_at is not None and workflow.created_at > 0
@@ -271,48 +257,38 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
         assert workflow.recovery_attempts == 1
 
     # Test every filter
-    workflows = _workflow_commands.list_queued_workflows(
-        sys_db, status=WorkflowStatusString.PENDING.value
-    )
+    workflows = DBOS.list_queued_workflows(status=WorkflowStatusString.PENDING.value)
     assert len(workflows) == queued_steps
-    workflows = _workflow_commands.list_queued_workflows(
-        sys_db, status=WorkflowStatusString.ENQUEUED.value
-    )
+    workflows = DBOS.list_queued_workflows(status=WorkflowStatusString.ENQUEUED.value)
     assert len(workflows) == 0
-    workflows = _workflow_commands.list_queued_workflows(sys_db, queue_name=queue.name)
+    workflows = DBOS.list_queued_workflows(queue_name=queue.name)
     assert len(workflows) == queued_steps
-    workflows = _workflow_commands.list_queued_workflows(sys_db, queue_name="no")
+    workflows = DBOS.list_queued_workflows(queue_name="no")
     assert len(workflows) == 0
-    workflows = _workflow_commands.list_queued_workflows(
-        sys_db, name=f"<temp>.{blocking_step.__qualname__}"
-    )
+    workflows = DBOS.list_queued_workflows(name=f"<temp>.{blocking_step.__qualname__}")
     assert len(workflows) == queued_steps
-    workflows = _workflow_commands.list_queued_workflows(sys_db, name="no")
+    workflows = DBOS.list_queued_workflows(name="no")
     assert len(workflows) == 0
     now = datetime.now(timezone.utc)
     start_time = (now - timedelta(seconds=10)).isoformat()
     end_time = (now + timedelta(seconds=10)).isoformat()
-    workflows = _workflow_commands.list_queued_workflows(
-        sys_db, start_time=start_time, end_time=end_time
-    )
+    workflows = DBOS.list_queued_workflows(start_time=start_time, end_time=end_time)
     assert len(workflows) == queued_steps
-    workflows = _workflow_commands.list_queued_workflows(
-        sys_db, start_time=now.isoformat(), end_time=end_time
+    workflows = DBOS.list_queued_workflows(
+        start_time=now.isoformat(), end_time=end_time
     )
     assert len(workflows) == 0
-    workflows = _workflow_commands.list_queued_workflows(sys_db, limit=2)
+    workflows = DBOS.list_queued_workflows(limit=2)
     assert len(workflows) == 2
-    workflows = _workflow_commands.list_queued_workflows(sys_db, limit=2, offset=2)
+    workflows = DBOS.list_queued_workflows(limit=2, offset=2)
     assert len(workflows) == 2
-    workflows = _workflow_commands.list_queued_workflows(
-        sys_db, offset=queued_steps - 1
-    )
+    workflows = DBOS.list_queued_workflows(offset=queued_steps - 1)
     assert len(workflows) == 1
 
     # Confirm the workflow finishes and nothing is enqueued afterwards
     event.set()
     assert handle.get_result() == [0, 1, 2, 3, 4]
-    workflows = _workflow_commands.list_queued_workflows(sys_db)
+    workflows = DBOS.list_queued_workflows()
     assert len(workflows) == 0
 
 
@@ -566,7 +542,7 @@ async def test_callchild_first_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> No
     assert wfsteps[2]["function_name"] == "stepTwo"
 
 
-def test_callchild_rerun_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_callchild_rerun_async_thread(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def parentWorkflow() -> str:
@@ -591,7 +567,7 @@ def test_callchild_rerun_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> Non
     assert res1 == res2
 
 
-def test_callchild_rerun_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_callchild_rerun_sync(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def parentWorkflow() -> str:
@@ -614,7 +590,7 @@ def test_callchild_rerun_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
 
 @pytest.mark.asyncio
-async def test_callchild_rerun_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> None:
+async def test_callchild_rerun_asyncio(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def parentWorkflow() -> str:

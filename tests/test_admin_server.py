@@ -260,7 +260,7 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
     dbos._sys_db.wait_for_buffer_flush()
 
     # Verify the workflow has succeeded
-    output = _workflow_commands.list_workflows(sys_db)
+    output = DBOS.list_workflows()
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
     assert output[0] != None, "Expected output to be not None"
     wfUuid = output[0].workflow_id
@@ -326,7 +326,7 @@ def test_admin_workflow_restart(dbos: DBOS, sys_db: SystemDatabase) -> None:
     time.sleep(1)
 
     # get the workflow list
-    output = _workflow_commands.list_workflows(sys_db)
+    output = DBOS.list_workflows()
     assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
     assert output[0] != None, "Expected output to be not None"
@@ -362,7 +362,7 @@ def test_admin_workflow_restart(dbos: DBOS, sys_db: SystemDatabase) -> None:
     else:
         assert False, "Expected info to be not None"
 
-    output = _workflow_commands.list_workflows(sys_db)
+    output = DBOS.list_workflows()
     assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
 
     if output[0].workflow_id == wfUuid:

@@ -3,7 +3,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import List, Optional, Type, TypedDict, TypeVar
 
-from dbos._workflow_commands import WorkflowInformation
+from dbos._workflow_commands import WorkflowStatus
 
 
 class MessageType(str, Enum):
@@ -141,27 +141,33 @@ class WorkflowsOutput:
     ExecutorID: Optional[str]
 
     @classmethod
-    def from_workflow_information(cls, info: WorkflowInformation) -> "WorkflowsOutput":
+    def from_workflow_information(cls, info: WorkflowStatus) -> "WorkflowsOutput":
         # Convert fields to strings as needed
         created_at_str = str(info.created_at) if info.created_at is not None else None
         updated_at_str = str(info.updated_at) if info.updated_at is not None else None
         inputs_str = str(info.input) if info.input is not None else None
         outputs_str = str(info.output) if info.output is not None else None
+        error_str = str(info.error) if info.error is not None else None
         request_str = str(info.request) if info.request is not None else None
+        roles_str = (
+            str(info.authenticated_roles)
+            if info.authenticated_roles is not None
+            else None
+        )
 
         return cls(
             WorkflowUUID=info.workflow_id,
             Status=info.status,
-            WorkflowName=info.workflow_name,
-            WorkflowClassName=info.workflow_class_name,
-            WorkflowConfigName=info.workflow_config_name,
+            WorkflowName=info.name,
+            WorkflowClassName=info.class_name,
+            WorkflowConfigName=info.config_name,
             AuthenticatedUser=info.authenticated_user,
             AssumedRole=info.assumed_role,
-            AuthenticatedRoles=info.authenticated_roles,
+            AuthenticatedRoles=roles_str,
             Input=inputs_str,
             Output=outputs_str,
             Request=request_str,
-            Error=info.error,
+            Error=error_str,
             CreatedAt=created_at_str,
             UpdatedAt=updated_at_str,
             QueueName=info.queue_name,

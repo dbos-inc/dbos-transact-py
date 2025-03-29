@@ -4,6 +4,8 @@ import inspect
 import time
 from typing import Any, Callable, Coroutine, Optional, Protocol, TypeVar, Union, cast
 
+from dbos._context import EnterDBOSStepRetry
+
 T = TypeVar("T")
 R = TypeVar("R")
 
@@ -98,7 +100,8 @@ class Immediate(Outcome[T]):
     ) -> T:
         for i in range(attempts):
             try:
-                return func()
+                with EnterDBOSStepRetry(i, attempts):
+                    return func()
             except Exception as exp:
                 wait_time = on_exception(i, exp)
                 time.sleep(wait_time)
@@ -184,7 +187,8 @@ class Pending(Outcome[T]):
     ) -> T:
         for i in range(attempts):
             try:
-                return await func()
+                with EnterDBOSStepRetry(i, attempts):
+                    return await func()
             except Exception as exp:
                 wait_time = on_exception(i, exp)
                 await asyncio.sleep(wait_time)

@@ -84,10 +84,10 @@ if TYPE_CHECKING:
         Workflow,
         WorkflowHandle,
         WorkflowHandleAsync,
-        WorkflowStatus,
         DBOSRegistry,
         IsolationLevel,
     )
+    from ._workflow_commands import WorkflowStatus
 
 from sqlalchemy.exc import DBAPIError, InvalidRequestError
 
@@ -515,9 +515,6 @@ def start_workflow(
             or wf_status == WorkflowStatusString.SUCCESS.value
         )
     ):
-        dbos.logger.debug(
-            f"Workflow {new_wf_id} already completed with status {wf_status}. Directly returning a workflow handle."
-        )
         return WorkflowHandlePolling(new_wf_id, dbos)
 
     future = dbos._executor.submit(
@@ -605,9 +602,6 @@ async def start_workflow_async(
             or wf_status == WorkflowStatusString.SUCCESS.value
         )
     ):
-        dbos.logger.debug(
-            f"Workflow {new_wf_id} already completed with status {wf_status}. Directly returning a workflow handle."
-        )
         return WorkflowHandleAsyncPolling(new_wf_id, dbos)
 
     coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, *args, **kwargs)
@@ -946,7 +940,7 @@ def decorate_step(
 
             def on_exception(attempt: int, error: BaseException) -> float:
                 dbos.logger.warning(
-                    f"Step being automatically retried. (attempt {attempt} of {attempts}). {traceback.format_exc()}"
+                    f"Step being automatically retried. (attempt {attempt + 1} of {attempts}). {traceback.format_exc()}"
                 )
                 ctx = assert_current_dbos_context()
                 ctx.get_current_span().add_event(
