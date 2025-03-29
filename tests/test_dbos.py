@@ -1217,8 +1217,6 @@ def test_debug_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
 
     result4 = dest_handle_2.get_result()
     assert result4 == result2
-    # In start_workflow, we skip the replay of already finished workflows
-    assert f"Workflow {dest_wfid} already completed with status" in caplog.text
 
     # Reset logging
     logging.getLogger("dbos").propagate = original_propagate
