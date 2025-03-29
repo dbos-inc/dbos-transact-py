@@ -602,9 +602,6 @@ async def start_workflow_async(
             or wf_status == WorkflowStatusString.SUCCESS.value
         )
     ):
-        dbos.logger.debug(
-            f"Workflow {new_wf_id} already completed with status {wf_status}. Directly returning a workflow handle."
-        )
         return WorkflowHandleAsyncPolling(new_wf_id, dbos)
 
     coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, *args, **kwargs)
