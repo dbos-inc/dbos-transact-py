@@ -55,11 +55,6 @@ atomic = true
 [tool.mypy]
 strict = true
 
-[tool.pyright]
-typeCheckingMode = "standard"
-reportTypedDictNotRequiredAccess = false
-reportRedeclaration = false
-
 [tool.pytest.ini_options]
 addopts = "-s"
 log_cli_format = "%(asctime)s [%(levelname)8s] (%(name)s:%(filename)s:%(lineno)s) %(message)s"
