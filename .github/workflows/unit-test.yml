@@ -83,8 +83,14 @@ jobs:
       run: pdm install
       working-directory: ./
 
+      # Mypy is the main type-checker used to verify the entire code base.
     - name: Check Types
       run: pdm run mypy .
+      working-directory: ./
+
+      # Pyright is used by Pylance, so verify it works with DBOS application code.
+    - name: Check Types With Pyright
+      run: pdm run pyright tests
       working-directory: ./
 
     - name: Run Unit Tests
