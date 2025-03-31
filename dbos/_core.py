@@ -81,7 +81,6 @@ from ._sys_db import (
 if TYPE_CHECKING:
     from ._dbos import (
         DBOS,
-        Workflow,
         WorkflowHandle,
         WorkflowHandleAsync,
         DBOSRegistry,
@@ -304,7 +303,7 @@ def _get_wf_invoke_func(
 def _execute_workflow_wthread(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
-    func: "Workflow[P, R]",
+    func: "Callable[P, R]",
     ctx: DBOSContext,
     *args: Any,
     **kwargs: Any,
@@ -335,7 +334,7 @@ def _execute_workflow_wthread(
 async def _execute_workflow_async(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
-    func: "Workflow[P, Coroutine[Any, Any, R]]",
+    func: "Callable[P, Coroutine[Any, Any, R]]",
     ctx: DBOSContext,
     *args: Any,
     **kwargs: Any,
@@ -449,7 +448,7 @@ def _get_new_wf() -> tuple[str, DBOSContext]:
 
 def start_workflow(
     dbos: "DBOS",
-    func: "Workflow[P, Union[R, Coroutine[Any, Any, R]]]",
+    func: "Callable[P, Union[R, Coroutine[Any, Any, R]]]",
     queue_name: Optional[str],
     execute_workflow: bool,
     *args: P.args,
@@ -531,7 +530,7 @@ def start_workflow(
 
 async def start_workflow_async(
     dbos: "DBOS",
-    func: "Workflow[P, Coroutine[Any, Any, R]]",
+    func: "Callable[P, Coroutine[Any, Any, R]]",
     queue_name: Optional[str],
     execute_workflow: bool,
     *args: P.args,
