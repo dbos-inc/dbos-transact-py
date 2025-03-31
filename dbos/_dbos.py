@@ -713,7 +713,7 @@ class DBOS:
     @classmethod
     def start_workflow(
         cls,
-        func: Workflow[P, R],
+        func: Callable[P, R],
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
@@ -723,7 +723,7 @@ class DBOS:
     @classmethod
     async def start_workflow_async(
         cls,
-        func: Workflow[P, Coroutine[Any, Any, R]],
+        func: Callable[P, Coroutine[Any, Any, R]],
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> WorkflowHandleAsync[R]:
