@@ -28,12 +28,10 @@ from sqlalchemy.sql import func
 from dbos._utils import GlobalParams
 
 from . import _serialization
-from ._context import get_local_dbos_context
-from ._dbos_config import ConfigFile
+from ._dbos_config import ConfigFile, DatabaseConfig
 from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
-    DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSWorkflowConflictIDError,
 )
@@ -168,23 +166,21 @@ _buffer_flush_interval_secs = 1.0
 
 class SystemDatabase:
 
-    def __init__(self, config: ConfigFile, *, debug_mode: bool = False):
-        self.config = config
-
+    def __init__(self, database: DatabaseConfig, *, debug_mode: bool = False):
         sysdb_name = (
-            config["database"]["sys_db_name"]
-            if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]
-            else config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
+            database["sys_db_name"]
+            if "sys_db_name" in database and database["sys_db_name"]
+            else database["app_db_name"] + SystemSchema.sysdb_suffix
         )
 
         if not debug_mode:
             # If the system database does not already exist, create it
             postgres_db_url = sa.URL.create(
                 "postgresql+psycopg",
-                username=config["database"]["username"],
-                password=config["database"]["password"],
-                host=config["database"]["hostname"],
-                port=config["database"]["port"],
+                username=database["username"],
+                password=database["password"],
+                host=database["hostname"],
+                port=database["port"],
                 database="postgres",
                 # fills the "application_name" column in pg_stat_activity
                 query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
@@ -201,10 +197,10 @@ class SystemDatabase:
 
         system_db_url = sa.URL.create(
             "postgresql+psycopg",
-            username=config["database"]["username"],
-            password=config["database"]["password"],
-            host=config["database"]["hostname"],
-            port=config["database"]["port"],
+            username=database["username"],
+            password=database["password"],
+            host=database["hostname"],
+            port=database["port"],
             database=sysdb_name,
             # fills the "application_name" column in pg_stat_activity
             query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
@@ -213,7 +209,7 @@ class SystemDatabase:
         # Create a connection pool for the system database
         self.engine = sa.create_engine(
             system_db_url,
-            pool_size=config["database"]["sys_db_pool_size"],
+            pool_size=database["sys_db_pool_size"],
             max_overflow=0,
             pool_timeout=30,
             connect_args={"connect_timeout": 10},

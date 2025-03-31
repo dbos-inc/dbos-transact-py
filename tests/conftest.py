@@ -42,7 +42,7 @@ def config() -> ConfigFile:
 
 @pytest.fixture()
 def sys_db(config: ConfigFile) -> Generator[SystemDatabase, Any, None]:
-    sys_db = SystemDatabase(config)
+    sys_db = SystemDatabase(config["database"])
     yield sys_db
     sys_db.destroy()
 
