@@ -90,7 +90,7 @@ jobs:
 
       # Pyright is used by Pylance, so verify it works with DBOS application code.
     - name: Check Types With Pyright
-      run: pdm run pyright tests
+      run: pdm run pyright tests -p pyrightconfig.test.json
       working-directory: ./
 
     - name: Run Unit Tests
