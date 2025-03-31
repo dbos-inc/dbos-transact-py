@@ -10,7 +10,7 @@ from dbos._utils import GlobalParams
 from ._core import P, R, execute_workflow_by_id, start_workflow, start_workflow_async
 
 if TYPE_CHECKING:
-    from ._dbos import DBOS, Workflow, WorkflowHandle, WorkflowHandleAsync
+    from ._dbos import DBOS, WorkflowHandle, WorkflowHandleAsync
 
 
 class QueueRateLimit(TypedDict):
