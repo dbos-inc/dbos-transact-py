@@ -419,7 +419,6 @@ def test_class_recovery(dbos: DBOS) -> None:
 def test_inst_recovery(dbos: DBOS) -> None:
     wfid = str(uuid.uuid4())
     exc_cnt: int = 0
-    last_inst: Optional[TestClass] = None
 
     @DBOS.dbos_class()
     class TestClass(DBOSConfiguredInstance):
@@ -436,6 +435,7 @@ def test_inst_recovery(dbos: DBOS) -> None:
             return "ran2"
 
     inst = TestClass()
+    last_inst: Optional[TestClass] = None
     with SetWorkflowID(wfid):
         assert "ran2" == inst.check_inst("arg1")
 

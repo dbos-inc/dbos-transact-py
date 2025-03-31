@@ -57,6 +57,8 @@ strict = true
 
 [tool.pyright]
 typeCheckingMode = "standard"
+reportTypedDictNotRequiredAccess = false
+reportRedeclaration = false
 
 [tool.pytest.ini_options]
 addopts = "-s"
