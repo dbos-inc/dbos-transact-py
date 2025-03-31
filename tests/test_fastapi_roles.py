@@ -308,9 +308,9 @@ def test_role_tracing() -> None:
     provider.add_span_processor(span_processor)
 
     def function_to_trace() -> None:
-        with provider.get_tracer(__name__).start_as_current_span(
+        with provider.get_tracer(__name__).start_as_current_span(  # pyright: ignore
             "test-span"
-        ) as span:  # pyright: ignore
+        ) as span:
             span.set_attribute("testattribute", "value")
 
     # Clear any existing spans
