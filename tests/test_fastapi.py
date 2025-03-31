@@ -172,7 +172,7 @@ async def test_custom_lifespan(
     resource = None
     port = 8000
 
-    @asynccontextmanager  # type: ignore
+    @asynccontextmanager  # pyright: ignore
     async def lifespan(app: FastAPI) -> Any:
         nonlocal resource
         resource = 1
