@@ -56,7 +56,7 @@ atomic = true
 strict = true
 
 [tool.pyright]
-include = ["dbos", "tests"]
+typeCheckingMode = "standard"
 
 [tool.pytest.ini_options]
 addopts = "-s"
