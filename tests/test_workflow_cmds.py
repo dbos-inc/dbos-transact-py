@@ -536,10 +536,11 @@ async def test_callchild_first_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> No
     dbos._sys_db._flush_workflow_status_buffer()
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
-    assert len(wfsteps) == 3
+    assert len(wfsteps) == 4
     assert wfsteps[0]["function_name"] == "child_workflow"
-    assert wfsteps[1]["function_name"] == "stepOne"
-    assert wfsteps[2]["function_name"] == "stepTwo"
+    assert wfsteps[1]["function_name"] == "DBOS.getResult"
+    assert wfsteps[2]["function_name"] == "stepOne"
+    assert wfsteps[3]["function_name"] == "stepTwo"
 
 
 def test_callchild_rerun_async_thread(dbos: DBOS) -> None:

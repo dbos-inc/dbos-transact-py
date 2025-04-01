@@ -322,13 +322,9 @@ def _get_wf_invoke_func(
                 dbos._sys_db.buffer_workflow_status(status)
             return output
         except DBOSWorkflowConflictIDError:
-            # Retrieve the workflow handle and wait for the result.
-            # Must use existing_workflow=False because workflow status might not be set yet for single transaction workflows.
-            wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(
-                status["workflow_uuid"], existing_workflow=False
-            )
-            output = wf_handle.get_result()
-            return output
+            # Await the workflow result
+            r: R = dbos._sys_db.await_workflow_result(status["workflow_uuid"])
+            return r
         except DBOSWorkflowCancelledError as error:
             raise
         except Exception as error:
@@ -712,7 +708,8 @@ def workflow_wrapper(
                 c_wfid: str, dbos: "DBOS"
             ) -> Callable[[Callable[[], R]], R]:
                 def recorded_result_inner(func: Callable[[], R]) -> R:
-                    return WorkflowHandlePolling(c_wfid, dbos).get_result()
+                    r: R = dbos._sys_db.await_workflow_result(c_wfid)
+                    return r
 
                 return recorded_result_inner
 
