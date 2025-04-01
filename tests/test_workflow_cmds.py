@@ -308,6 +308,17 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
         assert steps[i + queued_steps]["output"] == i
         assert steps[i + queued_steps]["error"] is None
 
+    child_workflows = DBOS.list_workflows(name=f"<temp>.{blocking_step.__qualname__}")
+    assert (len(child_workflows)) == queued_steps
+    for i, c in enumerate(child_workflows):
+        steps = _workflow_commands.list_workflow_steps(sys_db, c.workflow_id)
+        assert len(steps) == 1
+        assert steps[0]["function_id"] == 1
+        assert steps[0]["function_name"] == "blocking_step"
+        assert steps[0]["child_workflow_id"] is None
+        assert steps[0]["output"] == i
+        assert steps[0]["error"] is None
+
 
 def test_list_2steps_sleep(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
