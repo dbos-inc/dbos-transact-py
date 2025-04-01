@@ -350,13 +350,14 @@ def test_send_recv(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
 
 def test_set_get_event(dbos: DBOS, sys_db: SystemDatabase) -> None:
+    value = "Hello, World!"
 
     @DBOS.workflow()
     def set_get_workflow() -> None:
-        DBOS.set_event("key", "Hello, World!")
+        DBOS.set_event("key", value)
         stepOne()
-        DBOS.get_event("wfid", "key", 1)
-        return
+        DBOS.get_event("fake_id", "fake_value", 0)
+        return DBOS.get_event(DBOS.workflow_id, "key", 1)
 
     @DBOS.step()
     def stepOne() -> None:
@@ -364,14 +365,21 @@ def test_set_get_event(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        set_get_workflow()
+        assert set_get_workflow() == value
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
-    assert len(wfsteps) == 4
+    assert len(wfsteps) == 5
     assert wfsteps[0]["function_name"] == "DBOS.setEvent"
     assert wfsteps[1]["function_name"] == "stepOne"
     assert wfsteps[2]["function_name"] == "DBOS.sleep"
     assert wfsteps[3]["function_name"] == "DBOS.getEvent"
+    assert wfsteps[3]["child_workflow_id"] == None
+    assert wfsteps[3]["output"] == None
+    assert wfsteps[3]["error"] == None
+    assert wfsteps[4]["function_name"] == "DBOS.getEvent"
+    assert wfsteps[4]["child_workflow_id"] == None
+    assert wfsteps[4]["output"] == value
+    assert wfsteps[4]["error"] == None
 
 
 def test_callchild_first_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
