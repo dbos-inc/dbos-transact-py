@@ -544,7 +544,7 @@ def start_workflow(
             ctx.parent_workflow_id,
             new_child_workflow_id,
             ctx.parent_workflow_fid,
-            func.__name__,
+            get_dbos_func_name(func),
         )
 
     if not execute_workflow or (
@@ -629,7 +629,7 @@ async def start_workflow_async(
             ctx.parent_workflow_id,
             new_child_workflow_id,
             ctx.parent_workflow_fid,
-            func.__name__,
+            get_dbos_func_name(func),
         )
 
     wf_status = status["status"]
@@ -670,8 +670,6 @@ def workflow_wrapper(
     max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
 ) -> Callable[P, R]:
     func.__orig_func = func  # type: ignore
-
-    funcName = func.__name__
 
     fi = get_or_create_func_info(func)
     fi.max_recovery_attempts = max_recovery_attempts
@@ -743,7 +741,7 @@ def workflow_wrapper(
                     ctx.parent_workflow_id,
                     ctx.workflow_id,
                     ctx.parent_workflow_fid,
-                    funcName,
+                    get_dbos_func_name(func),
                 )
 
             return _get_wf_invoke_func(dbos, status)
@@ -954,7 +952,7 @@ def decorate_step(
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
 
-        stepName = func.__name__
+        stepName = func.__qualname__
 
         def invoke_step(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:

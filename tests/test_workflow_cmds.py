@@ -297,7 +297,7 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
     for i in range(queued_steps):
         # Check the enqueues
         assert steps[i]["function_id"] == i + 1
-        assert steps[i]["function_name"] == "temp_wf"
+        assert steps[i]["function_name"] == f"<temp>.{blocking_step.__qualname__}"
         assert steps[i]["child_workflow_id"] is not None
         assert steps[i]["output"] is None
         assert steps[i]["error"] is None
@@ -314,7 +314,7 @@ def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
         steps = _workflow_commands.list_workflow_steps(sys_db, c.workflow_id)
         assert len(steps) == 1
         assert steps[0]["function_id"] == 1
-        assert steps[0]["function_name"] == "blocking_step"
+        assert steps[0]["function_name"] == blocking_step.__qualname__
         assert steps[0]["child_workflow_id"] is None
         assert steps[0]["output"] == i
         assert steps[0]["error"] is None
@@ -343,8 +343,8 @@ def test_list_2steps_sleep(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
     assert len(wfsteps) == 3
-    assert wfsteps[0]["function_name"] == "stepOne"
-    assert wfsteps[1]["function_name"] == "stepTwo"
+    assert wfsteps[0]["function_name"] == stepOne.__qualname__
+    assert wfsteps[1]["function_name"] == stepTwo.__qualname__
     assert wfsteps[2]["function_name"] == "DBOS.sleep"
 
 
@@ -398,7 +398,7 @@ def test_set_get_event(dbos: DBOS, sys_db: SystemDatabase) -> None:
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
     assert len(wfsteps) == 5
     assert wfsteps[0]["function_name"] == "DBOS.setEvent"
-    assert wfsteps[1]["function_name"] == "stepOne"
+    assert wfsteps[1]["function_name"] == stepOne.__qualname__
     assert wfsteps[2]["function_name"] == "DBOS.sleep"
     assert wfsteps[3]["function_name"] == "DBOS.getEvent"
     assert wfsteps[3]["child_workflow_id"] == None
@@ -437,9 +437,9 @@ def test_callchild_first_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
     assert len(wfsteps) == 3
-    assert wfsteps[0]["function_name"] == "child_workflow"
-    assert wfsteps[1]["function_name"] == "stepOne"
-    assert wfsteps[2]["function_name"] == "stepTwo"
+    assert wfsteps[0]["function_name"] == child_workflow.__qualname__
+    assert wfsteps[1]["function_name"] == stepOne.__qualname__
+    assert wfsteps[2]["function_name"] == stepTwo.__qualname__
 
 
 def test_callchild_last_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
@@ -469,9 +469,9 @@ def test_callchild_last_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
     assert len(wfsteps) == 3
-    assert wfsteps[0]["function_name"] == "stepOne"
-    assert wfsteps[1]["function_name"] == "stepTwo"
-    assert wfsteps[2]["function_name"] == "child_workflow"
+    assert wfsteps[0]["function_name"] == stepOne.__qualname__
+    assert wfsteps[1]["function_name"] == stepTwo.__qualname__
+    assert wfsteps[2]["function_name"] == child_workflow.__qualname__
 
 
 def test_callchild_first_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
@@ -502,10 +502,10 @@ def test_callchild_first_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> Non
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
     assert len(wfsteps) == 4
-    assert wfsteps[0]["function_name"] == "child_workflow"
+    assert wfsteps[0]["function_name"] == child_workflow.__qualname__
     assert wfsteps[1]["function_name"] == "DBOS.getStatus"
-    assert wfsteps[2]["function_name"] == "stepOne"
-    assert wfsteps[3]["function_name"] == "stepTwo"
+    assert wfsteps[2]["function_name"] == stepOne.__qualname__
+    assert wfsteps[3]["function_name"] == stepTwo.__qualname__
 
 
 def test_callchild_middle_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
@@ -537,16 +537,16 @@ def test_callchild_middle_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> No
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
     assert len(wfsteps) == 5
-    assert wfsteps[0]["function_name"] == "stepOne"
+    assert wfsteps[0]["function_name"] == stepOne.__qualname__
     assert wfsteps[0]["child_workflow_id"] == None
     assert wfsteps[0]["output"] == wfid
     assert wfsteps[0]["error"] == None
-    assert wfsteps[1]["function_name"] == "child_workflow"
+    assert wfsteps[1]["function_name"] == child_workflow.__qualname__
     assert wfsteps[1]["child_workflow_id"] == child_id
     assert wfsteps[1]["output"] == None
     assert wfsteps[1]["error"] == None
     assert wfsteps[2]["function_name"] == "DBOS.getStatus"
-    assert wfsteps[3]["function_name"] == "stepTwo"
+    assert wfsteps[3]["function_name"] == stepTwo.__qualname__
     assert wfsteps[3]["child_workflow_id"] == None
     assert wfsteps[3]["output"] == None
     assert wfsteps[3]["error"] == None
@@ -588,7 +588,7 @@ async def test_callchild_first_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> No
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
     assert len(wfsteps) == 4
-    assert wfsteps[0]["function_name"] == "child_workflow"
+    assert wfsteps[0]["function_name"] == child_workflow.__qualname__
     assert wfsteps[0]["child_workflow_id"] == child_id
     assert wfsteps[0]["output"] == None
     assert wfsteps[0]["error"] == None
@@ -596,11 +596,11 @@ async def test_callchild_first_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> No
     assert wfsteps[1]["child_workflow_id"] == child_id
     assert wfsteps[1]["output"] == child_id
     assert wfsteps[1]["error"] == None
-    assert wfsteps[2]["function_name"] == "stepOne"
+    assert wfsteps[2]["function_name"] == stepOne.__qualname__
     assert wfsteps[2]["child_workflow_id"] == None
     assert wfsteps[2]["output"] == wfid
     assert wfsteps[2]["error"] == None
-    assert wfsteps[3]["function_name"] == "stepTwo"
+    assert wfsteps[3]["function_name"] == stepTwo.__qualname__
     assert wfsteps[3]["child_workflow_id"] == None
     assert wfsteps[3]["output"] == None
     assert wfsteps[3]["error"] == None
