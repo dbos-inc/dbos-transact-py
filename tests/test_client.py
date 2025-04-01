@@ -8,6 +8,7 @@ import sqlalchemy as sa
 from dbos import DBOS, DBOSClient, EnqueueOptions, Queue
 from dbos._dbos import WorkflowHandle
 from dbos._schemas.system_database import SystemSchema
+from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
 
 
@@ -15,6 +16,16 @@ class Person(TypedDict):
     first: str
     last: str
     age: int
+
+
+def get_wf_status(sys_db: SystemDatabase, wfid: str) -> sa.Row[tuple[str, str]] | None:
+    with sys_db.engine.connect() as c:
+        stmt = sa.select(
+            SystemSchema.workflow_status.c.status,
+            SystemSchema.workflow_status.c.application_version,
+        ).where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+
+        return c.execute(stmt).fetchone()
 
 
 def test_client_enqueue_appver_not_set(dbos: DBOS, client: DBOSClient) -> None:
@@ -35,13 +46,19 @@ def test_client_enqueue_appver_not_set(dbos: DBOS, client: DBOSClient) -> None:
     }
 
     client.enqueue(options, 42, "test", johnDoe)  # type: ignore
+
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     result = handle.get_result()
     assert result == '42-test-{"first": "John", "last": "Doe", "age": 30}'
 
+    wf_status = get_wf_status(dbos._sys_db, wfid)
+    assert wf_status is not None
+    status, app_version = wf_status
+    assert status == "SUCCESS"
+    assert app_version == GlobalParams.app_version
+
 
 def test_client_enqueue_appver_set(dbos: DBOS, client: DBOSClient) -> None:
-
     @DBOS.workflow()
     def enqueue_test(numVal: int, strVal: str, person: Person) -> str:
         return f"{numVal}-{strVal}-{json.dumps(person)}"
@@ -59,9 +76,16 @@ def test_client_enqueue_appver_set(dbos: DBOS, client: DBOSClient) -> None:
     }
 
     client.enqueue(options, 42, "test", johnDoe)  # type: ignore
+
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     result = handle.get_result()
     assert result == '42-test-{"first": "John", "last": "Doe", "age": 30}'
+
+    wf_status = get_wf_status(dbos._sys_db, wfid)
+    assert wf_status is not None
+    status, app_version = wf_status
+    assert status == "SUCCESS"
+    assert app_version == GlobalParams.app_version
 
 
 def test_client_enqueue_wrong_appver(dbos: DBOS, client: DBOSClient) -> None:
@@ -83,15 +107,11 @@ def test_client_enqueue_wrong_appver(dbos: DBOS, client: DBOSClient) -> None:
     }
 
     client.enqueue(options, 42, "test", johnDoe)  # type: ignore
-    handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
 
-    with dbos._sys_db.engine.connect() as c:
-        stmt = sa.select(
-            SystemSchema.workflow_status.c.status,
-            SystemSchema.workflow_status.c.application_version,
-        ).where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+    time.sleep(5)
 
-        row = c.execute(stmt).fetchone()
-        assert row is not None
-        # assert row["status"] == "ENQUEUED"
-        # assert row["app_version"] == "abcdef"
+    wf_status = get_wf_status(dbos._sys_db, wfid)
+    assert wf_status is not None
+    status, app_version = wf_status
+    assert status == "ENQUEUED"
+    assert app_version == "abcdef"
