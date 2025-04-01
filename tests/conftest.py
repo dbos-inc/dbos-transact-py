@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from fastapi import FastAPI
 from flask import Flask
 
-from dbos import DBOS, ConfigFile
+from dbos import DBOS, ConfigFile, DBOSClient
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 
@@ -113,6 +113,15 @@ def dbos(
 
     yield dbos
     DBOS.destroy(destroy_registry=True)
+
+
+@pytest.fixture()
+def client(config: ConfigFile) -> Generator[DBOSClient, Any, None]:
+    database = config["database"]
+    database_url = f"postgresql://{database['username']}:{database['password']}@{database['hostname']}:{database['port']}/{database['app_db_name']}"
+    client = DBOSClient(database_url)
+    yield client
+    client.destroy()
 
 
 @pytest.fixture()
