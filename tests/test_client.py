@@ -34,7 +34,7 @@ def test_client_enqueue_appver_not_set(dbos: DBOS, client: DBOSClient) -> None:
         "workflow_id": wfid,
     }
 
-    client.enqueue(options, 42, "test", johnDoe)
+    client.enqueue(options, 42, "test", johnDoe)  # type: ignore
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     result = handle.get_result()
     assert result == '42-test-{"first": "John", "last": "Doe", "age": 30}'
@@ -58,7 +58,7 @@ def test_client_enqueue_appver_set(dbos: DBOS, client: DBOSClient) -> None:
         "app_version": GlobalParams.app_version,
     }
 
-    client.enqueue(options, 42, "test", johnDoe)
+    client.enqueue(options, 42, "test", johnDoe)  # type: ignore
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     result = handle.get_result()
     assert result == '42-test-{"first": "John", "last": "Doe", "age": 30}'
@@ -82,7 +82,7 @@ def test_client_enqueue_wrong_appver(dbos: DBOS, client: DBOSClient) -> None:
         "app_version": "abcdef",
     }
 
-    client.enqueue(options, 42, "test", johnDoe)
+    client.enqueue(options, 42, "test", johnDoe)  # type: ignore
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
 
     with dbos._sys_db.engine.connect() as c:

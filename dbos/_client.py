@@ -1,7 +1,7 @@
 import asyncio
 import sys
 import uuid
-from typing import Any, Generic, Optional, TypedDict, TypeVar
+from typing import Any, Generic, NotRequired, Optional, TypedDict, TypeVar
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec
@@ -23,11 +23,11 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 class EnqueueOptions(TypedDict):
     workflow_name: str
-    workflow_class_name: Optional[str]
+    workflow_class_name: NotRequired[str]
     queue_name: str
-    max_recovery_attempts: Optional[int]
-    app_version: Optional[str]
-    workflow_id: Optional[str]
+    max_recovery_attempts: NotRequired[int]
+    app_version: NotRequired[str]
+    workflow_id: NotRequired[str]
 
 
 class WorkflowHandleClientPolling(Generic[R]):
