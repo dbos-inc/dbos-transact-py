@@ -771,8 +771,16 @@ class SystemDatabase:
                 StepInfo(
                     function_id=row[0],
                     function_name=row[1],
-                    output=row[2],  # Preserve JSON data
-                    error=row[3],
+                    output=(
+                        _serialization.deserialize(row[2])
+                        if row[2] is not None
+                        else row[2]
+                    ),
+                    error=(
+                        _serialization.deserialize_exception(row[3])
+                        if row[3] is not None
+                        else row[3]
+                    ),
                     child_workflow_id=row[4],
                 )
                 for row in rows
