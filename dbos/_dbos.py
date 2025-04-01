@@ -548,6 +548,8 @@ class DBOS:
         """
         if _dbos_global_instance is not None:
             _dbos_global_instance._reset_system_database()
+        else:
+            dbos_logger.warning("reset_system_database has no effect because global DBOS object does not exist")
 
     def _reset_system_database(self) -> None:
         assert (
