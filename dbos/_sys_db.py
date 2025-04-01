@@ -207,9 +207,13 @@ class SystemDatabase:
         )
 
         # Create a connection pool for the system database
+        pool_size = database.get("sys_db_pool_size")
+        if pool_size is None:
+            pool_size = 20
+
         self.engine = sa.create_engine(
             system_db_url,
-            pool_size=database["sys_db_pool_size"],
+            pool_size=pool_size,
             max_overflow=0,
             pool_timeout=30,
             connect_args={"connect_timeout": 10},
@@ -1347,7 +1351,9 @@ class SystemDatabase:
                 .on_conflict_do_nothing()
             )
 
-    def start_queued_workflows(self, queue: "Queue", executor_id: str) -> List[str]:
+    def start_queued_workflows(
+        self, queue: "Queue", executor_id: str, app_version: str
+    ) -> List[str]:
         if self._debug_mode:
             return []
 
@@ -1469,8 +1475,18 @@ class SystemDatabase:
                         SystemSchema.workflow_status.c.status
                         == WorkflowStatusString.ENQUEUED.value
                     )
+                    .where(
+                        sa.or_(
+                            SystemSchema.workflow_status.c.application_version
+                            == app_version,
+                            SystemSchema.workflow_status.c.application_version.is_(
+                                None
+                            ),
+                        )
+                    )
                     .values(
                         status=WorkflowStatusString.PENDING.value,
+                        application_version=app_version,
                         executor_id=executor_id,
                     )
                 )

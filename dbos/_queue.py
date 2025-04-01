@@ -85,7 +85,7 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
         for _, queue in dbos._registry.queue_info_map.items():
             try:
                 wf_ids = dbos._sys_db.start_queued_workflows(
-                    queue, GlobalParams.executor_id
+                    queue, GlobalParams.executor_id, GlobalParams.app_version
                 )
                 for id in wf_ids:
                     execute_workflow_by_id(dbos, id)
