@@ -414,11 +414,11 @@ def test_set_get_event(dbos: DBOS, sys_db: SystemDatabase) -> None:
 def test_callchild_first_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     @DBOS.workflow()
-    def parentWorkflow() -> None:
-        child_workflow()
+    def parentWorkflow() -> str:
+        child_id = child_workflow()
         stepOne()
         stepTwo()
-        return
+        return child_id
 
     @DBOS.step()
     def stepOne() -> None:
@@ -429,17 +429,63 @@ def test_callchild_first_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
         return
 
     @DBOS.workflow()
-    def child_workflow() -> None:
-        return
+    def child_workflow() -> str:
+        return DBOS.workflow_id
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        parentWorkflow()
+        child_id = parentWorkflow()
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
     assert len(wfsteps) == 4
     assert wfsteps[0]["function_name"] == child_workflow.__qualname__
+    assert wfsteps[0]["child_workflow_id"] == child_id
+    assert wfsteps[0]["output"] == None
+    assert wfsteps[0]["error"] == None
     assert wfsteps[1]["function_name"] == "DBOS.getResult"
+    assert wfsteps[1]["child_workflow_id"] == child_id
+    assert wfsteps[1]["output"] == child_id
+    assert wfsteps[1]["error"] == None
+    assert wfsteps[2]["function_name"] == stepOne.__qualname__
+    assert wfsteps[3]["function_name"] == stepTwo.__qualname__
+
+
+@pytest.mark.asyncio
+async def test_callchild_direct_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    async def parentWorkflow() -> str:
+        child_id = await child_workflow()
+        await stepOne()
+        await stepTwo()
+        return child_id
+
+    @DBOS.step()
+    async def stepOne() -> None:
+        return
+
+    @DBOS.step()
+    async def stepTwo() -> None:
+        return
+
+    @DBOS.workflow()
+    async def child_workflow() -> str:
+        return DBOS.workflow_id
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        child_id = await parentWorkflow()
+
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert len(wfsteps) == 4
+    assert wfsteps[0]["function_name"] == child_workflow.__qualname__
+    assert wfsteps[0]["child_workflow_id"] == child_id
+    assert wfsteps[0]["output"] == None
+    assert wfsteps[0]["error"] == None
+    assert wfsteps[1]["function_name"] == "DBOS.getResult"
+    assert wfsteps[1]["child_workflow_id"] == child_id
+    assert wfsteps[1]["output"] == child_id
+    assert wfsteps[1]["error"] == None
     assert wfsteps[2]["function_name"] == stepOne.__qualname__
     assert wfsteps[3]["function_name"] == stepTwo.__qualname__
 
