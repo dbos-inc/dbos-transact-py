@@ -102,6 +102,18 @@ class DBOSClient:
             "class_name": workflow_class_name,
             "queue_name": queue_name,
             "app_version": app_version,
+            "config_name": None,
+            "authenticated_user": None,
+            "assumed_role": None,
+            "authenticated_roles": None,
+            "request": None,
+            "output": None,
+            "error": None,
+            "created_at": None,
+            "updated_at": None,
+            "executor_id": None,
+            "recovery_attempts": None,
+            "app_id": None,
         }
 
         inputs: WorkflowInputs = {
@@ -147,6 +159,21 @@ class DBOSClient:
             "workflow_uuid": f"{destination_id}-{idempotency_key}",
             "status": WorkflowStatusString.SUCCESS.value,
             "name": "temp_workflow-send-client",
+            "class_name": None,
+            "queue_name": None,
+            "config_name": None,
+            "authenticated_user": None,
+            "assumed_role": None,
+            "authenticated_roles": None,
+            "request": None,
+            "output": None,
+            "error": None,
+            "created_at": None,
+            "updated_at": None,
+            "executor_id": None,
+            "recovery_attempts": None,
+            "app_id": None,
+            "app_version": None,
         }
         self._sys_db.insert_workflow_status(status)
         self._sys_db.send(status["workflow_uuid"], 0, destination_id, message, topic)
