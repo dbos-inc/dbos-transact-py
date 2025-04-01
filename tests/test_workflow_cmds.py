@@ -187,7 +187,7 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase) ->
         assert info.workflow_id == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
 
 
-def test_queued_workflows(dbos: DBOS) -> None:
+def test_queued_workflows(dbos: DBOS, sys_db: SystemDatabase) -> None:
     queued_steps = 5
     step_events = [threading.Event() for _ in range(queued_steps)]
     event = threading.Event()
@@ -290,6 +290,23 @@ def test_queued_workflows(dbos: DBOS) -> None:
     assert handle.get_result() == [0, 1, 2, 3, 4]
     workflows = DBOS.list_queued_workflows()
     assert len(workflows) == 0
+
+    # Test the steps are listed properly
+    steps = _workflow_commands.list_workflow_steps(sys_db, handle.workflow_id)
+    assert len(steps) == queued_steps * 2
+    for i in range(queued_steps):
+        # Check the enqueues
+        assert steps[i]["function_id"] == i + 1
+        assert steps[i]["function_name"] == "temp_wf"
+        assert steps[i]["child_workflow_id"] is not None
+        assert steps[i]["output"] is None
+        assert steps[i]["error"] is None
+        # Check the get_results
+        assert steps[i + queued_steps]["function_id"] == queued_steps + i + 1
+        assert steps[i + queued_steps]["function_name"] == "DBOS.getResult"
+        assert steps[i + queued_steps]["child_workflow_id"] is not None
+        assert steps[i + queued_steps]["output"] == i
+        assert steps[i + queued_steps]["error"] is None
 
 
 def test_list_2steps_sleep(dbos: DBOS, sys_db: SystemDatabase) -> None:
