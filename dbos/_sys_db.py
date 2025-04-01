@@ -1468,7 +1468,7 @@ class SystemDatabase:
                         break
 
                 # To start a function, first set its status to PENDING and update its executor ID
-                c.execute(
+                res = c.execute(
                     SystemSchema.workflow_status.update()
                     .where(SystemSchema.workflow_status.c.workflow_uuid == id)
                     .where(
@@ -1490,14 +1490,14 @@ class SystemDatabase:
                         executor_id=executor_id,
                     )
                 )
-
-                # Then give it a start time and assign the executor ID
-                c.execute(
-                    SystemSchema.workflow_queue.update()
-                    .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
-                    .values(started_at_epoch_ms=start_time_ms)
-                )
-                ret_ids.append(id)
+                if res.rowcount > 0:
+                    # Then give it a start time and assign the executor ID
+                    c.execute(
+                        SystemSchema.workflow_queue.update()
+                        .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
+                        .values(started_at_epoch_ms=start_time_ms)
+                    )
+                    ret_ids.append(id)
 
             # If we have a limiter, garbage-collect all completed functions started
             # before the period. If there's no limiter, there's no need--they were
