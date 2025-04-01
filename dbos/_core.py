@@ -700,6 +700,8 @@ def workflow_wrapper(
 
         wfOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
 
+        workflow_id = None
+
         def init_wf() -> Callable[[Callable[[], R]], R]:
 
             def recorded_result(
@@ -712,6 +714,8 @@ def workflow_wrapper(
                 return recorded_result_inner
 
             ctx = assert_current_dbos_context()  # Now the child ctx
+            nonlocal workflow_id
+            workflow_id = ctx.workflow_id
 
             if ctx.has_parent():
                 child_workflow_id = dbos._sys_db.check_child_workflow(
@@ -746,10 +750,26 @@ def workflow_wrapper(
 
             return _get_wf_invoke_func(dbos, status)
 
+        def record_get_result(func: Callable[[], R]) -> R:
+            """
+            If a child workflow is invoked synchronously, this records the implicit "getResult" where the
+            parent retrieves the child's output. It executes in the CALLER'S context, not the workflow's.
+            """
+            try:
+                r = func()
+            except Exception as e:
+                serialized_e = _serialization.serialize_exception(e)
+                dbos._sys_db.record_get_result(workflow_id, None, serialized_e)
+                raise
+            serialized_r = _serialization.serialize(r)
+            dbos._sys_db.record_get_result(workflow_id, serialized_r, None)
+            return r
+
         outcome = (
             wfOutcome.wrap(init_wf)
             .also(DBOSAssumeRole(rr))
             .also(enterWorkflowCtxMgr(attributes))
+            .then(record_get_result)
         )
         return outcome()  # type: ignore
 

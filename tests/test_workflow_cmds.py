@@ -437,10 +437,11 @@ def test_callchild_first_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
         parentWorkflow()
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
-    assert len(wfsteps) == 3
+    assert len(wfsteps) == 4
     assert wfsteps[0]["function_name"] == child_workflow.__qualname__
-    assert wfsteps[1]["function_name"] == stepOne.__qualname__
-    assert wfsteps[2]["function_name"] == stepTwo.__qualname__
+    assert wfsteps[1]["function_name"] == "DBOS.getResult"
+    assert wfsteps[2]["function_name"] == stepOne.__qualname__
+    assert wfsteps[3]["function_name"] == stepTwo.__qualname__
 
 
 def test_callchild_last_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
@@ -469,10 +470,11 @@ def test_callchild_last_sync(dbos: DBOS, sys_db: SystemDatabase) -> None:
         parentWorkflow()
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
-    assert len(wfsteps) == 3
+    assert len(wfsteps) == 4
     assert wfsteps[0]["function_name"] == stepOne.__qualname__
     assert wfsteps[1]["function_name"] == stepTwo.__qualname__
     assert wfsteps[2]["function_name"] == child_workflow.__qualname__
+    assert wfsteps[3]["function_name"] == "DBOS.getResult"
 
 
 def test_callchild_first_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
