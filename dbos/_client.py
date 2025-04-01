@@ -1,6 +1,12 @@
 import asyncio
+import sys
 import uuid
-from typing import Any, Generic, Optional, ParamSpec, TypedDict, TypeVar
+from typing import Any, Generic, Optional, TypedDict, TypeVar
+
+if sys.version_info < (3, 10):
+    from typing_extensions import ParamSpec
+else:
+    from typing import ParamSpec
 
 from dbos import _serialization
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
