@@ -557,6 +557,73 @@ def test_callchild_first_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> Non
     assert wfsteps[3]["function_name"] == stepTwo.__qualname__
 
 
+def test_list_steps_errors(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    queue = Queue("test-queue")
+
+    @DBOS.step()
+    def failing_step() -> None:
+        raise Exception("fail")
+
+    @DBOS.workflow()
+    def call_step() -> None:
+        return failing_step()
+
+    @DBOS.workflow()
+    def start_step() -> None:
+        handle = DBOS.start_workflow(failing_step)
+        return handle.get_result()
+
+    @DBOS.workflow()
+    def enqueue_step() -> None:
+        handle = queue.enqueue(failing_step)
+        return handle.get_result()
+
+    # Test calling a failing step directly
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        with pytest.raises(Exception):
+            call_step()
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert len(wfsteps) == 1
+    assert wfsteps[0]["function_name"] == failing_step.__qualname__
+    assert wfsteps[0]["child_workflow_id"] == None
+    assert wfsteps[0]["output"] == None
+    assert isinstance(wfsteps[0]["error"], Exception)
+
+    # Test start_workflow on a failing step
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        with pytest.raises(Exception):
+            start_step()
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert len(wfsteps) == 2
+    assert wfsteps[0]["function_name"] == f"<temp>.{failing_step.__qualname__}"
+    assert wfsteps[0]["child_workflow_id"] == f"{wfid}-1"
+    assert wfsteps[0]["output"] == None
+    assert wfsteps[0]["error"] == None
+    assert wfsteps[1]["function_name"] == f"DBOS.getResult"
+    assert wfsteps[1]["child_workflow_id"] == f"{wfid}-1"
+    assert wfsteps[1]["output"] == None
+    assert isinstance(wfsteps[1]["error"], Exception)
+
+    # Test enqueueing a failing step
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        with pytest.raises(Exception):
+            enqueue_step()
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
+    assert len(wfsteps) == 2
+    assert wfsteps[0]["function_name"] == f"<temp>.{failing_step.__qualname__}"
+    assert wfsteps[0]["child_workflow_id"] == f"{wfid}-1"
+    assert wfsteps[0]["output"] == None
+    assert wfsteps[0]["error"] == None
+    assert wfsteps[1]["function_name"] == f"DBOS.getResult"
+    assert wfsteps[1]["child_workflow_id"] == f"{wfid}-1"
+    assert wfsteps[1]["output"] == None
+    assert isinstance(wfsteps[1]["error"], Exception)
+
+
 def test_callchild_middle_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     @DBOS.workflow()
