@@ -759,9 +759,11 @@ def workflow_wrapper(
                 r = func()
             except Exception as e:
                 serialized_e = _serialization.serialize_exception(e)
+                assert workflow_id is not None
                 dbos._sys_db.record_get_result(workflow_id, None, serialized_e)
                 raise
             serialized_r = _serialization.serialize(r)
+            assert workflow_id is not None
             dbos._sys_db.record_get_result(workflow_id, serialized_r, None)
             return r
 
