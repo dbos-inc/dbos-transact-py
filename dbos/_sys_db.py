@@ -804,6 +804,31 @@ class SystemDatabase:
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
             raise
 
+    def record_get_result(
+        self, resultWorkflowID: str, output: Optional[str], error: Optional[str]
+    ) -> None:
+        ctx = get_local_dbos_context()
+        # Only record get_result called in workflow functions
+        if ctx is None or not ctx.is_workflow():
+            return
+        ctx.function_id += 1  # Record the get_result as a step
+        # Because there's no corresponding check, we do nothing on conflict
+        # and do not raise a DBOSWorkflowConflictIDError
+        sql = (
+            pg.insert(SystemSchema.operation_outputs)
+            .values(
+                workflow_uuid=ctx.workflow_id,
+                function_id=ctx.function_id,
+                function_name="DBOS.getResult",
+                output=output,
+                error=error,
+                child_workflow_id=resultWorkflowID,
+            )
+            .on_conflict_do_nothing()
+        )
+        with self.engine.begin() as c:
+            c.execute(sql)
+
     def record_child_workflow(
         self,
         parentUUID: str,
