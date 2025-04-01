@@ -485,7 +485,7 @@ def test_callchild_middle_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> No
 
     @DBOS.step()
     def stepOne() -> None:
-        return
+        return DBOS.workflow_id
 
     @DBOS.step()
     def stepTwo() -> None:
@@ -502,7 +502,13 @@ def test_callchild_middle_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> No
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
     assert len(wfsteps) == 5
     assert wfsteps[0]["function_name"] == "stepOne"
+    assert wfsteps[0]["child_workflow_id"] == None
+    assert wfsteps[0]["output"] == wfid
+    assert wfsteps[0]["error"] == None
     assert wfsteps[1]["function_name"] == "child_workflow"
+    assert wfsteps[1]["child_workflow_id"] == child_id
+    assert wfsteps[1]["output"] == None
+    assert wfsteps[1]["error"] == None
     assert wfsteps[2]["function_name"] == "DBOS.getStatus"
     assert wfsteps[3]["function_name"] == "stepTwo"
     assert wfsteps[3]["child_workflow_id"] == None
