@@ -23,7 +23,7 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 class EnqueueOptions(TypedDict):
     workflow_name: str
-    workflow_class_name: str
+    workflow_class_name: Optional[str]
     queue_name: str
     max_recovery_attempts: Optional[int]
     app_version: Optional[str]
@@ -75,11 +75,10 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
 
 
 class DBOSClient:
-    def __init__(self, database_url: str, system_database: Optional[str]):
+    def __init__(self, database_url: str, system_database: Optional[str] = None):
         db_config = parse_database_url_to_dbconfig(database_url)
         if system_database is not None:
             db_config["sys_db_name"] = system_database
-
         self._sys_db = SystemDatabase(db_config)
 
     def destroy(self) -> None:
@@ -89,17 +88,16 @@ class DBOSClient:
         self, options: EnqueueOptions, *args: tuple[Any,], **kwargs: dict[str, Any]
     ) -> None:
         workflow_name = options["workflow_name"]
-        workflow_class_name = options["workflow_class_name"]
         queue_name = options["queue_name"]
-        max_recovery_attempts = (
-            options["max_recovery_attempts"]
-            if options["max_recovery_attempts"]
-            else DEFAULT_MAX_RECOVERY_ATTEMPTS
-        )
-        workflow_id = (
-            options["workflow_id"] if options["workflow_id"] else str(uuid.uuid4())
-        )
-        app_version = options["app_version"]
+
+        workflow_class_name = options.get("workflow_class_name")
+        app_version = options.get("app_version")
+        max_recovery_attempts = options.get("max_recovery_attempts")
+        if max_recovery_attempts is None:
+            max_recovery_attempts = DEFAULT_MAX_RECOVERY_ATTEMPTS
+        workflow_id = options.get("workflow_id")
+        if workflow_id is None:
+            workflow_id = str(uuid.uuid4())
 
         status: WorkflowStatusInternal = {
             "workflow_uuid": workflow_id,
