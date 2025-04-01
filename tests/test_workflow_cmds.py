@@ -1,6 +1,7 @@
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 
@@ -381,7 +382,7 @@ def test_set_get_event(dbos: DBOS, sys_db: SystemDatabase) -> None:
     value = "Hello, World!"
 
     @DBOS.workflow()
-    def set_get_workflow() -> None:
+    def set_get_workflow() -> Any:
         DBOS.set_event("key", value)
         stepOne()
         DBOS.get_event("fake_id", "fake_value", 0)
@@ -520,7 +521,7 @@ def test_callchild_middle_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> No
         return handle.workflow_id
 
     @DBOS.step()
-    def stepOne() -> None:
+    def stepOne() -> str:
         return DBOS.workflow_id
 
     @DBOS.step()
@@ -528,7 +529,7 @@ def test_callchild_middle_async_thread(dbos: DBOS, sys_db: SystemDatabase) -> No
         return
 
     @DBOS.workflow()
-    def child_workflow() -> None:
+    def child_workflow() -> str:
         return DBOS.workflow_id
 
     wfid = str(uuid.uuid4())
@@ -568,7 +569,7 @@ async def test_callchild_first_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> No
         return child_id
 
     @DBOS.step()
-    def stepOne() -> None:
+    def stepOne() -> str:
         return DBOS.workflow_id
 
     @DBOS.step()

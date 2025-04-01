@@ -154,10 +154,15 @@ class GetPendingWorkflowsOutput:
 
 
 class StepInfo(TypedDict):
+    # The unique ID of the step in the workflow
     function_id: int
+    # The (fully qualified) name of the step
     function_name: str
-    output: Optional[str]  # JSON (jsonpickle)
-    error: Optional[str]  # JSON (jsonpickle)
+    # The step's output, if any
+    output: Optional[Any]
+    # The error the step threw, if any
+    error: Optional[Exception]
+    # If the step starts or retrieves the result of a workflow, its ID
     child_workflow_id: Optional[str]
 
 
