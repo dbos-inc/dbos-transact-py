@@ -241,27 +241,25 @@ def test_wfstatus_invalid(dbos: DBOS) -> None:
     has_executed = False
 
     @DBOS.workflow()
-    def non_deterministic_worklow() -> None:
+    def non_deterministic_workflow() -> None:
         nonlocal has_executed
         handle = dbos.start_workflow(regular_workflow)
         if not has_executed:
             # Mock a scenario where the workflow control flow is changed by an external process
             dbos.set_event("test_event", "value1")
             has_executed = True
-
+        handle.get_status()
         res = handle.get_result()
         assert res == "done"
-
-        handle.get_status()
         return
 
     wfuuid = str(uuid.uuid4())
     with SetWorkflowID(wfuuid):
-        non_deterministic_worklow()
+        non_deterministic_workflow()
 
     with pytest.raises(DBOSException) as exc_info:
         with SetWorkflowID(wfuuid):
-            non_deterministic_worklow()
+            non_deterministic_workflow()
     assert "Hint: Check if your workflow is deterministic." in str(exc_info.value)
 
 

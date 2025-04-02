@@ -33,7 +33,6 @@ from ._dbos_config import ConfigFile
 from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
-    DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSWorkflowConflictIDError,
 )
@@ -154,10 +153,15 @@ class GetPendingWorkflowsOutput:
 
 
 class StepInfo(TypedDict):
+    # The unique ID of the step in the workflow
     function_id: int
+    # The (fully qualified) name of the step
     function_name: str
-    output: Optional[str]  # JSON (jsonpickle)
-    error: Optional[str]  # JSON (jsonpickle)
+    # The step's output, if any
+    output: Optional[Any]
+    # The error the step threw, if any
+    error: Optional[Exception]
+    # If the step starts or retrieves the result of a workflow, its ID
     child_workflow_id: Optional[str]
 
 
@@ -771,8 +775,16 @@ class SystemDatabase:
                 StepInfo(
                     function_id=row[0],
                     function_name=row[1],
-                    output=row[2],  # Preserve JSON data
-                    error=row[3],
+                    output=(
+                        _serialization.deserialize(row[2])
+                        if row[2] is not None
+                        else row[2]
+                    ),
+                    error=(
+                        _serialization.deserialize_exception(row[3])
+                        if row[3] is not None
+                        else row[3]
+                    ),
                     child_workflow_id=row[4],
                 )
                 for row in rows
@@ -803,6 +815,31 @@ class SystemDatabase:
             if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
             raise
+
+    def record_get_result(
+        self, result_workflow_id: str, output: Optional[str], error: Optional[str]
+    ) -> None:
+        ctx = get_local_dbos_context()
+        # Only record get_result called in workflow functions
+        if ctx is None or not ctx.is_workflow():
+            return
+        ctx.function_id += 1  # Record the get_result as a step
+        # Because there's no corresponding check, we do nothing on conflict
+        # and do not raise a DBOSWorkflowConflictIDError
+        sql = (
+            pg.insert(SystemSchema.operation_outputs)
+            .values(
+                workflow_uuid=ctx.workflow_id,
+                function_id=ctx.function_id,
+                function_name="DBOS.getResult",
+                output=output,
+                error=error,
+                child_workflow_id=result_workflow_id,
+            )
+            .on_conflict_do_nothing()
+        )
+        with self.engine.begin() as c:
+            c.execute(sql)
 
     def record_child_workflow(
         self,
