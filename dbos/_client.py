@@ -83,9 +83,9 @@ class DBOSClient:
     def destroy(self) -> None:
         self._sys_db.destroy()
 
-    def enqueue(
+    def _enqueue(
         self, options: EnqueueOptions, *args: tuple[Any,], **kwargs: dict[str, Any]
-    ) -> None:
+    ) -> str:
         workflow_name = options["workflow_name"]
         queue_name = options["queue_name"]
 
@@ -130,11 +130,19 @@ class DBOSClient:
         )
         if wf_status == WorkflowStatusString.ENQUEUED.value:
             self._sys_db.enqueue(workflow_id, queue_name)
+        return workflow_id
+
+    def enqueue(
+        self, options: EnqueueOptions, *args: tuple[Any,], **kwargs: dict[str, Any]
+    ) -> WorkflowHandle[R]:
+        workflow_id = self._enqueue(options, *args, **kwargs)
+        return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
 
     async def enqueue_async(
         self, options: EnqueueOptions, *args: tuple[Any,], **kwargs: dict[str, Any]
-    ) -> None:
-        await asyncio.to_thread(self.enqueue, options, *args, **kwargs)
+    ) -> WorkflowHandleAsync[R]:
+        workflow_id = await asyncio.to_thread(self._enqueue, options, *args, **kwargs)
+        return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
 
     def retrieve_workflow(self, workflow_id: str) -> WorkflowHandle[R]:
         status = get_workflow(self._sys_db, workflow_id, True)
