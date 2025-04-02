@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import List, Optional, Type, TypedDict, TypeVar
 
+from dbos._sys_db import StepInfo
 from dbos._workflow_commands import WorkflowStatus
 
 
@@ -16,6 +17,7 @@ class MessageType(str, Enum):
     RESTART = "restart"
     GET_WORKFLOW = "get_workflow"
     EXIST_PENDING_WORKFLOWS = "exist_pending_workflows"
+    LIST_STEPS = "list_steps"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -177,6 +179,27 @@ class WorkflowsOutput:
 
 
 @dataclass
+class WorkflowSteps:
+    function_id: int
+    function_name: str
+    output: Optional[str]
+    error: Optional[str]
+    child_workflow_id: Optional[str]
+
+    @classmethod
+    def from_step_info(cls, info: StepInfo) -> "WorkflowSteps":
+        output_str = str(info["output"]) if info["output"] is not None else None
+        error_str = str(info["error"]) if info["error"] is not None else None
+        return cls(
+            function_id=info["function_id"],
+            function_name=info["function_name"],
+            output=output_str,
+            error=error_str,
+            child_workflow_id=info["child_workflow_id"],
+        )
+
+
+@dataclass
 class ListWorkflowsRequest(BaseMessage):
     body: ListWorkflowsBody
 
@@ -229,4 +252,15 @@ class ExistPendingWorkflowsRequest(BaseMessage):
 @dataclass
 class ExistPendingWorkflowsResponse(BaseMessage):
     exist: bool
+    error_message: Optional[str] = None
+
+
+@dataclass
+class ListStepsRequest(BaseMessage):
+    workflow_id: str
+
+
+@dataclass
+class ListStepsResponse(BaseMessage):
+    output: Optional[List[WorkflowSteps]]
     error_message: Optional[str] = None

@@ -9,7 +9,12 @@ from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
 from dbos._utils import GlobalParams
-from dbos._workflow_commands import get_workflow, list_queued_workflows, list_workflows
+from dbos._workflow_commands import (
+    get_workflow,
+    list_queued_workflows,
+    list_workflow_steps,
+    list_workflows,
+)
 
 from . import protocol as p
 
@@ -243,6 +248,32 @@ class ConductorWebsocket(threading.Thread):
                                 )
                             )
                             websocket.send(exist_pending_workflows_response.to_json())
+                        elif msg_type == p.MessageType.LIST_STEPS:
+                            list_steps_message = p.ListStepsRequest.from_json(message)
+                            step_info = None
+                            try:
+                                step_info = list_workflow_steps(
+                                    self.dbos._sys_db,
+                                    list_steps_message.workflow_id,
+                                )
+                            except Exception as e:
+                                error_message = f"Exception encountered when getting workflow {list_steps_message.workflow_id}: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+
+                            list_steps_response = p.ListStepsResponse(
+                                type=p.MessageType.LIST_STEPS,
+                                request_id=base_message.request_id,
+                                output=(
+                                    [
+                                        p.WorkflowSteps.from_step_info(i)
+                                        for i in step_info
+                                    ]
+                                    if step_info is not None
+                                    else None
+                                ),
+                                error_message=error_message,
+                            )
+                            websocket.send(list_steps_response.to_json())
                         else:
                             self.dbos.logger.warning(
                                 f"Unexpected message type: {msg_type}"
