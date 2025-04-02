@@ -33,7 +33,6 @@ from ._dbos_config import ConfigFile
 from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
-    DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSWorkflowConflictIDError,
 )
@@ -818,7 +817,7 @@ class SystemDatabase:
             raise
 
     def record_get_result(
-        self, resultWorkflowID: str, output: Optional[str], error: Optional[str]
+        self, result_workflow_id: str, output: Optional[str], error: Optional[str]
     ) -> None:
         ctx = get_local_dbos_context()
         # Only record get_result called in workflow functions
@@ -835,7 +834,7 @@ class SystemDatabase:
                 function_name="DBOS.getResult",
                 output=output,
                 error=error,
-                child_workflow_id=resultWorkflowID,
+                child_workflow_id=result_workflow_id,
             )
             .on_conflict_do_nothing()
         )
