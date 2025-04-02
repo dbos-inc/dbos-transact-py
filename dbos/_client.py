@@ -25,7 +25,6 @@ class EnqueueOptions(TypedDict):
     workflow_name: str
     workflow_class_name: NotRequired[str]
     queue_name: str
-    max_recovery_attempts: NotRequired[int]
     app_version: NotRequired[str]
     workflow_id: NotRequired[str]
 
@@ -125,9 +124,7 @@ class DBOSClient:
             "kwargs": kwargs,
         }
 
-        wf_status = self._sys_db.insert_workflow_status(
-            status, max_recovery_attempts=max_recovery_attempts
-        )
+        wf_status = self._sys_db.insert_workflow_status(status)
         self._sys_db.update_workflow_inputs(
             workflow_id, _serialization.serialize_args(inputs)
         )
