@@ -126,17 +126,6 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 T = TypeVar("T")
 
-
-class DBOSCallProtocol(Protocol[P, R]):
-    __name__: str
-    __qualname__: str
-
-    def __call__(*args: P.args, **kwargs: P.kwargs) -> R: ...
-
-
-Workflow: TypeAlias = DBOSCallProtocol[P, R]
-
-
 IsolationLevel = Literal[
     "SERIALIZABLE",
     "REPEATABLE READ",
@@ -169,7 +158,7 @@ RegisteredJob = Tuple[
 
 class DBOSRegistry:
     def __init__(self) -> None:
-        self.workflow_info_map: dict[str, Workflow[..., Any]] = {}
+        self.workflow_info_map: dict[str, Callable[..., Any]] = {}
         self.function_type_map: dict[str, str] = {}
         self.class_info_map: dict[str, type] = {}
         self.instance_info_map: dict[str, object] = {}
@@ -563,6 +552,8 @@ class DBOS:
         """
         if _dbos_global_instance is not None:
             _dbos_global_instance._reset_system_database()
+        else:
+            dbos_logger.warning("reset_system_database has no effect because global DBOS object does not exist")
 
     def _reset_system_database(self) -> None:
         assert (
@@ -717,7 +708,7 @@ class DBOS:
     @classmethod
     def start_workflow(
         cls,
-        func: Workflow[P, R],
+        func: Callable[P, R],
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
@@ -727,7 +718,7 @@ class DBOS:
     @classmethod
     async def start_workflow_async(
         cls,
-        func: Workflow[P, Coroutine[Any, Any, R]],
+        func: Callable[P, Coroutine[Any, Any, R]],
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> WorkflowHandleAsync[R]:

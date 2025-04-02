@@ -71,8 +71,8 @@ def test_two_steps_cancel(dbos: DBOS, config: ConfigFile) -> None:
         return
 
     # run the workflow
+    wfuuid = str(uuid.uuid4())
     try:
-        wfuuid = str(uuid.uuid4())
         with SetWorkflowID(wfuuid):
             simple_workflow()
 
@@ -116,8 +116,8 @@ def test_two_transactions_cancel(dbos: DBOS, config: ConfigFile) -> None:
         return
 
     # run the workflow
+    wfuuid = str(uuid.uuid4())
     try:
-        wfuuid = str(uuid.uuid4())
         with SetWorkflowID(wfuuid):
             simple_workflow()
 

@@ -81,7 +81,6 @@ from ._sys_db import (
 if TYPE_CHECKING:
     from ._dbos import (
         DBOS,
-        Workflow,
         WorkflowHandle,
         WorkflowHandleAsync,
         DBOSRegistry,
@@ -109,7 +108,15 @@ class WorkflowHandleFuture(Generic[R]):
         return self.workflow_id
 
     def get_result(self) -> R:
-        return self.future.result()
+        try:
+            r = self.future.result()
+        except Exception as e:
+            serialized_e = _serialization.serialize_exception(e)
+            self.dbos._sys_db.record_get_result(self.workflow_id, None, serialized_e)
+            raise
+        serialized_r = _serialization.serialize(r)
+        self.dbos._sys_db.record_get_result(self.workflow_id, serialized_r, None)
+        return r
 
     def get_status(self) -> "WorkflowStatus":
         stat = self.dbos.get_workflow_status(self.workflow_id)
@@ -128,8 +135,15 @@ class WorkflowHandlePolling(Generic[R]):
         return self.workflow_id
 
     def get_result(self) -> R:
-        res: R = self.dbos._sys_db.await_workflow_result(self.workflow_id)
-        return res
+        try:
+            r: R = self.dbos._sys_db.await_workflow_result(self.workflow_id)
+        except Exception as e:
+            serialized_e = _serialization.serialize_exception(e)
+            self.dbos._sys_db.record_get_result(self.workflow_id, None, serialized_e)
+            raise
+        serialized_r = _serialization.serialize(r)
+        self.dbos._sys_db.record_get_result(self.workflow_id, serialized_r, None)
+        return r
 
     def get_status(self) -> "WorkflowStatus":
         stat = self.dbos.get_workflow_status(self.workflow_id)
@@ -149,7 +163,22 @@ class WorkflowHandleAsyncTask(Generic[R]):
         return self.workflow_id
 
     async def get_result(self) -> R:
-        return await self.task
+        try:
+            r = await self.task
+        except Exception as e:
+            serialized_e = _serialization.serialize_exception(e)
+            await asyncio.to_thread(
+                self.dbos._sys_db.record_get_result,
+                self.workflow_id,
+                None,
+                serialized_e,
+            )
+            raise
+        serialized_r = _serialization.serialize(r)
+        await asyncio.to_thread(
+            self.dbos._sys_db.record_get_result, self.workflow_id, serialized_r, None
+        )
+        return r
 
     async def get_status(self) -> "WorkflowStatus":
         stat = await asyncio.to_thread(self.dbos.get_workflow_status, self.workflow_id)
@@ -168,10 +197,24 @@ class WorkflowHandleAsyncPolling(Generic[R]):
         return self.workflow_id
 
     async def get_result(self) -> R:
-        res: R = await asyncio.to_thread(
-            self.dbos._sys_db.await_workflow_result, self.workflow_id
+        try:
+            r: R = await asyncio.to_thread(
+                self.dbos._sys_db.await_workflow_result, self.workflow_id
+            )
+        except Exception as e:
+            serialized_e = _serialization.serialize_exception(e)
+            await asyncio.to_thread(
+                self.dbos._sys_db.record_get_result,
+                self.workflow_id,
+                None,
+                serialized_e,
+            )
+            raise
+        serialized_r = _serialization.serialize(r)
+        await asyncio.to_thread(
+            self.dbos._sys_db.record_get_result, self.workflow_id, serialized_r, None
         )
-        return res
+        return r
 
     async def get_status(self) -> "WorkflowStatus":
         stat = await asyncio.to_thread(self.dbos.get_workflow_status, self.workflow_id)
@@ -279,13 +322,9 @@ def _get_wf_invoke_func(
                 dbos._sys_db.buffer_workflow_status(status)
             return output
         except DBOSWorkflowConflictIDError:
-            # Retrieve the workflow handle and wait for the result.
-            # Must use existing_workflow=False because workflow status might not be set yet for single transaction workflows.
-            wf_handle: "WorkflowHandle[R]" = dbos.retrieve_workflow(
-                status["workflow_uuid"], existing_workflow=False
-            )
-            output = wf_handle.get_result()
-            return output
+            # Await the workflow result
+            r: R = dbos._sys_db.await_workflow_result(status["workflow_uuid"])
+            return r
         except DBOSWorkflowCancelledError as error:
             raise
         except Exception as error:
@@ -304,7 +343,7 @@ def _get_wf_invoke_func(
 def _execute_workflow_wthread(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
-    func: "Workflow[P, R]",
+    func: "Callable[P, R]",
     ctx: DBOSContext,
     *args: Any,
     **kwargs: Any,
@@ -335,7 +374,7 @@ def _execute_workflow_wthread(
 async def _execute_workflow_async(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
-    func: "Workflow[P, Coroutine[Any, Any, R]]",
+    func: "Callable[P, Coroutine[Any, Any, R]]",
     ctx: DBOSContext,
     *args: Any,
     **kwargs: Any,
@@ -449,7 +488,7 @@ def _get_new_wf() -> tuple[str, DBOSContext]:
 
 def start_workflow(
     dbos: "DBOS",
-    func: "Workflow[P, Union[R, Coroutine[Any, Any, R]]]",
+    func: "Callable[P, Union[R, Coroutine[Any, Any, R]]]",
     queue_name: Optional[str],
     execute_workflow: bool,
     *args: P.args,
@@ -505,7 +544,7 @@ def start_workflow(
             ctx.parent_workflow_id,
             new_child_workflow_id,
             ctx.parent_workflow_fid,
-            func.__name__,
+            get_dbos_func_name(func),
         )
 
     if not execute_workflow or (
@@ -531,7 +570,7 @@ def start_workflow(
 
 async def start_workflow_async(
     dbos: "DBOS",
-    func: "Workflow[P, Coroutine[Any, Any, R]]",
+    func: "Callable[P, Coroutine[Any, Any, R]]",
     queue_name: Optional[str],
     execute_workflow: bool,
     *args: P.args,
@@ -590,7 +629,7 @@ async def start_workflow_async(
             ctx.parent_workflow_id,
             new_child_workflow_id,
             ctx.parent_workflow_fid,
-            func.__name__,
+            get_dbos_func_name(func),
         )
 
     wf_status = status["status"]
@@ -632,8 +671,6 @@ def workflow_wrapper(
 ) -> Callable[P, R]:
     func.__orig_func = func  # type: ignore
 
-    funcName = func.__name__
-
     fi = get_or_create_func_info(func)
     fi.max_recovery_attempts = max_recovery_attempts
 
@@ -663,17 +700,22 @@ def workflow_wrapper(
 
         wfOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
 
+        workflow_id = None
+
         def init_wf() -> Callable[[Callable[[], R]], R]:
 
             def recorded_result(
                 c_wfid: str, dbos: "DBOS"
             ) -> Callable[[Callable[[], R]], R]:
                 def recorded_result_inner(func: Callable[[], R]) -> R:
-                    return WorkflowHandlePolling(c_wfid, dbos).get_result()
+                    r: R = dbos._sys_db.await_workflow_result(c_wfid)
+                    return r
 
                 return recorded_result_inner
 
             ctx = assert_current_dbos_context()  # Now the child ctx
+            nonlocal workflow_id
+            workflow_id = ctx.workflow_id
 
             if ctx.has_parent():
                 child_workflow_id = dbos._sys_db.check_child_workflow(
@@ -703,15 +745,33 @@ def workflow_wrapper(
                     ctx.parent_workflow_id,
                     ctx.workflow_id,
                     ctx.parent_workflow_fid,
-                    funcName,
+                    get_dbos_func_name(func),
                 )
 
             return _get_wf_invoke_func(dbos, status)
+
+        def record_get_result(func: Callable[[], R]) -> R:
+            """
+            If a child workflow is invoked synchronously, this records the implicit "getResult" where the
+            parent retrieves the child's output. It executes in the CALLER'S context, not the workflow's.
+            """
+            try:
+                r = func()
+            except Exception as e:
+                serialized_e = _serialization.serialize_exception(e)
+                assert workflow_id is not None
+                dbos._sys_db.record_get_result(workflow_id, None, serialized_e)
+                raise
+            serialized_r = _serialization.serialize(r)
+            assert workflow_id is not None
+            dbos._sys_db.record_get_result(workflow_id, serialized_r, None)
+            return r
 
         outcome = (
             wfOutcome.wrap(init_wf)
             .also(DBOSAssumeRole(rr))
             .also(enterWorkflowCtxMgr(attributes))
+            .then(record_get_result)
         )
         return outcome()  # type: ignore
 
@@ -914,7 +974,7 @@ def decorate_step(
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
 
-        stepName = func.__name__
+        stepName = func.__qualname__
 
         def invoke_step(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:
