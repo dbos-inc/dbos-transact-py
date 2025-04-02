@@ -1,7 +1,10 @@
 import json
+import os
+import subprocess
+import sys
 import time
 import uuid
-from typing import Optional, TypedDict
+from typing import Optional, TypedDict, cast
 
 import sqlalchemy as sa
 
@@ -18,7 +21,9 @@ class Person(TypedDict):
     age: int
 
 
-def get_wf_status(sys_db: SystemDatabase, wfid: str) -> sa.Row[tuple[str, str]] | None:
+def get_wf_status(
+    sys_db: SystemDatabase, wfid: str
+) -> Optional[sa.Row[tuple[str, str]]]:
     with sys_db.engine.connect() as c:
         stmt = sa.select(
             SystemSchema.workflow_status.c.status,
@@ -151,8 +156,8 @@ def test_client_enqueue_idempotent(dbos: DBOS, client: DBOSClient) -> None:
 def test_client_send_with_topic(client: DBOSClient, dbos: DBOS) -> None:
 
     @DBOS.workflow()
-    def sendTest(topic: Optional[str] = None):
-        return DBOS.recv(topic, 60)
+    def sendTest(topic: Optional[str] = None) -> str:
+        return cast(str, DBOS.recv(topic, 60))
 
     now = time.time_ns()
     wfid = f"{now}-test_client_send_with_topic"
@@ -171,8 +176,8 @@ def test_client_send_with_topic(client: DBOSClient, dbos: DBOS) -> None:
 def test_client_send_no_topic(client: DBOSClient, dbos: DBOS) -> None:
 
     @DBOS.workflow()
-    def sendTest(topic: Optional[str] = None):
-        return DBOS.recv(topic, 60)
+    def sendTest(topic: Optional[str] = None) -> str:
+        return cast(str, DBOS.recv(topic, 60))
 
     now = time.time_ns()
     wfid = f"{now}-test_client_send_with_topic"
@@ -190,8 +195,8 @@ def test_client_send_no_topic(client: DBOSClient, dbos: DBOS) -> None:
 def test_client_send_idempotent(client: DBOSClient, dbos: DBOS) -> None:
 
     @DBOS.workflow()
-    def sendTest(topic: Optional[str] = None):
-        return DBOS.recv(topic, 60)
+    def sendTest(topic: Optional[str] = None) -> str:
+        return cast(str, DBOS.recv(topic, 60))
 
     now = time.time_ns()
     wfid = f"{now}-test_client_send_with_topic"
@@ -209,13 +214,13 @@ def test_client_send_idempotent(client: DBOSClient, dbos: DBOS) -> None:
 def test_client_retrieve_wf(client: DBOSClient, dbos: DBOS) -> None:
 
     @DBOS.workflow()
-    def retrieve_test(value: str):
+    def retrieve_test(value: str) -> str:
         DBOS.sleep(5)
         return value
 
     handle1 = DBOS.start_workflow(retrieve_test, "Hello, DBOS!")
 
-    handle2 = client.retrieve_workflow(handle1.get_workflow_id())
+    handle2: WorkflowHandle[str] = client.retrieve_workflow(handle1.get_workflow_id())
     assert handle1.get_workflow_id() == handle2.get_workflow_id()
     status = handle2.get_status()
     assert status.status == "PENDING"
@@ -227,14 +232,14 @@ def test_client_retrieve_wf(client: DBOSClient, dbos: DBOS) -> None:
 def test_client_retrieve_wf_done(client: DBOSClient, dbos: DBOS) -> None:
 
     @DBOS.workflow()
-    def retrieve_test(value: str):
+    def retrieve_test(value: str) -> str:
         return value
 
     handle1 = DBOS.start_workflow(retrieve_test, "Hello, DBOS!")
     result1 = handle1.get_result()
     assert result1 == "Hello, DBOS!"
 
-    handle2 = client.retrieve_workflow(handle1.get_workflow_id())
+    handle2: WorkflowHandle[str] = client.retrieve_workflow(handle1.get_workflow_id())
     assert handle1.get_workflow_id() == handle2.get_workflow_id()
     result2 = handle2.get_result()
     assert result2 == "Hello, DBOS!"
