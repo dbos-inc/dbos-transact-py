@@ -47,7 +47,6 @@ async def test_async_workflow(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         result = await test_workflow("alice", "bob")
         assert result == "alicetxn11bobstep1"
-    dbos._sys_db.wait_for_buffer_flush()
 
     with SetWorkflowID(wfuuid):
         result = await test_workflow("alice", "bob")
@@ -93,7 +92,6 @@ async def test_async_step(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         result = await test_workflow("alice", "bob")
         assert result == "alicetxn11bobstep1"
-    dbos._sys_db.wait_for_buffer_flush()
 
     with SetWorkflowID(wfuuid):
         result = await test_workflow("alice", "bob")
@@ -323,7 +321,6 @@ async def test_async_step_temp(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         result = await test_step("alice")
         assert result == "alicestep1"
-    dbos._sys_db.wait_for_buffer_flush()
 
     with SetWorkflowID(wfuuid):
         result = await test_step("alice")

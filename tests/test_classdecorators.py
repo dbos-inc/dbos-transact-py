@@ -806,14 +806,12 @@ def test_inst_txn(dbos: DBOS) -> None:
 
     with SetWorkflowID(wfid):
         assert inst.transaction(input) == input * multiplier
-    dbos._sys_db.wait_for_buffer_flush()
     status = DBOS.retrieve_workflow(wfid).get_status()
     assert status.class_name == "TestClass"
     assert status.config_name == "test_class"
 
     handle = DBOS.start_workflow(inst.transaction, input)
     assert handle.get_result() == input * multiplier
-    dbos._sys_db.wait_for_buffer_flush()
     status = handle.get_status()
     assert status.class_name == "TestClass"
     assert status.config_name == "test_class"

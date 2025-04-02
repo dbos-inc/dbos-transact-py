@@ -258,7 +258,6 @@ def test_exception_workflow(dbos: DBOS) -> None:
     assert bad_txn_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid, shouldn't throw errors
-    dbos._sys_db._flush_workflow_status_buffer()
     handle = DBOS.execute_workflow_id(wfuuid)
     with pytest.raises(Exception) as exc_info:
         handle.get_result()
@@ -298,12 +297,6 @@ def test_temp_workflow(dbos: DBOS) -> None:
     res = test_step("var")
     assert res == "var"
 
-    # Flush workflow inputs buffer shouldn't fail due to foreign key violation.
-    # It should properly skip the transaction inputs.
-    dbos._sys_db._flush_workflow_inputs_buffer()
-
-    # Wait for buffers to flush
-    dbos._sys_db.wait_for_buffer_flush()
     wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 2
 
@@ -398,7 +391,6 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") == "bob1bob"
 
-    dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
     with dbos._sys_db.engine.begin() as c:
         c.execute(
@@ -444,7 +436,6 @@ def test_recovery_workflow_step(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") == "bob"
 
-    dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
     with dbos._sys_db.engine.begin() as c:
         c.execute(
@@ -481,7 +472,6 @@ def test_workflow_returns_none(dbos: DBOS) -> None:
         assert test_workflow("bob", "bob") is None
     assert wf_counter == 1
 
-    dbos._sys_db.wait_for_buffer_flush()
     with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") is None
     assert wf_counter == 2
@@ -528,7 +518,6 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
         res = test_transaction("bob")
         assert res == "bob1"
 
-    dbos._sys_db.wait_for_buffer_flush()
     wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 1
     assert wfs.workflow_uuids[0] == wfuuid
@@ -554,7 +543,6 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert len(wfs.workflow_uuids) == 1
     assert wfs.workflow_uuids[0] == wfuuid
 
-    dbos._sys_db.wait_for_buffer_flush()
     wfi = dbos._sys_db.get_workflow_status(wfs.workflow_uuids[0])
     assert wfi
     assert wfi["name"].startswith("<temp>")
@@ -583,7 +571,6 @@ def test_recovery_thread(config: ConfigFile) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow(test_var) == test_var
 
-    dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
     dbos._sys_db.update_workflow_status(
         {
@@ -778,7 +765,6 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
         fstat1 = wfh.get_status()
         assert fstat1
         fres = wfh.get_result()
-        dbos._sys_db.wait_for_buffer_flush()  # Wait for status to export.
         fstat2 = wfh.get_status()
         assert fstat2
         return fstat1.status + fres + fstat2.status
@@ -1196,8 +1182,6 @@ def test_debug_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
     assert "Running recv" in caplog.text
     caplog.clear()
 
-    dbos._sys_db._flush_workflow_status_buffer()
-
     # Second run
     with SetWorkflowID(dest_wfid):
         dest_handle_2 = dbos.start_workflow(test_workflow_dest)
@@ -1336,7 +1320,6 @@ def test_recovery_appversion(config: ConfigFile) -> None:
         assert test_workflow(input) == input
 
     # Change the workflow status to pending
-    dbos._sys_db.wait_for_buffer_flush()
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.update(SystemSchema.workflow_status)
@@ -1360,7 +1343,6 @@ def test_recovery_appversion(config: ConfigFile) -> None:
     assert workflow_handles[0].get_result() == input
 
     # Change the workflow status to pending
-    dbos._sys_db.wait_for_buffer_flush()
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.update(SystemSchema.workflow_status)

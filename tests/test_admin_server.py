@@ -97,8 +97,6 @@ def test_admin_recovery(config: ConfigFile) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") == "bob1bob"
 
-    dbos._sys_db.wait_for_buffer_flush()
-
     # Manually update the database to pretend the workflow comes from another executor and is pending
     with dbos._sys_db.engine.begin() as c:
         query = (
@@ -257,7 +255,6 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
     # Run the workflow and flush its results
     simple_workflow()
     assert counter == 1
-    dbos._sys_db.wait_for_buffer_flush()
 
     # Verify the workflow has succeeded
     output = DBOS.list_workflows()
@@ -295,7 +292,6 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
     )
     assert response.status_code == 204
     assert event.wait(timeout=5)
-    dbos._sys_db.wait_for_buffer_flush()
     assert counter == 2
     info = _workflow_commands.get_workflow(sys_db, wfUuid, True)
     assert info is not None
@@ -307,7 +303,6 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
         f"http://localhost:3001/workflows/{wfUuid}/resume", json=[], timeout=5
     )
     assert response.status_code == 204
-    dbos._sys_db.wait_for_buffer_flush()
     info = _workflow_commands.get_workflow(sys_db, wfUuid, True)
     assert info is not None
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"

@@ -27,7 +27,6 @@ def test_list_workflow(dbos: DBOS) -> None:
     wfid = str(uuid.uuid4)
     with SetWorkflowID(wfid):
         assert simple_workflow(1) == 2
-    dbos._sys_db._flush_workflow_status_buffer()
 
     # List the workflow, then test every output
     outputs = DBOS.list_workflows()
@@ -765,8 +764,6 @@ async def test_callchild_first_asyncio(dbos: DBOS, sys_db: SystemDatabase) -> No
     with SetWorkflowID(wfid):
         handle = await dbos.start_workflow_async(parentWorkflow)
         child_id = await handle.get_result()
-
-    dbos._sys_db._flush_workflow_status_buffer()
 
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, wfid)
     assert len(wfsteps) == 4

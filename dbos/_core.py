@@ -279,25 +279,15 @@ def _init_workflow(
             raise DBOSNonExistentWorkflowError(wfid)
         wf_status = get_status_result["status"]
     else:
-        if temp_wf_type != "transaction" or queue is not None:
-            # Synchronously record the status and inputs for workflows and single-step workflows
-            # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
-            # TODO: Make this transactional (and with the queue step below)
-            wf_status = dbos._sys_db.insert_workflow_status(
-                status, max_recovery_attempts=max_recovery_attempts
-            )
+        # Synchronously record the status and inputs for workflows and single-step workflows
+        # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
+        # TODO: Make this transactional (and with the queue step below)
+        wf_status = dbos._sys_db.insert_workflow_status(
+            status, max_recovery_attempts=max_recovery_attempts
+        )
 
-            # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
-            dbos._sys_db.update_workflow_inputs(
-                wfid, _serialization.serialize_args(inputs)
-            )
-
-        else:
-            # Buffer the inputs for single-transaction workflows, but don't buffer the status
-
-            dbos._sys_db.buffer_workflow_inputs(
-                wfid, _serialization.serialize_args(inputs)
-            )
+        # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
+        dbos._sys_db.update_workflow_inputs(wfid, _serialization.serialize_args(inputs))
 
         if queue is not None and wf_status == WorkflowStatusString.ENQUEUED.value:
             dbos._sys_db.enqueue(wfid, queue)
@@ -319,7 +309,7 @@ def _get_wf_invoke_func(
                 if status["queue_name"] is not None:
                     queue = dbos._registry.queue_info_map[status["queue_name"]]
                     dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-                dbos._sys_db.buffer_workflow_status(status)
+                dbos._sys_db.update_workflow_status(status)
             return output
         except DBOSWorkflowConflictIDError:
             # Await the workflow result
