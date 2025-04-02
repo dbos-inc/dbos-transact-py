@@ -15,7 +15,7 @@ from dbos._dbos import WorkflowHandle
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
-from tests.client_collateral import retrieve_test, send_test
+from tests.client_collateral import event_test, retrieve_test, send_test
 
 
 class Person(TypedDict):
@@ -205,29 +205,29 @@ def test_client_send_idempotent(dbos: DBOS, client: DBOSClient) -> None:
     client.send(wfid, message, topic, idempotency_key)
 
     with dbos._sys_db.engine.connect() as conn:
-        result = conn.execute(
+        nresult = conn.execute(
             sa.text(
                 "SELECT * FROM dbos.notifications WHERE destination_uuid = :wfid"
             ).bindparams(wfid=wfid)
         ).fetchall()
-        assert len(result) == 1
-        result = conn.execute(
+        assert len(nresult) == 1
+        oresult = conn.execute(
             sa.text(
                 "SELECT * FROM dbos.operation_outputs WHERE workflow_uuid = :wfid"
             ).bindparams(wfid=sendWFID)
         ).fetchall()
-        assert len(result) == 1
-        result = conn.execute(
+        assert len(oresult) == 1
+        sresult = conn.execute(
             sa.text(
                 "SELECT * FROM dbos.workflow_status WHERE workflow_uuid = :wfid"
             ).bindparams(wfid=sendWFID)
         ).fetchall()
-        assert len(result) == 1
+        assert len(sresult) == 1
 
     DBOS.recover_pending_workflows()
-    handle = DBOS.retrieve_workflow(wfid)
-    result = handle.get_result()
-    assert result == message
+    handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
+    result2 = handle.get_result()
+    assert result2 == message
 
 
 def test_client_send_failure(dbos: DBOS, client: DBOSClient) -> None:
@@ -246,41 +246,111 @@ def test_client_send_failure(dbos: DBOS, client: DBOSClient) -> None:
 
     # simulate a send failure by deleting notification but leaving the WF status table result
     with dbos._sys_db.engine.connect() as conn:
-        result = conn.execute(
+        oresult = conn.execute(
             sa.text(
                 "DELETE FROM dbos.operation_outputs WHERE workflow_uuid = :wfid"
             ).bindparams(wfid=sendWFID)
         )
-        assert result.rowcount == 1
-        result = conn.execute(
+        assert oresult.rowcount == 1
+        nresult = conn.execute(
             sa.text(
                 "DELETE FROM dbos.notifications WHERE destination_uuid = :wfid"
             ).bindparams(wfid=wfid)
         )
-        assert result.rowcount == 1
-        result = conn.execute(
+        assert nresult.rowcount == 1
+        sresult = conn.execute(
             sa.text(
                 "SELECT recovery_attempts FROM dbos.workflow_status WHERE workflow_uuid = :wfid"
             ).bindparams(wfid=sendWFID)
         ).fetchall()
-        assert len(result) == 1
-        assert result[0][0] == 1
+        assert len(sresult) == 1
+        assert sresult[0][0] == 1
 
     client.send(wfid, message, topic, idempotency_key)
 
     with dbos._sys_db.engine.connect() as conn:
-        result = conn.execute(
+        s2result = conn.execute(
             sa.text(
                 "SELECT recovery_attempts FROM dbos.workflow_status WHERE workflow_uuid = :wfid"
             ).bindparams(wfid=sendWFID)
         ).fetchall()
-        assert len(result) == 1
-        assert result[0][0] == 2
+        assert len(s2result) == 1
+        assert s2result[0][0] == 2
 
     DBOS.recover_pending_workflows()
-    handle = DBOS.retrieve_workflow(wfid)
+    handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     result = handle.get_result()
     assert result == message
+
+
+def test_client_get_event(client: DBOSClient, dbos: DBOS) -> None:
+    run_client_collateral()
+
+    now = math.floor(time.time())
+    wfid = f"test-client-event-{now}"
+    key = f"key-{now}"
+    value = f"value-{now}"
+
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(event_test, key, value, None)
+
+    client_value = client.get_event(wfid, key, 10)
+    assert client_value == value
+    result = handle.get_result()
+    assert result == f"{key}-{value}"
+
+
+def test_client_get_event_finished(client: DBOSClient, dbos: DBOS) -> None:
+    run_client_collateral()
+
+    now = math.floor(time.time())
+    wfid = f"test-client-event-{now}"
+    key = f"key-{now}"
+    value = f"value-{now}"
+
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(event_test, key, value, None)
+        result = handle.get_result()
+        assert result == f"{key}-{value}"
+
+    client_value = client.get_event(wfid, key, 10)
+    assert client_value == value
+
+
+def test_client_get_event_update(client: DBOSClient, dbos: DBOS) -> None:
+    run_client_collateral()
+
+    now = math.floor(time.time())
+    wfid = f"test-client-event-{now}"
+    key = f"key-{now}"
+    value = f"value-{now}"
+
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(event_test, key, value, 10)
+
+    client_value = client.get_event(wfid, key, 10)
+    assert client_value == value
+    result = handle.get_result()
+    assert result == f"{key}-{value}"
+    client_value = client.get_event(wfid, key, 10)
+    assert client_value == f"updated-{value}"
+
+
+def test_client_get_event_update_finished(client: DBOSClient, dbos: DBOS) -> None:
+    run_client_collateral()
+
+    now = math.floor(time.time())
+    wfid = f"test-client-event-{now}"
+    key = f"key-{now}"
+    value = f"value-{now}"
+
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(event_test, key, value, 10)
+        result = handle.get_result()
+        assert result == f"{key}-{value}"
+
+    client_value = client.get_event(wfid, key, 10)
+    assert client_value == f"updated-{value}"
 
 
 def test_client_retrieve_wf(client: DBOSClient, dbos: DBOS) -> None:

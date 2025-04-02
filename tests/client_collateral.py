@@ -35,4 +35,4 @@ def event_test(key: str, value: str, update: Optional[int] = None) -> str:
     if update is not None:
         DBOS.sleep(update)
         DBOS.set_event(key, f"updated-{value}")
-    return value
+    return f"{key}-{value}"
