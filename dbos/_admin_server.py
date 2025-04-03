@@ -7,8 +7,6 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any, List, TypedDict
 
-import jsonpickle  # type: ignore
-
 from ._logger import dbos_logger
 from ._recovery import recover_pending_workflows
 
@@ -162,7 +160,17 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_steps(self, workflow_id: str) -> None:
         steps = self.dbos._sys_db.get_workflow_steps(workflow_id)
-        json_steps = jsonpickle.encode(steps, unpicklable=False).encode("utf-8")
+
+        updated_steps = [
+            {
+                **step,
+                "output": str(step["output"]) if step["output"] is not None else None,
+                "error": str(step["error"]) if step["error"] is not None else None,
+            }
+            for step in steps
+        ]
+
+        json_steps = json.dumps(updated_steps).encode("utf-8")
         self.send_response(200)
         self._end_headers()
         self.wfile.write(json_steps)
