@@ -176,7 +176,7 @@ class DBOSRegistry:
         self.workflow_info_map[name] = wrapped_func
 
     def register_class(self, cls: type, ci: DBOSClassInfo) -> None:
-        class_name = cls.__name__
+        class_name = cls.__module__ + "::" + cls.__qualname__
         if class_name in self.class_info_map:
             if self.class_info_map[class_name] is not cls:
                 raise Exception(f"Duplicate type registration for class '{class_name}'")

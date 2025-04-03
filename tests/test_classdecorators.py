@@ -376,11 +376,12 @@ def test_duplicate_reg(dbos: DBOS) -> None:
             def __init__(self) -> None:
                 super().__init__("bob")
 
-    assert "Duplicate type registration for class 'DBOSTestRegDup'" == str(
-        exc_info.value
+    assert (
+        "Duplicate type registration for class 'tests.test_classdecorators::test_duplicate_reg.<locals>.DBOSTestRegDup'"
+        == str(exc_info.value)
     )
 
-    # Dupliocate instance registration
+    # Duplicate instance registration
     inst = DBOSTestRegDup()
     with pytest.raises(Exception) as exc_info:
         inst = DBOSTestRegDup()
@@ -389,6 +390,8 @@ def test_duplicate_reg(dbos: DBOS) -> None:
         "Duplicate instance registration for class 'DBOSTestRegDup' instance 'bob'"
         == str(exc_info.value)
     )
+
+    from tests import classdefs, dupname_classdefs
 
 
 def test_class_recovery(dbos: DBOS) -> None:
