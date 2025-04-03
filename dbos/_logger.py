@@ -26,6 +26,11 @@ class DBOSLogTransformer(logging.Filter):
         record.applicationID = self.app_id
         record.applicationVersion = GlobalParams.app_version
         record.executorID = GlobalParams.executor_id
+        from dbos._context import get_local_dbos_context
+
+        ctx = get_local_dbos_context()
+        if ctx and ctx.is_within_workflow():
+            record.operationUUID = ctx.workflow_id
         return True
 
 
