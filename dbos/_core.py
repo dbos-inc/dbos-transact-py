@@ -305,8 +305,10 @@ def _get_wf_invoke_func(
             or status["status"] == WorkflowStatusString.SUCCESS.value
         ):
             # Directly return the result if the workflow is already completed
-            r: R = dbos._sys_db.await_workflow_result(status["workflow_uuid"])
-            return r
+            recorded_result: R = dbos._sys_db.await_workflow_result(
+                status["workflow_uuid"]
+            )
+            return recorded_result
         try:
             output = func()
             status["status"] = "SUCCESS"
