@@ -30,6 +30,23 @@ def run_client_collateral() -> None:
     runpy.run_path(filename)
 
 
+def test_client_enqueue_and_get_result(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    johnDoe: Person = {"first": "John", "last": "Doe", "age": 30}
+    wfid = str(uuid.uuid4())
+
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "enqueue_test",
+        "workflow_id": wfid,
+    }
+
+    handle: WorkflowHandle[str] = client.enqueue(options, 42, "test", johnDoe)
+    result = handle.get_result()
+    assert result == '42-test-{"first": "John", "last": "Doe", "age": 30}'
+
+
 def test_client_enqueue_appver_not_set(dbos: DBOS, client: DBOSClient) -> None:
     run_client_collateral()
 
