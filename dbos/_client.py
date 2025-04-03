@@ -138,15 +138,11 @@ class DBOSClient:
             self._sys_db.enqueue(workflow_id, queue_name)
         return workflow_id
 
-    def enqueue(
-        self, options: EnqueueOptions, *args: tuple[Any,], **kwargs: dict[str, Any]
-    ) -> WorkflowHandle[R]:
+    def enqueue(self, options: EnqueueOptions, *args, **kwargs) -> WorkflowHandle[R]:  # type: ignore
         workflow_id = self._enqueue(options, *args, **kwargs)
         return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
 
-    async def enqueue_async(
-        self, options: EnqueueOptions, *args: tuple[Any,], **kwargs: dict[str, Any]
-    ) -> WorkflowHandleAsync[R]:
+    async def enqueue_async(self, options: EnqueueOptions, *args, **kwargs) -> WorkflowHandleAsync[R]:  # type: ignore
         workflow_id = await asyncio.to_thread(self._enqueue, options, *args, **kwargs)
         return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
 

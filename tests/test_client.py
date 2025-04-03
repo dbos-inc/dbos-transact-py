@@ -42,7 +42,7 @@ def test_client_enqueue_appver_not_set(dbos: DBOS, client: DBOSClient) -> None:
         "workflow_id": wfid,
     }
 
-    client.enqueue(options, 42, "test", johnDoe)  # type: ignore
+    client.enqueue(options, 42, "test", johnDoe)
 
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     result = handle.get_result()
@@ -68,7 +68,7 @@ def test_client_enqueue_appver_set(dbos: DBOS, client: DBOSClient) -> None:
         "app_version": GlobalParams.app_version,
     }
 
-    client.enqueue(options, 42, "test", johnDoe)  # type: ignore
+    client.enqueue(options, 42, "test", johnDoe)
 
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     result = handle.get_result()
@@ -94,7 +94,7 @@ def test_client_enqueue_wrong_appver(dbos: DBOS, client: DBOSClient) -> None:
         "app_version": "0123456789abcdef",
     }
 
-    client.enqueue(options, 42, "test", johnDoe)  # type: ignore
+    client.enqueue(options, 42, "test", johnDoe)
 
     time.sleep(5)
 
@@ -119,8 +119,8 @@ def test_client_enqueue_idempotent(
         "workflow_id": wfid,
     }
 
-    client.enqueue(options, 42, "test", johnDoe)  # type: ignore
-    client.enqueue(options, 42, "test", johnDoe)  # type: ignore
+    client.enqueue(options, 42, "test", johnDoe)
+    client.enqueue(options, 42, "test", johnDoe)
 
     wf_status = sys_db.get_workflow_status(wfid)
     assert wf_status is not None
