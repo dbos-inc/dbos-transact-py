@@ -25,7 +25,7 @@ def upgrade() -> None:
             "function_name",
             sa.Text(),
             nullable=False,
-            default="",
+            server_default="",
         ),
         schema="dbos",
     )
