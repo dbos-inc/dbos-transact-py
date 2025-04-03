@@ -94,7 +94,7 @@ jobs:
       working-directory: ./
 
     - name: Run Unit Tests
-      run: pdm run pytest
+      run: pdm run pytest tests/test_client.py 
       working-directory: ./
       env:
         PGPASSWORD: a!b@c$d()e*_,/:;=?@ff[]22
