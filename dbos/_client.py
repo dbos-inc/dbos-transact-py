@@ -1,13 +1,7 @@
 import asyncio
-import json
 import sys
 import uuid
 from typing import Any, Generic, Optional, TypedDict, TypeVar
-
-if sys.version_info < (3, 10):
-    from typing_extensions import ParamSpec
-else:
-    from typing import ParamSpec
 
 if sys.version_info < (3, 11):
     from typing_extensions import NotRequired
@@ -15,7 +9,7 @@ else:
     from typing import NotRequired
 
 from dbos import _serialization
-from dbos._dbos import DBOS, WorkflowHandle, WorkflowHandleAsync
+from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._dbos_config import parse_database_url_to_dbconfig
 from dbos._error import DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
@@ -23,7 +17,6 @@ from dbos._serialization import WorkflowInputs
 from dbos._sys_db import SystemDatabase, WorkflowStatusInternal, WorkflowStatusString
 from dbos._workflow_commands import WorkflowStatus, get_workflow
 
-P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 
@@ -89,9 +82,7 @@ class DBOSClient:
     def destroy(self) -> None:
         self._sys_db.destroy()
 
-    def _enqueue(
-        self, options: EnqueueOptions, *args: tuple[Any,], **kwargs: dict[str, Any]
-    ) -> str:
+    def _enqueue(self, options: EnqueueOptions, *args: Any, **kwargs: Any) -> str:
         workflow_name = options["workflow_name"]
         queue_name = options["queue_name"]
 
@@ -138,11 +129,15 @@ class DBOSClient:
             self._sys_db.enqueue(workflow_id, queue_name)
         return workflow_id
 
-    def enqueue(self, options: EnqueueOptions, *args, **kwargs) -> WorkflowHandle[R]:  # type: ignore
+    def enqueue(
+        self, options: EnqueueOptions, *args: Any, **kwargs: Any
+    ) -> WorkflowHandle[R]:
         workflow_id = self._enqueue(options, *args, **kwargs)
         return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
 
-    async def enqueue_async(self, options: EnqueueOptions, *args, **kwargs) -> WorkflowHandleAsync[R]:  # type: ignore
+    async def enqueue_async(
+        self, options: EnqueueOptions, *args: Any, **kwargs: Any
+    ) -> WorkflowHandleAsync[R]:
         workflow_id = await asyncio.to_thread(self._enqueue, options, *args, **kwargs)
         return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
 
