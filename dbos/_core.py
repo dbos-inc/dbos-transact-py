@@ -304,6 +304,9 @@ def _get_wf_invoke_func(
             status["status"] == WorkflowStatusString.ERROR.value
             or status["status"] == WorkflowStatusString.SUCCESS.value
         ):
+            dbos.logger.debug(
+                f"Workflow {status['workflow_uuid']} is already completed with status {status['status']}"
+            )
             # Directly return the result if the workflow is already completed
             recorded_result: R = dbos._sys_db.await_workflow_result(
                 status["workflow_uuid"]
@@ -552,6 +555,9 @@ def start_workflow(
             or wf_status == WorkflowStatusString.SUCCESS.value
         )
     ):
+        dbos.logger.debug(
+            f"Workflow {new_wf_id} is already completed with status {wf_status}"
+        )
         return WorkflowHandlePolling(new_wf_id, dbos)
 
     future = dbos._executor.submit(
@@ -639,6 +645,9 @@ async def start_workflow_async(
             or wf_status == WorkflowStatusString.SUCCESS.value
         )
     ):
+        dbos.logger.debug(
+            f"Workflow {new_wf_id} is already completed with status {wf_status}"
+        )
         return WorkflowHandleAsyncPolling(new_wf_id, dbos)
 
     coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, *args, **kwargs)

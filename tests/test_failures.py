@@ -201,6 +201,8 @@ def test_wfstatus_invalid(dbos: DBOS) -> None:
         return "done"
 
     has_executed = False
+    event = threading.Event()
+    wfevent = threading.Event()
 
     @DBOS.workflow()
     def non_deterministic_workflow() -> None:
@@ -213,16 +215,24 @@ def test_wfstatus_invalid(dbos: DBOS) -> None:
         handle.get_status()
         res = handle.get_result()
         assert res == "done"
+        wfevent.set()
+        event.wait()
         return
 
     wfuuid = str(uuid.uuid4())
     with SetWorkflowID(wfuuid):
-        non_deterministic_workflow()
+        handle1 = dbos.start_workflow(non_deterministic_workflow)
+
+    # Make sure the first one has reached the point where it waits for the event
+    wfevent.wait()
+    with SetWorkflowID(wfuuid):
+        handle2 = dbos.start_workflow(non_deterministic_workflow)
 
     with pytest.raises(DBOSException) as exc_info:
-        with SetWorkflowID(wfuuid):
-            non_deterministic_workflow()
+        handle2.get_result()
     assert "Hint: Check if your workflow is deterministic." in str(exc_info.value)
+    event.set()
+    assert handle1.get_result() == None
 
 
 def test_step_retries(dbos: DBOS) -> None:

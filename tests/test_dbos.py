@@ -261,7 +261,7 @@ def test_exception_workflow(dbos: DBOS) -> None:
     with pytest.raises(Exception) as exc_info:
         handle.get_result()
     assert "test error" == str(exc_info.value)
-    assert wf_counter == 3  # The workflow error is directly returned without running
+    assert wf_counter == 2  # The workflow error is directly returned without running
 
 
 def test_temp_workflow(dbos: DBOS) -> None:
@@ -473,11 +473,11 @@ def test_workflow_returns_none(dbos: DBOS) -> None:
 
     with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") is None
-    assert wf_counter == 2
+    assert wf_counter == 1
 
     handle: WorkflowHandle[None] = DBOS.retrieve_workflow(wfuuid)
     assert handle.get_result() == None
-    assert wf_counter == 2
+    assert wf_counter == 1
 
     # Change the workflow status to pending
     with dbos._sys_db.engine.begin() as c:
@@ -490,7 +490,7 @@ def test_workflow_returns_none(dbos: DBOS) -> None:
     workflow_handles = DBOS.recover_pending_workflows()
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() is None
-    assert wf_counter == 3
+    assert wf_counter == 2
 
     # Test that there was a recovery attempt of this
     stat = workflow_handles[0].get_status()
@@ -890,7 +890,7 @@ def test_send_recv(dbos: DBOS) -> None:
     with SetWorkflowID(send_uuid):
         res = test_send_workflow(handle.get_workflow_id(), "testtopic")
         assert res == dest_uuid
-        assert send_counter == 2
+        assert send_counter == 1
 
     with SetWorkflowID(dest_uuid):
         begin_time = time.time()
@@ -898,7 +898,7 @@ def test_send_recv(dbos: DBOS) -> None:
         duration = time.time() - begin_time
         assert duration < 3.0
         assert res == "test2-test1-test3"
-        assert recv_counter == 2
+        assert recv_counter == 1
 
     with SetWorkflowID(timeout_uuid):
         begin_time = time.time()
@@ -1127,7 +1127,9 @@ def test_multi_set_event(dbos: DBOS) -> None:
     assert DBOS.get_event(wfid, "key") == "value2"
 
 
-def test_debug_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
+def test_debug_logging(
+    dbos: DBOS, caplog: pytest.LogCaptureFixture, config: ConfigFile
+) -> None:
     wfid = str(uuid.uuid4())
     dest_wfid = str(uuid.uuid4())
 
@@ -1182,6 +1184,26 @@ def test_debug_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
     caplog.clear()
 
     # Second run
+    with SetWorkflowID(dest_wfid):
+        dest_handle_2 = dbos.start_workflow(test_workflow_dest)
+
+    with SetWorkflowID(wfid):
+        result3 = test_workflow()
+
+    assert result3 == result1
+    assert "is already completed with status SUCCESS" in caplog.text
+
+    result4 = dest_handle_2.get_result()
+    assert result4 == result2
+    caplog.clear()
+
+    # Debug mode run
+    DBOS.destroy()
+    DBOS(config=config)
+    logging.getLogger("dbos").propagate = True
+    caplog.set_level(logging.DEBUG, "dbos")
+    DBOS.launch(debug_mode=True)
+
     with SetWorkflowID(dest_wfid):
         dest_handle_2 = dbos.start_workflow(test_workflow_dest)
 
@@ -1304,6 +1326,7 @@ def test_app_version(config: ConfigFile) -> None:
 
 def test_recovery_appversion(config: ConfigFile) -> None:
     input = 5
+    os.environ["DBOS__VMID"] = "testexecutor"
 
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
@@ -1327,6 +1350,7 @@ def test_recovery_appversion(config: ConfigFile) -> None:
         )
 
     # Reconstruct an identical environment to simulate a restart
+    os.environ["DBOS__VMID"] = "testexecutor_another"
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
 
@@ -1337,7 +1361,7 @@ def test_recovery_appversion(config: ConfigFile) -> None:
     DBOS.launch()
 
     # The workflow should successfully recover
-    workflow_handles = DBOS.recover_pending_workflows()
+    workflow_handles = DBOS.recover_pending_workflows(["testexecutor"])
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == input
 
@@ -1360,5 +1384,8 @@ def test_recovery_appversion(config: ConfigFile) -> None:
     DBOS.launch()
 
     # The workflow should not recover
-    workflow_handles = DBOS.recover_pending_workflows()
+    workflow_handles = DBOS.recover_pending_workflows(["testexecutor"])
     assert len(workflow_handles) == 0
+
+    # Clean up the environment variable
+    del os.environ["DBOS__VMID"]

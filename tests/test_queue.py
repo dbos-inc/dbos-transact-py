@@ -50,7 +50,7 @@ def test_simple_queue(dbos: DBOS) -> None:
     assert handle.get_result() == "abcd123"
     with SetWorkflowID(wfid):
         assert test_workflow("abc", "123") == "abcd123"
-    assert wf_counter == 2
+    assert wf_counter == 1
     assert step_counter == 1
 
 
