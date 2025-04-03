@@ -73,7 +73,7 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
 
 
 class DBOSClient:
-    def __init__(self, database_url: str, system_database: Optional[str] = None):
+    def __init__(self, database_url: str, *, system_database: Optional[str] = None):
         db_config = parse_database_url_to_dbconfig(database_url)
         if system_database is not None:
             db_config["sys_db_name"] = system_database
