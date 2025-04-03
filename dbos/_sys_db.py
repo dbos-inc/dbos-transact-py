@@ -28,6 +28,7 @@ from sqlalchemy.sql import func
 from dbos._utils import GlobalParams
 
 from . import _serialization
+from ._context import get_local_dbos_context
 from ._dbos_config import ConfigFile, DatabaseConfig
 from ._error import (
     DBOSConflictingWorkflowError,
