@@ -33,7 +33,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
         wf_counter += 1
         res = test_transaction(var2)
         res2 = test_step(var)
-        DBOS.logger.info("I'm test_workflow")
+        DBOS.logger.info("I'm test_workflow " + var + var2)
         return res + res2
 
     @DBOS.transaction(isolation_level="REPEATABLE READ")
@@ -42,7 +42,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
-        DBOS.logger.info("I'm test_transaction")
+        DBOS.logger.info("I'm test_transaction " + var2)
         return var2 + str(rows[0][0])
 
     @DBOS.step()
@@ -53,7 +53,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
         assert DBOS.step_status.max_attempts is None
         nonlocal step_counter
         step_counter += 1
-        DBOS.logger.info("I'm test_step")
+        DBOS.logger.info("I'm test_step " + var)
         return var
 
     assert test_workflow("bob", "bob") == "bob1bob"
@@ -62,15 +62,17 @@ def test_simple_workflow(dbos: DBOS) -> None:
     wfuuid = str(uuid.uuid4())
     with SetWorkflowID(wfuuid):
         assert test_workflow("alice", "alice") == "alice1alice"
+    assert wf_counter == 2
     with SetWorkflowID(wfuuid):
         assert test_workflow("alice", "alice") == "alice1alice"
     assert txn_counter == 2  # Only increment once
     assert step_counter == 2  # Only increment once
+    assert wf_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid
     handle = DBOS.execute_workflow_id(wfuuid)
     assert handle.get_result() == "alice1alice"
-    assert wf_counter == 4
+    assert wf_counter == 2
 
 
 def test_simple_workflow_attempts_counter(dbos: DBOS) -> None:
@@ -92,10 +94,7 @@ def test_simple_workflow_attempts_counter(dbos: DBOS) -> None:
             assert result is not None
             recovery_attempts, created_at, updated_at = result
             assert recovery_attempts == i + 1
-            if i == 0:
-                assert created_at == updated_at
-            else:
-                assert updated_at > created_at
+            assert updated_at > created_at
 
 
 def test_child_workflow(dbos: DBOS) -> None:
@@ -258,12 +257,11 @@ def test_exception_workflow(dbos: DBOS) -> None:
     assert bad_txn_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid, shouldn't throw errors
-    dbos._sys_db._flush_workflow_status_buffer()
     handle = DBOS.execute_workflow_id(wfuuid)
     with pytest.raises(Exception) as exc_info:
         handle.get_result()
     assert "test error" == str(exc_info.value)
-    assert wf_counter == 3  # The workflow error is directly returned without running
+    assert wf_counter == 2  # The workflow error is directly returned without running
 
 
 def test_temp_workflow(dbos: DBOS) -> None:
@@ -298,12 +296,6 @@ def test_temp_workflow(dbos: DBOS) -> None:
     res = test_step("var")
     assert res == "var"
 
-    # Flush workflow inputs buffer shouldn't fail due to foreign key violation.
-    # It should properly skip the transaction inputs.
-    dbos._sys_db._flush_workflow_inputs_buffer()
-
-    # Wait for buffers to flush
-    dbos._sys_db.wait_for_buffer_flush()
     wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 2
 
@@ -398,7 +390,6 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") == "bob1bob"
 
-    dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
     with dbos._sys_db.engine.begin() as c:
         c.execute(
@@ -444,7 +435,6 @@ def test_recovery_workflow_step(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") == "bob"
 
-    dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
     with dbos._sys_db.engine.begin() as c:
         c.execute(
@@ -481,14 +471,13 @@ def test_workflow_returns_none(dbos: DBOS) -> None:
         assert test_workflow("bob", "bob") is None
     assert wf_counter == 1
 
-    dbos._sys_db.wait_for_buffer_flush()
     with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") is None
-    assert wf_counter == 2
+    assert wf_counter == 1
 
     handle: WorkflowHandle[None] = DBOS.retrieve_workflow(wfuuid)
     assert handle.get_result() == None
-    assert wf_counter == 2
+    assert wf_counter == 1
 
     # Change the workflow status to pending
     with dbos._sys_db.engine.begin() as c:
@@ -501,7 +490,7 @@ def test_workflow_returns_none(dbos: DBOS) -> None:
     workflow_handles = DBOS.recover_pending_workflows()
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() is None
-    assert wf_counter == 3
+    assert wf_counter == 2
 
     # Test that there was a recovery attempt of this
     stat = workflow_handles[0].get_status()
@@ -528,7 +517,6 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
         res = test_transaction("bob")
         assert res == "bob1"
 
-    dbos._sys_db.wait_for_buffer_flush()
     wfs = dbos._sys_db.get_workflows(gwi)
     assert len(wfs.workflow_uuids) == 1
     assert wfs.workflow_uuids[0] == wfuuid
@@ -554,7 +542,6 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert len(wfs.workflow_uuids) == 1
     assert wfs.workflow_uuids[0] == wfuuid
 
-    dbos._sys_db.wait_for_buffer_flush()
     wfi = dbos._sys_db.get_workflow_status(wfs.workflow_uuids[0])
     assert wfi
     assert wfi["name"].startswith("<temp>")
@@ -583,7 +570,6 @@ def test_recovery_thread(config: ConfigFile) -> None:
     with SetWorkflowID(wfuuid):
         assert test_workflow(test_var) == test_var
 
-    dbos._sys_db.wait_for_buffer_flush()
     # Change the workflow status to pending
     dbos._sys_db.update_workflow_status(
         {
@@ -666,7 +652,7 @@ def test_start_workflow(dbos: DBOS) -> None:
         context = assert_current_dbos_context()
         assert not context.is_within_workflow()
     assert txn_counter == 1
-    assert wf_counter == 3
+    assert wf_counter == 1
 
 
 def test_retrieve_workflow(dbos: DBOS) -> None:
@@ -778,7 +764,6 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
         fstat1 = wfh.get_status()
         assert fstat1
         fres = wfh.get_result()
-        dbos._sys_db.wait_for_buffer_flush()  # Wait for status to export.
         fstat2 = wfh.get_status()
         assert fstat2
         return fstat1.status + fres + fstat2.status
@@ -905,7 +890,7 @@ def test_send_recv(dbos: DBOS) -> None:
     with SetWorkflowID(send_uuid):
         res = test_send_workflow(handle.get_workflow_id(), "testtopic")
         assert res == dest_uuid
-        assert send_counter == 2
+        assert send_counter == 1
 
     with SetWorkflowID(dest_uuid):
         begin_time = time.time()
@@ -913,7 +898,7 @@ def test_send_recv(dbos: DBOS) -> None:
         duration = time.time() - begin_time
         assert duration < 3.0
         assert res == "test2-test1-test3"
-        assert recv_counter == 2
+        assert recv_counter == 1
 
     with SetWorkflowID(timeout_uuid):
         begin_time = time.time()
@@ -1142,7 +1127,9 @@ def test_multi_set_event(dbos: DBOS) -> None:
     assert DBOS.get_event(wfid, "key") == "value2"
 
 
-def test_debug_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
+def test_debug_logging(
+    dbos: DBOS, caplog: pytest.LogCaptureFixture, config: ConfigFile
+) -> None:
     wfid = str(uuid.uuid4())
     dest_wfid = str(uuid.uuid4())
 
@@ -1196,9 +1183,27 @@ def test_debug_logging(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
     assert "Running recv" in caplog.text
     caplog.clear()
 
-    dbos._sys_db._flush_workflow_status_buffer()
-
     # Second run
+    with SetWorkflowID(dest_wfid):
+        dest_handle_2 = dbos.start_workflow(test_workflow_dest)
+
+    with SetWorkflowID(wfid):
+        result3 = test_workflow()
+
+    assert result3 == result1
+    assert "is already completed with status SUCCESS" in caplog.text
+
+    result4 = dest_handle_2.get_result()
+    assert result4 == result2
+    caplog.clear()
+
+    # Debug mode run
+    DBOS.destroy()
+    DBOS(config=config)
+    logging.getLogger("dbos").propagate = True
+    caplog.set_level(logging.DEBUG, "dbos")
+    DBOS.launch(debug_mode=True)
+
     with SetWorkflowID(dest_wfid):
         dest_handle_2 = dbos.start_workflow(test_workflow_dest)
 
@@ -1321,6 +1326,7 @@ def test_app_version(config: ConfigFile) -> None:
 
 def test_recovery_appversion(config: ConfigFile) -> None:
     input = 5
+    os.environ["DBOS__VMID"] = "testexecutor"
 
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
@@ -1336,7 +1342,6 @@ def test_recovery_appversion(config: ConfigFile) -> None:
         assert test_workflow(input) == input
 
     # Change the workflow status to pending
-    dbos._sys_db.wait_for_buffer_flush()
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.update(SystemSchema.workflow_status)
@@ -1345,6 +1350,7 @@ def test_recovery_appversion(config: ConfigFile) -> None:
         )
 
     # Reconstruct an identical environment to simulate a restart
+    os.environ["DBOS__VMID"] = "testexecutor_another"
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
 
@@ -1355,12 +1361,11 @@ def test_recovery_appversion(config: ConfigFile) -> None:
     DBOS.launch()
 
     # The workflow should successfully recover
-    workflow_handles = DBOS.recover_pending_workflows()
+    workflow_handles = DBOS.recover_pending_workflows(["testexecutor"])
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == input
 
     # Change the workflow status to pending
-    dbos._sys_db.wait_for_buffer_flush()
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.update(SystemSchema.workflow_status)
@@ -1379,5 +1384,8 @@ def test_recovery_appversion(config: ConfigFile) -> None:
     DBOS.launch()
 
     # The workflow should not recover
-    workflow_handles = DBOS.recover_pending_workflows()
+    workflow_handles = DBOS.recover_pending_workflows(["testexecutor"])
     assert len(workflow_handles) == 0
+
+    # Clean up the environment variable
+    del os.environ["DBOS__VMID"]
