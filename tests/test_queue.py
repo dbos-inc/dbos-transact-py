@@ -19,7 +19,7 @@ from dbos import (
     WorkflowHandle,
 )
 from dbos._schemas.system_database import SystemSchema
-from dbos._sys_db import WorkflowStatusString, _buffer_flush_interval_secs
+from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
 from tests.conftest import default_config, queue_entries_are_cleaned_up
 
@@ -51,7 +51,7 @@ def test_simple_queue(dbos: DBOS) -> None:
     assert handle.get_result() == "abcd123"
     with SetWorkflowID(wfid):
         assert test_workflow("abc", "123") == "abcd123"
-    assert wf_counter == 2
+    assert wf_counter == 1
     assert step_counter == 1
 
 
@@ -233,7 +233,6 @@ def test_limiter(dbos: DBOS) -> None:
         assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.2
 
     # Verify all workflows get the SUCCESS status eventually
-    dbos._sys_db.wait_for_buffer_flush()
     for h in handles:
         assert h.get_status().status == WorkflowStatusString.SUCCESS.value
 
@@ -301,7 +300,6 @@ def test_multiple_queues(dbos: DBOS) -> None:
         assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.2
 
     # Verify all workflows get the SUCCESS status eventually
-    dbos._sys_db.wait_for_buffer_flush()
     for h in handles:
         assert h.get_status().status == WorkflowStatusString.SUCCESS.value
 
@@ -904,49 +902,6 @@ def test_resuming_queued_workflows(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-# Test a race condition between removing a task from the queue and flushing the status buffer
-def test_resuming_already_completed_queue_workflow(dbos: DBOS) -> None:
-    dbos._sys_db._run_background_processes = False  # Disable buffer flush
-
-    start_event = threading.Event()
-    counter = 0
-
-    @DBOS.workflow()
-    def test_step() -> None:
-        start_event.set()
-        nonlocal counter
-        counter += 1
-
-    queue = Queue("test_queue")
-    handle = queue.enqueue(test_step)
-    start_event.wait()
-    start_event.clear()
-    time.sleep(_buffer_flush_interval_secs)
-    assert (
-        handle.get_status().status == WorkflowStatusString.PENDING.value
-    )  # Not flushed
-    assert counter == 1  # But, really, it's completed
-    dbos._sys_db._workflow_status_buffer = (
-        {}
-    )  # Clear buffer (simulates a process restart)
-
-    # Recovery picks up on the workflow and recovers it
-    recovered_ids = DBOS.recover_pending_workflows()
-    assert len(recovered_ids) == 1
-    assert recovered_ids[0].get_workflow_id() == handle.get_workflow_id()
-    start_event.wait()
-    assert counter == 2  # The workflow ran again
-    time.sleep(
-        _buffer_flush_interval_secs
-    )  # This is actually to wait that _get_wf_invoke_func buffers the status
-    dbos._sys_db._flush_workflow_status_buffer()  # Manually flush
-    assert (
-        handle.get_status().status == WorkflowStatusString.SUCCESS.value
-    )  # Is recovered
-    assert handle.get_status().executor_id == "local"
-    assert handle.get_status().recovery_attempts == 2
-
-
 def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
     start_event = threading.Event()
     blocking_event = threading.Event()
@@ -1005,7 +960,6 @@ def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
     # Complete the blocked workflow
     blocking_event.set()
     assert blocked_handle.get_result() == None
-    dbos._sys_db.wait_for_buffer_flush()
     assert blocked_handle.get_status().status == WorkflowStatusString.SUCCESS.value
     with dbos._sys_db.engine.begin() as c:
         query = sa.select(SystemSchema.workflow_status.c.recovery_attempts).where(
