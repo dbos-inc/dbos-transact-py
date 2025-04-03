@@ -555,9 +555,6 @@ def start_workflow(
             or wf_status == WorkflowStatusString.SUCCESS.value
         )
     ):
-        dbos.logger.debug(
-            f"Workflow {new_wf_id} is already completed with status {wf_status}"
-        )
         return WorkflowHandlePolling(new_wf_id, dbos)
 
     future = dbos._executor.submit(
@@ -645,9 +642,6 @@ async def start_workflow_async(
             or wf_status == WorkflowStatusString.SUCCESS.value
         )
     ):
-        dbos.logger.debug(
-            f"Workflow {new_wf_id} is already completed with status {wf_status}"
-        )
         return WorkflowHandleAsyncPolling(new_wf_id, dbos)
 
     coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, *args, **kwargs)
