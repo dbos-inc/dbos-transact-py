@@ -27,6 +27,8 @@ class DBOSLogTransformer(logging.Filter):
         record.applicationID = self.app_id
         record.applicationVersion = GlobalParams.app_version
         record.executorID = GlobalParams.executor_id
+
+        # If available, decorate the log entry with Workflow ID and Trace ID
         from dbos._context import get_local_dbos_context
 
         ctx = get_local_dbos_context()
