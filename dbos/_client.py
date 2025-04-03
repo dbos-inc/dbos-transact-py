@@ -4,9 +4,14 @@ import uuid
 from typing import Any, Generic, Optional, TypedDict, TypeVar
 
 if sys.version_info < (3, 10):
-    from typing_extensions import NotRequired, ParamSpec
+    from typing_extensions import ParamSpec
 else:
-    from typing import ParamSpec, NotRequired
+    from typing import ParamSpec
+
+if sys.version_info < (3, 11):
+    from typing_extensions import NotRequired
+else:
+    from typing import NotRequired
 
 from dbos import _serialization
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
