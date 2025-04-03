@@ -29,7 +29,7 @@ jobs:
         image: sibedge/postgres-plv8
         env:
           # Specify the password for Postgres superuser.
-          POSTGRES_PASSWORD: Excelled55Depress12Cliche
+          POSTGRES_PASSWORD: a!b@c$d()e*_,/:;=?@ff[]22
         # Set health checks to wait until postgres has started
         options: >-
           --health-cmd pg_isready
@@ -94,8 +94,8 @@ jobs:
       working-directory: ./
 
     - name: Run Unit Tests
-      run: pdm run pytest tests/test_client.py 
+      run: pdm run pytest
       working-directory: ./
       env:
-        PGPASSWORD: Excelled55Depress12Cliche
+        PGPASSWORD: a!b@c$d()e*_,/:;=?@ff[]22
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

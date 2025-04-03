@@ -84,8 +84,6 @@ class DBOSClient:
         db_config = parse_database_url_to_dbconfig(database_url)
         if system_database is not None:
             db_config["sys_db_name"] = system_database
-        DBOS.logger.info(database_url)
-        DBOS.logger.info(json.dumps(db_config))
         self._sys_db = SystemDatabase(db_config)
 
     def destroy(self) -> None:

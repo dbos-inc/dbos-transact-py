@@ -1,9 +1,9 @@
 import glob
-import json
 import os
 import subprocess
 import time
 from typing import Any, Generator, Tuple
+from urllib.parse import quote
 
 import pytest
 import sqlalchemy as sa
@@ -119,9 +119,9 @@ def dbos(
 @pytest.fixture()
 def client(config: ConfigFile) -> Generator[DBOSClient, Any, None]:
     database = config["database"]
-    database_url = f"postgresql://{database['username']}:{database['password']}@{database['hostname']}:{database['port']}/{database['app_db_name']}"
-    DBOS.logger.info(json.dumps(database))
-    DBOS.logger.info(database_url)
+    username = quote(database["username"])
+    password = quote(database["password"])
+    database_url = f"postgresql://{username}:{password}@{database['hostname']}:{database['port']}/{database['app_db_name']}"
     client = DBOSClient(database_url)
     yield client
     client.destroy()
