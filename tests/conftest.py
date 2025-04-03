@@ -1,4 +1,5 @@
 import glob
+import json
 import os
 import subprocess
 import time
@@ -119,6 +120,7 @@ def dbos(
 def client(config: ConfigFile) -> Generator[DBOSClient, Any, None]:
     database = config["database"]
     database_url = f"postgresql://{database['username']}:{database['password']}@{database['hostname']}:{database['port']}/{database['app_db_name']}"
+    DBOS.logger.info(json.dumps(database))
     DBOS.logger.info(database_url)
     client = DBOSClient(database_url)
     yield client

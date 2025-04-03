@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 import uuid
 from typing import Any, Generic, Optional, TypedDict, TypeVar
@@ -14,7 +15,7 @@ else:
     from typing import NotRequired
 
 from dbos import _serialization
-from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
+from dbos._dbos import DBOS, WorkflowHandle, WorkflowHandleAsync
 from dbos._dbos_config import parse_database_url_to_dbconfig
 from dbos._error import DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
@@ -83,6 +84,8 @@ class DBOSClient:
         db_config = parse_database_url_to_dbconfig(database_url)
         if system_database is not None:
             db_config["sys_db_name"] = system_database
+        DBOS.logger.info(database_url)
+        DBOS.logger.info(json.dumps(db_config))
         self._sys_db = SystemDatabase(db_config)
 
     def destroy(self) -> None:
