@@ -279,8 +279,7 @@ def _init_workflow(
             raise DBOSNonExistentWorkflowError(wfid)
         wf_status = get_status_result["status"]
     else:
-        # Synchronously record the status and inputs for workflows and single-step workflows
-        # We also have to do this for single-step workflows because of the foreign key constraint on the operation outputs table
+        # Synchronously record the status and inputs for workflows
         # TODO: Make this transactional (and with the queue step below)
         wf_status = dbos._sys_db.insert_workflow_status(
             status, max_recovery_attempts=max_recovery_attempts
@@ -301,6 +300,13 @@ def _get_wf_invoke_func(
     status: WorkflowStatusInternal,
 ) -> Callable[[Callable[[], R]], R]:
     def persist(func: Callable[[], R]) -> R:
+        if not dbos.debug_mode and (
+            status["status"] == WorkflowStatusString.ERROR.value
+            or status["status"] == WorkflowStatusString.SUCCESS.value
+        ):
+            # Directly return the result if the workflow is already completed
+            r: R = dbos._sys_db.await_workflow_result(status["workflow_uuid"])
+            return r
         try:
             output = func()
             status["status"] = "SUCCESS"

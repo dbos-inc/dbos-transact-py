@@ -413,7 +413,7 @@ def test_class_recovery(dbos: DBOS) -> None:
     # Test we can execute the workflow by uuid as recovery would do
     handle = DBOS.execute_workflow_id("run1")
     assert handle.get_result() == "ran"
-    assert exc_cnt == 2
+    assert exc_cnt == 1
 
 
 def test_inst_recovery(dbos: DBOS) -> None:
@@ -446,8 +446,9 @@ def test_inst_recovery(dbos: DBOS) -> None:
     last_inst = None
     handle = DBOS.execute_workflow_id(wfid)
     assert handle.get_result() == "ran2"
-    assert exc_cnt == 2
-    assert last_inst is inst
+    assert exc_cnt == 1
+    # Workflow has finished so last_inst should be None
+    assert last_inst is None
 
     status = DBOS.retrieve_workflow(wfid).get_status()
     assert status.class_name == "TestClass"

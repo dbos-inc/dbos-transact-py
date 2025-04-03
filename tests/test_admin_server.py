@@ -252,7 +252,7 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
         nonlocal counter
         counter += 1
 
-    # Run the workflow and flush its results
+    # Run the workflow
     simple_workflow()
     assert counter == 1
 
@@ -292,6 +292,8 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
     )
     assert response.status_code == 204
     assert event.wait(timeout=5)
+    # Wait for the workflow to finish
+    DBOS.retrieve_workflow(wfUuid).get_result()
     assert counter == 2
     info = _workflow_commands.get_workflow(sys_db, wfUuid, True)
     assert info is not None
@@ -303,6 +305,7 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
         f"http://localhost:3001/workflows/{wfUuid}/resume", json=[], timeout=5
     )
     assert response.status_code == 204
+    DBOS.retrieve_workflow(wfUuid).get_result()
     info = _workflow_commands.get_workflow(sys_db, wfUuid, True)
     assert info is not None
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"

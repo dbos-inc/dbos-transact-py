@@ -370,7 +370,7 @@ async def test_start_workflow_async(dbos: DBOS) -> None:
     result = await handle.get_result()
     assert result == "alicebobstep1"
 
-    assert wf_counter == 2
+    assert wf_counter == 1
     assert step_counter == 1
     assert wf_el_id == id(asyncio.get_running_loop())
     assert step_el_id == id(asyncio.get_running_loop())

@@ -33,7 +33,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
         wf_counter += 1
         res = test_transaction(var2)
         res2 = test_step(var)
-        DBOS.logger.info("I'm test_workflow")
+        DBOS.logger.info("I'm test_workflow " + var + var2)
         return res + res2
 
     @DBOS.transaction(isolation_level="REPEATABLE READ")
@@ -42,7 +42,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
         txn_counter += 1
-        DBOS.logger.info("I'm test_transaction")
+        DBOS.logger.info("I'm test_transaction " + var2)
         return var2 + str(rows[0][0])
 
     @DBOS.step()
@@ -53,7 +53,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
         assert DBOS.step_status.max_attempts is None
         nonlocal step_counter
         step_counter += 1
-        DBOS.logger.info("I'm test_step")
+        DBOS.logger.info("I'm test_step " + var)
         return var
 
     assert test_workflow("bob", "bob") == "bob1bob"
@@ -62,15 +62,17 @@ def test_simple_workflow(dbos: DBOS) -> None:
     wfuuid = str(uuid.uuid4())
     with SetWorkflowID(wfuuid):
         assert test_workflow("alice", "alice") == "alice1alice"
+    assert wf_counter == 2
     with SetWorkflowID(wfuuid):
         assert test_workflow("alice", "alice") == "alice1alice"
     assert txn_counter == 2  # Only increment once
     assert step_counter == 2  # Only increment once
+    assert wf_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid
     handle = DBOS.execute_workflow_id(wfuuid)
     assert handle.get_result() == "alice1alice"
-    assert wf_counter == 4
+    assert wf_counter == 2
 
 
 def test_simple_workflow_attempts_counter(dbos: DBOS) -> None:
@@ -92,10 +94,7 @@ def test_simple_workflow_attempts_counter(dbos: DBOS) -> None:
             assert result is not None
             recovery_attempts, created_at, updated_at = result
             assert recovery_attempts == i + 1
-            if i == 0:
-                assert created_at == updated_at
-            else:
-                assert updated_at > created_at
+            assert updated_at > created_at
 
 
 def test_child_workflow(dbos: DBOS) -> None:
@@ -653,7 +652,7 @@ def test_start_workflow(dbos: DBOS) -> None:
         context = assert_current_dbos_context()
         assert not context.is_within_workflow()
     assert txn_counter == 1
-    assert wf_counter == 3
+    assert wf_counter == 1
 
 
 def test_retrieve_workflow(dbos: DBOS) -> None:
