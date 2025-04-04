@@ -215,11 +215,11 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
 
 
 def _substitute_env_vars(content: str, silent: bool = False) -> str:
-    # Regex to match ${VAR_NAME} style placeholders for environment variables
-    env_regex = r"\$\{([^}]+)\}"
 
     # Regex to match ${SECRET:SECRET_NAME} style placeholders for Docker secrets
     secret_regex = r"\$\{SECRET:([^}]+)\}"
+    # Regex to match ${VAR_NAME} style placeholders for environment variables
+    env_regex = r"\$\{(?!SECRET:)([^}]+)\}"
 
     def replace_env_func(match: re.Match[str]) -> str:
         var_name = match.group(1)
