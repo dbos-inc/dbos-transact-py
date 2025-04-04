@@ -20,6 +20,7 @@ from dbos import (
 )
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
+from dbos._utils import GlobalParams
 from tests.conftest import default_config, queue_entries_are_cleaned_up
 
 
@@ -481,6 +482,7 @@ def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
     manager = multiprocessing.Manager()
     for i in range(0, 2):
         os.environ["DBOS__VMID"] = f"test-executor-{i}"
+        os.environ["DBOS__APPVERSION"] = GlobalParams.app_version
         start_signal = manager.Event()
         start_signals.append(start_signal)
         end_signal = manager.Event()
@@ -491,6 +493,7 @@ def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
         process.start()
         processes.append(process)
     del os.environ["DBOS__VMID"]
+    del os.environ["DBOS__APPVERSION"]
 
     # Check that a single worker was able to acquire all the tasks
     loop = True

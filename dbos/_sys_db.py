@@ -29,7 +29,7 @@ from dbos._utils import GlobalParams
 
 from . import _serialization
 from ._context import get_local_dbos_context
-from ._dbos_config import ConfigFile
+from ._dbos_config import ConfigFile, DatabaseConfig
 from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
@@ -170,23 +170,21 @@ _dbos_null_topic = "__null__topic__"
 
 class SystemDatabase:
 
-    def __init__(self, config: ConfigFile, *, debug_mode: bool = False):
-        self.config = config
-
+    def __init__(self, database: DatabaseConfig, *, debug_mode: bool = False):
         sysdb_name = (
-            config["database"]["sys_db_name"]
-            if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]
-            else config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
+            database["sys_db_name"]
+            if "sys_db_name" in database and database["sys_db_name"]
+            else database["app_db_name"] + SystemSchema.sysdb_suffix
         )
 
         if not debug_mode:
             # If the system database does not already exist, create it
             postgres_db_url = sa.URL.create(
                 "postgresql+psycopg",
-                username=config["database"]["username"],
-                password=config["database"]["password"],
-                host=config["database"]["hostname"],
-                port=config["database"]["port"],
+                username=database["username"],
+                password=database["password"],
+                host=database["hostname"],
+                port=database["port"],
                 database="postgres",
                 # fills the "application_name" column in pg_stat_activity
                 query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
@@ -203,19 +201,23 @@ class SystemDatabase:
 
         system_db_url = sa.URL.create(
             "postgresql+psycopg",
-            username=config["database"]["username"],
-            password=config["database"]["password"],
-            host=config["database"]["hostname"],
-            port=config["database"]["port"],
+            username=database["username"],
+            password=database["password"],
+            host=database["hostname"],
+            port=database["port"],
             database=sysdb_name,
             # fills the "application_name" column in pg_stat_activity
             query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
         )
 
         # Create a connection pool for the system database
+        pool_size = database.get("sys_db_pool_size")
+        if pool_size is None:
+            pool_size = 20
+
         self.engine = sa.create_engine(
             system_db_url,
-            pool_size=config["database"]["sys_db_pool_size"],
+            pool_size=pool_size,
             max_overflow=0,
             pool_timeout=30,
             connect_args={"connect_timeout": 10},
@@ -1264,7 +1266,9 @@ class SystemDatabase:
                 .on_conflict_do_nothing()
             )
 
-    def start_queued_workflows(self, queue: "Queue", executor_id: str) -> List[str]:
+    def start_queued_workflows(
+        self, queue: "Queue", executor_id: str, app_version: str
+    ) -> List[str]:
         if self._debug_mode:
             return []
 
@@ -1379,26 +1383,36 @@ class SystemDatabase:
                         break
 
                 # To start a function, first set its status to PENDING and update its executor ID
-                c.execute(
+                res = c.execute(
                     SystemSchema.workflow_status.update()
                     .where(SystemSchema.workflow_status.c.workflow_uuid == id)
                     .where(
                         SystemSchema.workflow_status.c.status
                         == WorkflowStatusString.ENQUEUED.value
                     )
+                    .where(
+                        sa.or_(
+                            SystemSchema.workflow_status.c.application_version
+                            == app_version,
+                            SystemSchema.workflow_status.c.application_version.is_(
+                                None
+                            ),
+                        )
+                    )
                     .values(
                         status=WorkflowStatusString.PENDING.value,
+                        application_version=app_version,
                         executor_id=executor_id,
                     )
                 )
-
-                # Then give it a start time and assign the executor ID
-                c.execute(
-                    SystemSchema.workflow_queue.update()
-                    .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
-                    .values(started_at_epoch_ms=start_time_ms)
-                )
-                ret_ids.append(id)
+                if res.rowcount > 0:
+                    # Then give it a start time and assign the executor ID
+                    c.execute(
+                        SystemSchema.workflow_queue.update()
+                        .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
+                        .values(started_at_epoch_ms=start_time_ms)
+                    )
+                    ret_ids.append(id)
 
             # If we have a limiter, garbage-collect all completed functions started
             # before the period. If there's no limiter, there's no need--they were
