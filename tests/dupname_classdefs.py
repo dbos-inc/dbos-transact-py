@@ -1,11 +1,12 @@
-from dbos import DBOS
+from dbos import DBOS, DBOSConfiguredInstance
 
 
 @DBOS.dbos_class()
-class DBOSTestRegDup:
-    """DBOSTestRegDup duplicate the name of a class defined in test_classdecorators.py"""
+class DBOSTestRegDup(DBOSConfiguredInstance):
+    """DBOSTestRegDup duplicates the name of a class defined in test_classdecorators.py"""
 
-    pass
+    def __init__(self, instance_name: str) -> None:
+        super().__init__(instance_name)
 
 
 @DBOS.dbos_class()

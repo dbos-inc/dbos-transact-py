@@ -176,7 +176,7 @@ class DBOSRegistry:
         self.workflow_info_map[name] = wrapped_func
 
     def register_class(self, cls: type, ci: DBOSClassInfo) -> None:
-        class_name = cls.__module__ + "::" + cls.__qualname__
+        class_name = self._class_fqn(cls)
         if class_name in self.class_info_map:
             if self.class_info_map[class_name] is not cls:
                 raise Exception(f"Duplicate type registration for class '{class_name}'")
@@ -199,7 +199,7 @@ class DBOSRegistry:
 
     def register_instance(self, inst: object) -> None:
         config_name = getattr(inst, "config_name")
-        class_name = inst.__class__.__name__
+        class_name = self._class_fqn(inst.__class__)
         fn = f"{class_name}/{config_name}"
         if fn in self.instance_info_map:
             if self.instance_info_map[fn] is not inst:
@@ -208,6 +208,13 @@ class DBOSRegistry:
                 )
         else:
             self.instance_info_map[fn] = inst
+
+    def _class_fqn(self, cls: type) -> str:
+        """Returns fully qualified name of the given class.
+
+        Join with / instead of . to avoid collision of similar classes in different hierarchies.
+        """
+        return f"{cls.__module__}/{cls.__qualname__}"
 
     def cancel_workflow(self, workflow_id: str) -> None:
         self.workflow_cancelled_map[workflow_id] = True
