@@ -40,7 +40,7 @@
           },
           "password": {
             "type": ["string", "null"],
-            "description": "The password to use when connecting to the application database. Developers are strongly encouraged to use environment variable substitution to avoid storing secrets in source."
+            "description": "The password to use when connecting to the application database. Developers are strongly encouraged to use environment variable substitution (${VAR_NAME}) or Docker secrets (${SECRET:SECRET_NAME}) to avoid storing secrets in source."
           },
           "connectionTimeoutMillis": {
             "type": "number",
