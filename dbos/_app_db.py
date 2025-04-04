@@ -27,19 +27,18 @@ class RecordedResult(TypedDict):
 
 class ApplicationDatabase:
 
-    def __init__(self, config: ConfigFile, *, debug_mode: bool = False):
-        self.config = config
+    def __init__(self, database: DatabaseConfig, *, debug_mode: bool = False):
 
-        app_db_name = config["database"]["app_db_name"]
+        app_db_name = database["app_db_name"]
 
         # If the application database does not already exist, create it
         if not debug_mode:
             postgres_db_url = sa.URL.create(
                 "postgresql+psycopg",
-                username=config["database"]["username"],
-                password=config["database"]["password"],
-                host=config["database"]["hostname"],
-                port=config["database"]["port"],
+                username=database["username"],
+                password=database["password"],
+                host=database["hostname"],
+                port=database["port"],
                 database="postgres",
             )
             postgres_db_engine = sa.create_engine(postgres_db_url)
@@ -55,25 +54,25 @@ class ApplicationDatabase:
         # Create a connection pool for the application database
         app_db_url = sa.URL.create(
             "postgresql+psycopg",
-            username=config["database"]["username"],
-            password=config["database"]["password"],
-            host=config["database"]["hostname"],
-            port=config["database"]["port"],
+            username=database["username"],
+            password=database["password"],
+            host=database["hostname"],
+            port=database["port"],
             database=app_db_name,
         )
 
         connect_args = {}
         if (
-            "connectionTimeoutMillis" in config["database"]
-            and config["database"]["connectionTimeoutMillis"]
+            "connectionTimeoutMillis" in database
+            and database["connectionTimeoutMillis"]
         ):
             connect_args["connect_timeout"] = int(
-                config["database"]["connectionTimeoutMillis"] / 1000
+                database["connectionTimeoutMillis"] / 1000
             )
 
         self.engine = sa.create_engine(
             app_db_url,
-            pool_size=config["database"]["app_db_pool_size"],
+            pool_size=database["app_db_pool_size"],
             max_overflow=0,
             pool_timeout=30,
             connect_args=connect_args,

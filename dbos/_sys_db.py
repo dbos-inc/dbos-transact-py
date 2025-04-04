@@ -29,7 +29,7 @@ from dbos._utils import GlobalParams
 
 from . import _serialization
 from ._context import get_local_dbos_context
-from ._dbos_config import ConfigFile
+from ._dbos_config import ConfigFile, DatabaseConfig
 from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
@@ -166,29 +166,25 @@ class StepInfo(TypedDict):
 
 
 _dbos_null_topic = "__null__topic__"
-_buffer_flush_batch_size = 100
-_buffer_flush_interval_secs = 1.0
 
 
 class SystemDatabase:
 
-    def __init__(self, config: ConfigFile, *, debug_mode: bool = False):
-        self.config = config
-
+    def __init__(self, database: DatabaseConfig, *, debug_mode: bool = False):
         sysdb_name = (
-            config["database"]["sys_db_name"]
-            if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]
-            else config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
+            database["sys_db_name"]
+            if "sys_db_name" in database and database["sys_db_name"]
+            else database["app_db_name"] + SystemSchema.sysdb_suffix
         )
 
         if not debug_mode:
             # If the system database does not already exist, create it
             postgres_db_url = sa.URL.create(
                 "postgresql+psycopg",
-                username=config["database"]["username"],
-                password=config["database"]["password"],
-                host=config["database"]["hostname"],
-                port=config["database"]["port"],
+                username=database["username"],
+                password=database["password"],
+                host=database["hostname"],
+                port=database["port"],
                 database="postgres",
                 # fills the "application_name" column in pg_stat_activity
                 query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
@@ -205,19 +201,23 @@ class SystemDatabase:
 
         system_db_url = sa.URL.create(
             "postgresql+psycopg",
-            username=config["database"]["username"],
-            password=config["database"]["password"],
-            host=config["database"]["hostname"],
-            port=config["database"]["port"],
+            username=database["username"],
+            password=database["password"],
+            host=database["hostname"],
+            port=database["port"],
             database=sysdb_name,
             # fills the "application_name" column in pg_stat_activity
             query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
         )
 
         # Create a connection pool for the system database
+        pool_size = database.get("sys_db_pool_size")
+        if pool_size is None:
+            pool_size = 20
+
         self.engine = sa.create_engine(
             system_db_url,
-            pool_size=config["database"]["sys_db_pool_size"],
+            pool_size=pool_size,
             max_overflow=0,
             pool_timeout=30,
             connect_args={"connect_timeout": 10},
@@ -264,31 +264,16 @@ class SystemDatabase:
         self.notifications_map: Dict[str, threading.Condition] = {}
         self.workflow_events_map: Dict[str, threading.Condition] = {}
 
-        # Initialize the workflow status and inputs buffers
-        self._workflow_status_buffer: Dict[str, WorkflowStatusInternal] = {}
-        self._workflow_inputs_buffer: Dict[str, str] = {}
-        # Two sets for tracking which single-transaction workflows have been exported to the status table
-        self._exported_temp_txn_wf_status: Set[str] = set()
-        self._temp_txn_wf_ids: Set[str] = set()
-        self._is_flushing_status_buffer = False
-
         # Now we can run background processes
         self._run_background_processes = True
         self._debug_mode = debug_mode
 
     # Destroy the pool when finished
     def destroy(self) -> None:
-        self.wait_for_buffer_flush()
         self._run_background_processes = False
         if self.notification_conn is not None:
             self.notification_conn.close()
         self.engine.dispose()
-
-    def wait_for_buffer_flush(self) -> None:
-        # Wait until the buffers are flushed.
-        while self._is_flushing_status_buffer or not self._is_buffers_empty:
-            dbos_logger.debug("Waiting for system buffers to be exported")
-            time.sleep(1)
 
     def insert_workflow_status(
         self,
@@ -439,10 +424,6 @@ class SystemDatabase:
         else:
             with self.engine.begin() as c:
                 c.execute(cmd)
-
-        # If this is a single-transaction workflow, record that its status has been exported
-        if status["workflow_uuid"] in self._temp_txn_wf_ids:
-            self._exported_temp_txn_wf_status.add(status["workflow_uuid"])
 
     def cancel_workflow(
         self,
@@ -621,10 +602,7 @@ class SystemDatabase:
                     f"Workflow {workflow_uuid} has been called multiple times with different inputs"
                 )
             # TODO: actually changing the input
-        if workflow_uuid in self._temp_txn_wf_ids:
-            # Clean up the single-transaction tracking sets
-            self._exported_temp_txn_wf_status.discard(workflow_uuid)
-            self._temp_txn_wf_ids.discard(workflow_uuid)
+
         return
 
     def get_workflow_inputs(
@@ -1275,106 +1253,6 @@ class SystemDatabase:
             )
         return value
 
-    def _flush_workflow_status_buffer(self) -> None:
-        if self._debug_mode:
-            raise Exception("called _flush_workflow_status_buffer in debug mode")
-
-        """Export the workflow status buffer to the database, up to the batch size."""
-        if len(self._workflow_status_buffer) == 0:
-            return
-
-        # Record the exported status so far, and add them back on errors.
-        exported_status: Dict[str, WorkflowStatusInternal] = {}
-        with self.engine.begin() as c:
-            exported = 0
-            status_iter = iter(list(self._workflow_status_buffer))
-            wf_id: Optional[str] = None
-            while (
-                exported < _buffer_flush_batch_size
-                and (wf_id := next(status_iter, None)) is not None
-            ):
-                # Pop the first key in the buffer (FIFO)
-                status = self._workflow_status_buffer.pop(wf_id, None)
-                if status is None:
-                    continue
-                exported_status[wf_id] = status
-                try:
-                    self.update_workflow_status(status, conn=c)
-                    exported += 1
-                except Exception as e:
-                    dbos_logger.error(f"Error while flushing status buffer: {e}")
-                    c.rollback()
-                    # Add the exported status back to the buffer, so they can be retried next time
-                    self._workflow_status_buffer.update(exported_status)
-                    break
-
-    def _flush_workflow_inputs_buffer(self) -> None:
-        if self._debug_mode:
-            raise Exception("called _flush_workflow_inputs_buffer in debug mode")
-
-        """Export the workflow inputs buffer to the database, up to the batch size."""
-        if len(self._workflow_inputs_buffer) == 0:
-            return
-
-        # Record exported inputs so far, and add them back on errors.
-        exported_inputs: Dict[str, str] = {}
-        with self.engine.begin() as c:
-            exported = 0
-            input_iter = iter(list(self._workflow_inputs_buffer))
-            wf_id: Optional[str] = None
-            while (
-                exported < _buffer_flush_batch_size
-                and (wf_id := next(input_iter, None)) is not None
-            ):
-                if wf_id not in self._exported_temp_txn_wf_status:
-                    # Skip exporting inputs if the status has not been exported yet
-                    continue
-                inputs = self._workflow_inputs_buffer.pop(wf_id, None)
-                if inputs is None:
-                    continue
-                exported_inputs[wf_id] = inputs
-                try:
-                    self.update_workflow_inputs(wf_id, inputs, conn=c)
-                    exported += 1
-                except Exception as e:
-                    dbos_logger.error(f"Error while flushing inputs buffer: {e}")
-                    c.rollback()
-                    # Add the exported inputs back to the buffer, so they can be retried next time
-                    self._workflow_inputs_buffer.update(exported_inputs)
-                    break
-
-    def flush_workflow_buffers(self) -> None:
-        """Flush the workflow status and inputs buffers periodically, via a background thread."""
-        while self._run_background_processes:
-            try:
-                self._is_flushing_status_buffer = True
-                # Must flush the status buffer first, as the inputs table has a foreign key constraint on the status table.
-                self._flush_workflow_status_buffer()
-                self._flush_workflow_inputs_buffer()
-                self._is_flushing_status_buffer = False
-                if self._is_buffers_empty:
-                    # Only sleep if both buffers are empty
-                    time.sleep(_buffer_flush_interval_secs)
-            except Exception as e:
-                dbos_logger.error(f"Error while flushing buffers: {e}")
-                time.sleep(_buffer_flush_interval_secs)
-                # Will retry next time
-
-    def buffer_workflow_status(self, status: WorkflowStatusInternal) -> None:
-        self._workflow_status_buffer[status["workflow_uuid"]] = status
-
-    def buffer_workflow_inputs(self, workflow_id: str, inputs: str) -> None:
-        # inputs is a serialized WorkflowInputs string
-        self._workflow_inputs_buffer[workflow_id] = inputs
-        self._temp_txn_wf_ids.add(workflow_id)
-
-    @property
-    def _is_buffers_empty(self) -> bool:
-        return (
-            len(self._workflow_status_buffer) == 0
-            and len(self._workflow_inputs_buffer) == 0
-        )
-
     def enqueue(self, workflow_id: str, queue_name: str) -> None:
         if self._debug_mode:
             raise Exception("called enqueue in debug mode")
@@ -1388,7 +1266,9 @@ class SystemDatabase:
                 .on_conflict_do_nothing()
             )
 
-    def start_queued_workflows(self, queue: "Queue", executor_id: str) -> List[str]:
+    def start_queued_workflows(
+        self, queue: "Queue", executor_id: str, app_version: str
+    ) -> List[str]:
         if self._debug_mode:
             return []
 
@@ -1503,26 +1383,36 @@ class SystemDatabase:
                         break
 
                 # To start a function, first set its status to PENDING and update its executor ID
-                c.execute(
+                res = c.execute(
                     SystemSchema.workflow_status.update()
                     .where(SystemSchema.workflow_status.c.workflow_uuid == id)
                     .where(
                         SystemSchema.workflow_status.c.status
                         == WorkflowStatusString.ENQUEUED.value
                     )
+                    .where(
+                        sa.or_(
+                            SystemSchema.workflow_status.c.application_version
+                            == app_version,
+                            SystemSchema.workflow_status.c.application_version.is_(
+                                None
+                            ),
+                        )
+                    )
                     .values(
                         status=WorkflowStatusString.PENDING.value,
+                        application_version=app_version,
                         executor_id=executor_id,
                     )
                 )
-
-                # Then give it a start time and assign the executor ID
-                c.execute(
-                    SystemSchema.workflow_queue.update()
-                    .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
-                    .values(started_at_epoch_ms=start_time_ms)
-                )
-                ret_ids.append(id)
+                if res.rowcount > 0:
+                    # Then give it a start time and assign the executor ID
+                    c.execute(
+                        SystemSchema.workflow_queue.update()
+                        .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
+                        .values(started_at_epoch_ms=start_time_ms)
+                    )
+                    ret_ids.append(id)
 
             # If we have a limiter, garbage-collect all completed functions started
             # before the period. If there's no limiter, there's no need--they were

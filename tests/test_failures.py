@@ -146,43 +146,6 @@ def test_notification_errors(dbos: DBOS) -> None:
     assert duration < 3.0
 
 
-def test_buffer_flush_errors(dbos: DBOS) -> None:
-    @DBOS.transaction()
-    def test_transaction(var: str) -> str:
-        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
-        return var + str(rows[0][0])
-
-    cur_time: str = datetime.datetime.now().isoformat()
-    gwi: GetWorkflowsInput = GetWorkflowsInput()
-    gwi.start_time = cur_time
-
-    res = test_transaction("bob")
-    assert res == "bob1"
-
-    dbos._sys_db.wait_for_buffer_flush()
-    wfs = dbos._sys_db.get_workflows(gwi)
-    assert len(wfs.workflow_uuids) == 1
-
-    # Crash the system database connection and make sure the buffer flush works on time.
-    backup_engine = dbos._sys_db.engine
-    dbos._sys_db.engine = sa.create_engine(
-        "postgresql+psycopg://fake:database@localhost/fake_db"
-    )
-
-    res = test_transaction("bob")
-    assert res == "bob1"
-
-    # Should see some errors in the logs
-    time.sleep(2)
-
-    # Switch back to the original good engine.
-    dbos._sys_db.engine = backup_engine
-
-    dbos._sys_db.wait_for_buffer_flush()
-    wfs = dbos._sys_db.get_workflows(gwi)
-    assert len(wfs.workflow_uuids) == 2
-
-
 def test_dead_letter_queue(dbos: DBOS) -> None:
     event = threading.Event()
     max_recovery_attempts = 20
@@ -229,7 +192,6 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     # Complete the blocked workflow
     event.set()
     assert handle.get_result() == resumed_handle.get_result() == None
-    dbos._sys_db.wait_for_buffer_flush()
     assert handle.get_status().status == WorkflowStatusString.SUCCESS.value
 
 
@@ -239,6 +201,8 @@ def test_wfstatus_invalid(dbos: DBOS) -> None:
         return "done"
 
     has_executed = False
+    event = threading.Event()
+    wfevent = threading.Event()
 
     @DBOS.workflow()
     def non_deterministic_workflow() -> None:
@@ -251,16 +215,24 @@ def test_wfstatus_invalid(dbos: DBOS) -> None:
         handle.get_status()
         res = handle.get_result()
         assert res == "done"
+        wfevent.set()
+        event.wait()
         return
 
     wfuuid = str(uuid.uuid4())
     with SetWorkflowID(wfuuid):
-        non_deterministic_workflow()
+        handle1 = dbos.start_workflow(non_deterministic_workflow)
+
+    # Make sure the first one has reached the point where it waits for the event
+    wfevent.wait()
+    with SetWorkflowID(wfuuid):
+        handle2 = dbos.start_workflow(non_deterministic_workflow)
 
     with pytest.raises(DBOSException) as exc_info:
-        with SetWorkflowID(wfuuid):
-            non_deterministic_workflow()
+        handle2.get_result()
     assert "Hint: Check if your workflow is deterministic." in str(exc_info.value)
+    event.set()
+    assert handle1.get_result() == None
 
 
 def test_step_retries(dbos: DBOS) -> None:

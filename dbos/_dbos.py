@@ -445,8 +445,12 @@ class DBOS:
             dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             self._executor_field = ThreadPoolExecutor(max_workers=64)
-            self._sys_db_field = SystemDatabase(self.config, debug_mode=debug_mode)
-            self._app_db_field = ApplicationDatabase(self.config, debug_mode=debug_mode)
+            self._sys_db_field = SystemDatabase(
+                self.config["database"], debug_mode=debug_mode
+            )
+            self._app_db_field = ApplicationDatabase(
+                self.config["database"], debug_mode=debug_mode
+            )
 
             if debug_mode:
                 return
@@ -484,14 +488,6 @@ class DBOS:
             )
             notification_listener_thread.start()
             self._background_threads.append(notification_listener_thread)
-
-            # Start flush workflow buffers thread
-            flush_workflow_buffers_thread = threading.Thread(
-                target=self._sys_db.flush_workflow_buffers,
-                daemon=True,
-            )
-            flush_workflow_buffers_thread.start()
-            self._background_threads.append(flush_workflow_buffers_thread)
 
             # Start the queue thread
             evt = threading.Event()
@@ -549,7 +545,9 @@ class DBOS:
         if _dbos_global_instance is not None:
             _dbos_global_instance._reset_system_database()
         else:
-            dbos_logger.warning("reset_system_database has no effect because global DBOS object does not exist")
+            dbos_logger.warning(
+                "reset_system_database has no effect because global DBOS object does not exist"
+            )
 
     def _reset_system_database(self) -> None:
         assert (
