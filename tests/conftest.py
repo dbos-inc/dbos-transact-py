@@ -3,13 +3,14 @@ import os
 import subprocess
 import time
 from typing import Any, Generator, Tuple
+from urllib.parse import quote
 
 import pytest
 import sqlalchemy as sa
 from fastapi import FastAPI
 from flask import Flask
 
-from dbos import DBOS, ConfigFile
+from dbos import DBOS, ConfigFile, DBOSClient
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 
@@ -42,7 +43,7 @@ def config() -> ConfigFile:
 
 @pytest.fixture()
 def sys_db(config: ConfigFile) -> Generator[SystemDatabase, Any, None]:
-    sys_db = SystemDatabase(config)
+    sys_db = SystemDatabase(config["database"])
     yield sys_db
     sys_db.destroy()
 
@@ -113,6 +114,17 @@ def dbos(
 
     yield dbos
     DBOS.destroy(destroy_registry=True)
+
+
+@pytest.fixture()
+def client(config: ConfigFile) -> Generator[DBOSClient, Any, None]:
+    database = config["database"]
+    username = quote(database["username"])
+    password = quote(database["password"])
+    database_url = f"postgresql://{username}:{password}@{database['hostname']}:{database['port']}/{database['app_db_name']}"
+    client = DBOSClient(database_url)
+    yield client
+    client.destroy()
 
 
 @pytest.fixture()

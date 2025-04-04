@@ -189,8 +189,8 @@ def migrate() -> None:
     app_db = None
     sys_db = None
     try:
-        sys_db = SystemDatabase(config)
-        app_db = ApplicationDatabase(config)
+        sys_db = SystemDatabase(config["database"])
+        app_db = ApplicationDatabase(config["database"])
     except Exception as e:
         typer.echo(f"DBOS system schema migration failed: {e}")
     finally:
@@ -314,7 +314,7 @@ def list(
     ] = False,
 ) -> None:
     config = load_config(silent=True)
-    sys_db = SystemDatabase(config)
+    sys_db = SystemDatabase(config["database"])
     workflows = list_workflows(
         sys_db,
         limit=limit,
@@ -338,7 +338,7 @@ def get(
     ] = False,
 ) -> None:
     config = load_config(silent=True)
-    sys_db = SystemDatabase(config)
+    sys_db = SystemDatabase(config["database"])
     print(
         jsonpickle.encode(get_workflow(sys_db, workflow_id, request), unpicklable=False)
     )
@@ -349,7 +349,7 @@ def steps(
     workflow_id: Annotated[str, typer.Argument()],
 ) -> None:
     config = load_config(silent=True)
-    sys_db = SystemDatabase(config)
+    sys_db = SystemDatabase(config["database"])
     print(
         jsonpickle.encode(list_workflow_steps(sys_db, workflow_id), unpicklable=False)
     )
@@ -475,7 +475,7 @@ def list_queue(
     ] = False,
 ) -> None:
     config = load_config(silent=True)
-    sys_db = SystemDatabase(config)
+    sys_db = SystemDatabase(config["database"])
     workflows = list_queued_workflows(
         sys_db=sys_db,
         limit=limit,
