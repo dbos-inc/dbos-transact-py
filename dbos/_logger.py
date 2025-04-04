@@ -7,6 +7,7 @@ from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
+from opentelemetry.trace.span import format_trace_id
 
 from dbos._utils import GlobalParams
 
@@ -26,6 +27,19 @@ class DBOSLogTransformer(logging.Filter):
         record.applicationID = self.app_id
         record.applicationVersion = GlobalParams.app_version
         record.executorID = GlobalParams.executor_id
+
+        # If available, decorate the log entry with Workflow ID and Trace ID
+        from dbos._context import get_local_dbos_context
+
+        ctx = get_local_dbos_context()
+        if ctx:
+            if ctx.is_within_workflow():
+                record.operationUUID = ctx.workflow_id
+            span = ctx.get_current_span()
+            if span:
+                trace_id = format_trace_id(span.get_span_context().trace_id)
+                record.traceId = trace_id
+
         return True
 
 
