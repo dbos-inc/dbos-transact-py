@@ -53,14 +53,14 @@ class TestDockerSecrets(unittest.TestCase):
         with patch("os.path.exists") as mock_exists:
             mock_exists.return_value = True
             with patch("builtins.open", mock_open(read_data="secret_password")):
-                content = "This is a ${SECRET:db_password} test"
+                content = "This is a ${DOCKER_SECRET:db_password} test"
                 result = _substitute_env_vars(content)
                 self.assertEqual(result, "This is a secret_password test")
 
     def test_substitute_env_vars_with_missing_docker_secret(self) -> None:
         # Test that a warning is logged when a Docker secret is missing
         with patch("dbos._dbos_config.dbos_logger") as mock_logger:
-            content = "This is a ${SECRET:missing_secret} test"
+            content = "This is a ${DOCKER_SECRET:missing_secret} test"
             result = _substitute_env_vars(content)
             self.assertEqual(result, "This is a  test")
             mock_logger.warning.assert_called_once()
@@ -74,7 +74,9 @@ class TestDockerSecrets(unittest.TestCase):
                     "builtins.open",
                     mock_open(read_data="secret_password"),
                 ):
-                    content = "This is a ${TEST_VAR} and ${SECRET:db_password} test"
+                    content = (
+                        "This is a ${TEST_VAR} and ${DOCKER_SECRET:db_password} test"
+                    )
                     result = _substitute_env_vars(content)
                     self.assertEqual(
                         result, "This is a test_value and secret_password test"
@@ -83,7 +85,7 @@ class TestDockerSecrets(unittest.TestCase):
     def test_substitute_env_vars_with_silent_mode(self) -> None:
         # Test that no warning is logged when silent mode is enabled
         with patch("dbos._dbos_config.dbos_logger") as mock_logger:
-            content = "This is a ${SECRET:missing_secret} test"
+            content = "This is a ${DOCKER_SECRET:missing_secret} test"
             result = _substitute_env_vars(content, silent=True)
             self.assertEqual(result, "This is a  test")
             mock_logger.warning.assert_not_called()
@@ -96,7 +98,7 @@ database:
   hostname: localhost
   port: 5432
   username: postgres
-  password: ${SECRET:db_password}
+  password: ${DOCKER_SECRET:db_password}
   app_db_name: test_db
 """
 
@@ -147,7 +149,7 @@ database:
         # Create a mock configuration file with Docker secrets in the database URL
         config_content = """
 name: test-app
-database_url: postgresql://postgres:${SECRET:db_password}@localhost:5432/test_db
+database_url: postgresql://postgres:${DOCKER_SECRET:db_password}@localhost:5432/test_db
 """
 
         # Mock the file open and read operations
@@ -204,10 +206,10 @@ database:
   hostname: localhost
   port: 5432
   username: postgres
-  password: ${SECRET:db_password}
+  password: ${DOCKER_SECRET:db_password}
   app_db_name: test_db
   nested:
-    secret: ${SECRET:nested_secret}
+    secret: ${DOCKER_SECRET:nested_secret}
 """
 
         # Mock the file open and read operations
@@ -271,8 +273,8 @@ name: test-app
 runtimeConfig:
   setup:
     - echo "Setting up environment"
-    - export API_KEY=${SECRET:api_key}
-    - export DB_PASSWORD=${SECRET:db_password}
+    - export API_KEY=${DOCKER_SECRET:api_key}
+    - export DB_PASSWORD=${DOCKER_SECRET:db_password}
 """
 
         # Mock the file open and read operations
@@ -327,11 +329,11 @@ runtimeConfig:
         config_content = """
 name: test-app
 database:
-  hostname: ${SECRET:db_host}
-  port: ${SECRET:db_port}
-  username: ${SECRET:db_user}
-  password: ${SECRET:db_password}
-  app_db_name: ${SECRET:db_name}
+  hostname: ${DOCKER_SECRET:db_host}
+  port: ${DOCKER_SECRET:db_port}
+  username: ${DOCKER_SECRET:db_user}
+  password: ${DOCKER_SECRET:db_password}
+  app_db_name: ${DOCKER_SECRET:db_name}
 """
 
         # Mock the file open and read operations
@@ -454,7 +456,7 @@ database:
   hostname: ${DB_HOST}
   port: ${DB_PORT}
   username: ${DB_USER}
-  password: ${SECRET:db_password}
+  password: ${DOCKER_SECRET:db_password}
   app_db_name: ${DB_NAME}
 """
 
