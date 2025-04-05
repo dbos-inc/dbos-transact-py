@@ -52,9 +52,7 @@ class TestDockerSecrets(unittest.TestCase):
         # Mock the /run/secrets/ path
         with patch("os.path.exists") as mock_exists:
             mock_exists.return_value = True
-            with patch(
-                "builtins.open", unittest.mock.mock_open(read_data="secret_password")
-            ):
+            with patch("builtins.open", mock_open(read_data="secret_password")):
                 content = "This is a ${SECRET:db_password} test"
                 result = _substitute_env_vars(content)
                 self.assertEqual(result, "This is a secret_password test")
@@ -74,7 +72,7 @@ class TestDockerSecrets(unittest.TestCase):
                 mock_exists.return_value = True
                 with patch(
                     "builtins.open",
-                    unittest.mock.mock_open(read_data="secret_password"),
+                    mock_open(read_data="secret_password"),
                 ):
                     content = "This is a ${TEST_VAR} and ${SECRET:db_password} test"
                     result = _substitute_env_vars(content)
