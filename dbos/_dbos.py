@@ -234,6 +234,13 @@ class DBOSRegistry:
             hasher.update(source.encode("utf-8"))
         return hasher.hexdigest()
 
+    def get_internal_queue(self) -> Queue:
+        """
+        Get or create the internal queue used for the DBOS scheduler, for Kafka, and for
+        programmatic resuming and restarting of workflows.
+        """
+        return Queue("_dbos_internal_queue")
+
 
 class DBOS:
     """
@@ -488,6 +495,9 @@ class DBOS:
             )
             notification_listener_thread.start()
             self._background_threads.append(notification_listener_thread)
+
+            # Create the internal queue if it has not yet been created
+            self._registry.get_internal_queue()
 
             # Start the queue thread
             evt = threading.Event()
