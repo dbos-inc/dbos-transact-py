@@ -22,10 +22,9 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 class EnqueueOptions(TypedDict):
     workflow_name: str
-    workflow_class_name: NotRequired[str]
     queue_name: str
-    app_version: NotRequired[str]
     workflow_id: NotRequired[str]
+    app_version: NotRequired[str]
 
 
 class WorkflowHandleClientPolling(Generic[R]):
@@ -86,7 +85,6 @@ class DBOSClient:
         workflow_name = options["workflow_name"]
         queue_name = options["queue_name"]
 
-        workflow_class_name = options.get("workflow_class_name")
         app_version = options.get("app_version")
         max_recovery_attempts = options.get("max_recovery_attempts")
         if max_recovery_attempts is None:
@@ -99,7 +97,7 @@ class DBOSClient:
             "workflow_uuid": workflow_id,
             "status": WorkflowStatusString.ENQUEUED.value,
             "name": workflow_name,
-            "class_name": workflow_class_name,
+            "class_name": None,
             "queue_name": queue_name,
             "app_version": app_version,
             "config_name": None,
