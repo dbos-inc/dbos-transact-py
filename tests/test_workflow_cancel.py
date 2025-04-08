@@ -1,96 +1,48 @@
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+
+import pytest
 
 # Public API
-from dbos import (
-    DBOS,
-    ConfigFile,
-    Queue,
-    SetWorkflowID,
-    WorkflowStatusString,
-    _workflow_commands,
-)
-
-
-def test_basic(dbos: DBOS, config: ConfigFile) -> None:
-
-    steps_completed = 0
-
-    @DBOS.step()
-    def step_one() -> None:
-        nonlocal steps_completed
-        steps_completed += 1
-        print("Step one completed!")
-
-    @DBOS.step()
-    def step_two() -> None:
-        nonlocal steps_completed
-        steps_completed += 1
-        print("Step two completed!")
-
-    @DBOS.workflow()
-    def simple_workflow() -> None:
-        step_one()
-        dbos.sleep(1)
-        step_two()
-        print("Executed Simple workflow")
-        return
-
-    # run the workflow
-    simple_workflow()
-    time.sleep(1)  # wait for the workflow to complete
-    assert (
-        steps_completed == 2
-    ), f"Expected steps_completed to be 2, but got {steps_completed}"
+from dbos import DBOS, ConfigFile, SetWorkflowID
 
 
 def test_two_steps_cancel(dbos: DBOS, config: ConfigFile) -> None:
-
     steps_completed = 0
+    workflow_event = threading.Event()
+    main_thread_event = threading.Event()
 
     @DBOS.step()
     def step_one() -> None:
         nonlocal steps_completed
         steps_completed += 1
-        print("Step one completed!")
 
     @DBOS.step()
     def step_two() -> None:
         nonlocal steps_completed
         steps_completed += 1
-        print("Step two completed!")
 
     @DBOS.workflow()
     def simple_workflow() -> None:
         step_one()
-        dbos.sleep(2)
+        main_thread_event.set()
+        workflow_event.wait()
         step_two()
-        print("Executed Simple workflow")
-        return
 
-    # run the workflow
-    wfuuid = str(uuid.uuid4())
-    try:
-        with SetWorkflowID(wfuuid):
-            simple_workflow()
+    # Start the workflow,
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(simple_workflow)
+    DBOS.cancel_workflow(wfid)
+    workflow_event.set()
+    with pytest.raises(Exception):
+        handle.get_result()
+    assert steps_completed == 1
 
-        dbos.cancel_workflow(wfuuid)
-    except Exception as e:
-        # time.sleep(1)  # wait for the workflow to complete
-        assert (
-            steps_completed == 1
-        ), f"Expected steps_completed to be 1, but got {steps_completed}"
-
-    handle = dbos.resume_workflow(wfuuid)
-    time.sleep(1)
-
-    assert (
-        steps_completed == 2
-    ), f"Expected steps_completed to be 2, but got {steps_completed}"
-
+    handle = DBOS.resume_workflow(wfid)
     assert handle.get_result() == None
+    assert steps_completed == 2
 
 
 def test_two_transactions_cancel(dbos: DBOS, config: ConfigFile) -> None:
