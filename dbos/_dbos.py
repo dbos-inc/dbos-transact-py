@@ -940,11 +940,6 @@ class DBOS:
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id)
 
     @classmethod
-    def restart_workflow(cls, workflow_id: str) -> None:
-        """Execute a workflow by ID (for recovery)."""
-        execute_workflow_by_id(_get_dbos_instance(), workflow_id, True)
-
-    @classmethod
     def recover_pending_workflows(
         cls, executor_ids: List[str] = ["local"]
     ) -> List[WorkflowHandle[Any]]:
@@ -965,6 +960,11 @@ class DBOS:
         _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
         _get_or_create_dbos_registry().clear_workflow_cancelled(workflow_id)
         return cls.retrieve_workflow(workflow_id)
+
+    @classmethod
+    def restart_workflow(cls, workflow_id: str) -> None:
+        """Restart a workflow with a new workflow ID"""
+        execute_workflow_by_id(_get_dbos_instance(), workflow_id, True)
 
     @classmethod
     def list_workflows(
