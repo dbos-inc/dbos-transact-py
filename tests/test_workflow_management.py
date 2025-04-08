@@ -166,7 +166,7 @@ def test_restart(dbos: DBOS) -> None:
             self.multiply: Callable[[int], int] = lambda x: x * multiplier
             super().__init__("test_class")
 
-        @DBOS.transaction()
+        @DBOS.workflow()
         def workflow(self, x: int) -> int:
             return self.multiply(x)
 
