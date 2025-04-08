@@ -201,9 +201,8 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
             else:
                 time.sleep(1)
 
-    # Stop all scheduled workflows
-    for event in dbos.stop_events:
-        event.set()
+    # Stop the scheduled workflow
+    dbos.stop_events[0].set()
 
     dbos._sys_db.update_workflow_status(
         {
