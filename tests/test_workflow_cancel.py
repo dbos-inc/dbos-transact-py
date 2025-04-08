@@ -83,12 +83,14 @@ def test_two_steps_cancel(dbos: DBOS, config: ConfigFile) -> None:
             steps_completed == 1
         ), f"Expected steps_completed to be 1, but got {steps_completed}"
 
-    dbos.resume_workflow(wfuuid)
+    handle = dbos.resume_workflow(wfuuid)
     time.sleep(1)
 
     assert (
         steps_completed == 2
     ), f"Expected steps_completed to be 2, but got {steps_completed}"
+
+    assert handle.get_result() == None
 
 
 def test_two_transactions_cancel(dbos: DBOS, config: ConfigFile) -> None:

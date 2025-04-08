@@ -25,7 +25,7 @@ from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.sql import func
 
-from dbos._utils import GlobalParams
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
 from . import _serialization
 from ._context import get_local_dbos_context
@@ -454,6 +454,8 @@ class SystemDatabase:
         if self._debug_mode:
             raise Exception("called resume_workflow in debug mode")
         with self.engine.begin() as c:
+            # Execute with snapshot isolation in case of concurrent calls on the same workflow
+            c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
             # Check the status of the workflow. If it is complete, do nothing.
             row = c.execute(
                 sa.select(
@@ -472,11 +474,18 @@ class SystemDatabase:
                     SystemSchema.workflow_queue.c.workflow_uuid == workflow_id
                 )
             )
-            # Set the workflow's status to PENDING and clear its recovery attempts.
+            # Enqueue the workflow on the internal queue
+            c.execute(
+                pg.insert(SystemSchema.workflow_queue).values(
+                    workflow_uuid=workflow_id,
+                    queue_name=INTERNAL_QUEUE_NAME,
+                )
+            )
+            # Set the workflow's status to ENQUEUED and clear its recovery attempts.
             c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-                .values(status=WorkflowStatusString.PENDING.value, recovery_attempts=0)
+                .values(status=WorkflowStatusString.ENQUEUED.value, recovery_attempts=0)
             )
 
     def get_workflow_status(

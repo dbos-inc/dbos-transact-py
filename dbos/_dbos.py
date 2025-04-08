@@ -33,7 +33,7 @@ from opentelemetry.trace import Span
 
 from dbos import _serialization
 from dbos._conductor.conductor import ConductorWebsocket
-from dbos._utils import GlobalParams
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import (
     WorkflowStatus,
     list_queued_workflows,
@@ -239,7 +239,7 @@ class DBOSRegistry:
         Get or create the internal queue used for the DBOS scheduler, for Kafka, and for
         programmatic resuming and restarting of workflows.
         """
-        return Queue("_dbos_internal_queue")
+        return Queue(INTERNAL_QUEUE_NAME)
 
 
 class DBOS:
@@ -964,7 +964,7 @@ class DBOS:
         dbos_logger.info(f"Resuming workflow: {workflow_id}")
         _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
         _get_or_create_dbos_registry().clear_workflow_cancelled(workflow_id)
-        return execute_workflow_by_id(_get_dbos_instance(), workflow_id, False)
+        return cls.retrieve_workflow(workflow_id)
 
     @classmethod
     def list_workflows(
