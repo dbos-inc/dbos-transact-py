@@ -124,7 +124,7 @@ def test_cancel_resume_queue(dbos: DBOS) -> None:
         steps_completed += 1
 
     @DBOS.workflow()
-    def simple_workflow(x: int) -> None:
+    def simple_workflow(x: int) -> int:
         step_one()
         main_thread_event.set()
         workflow_event.wait()
