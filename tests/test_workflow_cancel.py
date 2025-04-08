@@ -30,7 +30,8 @@ def test_two_steps_cancel(dbos: DBOS, config: ConfigFile) -> None:
         workflow_event.wait()
         step_two()
 
-    # Start the workflow,
+    # Start the workflow and cancel it.
+    # Verify it stops after step one but before step two
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(simple_workflow)
@@ -40,6 +41,12 @@ def test_two_steps_cancel(dbos: DBOS, config: ConfigFile) -> None:
         handle.get_result()
     assert steps_completed == 1
 
+    # Resume the workflow. Verify it completes successfully.
+    handle = DBOS.resume_workflow(wfid)
+    assert handle.get_result() == None
+    assert steps_completed == 2
+
+    # Resume the workflow again. Verify it does not run again.
     handle = DBOS.resume_workflow(wfid)
     assert handle.get_result() == None
     assert steps_completed == 2
