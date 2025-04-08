@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, List, TypedDict
 
 from ._logger import dbos_logger
 from ._recovery import recover_pending_workflows
+from ._utils import GlobalParams
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
@@ -44,6 +45,7 @@ class AdminServer:
 class AdminRequestHandler(BaseHTTPRequestHandler):
     def __init__(self, dbos: DBOS, *args: Any, **kwargs: Any) -> None:
         self.dbos = dbos
+        self.is_deactivated = False
         super().__init__(*args, **kwargs)
 
     def _end_headers(self) -> None:
@@ -59,10 +61,14 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self._end_headers()
             self.wfile.write("healthy".encode("utf-8"))
         elif self.path == _deactivate_path:
+            if not self.is_deactivated:
+                dbos_logger.info(
+                    f"Deactivating DBOS executor {GlobalParams.executor_id} with version {GlobalParams.app_version}. This executor will complete existing workflows but will not start new workflows."
+                )
+                self.is_deactivated = True
             # Stop all scheduled workflows, queues, and kafka loops
             for event in self.dbos.stop_events:
                 event.set()
-
             self.send_response(200)
             self._end_headers()
             self.wfile.write("deactivated".encode("utf-8"))
