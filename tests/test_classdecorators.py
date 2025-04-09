@@ -316,11 +316,11 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
     stati = dbos.get_workflow_status(wfh.get_workflow_id())
     assert stati
     assert stati.config_name == "bob"
-    assert "DBOSTestClassInst" in stati.class_name
+    assert stati.class_name and "DBOSTestClassInst" in stati.class_name
     stat = wfh.get_status()
     assert stat
     assert stat.config_name == "bob"
-    assert "DBOSTestClassInst" in stat.class_name
+    assert stat.class_name and "DBOSTestClassInst" in stat.class_name
 
     assert wfh.get_result() == "bob1bob"
     assert inst.txn_counter == 2
@@ -470,7 +470,7 @@ def test_inst_recovery(dbos: DBOS) -> None:
     assert last_inst is None
 
     status = DBOS.retrieve_workflow(wfid).get_status()
-    assert "TestClass" in status.class_name
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
 
@@ -498,7 +498,7 @@ def test_inst_async_recovery(dbos: DBOS) -> None:
         orig_handle = DBOS.start_workflow(inst.workflow, input)
 
     status = orig_handle.get_status()
-    assert "TestClass" in status.class_name
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
     recovery_handle = DBOS.execute_workflow_id(wfid)
@@ -532,7 +532,7 @@ def test_inst_async_step_recovery(dbos: DBOS) -> None:
         orig_handle = DBOS.start_workflow(inst.step, input)
 
     status = orig_handle.get_status()
-    assert "TestClass" in status.class_name
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
     recovery_handle = DBOS.execute_workflow_id(wfid)
@@ -577,7 +577,7 @@ def test_step_recovery(dbos: DBOS) -> None:
     thread_event.wait()
 
     status = DBOS.retrieve_workflow(wfid).get_status()
-    assert "TestClass" in status.class_name
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
     recovery_handle = DBOS.execute_workflow_id(wfid)
@@ -645,7 +645,7 @@ def test_class_queue_recovery(dbos: DBOS) -> None:
     result = [i * multiplier for i in range(5)]
     for h in recovery_handles:
         status = h.get_status()
-        assert "TestClass" in status.class_name
+        assert status.class_name and "TestClass" in status.class_name
         assert status.config_name == "test_class"
         if h.get_workflow_id() == wfid:
             assert h.get_result() == result
@@ -715,7 +715,7 @@ def test_class_static_queue_recovery(dbos: DBOS) -> None:
     for h in recovery_handles:
         status = h.get_status()
         # Class name is not recorded for static methods
-        assert status.class_name == None
+        assert status.class_name and status.class_name == None
         assert status.config_name == None
         if h.get_workflow_id() == wfid:
             assert h.get_result() == result
@@ -789,7 +789,7 @@ def test_class_classmethod_queue_recovery(dbos: DBOS) -> None:
     for h in recovery_handles:
         status = h.get_status()
         # Class name is recorded for class methods
-        assert "TestClass" in status.class_name
+        assert status.class_name and "TestClass" in status.class_name
         assert status.config_name == None
         if h.get_workflow_id() == wfid:
             assert h.get_result() == result
@@ -827,13 +827,13 @@ def test_inst_txn(dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         assert inst.transaction(input) == input * multiplier
     status = DBOS.retrieve_workflow(wfid).get_status()
-    assert "TestClass" in status.class_name
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
     handle = DBOS.start_workflow(inst.transaction, input)
     assert handle.get_result() == input * multiplier
     status = handle.get_status()
-    assert "TestClass" in status.class_name
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
 
@@ -867,17 +867,17 @@ def test_mixed_methods(dbos: DBOS) -> None:
     handle = DBOS.start_workflow(inst.instance_workflow, input)
     assert handle.get_result() == input * multiplier
     status = handle.get_status()
-    assert "TestClass" in status.class_name
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
     handle = DBOS.start_workflow(inst.classmethod_workflow, input)
     assert handle.get_result() == input
     status = handle.get_status()
-    assert "TestClass" in status.class_name
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == None
 
     handle = DBOS.start_workflow(inst.staticmethod_workflow, input)
     assert handle.get_result() == input
     status = handle.get_status()
-    assert status.class_name == None
+    assert status.class_name and status.class_name == None
     assert status.config_name == None
