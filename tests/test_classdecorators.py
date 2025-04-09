@@ -407,7 +407,7 @@ def test_duplicate_reg(dbos: DBOS) -> None:
         bob2 = dupname_classdefs1.DBOSTestRegDup("bob")
 
     assert (
-        "Duplicate instance registration for class 'tests.dupname_classdefsa/DBOSTestRegDup' instance 'bob'"
+        "Duplicate instance registration for class 'tests.dupname_classdefs1/DBOSTestRegDup' instance 'bob'"
         == str(exc_info.value)
     )
 
