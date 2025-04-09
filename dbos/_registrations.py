@@ -166,16 +166,24 @@ def get_config_name(
     return None
 
 
+def _class_fqn(cls: type) -> str:
+    """Returns fully qualified name of the given class.
+
+    Join with / instead of . to avoid collision of similar classes in different hierarchies.
+    """
+    return f"{cls.__module__}/{cls.__qualname__}"
+
+
 def get_dbos_class_name(
     fi: Optional[DBOSFuncInfo], func: Callable[..., Any], args: Tuple[Any, ...]
 ) -> Optional[str]:
     if fi and fi.func_type != DBOSFuncType.Unknown and len(args) > 0:
         if fi.func_type == DBOSFuncType.Instance:
             first_arg = args[0]
-            return str(first_arg.__class__.__name__)
+            return _class_fqn(first_arg.__class__)
         if fi.func_type == DBOSFuncType.Class:
             first_arg = args[0]
-            return str(first_arg.__name__)
+            return _class_fqn(first_arg)
         return None
 
     # Check for improperly-registered functions

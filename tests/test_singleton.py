@@ -48,7 +48,7 @@ def test_dbos_singleton(cleanup_test_databases: None) -> None:
     stati = DBOS.get_workflow_status(wh.get_workflow_id())
     assert stati
     assert stati.config_name == "myconfig"
-    assert stati.class_name == "DBOSTestClass"
+    assert "DBOSTestClass" in stati.class_name
     wfhr: WorkflowHandle[str] = DBOS.retrieve_workflow(wh.get_workflow_id())
     assert wfhr.workflow_id == wh.get_workflow_id()
 
