@@ -170,6 +170,10 @@ def test_restart(dbos: DBOS) -> None:
         def workflow(self, x: int) -> int:
             return self.multiply(x)
 
+        @DBOS.step()
+        def step(self, x: int) -> int:
+            return self.multiply(x)
+
     inst = TestClass(multiplier)
 
     # Start the workflow, let it finish, restart it.
@@ -184,6 +188,15 @@ def test_restart(dbos: DBOS) -> None:
     # Verify it returns the same result with a different workflow ID and queue.
     queue = Queue("test_queue")
     handle = queue.enqueue(inst.workflow, input)
+    assert handle.get_result() == input * multiplier
+    forked_handle = DBOS.restart_workflow(handle.workflow_id)
+    assert forked_handle.workflow_id != handle.workflow_id
+    assert forked_handle.get_status().queue_name != handle.get_status().queue_name
+    assert forked_handle.get_result() == input * multiplier
+
+    # Enqueue the step, let it finish, restart it.
+    # Verify it returns the same result with a different workflow ID and queue.
+    handle = queue.enqueue(inst.step, input)
     assert handle.get_result() == input * multiplier
     forked_handle = DBOS.restart_workflow(handle.workflow_id)
     assert forked_handle.workflow_id != handle.workflow_id
