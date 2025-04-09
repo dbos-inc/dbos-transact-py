@@ -715,7 +715,7 @@ def test_class_static_queue_recovery(dbos: DBOS) -> None:
     for h in recovery_handles:
         status = h.get_status()
         # Class name is not recorded for static methods
-        assert status.class_name and status.class_name == None
+        assert status.class_name == None
         assert status.config_name == None
         if h.get_workflow_id() == wfid:
             assert h.get_result() == result
@@ -879,5 +879,5 @@ def test_mixed_methods(dbos: DBOS) -> None:
     handle = DBOS.start_workflow(inst.staticmethod_workflow, input)
     assert handle.get_result() == input
     status = handle.get_status()
-    assert status.class_name and status.class_name == None
+    assert status.class_name == None
     assert status.config_name == None
