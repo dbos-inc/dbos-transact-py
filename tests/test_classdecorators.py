@@ -393,19 +393,21 @@ def test_duplicate_reg(dbos: DBOS) -> None:
 
     # There should be no collision when the duplicate class names are in
     # different modules.
-    from tests import classdefs, dupname_classdefs
+    from tests import dupname_classdefs1, dupname_classdefsa
 
     # Two instances of the same class may be registered if they have different
     # instance_name.
     # Duplicate instance registration error still occurs with identical class
     # name, module, and instance_name.
-    alice = dupname_classdefs.DBOSTestRegDup("alice")
-    bob = dupname_classdefs.DBOSTestRegDup("bob")
+    alice = dupname_classdefs1.DBOSTestRegDup("alice")
+    bob = dupname_classdefsa.DBOSTestRegDup("bob")
+    bob2 = dupname_classdefs1.DBOSTestRegDup("bob")
+
     with pytest.raises(Exception) as exc_info:
-        bob2 = dupname_classdefs.DBOSTestRegDup("bob")
+        bob2 = dupname_classdefsa.DBOSTestRegDup("bob")
 
     assert (
-        "Duplicate instance registration for class 'tests.dupname_classdefs/DBOSTestRegDup' instance 'bob'"
+        "Duplicate instance registration for class 'tests.dupname_classdefsa/DBOSTestRegDup' instance 'bob'"
         == str(exc_info.value)
     )
 
