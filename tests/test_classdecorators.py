@@ -404,7 +404,7 @@ def test_duplicate_reg(dbos: DBOS) -> None:
     bob2 = dupname_classdefs1.DBOSTestRegDup("bob")
 
     with pytest.raises(Exception) as exc_info:
-        bob2 = dupname_classdefsa.DBOSTestRegDup("bob")
+        bob2 = dupname_classdefs1.DBOSTestRegDup("bob")
 
     assert (
         "Duplicate instance registration for class 'tests.dupname_classdefsa/DBOSTestRegDup' instance 'bob'"
