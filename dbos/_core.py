@@ -782,6 +782,9 @@ def decorate_transaction(
     dbosreg: "DBOSRegistry", isolation_level: "IsolationLevel" = "SERIALIZABLE"
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
+
+        transactionName = func.__qualname__
+
         def invoke_tx(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:
                 raise DBOSException(
@@ -810,6 +813,7 @@ def decorate_transaction(
                         "txn_snapshot": "",  # TODO: add actual snapshot
                         "executor_id": None,
                         "txn_id": None,
+                        "function_name": transactionName,
                     }
                     retry_wait_seconds = 0.001
                     backoff_factor = 1.5

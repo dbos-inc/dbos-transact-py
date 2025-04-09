@@ -2,12 +2,15 @@ from typing import Optional, TypedDict
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
+from . import _serialization
 from ._dbos_config import ConfigFile, DatabaseConfig
 from ._error import DBOSWorkflowConflictIDError
 from ._schemas.application_database import ApplicationSchema
+from ._sys_db import StepInfo
 
 
 class TransactionResultInternal(TypedDict):
@@ -87,7 +90,30 @@ class ApplicationDatabase:
                     f"CREATE SCHEMA IF NOT EXISTS {ApplicationSchema.schema}"
                 )
                 conn.execute(schema_creation_query)
-            ApplicationSchema.metadata_obj.create_all(self.engine)
+
+            inspector = inspect(self.engine)
+            if not inspector.has_table(
+                "transaction_outputs", schema=ApplicationSchema.schema
+            ):
+                ApplicationSchema.metadata_obj.create_all(self.engine)
+            else:
+                columns = inspector.get_columns(
+                    "transaction_outputs", schema=ApplicationSchema.schema
+                )
+                column_names = [col["name"] for col in columns]
+
+                if "function_name" not in column_names:
+                    # Column missing, alter table to add it
+                    with self.engine.connect() as conn:
+                        conn.execute(
+                            text(
+                                f"""
+                            ALTER TABLE {ApplicationSchema.schema}.transaction_outputs
+                            ADD COLUMN function_name TEXT NOT NULL DEFAULT '';
+                            """
+                            )
+                        )
+                        conn.commit()
 
     def destroy(self) -> None:
         self.engine.dispose()
@@ -108,6 +134,7 @@ class ApplicationDatabase:
                     executor_id=(
                         output["executor_id"] if output["executor_id"] else None
                     ),
+                    function_name=output["function_name"],
                 )
             )
         except DBAPIError as dbapi_error:
@@ -133,6 +160,7 @@ class ApplicationDatabase:
                         executor_id=(
                             output["executor_id"] if output["executor_id"] else None
                         ),
+                        function_name=output["function_name"],
                     )
                 )
         except DBAPIError as dbapi_error:
@@ -160,3 +188,33 @@ class ApplicationDatabase:
             "error": rows[0][1],
         }
         return result
+
+    @staticmethod
+    def get_transactions(session: Session, workflow_uuid: str) -> Optional[StepInfo]:
+        rows = session.execute(
+            sa.select(
+                ApplicationSchema.transaction_outputs.c.function_id,
+                ApplicationSchema.transaction_outputs.c.fuction_name,
+                ApplicationSchema.transaction_outputs.c.output,
+                ApplicationSchema.transaction_outputs.c.error,
+            ).where(
+                ApplicationSchema.transaction_outputs.c.workflow_uuid == workflow_uuid,
+            )
+        ).all()
+
+        return [
+            StepInfo(
+                function_id=row[0],
+                function_name=row[1],
+                output=(
+                    _serialization.deserialize(row[2]) if row[2] is not None else row[2]
+                ),
+                error=(
+                    _serialization.deserialize_exception(row[3])
+                    if row[3] is not None
+                    else row[3]
+                ),
+                child_workflow_id=row[4],
+            )
+            for row in rows
+        ]
