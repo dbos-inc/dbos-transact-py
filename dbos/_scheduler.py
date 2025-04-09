@@ -52,7 +52,7 @@ def scheduled(
             )
 
         global scheduler_queue
-        scheduler_queue = Queue("_dbos_internal_queue")
+        scheduler_queue = dbosreg.get_internal_queue()
         stop_event = threading.Event()
         dbosreg.register_poller(stop_event, scheduler_loop, func, cron, stop_event)
         return func

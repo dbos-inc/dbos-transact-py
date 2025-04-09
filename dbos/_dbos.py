@@ -33,7 +33,7 @@ from opentelemetry.trace import Span
 
 from dbos import _serialization
 from dbos._conductor.conductor import ConductorWebsocket
-from dbos._utils import GlobalParams
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import (
     WorkflowStatus,
     list_queued_workflows,
@@ -233,6 +233,13 @@ class DBOSRegistry:
         for source in sources:
             hasher.update(source.encode("utf-8"))
         return hasher.hexdigest()
+
+    def get_internal_queue(self) -> Queue:
+        """
+        Get or create the internal queue used for the DBOS scheduler, for Kafka, and for
+        programmatic resuming and restarting of workflows.
+        """
+        return Queue(INTERNAL_QUEUE_NAME)
 
 
 class DBOS:
@@ -488,6 +495,9 @@ class DBOS:
             )
             notification_listener_thread.start()
             self._background_threads.append(notification_listener_thread)
+
+            # Create the internal queue if it has not yet been created
+            self._registry.get_internal_queue()
 
             # Start the queue thread
             evt = threading.Event()
@@ -930,11 +940,6 @@ class DBOS:
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id)
 
     @classmethod
-    def restart_workflow(cls, workflow_id: str) -> None:
-        """Execute a workflow by ID (for recovery)."""
-        execute_workflow_by_id(_get_dbos_instance(), workflow_id, True)
-
-    @classmethod
     def recover_pending_workflows(
         cls, executor_ids: List[str] = ["local"]
     ) -> List[WorkflowHandle[Any]]:
@@ -954,7 +959,13 @@ class DBOS:
         dbos_logger.info(f"Resuming workflow: {workflow_id}")
         _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
         _get_or_create_dbos_registry().clear_workflow_cancelled(workflow_id)
-        return execute_workflow_by_id(_get_dbos_instance(), workflow_id, False)
+        return cls.retrieve_workflow(workflow_id)
+
+    @classmethod
+    def restart_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
+        """Restart a workflow with a new workflow ID"""
+        forked_workflow_id = _get_dbos_instance()._sys_db.fork_workflow(workflow_id)
+        return cls.retrieve_workflow(forked_workflow_id)
 
     @classmethod
     def list_workflows(

@@ -178,15 +178,8 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
             dead_letter_workflow()
     assert exc_info.errisinstance(DBOSDeadLetterQueueError)
 
-    # Resume the workflow. Verify it returns to PENDING status without error.
+    # Resume the workflow. Verify it can recover again without error.
     resumed_handle = dbos.resume_workflow(wfid)
-    assert (
-        handle.get_status().status
-        == resumed_handle.get_status().status
-        == WorkflowStatusString.PENDING.value
-    )
-
-    # Verify the workflow can recover again without error.
     DBOS.recover_pending_workflows()
 
     # Complete the blocked workflow

@@ -115,7 +115,7 @@ def kafka_consumer(
                 _in_order_kafka_queues[topic] = queue
         else:
             global _kafka_queue
-            _kafka_queue = Queue("_dbos_internal_queue")
+            _kafka_queue = dbosreg.get_internal_queue()
         stop_event = threading.Event()
         dbosreg.register_poller(
             stop_event, _kafka_consumer_loop, func, config, topics, stop_event, in_order
