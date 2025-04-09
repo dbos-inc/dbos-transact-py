@@ -8,6 +8,7 @@ import pytest
 from dbos import DBOS, Queue, SetWorkflowID
 from dbos._dbos import DBOSConfiguredInstance
 from dbos._error import DBOSWorkflowCancelledError
+from dbos._utils import INTERNAL_QUEUE_NAME
 from tests.conftest import queue_entries_are_cleaned_up
 
 
@@ -191,7 +192,7 @@ def test_restart(dbos: DBOS) -> None:
     assert handle.get_result() == input * multiplier
     forked_handle = DBOS.restart_workflow(handle.workflow_id)
     assert forked_handle.workflow_id != handle.workflow_id
-    assert forked_handle.get_status().queue_name != handle.get_status().queue_name
+    assert forked_handle.get_status().queue_name == INTERNAL_QUEUE_NAME
     assert forked_handle.get_result() == input * multiplier
 
     # Enqueue the step, let it finish, restart it.
@@ -202,3 +203,10 @@ def test_restart(dbos: DBOS) -> None:
     assert forked_handle.workflow_id != handle.workflow_id
     assert forked_handle.get_status().queue_name != handle.get_status().queue_name
     assert forked_handle.get_result() == input * multiplier
+
+    # Verify restarting a nonexistent workflow throws an exception
+    with pytest.raises(Exception):
+        DBOS.restart_workflow("fake_id")
+
+    # Verify nothing is left on any queue
+    assert queue_entries_are_cleaned_up(dbos)
