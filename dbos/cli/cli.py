@@ -350,8 +350,11 @@ def steps(
 ) -> None:
     config = load_config(silent=True)
     sys_db = SystemDatabase(config["database"])
+    app_db = ApplicationDatabase(config["database"])
     print(
-        jsonpickle.encode(list_workflow_steps(sys_db, workflow_id), unpicklable=False)
+        jsonpickle.encode(
+            list_workflow_steps(sys_db, app_db, workflow_id), unpicklable=False
+        )
     )
 
 

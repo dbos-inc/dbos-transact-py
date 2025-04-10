@@ -25,6 +25,7 @@ class ApplicationSchema:
         Column("txn_id", Text, nullable=True),
         Column("txn_snapshot", Text),
         Column("executor_id", Text, nullable=True),
+        Column("function_name", Text, nullable=False, server_default=""),
         Column(
             "created_at",
             BigInteger,
