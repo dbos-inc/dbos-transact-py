@@ -894,7 +894,7 @@ def test_list_transaction(
         DBOS.sleep(1)
         return
 
-    @DBOS.step()
+    @DBOS.transaction()
     def transactionOne() -> str:
         return "a test transaction"
 
@@ -930,11 +930,11 @@ def test_list_transaction_error(
         DBOS.sleep(1)
         return
 
-    @DBOS.step()
+    @DBOS.transaction()
     def transactionOne() -> str:
         return "a test transaction"
 
-    @DBOS.step()
+    @DBOS.transaction()
     def transactionErr() -> None:
         raise Exception("a test transaction error")
 
