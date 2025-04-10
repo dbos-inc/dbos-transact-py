@@ -189,18 +189,19 @@ class ApplicationDatabase:
         }
         return result
 
-    @staticmethod
-    def get_transactions(session: Session, workflow_uuid: str) -> Optional[StepInfo]:
-        rows = session.execute(
-            sa.select(
-                ApplicationSchema.transaction_outputs.c.function_id,
-                ApplicationSchema.transaction_outputs.c.fuction_name,
-                ApplicationSchema.transaction_outputs.c.output,
-                ApplicationSchema.transaction_outputs.c.error,
-            ).where(
-                ApplicationSchema.transaction_outputs.c.workflow_uuid == workflow_uuid,
-            )
-        ).all()
+    def get_transactions(self, workflow_uuid: str) -> Optional[StepInfo]:
+        with self.engine.begin() as conn:
+            rows = conn.execute(
+                sa.select(
+                    ApplicationSchema.transaction_outputs.c.function_id,
+                    ApplicationSchema.transaction_outputs.c.function_name,
+                    ApplicationSchema.transaction_outputs.c.output,
+                    ApplicationSchema.transaction_outputs.c.error,
+                ).where(
+                    ApplicationSchema.transaction_outputs.c.workflow_uuid
+                    == workflow_uuid,
+                )
+            ).all()
 
         return [
             StepInfo(

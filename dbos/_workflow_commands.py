@@ -174,8 +174,9 @@ def get_workflow(
 def list_workflow_steps(
     sys_db: SystemDatabase, app_db: ApplicationDatabase, workflow_id: str
 ) -> List[StepInfo]:
+    print("Listing workflow steps for workflow ID: %s", workflow_id)
     steps = sys_db.get_workflow_steps(workflow_id)
     transactions = app_db.get_transactions(workflow_id)
     merged_steps = steps + transactions
-    merged_steps.sort(key=lambda step: step.function_id)
+    merged_steps.sort(key=lambda step: step["function_id"])
     return merged_steps

@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from flask import Flask
 
 from dbos import DBOS, ConfigFile, DBOSClient
+from dbos._app_db import ApplicationDatabase
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 
@@ -46,6 +47,13 @@ def sys_db(config: ConfigFile) -> Generator[SystemDatabase, Any, None]:
     sys_db = SystemDatabase(config["database"])
     yield sys_db
     sys_db.destroy()
+
+
+@pytest.fixture()
+def app_db(config: ConfigFile) -> Generator[SystemDatabase, Any, None]:
+    app_db = ApplicationDatabase(config["database"])
+    yield app_db
+    app_db.destroy()
 
 
 @pytest.fixture(scope="session")

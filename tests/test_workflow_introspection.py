@@ -14,6 +14,7 @@ from dbos import (
     WorkflowStatusString,
     _workflow_commands,
 )
+from dbos._app_db import ApplicationDatabase
 from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
 
@@ -856,3 +857,33 @@ async def test_callchild_rerun_asyncio(dbos: DBOS) -> None:
         res2 = await handle.get_result()
 
     assert res1 == res2
+
+
+def test_list_transaction(
+    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
+) -> None:
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        transactionOne()
+        stepTwo()
+        DBOS.sleep(1)
+        return
+
+    @DBOS.step()
+    def transactionOne() -> None:
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        simple_workflow()
+
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    assert len(wfsteps) == 3
+    assert wfsteps[0]["function_name"] == transactionOne.__qualname__
+    assert wfsteps[1]["function_name"] == stepTwo.__qualname__
+    assert wfsteps[2]["function_name"] == "DBOS.sleep"
