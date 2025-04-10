@@ -1273,7 +1273,7 @@ def test_duplicate_registration(
         pass
 
     assert (
-        "Duplicate registration for function '<temp>.test_duplicate_registration.<locals>.my_transaction'"
+        "Duplicate registration of function 'test_duplicate_registration.<locals>.my_transaction'"
         in caplog.text
     )
 
@@ -1286,7 +1286,7 @@ def test_duplicate_registration(
         pass
 
     assert (
-        "Duplicate registration for function '<temp>.test_duplicate_registration.<locals>.my_step'"
+        "Duplicate registration of function 'test_duplicate_registration.<locals>.my_step'"
         in caplog.text
     )
 
@@ -1301,17 +1301,14 @@ def test_duplicate_registration(
         my_transaction()
 
     assert (
-        "Duplicate registration for function 'test_duplicate_registration.<locals>.my_workflow'"
+        "Duplicate registration of function 'test_duplicate_registration.<locals>.my_workflow'"
         in caplog.text
     )
 
     DBOS.destroy()
     DBOS(config=config)
     DBOS.launch()
-    assert (
-        "Duplicate registration for function '<temp>.temp_send_workflow'"
-        not in caplog.text
-    )
+    assert "Duplicate registration of function 'temp_send_workflow'" not in caplog.text
 
     # Reset logging
     logging.getLogger("dbos").propagate = original_propagate
