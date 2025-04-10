@@ -196,7 +196,9 @@ class DBOSContext:
         self._end_span(exc_value)
 
     def get_current_span(self) -> Span:
-        return self.spans[-1]
+        if len(self.spans):
+            return self.spans[-1]
+        return None
 
     def _start_span(self, attributes: TracedAttributes) -> None:
         attributes["operationUUID"] = (
