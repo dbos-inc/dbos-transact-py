@@ -195,7 +195,7 @@ class DBOSContext:
     def end_handler(self, exc_value: Optional[BaseException]) -> None:
         self._end_span(exc_value)
 
-    def get_current_span(self) -> Span:
+    def get_current_span(self) -> Optional[Span]:
         if len(self.spans):
             return self.spans[-1]
         return None
