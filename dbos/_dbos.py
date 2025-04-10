@@ -172,6 +172,8 @@ class DBOSRegistry:
         if name in self.function_type_map:
             if self.function_type_map[name] != functype:
                 raise DBOSConflictingRegistrationError(name)
+            if name != TEMP_SEND_WF_NAME:
+                dbos_logger.warning(f"Duplicate registration for function '{name}'")
         self.function_type_map[name] = functype
         self.workflow_info_map[name] = wrapped_func
 
