@@ -892,10 +892,12 @@ def decorate_transaction(
                         except DBAPIError as dbapi_error:
                             if dbapi_error.orig.sqlstate == "40001":  # type: ignore
                                 # Retry on serialization failure
-                                ctx.get_current_span().add_event(
-                                    "Transaction Serialization Failure",
-                                    {"retry_wait_seconds": retry_wait_seconds},
-                                )
+                                span = ctx.get_current_span()
+                                if span:
+                                    span.add_event(
+                                        "Transaction Serialization Failure",
+                                        {"retry_wait_seconds": retry_wait_seconds},
+                                    )
                                 time.sleep(retry_wait_seconds)
                                 retry_wait_seconds = min(
                                     retry_wait_seconds * backoff_factor,
@@ -1004,13 +1006,15 @@ def decorate_step(
                     f"Step being automatically retried. (attempt {attempt + 1} of {attempts}). {traceback.format_exc()}"
                 )
                 ctx = assert_current_dbos_context()
-                ctx.get_current_span().add_event(
-                    f"Step attempt {attempt} failed",
-                    {
-                        "error": str(error),
-                        "retryIntervalSeconds": interval_seconds,
-                    },
-                )
+                span = ctx.get_current_span()
+                if span:
+                    span.add_event(
+                        f"Step attempt {attempt} failed",
+                        {
+                            "error": str(error),
+                            "retryIntervalSeconds": interval_seconds,
+                        },
+                    )
                 return min(
                     interval_seconds * (backoff_rate**attempt),
                     max_retry_interval_seconds,
