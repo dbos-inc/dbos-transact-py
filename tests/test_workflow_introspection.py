@@ -889,3 +889,47 @@ def test_list_transaction(
     assert wfsteps[0]["error"] == None
     assert wfsteps[1]["function_name"] == stepTwo.__qualname__
     assert wfsteps[2]["function_name"] == "DBOS.sleep"
+
+
+def test_list_transaction_error(
+    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
+) -> None:
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        transactionOne()
+        stepTwo()
+        try:
+            transactionErr()
+        except Exception as e:
+            print(f"Error: {e}")
+        DBOS.sleep(1)
+        return
+
+    @DBOS.step()
+    def transactionOne() -> str:
+        return "a test transaction"
+
+    @DBOS.step()
+    def transactionErr() -> None:
+        raise Exception("a test transaction error")
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        simple_workflow()
+
+    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    print(f"wfsteps: {wfsteps}")
+    assert len(wfsteps) == 4
+    assert wfsteps[0]["function_name"] == transactionOne.__qualname__
+    assert wfsteps[0]["output"] == "a test transaction"
+    assert wfsteps[0]["error"] == None
+    assert wfsteps[1]["function_name"] == stepTwo.__qualname__
+    assert wfsteps[2]["function_name"] == transactionErr.__qualname__
+    assert wfsteps[2]["output"] == None
+    assert isinstance(wfsteps[2]["error"], Exception)
+    assert wfsteps[3]["function_name"] == "DBOS.sleep"
