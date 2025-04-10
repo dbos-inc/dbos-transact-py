@@ -871,8 +871,8 @@ def test_list_transaction(
         return
 
     @DBOS.step()
-    def transactionOne() -> None:
-        return
+    def transactionOne() -> str:
+        return "a test transaction"
 
     @DBOS.step()
     def stepTwo() -> None:
@@ -885,5 +885,7 @@ def test_list_transaction(
     wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
     assert len(wfsteps) == 3
     assert wfsteps[0]["function_name"] == transactionOne.__qualname__
+    assert wfsteps[0]["output"] == "a test transaction"
+    assert wfsteps[0]["error"] == None
     assert wfsteps[1]["function_name"] == stepTwo.__qualname__
     assert wfsteps[2]["function_name"] == "DBOS.sleep"
