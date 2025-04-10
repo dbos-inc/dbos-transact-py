@@ -215,7 +215,6 @@ class ApplicationDatabase:
                     if row[3] is not None
                     else row[3]
                 ),
-                child_workflow_id=row[4],
             )
             for row in rows
         ]
