@@ -50,7 +50,7 @@ def sys_db(config: ConfigFile) -> Generator[SystemDatabase, Any, None]:
 
 
 @pytest.fixture()
-def app_db(config: ConfigFile) -> Generator[SystemDatabase, Any, None]:
+def app_db(config: ConfigFile) -> Generator[ApplicationDatabase, Any, None]:
     app_db = ApplicationDatabase(config["database"])
     yield app_db
     app_db.destroy()
