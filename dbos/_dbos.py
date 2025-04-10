@@ -1094,7 +1094,9 @@ class DBOS:
     def span(cls) -> Span:
         """Return the tracing `Span` associated with the current context."""
         ctx = assert_current_dbos_context()
-        return ctx.get_current_span()
+        span = ctx.get_current_span()
+        assert span
+        return span
 
     @classproperty
     def request(cls) -> Optional["Request"]:
