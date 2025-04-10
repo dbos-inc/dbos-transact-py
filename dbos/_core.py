@@ -398,9 +398,7 @@ async def _execute_workflow_async(
                 raise
 
 
-def execute_workflow_by_id(
-    dbos: "DBOS", workflow_id: str, startNew: bool = False
-) -> "WorkflowHandle[Any]":
+def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]":
     status = dbos._sys_db.get_workflow_status(workflow_id)
     if not status:
         raise DBOSRecoveryError(workflow_id, "Workflow status not found")
@@ -441,7 +439,7 @@ def execute_workflow_by_id(
             class_object = dbos._registry.class_info_map[class_name]
             inputs["args"] = (class_object,) + inputs["args"]
 
-        if startNew:
+        with SetWorkflowID(workflow_id):
             return start_workflow(
                 dbos,
                 wf_func,
@@ -450,16 +448,6 @@ def execute_workflow_by_id(
                 *inputs["args"],
                 **inputs["kwargs"],
             )
-        else:
-            with SetWorkflowID(workflow_id):
-                return start_workflow(
-                    dbos,
-                    wf_func,
-                    status["queue_name"],
-                    True,
-                    *inputs["args"],
-                    **inputs["kwargs"],
-                )
 
 
 def _get_new_wf() -> tuple[str, DBOSContext]:

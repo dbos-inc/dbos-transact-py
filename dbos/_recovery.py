@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 def _recover_workflow(
     dbos: "DBOS", workflow: GetPendingWorkflowsOutput
 ) -> "WorkflowHandle[Any]":
-    if workflow.queue_name and workflow.queue_name != "_dbos_internal_queue":
+    if workflow.queue_name:
         cleared = dbos._sys_db.clear_queue_assignment(workflow.workflow_uuid)
         if cleared:
             return dbos.retrieve_workflow(workflow.workflow_uuid)

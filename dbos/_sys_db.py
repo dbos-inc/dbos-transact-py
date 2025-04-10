@@ -4,6 +4,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -25,7 +26,7 @@ from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.sql import func
 
-from dbos._utils import GlobalParams
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
 from . import _serialization
 from ._context import get_local_dbos_context
@@ -447,13 +448,12 @@ class SystemDatabase:
                 )
             )
 
-    def resume_workflow(
-        self,
-        workflow_id: str,
-    ) -> None:
+    def resume_workflow(self, workflow_id: str) -> None:
         if self._debug_mode:
             raise Exception("called resume_workflow in debug mode")
         with self.engine.begin() as c:
+            # Execute with snapshot isolation in case of concurrent calls on the same workflow
+            c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
             # Check the status of the workflow. If it is complete, do nothing.
             row = c.execute(
                 sa.select(
@@ -472,12 +472,63 @@ class SystemDatabase:
                     SystemSchema.workflow_queue.c.workflow_uuid == workflow_id
                 )
             )
-            # Set the workflow's status to PENDING and clear its recovery attempts.
+            # Enqueue the workflow on the internal queue
+            c.execute(
+                pg.insert(SystemSchema.workflow_queue).values(
+                    workflow_uuid=workflow_id,
+                    queue_name=INTERNAL_QUEUE_NAME,
+                )
+            )
+            # Set the workflow's status to ENQUEUED and clear its recovery attempts.
             c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-                .values(status=WorkflowStatusString.PENDING.value, recovery_attempts=0)
+                .values(status=WorkflowStatusString.ENQUEUED.value, recovery_attempts=0)
             )
+
+    def fork_workflow(self, original_workflow_id: str) -> str:
+        status = self.get_workflow_status(original_workflow_id)
+        if status is None:
+            raise Exception(f"Workflow {original_workflow_id} not found")
+        inputs = self.get_workflow_inputs(original_workflow_id)
+        if inputs is None:
+            raise Exception(f"Workflow {original_workflow_id} not found")
+        # Generate a random ID for the forked workflow
+        forked_workflow_id = str(uuid.uuid4())
+        with self.engine.begin() as c:
+            # Create an entry for the forked workflow with the same
+            # initial values as the original.
+            c.execute(
+                pg.insert(SystemSchema.workflow_status).values(
+                    workflow_uuid=forked_workflow_id,
+                    status=WorkflowStatusString.ENQUEUED.value,
+                    name=status["name"],
+                    class_name=status["class_name"],
+                    config_name=status["config_name"],
+                    application_version=status["app_version"],
+                    application_id=status["app_id"],
+                    request=status["request"],
+                    authenticated_user=status["authenticated_user"],
+                    authenticated_roles=status["authenticated_roles"],
+                    assumed_role=status["assumed_role"],
+                    queue_name=INTERNAL_QUEUE_NAME,
+                )
+            )
+            # Copy the original workflow's inputs into the forked workflow
+            c.execute(
+                pg.insert(SystemSchema.workflow_inputs).values(
+                    workflow_uuid=forked_workflow_id,
+                    inputs=_serialization.serialize_args(inputs),
+                )
+            )
+            # Enqueue the forked workflow on the internal queue
+            c.execute(
+                pg.insert(SystemSchema.workflow_queue).values(
+                    workflow_uuid=forked_workflow_id,
+                    queue_name=INTERNAL_QUEUE_NAME,
+                )
+            )
+        return forked_workflow_id
 
     def get_workflow_status(
         self, workflow_uuid: str

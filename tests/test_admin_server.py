@@ -13,7 +13,7 @@ from requests.exceptions import ConnectionError
 from dbos import DBOS, ConfigFile, DBOSConfig, Queue, SetWorkflowID, _workflow_commands
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase, WorkflowStatusString
-from dbos._utils import GlobalParams
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
 
 def test_admin_endpoints(dbos: DBOS) -> None:
@@ -41,6 +41,7 @@ def test_admin_endpoints(dbos: DBOS) -> None:
     )
     assert response.status_code == 200
     assert response.json() == [
+        {"name": INTERNAL_QUEUE_NAME},
         {"name": "q1"},
         {"name": "q2", "concurrency": 1},
         {"name": "q3", "concurrency": 1, "workerConcurrency": 1},
