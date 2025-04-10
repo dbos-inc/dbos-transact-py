@@ -254,6 +254,7 @@ class ConductorWebsocket(threading.Thread):
                             try:
                                 step_info = list_workflow_steps(
                                     self.dbos._sys_db,
+                                    self.dbos._app_db,
                                     list_steps_message.workflow_id,
                                 )
                             except Exception as e:

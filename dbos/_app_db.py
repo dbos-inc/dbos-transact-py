@@ -1,4 +1,4 @@
-from typing import Optional, TypedDict
+from typing import List, Optional, TypedDict
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
@@ -21,6 +21,7 @@ class TransactionResultInternal(TypedDict):
     txn_id: Optional[str]
     txn_snapshot: str
     executor_id: Optional[str]
+    function_name: Optional[str]
 
 
 class RecordedResult(TypedDict):
@@ -189,7 +190,7 @@ class ApplicationDatabase:
         }
         return result
 
-    def get_transactions(self, workflow_uuid: str) -> Optional[StepInfo]:
+    def get_transactions(self, workflow_uuid: str) -> List[StepInfo]:
         with self.engine.begin() as conn:
             rows = conn.execute(
                 sa.select(
@@ -202,7 +203,6 @@ class ApplicationDatabase:
                     == workflow_uuid,
                 )
             ).all()
-
         return [
             StepInfo(
                 function_id=row[0],
@@ -215,6 +215,7 @@ class ApplicationDatabase:
                     if row[3] is not None
                     else row[3]
                 ),
+                child_workflow_id=None,
             )
             for row in rows
         ]
