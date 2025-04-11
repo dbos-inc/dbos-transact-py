@@ -13,6 +13,7 @@ from dbos._error import (
     DBOSDeadLetterQueueError,
     DBOSException,
     DBOSMaxStepRetriesExceeded,
+    DBOSUnexpectedStepError,
 )
 from dbos._sys_db import WorkflowStatusString
 
@@ -221,9 +222,8 @@ def test_wfstatus_invalid(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         handle2 = dbos.start_workflow(non_deterministic_workflow)
 
-    with pytest.raises(DBOSException) as exc_info:
+    with pytest.raises(DBOSUnexpectedStepError) as exc_info:
         handle2.get_result()
-    assert "Hint: Check if your workflow is deterministic." in str(exc_info.value)
     event.set()
     assert handle1.get_result() == None
 

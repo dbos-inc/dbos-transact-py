@@ -964,7 +964,7 @@ def decorate_step(
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
 
-        stepName = func.__qualname__
+        step_name = func.__qualname__
 
         def invoke_step(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:
@@ -1005,7 +1005,7 @@ def decorate_step(
                 step_output: OperationResultInternal = {
                     "workflow_uuid": ctx.workflow_id,
                     "function_id": ctx.function_id,
-                    "function_name": stepName,
+                    "function_name": step_name,
                     "output": None,
                     "error": None,
                 }
@@ -1023,7 +1023,7 @@ def decorate_step(
             def check_existing_result() -> Union[NoResult, R]:
                 ctx = assert_current_dbos_context()
                 recorded_output = dbos._sys_db.check_operation_execution(
-                    ctx.workflow_id, ctx.function_id
+                    ctx.workflow_id, ctx.function_id, step_name
                 )
                 if dbos.debug_mode and recorded_output is None:
                     raise DBOSException("Step output not found in debug mode")
