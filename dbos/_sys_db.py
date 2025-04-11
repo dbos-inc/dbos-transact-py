@@ -580,9 +580,7 @@ class SystemDatabase:
             }
             return status
 
-    def await_workflow_result_internal(self, workflow_uuid: str) -> dict[str, Any]:
-        polling_interval_secs: float = 1.000
-
+    def await_workflow_result(self, workflow_id: str) -> Any:
         while True:
             with self.engine.begin() as c:
                 row = c.execute(
@@ -590,41 +588,21 @@ class SystemDatabase:
                         SystemSchema.workflow_status.c.status,
                         SystemSchema.workflow_status.c.output,
                         SystemSchema.workflow_status.c.error,
-                    ).where(
-                        SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
-                    )
+                    ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
                 ).fetchone()
                 if row is not None:
                     status = row[0]
-                    if status == str(WorkflowStatusString.SUCCESS.value):
-                        return {
-                            "status": status,
-                            "output": row[1],
-                            "workflow_uuid": workflow_uuid,
-                        }
-
-                    elif status == str(WorkflowStatusString.ERROR.value):
-                        return {
-                            "status": status,
-                            "error": row[2],
-                            "workflow_uuid": workflow_uuid,
-                        }
-
+                    if status == WorkflowStatusString.SUCCESS.value:
+                        output = row[1]
+                        return _serialization.deserialize(output)
+                    elif status == WorkflowStatusString.ERROR.value:
+                        error = row[2]
+                        raise _serialization.deserialize_exception(error)
+                    elif status == WorkflowStatusString.CANCELLED.value:
+                        raise Exception(f"Awaited workflow {workflow_id} was cancelled")
                 else:
                     pass  # CB: I guess we're assuming the WF will show up eventually.
-
-            time.sleep(polling_interval_secs)
-
-    def await_workflow_result(self, workflow_uuid: str) -> Any:
-        stat = self.await_workflow_result_internal(workflow_uuid)
-        if not stat:
-            return None
-        status: str = stat["status"]
-        if status == str(WorkflowStatusString.SUCCESS.value):
-            return _serialization.deserialize(stat["output"])
-        elif status == str(WorkflowStatusString.ERROR.value):
-            raise _serialization.deserialize_exception(stat["error"])
-        return None
+            time.sleep(1)
 
     def update_workflow_inputs(
         self, workflow_uuid: str, inputs: str, conn: Optional[sa.Connection] = None
