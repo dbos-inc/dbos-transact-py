@@ -489,6 +489,9 @@ class SystemDatabase:
     def fork_workflow(
         self, original_workflow_id: str, forked_workflow_id: str, start_step: int = 1
     ) -> str:
+        print(
+            f"fork_workflow {original_workflow_id} to {forked_workflow_id} with start step {start_step}"
+        )
         status = self.get_workflow_status(original_workflow_id)
         if status is None:
             raise Exception(f"Workflow {original_workflow_id} not found")
@@ -529,6 +532,24 @@ class SystemDatabase:
             # is the first step 0 or 1 ? need to confirm
             if start_step > 1:
 
+                max_function_id_row = c.execute(
+                    sa.select(
+                        sa.func.max(SystemSchema.operation_outputs.c.function_id)
+                    ).where(
+                        SystemSchema.operation_outputs.c.workflow_uuid
+                        == original_workflow_id
+                    )
+                ).fetchone()
+
+                max_function_id = (
+                    max_function_id_row[0] if max_function_id_row else None
+                )
+
+                if max_function_id is not None and start_step > max_function_id:
+                    raise DBOSWorkflowConflictIDError(
+                        f"Forked workflow start step {start_step} is greater than max step function id {max_function_id} in original workflow {original_workflow_id}"
+                    )
+
                 rows = c.execute(
                     sa.select(
                         SystemSchema.operation_outputs.c.function_id,
@@ -539,7 +560,7 @@ class SystemDatabase:
                     ).where(
                         (
                             SystemSchema.operation_outputs.c.workflow_uuid
-                            == forked_workflow_id
+                            == original_workflow_id
                         )
                         & (SystemSchema.operation_outputs.c.function_id < start_step)
                     )
@@ -547,6 +568,9 @@ class SystemDatabase:
 
                 if rows:
                     # Prepare the new rows to insert
+                    print(
+                        f"Forking workflow {original_workflow_id} to {forked_workflow_id} with rows: {rows}"
+                    )
                     new_rows = [
                         {
                             "workflow_uuid": forked_workflow_id,
@@ -561,6 +585,8 @@ class SystemDatabase:
 
                     # Insert the new rows
                     c.execute(sa.insert(SystemSchema.operation_outputs), new_rows)
+                else:
+                    print("No rows to copy for the forked workflow.")
 
             # Enqueue the forked workflow on the internal queue
             c.execute(

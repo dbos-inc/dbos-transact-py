@@ -132,7 +132,14 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
 
             if restart_match:
                 workflow_id = restart_match.group("workflow_id")
-                self._handle_restart(workflow_id)
+                try:
+                    data = json.loads(post_data.decode("utf-8"))
+                    print("data", data)
+                    start_step: int = data.get("start_step", 1)
+                    print("start_step", start_step)
+                except (json.JSONDecodeError, AttributeError):
+                    start_step = 1
+                self._handle_restart(workflow_id, start_step)
             elif resume_match:
                 workflow_id = resume_match.group("workflow_id")
                 self._handle_resume(workflow_id)
@@ -146,8 +153,8 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         return  # Disable admin server request logging
 
-    def _handle_restart(self, workflow_id: str) -> None:
-        self.dbos.restart_workflow(workflow_id)
+    def _handle_restart(self, workflow_id: str, start_step: int) -> None:
+        self.dbos.restart_workflow(workflow_id, start_step)
         print("Restarting workflow", workflow_id)
         self.send_response(204)
         self._end_headers()

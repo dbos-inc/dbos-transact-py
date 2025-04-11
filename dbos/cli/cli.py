@@ -22,6 +22,7 @@ from .._app_db import ApplicationDatabase
 from .._dbos_config import _is_valid_app_name
 from .._sys_db import SystemDatabase, reset_system_database
 from .._workflow_commands import (
+    fork_workflow,
     get_workflow,
     list_queued_workflows,
     list_workflow_steps,
@@ -356,6 +357,16 @@ def steps(
             list_workflow_steps(sys_db, app_db, workflow_id), unpicklable=False
         )
     )
+
+
+@workflow.command(help="List the steps of a workflow")
+def fork(
+    workflow_id: Annotated[str, typer.Argument()],
+    start_step: Annotated[
+        typing.Optional[int], typer.Argument(help="Step to start from")
+    ] = 1,
+) -> None:
+    print("Not yet implemented")
 
 
 @workflow.command(

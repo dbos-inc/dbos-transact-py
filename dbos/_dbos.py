@@ -962,9 +962,14 @@ class DBOS:
         return cls.retrieve_workflow(workflow_id)
 
     @classmethod
-    def restart_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
+    def restart_workflow(
+        cls, workflow_id: str, start_step: int = 1
+    ) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID"""
-        forked_workflow_id = _get_dbos_instance()._sys_db.fork_workflow(workflow_id)
+        forked_workflow_id = str(uuid.uuid4())
+        _get_dbos_instance()._sys_db.fork_workflow(
+            workflow_id, forked_workflow_id, start_step
+        )
         return cls.retrieve_workflow(forked_workflow_id)
 
     @classmethod
