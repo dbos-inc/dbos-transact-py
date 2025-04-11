@@ -52,6 +52,7 @@ from ._error import (
     DBOSMaxStepRetriesExceeded,
     DBOSNonExistentWorkflowError,
     DBOSRecoveryError,
+    DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
     DBOSWorkflowFunctionNotFoundError,
@@ -783,7 +784,7 @@ def decorate_transaction(
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
 
-        transactionName = func.__qualname__
+        transaction_name = func.__qualname__
 
         def invoke_tx(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:
@@ -814,7 +815,7 @@ def decorate_transaction(
                         "txn_snapshot": "",  # TODO: add actual snapshot
                         "executor_id": None,
                         "txn_id": None,
-                        "function_name": transactionName,
+                        "function_name": transaction_name,
                     }
                     retry_wait_seconds = 0.001
                     backoff_factor = 1.5
@@ -836,6 +837,7 @@ def decorate_transaction(
                                         session,
                                         ctx.workflow_id,
                                         ctx.function_id,
+                                        transaction_name,
                                     )
                                 )
                                 if dbos.debug_mode and recorded_output is None:
@@ -898,6 +900,8 @@ def decorate_transaction(
                                 f"InvalidRequestError in transaction {func.__qualname__} \033[1m Hint: Do not call commit() or rollback() within a DBOS transaction.\033[0m"
                             )
                             txn_error = invalid_request_error
+                            raise
+                        except DBOSUnexpectedStepError:
                             raise
                         except Exception as error:
                             txn_error = error

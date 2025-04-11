@@ -195,11 +195,11 @@ def test_nondeterministic_workflow(dbos: DBOS) -> None:
     main_thread_event = threading.Event()
 
     @DBOS.step()
-    def step_one():
+    def step_one() -> None:
         return
 
     @DBOS.step()
-    def step_two():
+    def step_two() -> None:
         return
 
     @DBOS.workflow()
@@ -208,6 +208,48 @@ def test_nondeterministic_workflow(dbos: DBOS) -> None:
             step_one()
         else:
             step_two()
+        main_thread_event.set()
+        workflow_event.wait()
+
+    # Start the workflow. It will complete step_one then wait.
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = dbos.start_workflow(non_deterministic_workflow)
+    main_thread_event.wait()
+
+    # To simulate nondeterminism, set the flag then restart the workflow.
+    flag = False
+    with SetWorkflowID(wfid):
+        handle_two = dbos.start_workflow(non_deterministic_workflow)
+
+    # Due to the nondeterminism, the workflow should encounter an unexpected step.
+    with pytest.raises(DBOSUnexpectedStepError) as exc_info:
+        handle_two.get_result()
+
+    # The original workflow should complete successfully.
+    workflow_event.set()
+    assert handle.get_result() == None
+
+
+def test_nondeterministic_workflow_txn(dbos: DBOS) -> None:
+    flag = True
+    workflow_event = threading.Event()
+    main_thread_event = threading.Event()
+
+    @DBOS.transaction()
+    def txn_one() -> None:
+        return
+
+    @DBOS.transaction()
+    def txn_two() -> None:
+        return
+
+    @DBOS.workflow()
+    def non_deterministic_workflow() -> None:
+        if flag:
+            txn_one()
+        else:
+            txn_two()
         main_thread_event.set()
         workflow_event.wait()
 
