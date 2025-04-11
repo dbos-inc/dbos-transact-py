@@ -883,6 +883,8 @@ class SystemDatabase:
         *,
         conn: Optional[sa.Connection] = None,
     ) -> Optional[RecordedResult]:
+        # Retrieve the status of the workflow. Additionally, if this step
+        # has run before, retrieve its name, output, and error.
         sql = (
             sa.select(
                 SystemSchema.workflow_status.c.status,
