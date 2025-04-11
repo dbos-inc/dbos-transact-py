@@ -44,13 +44,13 @@ app.add_typer(
 )
 
 
-@postgres.command(help="Start a local Postgres database")
-def start() -> None:
+@postgres.command(name="start", help="Start a local Postgres database")
+def pg_start() -> None:
     start_docker_pg()
 
 
-@postgres.command(help="Stop the local Postgres database")
-def stop() -> None:
+@postgres.command(name="start", help="Stop the local Postgres database")
+def pg_stop() -> None:
     stop_docker_pg()
 
 

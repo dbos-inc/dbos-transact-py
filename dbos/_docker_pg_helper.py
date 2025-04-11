@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 from typing import Any, Dict, Optional, Tuple
 
 
-def start_docker_pg():
+def start_docker_pg() -> None:
     """
     Starts a PostgreSQL database in a Docker container.
 
@@ -129,7 +129,7 @@ def check_docker_installed() -> bool:
         return False
 
 
-def stop_docker_pg():
+def stop_docker_pg() -> None:
     """
     Stops the Docker Postgres container.
 
