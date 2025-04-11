@@ -9,6 +9,7 @@ from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Dict,
     List,
     Literal,
@@ -16,6 +17,7 @@ from typing import (
     Sequence,
     Set,
     TypedDict,
+    TypeVar,
 )
 
 import psycopg
@@ -34,6 +36,7 @@ from ._dbos_config import ConfigFile, DatabaseConfig
 from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
+    DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSWorkflowConflictIDError,
 )
@@ -1533,6 +1536,38 @@ class SystemDatabase:
                         f"UNREACHABLE: Workflow {workflow_id} is found in the workflow_queue table but not found in the workflow_status table"
                     )
                 return True
+
+    T = TypeVar("T")
+
+    def call_function_as_step(self, fn: Callable[[], T], function_name: str) -> T:
+        ctx = get_local_dbos_context()
+        if ctx and ctx.is_within_workflow():
+            ctx.function_id += 1
+            res = self.check_operation_execution(ctx.workflow_id, ctx.function_id)
+            if res is not None:
+                if res["output"] is not None:
+                    resstat: SystemDatabase.T = _serialization.deserialize(
+                        res["output"]
+                    )
+                    return resstat
+                elif res["error"] is not None:
+                    raise _serialization.deserialize_exception(res["error"])
+                else:
+                    raise Exception(
+                        f"Recorded output and error are both None for {function_name}"
+                    )
+        result = fn()
+        if ctx and ctx.is_within_workflow():
+            self.record_operation_result(
+                {
+                    "workflow_uuid": ctx.workflow_id,
+                    "function_id": ctx.function_id,
+                    "function_name": function_name,
+                    "output": _serialization.serialize(result),
+                    "error": None,
+                }
+            )
+        return result
 
 
 def reset_system_database(config: ConfigFile) -> None:

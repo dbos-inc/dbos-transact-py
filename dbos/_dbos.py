@@ -734,32 +734,11 @@ class DBOS:
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
         """Return the status of a workflow execution."""
-        sys_db = _get_dbos_instance()._sys_db
-        ctx = get_local_dbos_context()
-        if ctx and ctx.is_within_workflow():
-            ctx.function_id += 1
-            res = sys_db.check_operation_execution(ctx.workflow_id, ctx.function_id)
-            if res is not None:
-                if res["output"]:
-                    resstat: WorkflowStatus = _serialization.deserialize(res["output"])
-                    return resstat
-                else:
-                    raise DBOSException(
-                        "Workflow status record not found. This should not happen! \033[1m Hint: Check if your workflow is deterministic.\033[0m"
-                    )
-        stat = get_workflow(_get_dbos_instance()._sys_db, workflow_id, True)
 
-        if ctx and ctx.is_within_workflow():
-            sys_db.record_operation_result(
-                {
-                    "workflow_uuid": ctx.workflow_id,
-                    "function_id": ctx.function_id,
-                    "function_name": "DBOS.getStatus",
-                    "output": _serialization.serialize(stat),
-                    "error": None,
-                }
-            )
-        return stat
+        def fn() -> Optional[WorkflowStatus]:
+            return get_workflow(_get_dbos_instance()._sys_db, workflow_id, True)
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.getStatus")
 
     @classmethod
     async def get_workflow_status_async(
