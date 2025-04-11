@@ -1,4 +1,5 @@
 import json
+import uuid
 from typing import Any, List, Optional
 
 from . import _serialization
@@ -179,3 +180,22 @@ def list_workflow_steps(
     merged_steps = steps + transactions
     merged_steps.sort(key=lambda step: step["function_id"])
     return merged_steps
+
+
+def fork_workflow(
+    sys_db: SystemDatabase,
+    app_db: ApplicationDatabase,
+    workflow_id: str,
+    start_step: int = 1,
+) -> str:
+    forked_workflow_uuid = str(uuid.uuid4())
+    app_db.clone_workflow_transactions(
+        workflow_id=workflow_id,
+        forked_workflow_uuid=forked_workflow_uuid,
+        start_step=start_step,
+    )
+    return sys_db.fork_workflow(
+        workflow_id=workflow_id,
+        forked_workflow_uuid=forked_workflow_uuid,
+        start_step=start_step,
+    )

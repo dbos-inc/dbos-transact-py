@@ -219,3 +219,50 @@ class ApplicationDatabase:
             )
             for row in rows
         ]
+
+    def clone_workflow_transactions(
+        engine, src_workflow_uuid: str, forked_workflow_uuid: str, start_step: int
+    ) -> None:
+        """
+        Copies all steps from dbos.transctions_outputs where function_id < input function_id
+        into a new workflow_uuid. Returns the new workflow_uuid.
+        """
+
+        with engine.begin() as conn:
+            # Select the rows you want to copy
+            rows = conn.execute(
+                sa.select(
+                    ApplicationSchema.transaction_outputs.c.function_id,
+                    ApplicationSchema.transaction_outputs.c.output,
+                    ApplicationSchema.transaction_outputs.c.error,
+                    ApplicationSchema.transaction_outputs.c.txn_id,
+                    ApplicationSchema.transaction_outputs.c.txn_snapshot,
+                    ApplicationSchema.transaction_outputs.c.executor_id,
+                    ApplicationSchema.transaction_outputs.c.function_name,
+                ).where(
+                    (
+                        ApplicationSchema.transaction_outputs.c.workflow_uuid
+                        == src_workflow_uuid
+                    )
+                    & (ApplicationSchema.transaction_outputs.c.function_id < start_step)
+                )
+            ).fetchall()
+
+        if rows:
+            # Prepare the new rows to insert
+            new_rows = [
+                {
+                    "workflow_uuid": forked_workflow_uuid,
+                    "function_id": row.function_id,
+                    "output": row.output,
+                    "error": row.error,
+                    "txn_id": row.txn_id,
+                    "txn_snapshot": row.txn_snapshot,
+                    "executor_id": row.executor_id,
+                    "function_name": row.function_name,
+                }
+                for row in rows
+            ]
+
+        # Insert the new rows
+        conn.execute(sa.insert(ApplicationSchema.transaction_outputs), new_rows)

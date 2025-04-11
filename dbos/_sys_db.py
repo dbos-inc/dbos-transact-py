@@ -486,7 +486,9 @@ class SystemDatabase:
                 .values(status=WorkflowStatusString.ENQUEUED.value, recovery_attempts=0)
             )
 
-    def fork_workflow(self, original_workflow_id: str) -> str:
+    def fork_workflow(
+        self, original_workflow_id: str, forked_workflow_id: str, start_step: int = 1
+    ) -> str:
         status = self.get_workflow_status(original_workflow_id)
         if status is None:
             raise Exception(f"Workflow {original_workflow_id} not found")
@@ -494,7 +496,7 @@ class SystemDatabase:
         if inputs is None:
             raise Exception(f"Workflow {original_workflow_id} not found")
         # Generate a random ID for the forked workflow
-        forked_workflow_id = str(uuid.uuid4())
+        # forked_workflow_id = str(uuid.uuid4())
         with self.engine.begin() as c:
             # Create an entry for the forked workflow with the same
             # initial values as the original.
@@ -521,6 +523,45 @@ class SystemDatabase:
                     inputs=_serialization.serialize_args(inputs),
                 )
             )
+
+            # Copy the original workflow's outputs into the forked workflow
+
+            # is the first step 0 or 1 ? need to confirm
+            if start_step > 1:
+
+                rows = c.execute(
+                    sa.select(
+                        SystemSchema.operation_outputs.c.function_id,
+                        SystemSchema.operation_outputs.c.output,
+                        SystemSchema.operation_outputs.c.error,
+                        SystemSchema.operation_outputs.c.function_name,
+                        SystemSchema.operation_outputs.c.child_workflow_id,
+                    ).where(
+                        (
+                            SystemSchema.operation_outputs.c.workflow_uuid
+                            == forked_workflow_id
+                        )
+                        & (SystemSchema.operation_outputs.c.function_id < start_step)
+                    )
+                ).fetchall()
+
+                if rows:
+                    # Prepare the new rows to insert
+                    new_rows = [
+                        {
+                            "workflow_uuid": forked_workflow_id,
+                            "function_id": row.function_id,
+                            "output": row.output,
+                            "error": row.error,
+                            "function_name": row.function_name,
+                            "child_workflow_id": row.child_workflow_id,
+                        }
+                        for row in rows
+                    ]
+
+                    # Insert the new rows
+                    c.execute(sa.insert(SystemSchema.operation_outputs), new_rows)
+
             # Enqueue the forked workflow on the internal queue
             c.execute(
                 pg.insert(SystemSchema.workflow_queue).values(
