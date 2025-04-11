@@ -599,7 +599,7 @@ class SystemDatabase:
                         error = row[2]
                         raise _serialization.deserialize_exception(error)
                     elif status == WorkflowStatusString.CANCELLED.value:
-                        # Return a normal exception here, not the cancellation exception
+                        # Raise a normal exception here, not the cancellation exception
                         # because the awaiting workflow is not being cancelled.
                         raise Exception(f"Awaited workflow {workflow_id} was cancelled")
                 else:
