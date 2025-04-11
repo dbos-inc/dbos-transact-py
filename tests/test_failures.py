@@ -1,4 +1,3 @@
-import datetime
 import threading
 import time
 import uuid
@@ -8,10 +7,9 @@ import sqlalchemy as sa
 from psycopg.errors import SerializationFailure
 from sqlalchemy.exc import InvalidRequestError, OperationalError
 
-from dbos import DBOS, GetWorkflowsInput, Queue, SetWorkflowID
+from dbos import DBOS, Queue, SetWorkflowID
 from dbos._error import (
     DBOSDeadLetterQueueError,
-    DBOSException,
     DBOSMaxStepRetriesExceeded,
     DBOSUnexpectedStepError,
 )
