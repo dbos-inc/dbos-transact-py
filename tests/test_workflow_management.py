@@ -140,6 +140,8 @@ def test_cancel_resume_queue(dbos: DBOS) -> None:
     main_thread_event.wait()
     DBOS.cancel_workflow(wfid)
     workflow_event.set()
+    with pytest.raises(Exception):
+        handle.get_result()
     assert steps_completed == 1
 
     # Resume the workflow. Verify it completes successfully.

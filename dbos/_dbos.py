@@ -166,7 +166,6 @@ class DBOSRegistry:
         self.pollers: list[RegisteredJob] = []
         self.dbos: Optional[DBOS] = None
         self.config: Optional[ConfigFile] = None
-        self.workflow_cancelled_map: dict[str, bool] = {}
 
     def register_wf_function(self, name: str, wrapped_func: F, functype: str) -> None:
         if name in self.function_type_map:
@@ -214,15 +213,6 @@ class DBOSRegistry:
                 )
         else:
             self.instance_info_map[fn] = inst
-
-    def cancel_workflow(self, workflow_id: str) -> None:
-        self.workflow_cancelled_map[workflow_id] = True
-
-    def is_workflow_cancelled(self, workflow_id: str) -> bool:
-        return self.workflow_cancelled_map.get(workflow_id, False)
-
-    def clear_workflow_cancelled(self, workflow_id: str) -> None:
-        self.workflow_cancelled_map.pop(workflow_id, None)
 
     def compute_app_version(self) -> str:
         """
@@ -740,32 +730,11 @@ class DBOS:
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
         """Return the status of a workflow execution."""
-        sys_db = _get_dbos_instance()._sys_db
-        ctx = get_local_dbos_context()
-        if ctx and ctx.is_within_workflow():
-            ctx.function_id += 1
-            res = sys_db.check_operation_execution(ctx.workflow_id, ctx.function_id)
-            if res is not None:
-                if res["output"]:
-                    resstat: WorkflowStatus = _serialization.deserialize(res["output"])
-                    return resstat
-                else:
-                    raise DBOSException(
-                        "Workflow status record not found. This should not happen! \033[1m Hint: Check if your workflow is deterministic.\033[0m"
-                    )
-        stat = get_workflow(_get_dbos_instance()._sys_db, workflow_id, True)
 
-        if ctx and ctx.is_within_workflow():
-            sys_db.record_operation_result(
-                {
-                    "workflow_uuid": ctx.workflow_id,
-                    "function_id": ctx.function_id,
-                    "function_name": "DBOS.getStatus",
-                    "output": _serialization.serialize(stat),
-                    "error": None,
-                }
-            )
-        return stat
+        def fn() -> Optional[WorkflowStatus]:
+            return get_workflow(_get_dbos_instance()._sys_db, workflow_id, True)
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.getStatus")
 
     @classmethod
     async def get_workflow_status_async(
@@ -957,14 +926,12 @@ class DBOS:
         """Cancel a workflow by ID."""
         dbos_logger.info(f"Cancelling workflow: {workflow_id}")
         _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
-        _get_or_create_dbos_registry().cancel_workflow(workflow_id)
 
     @classmethod
     def resume_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Resume a workflow by ID."""
         dbos_logger.info(f"Resuming workflow: {workflow_id}")
         _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
-        _get_or_create_dbos_registry().clear_workflow_cancelled(workflow_id)
         return cls.retrieve_workflow(workflow_id)
 
     @classmethod

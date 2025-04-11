@@ -37,6 +37,7 @@ class DBOSErrorCode(Enum):
     NotAuthorized = 8
     ConflictingWorkflowError = 9
     WorkflowCancelled = 10
+    UnexpectedStep = 11
     ConflictingRegistrationError = 25
 
 
@@ -154,4 +155,16 @@ class DBOSConflictingRegistrationError(DBOSException):
         super().__init__(
             f"Operation (Name: {name}) is already registered with a conflicting function type",
             dbos_error_code=DBOSErrorCode.ConflictingRegistrationError.value,
+        )
+
+
+class DBOSUnexpectedStepError(DBOSException):
+    """Exception raised when a step has an unexpected recorded name."""
+
+    def __init__(
+        self, workflow_id: str, step_id: int, expected_name: str, recorded_name: str
+    ) -> None:
+        super().__init__(
+            f"During execution of workflow {workflow_id} step {step_id}, function {recorded_name} was recorded when {expected_name} was expected. Check that your workflow is deterministic.",
+            dbos_error_code=DBOSErrorCode.UnexpectedStep.value,
         )
