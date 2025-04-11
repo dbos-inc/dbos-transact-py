@@ -189,43 +189,46 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     assert handle.get_status().status == WorkflowStatusString.SUCCESS.value
 
 
-def test_wfstatus_invalid(dbos: DBOS) -> None:
-    @DBOS.workflow()
-    def regular_workflow() -> str:
-        return "done"
+def test_nondeterministic_workflow(dbos: DBOS) -> None:
+    flag = True
+    workflow_event = threading.Event()
+    main_thread_event = threading.Event()
 
-    has_executed = False
-    event = threading.Event()
-    wfevent = threading.Event()
+    @DBOS.step()
+    def step_one():
+        return
+
+    @DBOS.step()
+    def step_two():
+        return
 
     @DBOS.workflow()
     def non_deterministic_workflow() -> None:
-        nonlocal has_executed
-        handle = dbos.start_workflow(regular_workflow)
-        if not has_executed:
-            # Mock a scenario where the workflow control flow is changed by an external process
-            dbos.set_event("test_event", "value1")
-            has_executed = True
-        handle.get_status()
-        res = handle.get_result()
-        assert res == "done"
-        wfevent.set()
-        event.wait()
-        return
+        if flag:
+            step_one()
+        else:
+            step_two()
+        main_thread_event.set()
+        workflow_event.wait()
 
-    wfuuid = str(uuid.uuid4())
-    with SetWorkflowID(wfuuid):
-        handle1 = dbos.start_workflow(non_deterministic_workflow)
+    # Start the workflow. It will complete step_one then wait.
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = dbos.start_workflow(non_deterministic_workflow)
+    main_thread_event.wait()
 
-    # Make sure the first one has reached the point where it waits for the event
-    wfevent.wait()
-    with SetWorkflowID(wfuuid):
-        handle2 = dbos.start_workflow(non_deterministic_workflow)
+    # To simulate nondeterminism, set the flag then restart the workflow.
+    flag = False
+    with SetWorkflowID(wfid):
+        handle_two = dbos.start_workflow(non_deterministic_workflow)
 
+    # Due to the nondeterminism, the workflow should encounter an unexpected step.
     with pytest.raises(DBOSUnexpectedStepError) as exc_info:
-        handle2.get_result()
-    event.set()
-    assert handle1.get_result() == None
+        handle_two.get_result()
+
+    # The original workflow should complete successfully.
+    workflow_event.set()
+    assert handle.get_result() == None
 
 
 def test_step_retries(dbos: DBOS) -> None:
