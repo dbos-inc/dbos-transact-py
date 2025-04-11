@@ -172,6 +172,12 @@ class DBOSRegistry:
         if name in self.function_type_map:
             if self.function_type_map[name] != functype:
                 raise DBOSConflictingRegistrationError(name)
+            if name != TEMP_SEND_WF_NAME:
+                # Remove the `<temp>` prefix from the function name to avoid confusion
+                truncated_name = name.replace("<temp>.", "")
+                dbos_logger.warning(
+                    f"Duplicate registration of function '{truncated_name}'. A function named '{truncated_name}' has already been registered with DBOS. All functions registered with DBOS must have unique names."
+                )
         self.function_type_map[name] = functype
         self.workflow_info_map[name] = wrapped_func
 
