@@ -918,7 +918,6 @@ class SystemDatabase:
         )
         # If the workflow is cancelled, raise the exception
         if workflow_status == WorkflowStatusString.CANCELLED.value:
-            print("RAISE")
             raise DBOSWorkflowCancelledError(
                 f"Workflow {workflow_id} is cancelled. Aborting function."
             )
