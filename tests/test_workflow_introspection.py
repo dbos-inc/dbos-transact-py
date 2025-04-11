@@ -958,7 +958,7 @@ def test_list_transaction_error(
     assert wfsteps[3]["function_name"] == "DBOS.sleep"
 
 
-def test_list_workflows_as_step(dbos: DBOS):
+def test_list_workflows_as_step(dbos: DBOS) -> None:
     workflow_event = threading.Event()
     main_thread_event = threading.Event()
 
@@ -970,7 +970,7 @@ def test_list_workflows_as_step(dbos: DBOS):
         return length
 
     @DBOS.workflow()
-    def simple_workflow():
+    def simple_workflow() -> None:
         return
 
     # Start the workflow. It should find one workflow.
