@@ -924,20 +924,37 @@ class DBOS:
     @classmethod
     def cancel_workflow(cls, workflow_id: str) -> None:
         """Cancel a workflow by ID."""
-        dbos_logger.info(f"Cancelling workflow: {workflow_id}")
-        _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
+
+        def fn() -> None:
+            dbos_logger.info(f"Cancelling workflow: {workflow_id}")
+            _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.cancelWorkflow"
+        )
 
     @classmethod
     def resume_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Resume a workflow by ID."""
-        dbos_logger.info(f"Resuming workflow: {workflow_id}")
-        _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
+
+        def fn() -> None:
+            dbos_logger.info(f"Resuming workflow: {workflow_id}")
+            _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
+
+        _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.resumeWorkflow")
         return cls.retrieve_workflow(workflow_id)
 
     @classmethod
     def restart_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID"""
-        forked_workflow_id = _get_dbos_instance()._sys_db.fork_workflow(workflow_id)
+
+        def fn() -> str:
+            dbos_logger.info(f"Restarting workflow: {workflow_id}")
+            return _get_dbos_instance()._sys_db.fork_workflow(workflow_id)
+
+        forked_workflow_id = _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.restartWorkflow"
+        )
         return cls.retrieve_workflow(forked_workflow_id)
 
     @classmethod
@@ -955,18 +972,23 @@ class DBOS:
         offset: Optional[int] = None,
         sort_desc: bool = False,
     ) -> List[WorkflowStatus]:
-        return list_workflows(
-            _get_dbos_instance()._sys_db,
-            workflow_ids=workflow_ids,
-            status=status,
-            start_time=start_time,
-            end_time=end_time,
-            name=name,
-            app_version=app_version,
-            user=user,
-            limit=limit,
-            offset=offset,
-            sort_desc=sort_desc,
+        def fn() -> List[WorkflowStatus]:
+            return list_workflows(
+                _get_dbos_instance()._sys_db,
+                workflow_ids=workflow_ids,
+                status=status,
+                start_time=start_time,
+                end_time=end_time,
+                name=name,
+                app_version=app_version,
+                user=user,
+                limit=limit,
+                offset=offset,
+                sort_desc=sort_desc,
+            )
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.listWorkflows"
         )
 
     @classmethod
@@ -982,16 +1004,21 @@ class DBOS:
         offset: Optional[int] = None,
         sort_desc: bool = False,
     ) -> List[WorkflowStatus]:
-        return list_queued_workflows(
-            _get_dbos_instance()._sys_db,
-            queue_name=queue_name,
-            status=status,
-            start_time=start_time,
-            end_time=end_time,
-            name=name,
-            limit=limit,
-            offset=offset,
-            sort_desc=sort_desc,
+        def fn() -> List[WorkflowStatus]:
+            return list_queued_workflows(
+                _get_dbos_instance()._sys_db,
+                queue_name=queue_name,
+                status=status,
+                start_time=start_time,
+                end_time=end_time,
+                name=name,
+                limit=limit,
+                offset=offset,
+                sort_desc=sort_desc,
+            )
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.listQueuedWorkflows"
         )
 
     @classproperty
