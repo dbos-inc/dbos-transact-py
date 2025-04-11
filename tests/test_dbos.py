@@ -1257,6 +1257,63 @@ def test_double_decoration(dbos: DBOS) -> None:
         my_function()
 
 
+def test_duplicate_registration(
+    dbos: DBOS, caplog: pytest.LogCaptureFixture, config: ConfigFile
+) -> None:
+    original_propagate = logging.getLogger("dbos").propagate
+    caplog.set_level(logging.WARNING, "dbos")
+    logging.getLogger("dbos").propagate = True
+
+    @DBOS.transaction()
+    def my_transaction() -> None:
+        pass
+
+    @DBOS.transaction()
+    def my_transaction() -> None:
+        pass
+
+    assert (
+        "Duplicate registration of function 'test_duplicate_registration.<locals>.my_transaction'"
+        in caplog.text
+    )
+
+    @DBOS.step()
+    def my_step() -> None:
+        pass
+
+    @DBOS.step()
+    def my_step() -> None:
+        pass
+
+    assert (
+        "Duplicate registration of function 'test_duplicate_registration.<locals>.my_step'"
+        in caplog.text
+    )
+
+    @DBOS.workflow()
+    def my_workflow() -> None:
+        my_step()
+        my_transaction()
+
+    @DBOS.workflow()
+    def my_workflow() -> None:
+        my_step()
+        my_transaction()
+
+    assert (
+        "Duplicate registration of function 'test_duplicate_registration.<locals>.my_workflow'"
+        in caplog.text
+    )
+
+    DBOS.destroy()
+    DBOS(config=config)
+    DBOS.launch()
+    assert "Duplicate registration of function 'temp_send_workflow'" not in caplog.text
+
+    # Reset logging
+    logging.getLogger("dbos").propagate = original_propagate
+
+
 def test_app_version(config: ConfigFile) -> None:
     def is_hex(s: str) -> bool:
         return all(c in "0123456789abcdefABCDEF" for c in s)
