@@ -983,13 +983,6 @@ def decorate_step(
                 "operationType": OperationType.STEP.value,
             }
 
-            # Check if the workflow is cancelled
-            ctx = assert_current_dbos_context()
-            if dbosreg.is_workflow_cancelled(ctx.workflow_id):
-                raise DBOSWorkflowCancelledError(
-                    f"Workflow {ctx.workflow_id} is cancelled. Aborting step {func.__name__}."
-                )
-
             attempts = max_attempts if retries_allowed else 1
             max_retry_interval_seconds: float = 3600  # 1 Hour
 

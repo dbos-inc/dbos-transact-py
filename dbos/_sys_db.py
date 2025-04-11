@@ -36,6 +36,7 @@ from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
     DBOSNonExistentWorkflowError,
+    DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
 )
 from ._logger import dbos_logger
@@ -877,31 +878,30 @@ class SystemDatabase:
 
     def check_operation_execution(
         self,
-        workflow_uuid: str,
+        workflow_id: str,
         function_id: int,
         *,
         conn: Optional[sa.Connection] = None,
     ) -> Optional[RecordedResult]:
         sql = (
             sa.select(
+                SystemSchema.workflow_status.c.status,
                 SystemSchema.operation_outputs.c.output,
                 SystemSchema.operation_outputs.c.error,
                 SystemSchema.operation_outputs.c.function_name,
-                SystemSchema.workflow_status.c.status,
             )
             .select_from(
-                SystemSchema.operation_outputs.join(
-                    SystemSchema.workflow_status,
-                    SystemSchema.operation_outputs.c.workflow_uuid
-                    == SystemSchema.workflow_status.c.workflow_uuid,
+                SystemSchema.workflow_status.outerjoin(
+                    SystemSchema.operation_outputs,
+                    (
+                        SystemSchema.workflow_status.c.workflow_uuid
+                        == SystemSchema.operation_outputs.c.workflow_uuid
+                    )
+                    & (SystemSchema.operation_outputs.c.function_id == function_id),
                 )
             )
-            .where(
-                SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
-                SystemSchema.operation_outputs.c.function_id == function_id,
-            )
+            .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
         )
-
         # If in a transaction, use the provided connection
         rows: Sequence[Any]
         if conn is not None:
@@ -909,14 +909,22 @@ class SystemDatabase:
         else:
             with self.engine.begin() as c:
                 rows = c.execute(sql).all()
-        if len(rows) == 0:
-            return None
-        output, error, function_name, workflow_status = (
+        assert len(rows) > 0, f"Error: Workflow {workflow_id} does not exist"
+        workflow_status, output, error, function_name = (
             rows[0][0],
             rows[0][1],
             rows[0][2],
             rows[0][3],
         )
+        # If the workflow is cancelled, raise the exception
+        if workflow_status == WorkflowStatusString.CANCELLED.value:
+            print("RAISE")
+            raise DBOSWorkflowCancelledError(
+                f"Workflow {workflow_id} is cancelled. Aborting function."
+            )
+        # If there is no row for the function, return None
+        if function_name is None:
+            return None
         result: RecordedResult = {
             "output": output,
             "error": error,
