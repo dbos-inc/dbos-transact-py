@@ -856,7 +856,9 @@ def test_cancelling_queued_workflows(dbos: DBOS) -> None:
 
     # Complete the blocked workflow
     blocking_event.set()
-    assert blocked_handle.get_result() == None
+    with pytest.raises(Exception) as exc_info:
+        blocked_handle.get_result()
+    assert "was cancelled" in str(exc_info.value)
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
