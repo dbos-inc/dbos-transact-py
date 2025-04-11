@@ -15,7 +15,6 @@ from typing import (
     Literal,
     Optional,
     Sequence,
-    Set,
     TypedDict,
     TypeVar,
 )
@@ -36,7 +35,6 @@ from ._dbos_config import ConfigFile, DatabaseConfig
 from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
-    DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSWorkflowConflictIDError,
 )
@@ -878,14 +876,30 @@ class SystemDatabase:
             raise
 
     def check_operation_execution(
-        self, workflow_uuid: str, function_id: int, conn: Optional[sa.Connection] = None
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        *,
+        conn: Optional[sa.Connection] = None,
     ) -> Optional[RecordedResult]:
-        sql = sa.select(
-            SystemSchema.operation_outputs.c.output,
-            SystemSchema.operation_outputs.c.error,
-        ).where(
-            SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
-            SystemSchema.operation_outputs.c.function_id == function_id,
+        sql = (
+            sa.select(
+                SystemSchema.operation_outputs.c.output,
+                SystemSchema.operation_outputs.c.error,
+                SystemSchema.operation_outputs.c.function_name,
+                SystemSchema.workflow_status.c.status,
+            )
+            .select_from(
+                SystemSchema.operation_outputs.join(
+                    SystemSchema.workflow_status,
+                    SystemSchema.operation_outputs.c.workflow_uuid
+                    == SystemSchema.workflow_status.c.workflow_uuid,
+                )
+            )
+            .where(
+                SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
+                SystemSchema.operation_outputs.c.function_id == function_id,
+            )
         )
 
         # If in a transaction, use the provided connection
@@ -897,9 +911,15 @@ class SystemDatabase:
                 rows = c.execute(sql).all()
         if len(rows) == 0:
             return None
+        output, error, function_name, workflow_status = (
+            rows[0][0],
+            rows[0][1],
+            rows[0][2],
+            rows[0][3],
+        )
         result: RecordedResult = {
-            "output": rows[0][0],
-            "error": rows[0][1],
+            "output": output,
+            "error": error,
         }
         return result
 
