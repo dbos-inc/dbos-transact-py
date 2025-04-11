@@ -848,7 +848,7 @@ def decorate_transaction(
                                         "Transaction output not found in debug mode"
                                     )
                                 if recorded_output:
-                                    dbos.logger.debug(
+                                    dbos.logger.info(
                                         f"Replaying transaction, id: {ctx.function_id}, name: {attributes['name']}"
                                     )
                                     if recorded_output["error"]:
@@ -868,7 +868,7 @@ def decorate_transaction(
                                             "Output and error are both None"
                                         )
                                 else:
-                                    dbos.logger.debug(
+                                    dbos.logger.info(
                                         f"Running transaction, id: {ctx.function_id}, name: {attributes['name']}"
                                     )
 

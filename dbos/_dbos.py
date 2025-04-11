@@ -967,6 +967,9 @@ class DBOS:
     ) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID"""
         forked_workflow_id = str(uuid.uuid4())
+        _dbos_global_instance._app_db.clone_workflow_transactions(
+            workflow_id, forked_workflow_id, start_step
+        )
         _get_dbos_instance()._sys_db.fork_workflow(
             workflow_id, forked_workflow_id, start_step
         )
