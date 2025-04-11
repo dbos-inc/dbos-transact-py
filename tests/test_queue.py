@@ -719,7 +719,7 @@ def test_queue_recovery(dbos: DBOS) -> None:
     assert step_counter == 5
 
     # Recover the workflow, then resume it.
-    recovery_handles = DBOS.recover_pending_workflows()
+    recovery_handles = DBOS._recover_pending_workflows()
     # Wait until the 2nd invocation of the workflows are dequeued and executed
     for e in step_events:
         e.wait()
@@ -790,7 +790,7 @@ def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
         c.execute(query)
 
     # Trigger workflow recovery. The two first workflows should still be blocked but the 3rd one enqueued
-    recovered_other_handles = DBOS.recover_pending_workflows(["other"])
+    recovered_other_handles = DBOS._recover_pending_workflows(["other"])
     assert handle1.get_status().status == WorkflowStatusString.PENDING.value
     assert handle2.get_status().status == WorkflowStatusString.PENDING.value
     assert len(recovered_other_handles) == 1
@@ -798,7 +798,7 @@ def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
     assert handle3.get_status().status == WorkflowStatusString.ENQUEUED.value
 
     # Trigger workflow recovery for "local". The two first workflows should be re-enqueued then dequeued again
-    recovered_local_handles = DBOS.recover_pending_workflows(["local"])
+    recovered_local_handles = DBOS._recover_pending_workflows(["local"])
     assert len(recovered_local_handles) == 2
     for h in recovered_local_handles:
         assert h.get_workflow_id() in [
@@ -934,12 +934,12 @@ def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
     # Attempt to recover the blocked workflow the maximum number of times
     for i in range(max_recovery_attempts):
         start_event.clear()
-        DBOS.recover_pending_workflows()
+        DBOS._recover_pending_workflows()
         start_event.wait()
         assert recovery_count == i + 2
 
     # Verify an additional recovery throws puts the workflow in the DLQ status.
-    DBOS.recover_pending_workflows()
+    DBOS._recover_pending_workflows()
     # we can't start_event.wait() here because the workflow will never execute
     time.sleep(2)
     assert (

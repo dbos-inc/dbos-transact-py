@@ -910,12 +910,12 @@ class DBOS:
         )
 
     @classmethod
-    def execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
+    def _execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Execute a workflow by ID (for recovery)."""
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id)
 
     @classmethod
-    def recover_pending_workflows(
+    def _recover_pending_workflows(
         cls, executor_ids: List[str] = ["local"]
     ) -> List[WorkflowHandle[Any]]:
         """Find all PENDING workflows and execute them."""

@@ -241,7 +241,7 @@ def test_client_send_idempotent(dbos: DBOS, client: DBOSClient) -> None:
         ).fetchall()
         assert len(sresult) == 1
 
-    DBOS.recover_pending_workflows()
+    DBOS._recover_pending_workflows()
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     result2 = handle.get_result()
     assert result2 == message
@@ -294,7 +294,7 @@ def test_client_send_failure(dbos: DBOS, client: DBOSClient) -> None:
         assert len(s2result) == 1
         assert s2result[0][0] == 2
 
-    DBOS.recover_pending_workflows()
+    DBOS._recover_pending_workflows()
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     result = handle.get_result()
     assert result == message

@@ -91,7 +91,7 @@ def test_wf_debug(dbos: DBOS, config: ConfigFile) -> None:
     DBOS(config=config)
     DBOS.launch(debug_mode=True)
 
-    handle = DBOS.execute_workflow_id(wfuuid)
+    handle = DBOS._execute_workflow_id(wfuuid)
     result = handle.get_result()
     assert result == "test"
     assert wf_counter == 2
@@ -136,7 +136,7 @@ def test_wf_debug_exception(dbos: DBOS, config: ConfigFile) -> None:
     DBOS(config=config)
     DBOS.launch(debug_mode=True)
 
-    handle = DBOS.execute_workflow_id(wfuuid)
+    handle = DBOS._execute_workflow_id(wfuuid)
     with pytest.raises(Exception) as excinfo:
         handle.get_result()
     assert str(excinfo.value) == "test_wf_debug_exception"

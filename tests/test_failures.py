@@ -163,13 +163,13 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
 
     # Attempt to recover the blocked workflow the maximum number of times
     for i in range(max_recovery_attempts):
-        DBOS.recover_pending_workflows()
+        DBOS._recover_pending_workflows()
         assert recovery_count == i + 2
 
     # Verify an additional attempt (either through recovery or through a direct call) throws a DLQ error
     # and puts the workflow in the DLQ status.
     with pytest.raises(Exception) as exc_info:
-        DBOS.recover_pending_workflows()
+        DBOS._recover_pending_workflows()
     assert exc_info.errisinstance(DBOSDeadLetterQueueError)
     assert handle.get_status().status == WorkflowStatusString.RETRIES_EXCEEDED.value
     with pytest.raises(Exception) as exc_info:
@@ -179,7 +179,7 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
 
     # Resume the workflow. Verify it can recover again without error.
     resumed_handle = dbos.resume_workflow(wfid)
-    DBOS.recover_pending_workflows()
+    DBOS._recover_pending_workflows()
 
     # Complete the blocked workflow
     event.set()
@@ -379,7 +379,7 @@ def test_recovery_during_retries(dbos: DBOS) -> None:
 
     handle = DBOS.start_workflow(failing_workflow)
     start_event.wait()
-    recovery_handles = DBOS.recover_pending_workflows()
+    recovery_handles = DBOS._recover_pending_workflows()
     assert len(recovery_handles) == 1
     blocking_event.set()
     assert handle.get_result() is None
@@ -405,6 +405,6 @@ def test_keyboardinterrupt_during_retries(dbos: DBOS) -> None:
     with pytest.raises(KeyboardInterrupt):
         failing_workflow()
     raise_interrupt = False
-    recovery_handles = DBOS.recover_pending_workflows()
+    recovery_handles = DBOS._recover_pending_workflows()
     assert len(recovery_handles) == 1
     assert recovery_handles[0].get_result() == recovery_handles[0].workflow_id
