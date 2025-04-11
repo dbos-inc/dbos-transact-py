@@ -45,6 +45,9 @@ class WorkflowStatus:
     executor_id: Optional[str]
     # The application version on which this workflow was started
     app_version: Optional[str]
+
+    # INTERNAL FIELDS
+
     # The ID of the application executing this workflow
     app_id: Optional[str]
     # The number of times this workflow's execution has been attempted
