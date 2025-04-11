@@ -791,13 +791,14 @@ def decorate_transaction(
                     f"Function {func.__name__} invoked before DBOS initialized"
                 )
 
+            dbos = dbosreg.dbos
             ctx = assert_current_dbos_context()
-            if dbosreg.is_workflow_cancelled(ctx.workflow_id):
+            status = dbos._sys_db.get_workflow_status(ctx.workflow_id)
+            if status and status["status"] == WorkflowStatusString.CANCELLED.value:
                 raise DBOSWorkflowCancelledError(
                     f"Workflow {ctx.workflow_id} is cancelled. Aborting transaction {func.__name__}."
                 )
 
-            dbos = dbosreg.dbos
             with dbos._app_db.sessionmaker() as session:
                 attributes: TracedAttributes = {
                     "name": func.__name__,
@@ -819,12 +820,6 @@ def decorate_transaction(
                     backoff_factor = 1.5
                     max_retry_wait_seconds = 2.0
                     while True:
-
-                        if dbosreg.is_workflow_cancelled(ctx.workflow_id):
-                            raise DBOSWorkflowCancelledError(
-                                f"Workflow {ctx.workflow_id} is cancelled. Aborting transaction {func.__name__}."
-                            )
-
                         has_recorded_error = False
                         txn_error: Optional[Exception] = None
                         try:
