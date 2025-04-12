@@ -486,6 +486,18 @@ class SystemDatabase:
                 .values(status=WorkflowStatusString.ENQUEUED.value, recovery_attempts=0)
             )
 
+    def get_max_function_id(self, workflow_uuid: str) -> Optional[int]:
+        with self.engine.begin() as conn:
+            max_function_id_row = conn.execute(
+                sa.select(
+                    sa.func.max(SystemSchema.operation_outputs.c.function_id)
+                ).where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid)
+            ).fetchone()
+
+            max_function_id = max_function_id_row[0] if max_function_id_row else None
+
+            return max_function_id
+
     def fork_workflow(
         self, original_workflow_id: str, forked_workflow_id: str, start_step: int = 1
     ) -> str:
@@ -532,23 +544,23 @@ class SystemDatabase:
             # is the first step 0 or 1 ? need to confirm
             if start_step > 1:
 
-                max_function_id_row = c.execute(
-                    sa.select(
-                        sa.func.max(SystemSchema.operation_outputs.c.function_id)
-                    ).where(
-                        SystemSchema.operation_outputs.c.workflow_uuid
-                        == original_workflow_id
-                    )
-                ).fetchone()
+                # max_function_id_row = c.execute(
+                #    sa.select(
+                #        sa.func.max(SystemSchema.operation_outputs.c.function_id)
+                #    ).where(
+                #        SystemSchema.operation_outputs.c.workflow_uuid
+                #        == original_workflow_id
+                #    )
+                # ).fetchone()
 
-                max_function_id = (
-                    max_function_id_row[0] if max_function_id_row else None
-                )
+                # max_function_id = (
+                #    max_function_id_row[0] if max_function_id_row else None
+                # )
 
-                if max_function_id is not None and start_step > max_function_id:
-                    raise DBOSWorkflowConflictIDError(
-                        f"Forked workflow start step {start_step} is greater than max step function id {max_function_id} in original workflow {original_workflow_id}"
-                    )
+                # if max_function_id is not None and start_step > max_function_id:
+                #    raise DBOSWorkflowConflictIDError(
+                #        f"Forked workflow start step {start_step} is greater than max step function id {max_function_id} in original workflow {original_workflow_id}"
+                #    )
 
                 rows = c.execute(
                     sa.select(

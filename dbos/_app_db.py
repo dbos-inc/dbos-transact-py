@@ -220,6 +220,21 @@ class ApplicationDatabase:
             for row in rows
         ]
 
+    def get_max_function_id(self, workflow_uuid: str) -> Optional[int]:
+        with self.engine.begin() as conn:
+            max_function_id_row = conn.execute(
+                sa.select(
+                    sa.func.max(ApplicationSchema.transaction_outputs.c.function_id)
+                ).where(
+                    ApplicationSchema.transaction_outputs.c.workflow_uuid
+                    == workflow_uuid
+                )
+            ).fetchone()
+
+            max_function_id = max_function_id_row[0] if max_function_id_row else None
+
+            return max_function_id
+
     def clone_workflow_transactions(
         self, src_workflow_id: str, forked_workflow_id: str, start_step: int
     ) -> None:
@@ -234,23 +249,23 @@ class ApplicationDatabase:
         with self.engine.begin() as conn:
             # Select the rows you want to copy
 
-            max_function_id_row = conn.execute(
-                sa.select(
-                    sa.func.max(ApplicationSchema.transaction_outputs.c.function_id)
-                ).where(
-                    ApplicationSchema.transaction_outputs.c.workflow_uuid
-                    == src_workflow_id
-                )
-            ).fetchone()
+            # max_function_id_row = conn.execute(
+            #    sa.select(
+            #        sa.func.max(ApplicationSchema.transaction_outputs.c.function_id)
+            #    ).where(
+            #        ApplicationSchema.transaction_outputs.c.workflow_uuid
+            #        == src_workflow_id
+            #    )
+            # ).fetchone()
 
-            max_function_id = max_function_id_row[0] if max_function_id_row else None
+            # max_function_id = max_function_id_row[0] if max_function_id_row else None
 
-            print(f"transaction rows Max function id: {max_function_id}")
+            # print(f"transaction rows Max function id: {max_function_id}")
 
-            if max_function_id is not None and start_step > max_function_id:
-                raise DBOSWorkflowConflictIDError(
-                    f"Forked workflow start step {start_step} is greater than max step function id {max_function_id} in original workflow {src_workflow_id}"
-                )
+            # if max_function_id is not None and start_step > max_function_id:
+            #    raise DBOSWorkflowConflictIDError(
+            #         f"Forked workflow start step {start_step} is greater than max step function id {max_function_id} in original workflow {src_workflow_id}"
+            #    )
 
             rows = conn.execute(
                 sa.select(
