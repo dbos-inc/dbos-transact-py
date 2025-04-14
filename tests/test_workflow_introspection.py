@@ -956,3 +956,37 @@ def test_list_transaction_error(
     assert wfsteps[2]["output"] == None
     assert isinstance(wfsteps[2]["error"], Exception)
     assert wfsteps[3]["function_name"] == "DBOS.sleep"
+
+
+def test_list_workflows_as_step(dbos: DBOS) -> None:
+    workflow_event = threading.Event()
+    main_thread_event = threading.Event()
+
+    @DBOS.workflow()
+    def listing_workflow() -> int:
+        length = len(DBOS.list_workflows())
+        main_thread_event.set()
+        workflow_event.wait()
+        return length
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        return
+
+    # Start the workflow. It should find one workflow.
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(listing_workflow)
+    main_thread_event.wait()
+
+    # Run another workflow
+    simple_workflow()
+
+    # Run the listing workflow again with the same ID.
+    with SetWorkflowID(wfid):
+        handle_two = DBOS.start_workflow(listing_workflow)
+
+    # Complete both executions. They should each find one workflow.
+    workflow_event.set()
+    assert handle.get_result() == 1
+    assert handle_two.get_result() == 1

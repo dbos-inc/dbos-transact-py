@@ -28,7 +28,7 @@ def debug_workflow(workflow_id: str, entrypoint: Union[str, PythonModule]) -> No
 
     DBOS.logger.info(f"Debugging workflow {workflow_id}...")
     DBOS.launch(debug_mode=True)
-    handle = DBOS.execute_workflow_id(workflow_id)
+    handle = DBOS._execute_workflow_id(workflow_id)
     handle.get_result()
     DBOS.logger.info("Workflow Debugging complete. Exiting process.")
 

@@ -53,7 +53,7 @@ class WF:
 def main() -> None:
     DBOS(config=default_config())
     DBOS.launch()
-    DBOS.recover_pending_workflows()
+    DBOS._recover_pending_workflows()
 
     with SetWorkflowID("testqueuedwfcrash"):
         WF.enqueue_5_tasks()
