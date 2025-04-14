@@ -7,7 +7,7 @@ import pytest
 # Public API
 from dbos import DBOS, Queue, SetWorkflowID
 from dbos._dbos import DBOSConfiguredInstance
-from dbos._error import DBOSWorkflowCancelledError
+from dbos._error import DBOSException, DBOSWorkflowCancelledError
 from dbos._utils import INTERNAL_QUEUE_NAME
 from tests.conftest import queue_entries_are_cleaned_up
 
@@ -470,3 +470,25 @@ def test_restart_fromsteps_steps_tr(
     assert trThreeCount == 2
     assert stepFourCount == 2
     assert trFiveCount == 3
+
+    # invalid step
+    try:
+        forked_handle = DBOS.restart_workflow(wfid, 7)
+        assert forked_handle.workflow_id != wfid
+        forked_handle.get_result()
+    except Exception as e:
+        print(f"Exception: {e}")
+        assert isinstance(e, DBOSException)
+        assert "Cannot restart workflow" in str(e)
+        assert trOneCount == 1
+
+    # invalid < 1 will default to 1
+    forked_handle = DBOS.restart_workflow(wfid, -1)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert trOneCount == 2
+    assert stepTwoCount == 2
+    assert trThreeCount == 3
+    assert stepFourCount == 3
+    assert trFiveCount == 4
