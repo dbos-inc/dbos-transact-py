@@ -411,7 +411,7 @@ def test_class_recovery(dbos: DBOS) -> None:
     assert exc_cnt == 1
 
     # Test we can execute the workflow by uuid as recovery would do
-    handle = DBOS.execute_workflow_id("run1")
+    handle = DBOS._execute_workflow_id("run1")
     assert handle.get_result() == "ran"
     assert exc_cnt == 1
 
@@ -444,7 +444,7 @@ def test_inst_recovery(dbos: DBOS) -> None:
 
     # Test we can execute the workflow by uuid as recovery would do
     last_inst = None
-    handle = DBOS.execute_workflow_id(wfid)
+    handle = DBOS._execute_workflow_id(wfid)
     assert handle.get_result() == "ran2"
     assert exc_cnt == 1
     # Workflow has finished so last_inst should be None
@@ -482,7 +482,7 @@ def test_inst_async_recovery(dbos: DBOS) -> None:
     assert status.class_name == "TestClass"
     assert status.config_name == "test_class"
 
-    recovery_handle = DBOS.execute_workflow_id(wfid)
+    recovery_handle = DBOS._execute_workflow_id(wfid)
 
     event.set()
     assert orig_handle.get_result() == input * multiplier
@@ -516,7 +516,7 @@ def test_inst_async_step_recovery(dbos: DBOS) -> None:
     assert status.class_name == "TestClass"
     assert status.config_name == "test_class"
 
-    recovery_handle = DBOS.execute_workflow_id(wfid)
+    recovery_handle = DBOS._execute_workflow_id(wfid)
 
     event.set()
     assert orig_handle.get_result() == input * multiplier
@@ -561,7 +561,7 @@ def test_step_recovery(dbos: DBOS) -> None:
     assert status.class_name == "TestClass"
     assert status.config_name == "test_class"
 
-    recovery_handle = DBOS.execute_workflow_id(wfid)
+    recovery_handle = DBOS._execute_workflow_id(wfid)
 
     blocking_event.set()
     thread.join()
@@ -614,7 +614,7 @@ def test_class_queue_recovery(dbos: DBOS) -> None:
     assert step_counter == 5
 
     # Recover the workflow, then resume it.
-    recovery_handles = DBOS.recover_pending_workflows()
+    recovery_handles = DBOS._recover_pending_workflows()
     # Wait until the 2nd invocation of the workflows are dequeued and executed
     for e in step_events:
         e.wait()
@@ -683,7 +683,7 @@ def test_class_static_queue_recovery(dbos: DBOS) -> None:
     assert step_counter == 5
 
     # Recover the workflow, then resume it.
-    recovery_handles = DBOS.recover_pending_workflows()
+    recovery_handles = DBOS._recover_pending_workflows()
     # Wait until the 2nd invocation of the workflows are dequeued and executed
     for e in step_events:
         e.wait()
@@ -757,7 +757,7 @@ def test_class_classmethod_queue_recovery(dbos: DBOS) -> None:
     assert step_counter == 5
 
     # Recover the workflow, then resume it.
-    recovery_handles = DBOS.recover_pending_workflows()
+    recovery_handles = DBOS._recover_pending_workflows()
     # Wait until the 2nd invocation of the workflows are dequeued and executed
     for e in step_events:
         e.wait()

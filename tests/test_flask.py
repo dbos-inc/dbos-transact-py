@@ -120,6 +120,6 @@ def test_endpoint_recovery(dbos_flask: Tuple[DBOS, Flask]) -> None:
     )
 
     # Recovery should execute the workflow again but skip the transaction
-    workflow_handles = DBOS.recover_pending_workflows()
+    workflow_handles = DBOS._recover_pending_workflows()
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == ("a", wfuuid)
