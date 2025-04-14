@@ -449,7 +449,12 @@ def restart(
     if response.status_code == 204:
         print(f"Workflow {uuid} has been restarted")
     else:
-        print(f"Failed to resume workflow {uuid}. Status code: {response.status_code}")
+        error_message = response.json().get("error", "Unknown error")
+        print(
+            f"Failed to resume workflow {uuid}. "
+            f"Status code: {response.status_code}. "
+            f"Error: {error_message}"
+        )
 
 
 @queue.command(name="list", help="List enqueued functions for your application")

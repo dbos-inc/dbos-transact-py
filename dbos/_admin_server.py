@@ -7,6 +7,7 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any, List, TypedDict
 
+from ._error import DBOSException
 from ._logger import dbos_logger
 from ._recovery import recover_pending_workflows
 from ._utils import GlobalParams
@@ -154,10 +155,19 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         return  # Disable admin server request logging
 
     def _handle_restart(self, workflow_id: str, start_step: int) -> None:
-        self.dbos.restart_workflow(workflow_id, start_step)
-        print("Restarting workflow", workflow_id)
-        self.send_response(204)
-        self._end_headers()
+        try:
+            self.dbos.restart_workflow(workflow_id, start_step)
+            print("Restarting workflow", workflow_id)
+            self.send_response(204)
+            self._end_headers()
+        except DBOSException as e:
+            print(f"Error restarting workflow: {e}")
+            self.send_response(400)
+            response_body = json.dumps({"error": str(e)}).encode("utf-8")
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response_body)))
+            self.end_headers()
+            self.wfile.write(response_body)
 
     def _handle_resume(self, workflow_id: str) -> None:
         print("Resuming workflow", workflow_id)
