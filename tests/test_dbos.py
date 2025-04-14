@@ -70,7 +70,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
     assert wf_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid
-    handle = DBOS.execute_workflow_id(wfuuid)
+    handle = DBOS._execute_workflow_id(wfuuid)
     assert handle.get_result() == "alice1alice"
     assert wf_counter == 2
 
@@ -257,7 +257,7 @@ def test_exception_workflow(dbos: DBOS) -> None:
     assert bad_txn_counter == 2  # Only increment once
 
     # Test we can execute the workflow by uuid, shouldn't throw errors
-    handle = DBOS.execute_workflow_id(wfuuid)
+    handle = DBOS._execute_workflow_id(wfuuid)
     with pytest.raises(Exception) as exc_info:
         handle.get_result()
     assert "test error" == str(exc_info.value)
@@ -399,7 +399,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
         )
 
     # Recovery should execute the workflow again but skip the transaction
-    workflow_handles = DBOS.recover_pending_workflows()
+    workflow_handles = DBOS._recover_pending_workflows()
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == "bob1bob"
     assert wf_counter == 2
@@ -444,7 +444,7 @@ def test_recovery_workflow_step(dbos: DBOS) -> None:
         )
 
     # Recovery should execute the workflow again but skip the transaction
-    workflow_handles = DBOS.recover_pending_workflows()
+    workflow_handles = DBOS._recover_pending_workflows()
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == "bob"
     assert wf_counter == 2
@@ -487,7 +487,7 @@ def test_workflow_returns_none(dbos: DBOS) -> None:
             .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
         )
 
-    workflow_handles = DBOS.recover_pending_workflows()
+    workflow_handles = DBOS._recover_pending_workflows()
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() is None
     assert wf_counter == 2
@@ -534,7 +534,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
         )
 
     # Recovery should execute the workflow again but skip the transaction
-    workflow_handles = DBOS.recover_pending_workflows()
+    workflow_handles = DBOS._recover_pending_workflows()
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == "bob1"
 
@@ -1257,6 +1257,63 @@ def test_double_decoration(dbos: DBOS) -> None:
         my_function()
 
 
+def test_duplicate_registration(
+    dbos: DBOS, caplog: pytest.LogCaptureFixture, config: ConfigFile
+) -> None:
+    original_propagate = logging.getLogger("dbos").propagate
+    caplog.set_level(logging.WARNING, "dbos")
+    logging.getLogger("dbos").propagate = True
+
+    @DBOS.transaction()
+    def my_transaction() -> None:
+        pass
+
+    @DBOS.transaction()
+    def my_transaction() -> None:
+        pass
+
+    assert (
+        "Duplicate registration of function 'test_duplicate_registration.<locals>.my_transaction'"
+        in caplog.text
+    )
+
+    @DBOS.step()
+    def my_step() -> None:
+        pass
+
+    @DBOS.step()
+    def my_step() -> None:
+        pass
+
+    assert (
+        "Duplicate registration of function 'test_duplicate_registration.<locals>.my_step'"
+        in caplog.text
+    )
+
+    @DBOS.workflow()
+    def my_workflow() -> None:
+        my_step()
+        my_transaction()
+
+    @DBOS.workflow()
+    def my_workflow() -> None:
+        my_step()
+        my_transaction()
+
+    assert (
+        "Duplicate registration of function 'test_duplicate_registration.<locals>.my_workflow'"
+        in caplog.text
+    )
+
+    DBOS.destroy()
+    DBOS(config=config)
+    DBOS.launch()
+    assert "Duplicate registration of function 'temp_send_workflow'" not in caplog.text
+
+    # Reset logging
+    logging.getLogger("dbos").propagate = original_propagate
+
+
 def test_app_version(config: ConfigFile) -> None:
     def is_hex(s: str) -> bool:
         return all(c in "0123456789abcdefABCDEF" for c in s)
@@ -1361,7 +1418,7 @@ def test_recovery_appversion(config: ConfigFile) -> None:
     DBOS.launch()
 
     # The workflow should successfully recover
-    workflow_handles = DBOS.recover_pending_workflows(["testexecutor"])
+    workflow_handles = DBOS._recover_pending_workflows(["testexecutor"])
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == input
 
@@ -1384,7 +1441,7 @@ def test_recovery_appversion(config: ConfigFile) -> None:
     DBOS.launch()
 
     # The workflow should not recover
-    workflow_handles = DBOS.recover_pending_workflows(["testexecutor"])
+    workflow_handles = DBOS._recover_pending_workflows(["testexecutor"])
     assert len(workflow_handles) == 0
 
     # Clean up the environment variable

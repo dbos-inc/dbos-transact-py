@@ -227,7 +227,7 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
         }
     )
 
-    workflow_handles = DBOS.recover_pending_workflows()
+    workflow_handles = DBOS._recover_pending_workflows()
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == None
     max_tries = 10

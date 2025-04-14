@@ -1,7 +1,7 @@
 import asyncio
 import sys
 import uuid
-from typing import Any, Generic, Optional, TypedDict, TypeVar
+from typing import Any, Generic, List, Optional, TypedDict, TypeVar
 
 if sys.version_info < (3, 11):
     from typing_extensions import NotRequired
@@ -15,7 +15,12 @@ from dbos._error import DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._serialization import WorkflowInputs
 from dbos._sys_db import SystemDatabase, WorkflowStatusInternal, WorkflowStatusString
-from dbos._workflow_commands import WorkflowStatus, get_workflow
+from dbos._workflow_commands import (
+    WorkflowStatus,
+    get_workflow,
+    list_queued_workflows,
+    list_workflows,
+)
 
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
@@ -201,4 +206,120 @@ class DBOSClient:
     ) -> Any:
         return await asyncio.to_thread(
             self.get_event, workflow_id, key, timeout_seconds
+        )
+
+    def cancel_workflow(self, workflow_id: str) -> None:
+        self._sys_db.cancel_workflow(workflow_id)
+
+    async def cancel_workflow_async(self, workflow_id: str) -> None:
+        await asyncio.to_thread(self.cancel_workflow, workflow_id)
+
+    def resume_workflow(self, workflow_id: str) -> None:
+        self._sys_db.resume_workflow(workflow_id)
+
+    async def resume_workflow_async(self, workflow_id: str) -> None:
+        await asyncio.to_thread(self.resume_workflow, workflow_id)
+
+    def list_workflows(
+        self,
+        *,
+        workflow_ids: Optional[List[str]] = None,
+        status: Optional[str] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        name: Optional[str] = None,
+        app_version: Optional[str] = None,
+        user: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        sort_desc: bool = False,
+    ) -> List[WorkflowStatus]:
+        return list_workflows(
+            self._sys_db,
+            workflow_ids=workflow_ids,
+            status=status,
+            start_time=start_time,
+            end_time=end_time,
+            name=name,
+            app_version=app_version,
+            user=user,
+            limit=limit,
+            offset=offset,
+            sort_desc=sort_desc,
+        )
+
+    async def list_workflows_async(
+        self,
+        *,
+        workflow_ids: Optional[List[str]] = None,
+        status: Optional[str] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        name: Optional[str] = None,
+        app_version: Optional[str] = None,
+        user: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        sort_desc: bool = False,
+    ) -> List[WorkflowStatus]:
+        return await asyncio.to_thread(
+            self.list_workflows,
+            workflow_ids=workflow_ids,
+            status=status,
+            start_time=start_time,
+            end_time=end_time,
+            name=name,
+            app_version=app_version,
+            user=user,
+            limit=limit,
+            offset=offset,
+            sort_desc=sort_desc,
+        )
+
+    def list_queued_workflows(
+        self,
+        *,
+        queue_name: Optional[str] = None,
+        status: Optional[str] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        name: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        sort_desc: bool = False,
+    ) -> List[WorkflowStatus]:
+        return list_queued_workflows(
+            self._sys_db,
+            queue_name=queue_name,
+            status=status,
+            start_time=start_time,
+            end_time=end_time,
+            name=name,
+            limit=limit,
+            offset=offset,
+            sort_desc=sort_desc,
+        )
+
+    async def list_queued_workflows_async(
+        self,
+        *,
+        queue_name: Optional[str] = None,
+        status: Optional[str] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        name: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        sort_desc: bool = False,
+    ) -> List[WorkflowStatus]:
+        return await asyncio.to_thread(
+            self.list_queued_workflows,
+            queue_name=queue_name,
+            status=status,
+            start_time=start_time,
+            end_time=end_time,
+            name=name,
+            limit=limit,
+            offset=offset,
+            sort_desc=sort_desc,
         )

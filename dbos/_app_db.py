@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from . import _serialization
 from ._dbos_config import ConfigFile, DatabaseConfig
-from ._error import DBOSWorkflowConflictIDError
+from ._error import DBOSUnexpectedStepError, DBOSWorkflowConflictIDError
 from ._schemas.application_database import ApplicationSchema
 from ._sys_db import StepInfo
 
@@ -171,22 +171,31 @@ class ApplicationDatabase:
 
     @staticmethod
     def check_transaction_execution(
-        session: Session, workflow_uuid: str, function_id: int
+        session: Session, workflow_id: str, function_id: int, function_name: str
     ) -> Optional[RecordedResult]:
         rows = session.execute(
             sa.select(
                 ApplicationSchema.transaction_outputs.c.output,
                 ApplicationSchema.transaction_outputs.c.error,
+                ApplicationSchema.transaction_outputs.c.function_name,
             ).where(
-                ApplicationSchema.transaction_outputs.c.workflow_uuid == workflow_uuid,
+                ApplicationSchema.transaction_outputs.c.workflow_uuid == workflow_id,
                 ApplicationSchema.transaction_outputs.c.function_id == function_id,
             )
         ).all()
         if len(rows) == 0:
             return None
+        output, error, recorded_function_name = rows[0][0], rows[0][1], rows[0][2]
+        if function_name != recorded_function_name:
+            raise DBOSUnexpectedStepError(
+                workflow_id=workflow_id,
+                step_id=function_id,
+                expected_name=function_name,
+                recorded_name=recorded_function_name,
+            )
         result: RecordedResult = {
-            "output": rows[0][0],
-            "error": rows[0][1],
+            "output": output,
+            "error": error,
         }
         return result
 
