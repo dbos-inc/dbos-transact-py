@@ -1007,6 +1007,10 @@ def test_call_as_step_within_step(
     def getStatusWorkflow() -> str:
         return getStatus(DBOS.workflow_id)
 
+    @DBOS.transaction()
+    def transactionStatus() -> None:
+        DBOS.get_workflow_status(DBOS.workflow_id)
+
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         status = getStatusWorkflow()
@@ -1016,3 +1020,9 @@ def test_call_as_step_within_step(
 
     assert len(steps) == 1
     assert steps[0]["function_name"] == getStatus.__qualname__
+
+    with pytest.raises(Exception) as exc_info:
+        transactionStatus()
+    assert "Invalid call to `DBOS.getStatus` inside a transaction" in str(
+        exc_info.value
+    )

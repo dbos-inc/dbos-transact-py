@@ -1569,6 +1569,8 @@ class SystemDatabase:
 
     def call_function_as_step(self, fn: Callable[[], T], function_name: str) -> T:
         ctx = get_local_dbos_context()
+        if ctx and ctx.is_transaction():
+            raise Exception(f"Invalid call to `{function_name}` inside a transaction")
         if ctx and ctx.is_workflow():
             ctx.function_id += 1
             res = self.check_operation_execution(
