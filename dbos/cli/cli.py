@@ -374,16 +374,6 @@ def steps(
     )
 
 
-@workflow.command(help="List the steps of a workflow")
-def fork(
-    workflow_id: Annotated[str, typer.Argument()],
-    start_step: Annotated[
-        typing.Optional[int], typer.Argument(help="Step to start from")
-    ] = 1,
-) -> None:
-    print("Not yet implemented")
-
-
 @workflow.command(
     help="Cancel a workflow so it is no longer automatically retried or restarted"
 )
@@ -441,9 +431,19 @@ def restart(
         typing.Optional[int],
         typer.Option("--port", "-p", help="Specify the admin port"),
     ] = 3001,
+    step: Annotated[
+        typing.Optional[int],
+        typer.Option(
+            "--step",
+            "-s",
+            help="Restart from this step (default: first step)",
+        ),
+    ] = 1,
 ) -> None:
     response = requests.post(
-        f"http://{host}:{port}/workflows/{uuid}/restart", json=[], timeout=5
+        f"http://{host}:{port}/workflows/{uuid}/restart",
+        json={"start_step": step},
+        timeout=5,
     )
 
     if response.status_code == 204:
