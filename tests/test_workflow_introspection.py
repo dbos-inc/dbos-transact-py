@@ -990,3 +990,29 @@ def test_list_workflows_as_step(dbos: DBOS) -> None:
     workflow_event.set()
     assert handle.get_result() == 1
     assert handle_two.get_result() == 1
+
+
+def test_call_as_step_within_step(
+    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
+) -> None:
+    # If we call any util functions within a step, it should be called directly without checkpointing
+
+    @DBOS.step()
+    def getStatus(workflow_id: str) -> str:
+        status = DBOS.get_workflow_status(workflow_id)
+        assert status is not None
+        return status.status
+
+    @DBOS.workflow()
+    def getStatusWorkflow() -> str:
+        return getStatus(DBOS.workflow_id)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        status = getStatusWorkflow()
+        assert status == WorkflowStatusString.PENDING.value
+
+    steps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+
+    assert len(steps) == 1
+    assert steps[0]["function_name"] == getStatus.__qualname__
