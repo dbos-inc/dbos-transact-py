@@ -946,12 +946,10 @@ class DBOS:
 
     @classmethod
     def get_max_function_id(cls, workflow_uuid: str) -> Optional[int]:
-        max_transactions = _dbos_global_instance._app_db.get_max_function_id(
+        max_transactions = _get_dbos_instance()._app_db.get_max_function_id(
             workflow_uuid
         )
-        max_operations = _dbos_global_instance._sys_db.get_max_function_id(
-            workflow_uuid
-        )
+        max_operations = _get_dbos_instance()._sys_db.get_max_function_id(workflow_uuid)
 
         if max_transactions is None and max_operations is None:
             return None
@@ -974,7 +972,7 @@ class DBOS:
             )
 
         forked_workflow_id = str(uuid.uuid4())
-        _dbos_global_instance._app_db.clone_workflow_transactions(
+        _get_dbos_instance()._app_db.clone_workflow_transactions(
             workflow_id, forked_workflow_id, start_step
         )
         # _get_dbos_instance()._sys_db.fork_workflow(
