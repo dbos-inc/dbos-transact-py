@@ -15,7 +15,6 @@ from jsonschema import ValidationError, validate
 from rich import print
 from sqlalchemy import URL, make_url
 
-from ._db_wizard import db_wizard, load_db_connection
 from ._error import DBOSInitializationError
 from ._logger import dbos_logger
 
@@ -70,7 +69,6 @@ class DatabaseConfig(TypedDict, total=False):
     sys_db_pool_size: Optional[int]
     ssl: Optional[bool]
     ssl_ca: Optional[str]
-    local_suffix: Optional[bool]
     migrate: Optional[List[str]]
     rollback: Optional[List[str]]
 
@@ -288,7 +286,6 @@ def load_config(
     config_file_path: str = DBOS_CONFIG_PATH,
     *,
     run_process_config: bool = True,
-    use_db_wizard: bool = True,
     silent: bool = False,
 ) -> ConfigFile:
     """
@@ -339,13 +336,12 @@ def load_config(
 
     data = cast(ConfigFile, data)
     if run_process_config:
-        data = process_config(data=data, use_db_wizard=use_db_wizard, silent=silent)
+        data = process_config(data=data, silent=silent)
     return data  # type: ignore
 
 
 def process_config(
     *,
-    use_db_wizard: bool = True,
     data: ConfigFile,
     silent: bool = False,
 ) -> ConfigFile:
@@ -372,22 +368,17 @@ def process_config(
     # database_url takes precedence over database config, but we need to preserve rollback and migrate if they exist
     migrate = data["database"].get("migrate", False)
     rollback = data["database"].get("rollback", False)
-    local_suffix = data["database"].get("local_suffix", False)
     if data.get("database_url"):
         dbconfig = parse_database_url_to_dbconfig(cast(str, data["database_url"]))
         if migrate:
             dbconfig["migrate"] = cast(List[str], migrate)
         if rollback:
             dbconfig["rollback"] = cast(List[str], rollback)
-        if local_suffix:
-            dbconfig["local_suffix"] = cast(bool, local_suffix)
         data["database"] = dbconfig
 
     if "app_db_name" not in data["database"] or not (data["database"]["app_db_name"]):
         data["database"]["app_db_name"] = _app_name_to_db_name(data["name"])
 
-    # Load the DB connection file. Use its values for missing connection parameters. Use defaults otherwise.
-    db_connection = load_db_connection()
     connection_passed_in = data["database"].get("hostname", None) is not None
 
     dbos_dbport: Optional[int] = None
@@ -397,48 +388,21 @@ def process_config(
             dbos_dbport = int(dbport_env)
         except ValueError:
             pass
-    dbos_dblocalsuffix: Optional[bool] = None
-    dblocalsuffix_env = os.getenv("DBOS_DBLOCALSUFFIX")
-    if dblocalsuffix_env:
-        try:
-            dbos_dblocalsuffix = dblocalsuffix_env.casefold() == "true".casefold()
-        except ValueError:
-            pass
 
     data["database"]["hostname"] = (
-        os.getenv("DBOS_DBHOST")
-        or data["database"].get("hostname")
-        or db_connection.get("hostname")
-        or "localhost"
+        os.getenv("DBOS_DBHOST") or data["database"].get("hostname") or "localhost"
     )
 
-    data["database"]["port"] = (
-        dbos_dbport or data["database"].get("port") or db_connection.get("port") or 5432
-    )
+    data["database"]["port"] = dbos_dbport or data["database"].get("port") or 5432
     data["database"]["username"] = (
-        os.getenv("DBOS_DBUSER")
-        or data["database"].get("username")
-        or db_connection.get("username")
-        or "postgres"
+        os.getenv("DBOS_DBUSER") or data["database"].get("username") or "postgres"
     )
     data["database"]["password"] = (
         os.getenv("DBOS_DBPASSWORD")
         or data["database"].get("password")
-        or db_connection.get("password")
         or os.environ.get("PGPASSWORD")
         or "dbos"
     )
-
-    local_suffix = False
-    dbcon_local_suffix = db_connection.get("local_suffix")
-    if dbcon_local_suffix is not None:
-        local_suffix = dbcon_local_suffix
-    db_local_suffix = data["database"].get("local_suffix")
-    if db_local_suffix is not None:
-        local_suffix = db_local_suffix
-    if dbos_dblocalsuffix is not None:
-        local_suffix = dbos_dblocalsuffix
-    data["database"]["local_suffix"] = local_suffix
 
     if not data["database"].get("app_db_pool_size"):
         data["database"]["app_db_pool_size"] = 20
@@ -454,10 +418,6 @@ def process_config(
     elif "run_admin_server" not in data["runtimeConfig"]:
         data["runtimeConfig"]["run_admin_server"] = True
 
-    # Check the connectivity to the database and make sure it's properly configured
-    # Note, never use db wizard if the DBOS is running in debug mode (i.e. DBOS_DEBUG_WORKFLOW_ID env var is set)
-    debugWorkflowId = os.getenv("DBOS_DEBUG_WORKFLOW_ID")
-
     # Pretty-print where we've loaded database connection information from, respecting the log level
     if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
         d = data["database"]
@@ -470,20 +430,10 @@ def process_config(
             print(
                 f"[bold blue]Using database connection string: {conn_string}[/bold blue]"
             )
-        elif db_connection.get("hostname"):
-            print(
-                f"[bold blue]Loading database connection string from .dbos/db_connection: {conn_string}[/bold blue]"
-            )
         else:
             print(
                 f"[bold blue]Using default database connection string: {conn_string}[/bold blue]"
             )
-
-    if use_db_wizard and debugWorkflowId is None:
-        data = db_wizard(data)
-
-    if "local_suffix" in data["database"] and data["database"]["local_suffix"]:
-        data["database"]["app_db_name"] = f"{data['database']['app_db_name']}_local"
 
     # Return data as ConfigFile type
     return data
