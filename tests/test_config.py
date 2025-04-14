@@ -327,7 +327,6 @@ def test_process_config_full():
             "sys_db_pool_size": 27,
             "ssl": True,
             "ssl_ca": "ca.pem",
-            "local_suffix": False,
             "migrate": ["alembic upgrade head"],
             "rollback": ["alembic downgrade base"],
         },
@@ -351,7 +350,7 @@ def test_process_config_full():
         },
     }
 
-    configFile = process_config(data=config, use_db_wizard=False)
+    configFile = process_config(data=config)
     assert configFile["name"] == "some-app"
     assert configFile["database"]["hostname"] == "example.com"
     assert configFile["database"]["port"] == 2345
@@ -362,7 +361,6 @@ def test_process_config_full():
     assert configFile["database"]["sys_db_name"] == "sys_db"
     assert configFile["database"]["ssl"] == True
     assert configFile["database"]["ssl_ca"] == "ca.pem"
-    assert configFile["database"]["local_suffix"] == False
     assert configFile["database"]["migrate"] == ["alembic upgrade head"]
     assert configFile["database"]["rollback"] == ["alembic downgrade base"]
     assert configFile["database"]["app_db_pool_size"] == 45
@@ -386,7 +384,7 @@ def test_process_config_with_db_url():
         "name": "some-app",
         "database_url": "postgresql://user:password@localhost:7777/dbn?connect_timeout=1&sslmode=require&sslrootcert=ca.pem",
     }
-    processed_config = process_config(data=config, use_db_wizard=False)
+    processed_config = process_config(data=config)
     assert processed_config["name"] == "some-app"
     assert processed_config["database"]["hostname"] == "localhost"
     assert processed_config["database"]["port"] == 7777
@@ -396,7 +394,6 @@ def test_process_config_with_db_url():
     assert processed_config["database"]["connectionTimeoutMillis"] == 1000
     assert processed_config["database"]["ssl"] == True
     assert processed_config["database"]["ssl_ca"] == "ca.pem"
-    assert processed_config["database"]["local_suffix"] == False
     assert processed_config["database"]["app_db_pool_size"] == 20
     assert processed_config["database"]["sys_db_pool_size"] == 20
     assert "rollback" not in processed_config["database"]
@@ -417,22 +414,20 @@ def test_process_config_with_db_url_taking_precedence_over_database():
             "sys_db_name": "sys_db",
             "ssl": True,
             "ssl_ca": "ca.pem",
-            "local_suffix": True,
             "migrate": ["alembic upgrade head"],
             "rollback": ["alembic downgrade base"],
         },
         "database_url": "postgresql://boo:whoisdiz@remotehost:7777/takesprecedence",
     }
-    processed_config = process_config(data=config, use_db_wizard=False)
+    processed_config = process_config(data=config)
     assert processed_config["name"] == "some-app"
     assert processed_config["database"]["hostname"] == "remotehost"
     assert processed_config["database"]["port"] == 7777
     assert processed_config["database"]["username"] == "boo"
     assert processed_config["database"]["password"] == "whoisdiz"
-    assert processed_config["database"]["app_db_name"] == "takesprecedence_local"
+    assert processed_config["database"]["app_db_name"] == "takesprecedence"
     assert processed_config["database"]["migrate"] == ["alembic upgrade head"]
     assert processed_config["database"]["rollback"] == ["alembic downgrade base"]
-    assert processed_config["database"]["local_suffix"] == True
     assert processed_config["database"]["app_db_pool_size"] == 20
     assert processed_config["database"]["sys_db_pool_size"] == 20
     assert processed_config["database"]["connectionTimeoutMillis"] == 10000
@@ -550,32 +545,6 @@ def test_config_bad_name():
     assert "Invalid app name" in str(exc_info.value)
 
 
-def test_load_config_load_db_connection(mocker):
-    mock_db_connection = """
-    {"hostname": "example.com", "port": 2345, "username": "example", "password": "password", "local_suffix": true}
-    """
-    mocker.patch(
-        "builtins.open",
-        side_effect=generate_mock_open([".dbos/db_connection"], [mock_db_connection]),
-    )
-
-    config = {
-        "name": "some-app",
-    }
-
-    configFile = process_config(data=config, use_db_wizard=False)
-    assert configFile["name"] == "some-app"
-    assert configFile["database"]["hostname"] == "example.com"
-    assert configFile["database"]["port"] == 2345
-    assert configFile["database"]["username"] == "example"
-    assert configFile["database"]["password"] == "password"
-    assert configFile["database"]["local_suffix"] == True
-    assert configFile["database"]["app_db_name"] == "some_app_local"
-    assert configFile["database"]["app_db_pool_size"] == 20
-    assert configFile["database"]["sys_db_pool_size"] == 20
-    assert configFile["database"]["connectionTimeoutMillis"] == 10000
-
-
 def test_config_mixed_params():
     config = {
         "name": "some-app",
@@ -587,7 +556,7 @@ def test_config_mixed_params():
         },
     }
 
-    configFile = process_config(data=config, use_db_wizard=False)
+    configFile = process_config(data=config)
     assert configFile["name"] == "some-app"
     assert configFile["database"]["hostname"] == "localhost"
     assert configFile["database"]["port"] == 1234
@@ -606,75 +575,20 @@ def test_debug_override(mocker: pytest_mock.MockFixture):
             "DBOS_DBPORT": "1234",
             "DBOS_DBUSER": "fakeuser",
             "DBOS_DBPASSWORD": "fakepassword",
-            "DBOS_DBLOCALSUFFIX": "false",
         },
     )
 
     config: Configfile = {
         "name": "some-app",
     }
-    configFile = process_config(data=config, use_db_wizard=False)
+    configFile = process_config(data=config)
     assert configFile["database"]["hostname"] == "fakehost"
     assert configFile["database"]["port"] == 1234
     assert configFile["database"]["username"] == "fakeuser"
     assert configFile["database"]["password"] == "fakepassword"
-    assert configFile["database"]["local_suffix"] == False
     assert configFile["database"]["app_db_pool_size"] == 20
     assert configFile["database"]["sys_db_pool_size"] == 20
     assert configFile["database"]["connectionTimeoutMillis"] == 10000
-
-
-def test_local_config():
-    config: ConfigFile = {
-        "name": "some-app",
-        "database": {
-            "hostname": "localhost",
-            "port": 5432,
-            "username": "postgres",
-            "password": os.environ["PGPASSWORD"],
-            "app_db_name": "some_db",
-            "connectionTimeoutMillis": 3000,
-            "local_suffix": True,
-        },
-    }
-    processed_config = process_config(data=config)
-
-    assert processed_config["name"] == "some-app"
-    assert processed_config["database"]["local_suffix"] == True
-    assert processed_config["database"]["hostname"] == "localhost"
-    assert processed_config["database"]["port"] == 5432
-    assert processed_config["database"]["username"] == "postgres"
-    assert processed_config["database"]["password"] == os.environ["PGPASSWORD"]
-    assert processed_config["database"]["app_db_name"] == "some_db_local"
-    assert processed_config["database"]["connectionTimeoutMillis"] == 3000
-    assert processed_config["database"]["app_db_pool_size"] == 20
-    assert processed_config["database"]["sys_db_pool_size"] == 20
-
-
-def test_local_config_without_name(mocker):
-    config: ConfigFile = {
-        "name": "some-app",
-        "database": {
-            "hostname": "localhost",
-            "port": 5432,
-            "username": "postgres",
-            "password": os.environ["PGPASSWORD"],
-            "connectionTimeoutMillis": 3000,
-            "local_suffix": True,
-        },
-    }
-    processed_config = process_config(data=config)
-
-    assert processed_config["name"] == "some-app"
-    assert processed_config["database"]["local_suffix"] == True
-    assert processed_config["database"]["hostname"] == "localhost"
-    assert processed_config["database"]["port"] == 5432
-    assert processed_config["database"]["username"] == "postgres"
-    assert processed_config["database"]["password"] == os.environ["PGPASSWORD"]
-    assert processed_config["database"]["app_db_name"] == "some_app_local"
-    assert processed_config["database"]["connectionTimeoutMillis"] == 3000
-    assert processed_config["database"]["app_db_pool_size"] == 20
-    assert processed_config["database"]["sys_db_pool_size"] == 20
 
 
 ####################
@@ -1410,30 +1324,5 @@ def test_get_dbos_database_url(mocker):
         host="localhost",
         port=5432,
         database="some_db",
-    ).render_as_string(hide_password=False)
-    assert get_dbos_database_url() == expected_url
-
-
-def test_get_dbos_database_url_local_suffix(mocker):
-    mock_config = """
-        name: "some-app"
-        database:
-          hostname: 'localhost'
-          port: 5432
-          username: 'postgres'
-          password: ${PGPASSWORD}
-          app_db_name: 'some_db'
-          local_suffix: true
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-    expected_url = URL.create(
-        "postgresql+psycopg",
-        username="postgres",
-        password=os.environ.get("PGPASSWORD"),
-        host="localhost",
-        port=5432,
-        database="some_db_local",
     ).render_as_string(hide_password=False)
     assert get_dbos_database_url() == expected_url
