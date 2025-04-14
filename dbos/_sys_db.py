@@ -9,13 +9,14 @@ from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Dict,
     List,
     Literal,
     Optional,
     Sequence,
-    Set,
     TypedDict,
+    TypeVar,
 )
 
 import psycopg
@@ -35,6 +36,8 @@ from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
     DBOSNonExistentWorkflowError,
+    DBOSUnexpectedStepError,
+    DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
 )
 from ._logger import dbos_logger
@@ -577,9 +580,7 @@ class SystemDatabase:
             }
             return status
 
-    def await_workflow_result_internal(self, workflow_uuid: str) -> dict[str, Any]:
-        polling_interval_secs: float = 1.000
-
+    def await_workflow_result(self, workflow_id: str) -> Any:
         while True:
             with self.engine.begin() as c:
                 row = c.execute(
@@ -587,41 +588,23 @@ class SystemDatabase:
                         SystemSchema.workflow_status.c.status,
                         SystemSchema.workflow_status.c.output,
                         SystemSchema.workflow_status.c.error,
-                    ).where(
-                        SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
-                    )
+                    ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
                 ).fetchone()
                 if row is not None:
                     status = row[0]
-                    if status == str(WorkflowStatusString.SUCCESS.value):
-                        return {
-                            "status": status,
-                            "output": row[1],
-                            "workflow_uuid": workflow_uuid,
-                        }
-
-                    elif status == str(WorkflowStatusString.ERROR.value):
-                        return {
-                            "status": status,
-                            "error": row[2],
-                            "workflow_uuid": workflow_uuid,
-                        }
-
+                    if status == WorkflowStatusString.SUCCESS.value:
+                        output = row[1]
+                        return _serialization.deserialize(output)
+                    elif status == WorkflowStatusString.ERROR.value:
+                        error = row[2]
+                        raise _serialization.deserialize_exception(error)
+                    elif status == WorkflowStatusString.CANCELLED.value:
+                        # Raise a normal exception here, not the cancellation exception
+                        # because the awaiting workflow is not being cancelled.
+                        raise Exception(f"Awaited workflow {workflow_id} was cancelled")
                 else:
                     pass  # CB: I guess we're assuming the WF will show up eventually.
-
-            time.sleep(polling_interval_secs)
-
-    def await_workflow_result(self, workflow_uuid: str) -> Any:
-        stat = self.await_workflow_result_internal(workflow_uuid)
-        if not stat:
-            return None
-        status: str = stat["status"]
-        if status == str(WorkflowStatusString.SUCCESS.value):
-            return _serialization.deserialize(stat["output"])
-        elif status == str(WorkflowStatusString.ERROR.value):
-            raise _serialization.deserialize_exception(stat["error"])
-        return None
+            time.sleep(1)
 
     def update_workflow_inputs(
         self, workflow_uuid: str, inputs: str, conn: Optional[sa.Connection] = None
@@ -895,16 +878,34 @@ class SystemDatabase:
             raise
 
     def check_operation_execution(
-        self, workflow_uuid: str, function_id: int, conn: Optional[sa.Connection] = None
+        self,
+        workflow_id: str,
+        function_id: int,
+        function_name: str,
+        *,
+        conn: Optional[sa.Connection] = None,
     ) -> Optional[RecordedResult]:
-        sql = sa.select(
-            SystemSchema.operation_outputs.c.output,
-            SystemSchema.operation_outputs.c.error,
-        ).where(
-            SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
-            SystemSchema.operation_outputs.c.function_id == function_id,
+        # Retrieve the status of the workflow. Additionally, if this step
+        # has run before, retrieve its name, output, and error.
+        sql = (
+            sa.select(
+                SystemSchema.workflow_status.c.status,
+                SystemSchema.operation_outputs.c.output,
+                SystemSchema.operation_outputs.c.error,
+                SystemSchema.operation_outputs.c.function_name,
+            )
+            .select_from(
+                SystemSchema.workflow_status.outerjoin(
+                    SystemSchema.operation_outputs,
+                    (
+                        SystemSchema.workflow_status.c.workflow_uuid
+                        == SystemSchema.operation_outputs.c.workflow_uuid
+                    )
+                    & (SystemSchema.operation_outputs.c.function_id == function_id),
+                )
+            )
+            .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
         )
-
         # If in a transaction, use the provided connection
         rows: Sequence[Any]
         if conn is not None:
@@ -912,11 +913,32 @@ class SystemDatabase:
         else:
             with self.engine.begin() as c:
                 rows = c.execute(sql).all()
-        if len(rows) == 0:
+        assert len(rows) > 0, f"Error: Workflow {workflow_id} does not exist"
+        workflow_status, output, error, recorded_function_name = (
+            rows[0][0],
+            rows[0][1],
+            rows[0][2],
+            rows[0][3],
+        )
+        # If the workflow is cancelled, raise the exception
+        if workflow_status == WorkflowStatusString.CANCELLED.value:
+            raise DBOSWorkflowCancelledError(
+                f"Workflow {workflow_id} is cancelled. Aborting function."
+            )
+        # If there is no row for the function, return None
+        if recorded_function_name is None:
             return None
+        # If the provided and recorded function name are different, throw an exception.
+        if function_name != recorded_function_name:
+            raise DBOSUnexpectedStepError(
+                workflow_id=workflow_id,
+                step_id=function_id,
+                expected_name=function_name,
+                recorded_name=recorded_function_name,
+            )
         result: RecordedResult = {
-            "output": rows[0][0],
-            "error": rows[0][1],
+            "output": output,
+            "error": error,
         }
         return result
 
@@ -945,10 +967,11 @@ class SystemDatabase:
         message: Any,
         topic: Optional[str] = None,
     ) -> None:
+        function_name = "DBOS.send"
         topic = topic if topic is not None else _dbos_null_topic
         with self.engine.begin() as c:
             recorded_output = self.check_operation_execution(
-                workflow_uuid, function_id, conn=c
+                workflow_uuid, function_id, function_name, conn=c
             )
             if self._debug_mode and recorded_output is None:
                 raise Exception(
@@ -981,7 +1004,7 @@ class SystemDatabase:
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
-                "function_name": "DBOS.send",
+                "function_name": function_name,
                 "output": None,
                 "error": None,
             }
@@ -995,10 +1018,13 @@ class SystemDatabase:
         topic: Optional[str],
         timeout_seconds: float = 60,
     ) -> Any:
+        function_name = "DBOS.recv"
         topic = topic if topic is not None else _dbos_null_topic
 
         # First, check for previous executions.
-        recorded_output = self.check_operation_execution(workflow_uuid, function_id)
+        recorded_output = self.check_operation_execution(
+            workflow_uuid, function_id, function_name
+        )
         if self._debug_mode and recorded_output is None:
             raise Exception("called recv in debug mode without a previous execution")
         if recorded_output is not None:
@@ -1075,7 +1101,7 @@ class SystemDatabase:
                 {
                     "workflow_uuid": workflow_uuid,
                     "function_id": function_id,
-                    "function_name": "DBOS.recv",
+                    "function_name": function_name,
                     "output": _serialization.serialize(
                         message
                     ),  # None will be serialized to 'null'
@@ -1149,7 +1175,10 @@ class SystemDatabase:
         seconds: float,
         skip_sleep: bool = False,
     ) -> float:
-        recorded_output = self.check_operation_execution(workflow_uuid, function_id)
+        function_name = "DBOS.sleep"
+        recorded_output = self.check_operation_execution(
+            workflow_uuid, function_id, function_name
+        )
         end_time: float
         if self._debug_mode and recorded_output is None:
             raise Exception("called sleep in debug mode without a previous execution")
@@ -1166,7 +1195,7 @@ class SystemDatabase:
                     {
                         "workflow_uuid": workflow_uuid,
                         "function_id": function_id,
-                        "function_name": "DBOS.sleep",
+                        "function_name": function_name,
                         "output": _serialization.serialize(end_time),
                         "error": None,
                     }
@@ -1185,9 +1214,10 @@ class SystemDatabase:
         key: str,
         message: Any,
     ) -> None:
+        function_name = "DBOS.setEvent"
         with self.engine.begin() as c:
             recorded_output = self.check_operation_execution(
-                workflow_uuid, function_id, conn=c
+                workflow_uuid, function_id, function_name, conn=c
             )
             if self._debug_mode and recorded_output is None:
                 raise Exception(
@@ -1214,7 +1244,7 @@ class SystemDatabase:
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
-                "function_name": "DBOS.setEvent",
+                "function_name": function_name,
                 "output": None,
                 "error": None,
             }
@@ -1227,6 +1257,7 @@ class SystemDatabase:
         timeout_seconds: float = 60,
         caller_ctx: Optional[GetEventWorkflowContext] = None,
     ) -> Any:
+        function_name = "DBOS.getEvent"
         get_sql = sa.select(
             SystemSchema.workflow_events.c.value,
         ).where(
@@ -1236,7 +1267,7 @@ class SystemDatabase:
         # Check for previous executions only if it's in a workflow
         if caller_ctx is not None:
             recorded_output = self.check_operation_execution(
-                caller_ctx["workflow_uuid"], caller_ctx["function_id"]
+                caller_ctx["workflow_uuid"], caller_ctx["function_id"], function_name
             )
             if self._debug_mode and recorded_output is None:
                 raise Exception(
@@ -1295,7 +1326,7 @@ class SystemDatabase:
                 {
                     "workflow_uuid": caller_ctx["workflow_uuid"],
                     "function_id": caller_ctx["function_id"],
-                    "function_name": "DBOS.getEvent",
+                    "function_name": function_name,
                     "output": _serialization.serialize(
                         value
                     ),  # None will be serialized to 'null'
@@ -1533,6 +1564,42 @@ class SystemDatabase:
                         f"UNREACHABLE: Workflow {workflow_id} is found in the workflow_queue table but not found in the workflow_status table"
                     )
                 return True
+
+    T = TypeVar("T")
+
+    def call_function_as_step(self, fn: Callable[[], T], function_name: str) -> T:
+        ctx = get_local_dbos_context()
+        if ctx and ctx.is_transaction():
+            raise Exception(f"Invalid call to `{function_name}` inside a transaction")
+        if ctx and ctx.is_workflow():
+            ctx.function_id += 1
+            res = self.check_operation_execution(
+                ctx.workflow_id, ctx.function_id, function_name
+            )
+            if res is not None:
+                if res["output"] is not None:
+                    resstat: SystemDatabase.T = _serialization.deserialize(
+                        res["output"]
+                    )
+                    return resstat
+                elif res["error"] is not None:
+                    raise _serialization.deserialize_exception(res["error"])
+                else:
+                    raise Exception(
+                        f"Recorded output and error are both None for {function_name}"
+                    )
+        result = fn()
+        if ctx and ctx.is_workflow():
+            self.record_operation_result(
+                {
+                    "workflow_uuid": ctx.workflow_id,
+                    "function_id": ctx.function_id,
+                    "function_name": function_name,
+                    "output": _serialization.serialize(result),
+                    "error": None,
+                }
+            )
+        return result
 
 
 def reset_system_database(config: ConfigFile) -> None:

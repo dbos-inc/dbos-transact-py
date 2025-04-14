@@ -67,7 +67,7 @@ class ConductorWebsocket(threading.Thread):
                             recovery_message = p.RecoveryRequest.from_json(message)
                             success = True
                             try:
-                                self.dbos.recover_pending_workflows(
+                                self.dbos._recover_pending_workflows(
                                     recovery_message.executor_ids
                                 )
                             except Exception as e:
@@ -254,6 +254,7 @@ class ConductorWebsocket(threading.Thread):
                             try:
                                 step_info = list_workflow_steps(
                                     self.dbos._sys_db,
+                                    self.dbos._app_db,
                                     list_steps_message.workflow_id,
                                 )
                             except Exception as e:

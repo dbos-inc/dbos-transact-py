@@ -1,13 +1,16 @@
-from typing import Optional, TypedDict
+from typing import List, Optional, TypedDict
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
+from . import _serialization
 from ._dbos_config import ConfigFile, DatabaseConfig
-from ._error import DBOSWorkflowConflictIDError
+from ._error import DBOSUnexpectedStepError, DBOSWorkflowConflictIDError
 from ._schemas.application_database import ApplicationSchema
+from ._sys_db import StepInfo
 
 
 class TransactionResultInternal(TypedDict):
@@ -18,6 +21,7 @@ class TransactionResultInternal(TypedDict):
     txn_id: Optional[str]
     txn_snapshot: str
     executor_id: Optional[str]
+    function_name: Optional[str]
 
 
 class RecordedResult(TypedDict):
@@ -87,7 +91,30 @@ class ApplicationDatabase:
                     f"CREATE SCHEMA IF NOT EXISTS {ApplicationSchema.schema}"
                 )
                 conn.execute(schema_creation_query)
-            ApplicationSchema.metadata_obj.create_all(self.engine)
+
+            inspector = inspect(self.engine)
+            if not inspector.has_table(
+                "transaction_outputs", schema=ApplicationSchema.schema
+            ):
+                ApplicationSchema.metadata_obj.create_all(self.engine)
+            else:
+                columns = inspector.get_columns(
+                    "transaction_outputs", schema=ApplicationSchema.schema
+                )
+                column_names = [col["name"] for col in columns]
+
+                if "function_name" not in column_names:
+                    # Column missing, alter table to add it
+                    with self.engine.connect() as conn:
+                        conn.execute(
+                            text(
+                                f"""
+                            ALTER TABLE {ApplicationSchema.schema}.transaction_outputs
+                            ADD COLUMN function_name TEXT NOT NULL DEFAULT '';
+                            """
+                            )
+                        )
+                        conn.commit()
 
     def destroy(self) -> None:
         self.engine.dispose()
@@ -108,6 +135,7 @@ class ApplicationDatabase:
                     executor_id=(
                         output["executor_id"] if output["executor_id"] else None
                     ),
+                    function_name=output["function_name"],
                 )
             )
         except DBAPIError as dbapi_error:
@@ -133,6 +161,7 @@ class ApplicationDatabase:
                         executor_id=(
                             output["executor_id"] if output["executor_id"] else None
                         ),
+                        function_name=output["function_name"],
                     )
                 )
         except DBAPIError as dbapi_error:
@@ -142,21 +171,60 @@ class ApplicationDatabase:
 
     @staticmethod
     def check_transaction_execution(
-        session: Session, workflow_uuid: str, function_id: int
+        session: Session, workflow_id: str, function_id: int, function_name: str
     ) -> Optional[RecordedResult]:
         rows = session.execute(
             sa.select(
                 ApplicationSchema.transaction_outputs.c.output,
                 ApplicationSchema.transaction_outputs.c.error,
+                ApplicationSchema.transaction_outputs.c.function_name,
             ).where(
-                ApplicationSchema.transaction_outputs.c.workflow_uuid == workflow_uuid,
+                ApplicationSchema.transaction_outputs.c.workflow_uuid == workflow_id,
                 ApplicationSchema.transaction_outputs.c.function_id == function_id,
             )
         ).all()
         if len(rows) == 0:
             return None
+        output, error, recorded_function_name = rows[0][0], rows[0][1], rows[0][2]
+        if function_name != recorded_function_name:
+            raise DBOSUnexpectedStepError(
+                workflow_id=workflow_id,
+                step_id=function_id,
+                expected_name=function_name,
+                recorded_name=recorded_function_name,
+            )
         result: RecordedResult = {
-            "output": rows[0][0],
-            "error": rows[0][1],
+            "output": output,
+            "error": error,
         }
         return result
+
+    def get_transactions(self, workflow_uuid: str) -> List[StepInfo]:
+        with self.engine.begin() as conn:
+            rows = conn.execute(
+                sa.select(
+                    ApplicationSchema.transaction_outputs.c.function_id,
+                    ApplicationSchema.transaction_outputs.c.function_name,
+                    ApplicationSchema.transaction_outputs.c.output,
+                    ApplicationSchema.transaction_outputs.c.error,
+                ).where(
+                    ApplicationSchema.transaction_outputs.c.workflow_uuid
+                    == workflow_uuid,
+                )
+            ).all()
+        return [
+            StepInfo(
+                function_id=row[0],
+                function_name=row[1],
+                output=(
+                    _serialization.deserialize(row[2]) if row[2] is not None else row[2]
+                ),
+                error=(
+                    _serialization.deserialize_exception(row[3])
+                    if row[3] is not None
+                    else row[3]
+                ),
+                child_workflow_id=None,
+            )
+            for row in rows
+        ]

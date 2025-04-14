@@ -20,6 +20,7 @@ from dbos._debug import debug_workflow, parse_start_command
 from .. import load_config
 from .._app_db import ApplicationDatabase
 from .._dbos_config import _is_valid_app_name
+from .._docker_pg_helper import start_docker_pg, stop_docker_pg
 from .._sys_db import SystemDatabase, reset_system_database
 from .._workflow_commands import (
     get_workflow,
@@ -36,6 +37,21 @@ queue = typer.Typer()
 
 app.add_typer(workflow, name="workflow", help="Manage DBOS workflows")
 workflow.add_typer(queue, name="queue", help="Manage enqueued workflows")
+
+postgres = typer.Typer()
+app.add_typer(
+    postgres, name="postgres", help="Manage local Postgres database with Docker"
+)
+
+
+@postgres.command(name="start", help="Start a local Postgres database")
+def pg_start() -> None:
+    start_docker_pg()
+
+
+@postgres.command(name="stop", help="Stop the local Postgres database")
+def pg_stop() -> None:
+    stop_docker_pg()
 
 
 def _on_windows() -> bool:
@@ -246,7 +262,7 @@ def reset(
 def debug(
     workflow_id: Annotated[str, typer.Argument(help="Workflow ID to debug")],
 ) -> None:
-    config = load_config(silent=True, use_db_wizard=False)
+    config = load_config(silent=True)
     start = config["runtimeConfig"]["start"]
     if not start:
         typer.echo("No start commands found in 'dbos-config.yaml'")
@@ -350,8 +366,11 @@ def steps(
 ) -> None:
     config = load_config(silent=True)
     sys_db = SystemDatabase(config["database"])
+    app_db = ApplicationDatabase(config["database"])
     print(
-        jsonpickle.encode(list_workflow_steps(sys_db, workflow_id), unpicklable=False)
+        jsonpickle.encode(
+            list_workflow_steps(sys_db, app_db, workflow_id), unpicklable=False
+        )
     )
 
 

@@ -2,6 +2,7 @@ import json
 from typing import Any, List, Optional
 
 from . import _serialization
+from ._app_db import ApplicationDatabase
 from ._sys_db import (
     GetQueuedWorkflowsInput,
     GetWorkflowsInput,
@@ -44,6 +45,9 @@ class WorkflowStatus:
     executor_id: Optional[str]
     # The application version on which this workflow was started
     app_version: Optional[str]
+
+    # INTERNAL FIELDS
+
     # The ID of the application executing this workflow
     app_id: Optional[str]
     # The number of times this workflow's execution has been attempted
@@ -170,6 +174,11 @@ def get_workflow(
     return info
 
 
-def list_workflow_steps(sys_db: SystemDatabase, workflow_id: str) -> List[StepInfo]:
-    output = sys_db.get_workflow_steps(workflow_id)
-    return output
+def list_workflow_steps(
+    sys_db: SystemDatabase, app_db: ApplicationDatabase, workflow_id: str
+) -> List[StepInfo]:
+    steps = sys_db.get_workflow_steps(workflow_id)
+    transactions = app_db.get_transactions(workflow_id)
+    merged_steps = steps + transactions
+    merged_steps.sort(key=lambda step: step["function_id"])
+    return merged_steps

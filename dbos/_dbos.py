@@ -167,12 +167,17 @@ class DBOSRegistry:
         self.pollers: list[RegisteredJob] = []
         self.dbos: Optional[DBOS] = None
         self.config: Optional[ConfigFile] = None
-        self.workflow_cancelled_map: dict[str, bool] = {}
 
     def register_wf_function(self, name: str, wrapped_func: F, functype: str) -> None:
         if name in self.function_type_map:
             if self.function_type_map[name] != functype:
                 raise DBOSConflictingRegistrationError(name)
+            if name != TEMP_SEND_WF_NAME:
+                # Remove the `<temp>` prefix from the function name to avoid confusion
+                truncated_name = name.replace("<temp>.", "")
+                dbos_logger.warning(
+                    f"Duplicate registration of function '{truncated_name}'. A function named '{truncated_name}' has already been registered with DBOS. All functions registered with DBOS must have unique names."
+                )
         self.function_type_map[name] = functype
         self.workflow_info_map[name] = wrapped_func
 
@@ -209,15 +214,6 @@ class DBOSRegistry:
                 )
         else:
             self.instance_info_map[fn] = inst
-
-    def cancel_workflow(self, workflow_id: str) -> None:
-        self.workflow_cancelled_map[workflow_id] = True
-
-    def is_workflow_cancelled(self, workflow_id: str) -> bool:
-        return self.workflow_cancelled_map.get(workflow_id, False)
-
-    def clear_workflow_cancelled(self, workflow_id: str) -> None:
-        self.workflow_cancelled_map.pop(workflow_id, None)
 
     def compute_app_version(self) -> str:
         """
@@ -735,32 +731,11 @@ class DBOS:
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
         """Return the status of a workflow execution."""
-        sys_db = _get_dbos_instance()._sys_db
-        ctx = get_local_dbos_context()
-        if ctx and ctx.is_within_workflow():
-            ctx.function_id += 1
-            res = sys_db.check_operation_execution(ctx.workflow_id, ctx.function_id)
-            if res is not None:
-                if res["output"]:
-                    resstat: WorkflowStatus = _serialization.deserialize(res["output"])
-                    return resstat
-                else:
-                    raise DBOSException(
-                        "Workflow status record not found. This should not happen! \033[1m Hint: Check if your workflow is deterministic.\033[0m"
-                    )
-        stat = get_workflow(_get_dbos_instance()._sys_db, workflow_id, True)
 
-        if ctx and ctx.is_within_workflow():
-            sys_db.record_operation_result(
-                {
-                    "workflow_uuid": ctx.workflow_id,
-                    "function_id": ctx.function_id,
-                    "function_name": "DBOS.getStatus",
-                    "output": _serialization.serialize(stat),
-                    "error": None,
-                }
-            )
-        return stat
+        def fn() -> Optional[WorkflowStatus]:
+            return get_workflow(_get_dbos_instance()._sys_db, workflow_id, True)
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.getStatus")
 
     @classmethod
     async def get_workflow_status_async(
@@ -936,12 +911,12 @@ class DBOS:
         )
 
     @classmethod
-    def execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
+    def _execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Execute a workflow by ID (for recovery)."""
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id)
 
     @classmethod
-    def recover_pending_workflows(
+    def _recover_pending_workflows(
         cls, executor_ids: List[str] = ["local"]
     ) -> List[WorkflowHandle[Any]]:
         """Find all PENDING workflows and execute them."""
@@ -950,22 +925,37 @@ class DBOS:
     @classmethod
     def cancel_workflow(cls, workflow_id: str) -> None:
         """Cancel a workflow by ID."""
-        dbos_logger.info(f"Cancelling workflow: {workflow_id}")
-        _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
-        _get_or_create_dbos_registry().cancel_workflow(workflow_id)
+
+        def fn() -> None:
+            dbos_logger.info(f"Cancelling workflow: {workflow_id}")
+            _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.cancelWorkflow"
+        )
 
     @classmethod
     def resume_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Resume a workflow by ID."""
-        dbos_logger.info(f"Resuming workflow: {workflow_id}")
-        _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
-        _get_or_create_dbos_registry().clear_workflow_cancelled(workflow_id)
+
+        def fn() -> None:
+            dbos_logger.info(f"Resuming workflow: {workflow_id}")
+            _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
+
+        _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.resumeWorkflow")
         return cls.retrieve_workflow(workflow_id)
 
     @classmethod
     def restart_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID"""
-        forked_workflow_id = _get_dbos_instance()._sys_db.fork_workflow(workflow_id)
+
+        def fn() -> str:
+            dbos_logger.info(f"Restarting workflow: {workflow_id}")
+            return _get_dbos_instance()._sys_db.fork_workflow(workflow_id)
+
+        forked_workflow_id = _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.restartWorkflow"
+        )
         return cls.retrieve_workflow(forked_workflow_id)
 
     @classmethod
@@ -983,18 +973,23 @@ class DBOS:
         offset: Optional[int] = None,
         sort_desc: bool = False,
     ) -> List[WorkflowStatus]:
-        return list_workflows(
-            _get_dbos_instance()._sys_db,
-            workflow_ids=workflow_ids,
-            status=status,
-            start_time=start_time,
-            end_time=end_time,
-            name=name,
-            app_version=app_version,
-            user=user,
-            limit=limit,
-            offset=offset,
-            sort_desc=sort_desc,
+        def fn() -> List[WorkflowStatus]:
+            return list_workflows(
+                _get_dbos_instance()._sys_db,
+                workflow_ids=workflow_ids,
+                status=status,
+                start_time=start_time,
+                end_time=end_time,
+                name=name,
+                app_version=app_version,
+                user=user,
+                limit=limit,
+                offset=offset,
+                sort_desc=sort_desc,
+            )
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.listWorkflows"
         )
 
     @classmethod
@@ -1010,16 +1005,21 @@ class DBOS:
         offset: Optional[int] = None,
         sort_desc: bool = False,
     ) -> List[WorkflowStatus]:
-        return list_queued_workflows(
-            _get_dbos_instance()._sys_db,
-            queue_name=queue_name,
-            status=status,
-            start_time=start_time,
-            end_time=end_time,
-            name=name,
-            limit=limit,
-            offset=offset,
-            sort_desc=sort_desc,
+        def fn() -> List[WorkflowStatus]:
+            return list_queued_workflows(
+                _get_dbos_instance()._sys_db,
+                queue_name=queue_name,
+                status=status,
+                start_time=start_time,
+                end_time=end_time,
+                name=name,
+                limit=limit,
+                offset=offset,
+                sort_desc=sort_desc,
+            )
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.listQueuedWorkflows"
         )
 
     @classproperty
@@ -1062,11 +1062,11 @@ class DBOS:
 
     @classproperty
     def step_id(cls) -> int:
-        """Return the step ID for the current context. This is a unique identifier of the current step within the workflow."""
+        """Return the step ID for the currently executing step. This is a unique identifier of the current step within the workflow."""
         ctx = assert_current_dbos_context()
         assert (
-            ctx.is_within_workflow()
-        ), "step_id is only available within a DBOS workflow."
+            ctx.is_step() or ctx.is_transaction()
+        ), "step_id is only available within a DBOS step."
         return ctx.function_id
 
     @classproperty
@@ -1095,7 +1095,9 @@ class DBOS:
     def span(cls) -> Span:
         """Return the tracing `Span` associated with the current context."""
         ctx = assert_current_dbos_context()
-        return ctx.get_current_span()
+        span = ctx.get_current_span()
+        assert span
+        return span
 
     @classproperty
     def request(cls) -> Optional["Request"]:

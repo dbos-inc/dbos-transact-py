@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:94d3afe54094018e642f793cd9bb62a44ff7978b5895166df7ce8e476bfd06ff"
+content_hash = "sha256:f5e5077112d91aa7e9e03b284bbae73d7686179fd94928093d37f42aa342d4d6"
 
 [[metadata.targets]]
 requires_python = ">=3.9"
@@ -2043,6 +2043,21 @@ groups = ["dev"]
 files = [
     {file = "types_confluent_kafka-1.2.2-py3-none-any.whl", hash = "sha256:61dbcf5223d48593ec925f69ce39f63b5ec79902b3f27e496ff0e7bceeba4baf"},
     {file = "types_confluent_kafka-1.2.2.tar.gz", hash = "sha256:c1e4095ed8bd87b9f2b05f0b766ad0c2ade4e19da7e41c91542c805639d0bbef"},
+]
+
+[[package]]
+name = "types-docker"
+version = "7.1.0.20241229"
+requires_python = ">=3.8"
+summary = "Typing stubs for docker"
+groups = ["dev"]
+dependencies = [
+    "types-requests",
+    "urllib3>=2",
+]
+files = [
+    {file = "types_docker-7.1.0.20241229-py3-none-any.whl", hash = "sha256:b760745a6cb0351a19108c0b76e2a43ebc05a686f6c3ec9bc1a991ff9f1cc353"},
+    {file = "types_docker-7.1.0.20241229.tar.gz", hash = "sha256:d968f164bb02f934bc2f178515dd4b3c8b2b4e371a9400ec440247c09c139545"},
 ]
 
 [[package]]

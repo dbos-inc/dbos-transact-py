@@ -1,4 +1,3 @@
-import datetime
 import threading
 import time
 import uuid
@@ -8,11 +7,11 @@ import sqlalchemy as sa
 from psycopg.errors import SerializationFailure
 from sqlalchemy.exc import InvalidRequestError, OperationalError
 
-from dbos import DBOS, GetWorkflowsInput, Queue, SetWorkflowID
+from dbos import DBOS, Queue, SetWorkflowID
 from dbos._error import (
     DBOSDeadLetterQueueError,
-    DBOSException,
     DBOSMaxStepRetriesExceeded,
+    DBOSUnexpectedStepError,
 )
 from dbos._sys_db import WorkflowStatusString
 
@@ -164,13 +163,13 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
 
     # Attempt to recover the blocked workflow the maximum number of times
     for i in range(max_recovery_attempts):
-        DBOS.recover_pending_workflows()
+        DBOS._recover_pending_workflows()
         assert recovery_count == i + 2
 
     # Verify an additional attempt (either through recovery or through a direct call) throws a DLQ error
     # and puts the workflow in the DLQ status.
     with pytest.raises(Exception) as exc_info:
-        DBOS.recover_pending_workflows()
+        DBOS._recover_pending_workflows()
     assert exc_info.errisinstance(DBOSDeadLetterQueueError)
     assert handle.get_status().status == WorkflowStatusString.RETRIES_EXCEEDED.value
     with pytest.raises(Exception) as exc_info:
@@ -180,7 +179,7 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
 
     # Resume the workflow. Verify it can recover again without error.
     resumed_handle = dbos.resume_workflow(wfid)
-    DBOS.recover_pending_workflows()
+    DBOS._recover_pending_workflows()
 
     # Complete the blocked workflow
     event.set()
@@ -188,44 +187,88 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     assert handle.get_status().status == WorkflowStatusString.SUCCESS.value
 
 
-def test_wfstatus_invalid(dbos: DBOS) -> None:
-    @DBOS.workflow()
-    def regular_workflow() -> str:
-        return "done"
+def test_nondeterministic_workflow(dbos: DBOS) -> None:
+    flag = True
+    workflow_event = threading.Event()
+    main_thread_event = threading.Event()
 
-    has_executed = False
-    event = threading.Event()
-    wfevent = threading.Event()
+    @DBOS.step()
+    def step_one() -> None:
+        return
+
+    @DBOS.step()
+    def step_two() -> None:
+        return
 
     @DBOS.workflow()
     def non_deterministic_workflow() -> None:
-        nonlocal has_executed
-        handle = dbos.start_workflow(regular_workflow)
-        if not has_executed:
-            # Mock a scenario where the workflow control flow is changed by an external process
-            dbos.set_event("test_event", "value1")
-            has_executed = True
-        handle.get_status()
-        res = handle.get_result()
-        assert res == "done"
-        wfevent.set()
-        event.wait()
+        if flag:
+            step_one()
+        else:
+            step_two()
+        main_thread_event.set()
+        workflow_event.wait()
+
+    # Start the workflow. It will complete step_one then wait.
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = dbos.start_workflow(non_deterministic_workflow)
+    main_thread_event.wait()
+
+    # To simulate nondeterminism, set the flag then restart the workflow.
+    flag = False
+    with SetWorkflowID(wfid):
+        handle_two = dbos.start_workflow(non_deterministic_workflow)
+
+    # Due to the nondeterminism, the workflow should encounter an unexpected step.
+    with pytest.raises(DBOSUnexpectedStepError) as exc_info:
+        handle_two.get_result()
+
+    # The original workflow should complete successfully.
+    workflow_event.set()
+    assert handle.get_result() == None
+
+
+def test_nondeterministic_workflow_txn(dbos: DBOS) -> None:
+    flag = True
+    workflow_event = threading.Event()
+    main_thread_event = threading.Event()
+
+    @DBOS.transaction()
+    def txn_one() -> None:
         return
 
-    wfuuid = str(uuid.uuid4())
-    with SetWorkflowID(wfuuid):
-        handle1 = dbos.start_workflow(non_deterministic_workflow)
+    @DBOS.transaction()
+    def txn_two() -> None:
+        return
 
-    # Make sure the first one has reached the point where it waits for the event
-    wfevent.wait()
-    with SetWorkflowID(wfuuid):
-        handle2 = dbos.start_workflow(non_deterministic_workflow)
+    @DBOS.workflow()
+    def non_deterministic_workflow() -> None:
+        if flag:
+            txn_one()
+        else:
+            txn_two()
+        main_thread_event.set()
+        workflow_event.wait()
 
-    with pytest.raises(DBOSException) as exc_info:
-        handle2.get_result()
-    assert "Hint: Check if your workflow is deterministic." in str(exc_info.value)
-    event.set()
-    assert handle1.get_result() == None
+    # Start the workflow. It will complete step_one then wait.
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = dbos.start_workflow(non_deterministic_workflow)
+    main_thread_event.wait()
+
+    # To simulate nondeterminism, set the flag then restart the workflow.
+    flag = False
+    with SetWorkflowID(wfid):
+        handle_two = dbos.start_workflow(non_deterministic_workflow)
+
+    # Due to the nondeterminism, the workflow should encounter an unexpected step.
+    with pytest.raises(DBOSUnexpectedStepError) as exc_info:
+        handle_two.get_result()
+
+    # The original workflow should complete successfully.
+    workflow_event.set()
+    assert handle.get_result() == None
 
 
 def test_step_retries(dbos: DBOS) -> None:
@@ -336,7 +379,7 @@ def test_recovery_during_retries(dbos: DBOS) -> None:
 
     handle = DBOS.start_workflow(failing_workflow)
     start_event.wait()
-    recovery_handles = DBOS.recover_pending_workflows()
+    recovery_handles = DBOS._recover_pending_workflows()
     assert len(recovery_handles) == 1
     blocking_event.set()
     assert handle.get_result() is None
@@ -362,6 +405,6 @@ def test_keyboardinterrupt_during_retries(dbos: DBOS) -> None:
     with pytest.raises(KeyboardInterrupt):
         failing_workflow()
     raise_interrupt = False
-    recovery_handles = DBOS.recover_pending_workflows()
+    recovery_handles = DBOS._recover_pending_workflows()
     assert len(recovery_handles) == 1
     assert recovery_handles[0].get_result() == recovery_handles[0].workflow_id
