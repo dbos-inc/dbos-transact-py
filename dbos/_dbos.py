@@ -1093,11 +1093,11 @@ class DBOS:
 
     @classproperty
     def step_id(cls) -> int:
-        """Return the step ID for the current context. This is a unique identifier of the current step within the workflow."""
+        """Return the step ID for the currently executing step. This is a unique identifier of the current step within the workflow."""
         ctx = assert_current_dbos_context()
         assert (
-            ctx.is_within_workflow()
-        ), "step_id is only available within a DBOS workflow."
+            ctx.is_step() or ctx.is_transaction()
+        ), "step_id is only available within a DBOS step."
         return ctx.function_id
 
     @classproperty
