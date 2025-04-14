@@ -210,3 +210,93 @@ def test_restart(dbos: DBOS) -> None:
 
     # Verify nothing is left on any queue
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_restart_fromsteps_stepsonly(
+    dbos: DBOS,
+) -> None:
+
+    stepOneCount = 0
+    stepTwoCount = 0
+    stepThreeCount = 0
+    stepFourCount = 0
+    stepFiveCount = 0
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        stepOne()
+        stepTwo()
+        stepThree()
+        stepFour()
+        stepFive()
+        return
+
+    @DBOS.step()
+    def stepOne() -> None:
+        nonlocal stepOneCount
+        stepOneCount += 1
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        nonlocal stepTwoCount
+        stepTwoCount += 1
+        return
+
+    @DBOS.step()
+    def stepThree() -> None:
+        nonlocal stepThreeCount
+        stepThreeCount += 1
+        return
+
+    @DBOS.step()
+    def stepFour() -> None:
+        nonlocal stepFourCount
+        stepFourCount += 1
+        return
+
+    @DBOS.step()
+    def stepFive() -> None:
+        nonlocal stepFiveCount
+        stepFiveCount += 1
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        simple_workflow()
+
+    assert stepOneCount == 1
+    assert stepTwoCount == 1
+    assert stepThreeCount == 1
+    assert stepFourCount == 1
+    assert stepFiveCount == 1
+
+    forked_handle = DBOS.restart_workflow(wfid, 3)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert stepOneCount == 1
+    assert stepTwoCount == 1
+    assert stepThreeCount == 2
+    assert stepFourCount == 2
+    assert stepFiveCount == 2
+
+    forked_handle = DBOS.restart_workflow(wfid, 5)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert stepOneCount == 1
+    assert stepTwoCount == 1
+    assert stepThreeCount == 2
+    assert stepFourCount == 2
+    assert stepFiveCount == 3
+
+    forked_handle = DBOS.restart_workflow(wfid, 1)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert stepOneCount == 2
+    assert stepTwoCount == 2
+    assert stepThreeCount == 3
+    assert stepFourCount == 3
+    assert stepFiveCount == 4
