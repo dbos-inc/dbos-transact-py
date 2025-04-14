@@ -49,7 +49,7 @@ def pg_start() -> None:
     start_docker_pg()
 
 
-@postgres.command(name="start", help="Stop the local Postgres database")
+@postgres.command(name="stop", help="Stop the local Postgres database")
 def pg_stop() -> None:
     stop_docker_pg()
 
