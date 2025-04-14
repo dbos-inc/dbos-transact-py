@@ -390,3 +390,83 @@ def test_restart_fromsteps_transactionsonly(
     assert trThreeCount == 3
     assert trFourCount == 4
     assert trFiveCount == 4
+
+
+def test_restart_fromsteps_steps_tr(
+    dbos: DBOS,
+) -> None:
+
+    trOneCount = 0
+    stepTwoCount = 0
+    trThreeCount = 0
+    stepFourCount = 0
+    trFiveCount = 0
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        trOne()
+        stepTwo()
+        trThree()
+        stepFour()
+        trFive()
+        return
+
+    @DBOS.transaction()
+    def trOne() -> None:
+        nonlocal trOneCount
+        trOneCount += 1
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        nonlocal stepTwoCount
+        stepTwoCount += 1
+        return
+
+    @DBOS.transaction()
+    def trThree() -> None:
+        nonlocal trThreeCount
+        trThreeCount += 1
+        return
+
+    @DBOS.step()
+    def stepFour() -> None:
+        nonlocal stepFourCount
+        stepFourCount += 1
+        return
+
+    @DBOS.transaction()
+    def trFive() -> None:
+        nonlocal trFiveCount
+        trFiveCount += 1
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        simple_workflow()
+
+    assert trOneCount == 1
+    assert stepTwoCount == 1
+    assert trThreeCount == 1
+    assert stepFourCount == 1
+    assert trFiveCount == 1
+
+    forked_handle = DBOS.restart_workflow(wfid, 3)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert trOneCount == 1
+    assert stepTwoCount == 1
+    assert trThreeCount == 2
+    assert stepFourCount == 2
+    assert trFiveCount == 2
+
+    forked_handle = DBOS.restart_workflow(wfid, 5)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert trOneCount == 1
+    assert stepTwoCount == 1
+    assert trThreeCount == 2
+    assert stepFourCount == 2
+    assert trFiveCount == 3
