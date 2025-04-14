@@ -5,6 +5,7 @@ import time
 
 import docker
 import psycopg
+from docker.errors import APIError, NotFound
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 from typing import Any, Dict, Optional, Tuple
@@ -98,7 +99,7 @@ def start_docker_postgres(pool_config: Dict[str, Any]) -> bool:
                     f"Container '{container_name}' was stopped and has been restarted."
                 )
                 return True
-        except docker.errors.NotFound:
+        except NotFound:
             # Container doesn't exist, proceed with creation
             pass
 
@@ -118,7 +119,7 @@ def start_docker_postgres(pool_config: Dict[str, Any]) -> bool:
 
         logging.info(f"Created container: {container.id}")
 
-    except docker.errors.APIError as e:
+    except APIError as e:
         raise Exception(f"Docker API error: {str(e)}")
 
     # Wait for PostgreSQL to be ready
@@ -147,7 +148,7 @@ def check_docker_installed() -> bool:
     """
     try:
         client = docker.from_env()
-        client.ping()  # Check if Docker daemon is responsive
+        client.ping()  # type: ignore
         return True
     except Exception:
         return False
