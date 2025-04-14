@@ -1569,7 +1569,9 @@ class SystemDatabase:
 
     def call_function_as_step(self, fn: Callable[[], T], function_name: str) -> T:
         ctx = get_local_dbos_context()
-        if ctx and ctx.is_within_workflow():
+        if ctx and ctx.is_transaction():
+            raise Exception(f"Invalid call to `{function_name}` inside a transaction")
+        if ctx and ctx.is_workflow():
             ctx.function_id += 1
             res = self.check_operation_execution(
                 ctx.workflow_id, ctx.function_id, function_name
@@ -1587,7 +1589,7 @@ class SystemDatabase:
                         f"Recorded output and error are both None for {function_name}"
                     )
         result = fn()
-        if ctx and ctx.is_within_workflow():
+        if ctx and ctx.is_workflow():
             self.record_operation_result(
                 {
                     "workflow_uuid": ctx.workflow_id,
