@@ -975,9 +975,6 @@ class DBOS:
         _get_dbos_instance()._app_db.clone_workflow_transactions(
             workflow_id, forked_workflow_id, start_step
         )
-        # _get_dbos_instance()._sys_db.fork_workflow(
-        #    workflow_id, forked_workflow_id, start_step
-        # )
 
         def fn() -> str:
             dbos_logger.info(f"Restarting workflow: {workflow_id}")

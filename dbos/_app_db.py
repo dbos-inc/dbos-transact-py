@@ -258,24 +258,6 @@ class ApplicationDatabase:
         with self.engine.begin() as conn:
             # Select the rows you want to copy
 
-            # max_function_id_row = conn.execute(
-            #    sa.select(
-            #        sa.func.max(ApplicationSchema.transaction_outputs.c.function_id)
-            #    ).where(
-            #        ApplicationSchema.transaction_outputs.c.workflow_uuid
-            #        == src_workflow_id
-            #    )
-            # ).fetchone()
-
-            # max_function_id = max_function_id_row[0] if max_function_id_row else None
-
-            # print(f"transaction rows Max function id: {max_function_id}")
-
-            # if max_function_id is not None and start_step > max_function_id:
-            #    raise DBOSWorkflowConflictIDError(
-            #         f"Forked workflow start step {start_step} is greater than max step function id {max_function_id} in original workflow {src_workflow_id}"
-            #    )
-
             rows = conn.execute(
                 sa.select(
                     ApplicationSchema.transaction_outputs.c.function_id,
@@ -295,7 +277,7 @@ class ApplicationDatabase:
             ).fetchall()
 
             if rows:
-                # Prepare the new rows to insert
+
                 new_rows = [
                     {
                         "workflow_uuid": forked_workflow_id,
@@ -310,12 +292,4 @@ class ApplicationDatabase:
                     for row in rows
                 ]
 
-                print(
-                    f"Cloning transaction rows from {src_workflow_id} to {forked_workflow_id} {rows}"
-                )
-                # Insert the new rows
                 conn.execute(sa.insert(ApplicationSchema.transaction_outputs), new_rows)
-            else:
-                print(
-                    f"No transaction rows found for workflow {src_workflow_id} to clone."
-                )

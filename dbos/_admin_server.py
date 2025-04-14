@@ -135,9 +135,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 workflow_id = restart_match.group("workflow_id")
                 try:
                     data = json.loads(post_data.decode("utf-8"))
-                    print("data", data)
                     start_step: int = data.get("start_step", 1)
-                    print("start_step", start_step)
                 except (json.JSONDecodeError, AttributeError):
                     start_step = 1
                 self._handle_restart(workflow_id, start_step)

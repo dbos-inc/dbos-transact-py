@@ -845,7 +845,7 @@ def decorate_transaction(
                                         "Transaction output not found in debug mode"
                                     )
                                 if recorded_output:
-                                    dbos.logger.info(
+                                    dbos.logger.debug(
                                         f"Replaying transaction, id: {ctx.function_id}, name: {attributes['name']}"
                                     )
                                     if recorded_output["error"]:
@@ -1032,7 +1032,7 @@ def decorate_step(
                 if dbos.debug_mode and recorded_output is None:
                     raise DBOSException("Step output not found in debug mode")
                 if recorded_output:
-                    dbos.logger.info(
+                    dbos.logger.debug(
                         f"Replaying step, id: {ctx.function_id}, name: {attributes['name']}"
                     )
                     if recorded_output["error"] is not None:
@@ -1047,7 +1047,7 @@ def decorate_step(
                     else:
                         raise Exception("Output and error are both None")
                 else:
-                    dbos.logger.info(
+                    dbos.logger.debug(
                         f"Running step, id: {ctx.function_id}, name: {attributes['name']}"
                     )
                     return NoResult()
