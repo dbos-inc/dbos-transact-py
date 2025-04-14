@@ -300,3 +300,93 @@ def test_restart_fromsteps_stepsonly(
     assert stepThreeCount == 3
     assert stepFourCount == 3
     assert stepFiveCount == 4
+
+
+def test_restart_fromsteps_transactionsonly(
+    dbos: DBOS,
+) -> None:
+
+    trOneCount = 0
+    trTwoCount = 0
+    trThreeCount = 0
+    trFourCount = 0
+    trFiveCount = 0
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        trOne()
+        trTwo()
+        trThree()
+        trFour()
+        trFive()
+        return
+
+    @DBOS.transaction()
+    def trOne() -> None:
+        nonlocal trOneCount
+        trOneCount += 1
+        return
+
+    @DBOS.transaction()
+    def trTwo() -> None:
+        nonlocal trTwoCount
+        trTwoCount += 1
+        return
+
+    @DBOS.transaction()
+    def trThree() -> None:
+        nonlocal trThreeCount
+        trThreeCount += 1
+        return
+
+    @DBOS.transaction()
+    def trFour() -> None:
+        nonlocal trFourCount
+        trFourCount += 1
+        return
+
+    @DBOS.transaction()
+    def trFive() -> None:
+        nonlocal trFiveCount
+        trFiveCount += 1
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        simple_workflow()
+
+    assert trOneCount == 1
+    assert trTwoCount == 1
+    assert trThreeCount == 1
+    assert trFourCount == 1
+    assert trFiveCount == 1
+
+    forked_handle = DBOS.restart_workflow(wfid, 2)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert trOneCount == 1
+    assert trTwoCount == 2
+    assert trThreeCount == 2
+    assert trFourCount == 2
+    assert trFiveCount == 2
+
+    forked_handle = DBOS.restart_workflow(wfid, 4)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert trOneCount == 1
+    assert trTwoCount == 2
+    assert trThreeCount == 2
+    assert trFourCount == 3
+    assert trFiveCount == 3
+
+    forked_handle = DBOS.restart_workflow(wfid, 1)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert trOneCount == 2
+    assert trTwoCount == 3
+    assert trThreeCount == 3
+    assert trFourCount == 4
+    assert trFiveCount == 4
