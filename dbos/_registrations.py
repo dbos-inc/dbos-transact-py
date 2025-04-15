@@ -34,6 +34,7 @@ def set_temp_workflow_type(f: Any, name: TempWorkflowType) -> None:
 
 @dataclass
 class DBOSClassInfo:
+    registered_name: str
     def_required_roles: Optional[List[str]] = None
 
 
@@ -53,11 +54,17 @@ class DBOSFuncInfo:
     max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS
 
 
-def get_or_create_class_info(cls: Type[Any]) -> DBOSClassInfo:
+def get_or_create_class_info(
+    cls: Type[Any], provided_name: Optional[str] = None
+) -> DBOSClassInfo:
     if hasattr(cls, "dbos_class_decorator_info"):
         ci: DBOSClassInfo = getattr(cls, "dbos_class_decorator_info")
         return ci
-    ci = DBOSClassInfo()
+    class_name = _class_fqn(cls)
+    # Use the provided name instead of the class name if it is not None
+    if provided_name is not None:
+        class_name = provided_name
+    ci = DBOSClassInfo(registered_name=class_name)
     setattr(cls, "dbos_class_decorator_info", ci)
 
     # Tell all DBOS functions about this
@@ -167,11 +174,11 @@ def get_config_name(
 
 
 def _class_fqn(cls: type) -> str:
-    """Returns fully qualified name of the given class.
-
-    Join with / instead of . to avoid collision of similar classes in different hierarchies.
-    """
-    return f"{cls.__module__}/{cls.__qualname__}"
+    """Returns the registered name of the given class. If the class is not registered, it returns the fully qualified name of the class."""
+    ci = get_class_info(cls)
+    if ci is not None:
+        return ci.registered_name
+    return cls.__qualname__
 
 
 def get_dbos_class_name(

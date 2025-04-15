@@ -189,8 +189,10 @@ class DBOSRegistry:
         else:
             self.class_info_map[class_name] = cls
 
-    def create_class_info(self, cls: Type[T]) -> Type[T]:
-        ci = get_or_create_class_info(cls)
+    def create_class_info(
+        self, cls: Type[T], class_name: Optional[str] = None
+    ) -> Type[T]:
+        ci = get_or_create_class_info(cls, class_name)
         self.register_class(cls, ci)
         return cls
 
@@ -642,15 +644,22 @@ class DBOS:
         )
 
     @classmethod
-    def dbos_class(cls) -> Callable[[Type[T]], Type[T]]:
+    def dbos_class(
+        cls, class_name: Optional[str] = None
+    ) -> Callable[[Type[T]], Type[T]]:
         """
         Decorate a class that contains DBOS member functions.
 
         All DBOS classes must be decorated, as this associates the class with
-        its member functions.
+        its member functions. Class names must be globally unique. By default, the class name is class.__qualname__  but you can optionally provide a class name that is different from the default name.
         """
 
-        return _get_or_create_dbos_registry().create_class_info
+        def register_class(cls: Type[T]) -> Type[T]:
+            # Register the class with the DBOS registry
+            _get_or_create_dbos_registry().create_class_info(cls, class_name)
+            return cls
+
+        return register_class
 
     @classmethod
     def default_required_roles(cls, roles: List[str]) -> Callable[[Type[T]], Type[T]]:

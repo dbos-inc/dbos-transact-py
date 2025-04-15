@@ -377,7 +377,7 @@ def test_duplicate_reg(dbos: DBOS) -> None:
                 super().__init__("bob")
 
     assert (
-        "Duplicate type registration for class 'tests.test_classdecorators/test_duplicate_reg.<locals>.DBOSTestRegDup'"
+        "Duplicate type registration for class 'test_duplicate_reg.<locals>.DBOSTestRegDup'"
         == str(exc_info.value)
     )
 
@@ -387,12 +387,12 @@ def test_duplicate_reg(dbos: DBOS) -> None:
         inst = DBOSTestRegDup()
 
     assert (
-        "Duplicate instance registration for class 'tests.test_classdecorators/test_duplicate_reg.<locals>.DBOSTestRegDup' instance 'bob'"
+        "Duplicate instance registration for class 'test_duplicate_reg.<locals>.DBOSTestRegDup' instance 'bob'"
         == str(exc_info.value)
     )
 
     # There should be no collision when the duplicate class names are in
-    # different modules.
+    # different modules if they're specified with different names.
     from tests import dupname_classdefs1, dupname_classdefsa
 
     # Two instances of the same class may be registered if they have different
@@ -407,7 +407,7 @@ def test_duplicate_reg(dbos: DBOS) -> None:
         bob2 = dupname_classdefs1.DBOSTestRegDup("bob")
 
     assert (
-        "Duplicate instance registration for class 'tests.dupname_classdefs1/DBOSTestRegDup' instance 'bob'"
+        "Duplicate instance registration for class 'AnotherDBOSTestRegDup' instance 'bob'"
         == str(exc_info.value)
     )
 
