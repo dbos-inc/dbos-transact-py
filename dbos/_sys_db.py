@@ -539,11 +539,19 @@ class SystemDatabase:
                 )
             )
 
-            # is the first step 0 or 1 ? need to confirm
             if start_step > 1:
 
-                rows = c.execute(
+                insert_stmt = sa.insert(SystemSchema.operation_outputs).from_select(
+                    [
+                        "workflow_uuid",
+                        "function_id",
+                        "output",
+                        "error",
+                        "function_name",
+                        "child_workflow_id",
+                    ],
                     sa.select(
+                        sa.literal(forked_workflow_id).label("workflow_uuid"),
                         SystemSchema.operation_outputs.c.function_id,
                         SystemSchema.operation_outputs.c.output,
                         SystemSchema.operation_outputs.c.error,
@@ -555,28 +563,10 @@ class SystemDatabase:
                             == original_workflow_id
                         )
                         & (SystemSchema.operation_outputs.c.function_id < start_step)
-                    )
-                ).fetchall()
+                    ),
+                )
 
-                if rows:
-                    # Prepare the new rows to insert
-                    print(
-                        f"Forking workflow {original_workflow_id} to {forked_workflow_id} with rows: {rows}"
-                    )
-                    new_rows = [
-                        {
-                            "workflow_uuid": forked_workflow_id,
-                            "function_id": row.function_id,
-                            "output": row.output,
-                            "error": row.error,
-                            "function_name": row.function_name,
-                            "child_workflow_id": row.child_workflow_id,
-                        }
-                        for row in rows
-                    ]
-
-                    # Insert the new rows
-                    c.execute(sa.insert(SystemSchema.operation_outputs), new_rows)
+                c.execute(insert_stmt)
 
             # Enqueue the forked workflow on the internal queue
             c.execute(

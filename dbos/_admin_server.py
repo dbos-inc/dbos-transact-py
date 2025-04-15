@@ -154,8 +154,8 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_restart(self, workflow_id: str, start_step: int) -> None:
         try:
+            print(f"Restarting workflow {workflow_id} from step {start_step}")
             self.dbos.restart_workflow(workflow_id, start_step)
-            print("Restarting workflow", workflow_id)
             self.send_response(204)
             self._end_headers()
         except DBOSException as e:

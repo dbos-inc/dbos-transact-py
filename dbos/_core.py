@@ -865,7 +865,7 @@ def decorate_transaction(
                                             "Output and error are both None"
                                         )
                                 else:
-                                    dbos.logger.info(
+                                    dbos.logger.debug(
                                         f"Running transaction, id: {ctx.function_id}, name: {attributes['name']}"
                                     )
 
