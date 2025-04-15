@@ -273,7 +273,7 @@ def test_restart_fromsteps_stepsonly(
     assert stepFourCount == 1
     assert stepFiveCount == 1
 
-    forked_handle = DBOS.restart_workflow(wfid, 3)
+    forked_handle = DBOS.fork_workflow(wfid, 3)
     assert forked_handle.workflow_id != wfid
     forked_handle.get_result()
 
@@ -283,7 +283,7 @@ def test_restart_fromsteps_stepsonly(
     assert stepFourCount == 2
     assert stepFiveCount == 2
 
-    forked_handle = DBOS.restart_workflow(wfid, 5)
+    forked_handle = DBOS.fork_workflow(wfid, 5)
     assert forked_handle.workflow_id != wfid
     forked_handle.get_result()
 
@@ -293,7 +293,7 @@ def test_restart_fromsteps_stepsonly(
     assert stepFourCount == 2
     assert stepFiveCount == 3
 
-    forked_handle = DBOS.restart_workflow(wfid, 1)
+    forked_handle = DBOS.fork_workflow(wfid, 1)
     assert forked_handle.workflow_id != wfid
     forked_handle.get_result()
 
@@ -363,7 +363,7 @@ def test_restart_fromsteps_transactionsonly(
     assert trFourCount == 1
     assert trFiveCount == 1
 
-    forked_handle = DBOS.restart_workflow(wfid, 2)
+    forked_handle = DBOS.fork_workflow(wfid, 2)
     assert forked_handle.workflow_id != wfid
     forked_handle.get_result()
 
@@ -373,7 +373,7 @@ def test_restart_fromsteps_transactionsonly(
     assert trFourCount == 2
     assert trFiveCount == 2
 
-    forked_handle = DBOS.restart_workflow(wfid, 4)
+    forked_handle = DBOS.fork_workflow(wfid, 4)
     assert forked_handle.workflow_id != wfid
     forked_handle.get_result()
 
@@ -383,7 +383,7 @@ def test_restart_fromsteps_transactionsonly(
     assert trFourCount == 3
     assert trFiveCount == 3
 
-    forked_handle = DBOS.restart_workflow(wfid, 1)
+    forked_handle = DBOS.fork_workflow(wfid, 1)
     assert forked_handle.workflow_id != wfid
     forked_handle.get_result()
 
@@ -453,7 +453,7 @@ def test_restart_fromsteps_steps_tr(
     assert stepFourCount == 1
     assert trFiveCount == 1
 
-    forked_handle = DBOS.restart_workflow(wfid, 3)
+    forked_handle = DBOS.fork_workflow(wfid, 3)
     assert forked_handle.workflow_id != wfid
     forked_handle.get_result()
 
@@ -463,7 +463,7 @@ def test_restart_fromsteps_steps_tr(
     assert stepFourCount == 2
     assert trFiveCount == 2
 
-    forked_handle = DBOS.restart_workflow(wfid, 5)
+    forked_handle = DBOS.fork_workflow(wfid, 5)
     assert forked_handle.workflow_id != wfid
     forked_handle.get_result()
 
@@ -475,7 +475,7 @@ def test_restart_fromsteps_steps_tr(
 
     # invalid step
     try:
-        forked_handle = DBOS.restart_workflow(wfid, 7)
+        forked_handle = DBOS.fork_workflow(wfid, 7)
         assert forked_handle.workflow_id != wfid
         forked_handle.get_result()
     except Exception as e:
@@ -485,7 +485,7 @@ def test_restart_fromsteps_steps_tr(
         assert trOneCount == 1
 
     # invalid < 1 will default to 1
-    forked_handle = DBOS.restart_workflow(wfid, -1)
+    forked_handle = DBOS.fork_workflow(wfid, -1)
     assert forked_handle.workflow_id != wfid
     forked_handle.get_result()
 

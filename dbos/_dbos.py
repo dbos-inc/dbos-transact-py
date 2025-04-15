@@ -960,7 +960,34 @@ class DBOS:
         return max(max_transactions, max_operations)
 
     @classmethod
-    def restart_workflow(
+    def restart_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
+        """Restart a workflow with a new workflow ID"""
+
+        return cls.fork_workflow(workflow_id, 1)
+
+        # max_function_id = cls.get_max_function_id(workflow_id)
+        # if max_function_id is not None and start_step > max_function_id:
+        #    raise DBOSException(
+        #        f"Cannot restart workflow {workflow_id} at step {start_step}. The workflow has  {max_function_id} steps."
+        #    )
+
+        # forked_workflow_id = str(uuid.uuid4())
+        # _get_dbos_instance()._app_db.clone_workflow_transactions(
+        #     workflow_id, forked_workflow_id, start_step
+        # )
+
+        # def fn() -> str:
+        #    dbos_logger.info(f"Restarting workflow: {workflow_id}")
+        #    return _get_dbos_instance()._sys_db.fork_workflow(
+        #        workflow_id, forked_workflow_id, start_step
+        #    )
+
+        # _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.restartWorkflow")
+
+        # return cls.retrieve_workflow(forked_workflow_id)
+
+    @classmethod
+    def fork_workflow(
         cls, workflow_id: str, start_step: int = 1
     ) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID"""
@@ -971,13 +998,16 @@ class DBOS:
                 f"Cannot restart workflow {workflow_id} at step {start_step}. The workflow has  {max_function_id} steps."
             )
 
+        # outside the step so that retrieve_workflow can
         forked_workflow_id = str(uuid.uuid4())
-        _get_dbos_instance()._app_db.clone_workflow_transactions(
-            workflow_id, forked_workflow_id, start_step
-        )
 
         def fn() -> str:
             dbos_logger.info(f"Restarting workflow: {workflow_id}")
+
+            _get_dbos_instance()._app_db.clone_workflow_transactions(
+                workflow_id, forked_workflow_id, start_step
+            )
+
             return _get_dbos_instance()._sys_db.fork_workflow(
                 workflow_id, forked_workflow_id, start_step
             )
