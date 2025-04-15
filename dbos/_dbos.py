@@ -995,14 +995,14 @@ class DBOS:
         max_function_id = cls.get_max_function_id(workflow_id)
         if max_function_id is not None and start_step > max_function_id:
             raise DBOSException(
-                f"Cannot restart workflow {workflow_id} at step {start_step}. The workflow has  {max_function_id} steps."
+                f"Cannot fork workflow {workflow_id} at step {start_step}. The workflow has  {max_function_id} steps."
             )
 
         # outside the step so that retrieve_workflow can
         forked_workflow_id = str(uuid.uuid4())
 
         def fn() -> str:
-            dbos_logger.info(f"Restarting workflow: {workflow_id}")
+            dbos_logger.info(f"forking workflow: {workflow_id} from step {start_step}")
 
             _get_dbos_instance()._app_db.clone_workflow_transactions(
                 workflow_id, forked_workflow_id, start_step
