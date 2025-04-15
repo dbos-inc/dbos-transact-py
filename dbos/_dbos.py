@@ -956,7 +956,7 @@ class DBOS:
     ) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID"""
 
-        def get_max_function_id(workflow_uuid: str) -> Optional[int]:
+        def get_max_function_id(workflow_uuid: str) -> int:
             max_transactions = (
                 _get_dbos_instance()._app_db.get_max_function_id(workflow_uuid) or 0
             )
