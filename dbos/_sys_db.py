@@ -541,6 +541,7 @@ class SystemDatabase:
 
             if start_step > 1:
 
+                # Copy the original workflow's outputs into the forked workflow
                 insert_stmt = sa.insert(SystemSchema.operation_outputs).from_select(
                     [
                         "workflow_uuid",
