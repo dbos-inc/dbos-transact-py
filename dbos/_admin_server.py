@@ -153,7 +153,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                     return
             elif restart_match:
                 workflow_id = restart_match.group("workflow_id")
-                self._handle_handle(workflow_id)
+                self._handle_restart(workflow_id)
             elif resume_match:
                 workflow_id = resume_match.group("workflow_id")
                 self._handle_resume(workflow_id)
