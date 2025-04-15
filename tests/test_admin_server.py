@@ -349,7 +349,9 @@ def test_admin_workflow_restart(dbos: DBOS, sys_db: SystemDatabase) -> None:
         assert False, "Expected info to be not None"
 
     response = requests.post(
-        f"http://localhost:3001/workflows/{wfUuid}/restart", json=[], timeout=5
+        f"http://localhost:3001/workflows/{wfUuid}/restart",
+        json={"start_step": 3},
+        timeout=5,
     )
     assert response.status_code == 204
 
