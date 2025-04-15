@@ -136,8 +136,16 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 try:
                     data = json.loads(post_data.decode("utf-8"))
                     start_step: int = data.get("start_step", 1)
-                except (json.JSONDecodeError, AttributeError):
-                    start_step = 1
+                except (json.JSONDecodeError, AttributeError) as e:
+                    self.send_response(500)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(
+                        json.dumps({"error": f"Invalid JSON input: {str(e)}"}).encode(
+                            "utf-8"
+                        )
+                    )
+                    return
                 self._handle_restart(workflow_id, start_step)
             elif resume_match:
                 workflow_id = resume_match.group("workflow_id")
