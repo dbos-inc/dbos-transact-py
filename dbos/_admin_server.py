@@ -160,7 +160,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self._end_headers()
         except DBOSException as e:
             print(f"Error restarting workflow: {e}")
-            self.send_response(400)
+            self.send_response(500)
             response_body = json.dumps({"error": str(e)}).encode("utf-8")
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(response_body)))
