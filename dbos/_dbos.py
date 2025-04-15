@@ -956,7 +956,7 @@ class DBOS:
     ) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID"""
 
-        def get_max_function_id(cls, workflow_uuid: str) -> Optional[int]:
+        def get_max_function_id(workflow_uuid: str) -> Optional[int]:
             max_transactions = (
                 _get_dbos_instance()._app_db.get_max_function_id(workflow_uuid) or 0
             )
@@ -966,7 +966,7 @@ class DBOS:
             return max(max_transactions, max_operations)
 
         max_function_id = get_max_function_id(workflow_id)
-        if max_function_id is not None and start_step > max_function_id:
+        if max_function_id > 0 and start_step > max_function_id:
             raise DBOSException(
                 f"Cannot fork workflow {workflow_id} at step {start_step}. The workflow has  {max_function_id} steps."
             )
@@ -985,7 +985,7 @@ class DBOS:
                 workflow_id, forked_workflow_id, start_step
             )
 
-        _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.restartWorkflow")
+        _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.forkWorkflow")
 
         return cls.retrieve_workflow(forked_workflow_id)
 
