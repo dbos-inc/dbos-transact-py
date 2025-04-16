@@ -365,6 +365,9 @@ def _execute_workflow_wthread(
                 if isinstance(result, Immediate):
                     return cast(Immediate[R], result)()
                 else:
+                    return dbos._background_event_loop.submit_coroutine(
+                        cast(Pending[R], result)()
+                    )
                     return asyncio.run(cast(Pending[R], result)())
             except Exception:
                 dbos.logger.error(

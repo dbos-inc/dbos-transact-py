@@ -8,7 +8,7 @@ import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, Queue, SetWorkflowID
-from dbos._dbos import WorkflowHandleAsync
+from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._dbos_config import ConfigFile
 from dbos._error import DBOSException
 
@@ -160,10 +160,11 @@ async def test_send_recv_async(dbos: DBOS) -> None:
     none_uuid = str(uuid.uuid4())
     none_handle = None
     with SetWorkflowID(none_uuid):
-        none_handle = dbos.start_workflow(test_recv_timeout, 10.0)
+        none_handle = await dbos.start_workflow_async(test_recv_timeout, 10.0)
     await test_send_none(none_uuid)
     begin_time = time.time()
-    assert none_handle.get_result() is None
+    result = await none_handle.get_result()  # type: ignore
+    assert result is None
     duration = time.time() - begin_time
     assert duration < 1.0  # None is from the received message, not from the timeout.
 
@@ -409,14 +410,16 @@ def test_unawaited_workflow(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def child_workflow(x: int) -> int:
+        await asyncio.sleep(0.1)
         return x
 
     @DBOS.workflow()
     async def parent_workflow(x: int) -> None:
         with SetWorkflowID(child_id):
-            DBOS.start_workflow_async(child_workflow, x)
+            await DBOS.start_workflow_async(child_workflow, x)
 
     assert queue.enqueue(parent_workflow, input).get_result() is None
-    handle = DBOS.retrieve_workflow(child_id, existing_workflow=False)
-    print("WAIT")
+    handle: WorkflowHandle[int] = DBOS.retrieve_workflow(
+        child_id, existing_workflow=False
+    )
     assert handle.get_result() == 5
