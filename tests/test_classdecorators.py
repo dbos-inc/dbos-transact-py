@@ -398,7 +398,7 @@ def test_duplicate_reg(dbos: DBOS) -> None:
     # Two instances of the same class may be registered if they have different
     # instance_name.
     # Duplicate instance registration error still occurs with identical class
-    # name, module, and instance_name.
+    # name and instance_name.
     alice = dupname_classdefs1.DBOSTestRegDup("alice")
     bob = dupname_classdefsa.DBOSTestRegDup("bob")
     bob2 = dupname_classdefs1.DBOSTestRegDup("bob")
