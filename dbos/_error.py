@@ -26,6 +26,29 @@ class DBOSException(Exception):
         return f"DBOS Error: {self.message}"
 
 
+class DBOSBaseException(BaseException):
+    """
+    This class is for DBOS exceptions that should not be caught by user code.
+    It inherits from BaseException instead of Exception so it cannot be caught
+    except by code specifically trying to catch it.
+
+    Attributes:
+        message(str): The error message string
+        dbos_error_code(DBOSErrorCode): The error code, from the `DBOSErrorCode` enum
+    """
+
+    def __init__(self, message: str, dbos_error_code: Optional[int] = None):
+        self.message = message
+        self.dbos_error_code = dbos_error_code
+        self.status_code: Optional[int] = None
+        super().__init__(self.message)
+
+    def __str__(self) -> str:
+        if self.dbos_error_code:
+            return f"DBOS Error {self.dbos_error_code}: {self.message}"
+        return f"DBOS Error: {self.message}"
+
+
 class DBOSErrorCode(Enum):
     ConflictingIDError = 1
     RecoveryError = 2
@@ -41,14 +64,9 @@ class DBOSErrorCode(Enum):
     ConflictingRegistrationError = 25
 
 
-class DBOSWorkflowConflictIDError(DBOSException):
-    """Exception raised when a workflow database record already exists."""
-
-    def __init__(self, workflow_id: str):
-        super().__init__(
-            f"Conflicting workflow ID {workflow_id}",
-            dbos_error_code=DBOSErrorCode.ConflictingIDError.value,
-        )
+#######################################
+## Exception
+#######################################
 
 
 class DBOSConflictingWorkflowError(DBOSException):
@@ -138,16 +156,6 @@ class DBOSMaxStepRetriesExceeded(DBOSException):
         return (self.__class__, (self.step_name, self.max_retries))
 
 
-class DBOSWorkflowCancelledError(DBOSException):
-    """Exception raised when the workflow has already been cancelled."""
-
-    def __init__(self, msg: str) -> None:
-        super().__init__(
-            msg,
-            dbos_error_code=DBOSErrorCode.WorkflowCancelled.value,
-        )
-
-
 class DBOSConflictingRegistrationError(DBOSException):
     """Exception raised when conflicting decorators are applied to the same function."""
 
@@ -167,4 +175,29 @@ class DBOSUnexpectedStepError(DBOSException):
         super().__init__(
             f"During execution of workflow {workflow_id} step {step_id}, function {recorded_name} was recorded when {expected_name} was expected. Check that your workflow is deterministic.",
             dbos_error_code=DBOSErrorCode.UnexpectedStep.value,
+        )
+
+
+#######################################
+## BaseException
+#######################################
+
+
+class DBOSWorkflowCancelledError(DBOSBaseException):
+    """BaseException raised when the workflow has already been cancelled."""
+
+    def __init__(self, msg: str) -> None:
+        super().__init__(
+            msg,
+            dbos_error_code=DBOSErrorCode.WorkflowCancelled.value,
+        )
+
+
+class DBOSWorkflowConflictIDError(DBOSBaseException):
+    """BaseException raised when a workflow database record already exists."""
+
+    def __init__(self, workflow_id: str):
+        super().__init__(
+            f"Conflicting workflow ID {workflow_id}",
+            dbos_error_code=DBOSErrorCode.ConflictingIDError.value,
         )
