@@ -7,7 +7,7 @@ import pytest
 import sqlalchemy as sa
 
 # Public API
-from dbos import DBOS, SetWorkflowID
+from dbos import DBOS, Queue, SetWorkflowID
 from dbos._dbos import WorkflowHandleAsync
 from dbos._dbos_config import ConfigFile
 from dbos._error import DBOSException
@@ -402,10 +402,10 @@ async def test_retrieve_workflow_async(dbos: DBOS) -> None:
     assert wfstatus.workflow_id == wfuuid
 
 
-@pytest.mark.asyncio
-async def test_unawaited_workflow(dbos: DBOS) -> None:
+def test_unawaited_workflow(dbos: DBOS) -> None:
     input = 5
     child_id = str(uuid.uuid4())
+    queue = Queue("test_queue")
 
     @DBOS.workflow()
     async def child_workflow(x: int) -> int:
@@ -414,8 +414,9 @@ async def test_unawaited_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
     async def parent_workflow(x: int) -> None:
         with SetWorkflowID(child_id):
-            await DBOS.start_workflow_async(child_workflow, x)
+            DBOS.start_workflow_async(child_workflow, x)
 
-    assert await parent_workflow(input) is None
-    handle = await DBOS.retrieve_workflow_async(child_id)
-    assert await handle.get_result() == 5
+    assert queue.enqueue(parent_workflow, input).get_result() is None
+    handle = DBOS.retrieve_workflow(child_id, existing_workflow=False)
+    print("WAIT")
+    assert handle.get_result() == 5
