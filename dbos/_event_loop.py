@@ -4,6 +4,11 @@ from typing import Any, Coroutine, Optional, TypeVar
 
 
 class BackgroundEventLoop:
+    """
+    This is the event loop to which DBOS submits any coroutines that are not started from within an event loop.
+    In particular, coroutines submitted to queues (such as from scheduled workflows) run on this event loop.
+    """
+
     def __init__(self) -> None:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
