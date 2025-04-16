@@ -505,7 +505,7 @@ def test_restart_fromsteps_childwf(
     stepThreeCount = 0
 
     @DBOS.workflow()
-    def simple_workflow() -> None:
+    def simple_workflow() -> str:
         stepOne()
         wfid = str(uuid.uuid4())
         with SetWorkflowID(wfid):
@@ -515,7 +515,7 @@ def test_restart_fromsteps_childwf(
             )
         handle.get_result()
         stepThree()
-        return
+        return ""
 
     @DBOS.step()
     def stepOne() -> None:
