@@ -60,6 +60,7 @@ from ._recovery import recover_pending_workflows, startup_recovery_thread
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
+    _class_fqn,
     get_or_create_class_info,
     set_dbos_func_name,
     set_temp_workflow_type,
@@ -180,15 +181,17 @@ class DBOSRegistry:
         self.workflow_info_map[name] = wrapped_func
 
     def register_class(self, cls: type, ci: DBOSClassInfo) -> None:
-        class_name = cls.__name__
+        class_name = _class_fqn(cls)
         if class_name in self.class_info_map:
             if self.class_info_map[class_name] is not cls:
                 raise Exception(f"Duplicate type registration for class '{class_name}'")
         else:
             self.class_info_map[class_name] = cls
 
-    def create_class_info(self, cls: Type[T]) -> Type[T]:
-        ci = get_or_create_class_info(cls)
+    def create_class_info(
+        self, cls: Type[T], class_name: Optional[str] = None
+    ) -> Type[T]:
+        ci = get_or_create_class_info(cls, class_name)
         self.register_class(cls, ci)
         return cls
 
@@ -203,7 +206,7 @@ class DBOSRegistry:
 
     def register_instance(self, inst: object) -> None:
         config_name = getattr(inst, "config_name")
-        class_name = inst.__class__.__name__
+        class_name = _class_fqn(inst.__class__)
         fn = f"{class_name}/{config_name}"
         if fn in self.instance_info_map:
             if self.instance_info_map[fn] is not inst:
@@ -643,15 +646,22 @@ class DBOS:
         )
 
     @classmethod
-    def dbos_class(cls) -> Callable[[Type[T]], Type[T]]:
+    def dbos_class(
+        cls, class_name: Optional[str] = None
+    ) -> Callable[[Type[T]], Type[T]]:
         """
         Decorate a class that contains DBOS member functions.
 
         All DBOS classes must be decorated, as this associates the class with
-        its member functions.
+        its member functions. Class names must be globally unique. By default, the class name is class.__qualname__  but you can optionally provide a class name that is different from the default name.
         """
 
-        return _get_or_create_dbos_registry().create_class_info
+        def register_class(cls: Type[T]) -> Type[T]:
+            # Register the class with the DBOS registry
+            _get_or_create_dbos_registry().create_class_info(cls, class_name)
+            return cls
+
+        return register_class
 
     @classmethod
     def default_required_roles(cls, roles: List[str]) -> Callable[[Type[T]], Type[T]]:
