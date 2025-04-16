@@ -983,7 +983,7 @@ class DBOS:
 
         def fn() -> str:
             forked_workflow_id = str(uuid.uuid4())
-            dbos_logger.info(f"forking workflow: {workflow_id} from step {start_step}")
+            dbos_logger.info(f"Forking workflow: {workflow_id} from step {start_step}")
 
             _get_dbos_instance()._app_db.clone_workflow_transactions(
                 workflow_id, forked_workflow_id, start_step
