@@ -368,7 +368,6 @@ def _execute_workflow_wthread(
                     return dbos._background_event_loop.submit_coroutine(
                         cast(Pending[R], result)()
                     )
-                    return asyncio.run(cast(Pending[R], result)())
             except Exception:
                 dbos.logger.error(
                     f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
