@@ -56,6 +56,15 @@ async def test_async_workflow(dbos: DBOS) -> None:
     assert step_counter == 1
     assert txn_counter == 1
 
+    # Test DBOS.start_workflow_async
+    handle = await DBOS.start_workflow_async(test_workflow, "alice", "bob")
+    assert (await handle.get_result()) == "alicetxn21bobstep2"
+
+    # Test DBOS.start_workflow. Not recommended for async workflows,
+    # but needed for backwards compatibility.
+    sync_handle = DBOS.start_workflow(test_workflow, "alice", "bob")
+    assert sync_handle.get_result() == "alicetxn31bobstep3"  # type: ignore
+
 
 @pytest.mark.asyncio
 async def test_async_step(dbos: DBOS) -> None:
