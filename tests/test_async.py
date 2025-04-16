@@ -432,3 +432,37 @@ def test_unawaited_workflow(dbos: DBOS) -> None:
         child_id, existing_workflow=False
     )
     assert handle.get_result() == 5
+
+
+def test_unawaited_workflow_exception(dbos: DBOS) -> None:
+    child_id = str(uuid.uuid4())
+    queue = Queue("test_queue")
+
+    @DBOS.workflow()
+    async def child_workflow(s: str) -> int:
+        await asyncio.sleep(0.1)
+        raise Exception(s)
+
+    @DBOS.workflow()
+    async def parent_workflow(s: str) -> None:
+        with SetWorkflowID(child_id):
+            await DBOS.start_workflow_async(child_workflow, s)
+
+    # Verify the unawaited child properly throws an exception
+    input = "alice"
+    assert queue.enqueue(parent_workflow, input).get_result() is None
+    handle: WorkflowHandle[int] = DBOS.retrieve_workflow(
+        child_id, existing_workflow=False
+    )
+    with pytest.raises(Exception) as exc_info:
+        handle.get_result()
+    assert input in str(exc_info.value)
+
+    # Verify it works if run again
+    input = "bob"
+    child_id = str(uuid.uuid4())
+    assert queue.enqueue(parent_workflow, input).get_result() is None
+    handle = DBOS.retrieve_workflow(child_id, existing_workflow=False)
+    with pytest.raises(Exception) as exc_info:
+        handle.get_result()
+    assert input in str(exc_info.value)
