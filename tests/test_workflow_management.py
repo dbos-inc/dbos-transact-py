@@ -569,9 +569,23 @@ def test_restart_fromsteps_childwf(
     assert stepThreeCount == 3
 
     # call fork from within a workflow
-    fh = DBOS.start_workflow(fork, wfid, 1)
-    forkedwfid = fh.get_result()
-    assert forkedwfid != wfid
+    forkwfid = str(uuid.uuid4())
+    with SetWorkflowID(forkwfid):
+        fh = DBOS.start_workflow(fork, wfid, 1)
+    firstforkedwfid = fh.get_result()
+    assert firstforkedwfid != wfid
+    assert stepOneCount == 2
+    assert childwfCount == 3
+    assert stepThreeCount == 4
+
+    # call the workflow again with the same id
+    # testing that fork is not called again
+    with SetWorkflowID(forkwfid):
+        fh2 = DBOS.start_workflow(fork, wfid, 1)
+
+    secondforkedwfid = fh2.get_result()
+    assert secondforkedwfid == firstforkedwfid
+
     assert stepOneCount == 2
     assert childwfCount == 3
     assert stepThreeCount == 4
