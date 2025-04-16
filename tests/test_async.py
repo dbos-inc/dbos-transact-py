@@ -400,3 +400,22 @@ async def test_retrieve_workflow_async(dbos: DBOS) -> None:
     wfstatus = await handle.get_status()
     assert wfstatus.status == "SUCCESS"
     assert wfstatus.workflow_id == wfuuid
+
+
+@pytest.mark.asyncio
+async def test_unawaited_workflow(dbos: DBOS) -> None:
+    input = 5
+    child_id = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    async def child_workflow(x: int) -> int:
+        return x
+
+    @DBOS.workflow()
+    async def parent_workflow(x: int) -> None:
+        with SetWorkflowID(child_id):
+            await DBOS.start_workflow_async(child_workflow, x)
+
+    assert await parent_workflow(input) is None
+    handle = await DBOS.retrieve_workflow_async(child_id)
+    assert await handle.get_result() == 5
