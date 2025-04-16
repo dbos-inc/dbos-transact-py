@@ -4,7 +4,6 @@ import asyncio
 import atexit
 import hashlib
 import inspect
-import json
 import os
 import sys
 import threading
@@ -31,7 +30,6 @@ from typing import (
 
 from opentelemetry.trace import Span
 
-from dbos import _serialization
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import (
@@ -112,6 +110,7 @@ from ._error import (
     DBOSException,
     DBOSNonExistentWorkflowError,
 )
+from ._event_loop import BackgroundEventLoop
 from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
 from ._sys_db import SystemDatabase
 from ._workflow_commands import WorkflowStatus, get_workflow
@@ -341,6 +340,7 @@ class DBOS:
         self.conductor_url: Optional[str] = conductor_url
         self.conductor_key: Optional[str] = conductor_key
         self.conductor_websocket: Optional[ConductorWebsocket] = None
+        self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
 
         init_logger()
 
@@ -451,6 +451,7 @@ class DBOS:
             dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             self._executor_field = ThreadPoolExecutor(max_workers=64)
+            self._background_event_loop.start()
             self._sys_db_field = SystemDatabase(
                 self.config["database"], debug_mode=debug_mode
             )
@@ -568,6 +569,7 @@ class DBOS:
         self._initialized = False
         for event in self.stop_events:
             event.set()
+        self._background_event_loop.stop()
         if self._sys_db_field is not None:
             self._sys_db_field.destroy()
             self._sys_db_field = None
