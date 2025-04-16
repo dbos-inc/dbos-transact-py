@@ -34,6 +34,7 @@ def set_temp_workflow_type(f: Any, name: TempWorkflowType) -> None:
 
 @dataclass
 class DBOSClassInfo:
+    registered_name: str
     def_required_roles: Optional[List[str]] = None
 
 
@@ -53,11 +54,17 @@ class DBOSFuncInfo:
     max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS
 
 
-def get_or_create_class_info(cls: Type[Any]) -> DBOSClassInfo:
+def get_or_create_class_info(
+    cls: Type[Any], provided_name: Optional[str] = None
+) -> DBOSClassInfo:
     if hasattr(cls, "dbos_class_decorator_info"):
         ci: DBOSClassInfo = getattr(cls, "dbos_class_decorator_info")
         return ci
-    ci = DBOSClassInfo()
+    class_name = _class_fqn(cls)
+    # Use the provided name instead of the class name if it is not None
+    if provided_name is not None:
+        class_name = provided_name
+    ci = DBOSClassInfo(registered_name=class_name)
     setattr(cls, "dbos_class_decorator_info", ci)
 
     # Tell all DBOS functions about this
@@ -166,16 +173,24 @@ def get_config_name(
     return None
 
 
+def _class_fqn(cls: type) -> str:
+    """Returns the registered name of the given class. If the class name was not overridden at registration time, it returns the qualified name of the class."""
+    ci = get_class_info(cls)
+    if ci is not None:
+        return ci.registered_name
+    return cls.__qualname__
+
+
 def get_dbos_class_name(
     fi: Optional[DBOSFuncInfo], func: Callable[..., Any], args: Tuple[Any, ...]
 ) -> Optional[str]:
     if fi and fi.func_type != DBOSFuncType.Unknown and len(args) > 0:
         if fi.func_type == DBOSFuncType.Instance:
             first_arg = args[0]
-            return str(first_arg.__class__.__name__)
+            return _class_fqn(first_arg.__class__)
         if fi.func_type == DBOSFuncType.Class:
             first_arg = args[0]
-            return str(first_arg.__name__)
+            return _class_fqn(first_arg)
         return None
 
     # Check for improperly-registered functions
