@@ -64,5 +64,4 @@ class BackgroundEventLoop:
         """Submit a coroutine to the background event loop"""
         if self._loop is None:
             raise RuntimeError("Event loop not started")
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop).result()
-        return future
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
