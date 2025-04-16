@@ -316,11 +316,11 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
     stati = dbos.get_workflow_status(wfh.get_workflow_id())
     assert stati
     assert stati.config_name == "bob"
-    assert stati.class_name == "DBOSTestClassInst"
+    assert stati.class_name and "DBOSTestClassInst" in stati.class_name
     stat = wfh.get_status()
     assert stat
     assert stat.config_name == "bob"
-    assert stat.class_name == "DBOSTestClassInst"
+    assert stat.class_name and "DBOSTestClassInst" in stat.class_name
 
     assert wfh.get_result() == "bob1bob"
     assert inst.txn_counter == 2
@@ -376,17 +376,38 @@ def test_duplicate_reg(dbos: DBOS) -> None:
             def __init__(self) -> None:
                 super().__init__("bob")
 
-    assert "Duplicate type registration for class 'DBOSTestRegDup'" == str(
-        exc_info.value
+    assert (
+        "Duplicate type registration for class 'test_duplicate_reg.<locals>.DBOSTestRegDup'"
+        == str(exc_info.value)
     )
 
-    # Dupliocate instance registration
+    # Duplicate instance registration
     inst = DBOSTestRegDup()
     with pytest.raises(Exception) as exc_info:
         inst = DBOSTestRegDup()
 
     assert (
-        "Duplicate instance registration for class 'DBOSTestRegDup' instance 'bob'"
+        "Duplicate instance registration for class 'test_duplicate_reg.<locals>.DBOSTestRegDup' instance 'bob'"
+        == str(exc_info.value)
+    )
+
+    # There should be no collision when the duplicate class names are in
+    # different modules if they're specified with different names.
+    from tests import dupname_classdefs1, dupname_classdefsa
+
+    # Two instances of the same class may be registered if they have different
+    # instance_name.
+    # Duplicate instance registration error still occurs with identical class
+    # name and instance_name.
+    alice = dupname_classdefs1.DBOSTestRegDup("alice")
+    bob = dupname_classdefsa.DBOSTestRegDup("bob")
+    bob2 = dupname_classdefs1.DBOSTestRegDup("bob")
+
+    with pytest.raises(Exception) as exc_info:
+        bob2 = dupname_classdefs1.DBOSTestRegDup("bob")
+
+    assert (
+        "Duplicate instance registration for class 'AnotherDBOSTestRegDup' instance 'bob'"
         == str(exc_info.value)
     )
 
@@ -451,7 +472,7 @@ def test_inst_recovery(dbos: DBOS) -> None:
     assert last_inst is None
 
     status = DBOS.retrieve_workflow(wfid).get_status()
-    assert status.class_name == "TestClass"
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
 
@@ -479,7 +500,7 @@ def test_inst_async_recovery(dbos: DBOS) -> None:
         orig_handle = DBOS.start_workflow(inst.workflow, input)
 
     status = orig_handle.get_status()
-    assert status.class_name == "TestClass"
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
     recovery_handle = DBOS._execute_workflow_id(wfid)
@@ -513,7 +534,7 @@ def test_inst_async_step_recovery(dbos: DBOS) -> None:
         orig_handle = DBOS.start_workflow(inst.step, input)
 
     status = orig_handle.get_status()
-    assert status.class_name == "TestClass"
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
     recovery_handle = DBOS._execute_workflow_id(wfid)
@@ -558,7 +579,7 @@ def test_step_recovery(dbos: DBOS) -> None:
     thread_event.wait()
 
     status = DBOS.retrieve_workflow(wfid).get_status()
-    assert status.class_name == "TestClass"
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
     recovery_handle = DBOS._execute_workflow_id(wfid)
@@ -626,7 +647,7 @@ def test_class_queue_recovery(dbos: DBOS) -> None:
     result = [i * multiplier for i in range(5)]
     for h in recovery_handles:
         status = h.get_status()
-        assert status.class_name == "TestClass"
+        assert status.class_name and "TestClass" in status.class_name
         assert status.config_name == "test_class"
         if h.get_workflow_id() == wfid:
             assert h.get_result() == result
@@ -770,7 +791,7 @@ def test_class_classmethod_queue_recovery(dbos: DBOS) -> None:
     for h in recovery_handles:
         status = h.get_status()
         # Class name is recorded for class methods
-        assert status.class_name == "TestClass"
+        assert status.class_name and "TestClass" in status.class_name
         assert status.config_name == None
         if h.get_workflow_id() == wfid:
             assert h.get_result() == result
@@ -808,13 +829,13 @@ def test_inst_txn(dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         assert inst.transaction(input) == input * multiplier
     status = DBOS.retrieve_workflow(wfid).get_status()
-    assert status.class_name == "TestClass"
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
     handle = DBOS.start_workflow(inst.transaction, input)
     assert handle.get_result() == input * multiplier
     status = handle.get_status()
-    assert status.class_name == "TestClass"
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
 
@@ -848,13 +869,13 @@ def test_mixed_methods(dbos: DBOS) -> None:
     handle = DBOS.start_workflow(inst.instance_workflow, input)
     assert handle.get_result() == input * multiplier
     status = handle.get_status()
-    assert status.class_name == "TestClass"
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
     handle = DBOS.start_workflow(inst.classmethod_workflow, input)
     assert handle.get_result() == input
     status = handle.get_status()
-    assert status.class_name == "TestClass"
+    assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == None
 
     handle = DBOS.start_workflow(inst.staticmethod_workflow, input)

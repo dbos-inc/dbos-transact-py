@@ -33,7 +33,11 @@ def test_cancel_resume(dbos: DBOS) -> None:
         step_one()
         main_thread_event.set()
         workflow_event.wait()
-        step_two()
+        # A handler like this should not catch DBOSWorkflowCancelledError
+        try:
+            step_two()
+        except Exception:
+            raise
         return x
 
     # Start the workflow and cancel it.
