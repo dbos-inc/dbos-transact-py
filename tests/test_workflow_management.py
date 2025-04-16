@@ -535,6 +535,12 @@ def test_restart_fromsteps_childwf(
         stepThreeCount += 1
         return
 
+    @DBOS.workflow()
+    def fork(workflow_id: str, step: int) -> str:
+        handle = DBOS.fork_workflow(workflow_id, step)
+        handle.get_result()
+        return handle.get_workflow_id()
+
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         h = DBOS.start_workflow(simple_workflow)
@@ -557,3 +563,11 @@ def test_restart_fromsteps_childwf(
     assert stepOneCount == 1
     assert childwfCount == 2
     assert stepThreeCount == 3
+
+    # call fork from within a workflow
+    h = DBOS.start_workflow(fork, wfid, 1)
+    forkedwfid = h.get_result()
+    assert forkedwfid != wfid
+    assert stepOneCount == 2
+    assert childwfCount == 3
+    assert stepThreeCount == 4
