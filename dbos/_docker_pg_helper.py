@@ -46,7 +46,7 @@ def start_docker_pg() -> None:
     if has_docker:
         start_docker_postgres(pool_config)
         logging.info(
-            f"Postgres available at postgres://postgres:{pool_config['password']}@{pool_config['host']}:{pool_config['port']}"
+            f"Postgres available at postgresql://postgres:{pool_config['password']}@{pool_config['host']}:{pool_config['port']}"
         )
     else:
         logging.warning("Docker not detected locally")
