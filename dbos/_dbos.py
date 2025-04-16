@@ -971,10 +971,8 @@ class DBOS:
                 f"Cannot fork workflow {workflow_id} at step {start_step}. The workflow has  {max_function_id} steps."
             )
 
-        # outside the step so that retrieve_workflow can
-        forked_workflow_id = str(uuid.uuid4())
-
         def fn() -> str:
+            forked_workflow_id = str(uuid.uuid4())
             dbos_logger.info(f"forking workflow: {workflow_id} from step {start_step}")
 
             _get_dbos_instance()._app_db.clone_workflow_transactions(
@@ -985,9 +983,10 @@ class DBOS:
                 workflow_id, forked_workflow_id, start_step
             )
 
-        _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.forkWorkflow")
-
-        return cls.retrieve_workflow(forked_workflow_id)
+        new_id = _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.forkWorkflow"
+        )
+        return cls.retrieve_workflow(new_id)
 
     @classmethod
     def list_workflows(
