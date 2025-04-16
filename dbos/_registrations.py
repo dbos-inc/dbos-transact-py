@@ -174,7 +174,7 @@ def get_config_name(
 
 
 def _class_fqn(cls: type) -> str:
-    """Returns the registered name of the given class. If the class is not registered, it returns the fully qualified name of the class."""
+    """Returns the registered name of the given class. If the class name was not overridden at registration time, it returns the qualified name of the class."""
     ci = get_class_info(cls)
     if ci is not None:
         return ci.registered_name
