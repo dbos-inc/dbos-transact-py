@@ -83,6 +83,7 @@ class WorkflowStatusInternal(TypedDict):
     app_version: Optional[str]
     app_id: Optional[str]
     recovery_attempts: Optional[int]
+    workflow_timeout: Optional[int]  # Unix epoch timestamp in ms
 
 
 class RecordedResult(TypedDict):

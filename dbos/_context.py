@@ -93,6 +93,8 @@ class DBOSContext:
         self.assumed_role: Optional[str] = None
         self.step_status: Optional[StepStatus] = None
 
+        self.workflow_timeout = None
+
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()
         rv.logger = self.logger
@@ -355,6 +357,44 @@ class SetWorkflowID:
     ) -> Literal[False]:
         # Code to clean up the basic context if we created it
         assert_current_dbos_context().is_within_set_workflow_id_block = False
+        if self.created_ctx:
+            _clear_local_dbos_context()
+        return False  # Did not handle
+
+
+class SetWorkflowTimeout:
+    """
+    Set the workflow timeout (in seconds) to be used for the enclosed workflow invocations.
+
+    Typical Usage
+        ```
+        with SetWorkflowTimeout(<timeout in seconds>):
+            result = workflow_function(...)
+        ```
+    """
+
+    def __init__(self, workflow_timeout: str) -> None:
+        self.created_ctx = False
+        self.workflow_timeout = workflow_timeout
+
+    def __enter__(self) -> SetWorkflowID:
+        # Code to create a basic context
+        ctx = get_local_dbos_context()
+        if ctx is None:
+            self.created_ctx = True
+            _set_local_dbos_context(DBOSContext())
+        ctx = assert_current_dbos_context()
+        ctx.workflow_timeout = self.workflow_timeout
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        self.workflow_timeout = None
+        # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()
         return False  # Did not handle
