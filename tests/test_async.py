@@ -7,8 +7,8 @@ import pytest
 import sqlalchemy as sa
 
 # Public API
-from dbos import DBOS, SetWorkflowID
-from dbos._dbos import WorkflowHandleAsync
+from dbos import DBOS, Queue, SetWorkflowID
+from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._dbos_config import ConfigFile
 from dbos._error import DBOSException
 
@@ -55,6 +55,15 @@ async def test_async_workflow(dbos: DBOS) -> None:
     assert wf_counter == 2
     assert step_counter == 1
     assert txn_counter == 1
+
+    # Test DBOS.start_workflow_async
+    handle = await DBOS.start_workflow_async(test_workflow, "alice", "bob")
+    assert (await handle.get_result()) == "alicetxn21bobstep2"
+
+    # Test DBOS.start_workflow. Not recommended for async workflows,
+    # but needed for backwards compatibility.
+    sync_handle = DBOS.start_workflow(test_workflow, "alice", "bob")
+    assert sync_handle.get_result() == "alicetxn31bobstep3"  # type: ignore
 
 
 @pytest.mark.asyncio
@@ -160,10 +169,11 @@ async def test_send_recv_async(dbos: DBOS) -> None:
     none_uuid = str(uuid.uuid4())
     none_handle = None
     with SetWorkflowID(none_uuid):
-        none_handle = dbos.start_workflow(test_recv_timeout, 10.0)
+        none_handle = await dbos.start_workflow_async(test_recv_timeout, 10.0)
     await test_send_none(none_uuid)
     begin_time = time.time()
-    assert none_handle.get_result() is None
+    result = await none_handle.get_result()  # type: ignore
+    assert result is None
     duration = time.time() - begin_time
     assert duration < 1.0  # None is from the received message, not from the timeout.
 
@@ -400,3 +410,59 @@ async def test_retrieve_workflow_async(dbos: DBOS) -> None:
     wfstatus = await handle.get_status()
     assert wfstatus.status == "SUCCESS"
     assert wfstatus.workflow_id == wfuuid
+
+
+def test_unawaited_workflow(dbos: DBOS) -> None:
+    input = 5
+    child_id = str(uuid.uuid4())
+    queue = Queue("test_queue")
+
+    @DBOS.workflow()
+    async def child_workflow(x: int) -> int:
+        await asyncio.sleep(0.1)
+        return x
+
+    @DBOS.workflow()
+    async def parent_workflow(x: int) -> None:
+        with SetWorkflowID(child_id):
+            await DBOS.start_workflow_async(child_workflow, x)
+
+    assert queue.enqueue(parent_workflow, input).get_result() is None
+    handle: WorkflowHandle[int] = DBOS.retrieve_workflow(
+        child_id, existing_workflow=False
+    )
+    assert handle.get_result() == 5
+
+
+def test_unawaited_workflow_exception(dbos: DBOS) -> None:
+    child_id = str(uuid.uuid4())
+    queue = Queue("test_queue")
+
+    @DBOS.workflow()
+    async def child_workflow(s: str) -> int:
+        await asyncio.sleep(0.1)
+        raise Exception(s)
+
+    @DBOS.workflow()
+    async def parent_workflow(s: str) -> None:
+        with SetWorkflowID(child_id):
+            await DBOS.start_workflow_async(child_workflow, s)
+
+    # Verify the unawaited child properly throws an exception
+    input = "alice"
+    assert queue.enqueue(parent_workflow, input).get_result() is None
+    handle: WorkflowHandle[int] = DBOS.retrieve_workflow(
+        child_id, existing_workflow=False
+    )
+    with pytest.raises(Exception) as exc_info:
+        handle.get_result()
+    assert input in str(exc_info.value)
+
+    # Verify it works if run again
+    input = "bob"
+    child_id = str(uuid.uuid4())
+    assert queue.enqueue(parent_workflow, input).get_result() is None
+    handle = DBOS.retrieve_workflow(child_id, existing_workflow=False)
+    with pytest.raises(Exception) as exc_info:
+        handle.get_result()
+    assert input in str(exc_info.value)
