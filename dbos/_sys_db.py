@@ -885,50 +885,56 @@ class SystemDatabase:
         *,
         conn: Optional[sa.Connection] = None,
     ) -> Optional[RecordedResult]:
-        # Retrieve the status of the workflow. Additionally, if this step
-        # has run before, retrieve its name, output, and error.
-        sql = (
-            sa.select(
-                SystemSchema.workflow_status.c.status,
-                SystemSchema.operation_outputs.c.output,
-                SystemSchema.operation_outputs.c.error,
-                SystemSchema.operation_outputs.c.function_name,
-            )
-            .select_from(
-                SystemSchema.workflow_status.outerjoin(
-                    SystemSchema.operation_outputs,
-                    (
-                        SystemSchema.workflow_status.c.workflow_uuid
-                        == SystemSchema.operation_outputs.c.workflow_uuid
-                    )
-                    & (SystemSchema.operation_outputs.c.function_id == function_id),
-                )
-            )
-            .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+        # First query: Retrieve the workflow status
+        workflow_status_sql = sa.select(
+            SystemSchema.workflow_status.c.status,
+        ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+
+        # Second query: Retrieve operation outputs if they exist
+        operation_output_sql = sa.select(
+            SystemSchema.operation_outputs.c.output,
+            SystemSchema.operation_outputs.c.error,
+            SystemSchema.operation_outputs.c.function_name,
+        ).where(
+            (SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
+            & (SystemSchema.operation_outputs.c.function_id == function_id)
         )
-        # If in a transaction, use the provided connection
-        rows: Sequence[Any]
+
+        # Execute queries using the appropriate connection
         if conn is not None:
-            rows = conn.execute(sql).all()
+            workflow_status_rows = conn.execute(workflow_status_sql).all()
+            operation_output_rows = conn.execute(operation_output_sql).all()
         else:
             with self.engine.begin() as c:
-                rows = c.execute(sql).all()
-        assert len(rows) > 0, f"Error: Workflow {workflow_id} does not exist"
-        workflow_status, output, error, recorded_function_name = (
-            rows[0][0],
-            rows[0][1],
-            rows[0][2],
-            rows[0][3],
-        )
+                workflow_status_rows = c.execute(workflow_status_sql).all()
+                operation_output_rows = c.execute(operation_output_sql).all()
+
+        # Check if the workflow exists
+        assert (
+            len(workflow_status_rows) > 0
+        ), f"Error: Workflow {workflow_id} does not exist"
+
+        # Get workflow status
+        workflow_status = workflow_status_rows[0][0]
+
         # If the workflow is cancelled, raise the exception
         if workflow_status == WorkflowStatusString.CANCELLED.value:
             raise DBOSWorkflowCancelledError(
                 f"Workflow {workflow_id} is cancelled. Aborting function."
             )
-        # If there is no row for the function, return None
-        if recorded_function_name is None:
+
+        # If there are no operation outputs, return None
+        if not operation_output_rows:
             return None
-        # If the provided and recorded function name are different, throw an exception.
+
+        # Extract operation output data
+        output, error, recorded_function_name = (
+            operation_output_rows[0][0],
+            operation_output_rows[0][1],
+            operation_output_rows[0][2],
+        )
+
+        # If the provided and recorded function name are different, throw an exception
         if function_name != recorded_function_name:
             raise DBOSUnexpectedStepError(
                 workflow_id=workflow_id,
@@ -936,6 +942,7 @@ class SystemDatabase:
                 expected_name=function_name,
                 recorded_name=recorded_function_name,
             )
+
         result: RecordedResult = {
             "output": output,
             "error": error,
