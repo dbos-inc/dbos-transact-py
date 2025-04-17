@@ -15,11 +15,9 @@ from typing import (
     Coroutine,
     Generic,
     Optional,
-    Tuple,
     TypeVar,
     Union,
     cast,
-    overload,
 )
 
 from dbos._outcome import Immediate, NoResult, Outcome, Pending
@@ -60,7 +58,6 @@ from ._error import (
 )
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
-    DBOSFuncInfo,
     get_config_name,
     get_dbos_class_name,
     get_dbos_func_name,
@@ -305,12 +302,18 @@ def _init_workflow(
         dbos.stop_events.append(evt)
 
         def timeout_func() -> None:
-            time_to_wait_sec = (wf_timeout - (time.time() * 1000)) / 1000
-            if time_to_wait_sec > 0:
-                was_stopped = evt.wait(time_to_wait_sec)
-                if was_stopped:
-                    return
-            dbos.cancel_workflow(wfid)
+            try:
+                assert wf_timeout is not None
+                time_to_wait_sec = (wf_timeout - (time.time() * 1000)) / 1000
+                if time_to_wait_sec > 0:
+                    was_stopped = evt.wait(time_to_wait_sec)
+                    if was_stopped:
+                        return
+                dbos.cancel_workflow(wfid)
+            except Exception as e:
+                dbos.logger.warning(
+                    f"Exception in timeout thread for workflow {wfid}: {e}"
+                )
 
         timeout_thread = threading.Thread(target=timeout_func, daemon=True)
         timeout_thread.start()
