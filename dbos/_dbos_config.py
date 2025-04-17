@@ -402,6 +402,7 @@ def process_config(
             ).render_as_string(hide_password=False)
 
         if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
+            url = make_url(data["database_url"]).render_as_string(hide_password=True)
             print(f"[bold blue]Using database connection string: {url}[/bold blue]")
     else:
         if "app_db_name" not in data["database"] or not data["database"]["app_db_name"]:
