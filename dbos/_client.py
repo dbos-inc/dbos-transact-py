@@ -344,7 +344,7 @@ class DBOSClient:
         forked_workflow_id = fork_workflow(
             self._sys_db, self._app_db, workflow_id, start_step
         )
-        return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
+        return WorkflowHandleClientPolling[R](forked_workflow_id, self._sys_db)
 
     async def fork_workflow_async(
         self, workflow_id: str, start_step: int
