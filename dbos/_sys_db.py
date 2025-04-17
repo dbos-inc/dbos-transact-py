@@ -889,9 +889,10 @@ class SystemDatabase:
         *,
         conn: Optional[sa.Connection] = None,
     ) -> Optional[RecordedResult]:
-        # First query: Retrieve the workflow status
+        # First query: Retrieve the workflow status and timeout
         workflow_status_sql = sa.select(
             SystemSchema.workflow_status.c.status,
+            SystemSchema.workflow_status.c.workflow_timeout,
         ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
 
         # Second query: Retrieve operation outputs if they exist
@@ -904,7 +905,7 @@ class SystemDatabase:
             & (SystemSchema.operation_outputs.c.function_id == function_id)
         )
 
-        # Execute queries using the appropriate connection
+        # Execute both queries
         if conn is not None:
             workflow_status_rows = conn.execute(workflow_status_sql).all()
             operation_output_rows = conn.execute(operation_output_sql).all()
@@ -925,6 +926,18 @@ class SystemDatabase:
         if workflow_status == WorkflowStatusString.CANCELLED.value:
             raise DBOSWorkflowCancelledError(
                 f"Workflow {workflow_id} is cancelled. Aborting function."
+            )
+
+        # Get workflow timeout
+        workflow_timeout = workflow_status_rows[0][1]
+
+        # If the workflow has timed out, cancel it and raise the exception
+        if time.time() * 1000 > workflow_timeout:
+            if conn is not None:
+                conn.rollback()
+            self.cancel_workflow(workflow_id)
+            raise DBOSWorkflowCancelledError(
+                f"Workflow {workflow_id} has timed out. Aborting function."
             )
 
         # If there are no operation outputs, return None

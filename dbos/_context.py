@@ -93,7 +93,7 @@ class DBOSContext:
         self.assumed_role: Optional[str] = None
         self.step_status: Optional[StepStatus] = None
 
-        self.workflow_timeout: Optional[int] = None
+        self.workflow_timeout: Optional[float] = None
 
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()
@@ -373,7 +373,7 @@ class SetWorkflowTimeout:
         ```
     """
 
-    def __init__(self, workflow_timeout: int) -> None:
+    def __init__(self, workflow_timeout: float) -> None:
         self.created_ctx = False
         self.workflow_timeout = workflow_timeout
 

@@ -15,7 +15,11 @@ import sqlalchemy as sa
 from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle, WorkflowStatusString
 
 # Private API because this is a test
-from dbos._context import assert_current_dbos_context, get_local_dbos_context
+from dbos._context import (
+    SetWorkflowTimeout,
+    assert_current_dbos_context,
+    get_local_dbos_context,
+)
 from dbos._error import DBOSConflictingRegistrationError, DBOSMaxStepRetriesExceeded
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import GetWorkflowsInput
@@ -1447,3 +1451,14 @@ def test_recovery_appversion(config: ConfigFile) -> None:
 
     # Clean up the environment variable
     del os.environ["DBOS__VMID"]
+
+
+def test_workflow_timeout(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def blocked_workflow() -> None:
+        # threading.Event().wait()
+        pass
+
+    with SetWorkflowTimeout(0):
+        blocked_workflow()
