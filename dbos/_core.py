@@ -3,6 +3,7 @@ import functools
 import inspect
 import json
 import sys
+import threading
 import time
 import traceback
 from concurrent.futures import Future
@@ -298,6 +299,22 @@ def _init_workflow(
 
     if queue is not None and wf_status == WorkflowStatusString.ENQUEUED.value:
         dbos._sys_db.enqueue(wfid, queue)
+
+    if wf_timeout is not None:
+        evt = threading.Event()
+        dbos.stop_events.append(evt)
+
+        def timeout_func():
+            time_to_wait_sec = (wf_timeout - (time.time() * 1000)) / 1000
+            if time_to_wait_sec > 0:
+                was_stopped = evt.wait(time_to_wait_sec)
+                if was_stopped:
+                    return
+            dbos.cancel_workflow(wfid)
+
+        timeout_thread = threading.Thread(target=timeout_func, daemon=True)
+        timeout_thread.start()
+        dbos._background_threads.append(timeout_thread)
 
     status["status"] = wf_status
     return status

@@ -20,7 +20,11 @@ from dbos._context import (
     assert_current_dbos_context,
     get_local_dbos_context,
 )
-from dbos._error import DBOSConflictingRegistrationError, DBOSMaxStepRetriesExceeded
+from dbos._error import (
+    DBOSConflictingRegistrationError,
+    DBOSMaxStepRetriesExceeded,
+    DBOSWorkflowCancelledError,
+)
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import GetWorkflowsInput
 from dbos._utils import GlobalParams
@@ -1457,8 +1461,9 @@ def test_workflow_timeout(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def blocked_workflow() -> None:
-        # threading.Event().wait()
-        pass
+        while True:
+            DBOS.sleep(0.1)
 
-    with SetWorkflowTimeout(0):
-        blocked_workflow()
+    with SetWorkflowTimeout(0.1):
+        with pytest.raises(DBOSWorkflowCancelledError):
+            blocked_workflow()

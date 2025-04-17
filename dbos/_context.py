@@ -374,6 +374,10 @@ class SetWorkflowTimeout:
     """
 
     def __init__(self, workflow_timeout: float) -> None:
+        if not workflow_timeout > 0:
+            raise Exception(
+                f"Invalid workflow timeout {workflow_timeout}. Timeouts must be positive."
+            )
         self.created_ctx = False
         self.workflow_timeout = workflow_timeout
 
