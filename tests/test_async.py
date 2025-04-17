@@ -8,9 +8,10 @@ import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, Queue, SetWorkflowID
+from dbos._context import SetWorkflowTimeout, assert_current_dbos_context
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._dbos_config import ConfigFile
-from dbos._error import DBOSException
+from dbos._error import DBOSException, DBOSWorkflowCancelledError
 
 
 @pytest.mark.asyncio
@@ -466,3 +467,31 @@ def test_unawaited_workflow_exception(dbos: DBOS) -> None:
     with pytest.raises(Exception) as exc_info:
         handle.get_result()
     assert input in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_workflow_timeout_async(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    async def blocked_workflow() -> None:
+        assert assert_current_dbos_context().workflow_timeout is None
+        while True:
+            DBOS.sleep(0.1)
+
+    with SetWorkflowTimeout(0.1):
+        with pytest.raises(DBOSWorkflowCancelledError):
+            await blocked_workflow()
+        handle = await DBOS.start_workflow_async(blocked_workflow)
+        with pytest.raises(DBOSWorkflowCancelledError):
+            await handle.get_result()
+
+    @DBOS.workflow()
+    async def parent_workflow() -> None:
+        with SetWorkflowTimeout(0.1):
+            with pytest.raises(DBOSWorkflowCancelledError):
+                await blocked_workflow()
+            handle = await DBOS.start_workflow_async(blocked_workflow)
+            with pytest.raises(DBOSWorkflowCancelledError):
+                await handle.get_result()
+
+    await parent_workflow()
