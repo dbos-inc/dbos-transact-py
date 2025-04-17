@@ -268,7 +268,7 @@ def _init_workflow(
         "created_at": None,
         "updated_at": None,
         "workflow_timeout": (  # UNIX epoch timestamp of the timeout in ms
-            (time.time() * 1000 + ctx.workflow_timeout)
+            int((time.time() + ctx.workflow_timeout) * 1000)
             if ctx.workflow_timeout is not None
             else None
         ),

@@ -556,6 +556,7 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.updated_at,
                     SystemSchema.workflow_status.c.application_version,
                     SystemSchema.workflow_status.c.application_id,
+                    SystemSchema.workflow_status.c.workflow_timeout,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -579,6 +580,7 @@ class SystemDatabase:
                 "updated_at": row[12],
                 "app_version": row[13],
                 "app_id": row[14],
+                "workflow_timeout": row[15],
             }
             return status
 

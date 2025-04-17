@@ -30,6 +30,7 @@ class EnqueueOptions(TypedDict):
     queue_name: str
     workflow_id: NotRequired[str]
     app_version: NotRequired[str]
+    workflow_timeout: NotRequired[int]
 
 
 class WorkflowHandleClientPolling(Generic[R]):
@@ -97,6 +98,7 @@ class DBOSClient:
         workflow_id = options.get("workflow_id")
         if workflow_id is None:
             workflow_id = str(uuid.uuid4())
+        workflow_timeout = options.get("workflow_timeout", None)
 
         status: WorkflowStatusInternal = {
             "workflow_uuid": workflow_id,
@@ -117,6 +119,7 @@ class DBOSClient:
             "executor_id": None,
             "recovery_attempts": None,
             "app_id": None,
+            "workflow_timeout": workflow_timeout,
         }
 
         inputs: WorkflowInputs = {
@@ -183,6 +186,7 @@ class DBOSClient:
             "recovery_attempts": None,
             "app_id": None,
             "app_version": None,
+            "workflow_timeout": None,
         }
         self._sys_db.insert_workflow_status(status)
         self._sys_db.send(status["workflow_uuid"], 0, destination_id, message, topic)

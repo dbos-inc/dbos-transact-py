@@ -591,6 +591,7 @@ def test_recovery_thread(config: ConfigFile) -> None:
             "queue_name": None,
             "created_at": None,
             "updated_at": None,
+            "workflow_timeout": None,
         }
     )
 

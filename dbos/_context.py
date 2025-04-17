@@ -373,11 +373,11 @@ class SetWorkflowTimeout:
         ```
     """
 
-    def __init__(self, workflow_timeout: str) -> None:
+    def __init__(self, workflow_timeout: int) -> None:
         self.created_ctx = False
         self.workflow_timeout = workflow_timeout
 
-    def __enter__(self) -> SetWorkflowID:
+    def __enter__(self) -> SetWorkflowTimeout:
         # Code to create a basic context
         ctx = get_local_dbos_context()
         if ctx is None:
@@ -393,7 +393,7 @@ class SetWorkflowTimeout:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        self.workflow_timeout = None
+        assert_current_dbos_context().workflow_timeout = None
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()
