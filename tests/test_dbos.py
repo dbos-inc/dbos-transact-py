@@ -1471,3 +1471,21 @@ def test_workflow_timeout(dbos: DBOS) -> None:
         handle = DBOS.start_workflow(blocked_workflow)
         with pytest.raises(DBOSWorkflowCancelledError):
             handle.get_result()
+
+    @DBOS.workflow()
+    def parent_workflow() -> None:
+        with SetWorkflowTimeout(0.1):
+            with pytest.raises(DBOSWorkflowCancelledError):
+                blocked_workflow()
+            handle = DBOS.start_workflow(blocked_workflow)
+            with pytest.raises(DBOSWorkflowCancelledError):
+                handle.get_result()
+
+    assert parent_workflow() == None
+
+    with SetWorkflowTimeout(1.0):
+        assert assert_current_dbos_context().workflow_timeout == 1.0
+        with SetWorkflowTimeout(2.0):
+            assert assert_current_dbos_context().workflow_timeout == 2.0
+        assert assert_current_dbos_context().workflow_timeout == 1.0
+    assert get_local_dbos_context() is None
