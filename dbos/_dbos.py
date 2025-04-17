@@ -960,14 +960,45 @@ class DBOS:
     def restart_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID"""
 
-        def fn() -> str:
-            dbos_logger.info(f"Restarting workflow: {workflow_id}")
-            return _get_dbos_instance()._sys_db.fork_workflow(workflow_id)
+        return cls.fork_workflow(workflow_id, 1)
 
-        forked_workflow_id = _get_dbos_instance()._sys_db.call_function_as_step(
-            fn, "DBOS.restartWorkflow"
+    @classmethod
+    def fork_workflow(
+        cls, workflow_id: str, start_step: int = 1
+    ) -> WorkflowHandle[Any]:
+        """Restart a workflow with a new workflow ID"""
+
+        def get_max_function_id(workflow_uuid: str) -> int:
+            max_transactions = (
+                _get_dbos_instance()._app_db.get_max_function_id(workflow_uuid) or 0
+            )
+            max_operations = (
+                _get_dbos_instance()._sys_db.get_max_function_id(workflow_uuid) or 0
+            )
+            return max(max_transactions, max_operations)
+
+        max_function_id = get_max_function_id(workflow_id)
+        if max_function_id > 0 and start_step > max_function_id:
+            raise DBOSException(
+                f"Cannot fork workflow {workflow_id} at step {start_step}. The workflow has  {max_function_id} steps."
+            )
+
+        def fn() -> str:
+            forked_workflow_id = str(uuid.uuid4())
+            dbos_logger.info(f"Forking workflow: {workflow_id} from step {start_step}")
+
+            _get_dbos_instance()._app_db.clone_workflow_transactions(
+                workflow_id, forked_workflow_id, start_step
+            )
+
+            return _get_dbos_instance()._sys_db.fork_workflow(
+                workflow_id, forked_workflow_id, start_step
+            )
+
+        new_id = _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.forkWorkflow"
         )
-        return cls.retrieve_workflow(forked_workflow_id)
+        return cls.retrieve_workflow(new_id)
 
     @classmethod
     def list_workflows(

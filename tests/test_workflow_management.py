@@ -7,7 +7,7 @@ import pytest
 # Public API
 from dbos import DBOS, Queue, SetWorkflowID
 from dbos._dbos import DBOSConfiguredInstance
-from dbos._error import DBOSWorkflowCancelledError
+from dbos._error import DBOSException, DBOSWorkflowCancelledError
 from dbos._utils import INTERNAL_QUEUE_NAME
 from tests.conftest import queue_entries_are_cleaned_up
 
@@ -216,3 +216,376 @@ def test_restart(dbos: DBOS) -> None:
 
     # Verify nothing is left on any queue
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_restart_fromsteps_stepsonly(
+    dbos: DBOS,
+) -> None:
+
+    stepOneCount = 0
+    stepTwoCount = 0
+    stepThreeCount = 0
+    stepFourCount = 0
+    stepFiveCount = 0
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        stepOne()
+        stepTwo()
+        stepThree()
+        stepFour()
+        stepFive()
+        return
+
+    @DBOS.step()
+    def stepOne() -> None:
+        nonlocal stepOneCount
+        stepOneCount += 1
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        nonlocal stepTwoCount
+        stepTwoCount += 1
+        return
+
+    @DBOS.step()
+    def stepThree() -> None:
+        nonlocal stepThreeCount
+        stepThreeCount += 1
+        return
+
+    @DBOS.step()
+    def stepFour() -> None:
+        nonlocal stepFourCount
+        stepFourCount += 1
+        return
+
+    @DBOS.step()
+    def stepFive() -> None:
+        nonlocal stepFiveCount
+        stepFiveCount += 1
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        simple_workflow()
+
+    assert stepOneCount == 1
+    assert stepTwoCount == 1
+    assert stepThreeCount == 1
+    assert stepFourCount == 1
+    assert stepFiveCount == 1
+
+    forked_handle = DBOS.fork_workflow(wfid, 3)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert stepOneCount == 1
+    assert stepTwoCount == 1
+    assert stepThreeCount == 2
+    assert stepFourCount == 2
+    assert stepFiveCount == 2
+
+    forked_handle = DBOS.fork_workflow(wfid, 5)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert stepOneCount == 1
+    assert stepTwoCount == 1
+    assert stepThreeCount == 2
+    assert stepFourCount == 2
+    assert stepFiveCount == 3
+
+    forked_handle = DBOS.fork_workflow(wfid, 1)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert stepOneCount == 2
+    assert stepTwoCount == 2
+    assert stepThreeCount == 3
+    assert stepFourCount == 3
+    assert stepFiveCount == 4
+
+
+def test_restart_fromsteps_transactionsonly(
+    dbos: DBOS,
+) -> None:
+
+    trOneCount = 0
+    trTwoCount = 0
+    trThreeCount = 0
+    trFourCount = 0
+    trFiveCount = 0
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        trOne()
+        trTwo()
+        trThree()
+        trFour()
+        trFive()
+        return
+
+    @DBOS.transaction()
+    def trOne() -> None:
+        nonlocal trOneCount
+        trOneCount += 1
+        return
+
+    @DBOS.transaction()
+    def trTwo() -> None:
+        nonlocal trTwoCount
+        trTwoCount += 1
+        return
+
+    @DBOS.transaction()
+    def trThree() -> None:
+        nonlocal trThreeCount
+        trThreeCount += 1
+        return
+
+    @DBOS.transaction()
+    def trFour() -> None:
+        nonlocal trFourCount
+        trFourCount += 1
+        return
+
+    @DBOS.transaction()
+    def trFive() -> None:
+        nonlocal trFiveCount
+        trFiveCount += 1
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        simple_workflow()
+
+    assert trOneCount == 1
+    assert trTwoCount == 1
+    assert trThreeCount == 1
+    assert trFourCount == 1
+    assert trFiveCount == 1
+
+    forked_handle = DBOS.fork_workflow(wfid, 2)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert trOneCount == 1
+    assert trTwoCount == 2
+    assert trThreeCount == 2
+    assert trFourCount == 2
+    assert trFiveCount == 2
+
+    forked_handle = DBOS.fork_workflow(wfid, 4)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert trOneCount == 1
+    assert trTwoCount == 2
+    assert trThreeCount == 2
+    assert trFourCount == 3
+    assert trFiveCount == 3
+
+    forked_handle = DBOS.fork_workflow(wfid, 1)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert trOneCount == 2
+    assert trTwoCount == 3
+    assert trThreeCount == 3
+    assert trFourCount == 4
+    assert trFiveCount == 4
+
+
+def test_restart_fromsteps_steps_tr(
+    dbos: DBOS,
+) -> None:
+
+    trOneCount = 0
+    stepTwoCount = 0
+    trThreeCount = 0
+    stepFourCount = 0
+    trFiveCount = 0
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        trOne()
+        stepTwo()
+        trThree()
+        stepFour()
+        trFive()
+        return
+
+    @DBOS.transaction()
+    def trOne() -> None:
+        nonlocal trOneCount
+        trOneCount += 1
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        nonlocal stepTwoCount
+        stepTwoCount += 1
+        return
+
+    @DBOS.transaction()
+    def trThree() -> None:
+        nonlocal trThreeCount
+        trThreeCount += 1
+        return
+
+    @DBOS.step()
+    def stepFour() -> None:
+        nonlocal stepFourCount
+        stepFourCount += 1
+        return
+
+    @DBOS.transaction()
+    def trFive() -> None:
+        nonlocal trFiveCount
+        trFiveCount += 1
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        simple_workflow()
+
+    assert trOneCount == 1
+    assert stepTwoCount == 1
+    assert trThreeCount == 1
+    assert stepFourCount == 1
+    assert trFiveCount == 1
+
+    forked_handle = DBOS.fork_workflow(wfid, 3)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert trOneCount == 1
+    assert stepTwoCount == 1
+    assert trThreeCount == 2
+    assert stepFourCount == 2
+    assert trFiveCount == 2
+
+    forked_handle = DBOS.fork_workflow(wfid, 5)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert trOneCount == 1
+    assert stepTwoCount == 1
+    assert trThreeCount == 2
+    assert stepFourCount == 2
+    assert trFiveCount == 3
+
+    # invalid step
+    try:
+        forked_handle = DBOS.fork_workflow(wfid, 7)
+        assert forked_handle.workflow_id != wfid
+        forked_handle.get_result()
+    except Exception as e:
+        print(f"Exception: {e}")
+        assert isinstance(e, DBOSException)
+        assert "Cannot fork workflow" in str(e)
+        assert trOneCount == 1
+
+    # invalid < 1 will default to 1
+    forked_handle = DBOS.fork_workflow(wfid, -1)
+    assert forked_handle.workflow_id != wfid
+    forked_handle.get_result()
+
+    assert trOneCount == 2
+    assert stepTwoCount == 2
+    assert trThreeCount == 3
+    assert stepFourCount == 3
+    assert trFiveCount == 4
+
+
+def test_restart_fromsteps_childwf(
+    dbos: DBOS,
+) -> None:
+
+    stepOneCount = 0
+    childwfCount = 0
+    stepThreeCount = 0
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        stepOne()
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            handle = dbos.start_workflow(
+                child_workflow,
+                wfid,
+            )
+        handle.get_result()
+        stepThree()
+        return
+
+    @DBOS.step()
+    def stepOne() -> None:
+        nonlocal stepOneCount
+        stepOneCount += 1
+        return
+
+    @DBOS.workflow()
+    def child_workflow(id: str) -> str:
+        nonlocal childwfCount
+        childwfCount += 1
+        return id
+
+    @DBOS.step()
+    def stepThree() -> None:
+        nonlocal stepThreeCount
+        stepThreeCount += 1
+        return
+
+    @DBOS.workflow()
+    def fork(workflow_id: str, step: int) -> str:
+        handle = DBOS.fork_workflow(workflow_id, step)
+        handle.get_result()
+        return handle.get_workflow_id()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        h = DBOS.start_workflow(simple_workflow)
+    h.get_result()
+
+    assert stepOneCount == 1
+    assert childwfCount == 1
+    assert stepThreeCount == 1
+
+    forked_handle = DBOS.fork_workflow(wfid, 2)
+    forked_handle.get_result()
+    assert forked_handle.workflow_id != wfid
+    assert stepOneCount == 1
+    assert childwfCount == 2
+    assert stepThreeCount == 2
+
+    forked_handle = DBOS.fork_workflow(wfid, 3)
+    forked_handle.get_result()
+    assert forked_handle.workflow_id != wfid
+    assert stepOneCount == 1
+    assert childwfCount == 2
+    assert stepThreeCount == 3
+
+    # call fork from within a workflow
+    forkwfid = str(uuid.uuid4())
+    with SetWorkflowID(forkwfid):
+        fh = DBOS.start_workflow(fork, wfid, 1)
+    firstforkedwfid = fh.get_result()
+    assert firstforkedwfid != wfid
+    assert stepOneCount == 2
+    assert childwfCount == 3
+    assert stepThreeCount == 4
+
+    # call the workflow again with the same id
+    # testing that fork is not called again
+    with SetWorkflowID(forkwfid):
+        fh2 = DBOS.start_workflow(fork, wfid, 1)
+
+    secondforkedwfid = fh2.get_result()
+    assert secondforkedwfid == firstforkedwfid
+
+    assert stepOneCount == 2
+    assert childwfCount == 3
+    assert stepThreeCount == 4
