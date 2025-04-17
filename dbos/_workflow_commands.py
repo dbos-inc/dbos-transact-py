@@ -2,6 +2,8 @@ import json
 import uuid
 from typing import Any, List, Optional
 
+from dbos._error import DBOSException
+
 from . import _serialization
 from ._app_db import ApplicationDatabase
 from ._sys_db import (
@@ -183,3 +185,25 @@ def list_workflow_steps(
     merged_steps = steps + transactions
     merged_steps.sort(key=lambda step: step["function_id"])
     return merged_steps
+
+
+def fork_workflow(
+    sys_db: SystemDatabase,
+    app_db: ApplicationDatabase,
+    workflow_id: str,
+    start_step: int,
+) -> str:
+    def get_max_function_id(workflow_uuid: str) -> int:
+        max_transactions = app_db.get_max_function_id(workflow_uuid) or 0
+        max_operations = sys_db.get_max_function_id(workflow_uuid) or 0
+        return max(max_transactions, max_operations)
+
+    max_function_id = get_max_function_id(workflow_id)
+    if max_function_id > 0 and start_step > max_function_id:
+        raise DBOSException(
+            f"Cannot fork workflow {workflow_id} from step {start_step}. The workflow has {max_function_id} steps."
+        )
+    forked_workflow_id = str(uuid.uuid4())
+    app_db.clone_workflow_transactions(workflow_id, forked_workflow_id, start_step)
+    sys_db.fork_workflow(workflow_id, forked_workflow_id, start_step)
+    return forked_workflow_id
