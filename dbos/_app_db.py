@@ -228,3 +228,59 @@ class ApplicationDatabase:
             )
             for row in rows
         ]
+
+    def get_max_function_id(self, workflow_uuid: str) -> Optional[int]:
+        with self.engine.begin() as conn:
+            max_function_id_row = conn.execute(
+                sa.select(
+                    sa.func.max(ApplicationSchema.transaction_outputs.c.function_id)
+                ).where(
+                    ApplicationSchema.transaction_outputs.c.workflow_uuid
+                    == workflow_uuid
+                )
+            ).fetchone()
+
+            max_function_id = max_function_id_row[0] if max_function_id_row else None
+
+            return max_function_id
+
+    def clone_workflow_transactions(
+        self, src_workflow_id: str, forked_workflow_id: str, start_step: int
+    ) -> None:
+        """
+        Copies all steps from dbos.transctions_outputs where function_id < input function_id
+        into a new workflow_uuid. Returns the new workflow_uuid.
+        """
+
+        with self.engine.begin() as conn:
+
+            insert_stmt = sa.insert(ApplicationSchema.transaction_outputs).from_select(
+                [
+                    "workflow_uuid",
+                    "function_id",
+                    "output",
+                    "error",
+                    "txn_id",
+                    "txn_snapshot",
+                    "executor_id",
+                    "function_name",
+                ],
+                sa.select(
+                    sa.literal(forked_workflow_id).label("workflow_uuid"),
+                    ApplicationSchema.transaction_outputs.c.function_id,
+                    ApplicationSchema.transaction_outputs.c.output,
+                    ApplicationSchema.transaction_outputs.c.error,
+                    ApplicationSchema.transaction_outputs.c.txn_id,
+                    ApplicationSchema.transaction_outputs.c.txn_snapshot,
+                    ApplicationSchema.transaction_outputs.c.executor_id,
+                    ApplicationSchema.transaction_outputs.c.function_name,
+                ).where(
+                    (
+                        ApplicationSchema.transaction_outputs.c.workflow_uuid
+                        == src_workflow_id
+                    )
+                    & (ApplicationSchema.transaction_outputs.c.function_id < start_step)
+                ),
+            )
+
+            conn.execute(insert_stmt)

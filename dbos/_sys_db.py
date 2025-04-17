@@ -489,15 +489,29 @@ class SystemDatabase:
                 .values(status=WorkflowStatusString.ENQUEUED.value, recovery_attempts=0)
             )
 
-    def fork_workflow(self, original_workflow_id: str) -> str:
+    def get_max_function_id(self, workflow_uuid: str) -> Optional[int]:
+        with self.engine.begin() as conn:
+            max_function_id_row = conn.execute(
+                sa.select(
+                    sa.func.max(SystemSchema.operation_outputs.c.function_id)
+                ).where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid)
+            ).fetchone()
+
+            max_function_id = max_function_id_row[0] if max_function_id_row else None
+
+            return max_function_id
+
+    def fork_workflow(
+        self, original_workflow_id: str, forked_workflow_id: str, start_step: int = 1
+    ) -> str:
+
         status = self.get_workflow_status(original_workflow_id)
         if status is None:
             raise Exception(f"Workflow {original_workflow_id} not found")
         inputs = self.get_workflow_inputs(original_workflow_id)
         if inputs is None:
             raise Exception(f"Workflow {original_workflow_id} not found")
-        # Generate a random ID for the forked workflow
-        forked_workflow_id = str(uuid.uuid4())
+
         with self.engine.begin() as c:
             # Create an entry for the forked workflow with the same
             # initial values as the original.
@@ -524,6 +538,37 @@ class SystemDatabase:
                     inputs=_serialization.serialize_args(inputs),
                 )
             )
+
+            if start_step > 1:
+
+                # Copy the original workflow's outputs into the forked workflow
+                insert_stmt = sa.insert(SystemSchema.operation_outputs).from_select(
+                    [
+                        "workflow_uuid",
+                        "function_id",
+                        "output",
+                        "error",
+                        "function_name",
+                        "child_workflow_id",
+                    ],
+                    sa.select(
+                        sa.literal(forked_workflow_id).label("workflow_uuid"),
+                        SystemSchema.operation_outputs.c.function_id,
+                        SystemSchema.operation_outputs.c.output,
+                        SystemSchema.operation_outputs.c.error,
+                        SystemSchema.operation_outputs.c.function_name,
+                        SystemSchema.operation_outputs.c.child_workflow_id,
+                    ).where(
+                        (
+                            SystemSchema.operation_outputs.c.workflow_uuid
+                            == original_workflow_id
+                        )
+                        & (SystemSchema.operation_outputs.c.function_id < start_step)
+                    ),
+                )
+
+                c.execute(insert_stmt)
+
             # Enqueue the forked workflow on the internal queue
             c.execute(
                 pg.insert(SystemSchema.workflow_queue).values(

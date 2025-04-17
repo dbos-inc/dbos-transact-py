@@ -1,4 +1,5 @@
 import json
+import uuid
 from typing import Any, List, Optional
 
 from . import _serialization

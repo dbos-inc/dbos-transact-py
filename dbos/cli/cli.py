@@ -433,13 +433,60 @@ def restart(
     ] = 3001,
 ) -> None:
     response = requests.post(
-        f"http://{host}:{port}/workflows/{uuid}/restart", json=[], timeout=5
+        f"http://{host}:{port}/workflows/{uuid}/restart",
+        json=[],
+        timeout=5,
     )
 
     if response.status_code == 204:
         print(f"Workflow {uuid} has been restarted")
     else:
-        print(f"Failed to resume workflow {uuid}. Status code: {response.status_code}")
+        error_message = response.json().get("error", "Unknown error")
+        print(
+            f"Failed to restart workflow {uuid}. "
+            f"Status code: {response.status_code}. "
+            f"Error: {error_message}"
+        )
+
+
+@workflow.command(
+    help="fork a workflow from the beginning with a new id and from a step"
+)
+def fork(
+    uuid: Annotated[str, typer.Argument()],
+    host: Annotated[
+        typing.Optional[str],
+        typer.Option("--host", "-H", help="Specify the admin host"),
+    ] = "localhost",
+    port: Annotated[
+        typing.Optional[int],
+        typer.Option("--port", "-p", help="Specify the admin port"),
+    ] = 3001,
+    step: Annotated[
+        typing.Optional[int],
+        typer.Option(
+            "--step",
+            "-s",
+            help="Restart from this step (default: first step)",
+        ),
+    ] = 1,
+) -> None:
+    print(f"Forking workflow {uuid} from step {step}")
+    response = requests.post(
+        f"http://{host}:{port}/workflows/{uuid}/fork",
+        json={"start_step": step},
+        timeout=5,
+    )
+
+    if response.status_code == 204:
+        print(f"Workflow {uuid} has been forked")
+    else:
+        error_message = response.json().get("error", "Unknown error")
+        print(
+            f"Failed to fork workflow {uuid}. "
+            f"Status code: {response.status_code}. "
+            f"Error: {error_message}"
+        )
 
 
 @queue.command(name="list", help="List enqueued functions for your application")
