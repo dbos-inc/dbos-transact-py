@@ -74,9 +74,12 @@ class ApplicationDatabase:
                 database["connectionTimeoutMillis"] / 1000
             )
 
+        pool_size = database.get("app_db_pool_size")
+        if pool_size is None:
+            pool_size = 20
         self.engine = sa.create_engine(
             app_db_url,
-            pool_size=database["app_db_pool_size"],
+            pool_size=pool_size,
             max_overflow=0,
             pool_timeout=30,
             connect_args=connect_args,

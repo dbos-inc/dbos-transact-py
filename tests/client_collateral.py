@@ -36,3 +36,18 @@ def event_test(key: str, value: str, update: Optional[int] = None) -> str:
         DBOS.sleep(update)
         DBOS.set_event(key, f"updated-{value}")
     return f"{key}-{value}"
+
+
+@DBOS.transaction()
+def test_txn(x: int) -> int:
+    return x
+
+
+@DBOS.step()
+def test_step(x: int) -> int:
+    return x
+
+
+@DBOS.workflow()
+def fork_test(x: int) -> int:
+    return test_txn(x) + test_step(x)
