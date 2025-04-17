@@ -36,3 +36,9 @@ def event_test(key: str, value: str, update: Optional[int] = None) -> str:
         DBOS.sleep(update)
         DBOS.set_event(key, f"updated-{value}")
     return f"{key}-{value}"
+
+
+@DBOS.workflow()
+def blocked_workflow() -> None:
+    while True:
+        DBOS.sleep(0.1)

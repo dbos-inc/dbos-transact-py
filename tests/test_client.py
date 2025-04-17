@@ -8,6 +8,7 @@ import time
 import uuid
 from typing import Any, Optional, TypedDict, cast
 
+import pytest
 import sqlalchemy as sa
 
 from dbos import DBOS, ConfigFile, DBOSClient, EnqueueOptions, Queue, SetWorkflowID
@@ -45,6 +46,21 @@ def test_client_enqueue_and_get_result(dbos: DBOS, client: DBOSClient) -> None:
     handle: WorkflowHandle[str] = client.enqueue(options, 42, "test", johnDoe)
     result = handle.get_result()
     assert result == '42-test-{"first": "John", "last": "Doe", "age": 30}'
+
+
+def test_enqueue_with_timeout(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "blocked_workflow",
+        "workflow_timeout": 0.1,
+    }
+
+    handle: WorkflowHandle[str] = client.enqueue(options)
+    with pytest.raises(Exception) as exc_info:
+        handle.get_result()
+    assert "was cancelled" in str(exc_info.value)
 
 
 def test_client_enqueue_appver_not_set(dbos: DBOS, client: DBOSClient) -> None:

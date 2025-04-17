@@ -882,8 +882,8 @@ def test_timeout_queue(dbos: DBOS) -> None:
             handles.append(handle)
     for handle in handles:
         with pytest.raises(Exception) as exc_info:
-            assert "was cancelled" in str(exc_info.value)
             handle.get_result()
+        assert "was cancelled" in str(exc_info.value)
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
