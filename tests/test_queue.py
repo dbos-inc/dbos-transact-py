@@ -18,6 +18,7 @@ from dbos import (
     SetWorkflowID,
     WorkflowHandle,
 )
+from dbos._context import SetWorkflowTimeout
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
@@ -859,6 +860,29 @@ def test_cancelling_queued_workflows(dbos: DBOS) -> None:
     with pytest.raises(Exception) as exc_info:
         blocked_handle.get_result()
     assert "was cancelled" in str(exc_info.value)
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_timeout_queue(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def blocking_workflow() -> None:
+        while True:
+            DBOS.sleep(0.1)
+
+    queue = Queue("test_queue", concurrency=1)
+
+    num_workflows = 10
+    handles: list[WorkflowHandle[None]] = []
+    for _ in range(num_workflows):
+        with SetWorkflowTimeout(0.1):
+            handle = queue.enqueue(blocking_workflow)
+            handles.append(handle)
+    for handle in handles:
+        with pytest.raises(Exception) as exc_info:
+            assert "was cancelled" in str(exc_info.value)
+            handle.get_result()
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)

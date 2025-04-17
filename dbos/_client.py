@@ -1,5 +1,6 @@
 import asyncio
 import sys
+import time
 import uuid
 from typing import Any, Generic, List, Optional, TypedDict, TypeVar
 
@@ -119,7 +120,11 @@ class DBOSClient:
             "executor_id": None,
             "recovery_attempts": None,
             "app_id": None,
-            "workflow_timeout": workflow_timeout,
+            "workflow_timeout": (  # UNIX epoch timestamp of the timeout in ms
+                int((time.time() + workflow_timeout) * 1000)
+                if workflow_timeout is not None
+                else None
+            ),
         }
 
         inputs: WorkflowInputs = {

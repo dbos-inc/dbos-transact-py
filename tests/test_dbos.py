@@ -1467,3 +1467,6 @@ def test_workflow_timeout(dbos: DBOS) -> None:
     with SetWorkflowTimeout(0.1):
         with pytest.raises(DBOSWorkflowCancelledError):
             blocked_workflow()
+        handle = DBOS.start_workflow(blocked_workflow)
+        with pytest.raises(DBOSWorkflowCancelledError):
+            handle.get_result()

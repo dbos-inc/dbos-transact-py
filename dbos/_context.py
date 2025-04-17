@@ -111,6 +111,7 @@ class DBOSContext:
         )
         rv.request = self.request
         rv.assumed_role = self.assumed_role
+        rv.workflow_timeout = self.workflow_timeout
         return rv
 
     def has_parent(self) -> bool:

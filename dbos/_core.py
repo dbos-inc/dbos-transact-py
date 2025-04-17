@@ -296,7 +296,6 @@ def _init_workflow(
 
     if queue is not None and wf_status == WorkflowStatusString.ENQUEUED.value:
         dbos._sys_db.enqueue(wfid, queue)
-
     if wf_timeout is not None:
         evt = threading.Event()
         dbos.stop_events.append(evt)
