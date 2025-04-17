@@ -24,6 +24,7 @@ from dbos._sys_db import (
 )
 from dbos._workflow_commands import (
     WorkflowStatus,
+    fork_workflow,
     get_workflow,
     list_queued_workflows,
     list_workflow_steps,
@@ -338,3 +339,9 @@ class DBOSClient:
 
     async def list_workflow_steps_async(self, workflow_id: str) -> List[StepInfo]:
         return await asyncio.to_thread(self.list_workflow_steps, workflow_id)
+
+    def fork_workflow(self, workflow_id: str, start_step: int) -> str:
+        return fork_workflow(self._sys_db, self._app_db, workflow_id, start_step)
+
+    async def fork_workflow_async(self, workflow_id: str, start_step: int) -> str:
+        return await asyncio.to_thread(self.fork_workflow, workflow_id, start_step)
