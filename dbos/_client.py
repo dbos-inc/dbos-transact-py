@@ -10,7 +10,6 @@ else:
 
 from dbos import _serialization
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
-from dbos._dbos_config import parse_database_url_to_dbconfig
 from dbos._error import DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._serialization import WorkflowInputs
@@ -78,10 +77,7 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
 
 class DBOSClient:
     def __init__(self, database_url: str, *, system_database: Optional[str] = None):
-        db_config = parse_database_url_to_dbconfig(database_url)
-        if system_database is not None:
-            db_config["sys_db_name"] = system_database
-        self._sys_db = SystemDatabase(db_config)
+        self._sys_db = SystemDatabase(database_url, sys_db_name=system_database)
 
     def destroy(self) -> None:
         self._sys_db.destroy()

@@ -192,12 +192,9 @@ def init(
 )
 def migrate() -> None:
     config = load_config()
-    if not config["database"]["password"]:
-        typer.echo(
-            "DBOS configuration does not contain database password, please check your config file and retry!"
-        )
-        raise typer.Exit(code=1)
-    app_db_name = config["database"]["app_db_name"]
+    assert config["database_url"] is not None
+    db_url = sa.make_url(config["database_url"])
+    app_db_name = db_url.database
 
     typer.echo(f"Starting schema migration for database {app_db_name}")
 
@@ -205,8 +202,9 @@ def migrate() -> None:
     app_db = None
     sys_db = None
     try:
-        sys_db = SystemDatabase(config["database"])
-        app_db = ApplicationDatabase(config["database"])
+        assert config["database_url"] is not None
+        sys_db = SystemDatabase(config["database_url"])
+        app_db = ApplicationDatabase(config["database_url"])
     except Exception as e:
         typer.echo(f"DBOS system schema migration failed: {e}")
     finally:
@@ -330,7 +328,8 @@ def list(
     ] = False,
 ) -> None:
     config = load_config(silent=True)
-    sys_db = SystemDatabase(config["database"])
+    assert config["database_url"] is not None
+    sys_db = SystemDatabase(config["database_url"])
     workflows = list_workflows(
         sys_db,
         limit=limit,
@@ -354,7 +353,8 @@ def get(
     ] = False,
 ) -> None:
     config = load_config(silent=True)
-    sys_db = SystemDatabase(config["database"])
+    assert config["database_url"] is not None
+    sys_db = SystemDatabase(config["database_url"])
     print(
         jsonpickle.encode(get_workflow(sys_db, workflow_id, request), unpicklable=False)
     )
@@ -365,8 +365,9 @@ def steps(
     workflow_id: Annotated[str, typer.Argument()],
 ) -> None:
     config = load_config(silent=True)
-    sys_db = SystemDatabase(config["database"])
-    app_db = ApplicationDatabase(config["database"])
+    assert config["database_url"] is not None
+    sys_db = SystemDatabase(config["database_url"])
+    app_db = ApplicationDatabase(config["database_url"])
     print(
         jsonpickle.encode(
             list_workflow_steps(sys_db, app_db, workflow_id), unpicklable=False
@@ -541,7 +542,8 @@ def list_queue(
     ] = False,
 ) -> None:
     config = load_config(silent=True)
-    sys_db = SystemDatabase(config["database"])
+    assert config["database_url"] is not None
+    sys_db = SystemDatabase(config["database_url"])
     workflows = list_queued_workflows(
         sys_db=sys_db,
         limit=limit,

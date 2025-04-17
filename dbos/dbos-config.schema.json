@@ -25,30 +25,36 @@
         "properties": {
           "hostname": {
             "type": "string",
-            "description": "The hostname or IP address of the application database"
+            "description": "The hostname or IP address of the application database",
+            "deprecated": true
           },
           "port": {
             "type": "number",
-            "description": "The port number of the application database"
+            "description": "The port number of the application database",
+            "deprecated": true
           },
           "username": {
             "type": "string",
             "description": "The username to use when connecting to the application database",
             "not": {
               "enum": ["dbos"]
-            }
+            },
+            "deprecated": true
           },
           "password": {
             "type": ["string", "null"],
-            "description": "The password to use when connecting to the application database. Developers are strongly encouraged to use environment variable substitution (${VAR_NAME}) or Docker secrets (${DOCKER_SECRET:SECRET_NAME}) to avoid storing secrets in source."
+            "description": "The password to use when connecting to the application database. Developers are strongly encouraged to use environment variable substitution (${VAR_NAME}) or Docker secrets (${DOCKER_SECRET:SECRET_NAME}) to avoid storing secrets in source.",
+            "deprecated": true
           },
           "connectionTimeoutMillis": {
             "type": "number",
-            "description": "The number of milliseconds the system waits before timing out when connecting to the application database"
+            "description": "The number of milliseconds the system waits before timing out when connecting to the application database",
+            "deprecated": true
           },
           "app_db_name": {
             "type": "string",
-            "description": "The name of the application database"
+            "description": "The name of the application database",
+            "deprecated": true
           },
           "sys_db_name": {
             "type": "string",
@@ -62,23 +68,14 @@
             "type": "string",
             "description": "If using SSL/TLS to securely connect to a database, path to an SSL root certificate file"
           },
-          "app_db_client": {
-            "type": "string",
-            "description": "Specify the database client to use to connect to the application database",
-            "enum": [
-              "pg-node",
-              "prisma",
-              "typeorm",
-              "knex"
-            ]
-          },
           "migrate": {
             "type": "array",
             "description": "Specify a list of user DB migration commands to run"
           },
           "rollback": {
             "type": "array",
-            "description": "Specify a list of user DB rollback commands to run"
+            "description": "Specify a list of user DB rollback commands to run",
+            "deprecated": true
           }
         }
       },
