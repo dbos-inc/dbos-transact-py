@@ -1078,11 +1078,11 @@ class DBOS:
         reg = _get_or_create_dbos_registry()
         if reg.config is not None:
             return reg.config
-        config = (
+        loaded_config = (
             load_config()
         )  # This will return the processed & validated config (with defaults)
-        reg.config = config
-        return config
+        reg.config = loaded_config
+        return loaded_config
 
     @classproperty
     def sql_session(cls) -> Session:
