@@ -178,8 +178,8 @@ class SystemDatabase:
         self,
         database_url: str,
         *,
-        pool_size: int | None = 2,
-        sys_db_name: str | None = None,
+        pool_size: Optional[int] = 2,
+        sys_db_name: Optional[str] = None,
         debug_mode: bool = False,
     ):
         system_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")

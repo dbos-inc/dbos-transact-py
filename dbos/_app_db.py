@@ -32,7 +32,7 @@ class RecordedResult(TypedDict):
 class ApplicationDatabase:
 
     def __init__(
-        self, database_url: str, *, pool_size: int | None = 20, debug_mode: bool = False
+        self, database_url: str, *, pool_size: Optional[int] = 20, debug_mode: bool = False
     ):
         app_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
 
