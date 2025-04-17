@@ -187,7 +187,7 @@ class SystemDatabase:
             sysdb_name = sys_db_name
         else:
             assert system_db_url.database is not None
-            sys_db_name = system_db_url.database + SystemSchema.sysdb_suffix
+            sysdb_name = system_db_url.database + SystemSchema.sysdb_suffix
         system_db_url = system_db_url.set(database=sysdb_name)
 
         if not debug_mode:
