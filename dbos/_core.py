@@ -304,7 +304,7 @@ def _init_workflow(
         evt = threading.Event()
         dbos.stop_events.append(evt)
 
-        def timeout_func():
+        def timeout_func() -> None:
             time_to_wait_sec = (wf_timeout - (time.time() * 1000)) / 1000
             if time_to_wait_sec > 0:
                 was_stopped = evt.wait(time_to_wait_sec)
