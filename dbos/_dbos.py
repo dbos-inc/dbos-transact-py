@@ -67,7 +67,7 @@ from ._registrations import (
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
-from ._sys_db import reset_system_database
+from ._sys_db import StepInfo, reset_system_database
 from ._tracer import dbos_tracer
 
 if TYPE_CHECKING:
@@ -113,7 +113,7 @@ from ._error import (
 from ._event_loop import BackgroundEventLoop
 from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
 from ._sys_db import SystemDatabase
-from ._workflow_commands import WorkflowStatus, get_workflow
+from ._workflow_commands import WorkflowStatus, get_workflow, list_workflow_steps
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
@@ -1062,6 +1062,17 @@ class DBOS:
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
             fn, "DBOS.listQueuedWorkflows"
+        )
+
+    @classmethod
+    def list_workflow_steps(cls, workflow_id: str) -> List[StepInfo]:
+        def fn() -> List[StepInfo]:
+            return list_workflow_steps(
+                _get_dbos_instance()._sys_db, _get_dbos_instance()._app_db, workflow_id
+            )
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.listWorkflowSteps"
         )
 
     @classproperty
