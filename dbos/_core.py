@@ -287,7 +287,7 @@ def _init_workflow(
     else:
         # Synchronously record the status and inputs for workflows
         # TODO: Make this transactional (and with the queue step below)
-        wf_status = dbos._sys_db.insert_workflow_status(
+        wf_status, wf_timeout = dbos._sys_db.insert_workflow_status(
             status, max_recovery_attempts=max_recovery_attempts
         )
 

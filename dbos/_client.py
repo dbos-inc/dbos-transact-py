@@ -127,7 +127,7 @@ class DBOSClient:
             "kwargs": kwargs,
         }
 
-        wf_status = self._sys_db.insert_workflow_status(status)
+        wf_status, _ = self._sys_db.insert_workflow_status(status)
         self._sys_db.update_workflow_inputs(
             workflow_id, _serialization.serialize_args(inputs)
         )

@@ -285,10 +285,11 @@ class SystemDatabase:
         status: WorkflowStatusInternal,
         *,
         max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
-    ) -> WorkflowStatuses:
+    ) -> tuple[WorkflowStatuses, Optional[int]]:
         if self._debug_mode:
             raise Exception("called insert_workflow_status in debug mode")
         wf_status: WorkflowStatuses = status["status"]
+        wf_timeout: Optional[int] = status["workflow_timeout"]
 
         cmd = (
             pg.insert(SystemSchema.workflow_status)
@@ -325,7 +326,7 @@ class SystemDatabase:
             )
         )
 
-        cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
+        cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.workflow_timeout, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
 
         with self.engine.begin() as c:
             results = c.execute(cmd)
@@ -336,17 +337,18 @@ class SystemDatabase:
             # A mismatch indicates a workflow starting with the same UUID but different functions, which would throw an exception.
             recovery_attempts: int = row[0]
             wf_status = row[1]
+            wf_timeout = row[2]
             err_msg: Optional[str] = None
-            if row[2] != status["name"]:
-                err_msg = f"Workflow already exists with a different function name: {row[2]}, but the provided function name is: {status['name']}"
-            elif row[3] != status["class_name"]:
-                err_msg = f"Workflow already exists with a different class name: {row[3]}, but the provided class name is: {status['class_name']}"
-            elif row[4] != status["config_name"]:
-                err_msg = f"Workflow already exists with a different config name: {row[4]}, but the provided config name is: {status['config_name']}"
-            elif row[5] != status["queue_name"]:
+            if row[3] != status["name"]:
+                err_msg = f"Workflow already exists with a different function name: {row[3]}, but the provided function name is: {status['name']}"
+            elif row[4] != status["class_name"]:
+                err_msg = f"Workflow already exists with a different class name: {row[4]}, but the provided class name is: {status['class_name']}"
+            elif row[5] != status["config_name"]:
+                err_msg = f"Workflow already exists with a different config name: {row[5]}, but the provided config name is: {status['config_name']}"
+            elif row[6] != status["queue_name"]:
                 # This is a warning because a different queue name is not necessarily an error.
                 dbos_logger.warning(
-                    f"Workflow already exists in queue: {row[5]}, but the provided queue name is: {status['queue_name']}. The queue is not updated."
+                    f"Workflow already exists in queue: {row[6]}, but the provided queue name is: {status['queue_name']}. The queue is not updated."
                 )
             if err_msg is not None:
                 raise DBOSConflictingWorkflowError(status["workflow_uuid"], err_msg)
@@ -380,7 +382,7 @@ class SystemDatabase:
                     status["workflow_uuid"], max_recovery_attempts
                 )
 
-        return wf_status
+        return wf_status, wf_timeout
 
     def update_workflow_status(
         self,
