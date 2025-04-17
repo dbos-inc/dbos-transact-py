@@ -3,7 +3,7 @@ import os
 import re
 import sys
 from importlib import resources
-from typing import Any, Dict, List, Optional, TypedDict, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, TypedDict, Union, cast
 
 if sys.version_info < (3, 10):
     from typing_extensions import TypeGuard
@@ -58,39 +58,28 @@ class RuntimeConfig(TypedDict, total=False):
 
 
 class DatabaseConfig(TypedDict, total=False):
-    hostname: str
-    port: int
-    username: str
-    password: str
-    connectionTimeoutMillis: Optional[int]
-    app_db_name: str
+    """
+    Data structure containing the DBOS database configuration.
+    Attributes:
+        app_db_pool_size (int): Application database pool size
+        sys_db_name (str): System database name
+        sys_db_pool_size (int): System database pool size
+        migrate (List[str]): Migration commands to run on startup
+    """
+
+    hostname: str  # Will be removed in a future version
+    port: int  # Will be removed in a future version
+    username: str  # Will be removed in a future version
+    password: str  # Will be removed in a future version
+    connectionTimeoutMillis: Optional[int]  # Will be removed in a future version
+    app_db_name: str  # Will be removed in a future version
     app_db_pool_size: Optional[int]
     sys_db_name: Optional[str]
     sys_db_pool_size: Optional[int]
-    ssl: Optional[bool]
-    ssl_ca: Optional[str]
+    ssl: Optional[bool]  # Will be removed in a future version
+    ssl_ca: Optional[str]  # Will be removed in a future version
     migrate: Optional[List[str]]
-    rollback: Optional[List[str]]
-
-
-def parse_database_url_to_dbconfig(database_url: str) -> DatabaseConfig:
-    db_url = make_url(database_url)
-    db_config = {
-        "hostname": db_url.host,
-        "port": db_url.port or 5432,
-        "username": db_url.username,
-        "password": db_url.password,
-        "app_db_name": db_url.database,
-    }
-    for key, value in db_url.query.items():
-        str_value = value[0] if isinstance(value, tuple) else value
-        if key == "connect_timeout":
-            db_config["connectionTimeoutMillis"] = int(str_value) * 1000
-        elif key == "sslmode":
-            db_config["ssl"] = str_value == "require"
-        elif key == "sslrootcert":
-            db_config["ssl_ca"] = str_value
-    return cast(DatabaseConfig, db_config)
+    rollback: Optional[List[str]]  # Will be removed in a future version
 
 
 class OTLPExporterConfig(TypedDict, total=False):
@@ -117,7 +106,7 @@ class ConfigFile(TypedDict, total=False):
     Attributes:
         name (str): Application name
         runtimeConfig (RuntimeConfig): Configuration for request serving
-        database (DatabaseConfig): Configuration for the application and system databases
+        database (DatabaseConfig): Configure pool sizes, migrate commands
         database_url (str): Database connection string
         telemetry (TelemetryConfig): Configuration for tracing / logging
         env (Dict[str,str]): Environment varialbes
@@ -165,9 +154,6 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
 
     # Database config
     db_config: DatabaseConfig = {}
-    database_url = config.get("database_url")
-    if database_url:
-        db_config = parse_database_url_to_dbconfig(database_url)
     if "sys_db_name" in config:
         db_config["sys_db_name"] = config.get("sys_db_name")
     if "app_db_pool_size" in config:
@@ -176,6 +162,9 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         db_config["sys_db_pool_size"] = config.get("sys_db_pool_size")
     if db_config:
         translated_config["database"] = db_config
+
+    if "database_url" in config:
+        translated_config["database_url"] = config.get("database_url")
 
     # Runtime config
     translated_config["runtimeConfig"] = {"run_admin_server": True}
@@ -258,10 +247,7 @@ def _substitute_env_vars(content: str, silent: bool = False) -> str:
 
 def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
     """
-    Retrieve application database URL from configuration `.yaml` file.
-
-    Loads the DBOS `ConfigFile` from the specified path (typically `dbos-config.yaml`),
-        and returns the database URL for the application database.
+    Retrieve application database URL from configuration `.yaml` file and returns it as a string with clear password
 
     Args:
         config_file_path (str): The path to the yaml configuration file.
@@ -271,14 +257,7 @@ def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
 
     """
     dbos_config = load_config(config_file_path, run_process_config=True)
-    db_url = URL.create(
-        "postgresql+psycopg",
-        username=dbos_config["database"]["username"],
-        password=dbos_config["database"]["password"],
-        host=dbos_config["database"]["hostname"],
-        port=dbos_config["database"]["port"],
-        database=dbos_config["database"]["app_db_name"],
-    )
+    db_url = make_url(dbos_config["database_url"]).set(drivername="postgresql+psycopg")
     return db_url.render_as_string(hide_password=False)
 
 
@@ -362,55 +341,7 @@ def process_config(
     if logs.get("logLevel") is None:
         logs["logLevel"] = "INFO"
 
-    if "database" not in data:
-        data["database"] = {}
-
-    # database_url takes precedence over database config, but we need to preserve rollback and migrate if they exist
-    migrate = data["database"].get("migrate", False)
-    rollback = data["database"].get("rollback", False)
-    if data.get("database_url"):
-        dbconfig = parse_database_url_to_dbconfig(cast(str, data["database_url"]))
-        if migrate:
-            dbconfig["migrate"] = cast(List[str], migrate)
-        if rollback:
-            dbconfig["rollback"] = cast(List[str], rollback)
-        data["database"] = dbconfig
-
-    if "app_db_name" not in data["database"] or not (data["database"]["app_db_name"]):
-        data["database"]["app_db_name"] = _app_name_to_db_name(data["name"])
-
-    connection_passed_in = data["database"].get("hostname", None) is not None
-
-    dbos_dbport: Optional[int] = None
-    dbport_env = os.getenv("DBOS_DBPORT")
-    if dbport_env:
-        try:
-            dbos_dbport = int(dbport_env)
-        except ValueError:
-            pass
-
-    data["database"]["hostname"] = (
-        os.getenv("DBOS_DBHOST") or data["database"].get("hostname") or "localhost"
-    )
-
-    data["database"]["port"] = dbos_dbport or data["database"].get("port") or 5432
-    data["database"]["username"] = (
-        os.getenv("DBOS_DBUSER") or data["database"].get("username") or "postgres"
-    )
-    data["database"]["password"] = (
-        os.getenv("DBOS_DBPASSWORD")
-        or data["database"].get("password")
-        or os.environ.get("PGPASSWORD")
-        or "dbos"
-    )
-
-    if not data["database"].get("app_db_pool_size"):
-        data["database"]["app_db_pool_size"] = 20
-    if not data["database"].get("sys_db_pool_size"):
-        data["database"]["sys_db_pool_size"] = 20
-    if not data["database"].get("connectionTimeoutMillis"):
-        data["database"]["connectionTimeoutMillis"] = 10000
-
+    # Handle admin server config
     if not data.get("runtimeConfig"):
         data["runtimeConfig"] = {
             "run_admin_server": True,
@@ -418,22 +349,108 @@ def process_config(
     elif "run_admin_server" not in data["runtimeConfig"]:
         data["runtimeConfig"]["run_admin_server"] = True
 
-    # Pretty-print where we've loaded database connection information from, respecting the log level
-    if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
-        d = data["database"]
-        conn_string = f"postgresql://{d['username']}:*****@{d['hostname']}:{d['port']}/{d['app_db_name']}"
-        if os.getenv("DBOS_DBHOST"):
-            print(
-                f"[bold blue]Loading database connection string from debug environment variables: {conn_string}[/bold blue]"
-            )
-        elif connection_passed_in:
-            print(
-                f"[bold blue]Using database connection string: {conn_string}[/bold blue]"
-            )
-        else:
-            print(
-                f"[bold blue]Using default database connection string: {conn_string}[/bold blue]"
-            )
+    """
+    If a database_url is provided, pass it as is in the config (MAYBE: and backfill the data.database fields)
+
+    Else, build a database_url from the data.database fields
+
+    Pool sizes still need to be set in data.database
+
+    In debug mode, apply overrides from DBOS_DBHOST, DBOS_DBPORT, DBOS_DBUSER, and DBOS_DBPASSWORD.
+
+    Default configuration:
+        - Hostname: localhost
+        - Port: 5432
+        - Username: postgres
+        - Password: $PGPASSWORD
+        - Database name: transformed application name. [TODO: update]
+
+    """
+
+    isDebugMode = os.getenv("DBOS_DBHOST") is not None
+
+    if "database" not in data:
+        data["database"] = {}
+    data["database"]["app_db_pool_size"] = data["database"].get("app_db_pool_size", 20)
+    data["database"]["sys_db_pool_size"] = data["database"].get("sys_db_pool_size", 20)
+
+    if data.get("database_url") is not None:
+        # Parse the db string and check required fields
+        url = make_url(data["database_url"])
+        required_fields = [
+            ("username", "Username must be specified in the connection URL"),
+            ("password", "Password must be specified in the connection URL"),
+            ("host", "Host must be specified in the connection URL"),
+            ("database", "Database name must be specified in the connection URL"),
+        ]
+        for field_name, error_message in required_fields:
+            field_value = getattr(url, field_name, None)
+            if not field_value:
+                raise DBOSInitializationError(error_message)
+
+        # In debug mode perform env vars overrides
+        if isDebugMode:
+            # Override the username, password, host, and port
+            url.username = os.getenv("DBOS_DBUSER", url.username)
+            url.password = os.getenv("DBOS_DBPASSWORD", url.password)
+            url.host = os.getenv("DBOS_DBHOST", url.host)
+            dbos_dbport = os.getenv("DBOS_DBPORT")
+            if dbos_dbport:
+                try:
+                    dbos_dbport = int(dbos_dbport)
+                    url.port = dbos_dbport
+                except ValueError:
+                    pass
+
+        if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
+            print(f"[bold blue]Using database connection string: {url}[/bold blue]")
+    else:
+        app_db_name = _app_name_to_db_name(
+            data["database"].get("app_db_name", data["name"])
+        )
+
+        dbos_dbport: Optional[int] = None
+        dbport_env = os.getenv("DBOS_DBPORT")
+        if dbport_env:
+            try:
+                dbos_dbport = int(dbport_env)
+            except ValueError:
+                pass
+
+        hostname = (
+            os.getenv("DBOS_DBHOST") or data["database"].get("hostname") or "localhost"
+        )
+        port = dbos_dbport or data["database"].get("port") or 5432
+        username = (
+            os.getenv("DBOS_DBUSER") or data["database"].get("username") or "postgres"
+        )
+        password = (
+            os.getenv("DBOS_DBPASSWORD")
+            or data["database"].get("password")
+            or os.environ.get("PGPASSWORD")
+            or "dbos"
+        )
+
+        connect_timeout = int(
+            data["database"].get("connectionTimeoutMillis", 3000) / 1000
+        )
+
+        connection_string = f"postgresql://{username}:{password}@{hostname}:{port}/{app_db_name}?connect_timeout={connect_timeout}"
+
+        # Pretty-print where we've loaded database connection information from, respecting the log level
+        if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
+            conn_string = make_url(connection_string)
+            if isDebugMode:
+                print(
+                    f"[bold blue]Loading database connection string from debug environment variables: {conn_string}[/bold blue]"
+                )
+            else:
+                print(
+                    f"[bold blue]Using default database connection string: {conn_string}[/bold blue]"
+                )
+
+        # Finally craft the database url
+        data["database_url"] = connection_string
 
     # Return data as ConfigFile type
     return data
@@ -448,7 +465,7 @@ def _is_valid_app_name(name: str) -> bool:
 
 
 def _app_name_to_db_name(app_name: str) -> str:
-    name = app_name.replace("-", "_")
+    name = app_name.replace("-", "_").replace(" ", "_").lower()
     return name if not name[0].isdigit() else f"_{name}"
 
 
@@ -475,22 +492,29 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Name
     provided_config["name"] = config_from_file["name"]
 
-    # Database config. Note we disregard a potential database_url in config_from_file because it is not expected from DBOS Cloud
+    # Database config. We build a connection string with sslmode set based on the presence of ssl_ca in the config file.
+
+    # If ssl_ca is present, set sslmode to verify-full
+    # If ssl_ca is not present, set sslmode to no-verify
+    username = config_from_file["database"]["username"]
+    password = config_from_file["database"]["password"]
+    hostname = config_from_file["database"]["hostname"]
+    port = config_from_file["database"]["port"]
+    dbname = config_from_file["database"]["app_db_name"]
+    provided_config["database_url"] = (
+        f"postgresql://{username}:{password}@{hostname}:{port}/{dbname}?connect_timeout=3"
+    )
+    if "ssl_ca" in config_from_file["database"]:
+        ssl_ca = config_from_file["database"]["ssl_ca"]
+        provided_config["database_url"] += f"&sslmode=verify-full&sslrootcert={ssl_ca}"
+    else:
+        provided_config["database_url"] += "&sslmode=no-verify"
+
     if "database" not in provided_config:
         provided_config["database"] = {}
-    provided_config["database"]["hostname"] = config_from_file["database"]["hostname"]
-    provided_config["database"]["port"] = config_from_file["database"]["port"]
-    provided_config["database"]["username"] = config_from_file["database"]["username"]
-    provided_config["database"]["password"] = config_from_file["database"]["password"]
-    provided_config["database"]["app_db_name"] = config_from_file["database"][
-        "app_db_name"
-    ]
     provided_config["database"]["sys_db_name"] = config_from_file["database"][
         "sys_db_name"
     ]
-    provided_config["database"]["ssl"] = config_from_file["database"]["ssl"]
-    if "ssl_ca" in config_from_file["database"]:
-        provided_config["database"]["ssl_ca"] = config_from_file["database"]["ssl_ca"]
 
     # Telemetry config
     if "telemetry" not in provided_config or provided_config["telemetry"] is None:

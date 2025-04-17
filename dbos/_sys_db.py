@@ -27,11 +27,11 @@ from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.sql import func
 
-from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
+from dbos._utils import INTERNAL_QUEUE_NAME
 
 from . import _serialization
 from ._context import get_local_dbos_context
-from ._dbos_config import ConfigFile, DatabaseConfig
+from ._dbos_config import ConfigFile
 from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
@@ -174,26 +174,21 @@ _dbos_null_topic = "__null__topic__"
 
 class SystemDatabase:
 
-    def __init__(self, database: DatabaseConfig, *, debug_mode: bool = False):
-        sysdb_name = (
-            database["sys_db_name"]
-            if "sys_db_name" in database and database["sys_db_name"]
-            else database["app_db_name"] + SystemSchema.sysdb_suffix
-        )
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        pool_size: int = 2,
+        sys_db_name: str = None,
+        debug_mode: bool = False,
+    ):
+        system_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
+        sysdb_name = sys_db_name or system_db_url.database + SystemSchema.sysdb_suffix
+        system_db_url = system_db_url.set(database=sysdb_name)
 
         if not debug_mode:
             # If the system database does not already exist, create it
-            postgres_db_url = sa.URL.create(
-                "postgresql+psycopg",
-                username=database["username"],
-                password=database["password"],
-                host=database["hostname"],
-                port=database["port"],
-                database="postgres",
-                # fills the "application_name" column in pg_stat_activity
-                query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
-            )
-            engine = sa.create_engine(postgres_db_url)
+            engine = sa.create_engine(system_db_url.set(database="postgres"))
             with engine.connect() as conn:
                 conn.execution_options(isolation_level="AUTOCOMMIT")
                 if not conn.execute(
@@ -202,22 +197,6 @@ class SystemDatabase:
                 ).scalar():
                     conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
             engine.dispose()
-
-        system_db_url = sa.URL.create(
-            "postgresql+psycopg",
-            username=database["username"],
-            password=database["password"],
-            host=database["hostname"],
-            port=database["port"],
-            database=sysdb_name,
-            # fills the "application_name" column in pg_stat_activity
-            query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
-        )
-
-        # Create a connection pool for the system database
-        pool_size = database.get("sys_db_pool_size")
-        if pool_size is None:
-            pool_size = 20
 
         self.engine = sa.create_engine(
             system_db_url,
@@ -1648,22 +1627,15 @@ class SystemDatabase:
 
 
 def reset_system_database(config: ConfigFile) -> None:
+    db_url = sa.make_url(config["database_url"]).set(drivername="postgresql+psycopg")
     sysdb_name = (
         config["database"]["sys_db_name"]
         if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]
-        else config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
-    )
-    postgres_db_url = sa.URL.create(
-        "postgresql+psycopg",
-        username=config["database"]["username"],
-        password=config["database"]["password"],
-        host=config["database"]["hostname"],
-        port=config["database"]["port"],
-        database="postgres",
+        else db_url.database + SystemSchema.sysdb_suffix
     )
     try:
         # Connect to postgres default database
-        engine = sa.create_engine(postgres_db_url)
+        engine = sa.create_engine(db_url.set(database="postgres"))
 
         with engine.connect() as conn:
             # Set autocommit required for database dropping

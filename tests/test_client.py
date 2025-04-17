@@ -6,13 +6,12 @@ import subprocess
 import sys
 import time
 import uuid
-from typing import Any, Optional, TypedDict, cast
+from typing import Optional, TypedDict, cast
 
 import sqlalchemy as sa
 
-from dbos import DBOS, ConfigFile, DBOSClient, EnqueueOptions, Queue, SetWorkflowID
+from dbos import DBOS, ConfigFile, DBOSClient, EnqueueOptions, SetWorkflowID
 from dbos._dbos import WorkflowHandle
-from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
 from tests.client_collateral import event_test, retrieve_test, send_test

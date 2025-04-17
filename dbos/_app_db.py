@@ -3,11 +3,11 @@ from typing import List, Optional, TypedDict
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 from sqlalchemy import inspect, text
+from sqlalchemy.dialects.postgresql.psycopg import PGDialect_psycopg
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from . import _serialization
-from ._dbos_config import ConfigFile, DatabaseConfig
 from ._error import DBOSUnexpectedStepError, DBOSWorkflowConflictIDError
 from ._schemas.application_database import ApplicationSchema
 from ._sys_db import StepInfo
@@ -31,55 +31,30 @@ class RecordedResult(TypedDict):
 
 class ApplicationDatabase:
 
-    def __init__(self, database: DatabaseConfig, *, debug_mode: bool = False):
-
-        app_db_name = database["app_db_name"]
+    def __init__(
+        self, database_url: str, *, pool_size: int = 20, debug_mode: bool = False
+    ):
+        app_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
 
         # If the application database does not already exist, create it
         if not debug_mode:
-            postgres_db_url = sa.URL.create(
-                "postgresql+psycopg",
-                username=database["username"],
-                password=database["password"],
-                host=database["hostname"],
-                port=database["port"],
-                database="postgres",
+            postgres_db_engine = sa.create_engine(
+                app_db_url.set(database="postgres"),
             )
-            postgres_db_engine = sa.create_engine(postgres_db_url)
             with postgres_db_engine.connect() as conn:
                 conn.execution_options(isolation_level="AUTOCOMMIT")
                 if not conn.execute(
                     sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
-                    parameters={"db_name": app_db_name},
+                    parameters={"db_name": app_db_url.database},
                 ).scalar():
-                    conn.execute(sa.text(f"CREATE DATABASE {app_db_name}"))
+                    conn.execute(sa.text(f"CREATE DATABASE {app_db_url.database}"))
             postgres_db_engine.dispose()
-
-        # Create a connection pool for the application database
-        app_db_url = sa.URL.create(
-            "postgresql+psycopg",
-            username=database["username"],
-            password=database["password"],
-            host=database["hostname"],
-            port=database["port"],
-            database=app_db_name,
-        )
-
-        connect_args = {}
-        if (
-            "connectionTimeoutMillis" in database
-            and database["connectionTimeoutMillis"]
-        ):
-            connect_args["connect_timeout"] = int(
-                database["connectionTimeoutMillis"] / 1000
-            )
 
         self.engine = sa.create_engine(
             app_db_url,
-            pool_size=database["app_db_pool_size"],
+            pool_size=pool_size,
             max_overflow=0,
             pool_timeout=30,
-            connect_args=connect_args,
         )
         self.sessionmaker = sessionmaker(bind=self.engine)
         self.debug_mode = debug_mode

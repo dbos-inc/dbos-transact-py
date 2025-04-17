@@ -453,10 +453,14 @@ class DBOS:
             self._executor_field = ThreadPoolExecutor(max_workers=64)
             self._background_event_loop.start()
             self._sys_db_field = SystemDatabase(
-                self.config["database"], debug_mode=debug_mode
+                self.config["database_url"],
+                pool_size=self.config["database"]["sys_db_pool_size"],
+                debug_mode=debug_mode,
             )
             self._app_db_field = ApplicationDatabase(
-                self.config["database"], debug_mode=debug_mode
+                self.config["database_url"],
+                pool_size=self.config["database"]["app_db_pool_size"],
+                debug_mode=debug_mode,
             )
 
             if debug_mode:
