@@ -111,7 +111,6 @@ class DBOSContext:
         )
         rv.request = self.request
         rv.assumed_role = self.assumed_role
-        rv.workflow_timeout = self.workflow_timeout
         return rv
 
     def has_parent(self) -> bool:
@@ -410,6 +409,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         self.created_ctx = False
         self.attributes = attributes
         self.is_temp_workflow = attributes["name"] == "temp_wf"
+        self.saved_workflow_timeout: Optional[float] = None
 
     def __enter__(self) -> DBOSContext:
         # Code to create a basic context
@@ -419,6 +419,9 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
             ctx = DBOSContext()
             _set_local_dbos_context(ctx)
         assert not ctx.is_within_workflow()
+        # The workflow timeout should not be set within the workflow
+        self.saved_workflow_timeout = ctx.workflow_timeout
+        ctx.workflow_timeout = None
         ctx.start_workflow(
             None, self.attributes, self.is_temp_workflow
         )  # Will get from the context's next workflow ID
@@ -433,6 +436,8 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         ctx = assert_current_dbos_context()
         assert ctx.is_within_workflow()
         ctx.end_workflow(exc_value, self.is_temp_workflow)
+        # Restore the saved workflow timeout
+        ctx.workflow_timeout = self.saved_workflow_timeout
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()
