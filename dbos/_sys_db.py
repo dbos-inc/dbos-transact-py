@@ -440,8 +440,6 @@ class SystemDatabase:
         if self._debug_mode:
             raise Exception("called cancel_workflow in debug mode")
         with self.engine.begin() as c:
-            # Execute with snapshot isolation in case of concurrent calls on the same workflow
-            c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
             # Check the status of the workflow. If it is complete, do nothing.
             row = c.execute(
                 sa.select(

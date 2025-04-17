@@ -18,7 +18,7 @@ from dbos import (
     SetWorkflowID,
     WorkflowHandle,
 )
-from dbos._context import SetWorkflowTimeout
+from dbos._context import SetWorkflowTimeout, assert_current_dbos_context
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
@@ -868,6 +868,7 @@ def test_cancelling_queued_workflows(dbos: DBOS) -> None:
 def test_timeout_queue(dbos: DBOS) -> None:
     @DBOS.workflow()
     def blocking_workflow() -> None:
+        assert assert_current_dbos_context().workflow_timeout is None
         while True:
             DBOS.sleep(0.1)
 
@@ -876,7 +877,7 @@ def test_timeout_queue(dbos: DBOS) -> None:
     num_workflows = 10
     handles: list[WorkflowHandle[None]] = []
     for _ in range(num_workflows):
-        with SetWorkflowTimeout(0.1):
+        with SetWorkflowTimeout(2.0):
             handle = queue.enqueue(blocking_workflow)
             handles.append(handle)
     for handle in handles:
