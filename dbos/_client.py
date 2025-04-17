@@ -31,7 +31,7 @@ class EnqueueOptions(TypedDict):
     queue_name: str
     workflow_id: NotRequired[str]
     app_version: NotRequired[str]
-    workflow_timeout: NotRequired[int]
+    workflow_timeout: NotRequired[float]
 
 
 class WorkflowHandleClientPolling(Generic[R]):
