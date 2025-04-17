@@ -240,6 +240,15 @@ def _init_workflow(
         if len(ctx.workflow_id) > 0
         else ctx.id_assigned_for_next_workflow
     )
+
+    # In debug mode, just return the existing status
+    if dbos.debug_mode:
+        get_status_result = dbos._sys_db.get_workflow_status(wfid)
+        if get_status_result is None:
+            raise DBOSNonExistentWorkflowError(wfid)
+        return get_status_result
+
+    # Initialize a workflow status object from the context
     status: WorkflowStatusInternal = {
         "workflow_uuid": wfid,
         "status": (
@@ -278,24 +287,17 @@ def _init_workflow(
     if class_name is not None:
         inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
 
-    wf_status = status["status"]
-    if dbos.debug_mode:
-        get_status_result = dbos._sys_db.get_workflow_status(wfid)
-        if get_status_result is None:
-            raise DBOSNonExistentWorkflowError(wfid)
-        wf_status = get_status_result["status"]
-    else:
-        # Synchronously record the status and inputs for workflows
-        # TODO: Make this transactional (and with the queue step below)
-        wf_status, wf_timeout = dbos._sys_db.insert_workflow_status(
-            status, max_recovery_attempts=max_recovery_attempts
-        )
+    # Synchronously record the status and inputs for workflows
+    # TODO: Make this transactional (and with the queue step below)
+    wf_status, wf_timeout = dbos._sys_db.insert_workflow_status(
+        status, max_recovery_attempts=max_recovery_attempts
+    )
 
-        # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
-        dbos._sys_db.update_workflow_inputs(wfid, _serialization.serialize_args(inputs))
+    # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
+    dbos._sys_db.update_workflow_inputs(wfid, _serialization.serialize_args(inputs))
 
-        if queue is not None and wf_status == WorkflowStatusString.ENQUEUED.value:
-            dbos._sys_db.enqueue(wfid, queue)
+    if queue is not None and wf_status == WorkflowStatusString.ENQUEUED.value:
+        dbos._sys_db.enqueue(wfid, queue)
 
     status["status"] = wf_status
     return status
