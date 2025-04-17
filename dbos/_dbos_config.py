@@ -393,7 +393,11 @@ def process_config(
         if isDebugMode:
             # Override the username, password, host, and port
             port_str = os.getenv("DBOS_DBPORT")
-            port = int(port_str) if port_str is not None and port_str.isdigit() else url.port
+            port = (
+                int(port_str)
+                if port_str is not None and port_str.isdigit()
+                else url.port
+            )
             data["database_url"] = url.set(
                 username=os.getenv("DBOS_DBUSER", url.username),
                 password=os.getenv("DBOS_DBPASSWORD", url.password),
@@ -402,8 +406,10 @@ def process_config(
             ).render_as_string(hide_password=False)
 
         if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
-            url = make_url(data["database_url"]).render_as_string(hide_password=True)
-            print(f"[bold blue]Using database connection string: {url}[/bold blue]")
+            log_url = make_url(data["database_url"]).render_as_string(
+                hide_password=True
+            )
+            print(f"[bold blue]Using database connection string: {log_url}[/bold blue]")
     else:
         if "app_db_name" not in data["database"] or not data["database"]["app_db_name"]:
             _app_db_name = _app_name_to_db_name(data["name"])
