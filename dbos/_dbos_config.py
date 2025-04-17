@@ -375,6 +375,7 @@ def process_config(
     data["database"]["sys_db_pool_size"] = data["database"].get("sys_db_pool_size", 20)
 
     if data.get("database_url") is not None:
+        print(data)
         # Parse the db string and check required fields
         assert data["database_url"] is not None
         url = make_url(data["database_url"])
