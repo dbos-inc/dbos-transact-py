@@ -257,7 +257,8 @@ def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
 
     """
     dbos_config = load_config(config_file_path, run_process_config=True)
-    db_url = make_url(dbos_config["database_url"]).set(drivername="postgres+psycopg")
+    assert dbos_config["database_url"] is not None
+    db_url = make_url(dbos_config["database_url"]).set(drivername="postgresql+psycopg")
     return db_url.render_as_string(hide_password=False)
 
 
@@ -375,6 +376,7 @@ def process_config(
 
     if data.get("database_url") is not None:
         # Parse the db string and check required fields
+        assert data["database_url"] is not None
         url = make_url(data["database_url"])
         required_fields = [
             ("username", "Username must be specified in the connection URL"),
@@ -394,21 +396,19 @@ def process_config(
             data["database_url"] = url.set(
                 username=os.getenv("DBOS_DBUSER", url.username),
                 password=os.getenv("DBOS_DBPASSWORD", url.password),
-                host=os.getenv("DBOS_DBHOST", url.host),
-                port=(
-                    int(os.getenv("DBOS_DBPORT", url.port))
-                    if os.getenv("DBOS_DBPORT")
-                    else url.port
-                ),
+                host=os.getenv("DBOS_DBHOST", url.host)
             ).render_as_string(hide_password=False)
+            if os.getenv("DBOS_DBPORT") is not None:
+                port = str(os.getenv("DBOS_DBPORT"))
+                data["database_url"] = url.set(port=int(port)).render_as_string(hide_password=False)
 
         if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
             print(f"[bold blue]Using database connection string: {url}[/bold blue]")
     else:
         if "app_db_name" not in data["database"] or not data["database"]["app_db_name"]:
-            app_db_name = _app_name_to_db_name(data["name"])
+            _app_db_name = _app_name_to_db_name(data["name"])
         else:
-            app_db_name = data["database"]["app_db_name"]
+            _app_db_name = data["database"]["app_db_name"]
 
         dbos_dbport: Optional[int] = None
         dbport_env = os.getenv("DBOS_DBPORT")
@@ -418,25 +418,25 @@ def process_config(
             except ValueError:
                 pass
 
-        hostname = (
+        _hostname = (
             os.getenv("DBOS_DBHOST") or data["database"].get("hostname") or "localhost"
         )
-        port = dbos_dbport or data["database"].get("port") or 5432
-        username = (
+        _port = dbos_dbport or data["database"].get("port") or 5432
+        _username = (
             os.getenv("DBOS_DBUSER") or data["database"].get("username") or "postgres"
         )
-        password = (
+        _password = (
             os.getenv("DBOS_DBPASSWORD")
             or data["database"].get("password")
             or os.environ.get("PGPASSWORD")
             or "dbos"
         )
 
-        connect_timeout = int(
-            data["database"].get("connectionTimeoutMillis", 10000) / 1000
-        )
+        _connect_timeout = data["database"].get("connectionTimeoutMillis", 10000)
+        assert _connect_timeout is not None
+        _connect_timeout = int(_connect_timeout / 1000)
 
-        connection_string = f"postgres://{username}:{password}@{hostname}:{port}/{app_db_name}?connect_timeout={connect_timeout}"
+        connection_string = f"postgres://{_username}:{_password}@{_hostname}:{_port}/{_app_db_name}?connect_timeout={int(_connect_timeout)}"
 
         # Pretty-print where we've loaded database connection information from, respecting the log level
         if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
@@ -505,6 +505,7 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     provided_config["database_url"] = (
         f"postgres://{username}:{password}@{hostname}:{port}/{dbname}?connect_timeout=10"
     )
+    assert provided_config["database_url"] is not None
     if "ssl_ca" in config_from_file["database"]:
         ssl_ca = config_from_file["database"]["ssl_ca"]
         provided_config["database_url"] += f"&sslmode=verify-full&sslrootcert={ssl_ca}"

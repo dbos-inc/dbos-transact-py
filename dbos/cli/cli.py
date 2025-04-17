@@ -192,6 +192,7 @@ def init(
 )
 def migrate() -> None:
     config = load_config()
+    assert config["database_url"] is not None
     db_url = sa.make_url(config["database_url"])
     app_db_name = db_url.database
 
@@ -201,6 +202,7 @@ def migrate() -> None:
     app_db = None
     sys_db = None
     try:
+        assert config["database_url"] is not None
         sys_db = SystemDatabase(config["database_url"])
         app_db = ApplicationDatabase(config["database_url"])
     except Exception as e:
@@ -326,6 +328,7 @@ def list(
     ] = False,
 ) -> None:
     config = load_config(silent=True)
+    assert config["database_url"] is not None
     sys_db = SystemDatabase(config["database_url"])
     workflows = list_workflows(
         sys_db,
@@ -350,6 +353,7 @@ def get(
     ] = False,
 ) -> None:
     config = load_config(silent=True)
+    assert config["database_url"] is not None
     sys_db = SystemDatabase(config["database_url"])
     print(
         jsonpickle.encode(get_workflow(sys_db, workflow_id, request), unpicklable=False)
@@ -361,6 +365,7 @@ def steps(
     workflow_id: Annotated[str, typer.Argument()],
 ) -> None:
     config = load_config(silent=True)
+    assert config["database_url"] is not None
     sys_db = SystemDatabase(config["database_url"])
     app_db = ApplicationDatabase(config["database_url"])
     print(
@@ -537,6 +542,7 @@ def list_queue(
     ] = False,
 ) -> None:
     config = load_config(silent=True)
+    assert config["database_url"] is not None
     sys_db = SystemDatabase(config["database_url"])
     workflows = list_queued_workflows(
         sys_db=sys_db,

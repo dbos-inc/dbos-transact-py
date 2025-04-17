@@ -119,9 +119,10 @@ def test_reset(config: ConfigFile, postgres_db_engine: sa.Engine) -> None:
     dbos = DBOS(config=config)
     DBOS.reset_system_database()
 
-    sysdb_name = (
-        sa.make_url(config["database_url"]).database + SystemSchema.sysdb_suffix
-    )
+    assert config["database_url"] is not None
+    db_name = sa.make_url(config["database_url"]).database
+    assert db_name is not None
+    sysdb_name = (db_name + SystemSchema.sysdb_suffix)
     with postgres_db_engine.connect() as c:
         c.execution_options(isolation_level="AUTOCOMMIT")
         count: int = c.execute(

@@ -38,6 +38,7 @@ def config() -> ConfigFile:
 
 @pytest.fixture()
 def sys_db(config: ConfigFile) -> Generator[SystemDatabase, Any, None]:
+    assert config["database_url"] is not None
     sys_db = SystemDatabase(config["database_url"])
     yield sys_db
     sys_db.destroy()
@@ -45,6 +46,7 @@ def sys_db(config: ConfigFile) -> Generator[SystemDatabase, Any, None]:
 
 @pytest.fixture()
 def app_db(config: ConfigFile) -> Generator[ApplicationDatabase, Any, None]:
+    assert config["database_url"] is not None
     app_db = ApplicationDatabase(config["database_url"])
     yield app_db
     app_db.destroy()
@@ -53,6 +55,7 @@ def app_db(config: ConfigFile) -> Generator[ApplicationDatabase, Any, None]:
 @pytest.fixture(scope="session")
 def postgres_db_engine() -> sa.Engine:
     cfg = default_config()
+    assert cfg["database_url"] is not None
     return sa.create_engine(
         sa.make_url(cfg["database_url"]).set(
             drivername="postgresql+psycopg",
@@ -63,6 +66,7 @@ def postgres_db_engine() -> sa.Engine:
 
 @pytest.fixture()
 def cleanup_test_databases(config: ConfigFile, postgres_db_engine: sa.Engine) -> None:
+    assert config["database_url"] is not None
     app_db_name = sa.make_url(config["database_url"]).database
     sys_db_name = f"{app_db_name}_dbos_sys"
 
@@ -117,6 +121,7 @@ def dbos(
 
 @pytest.fixture()
 def client(config: ConfigFile) -> Generator[DBOSClient, Any, None]:
+    assert config["database_url"] is not None
     client = DBOSClient(config["database_url"])
     yield client
     client.destroy()
