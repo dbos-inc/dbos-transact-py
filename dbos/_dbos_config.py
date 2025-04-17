@@ -257,7 +257,7 @@ def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
 
     """
     dbos_config = load_config(config_file_path, run_process_config=True)
-    db_url = make_url(dbos_config["database_url"]).set(drivername="postgresql+psycopg")
+    db_url = make_url(dbos_config["database_url"]).set(drivername="postgres+psycopg")
     return db_url.render_as_string(hide_password=False)
 
 
@@ -324,6 +324,23 @@ def process_config(
     data: ConfigFile,
     silent: bool = False,
 ) -> ConfigFile:
+    """
+    If a database_url is provided, pass it as is in the config (MAYBE: and backfill the data.database fields)
+
+    Else, build a database_url from the data.database fields
+
+    Pool sizes still need to be set in data.database
+
+    In debug mode, apply overrides from DBOS_DBHOST, DBOS_DBPORT, DBOS_DBUSER, and DBOS_DBPASSWORD.
+
+    Default configuration:
+        - Hostname: localhost
+        - Port: 5432
+        - Username: postgres
+        - Password: $PGPASSWORD
+        - Database name: transformed application name. [TODO: update]
+    """
+
     if "name" not in data:
         raise DBOSInitializationError(f"Configuration must specify an application name")
 
@@ -349,24 +366,6 @@ def process_config(
     elif "run_admin_server" not in data["runtimeConfig"]:
         data["runtimeConfig"]["run_admin_server"] = True
 
-    """
-    If a database_url is provided, pass it as is in the config (MAYBE: and backfill the data.database fields)
-
-    Else, build a database_url from the data.database fields
-
-    Pool sizes still need to be set in data.database
-
-    In debug mode, apply overrides from DBOS_DBHOST, DBOS_DBPORT, DBOS_DBUSER, and DBOS_DBPASSWORD.
-
-    Default configuration:
-        - Hostname: localhost
-        - Port: 5432
-        - Username: postgres
-        - Password: $PGPASSWORD
-        - Database name: transformed application name. [TODO: update]
-
-    """
-
     isDebugMode = os.getenv("DBOS_DBHOST") is not None
 
     if "database" not in data:
@@ -385,29 +384,31 @@ def process_config(
         ]
         for field_name, error_message in required_fields:
             field_value = getattr(url, field_name, None)
+            print(field_value)
             if not field_value:
                 raise DBOSInitializationError(error_message)
 
         # In debug mode perform env vars overrides
         if isDebugMode:
             # Override the username, password, host, and port
-            url.username = os.getenv("DBOS_DBUSER", url.username)
-            url.password = os.getenv("DBOS_DBPASSWORD", url.password)
-            url.host = os.getenv("DBOS_DBHOST", url.host)
-            dbos_dbport = os.getenv("DBOS_DBPORT")
-            if dbos_dbport:
-                try:
-                    dbos_dbport = int(dbos_dbport)
-                    url.port = dbos_dbport
-                except ValueError:
-                    pass
+            data["database_url"] = url.set(
+                username=os.getenv("DBOS_DBUSER", url.username),
+                password=os.getenv("DBOS_DBPASSWORD", url.password),
+                host=os.getenv("DBOS_DBHOST", url.host),
+                port=(
+                    int(os.getenv("DBOS_DBPORT", url.port))
+                    if os.getenv("DBOS_DBPORT")
+                    else url.port
+                ),
+            ).render_as_string(hide_password=False)
 
         if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
             print(f"[bold blue]Using database connection string: {url}[/bold blue]")
     else:
-        app_db_name = _app_name_to_db_name(
-            data["database"].get("app_db_name", data["name"])
-        )
+        if "app_db_name" not in data["database"] or not data["database"]["app_db_name"]:
+            app_db_name = _app_name_to_db_name(data["name"])
+        else:
+            app_db_name = data["database"]["app_db_name"]
 
         dbos_dbport: Optional[int] = None
         dbport_env = os.getenv("DBOS_DBPORT")
@@ -432,10 +433,10 @@ def process_config(
         )
 
         connect_timeout = int(
-            data["database"].get("connectionTimeoutMillis", 3000) / 1000
+            data["database"].get("connectionTimeoutMillis", 10000) / 1000
         )
 
-        connection_string = f"postgresql://{username}:{password}@{hostname}:{port}/{app_db_name}?connect_timeout={connect_timeout}"
+        connection_string = f"postgres://{username}:{password}@{hostname}:{port}/{app_db_name}?connect_timeout={connect_timeout}"
 
         # Pretty-print where we've loaded database connection information from, respecting the log level
         if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
@@ -502,7 +503,7 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     port = config_from_file["database"]["port"]
     dbname = config_from_file["database"]["app_db_name"]
     provided_config["database_url"] = (
-        f"postgresql://{username}:{password}@{hostname}:{port}/{dbname}?connect_timeout=3"
+        f"postgres://{username}:{password}@{hostname}:{port}/{dbname}?connect_timeout=10"
     )
     if "ssl_ca" in config_from_file["database"]:
         ssl_ca = config_from_file["database"]["ssl_ca"]
