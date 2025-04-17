@@ -1207,7 +1207,7 @@ def test_get_dbos_database_url(mocker):
     )
 
     expected_url = URL.create(
-        "postgres+psycopg",
+        "postgresql+psycopg",
         username="postgres",
         password=os.environ.get("PGPASSWORD"),
         host="localhost",

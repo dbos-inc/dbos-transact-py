@@ -386,21 +386,20 @@ def process_config(
         ]
         for field_name, error_message in required_fields:
             field_value = getattr(url, field_name, None)
-            print(field_value)
             if not field_value:
                 raise DBOSInitializationError(error_message)
 
         # In debug mode perform env vars overrides
         if isDebugMode:
             # Override the username, password, host, and port
+            port_str = os.getenv("DBOS_DBPORT")
+            port = int(port_str) if port_str is not None and port_str.isdigit() else url.port
             data["database_url"] = url.set(
                 username=os.getenv("DBOS_DBUSER", url.username),
                 password=os.getenv("DBOS_DBPASSWORD", url.password),
-                host=os.getenv("DBOS_DBHOST", url.host)
+                host=os.getenv("DBOS_DBHOST", url.host),
+                port=port,
             ).render_as_string(hide_password=False)
-            if os.getenv("DBOS_DBPORT") is not None:
-                port = str(os.getenv("DBOS_DBPORT"))
-                data["database_url"] = url.set(port=int(port)).render_as_string(hide_password=False)
 
         if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
             print(f"[bold blue]Using database connection string: {url}[/bold blue]")
