@@ -245,7 +245,6 @@ def test_busy_admin_server_port_does_not_throw() -> None:
 
 
 def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
-    counter: int = 0
     event = threading.Event()
 
     @DBOS.workflow()
