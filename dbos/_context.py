@@ -93,7 +93,7 @@ class DBOSContext:
         self.assumed_role: Optional[str] = None
         self.step_status: Optional[StepStatus] = None
 
-        self.workflow_timeout = None
+        self.workflow_timeout: Optional[int] = None
 
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()

@@ -311,6 +311,7 @@ class SystemDatabase:
                 recovery_attempts=(
                     1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
                 ),
+                workflow_timeout=status["workflow_timeout"],
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],

@@ -267,6 +267,11 @@ def _init_workflow(
         "queue_name": queue,
         "created_at": None,
         "updated_at": None,
+        "workflow_timeout": (  # UNIX epoch timestamp of the timeout in ms
+            (time.time() * 1000 + ctx.workflow_timeout)
+            if ctx.workflow_timeout is not None
+            else None
+        ),
     }
 
     # If we have a class name, the first arg is the instance and do not serialize
