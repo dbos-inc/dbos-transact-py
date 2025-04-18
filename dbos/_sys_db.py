@@ -133,7 +133,7 @@ class GetWorkflowsInput:
             False  # If true, sort by created_at in DESC order. Default false (in ASC order).
         )
         self.workflow_id_prefix: Optional[str] = (
-            None  # If set, search for worklfow IDs starting with this string
+            None  # If set, search for workflow IDs starting with this string
         )
 
 
