@@ -1,6 +1,8 @@
+import uuid
 from typing import List, Optional
 
 from dbos._error import DBOSException
+
 from ._app_db import ApplicationDatabase
 from ._sys_db import (
     GetQueuedWorkflowsInput,
