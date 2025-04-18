@@ -326,11 +326,7 @@ class SystemDatabase:
 
         cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
 
-        if conn is not None:
-            results = conn.execute(cmd)
-        else:
-            with self.engine.begin() as c:
-                results = c.execute(cmd)
+        results = conn.execute(cmd)
 
         row = results.fetchone()
         if row is not None:
@@ -360,6 +356,8 @@ class SystemDatabase:
                     SystemSchema.workflow_queue.c.workflow_uuid
                     == status["workflow_uuid"]
                 )
+                conn.execute(delete_cmd)
+
                 dlq_cmd = (
                     sa.update(SystemSchema.workflow_status)
                     .where(
@@ -375,15 +373,9 @@ class SystemDatabase:
                         queue_name=None,
                     )
                 )
-                if conn is not None:
-                    conn.execute(delete_cmd)
-                    conn.execute(dlq_cmd)
-                    # Need to commit here because we're throwing an exception
-                    conn.commit()
-                else:
-                    with self.engine.begin() as c:
-                        c.execute(delete_cmd)
-                        c.execute(dlq_cmd)
+                conn.execute(dlq_cmd)
+                # Need to commit here because we're throwing an exception
+                conn.commit()
                 raise DBOSDeadLetterQueueError(
                     status["workflow_uuid"], max_recovery_attempts
                 )
