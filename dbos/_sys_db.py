@@ -354,7 +354,9 @@ class SystemDatabase:
 
             # Every time we start executing a workflow (and thus attempt to insert its status), we increment `recovery_attempts` by 1.
             # When this number becomes equal to `maxRetries + 1`, we mark the workflow as `RETRIES_EXCEEDED`.
-            if recovery_attempts > max_recovery_attempts + 1:
+            if (
+                wf_status != "SUCCESS" and wf_status != "ERROR"
+            ) and recovery_attempts > max_recovery_attempts + 1:
                 delete_cmd = sa.delete(SystemSchema.workflow_queue).where(
                     SystemSchema.workflow_queue.c.workflow_uuid
                     == status["workflow_uuid"]

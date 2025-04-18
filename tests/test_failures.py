@@ -186,6 +186,11 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     assert handle.get_result() == resumed_handle.get_result() == None
     assert handle.get_status().status == WorkflowStatusString.SUCCESS.value
 
+    # Verify that retries of a completed workflow do not raise the DLQ exception
+    for _ in range(max_recovery_attempts * 2):
+        with SetWorkflowID(wfid):
+            dead_letter_workflow()
+
 
 def test_nondeterministic_workflow(dbos: DBOS) -> None:
     flag = True
