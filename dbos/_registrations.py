@@ -51,7 +51,7 @@ class DBOSFuncInfo:
     class_info: Optional[DBOSClassInfo] = None
     func_type: DBOSFuncType = DBOSFuncType.Unknown
     required_roles: Optional[List[str]] = None
-    max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS
+    max_recovery_attempts: Optional[int] = DEFAULT_MAX_RECOVERY_ATTEMPTS
 
 
 def get_or_create_class_info(
