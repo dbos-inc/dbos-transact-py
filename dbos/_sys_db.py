@@ -316,7 +316,7 @@ class SystemDatabase:
                 recovery_attempts=(
                     1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
                 ),
-                workflow_timeout=status["workflow_timeout"],
+                workflow_deadline_epoch_ms=status["workflow_timeout"],
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
@@ -330,7 +330,7 @@ class SystemDatabase:
             )
         )
 
-        cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.workflow_timeout, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
+        cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.workflow_deadline_epoch_ms, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
 
         results = conn.execute(cmd)
 
@@ -620,7 +620,7 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.updated_at,
                     SystemSchema.workflow_status.c.application_version,
                     SystemSchema.workflow_status.c.application_id,
-                    SystemSchema.workflow_status.c.workflow_timeout,
+                    SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
