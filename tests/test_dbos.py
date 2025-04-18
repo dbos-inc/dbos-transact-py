@@ -962,14 +962,18 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     wfs = dbos._sys_db.get_workflows(gwi)
     assert dest_uuid in wfs.workflow_uuids
 
-    gwi.start_time = datetime.datetime.now().isoformat()
-    wfs = dbos._sys_db.get_workflows(gwi)
-    assert len(wfs.workflow_uuids) == 0
+    wfs = dbos.list_workflows(
+        start_time=datetime.datetime.now().isoformat(),
+        workflow_id_substring=dest_uuid[5:20],
+    )
+    assert len(wfs) == 0
 
-    gwi.start_time = None
-    gwi.workflow_id_substring = dest_uuid + "thisdoesnotexist"
-    wfs = dbos._sys_db.get_workflows(gwi)
-    assert len(wfs.workflow_uuids) == 0
+    wfs = dbos.list_workflows(workflow_id_substring=dest_uuid[5:20])
+    assert len(wfs) >= 1
+    assert dest_uuid in [w.workflow_id for w in wfs]
+
+    wfs = dbos.list_workflows(workflow_id_substring=dest_uuid + "thisdoesnotexist")
+    assert len(wfs) == 0
 
 
 def test_set_get_events(dbos: DBOS) -> None:
