@@ -83,12 +83,11 @@ class WorkflowStatusInternal(TypedDict):
     app_version: Optional[str]
     app_id: Optional[str]
     recovery_attempts: Optional[int]
-    workflow_timeout_ms: Optional[
-        int
-    ]  # The start-to-close timeout of the workflow in ms
-    workflow_deadline_epoch_ms: Optional[
-        int
-    ]  # The deadline of a workflow, computed by adding its timeout to its START time (which may be different from its creation time for queued workflows). Deadlines are propagated to children. At this deadline, the workflow is cancelled.
+    # The start-to-close timeout of the workflow in ms
+    workflow_timeout_ms: Optional[int]
+    # The deadline of a workflow, computed by adding its timeout to its start time.
+    # Deadlines propagate to children. When the deadline is reached, the workflow is cancelled.
+    workflow_deadline_epoch_ms: Optional[int]
 
 
 class RecordedResult(TypedDict):
