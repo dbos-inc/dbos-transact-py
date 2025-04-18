@@ -34,6 +34,7 @@ from dbos._conductor.conductor import ConductorWebsocket
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import (
     WorkflowStatus,
+    fork_workflow,
     list_queued_workflows,
     list_workflows,
 )
@@ -67,7 +68,7 @@ from ._registrations import (
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
-from ._sys_db import reset_system_database
+from ._sys_db import StepInfo, reset_system_database
 from ._tracer import dbos_tracer
 
 if TYPE_CHECKING:
@@ -113,7 +114,7 @@ from ._error import (
 from ._event_loop import BackgroundEventLoop
 from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
 from ._sys_db import SystemDatabase
-from ._workflow_commands import WorkflowStatus, get_workflow
+from ._workflow_commands import WorkflowStatus, get_workflow, list_workflow_steps
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
@@ -959,40 +960,19 @@ class DBOS:
     @classmethod
     def restart_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID"""
-
         return cls.fork_workflow(workflow_id, 1)
 
     @classmethod
-    def fork_workflow(
-        cls, workflow_id: str, start_step: int = 1
-    ) -> WorkflowHandle[Any]:
-        """Restart a workflow with a new workflow ID"""
-
-        def get_max_function_id(workflow_uuid: str) -> int:
-            max_transactions = (
-                _get_dbos_instance()._app_db.get_max_function_id(workflow_uuid) or 0
-            )
-            max_operations = (
-                _get_dbos_instance()._sys_db.get_max_function_id(workflow_uuid) or 0
-            )
-            return max(max_transactions, max_operations)
-
-        max_function_id = get_max_function_id(workflow_id)
-        if max_function_id > 0 and start_step > max_function_id:
-            raise DBOSException(
-                f"Cannot fork workflow {workflow_id} at step {start_step}. The workflow has  {max_function_id} steps."
-            )
+    def fork_workflow(cls, workflow_id: str, start_step: int) -> WorkflowHandle[Any]:
+        """Restart a workflow with a new workflow ID from a specific step"""
 
         def fn() -> str:
-            forked_workflow_id = str(uuid.uuid4())
             dbos_logger.info(f"Forking workflow: {workflow_id} from step {start_step}")
-
-            _get_dbos_instance()._app_db.clone_workflow_transactions(
-                workflow_id, forked_workflow_id, start_step
-            )
-
-            return _get_dbos_instance()._sys_db.fork_workflow(
-                workflow_id, forked_workflow_id, start_step
+            return fork_workflow(
+                _get_dbos_instance()._sys_db,
+                _get_dbos_instance()._app_db,
+                workflow_id,
+                start_step,
             )
 
         new_id = _get_dbos_instance()._sys_db.call_function_as_step(
@@ -1064,6 +1044,17 @@ class DBOS:
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
             fn, "DBOS.listQueuedWorkflows"
+        )
+
+    @classmethod
+    def list_workflow_steps(cls, workflow_id: str) -> List[StepInfo]:
+        def fn() -> List[StepInfo]:
+            return list_workflow_steps(
+                _get_dbos_instance()._sys_db, _get_dbos_instance()._app_db, workflow_id
+            )
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.listWorkflowSteps"
         )
 
     @classproperty

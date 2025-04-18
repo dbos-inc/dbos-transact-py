@@ -188,9 +188,7 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase) ->
         assert info.workflow_id == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
 
 
-def test_queued_workflows(
-    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
-) -> None:
+def test_queued_workflows(dbos: DBOS) -> None:
     queued_steps = 5
     step_events = [threading.Event() for _ in range(queued_steps)]
     event = threading.Event()
@@ -295,7 +293,7 @@ def test_queued_workflows(
     assert len(workflows) == 0
 
     # Test the steps are listed properly
-    steps = _workflow_commands.list_workflow_steps(sys_db, app_db, handle.workflow_id)
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(steps) == queued_steps * 2
     for i in range(queued_steps):
         # Check the enqueues
@@ -314,7 +312,7 @@ def test_queued_workflows(
     child_workflows = DBOS.list_workflows(name=f"<temp>.{blocking_step.__qualname__}")
     assert (len(child_workflows)) == queued_steps
     for i, c in enumerate(child_workflows):
-        steps = _workflow_commands.list_workflow_steps(sys_db, app_db, c.workflow_id)
+        steps = DBOS.list_workflow_steps(c.workflow_id)
         assert len(steps) == 1
         assert steps[0]["function_id"] == 1
         assert steps[0]["function_name"] == blocking_step.__qualname__
@@ -323,9 +321,7 @@ def test_queued_workflows(
         assert steps[0]["error"] is None
 
 
-def test_list_2steps_sleep(
-    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
-) -> None:
+def test_list_2steps_sleep(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def simple_workflow() -> None:
@@ -346,16 +342,14 @@ def test_list_2steps_sleep(
     with SetWorkflowID(wfid):
         simple_workflow()
 
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 3
     assert wfsteps[0]["function_name"] == stepOne.__qualname__
     assert wfsteps[1]["function_name"] == stepTwo.__qualname__
     assert wfsteps[2]["function_name"] == "DBOS.sleep"
 
 
-def test_send_recv(
-    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
-) -> None:
+def test_send_recv(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def send_workflow(target: str) -> None:
@@ -374,19 +368,17 @@ def test_send_recv(
     with SetWorkflowID(wfid_s):
         send_workflow(wfid_r)
 
-    wfsteps_send = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid_s)
+    wfsteps_send = DBOS.list_workflow_steps(wfid_s)
     assert len(wfsteps_send) == 1
     assert wfsteps_send[0]["function_name"] == "DBOS.send"
 
-    wfsteps_recv = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid_r)
+    wfsteps_recv = DBOS.list_workflow_steps(wfid_r)
     assert len(wfsteps_recv) == 2
     assert wfsteps_recv[1]["function_name"] == "DBOS.sleep"
     assert wfsteps_recv[0]["function_name"] == "DBOS.recv"
 
 
-def test_set_get_event(
-    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
-) -> None:
+def test_set_get_event(dbos: DBOS) -> None:
     value = "Hello, World!"
 
     @DBOS.workflow()
@@ -404,7 +396,7 @@ def test_set_get_event(
     with SetWorkflowID(wfid):
         assert set_get_workflow() == value
 
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 5
     assert wfsteps[0]["function_name"] == "DBOS.setEvent"
     assert wfsteps[1]["function_name"] == stepOne.__qualname__
@@ -419,9 +411,7 @@ def test_set_get_event(
     assert wfsteps[4]["error"] == None
 
 
-def test_callchild_first_sync(
-    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
-) -> None:
+def test_callchild_first_sync(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def parentWorkflow() -> str:
@@ -446,7 +436,7 @@ def test_callchild_first_sync(
     with SetWorkflowID(wfid):
         child_id = parentWorkflow()
 
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 4
     assert wfsteps[0]["function_name"] == child_workflow.__qualname__
     assert wfsteps[0]["child_workflow_id"] == child_id
@@ -461,9 +451,7 @@ def test_callchild_first_sync(
 
 
 @pytest.mark.asyncio
-async def test_callchild_direct_asyncio(
-    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
-) -> None:
+async def test_callchild_direct_asyncio(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def parentWorkflow() -> str:
@@ -488,7 +476,7 @@ async def test_callchild_direct_asyncio(
     with SetWorkflowID(wfid):
         child_id = await parentWorkflow()
 
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 4
     assert wfsteps[0]["function_name"] == child_workflow.__qualname__
     assert wfsteps[0]["child_workflow_id"] == child_id
@@ -502,9 +490,7 @@ async def test_callchild_direct_asyncio(
     assert wfsteps[3]["function_name"] == stepTwo.__qualname__
 
 
-def test_callchild_last_sync(
-    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
-) -> None:
+def test_callchild_last_sync(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def parentWorkflow() -> None:
@@ -529,7 +515,7 @@ def test_callchild_last_sync(
     with SetWorkflowID(wfid):
         parentWorkflow()
 
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 4
     assert wfsteps[0]["function_name"] == stepOne.__qualname__
     assert wfsteps[1]["function_name"] == stepTwo.__qualname__
@@ -537,9 +523,7 @@ def test_callchild_last_sync(
     assert wfsteps[3]["function_name"] == "DBOS.getResult"
 
 
-def test_callchild_first_async_thread(
-    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
-) -> None:
+def test_callchild_first_async_thread(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def parentWorkflow() -> None:
@@ -565,7 +549,7 @@ def test_callchild_first_async_thread(
     with SetWorkflowID(wfid):
         parentWorkflow()
 
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 4
     assert wfsteps[0]["function_name"] == child_workflow.__qualname__
     assert wfsteps[1]["function_name"] == "DBOS.getStatus"
@@ -573,9 +557,7 @@ def test_callchild_first_async_thread(
     assert wfsteps[3]["function_name"] == stepTwo.__qualname__
 
 
-def test_list_steps_errors(
-    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
-) -> None:
+def test_list_steps_errors(dbos: DBOS) -> None:
     queue = Queue("test-queue")
 
     @DBOS.step()
@@ -601,7 +583,7 @@ def test_list_steps_errors(
     with SetWorkflowID(wfid):
         with pytest.raises(Exception):
             call_step()
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 1
     assert wfsteps[0]["function_name"] == failing_step.__qualname__
     assert wfsteps[0]["child_workflow_id"] == None
@@ -613,7 +595,7 @@ def test_list_steps_errors(
     with SetWorkflowID(wfid):
         with pytest.raises(Exception):
             start_step()
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 2
     assert wfsteps[0]["function_name"] == f"<temp>.{failing_step.__qualname__}"
     assert wfsteps[0]["child_workflow_id"] == f"{wfid}-1"
@@ -629,7 +611,7 @@ def test_list_steps_errors(
     with SetWorkflowID(wfid):
         with pytest.raises(Exception):
             enqueue_step()
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 2
     assert wfsteps[0]["function_name"] == f"<temp>.{failing_step.__qualname__}"
     assert wfsteps[0]["child_workflow_id"] == f"{wfid}-1"
@@ -642,9 +624,7 @@ def test_list_steps_errors(
 
 
 @pytest.mark.asyncio
-async def test_list_steps_errors_async(
-    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
-) -> None:
+async def test_list_steps_errors_async(dbos: DBOS) -> None:
     queue = Queue("test-queue")
 
     @DBOS.step()
@@ -670,7 +650,7 @@ async def test_list_steps_errors_async(
     with SetWorkflowID(wfid):
         with pytest.raises(Exception):
             await call_step()
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 1
     assert wfsteps[0]["function_name"] == failing_step.__qualname__
     assert wfsteps[0]["child_workflow_id"] == None
@@ -682,7 +662,7 @@ async def test_list_steps_errors_async(
     with SetWorkflowID(wfid):
         with pytest.raises(Exception):
             await start_step()
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 2
     assert wfsteps[0]["function_name"] == f"<temp>.{failing_step.__qualname__}"
     assert wfsteps[0]["child_workflow_id"] == f"{wfid}-1"
@@ -698,7 +678,7 @@ async def test_list_steps_errors_async(
     with SetWorkflowID(wfid):
         with pytest.raises(Exception):
             await enqueue_step()
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 2
     assert wfsteps[0]["function_name"] == f"<temp>.{failing_step.__qualname__}"
     assert wfsteps[0]["child_workflow_id"] == f"{wfid}-1"
@@ -710,9 +690,7 @@ async def test_list_steps_errors_async(
     assert isinstance(wfsteps[1]["error"], Exception)
 
 
-def test_callchild_middle_async_thread(
-    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
-) -> None:
+def test_callchild_middle_async_thread(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def parentWorkflow() -> str:
@@ -739,7 +717,7 @@ def test_callchild_middle_async_thread(
     with SetWorkflowID(wfid):
         child_id = parentWorkflow()
 
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 5
     assert wfsteps[0]["function_name"] == stepOne.__qualname__
     assert wfsteps[0]["child_workflow_id"] == None
@@ -761,9 +739,7 @@ def test_callchild_middle_async_thread(
 
 
 @pytest.mark.asyncio
-async def test_callchild_first_asyncio(
-    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
-) -> None:
+async def test_callchild_first_asyncio(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def parentWorkflow() -> str:
@@ -790,7 +766,7 @@ async def test_callchild_first_asyncio(
         handle = await dbos.start_workflow_async(parentWorkflow)
         child_id = await handle.get_result()
 
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 4
     assert wfsteps[0]["function_name"] == child_workflow.__qualname__
     assert wfsteps[0]["child_workflow_id"] == child_id
@@ -883,9 +859,7 @@ async def test_callchild_rerun_asyncio(dbos: DBOS) -> None:
     assert res1 == res2
 
 
-def test_list_transaction(
-    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
-) -> None:
+def test_list_transaction(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def simple_workflow() -> None:
@@ -906,7 +880,7 @@ def test_list_transaction(
     with SetWorkflowID(wfid):
         simple_workflow()
 
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 3
     assert wfsteps[0]["function_name"] == transactionOne.__qualname__
     assert wfsteps[0]["output"] == "a test transaction"
@@ -915,9 +889,7 @@ def test_list_transaction(
     assert wfsteps[2]["function_name"] == "DBOS.sleep"
 
 
-def test_list_transaction_error(
-    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
-) -> None:
+def test_list_transaction_error(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def simple_workflow() -> None:
@@ -946,7 +918,7 @@ def test_list_transaction_error(
     with SetWorkflowID(wfid):
         simple_workflow()
 
-    wfsteps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 4
     assert wfsteps[0]["function_name"] == transactionOne.__qualname__
     assert wfsteps[0]["output"] == "a test transaction"
@@ -992,9 +964,7 @@ def test_list_workflows_as_step(dbos: DBOS) -> None:
     assert handle_two.get_result() == 1
 
 
-def test_call_as_step_within_step(
-    dbos: DBOS, sys_db: SystemDatabase, app_db: ApplicationDatabase
-) -> None:
+def test_call_as_step_within_step(dbos: DBOS) -> None:
     # If we call any util functions within a step, it should be called directly without checkpointing
 
     @DBOS.step()
@@ -1016,7 +986,7 @@ def test_call_as_step_within_step(
         status = getStatusWorkflow()
         assert status == WorkflowStatusString.PENDING.value
 
-    steps = _workflow_commands.list_workflow_steps(sys_db, app_db, wfid)
+    steps = DBOS.list_workflow_steps(wfid)
 
     assert len(steps) == 1
     assert steps[0]["function_name"] == getStatus.__qualname__
