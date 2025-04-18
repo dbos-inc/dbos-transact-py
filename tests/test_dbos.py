@@ -1499,13 +1499,28 @@ def test_workflow_timeout(dbos: DBOS) -> None:
             DBOS.sleep(0.1)
 
     # Verify a blocked workflow called with a timeout is cancelled
+    wfid = str(uuid.uuid4())
     with SetWorkflowTimeout(0.1):
         with pytest.raises(DBOSWorkflowCancelledError):
-            blocked_workflow()
+            with SetWorkflowID(wfid):
+                blocked_workflow()
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is None
         handle = DBOS.start_workflow(blocked_workflow)
         with pytest.raises(DBOSWorkflowCancelledError):
             handle.get_result()
+
+    # Change the workflow status to pending
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": "PENDING"})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+        )
+    # Recover the workflow, verify it still times out
+    handles = DBOS._recover_pending_workflows()
+    assert len(handles) == 1
+    with pytest.raises(DBOSWorkflowCancelledError):
+        handles[0].get_result()
 
     @DBOS.workflow()
     def parent_workflow_with_timeout() -> None:
@@ -1546,6 +1561,7 @@ def test_workflow_timeout(dbos: DBOS) -> None:
         DBOS.retrieve_workflow(direct_child).get_result()
     assert "was cancelled" in str(exc_info.value)
 
+    # Verify the context variables are set correctly
     with SetWorkflowTimeout(1.0):
         assert assert_current_dbos_context().workflow_timeout_ms == 1000
         with SetWorkflowTimeout(2.0):
