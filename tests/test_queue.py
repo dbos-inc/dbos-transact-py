@@ -865,28 +865,43 @@ def test_cancelling_queued_workflows(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-# def test_timeout_queue(dbos: DBOS) -> None:
-#     @DBOS.workflow()
-#     def blocking_workflow() -> None:
-#         assert assert_current_dbos_context().workflow_timeout_ms is None
-#         while True:
-#             DBOS.sleep(0.1)
+def test_timeout_queue(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def blocking_workflow() -> None:
+        assert assert_current_dbos_context().workflow_timeout_ms is None
+        while True:
+            DBOS.sleep(0.1)
 
-#     queue = Queue("test_queue", concurrency=1)
+    @DBOS.workflow()
+    def normal_workflow() -> None:
+        assert assert_current_dbos_context().workflow_timeout_ms is None
+        return
 
-#     num_workflows = 10
-#     handles: list[WorkflowHandle[None]] = []
-#     for _ in range(num_workflows):
-#         with SetWorkflowTimeout(2.0):
-#             handle = queue.enqueue(blocking_workflow)
-#             handles.append(handle)
-#     for handle in handles:
-#         with pytest.raises(Exception) as exc_info:
-#             handle.get_result()
-#         assert "was cancelled" in str(exc_info.value)
+    queue = Queue("test_queue", concurrency=1)
 
-#     # Verify all queue entries eventually get cleaned up.
-#     assert queue_entries_are_cleaned_up(dbos)
+    # Enqueue a few blocked workflow
+    num_workflows = 3
+    handles: list[WorkflowHandle[None]] = []
+    for _ in range(num_workflows):
+        with SetWorkflowTimeout(0.1):
+            handle = queue.enqueue(blocking_workflow)
+            handles.append(handle)
+
+    # Also enqueue a normal workflow
+    with SetWorkflowTimeout(1.0):
+        normal_handle = queue.enqueue(normal_workflow)
+
+    # Verify the blocked workflows are cancelled
+    for handle in handles:
+        with pytest.raises(Exception) as exc_info:
+            handle.get_result()
+        assert "was cancelled" in str(exc_info.value)
+
+    # Verify the normal workflow succeeds
+    normal_handle.get_result()
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
 
 
 def test_resuming_queued_workflows(dbos: DBOS) -> None:

@@ -1570,6 +1570,17 @@ class SystemDatabase:
                         status=WorkflowStatusString.PENDING.value,
                         application_version=app_version,
                         executor_id=executor_id,
+                        # If a timeout is set, set the deadline on dequeue
+                        workflow_deadline_epoch_ms=sa.case(
+                            (
+                                SystemSchema.workflow_status.c.workflow_timeout_ms.isnot(
+                                    None
+                                ),
+                                sa.func.extract("epoch", sa.func.now()) * 1000
+                                + SystemSchema.workflow_status.c.workflow_timeout_ms,
+                            ),
+                            else_=SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
+                        ),
                     )
                 )
                 if res.rowcount > 0:
