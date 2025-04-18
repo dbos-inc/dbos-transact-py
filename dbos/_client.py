@@ -179,7 +179,8 @@ class DBOSClient:
             "app_id": None,
             "app_version": None,
         }
-        self._sys_db.insert_workflow_status(status)
+        with self._sys_db.engine.begin() as conn:
+            self._sys_db.insert_workflow_status(status, conn)
         self._sys_db.send(status["workflow_uuid"], 0, destination_id, message, topic)
 
     async def send_async(

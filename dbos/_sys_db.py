@@ -282,9 +282,9 @@ class SystemDatabase:
     def insert_workflow_status(
         self,
         status: WorkflowStatusInternal,
+        conn: sa.Connection,
         *,
         max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
-        conn: Optional[sa.Connection] = None,
     ) -> WorkflowStatuses:
         if self._debug_mode:
             raise Exception("called insert_workflow_status in debug mode")
@@ -1664,7 +1664,7 @@ class SystemDatabase:
         """
         with self.engine.begin() as conn:
             wf_status = self.insert_workflow_status(
-                status, max_recovery_attempts=max_recovery_attempts, conn=conn
+                status, conn, max_recovery_attempts=max_recovery_attempts
             )
             # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
             self.update_workflow_inputs(status["workflow_uuid"], inputs, conn)
