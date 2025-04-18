@@ -3,8 +3,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import List, Optional, Type, TypedDict, TypeVar
 
-from dbos._sys_db import StepInfo
-from dbos._workflow_commands import WorkflowStatus
+from dbos._sys_db import StepInfo, WorkflowStatus
 
 
 class MessageType(str, Enum):
