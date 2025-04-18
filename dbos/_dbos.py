@@ -1014,6 +1014,7 @@ class DBOS:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
+        workflow_id_prefix: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         def fn() -> List[WorkflowStatus]:
             return list_workflows(
@@ -1028,6 +1029,7 @@ class DBOS:
                 limit=limit,
                 offset=offset,
                 sort_desc=sort_desc,
+                workflow_id_prefix=workflow_id_prefix,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
