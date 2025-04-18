@@ -1,4 +1,5 @@
 import datetime
+import json
 import logging
 import os
 import re
@@ -62,6 +63,50 @@ class WorkflowStatusString(Enum):
 WorkflowStatuses = Literal[
     "PENDING", "SUCCESS", "ERROR", "RETRIES_EXCEEDED", "CANCELLED", "ENQUEUED"
 ]
+
+
+class WorkflowStatus:
+    # The workflow ID
+    workflow_id: str
+    # The workflow status. Must be one of ENQUEUED, PENDING, SUCCESS, ERROR, CANCELLED, or RETRIES_EXCEEDED
+    status: str
+    # The name of the workflow function
+    name: str
+    # The name of the workflow's class, if any
+    class_name: Optional[str]
+    # The name with which the workflow's class instance was configured, if any
+    config_name: Optional[str]
+    # The user who ran the workflow, if specified
+    authenticated_user: Optional[str]
+    # The role with which the workflow ran, if specified
+    assumed_role: Optional[str]
+    # All roles which the authenticated user could assume
+    authenticated_roles: Optional[list[str]]
+    # The deserialized workflow input object
+    input: Optional[_serialization.WorkflowInputs]
+    # The workflow's output, if any
+    output: Optional[Any] = None
+    # The error the workflow threw, if any
+    error: Optional[Exception] = None
+    # Workflow start time, as a Unix epoch timestamp in ms
+    created_at: Optional[int]
+    # Last time the workflow status was updated, as a Unix epoch timestamp in ms
+    updated_at: Optional[int]
+    # If this workflow was enqueued, on which queue
+    queue_name: Optional[str]
+    # The executor to most recently executed this workflow
+    executor_id: Optional[str]
+    # The application version on which this workflow was started
+    app_version: Optional[str]
+
+    # INTERNAL FIELDS
+
+    # The ID of the application executing this workflow
+    app_id: Optional[str]
+    # The number of times this workflow's execution has been attempted
+    recovery_attempts: Optional[int]
+    # The HTTP request that triggered the workflow, if known
+    request: Optional[str]
 
 
 class WorkflowStatusInternal(TypedDict):
@@ -146,11 +191,6 @@ class GetQueuedWorkflowsInput(TypedDict):
     offset: Optional[int]  # Offset into the matching records for pagination
     name: Optional[str]  # The name of the workflow function
     sort_desc: Optional[bool]  # Sort by created_at in DESC or ASC order
-
-
-class GetWorkflowsOutput:
-    def __init__(self, workflow_uuids: List[str]):
-        self.workflow_uuids = workflow_uuids
 
 
 class GetPendingWorkflowsOutput:
@@ -702,8 +742,37 @@ class SystemDatabase:
             )
             return inputs
 
-    def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
-        query = sa.select(SystemSchema.workflow_status.c.workflow_uuid)
+    def get_workflows(
+        self, input: GetWorkflowsInput, get_request: bool = False
+    ) -> List[WorkflowStatus]:
+        """
+        Retrieve a list of workflows result and inputs based on the input criteria. The result is a list of external-facing workflow status objects.
+        """
+        query = sa.select(
+            SystemSchema.workflow_status.c.workflow_uuid,
+            SystemSchema.workflow_status.c.status,
+            SystemSchema.workflow_status.c.name,
+            SystemSchema.workflow_status.c.request,
+            SystemSchema.workflow_status.c.recovery_attempts,
+            SystemSchema.workflow_status.c.config_name,
+            SystemSchema.workflow_status.c.class_name,
+            SystemSchema.workflow_status.c.authenticated_user,
+            SystemSchema.workflow_status.c.authenticated_roles,
+            SystemSchema.workflow_status.c.assumed_role,
+            SystemSchema.workflow_status.c.queue_name,
+            SystemSchema.workflow_status.c.executor_id,
+            SystemSchema.workflow_status.c.created_at,
+            SystemSchema.workflow_status.c.updated_at,
+            SystemSchema.workflow_status.c.application_version,
+            SystemSchema.workflow_status.c.application_id,
+            SystemSchema.workflow_inputs.c.inputs,
+            SystemSchema.workflow_status.c.output,
+            SystemSchema.workflow_status.c.error,
+        ).join(
+            SystemSchema.workflow_inputs,
+            SystemSchema.workflow_status.c.workflow_uuid
+            == SystemSchema.workflow_inputs.c.workflow_uuid,
+        )
         if input.sort_desc:
             query = query.order_by(SystemSchema.workflow_status.c.created_at.desc())
         else:
@@ -749,18 +818,76 @@ class SystemDatabase:
 
         with self.engine.begin() as c:
             rows = c.execute(query)
-        workflow_ids = [row[0] for row in rows]
 
-        return GetWorkflowsOutput(workflow_ids)
+        infos: List[WorkflowStatus] = []
+        for row in rows:
+            info = WorkflowStatus()
+            info.workflow_id = row[0]
+            info.status = row[1]
+            info.name = row[2]
+            info.request = row[3] if get_request else None
+            info.recovery_attempts = row[4]
+            info.config_name = row[5]
+            info.class_name = row[6]
+            info.authenticated_user = row[7]
+            info.authenticated_roles = (
+                json.loads(row[8]) if row[8] is not None else None
+            )
+            info.assumed_role = row[9]
+            info.queue_name = row[10]
+            info.executor_id = row[11]
+            info.created_at = row[12]
+            info.updated_at = row[13]
+            info.app_version = row[14]
+            info.app_id = row[15]
+
+            inputs = _serialization.deserialize_args(row[16])
+            if inputs is not None:
+                info.input = inputs
+            if info.status == WorkflowStatusString.SUCCESS.value:
+                info.output = _serialization.deserialize(row[17])
+            elif info.status == WorkflowStatusString.ERROR.value:
+                info.error = _serialization.deserialize_exception(row[18])
+
+            infos.append(info)
+        return infos
 
     def get_queued_workflows(
-        self, input: GetQueuedWorkflowsInput
-    ) -> GetWorkflowsOutput:
-
-        query = sa.select(SystemSchema.workflow_queue.c.workflow_uuid).join(
-            SystemSchema.workflow_status,
-            SystemSchema.workflow_queue.c.workflow_uuid
-            == SystemSchema.workflow_status.c.workflow_uuid,
+        self, input: GetQueuedWorkflowsInput, get_request: bool = False
+    ) -> List[WorkflowStatus]:
+        """
+        Retrieve a list of queued workflows result and inputs based on the input criteria. The result is a list of external-facing workflow status objects.
+        """
+        query = sa.select(
+            SystemSchema.workflow_status.c.workflow_uuid,
+            SystemSchema.workflow_status.c.status,
+            SystemSchema.workflow_status.c.name,
+            SystemSchema.workflow_status.c.request,
+            SystemSchema.workflow_status.c.recovery_attempts,
+            SystemSchema.workflow_status.c.config_name,
+            SystemSchema.workflow_status.c.class_name,
+            SystemSchema.workflow_status.c.authenticated_user,
+            SystemSchema.workflow_status.c.authenticated_roles,
+            SystemSchema.workflow_status.c.assumed_role,
+            SystemSchema.workflow_status.c.queue_name,
+            SystemSchema.workflow_status.c.executor_id,
+            SystemSchema.workflow_status.c.created_at,
+            SystemSchema.workflow_status.c.updated_at,
+            SystemSchema.workflow_status.c.application_version,
+            SystemSchema.workflow_status.c.application_id,
+            SystemSchema.workflow_inputs.c.inputs,
+            SystemSchema.workflow_status.c.output,
+            SystemSchema.workflow_status.c.error,
+        ).select_from(
+            SystemSchema.workflow_queue.join(
+                SystemSchema.workflow_status,
+                SystemSchema.workflow_queue.c.workflow_uuid
+                == SystemSchema.workflow_status.c.workflow_uuid,
+            ).join(
+                SystemSchema.workflow_inputs,
+                SystemSchema.workflow_queue.c.workflow_uuid
+                == SystemSchema.workflow_inputs.c.workflow_uuid,
+            )
         )
         if input["sort_desc"]:
             query = query.order_by(SystemSchema.workflow_status.c.created_at.desc())
@@ -797,9 +924,40 @@ class SystemDatabase:
 
         with self.engine.begin() as c:
             rows = c.execute(query)
-        workflow_uuids = [row[0] for row in rows]
 
-        return GetWorkflowsOutput(workflow_uuids)
+        infos: List[WorkflowStatus] = []
+        for row in rows:
+            info = WorkflowStatus()
+            info.workflow_id = row[0]
+            info.status = row[1]
+            info.name = row[2]
+            info.request = row[3] if get_request else None
+            info.recovery_attempts = row[4]
+            info.config_name = row[5]
+            info.class_name = row[6]
+            info.authenticated_user = row[7]
+            info.authenticated_roles = (
+                json.loads(row[8]) if row[8] is not None else None
+            )
+            info.assumed_role = row[9]
+            info.queue_name = row[10]
+            info.executor_id = row[11]
+            info.created_at = row[12]
+            info.updated_at = row[13]
+            info.app_version = row[14]
+            info.app_id = row[15]
+
+            inputs = _serialization.deserialize_args(row[16])
+            if inputs is not None:
+                info.input = inputs
+            if info.status == WorkflowStatusString.SUCCESS.value:
+                info.output = _serialization.deserialize(row[17])
+            elif info.status == WorkflowStatusString.ERROR.value:
+                info.error = _serialization.deserialize_exception(row[18])
+
+            infos.append(info)
+
+        return infos
 
     def get_pending_workflows(
         self, executor_id: str, app_version: str
