@@ -287,16 +287,12 @@ def _init_workflow(
         inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
 
     # Synchronously record the status and inputs for workflows
-    # TODO: Make this transactional (and with the queue step below)
-    wf_status, wf_timeout = dbos._sys_db.insert_workflow_status(
-        status, max_recovery_attempts=max_recovery_attempts
+    wf_status, wf_timeout = dbos._sys_db.init_workflow(
+        status,
+        _serialization.serialize_args(inputs),
+        max_recovery_attempts=max_recovery_attempts,
     )
 
-    # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
-    dbos._sys_db.update_workflow_inputs(wfid, _serialization.serialize_args(inputs))
-
-    if queue is not None and wf_status == WorkflowStatusString.ENQUEUED.value:
-        dbos._sys_db.enqueue(wfid, queue)
     if wf_timeout is not None:
         evt = threading.Event()
         dbos.stop_events.append(evt)
