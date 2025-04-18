@@ -923,6 +923,22 @@ def test_timeout_queue(dbos: DBOS) -> None:
         DBOS.retrieve_workflow(child_id).get_result()
     assert "was cancelled" in str(exc_info.value)
 
+    # Verify if a parent called with a timeout enqueues a blocked child
+    # then exits the deadline propagates and the child is cancelled.
+    child_id = str(uuid.uuid4())
+    queue = Queue("regular_queue")
+
+    @DBOS.workflow()
+    def exiting_parent_workflow() -> None:
+        handle = queue.enqueue(blocking_workflow)
+        return handle.get_workflow_id()
+
+    with SetWorkflowTimeout(1.0):
+        child_id = exiting_parent_workflow()
+    with pytest.raises(Exception) as exc_info:
+        DBOS.retrieve_workflow(child_id).get_result()
+    assert "was cancelled" in str(exc_info.value)
+
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
 
