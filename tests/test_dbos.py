@@ -947,6 +947,30 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
 
     assert recv_counter == 1
 
+    # Test substring search
+    gwi.start_time = None
+    gwi.workflow_id_substring = dest_uuid
+    wfs = dbos._sys_db.get_workflows(gwi)
+    assert wfs.workflow_uuids[0] == dest_uuid
+
+    gwi.workflow_id_substring = dest_uuid[5:20]
+    wfs = dbos._sys_db.get_workflows(gwi)
+    assert dest_uuid in wfs.workflow_uuids
+
+    gwi.start_time = cur_time
+    gwi.workflow_id_substring = dest_uuid[5:20]
+    wfs = dbos._sys_db.get_workflows(gwi)
+    assert dest_uuid in wfs.workflow_uuids
+
+    gwi.start_time = datetime.datetime.now().isoformat()
+    wfs = dbos._sys_db.get_workflows(gwi)
+    assert len(wfs.workflow_uuids) == 0
+
+    gwi.start_time = None
+    gwi.workflow_id_substring = dest_uuid + "thisdoesnotexist"
+    wfs = dbos._sys_db.get_workflows(gwi)
+    assert len(wfs.workflow_uuids) == 0
+
 
 def test_set_get_events(dbos: DBOS) -> None:
     @DBOS.workflow()
