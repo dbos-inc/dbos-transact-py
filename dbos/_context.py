@@ -428,7 +428,8 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
             ctx = DBOSContext()
             _set_local_dbos_context(ctx)
         assert not ctx.is_within_workflow()
-        # The workflow timeout should not be set within the workflow
+        # Unset the workflow_timeout_ms context var so it is not applied to this
+        # workflow's children (instead we propagate the deadline)
         self.saved_workflow_timeout = ctx.workflow_timeout_ms
         ctx.workflow_timeout_ms = None
         ctx.start_workflow(
