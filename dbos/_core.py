@@ -318,6 +318,8 @@ def _init_workflow(
         timeout_thread.start()
         dbos._background_threads.append(timeout_thread)
 
+    ctx.workflow_deadline_epoch_ms = workflow_deadline_epoch_ms
+    status["workflow_deadline_epoch_ms"] = workflow_deadline_epoch_ms
     status["status"] = wf_status
     return status
 

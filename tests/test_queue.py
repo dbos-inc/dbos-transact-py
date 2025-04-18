@@ -869,12 +869,14 @@ def test_timeout_queue(dbos: DBOS) -> None:
     @DBOS.workflow()
     def blocking_workflow() -> None:
         assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         while True:
             DBOS.sleep(0.1)
 
     @DBOS.workflow()
     def normal_workflow() -> None:
         assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         return
 
     queue = Queue("test_queue", concurrency=1)

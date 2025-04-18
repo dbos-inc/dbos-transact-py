@@ -93,7 +93,10 @@ class DBOSContext:
         self.assumed_role: Optional[str] = None
         self.step_status: Optional[StepStatus] = None
 
+        # A user-specified workflow timeout. Takes priority over a propagated deadline.
         self.workflow_timeout_ms: Optional[int] = None
+        # A propagated workflow deadline.
+        self.workflow_deadline_epoch_ms: Optional[int] = None
 
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()
@@ -373,13 +376,17 @@ class SetWorkflowTimeout:
         ```
     """
 
-    def __init__(self, workflow_timeout_sec: float) -> None:
-        if not workflow_timeout_sec > 0:
+    def __init__(self, workflow_timeout_sec: Optional[float]) -> None:
+        if workflow_timeout_sec and not workflow_timeout_sec > 0:
             raise Exception(
                 f"Invalid workflow timeout {workflow_timeout_sec}. Timeouts must be positive."
             )
         self.created_ctx = False
-        self.workflow_timeout_ms = int(workflow_timeout_sec * 1000)
+        self.workflow_timeout_ms = (
+            int(workflow_timeout_sec * 1000)
+            if workflow_timeout_sec is not None
+            else None
+        )
         self.saved_workflow_timeout: Optional[int] = None
 
     def __enter__(self) -> SetWorkflowTimeout:
@@ -440,6 +447,8 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         ctx.end_workflow(exc_value, self.is_temp_workflow)
         # Restore the saved workflow timeout
         ctx.workflow_timeout_ms = self.saved_workflow_timeout
+        # Clear any propagating timeout
+        ctx.workflow_deadline_epoch_ms = None
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()
