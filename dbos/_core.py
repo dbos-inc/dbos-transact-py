@@ -232,8 +232,8 @@ def _init_workflow(
     class_name: Optional[str],
     config_name: Optional[str],
     temp_wf_type: Optional[str],
-    queue: Optional[str] = None,
-    max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
+    queue: Optional[str],
+    max_recovery_attempts: Optional[int],
 ) -> WorkflowStatusInternal:
     wfid = (
         ctx.workflow_id
@@ -653,7 +653,7 @@ else:
 def workflow_wrapper(
     dbosreg: "DBOSRegistry",
     func: Callable[P, R],
-    max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
+    max_recovery_attempts: Optional[int] = DEFAULT_MAX_RECOVERY_ATTEMPTS,
 ) -> Callable[P, R]:
     func.__orig_func = func  # type: ignore
 
@@ -718,6 +718,7 @@ def workflow_wrapper(
                 class_name=get_dbos_class_name(fi, func, args),
                 config_name=get_config_name(fi, func, args),
                 temp_wf_type=get_temp_workflow_type(func),
+                queue=None,
                 max_recovery_attempts=max_recovery_attempts,
             )
 
@@ -765,7 +766,7 @@ def workflow_wrapper(
 
 
 def decorate_workflow(
-    reg: "DBOSRegistry", max_recovery_attempts: int
+    reg: "DBOSRegistry", max_recovery_attempts: Optional[int]
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     def _workflow_decorator(func: Callable[P, R]) -> Callable[P, R]:
         wrapped_func = workflow_wrapper(reg, func, max_recovery_attempts)
