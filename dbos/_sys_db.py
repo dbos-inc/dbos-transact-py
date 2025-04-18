@@ -83,7 +83,7 @@ class WorkflowStatusInternal(TypedDict):
     app_version: Optional[str]
     app_id: Optional[str]
     recovery_attempts: Optional[int]
-    workflow_timeout: Optional[int]  # Unix epoch timestamp in ms
+    workflow_deadline_epoch_ms: Optional[int]  # Unix epoch timestamp in ms
 
 
 class RecordedResult(TypedDict):
@@ -293,7 +293,7 @@ class SystemDatabase:
         if self._debug_mode:
             raise Exception("called insert_workflow_status in debug mode")
         wf_status: WorkflowStatuses = status["status"]
-        wf_timeout: Optional[int] = status["workflow_timeout"]
+        wf_timeout: Optional[int] = status["workflow_deadline_epoch_ms"]
 
         cmd = (
             pg.insert(SystemSchema.workflow_status)
@@ -316,7 +316,7 @@ class SystemDatabase:
                 recovery_attempts=(
                     1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
                 ),
-                workflow_deadline_epoch_ms=status["workflow_timeout"],
+                workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
@@ -644,7 +644,7 @@ class SystemDatabase:
                 "updated_at": row[12],
                 "app_version": row[13],
                 "app_id": row[14],
-                "workflow_timeout": row[15],
+                "workflow_deadline_epoch_ms": row[15],
             }
             return status
 

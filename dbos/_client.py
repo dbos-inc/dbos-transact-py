@@ -120,7 +120,7 @@ class DBOSClient:
             "executor_id": None,
             "recovery_attempts": None,
             "app_id": None,
-            "workflow_timeout": (  # UNIX epoch timestamp of the timeout in ms
+            "workflow_deadline_epoch_ms": (  # UNIX epoch timestamp of the timeout in ms
                 int((time.time() + workflow_timeout) * 1000)
                 if workflow_timeout is not None
                 else None
@@ -186,7 +186,7 @@ class DBOSClient:
             "recovery_attempts": None,
             "app_id": None,
             "app_version": None,
-            "workflow_timeout": None,
+            "workflow_deadline_epoch_ms": None,
         }
         with self._sys_db.engine.begin() as conn:
             self._sys_db.insert_workflow_status(status, conn)

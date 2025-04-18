@@ -155,7 +155,7 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
             "queue_name": None,
             "created_at": None,
             "updated_at": None,
-            "workflow_timeout": None,
+            "workflow_deadline_epoch_ms": None,
         }
     )
 

@@ -275,7 +275,7 @@ def _init_workflow(
         "queue_name": queue,
         "created_at": None,
         "updated_at": None,
-        "workflow_timeout": (  # UNIX epoch timestamp of the timeout in ms
+        "workflow_deadline_epoch_ms": (  # UNIX epoch timestamp of the timeout in ms
             int((time.time() + workflow_timeout) * 1000)
             if workflow_timeout is not None
             else None
