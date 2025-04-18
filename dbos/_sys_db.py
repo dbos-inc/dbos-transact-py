@@ -298,7 +298,7 @@ class SystemDatabase:
         if self._debug_mode:
             raise Exception("called insert_workflow_status in debug mode")
         wf_status: WorkflowStatuses = status["status"]
-        wf_timeout: Optional[int] = status["workflow_deadline_epoch_ms"]
+        workflow_deadline_epoch_ms: Optional[int] = status["workflow_deadline_epoch_ms"]
 
         cmd = (
             pg.insert(SystemSchema.workflow_status)
@@ -346,7 +346,7 @@ class SystemDatabase:
             # A mismatch indicates a workflow starting with the same UUID but different functions, which would throw an exception.
             recovery_attempts: int = row[0]
             wf_status = row[1]
-            wf_timeout = row[2]
+            workflow_deadline_epoch_ms = row[2]
             err_msg: Optional[str] = None
             if row[3] != status["name"]:
                 err_msg = f"Workflow already exists with a different function name: {row[3]}, but the provided function name is: {status['name']}"
@@ -393,7 +393,7 @@ class SystemDatabase:
                     status["workflow_uuid"], max_recovery_attempts
                 )
 
-        return wf_status, wf_timeout
+        return wf_status, workflow_deadline_epoch_ms
 
     def update_workflow_status(
         self,
@@ -1712,7 +1712,7 @@ class SystemDatabase:
         Synchronously record the status and inputs for workflows in a single transaction
         """
         with self.engine.begin() as conn:
-            wf_status, wf_timeout = self.insert_workflow_status(
+            wf_status, workflow_deadline_epoch_ms = self.insert_workflow_status(
                 status, conn, max_recovery_attempts=max_recovery_attempts
             )
             # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
@@ -1723,7 +1723,7 @@ class SystemDatabase:
                 and wf_status == WorkflowStatusString.ENQUEUED.value
             ):
                 self.enqueue(status["workflow_uuid"], status["queue_name"], conn)
-        return wf_status, wf_timeout
+        return wf_status, workflow_deadline_epoch_ms
 
 
 def reset_system_database(config: ConfigFile) -> None:

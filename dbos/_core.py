@@ -288,20 +288,22 @@ def _init_workflow(
         inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
 
     # Synchronously record the status and inputs for workflows
-    wf_status, wf_timeout = dbos._sys_db.init_workflow(
+    wf_status, workflow_deadline_epoch_ms = dbos._sys_db.init_workflow(
         status,
         _serialization.serialize_args(inputs),
         max_recovery_attempts=max_recovery_attempts,
     )
 
-    if wf_timeout is not None:
+    if workflow_deadline_epoch_ms is not None:
         evt = threading.Event()
         dbos.stop_events.append(evt)
 
         def timeout_func() -> None:
             try:
-                assert wf_timeout is not None
-                time_to_wait_sec = (wf_timeout - (time.time() * 1000)) / 1000
+                assert workflow_deadline_epoch_ms is not None
+                time_to_wait_sec = (
+                    workflow_deadline_epoch_ms - (time.time() * 1000)
+                ) / 1000
                 if time_to_wait_sec > 0:
                     was_stopped = evt.wait(time_to_wait_sec)
                     if was_stopped:
