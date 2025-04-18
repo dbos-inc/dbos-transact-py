@@ -509,11 +509,15 @@ class SystemDatabase:
                     queue_name=INTERNAL_QUEUE_NAME,
                 )
             )
-            # Set the workflow's status to ENQUEUED and clear its recovery attempts.
+            # Set the workflow's status to ENQUEUED and clear its recovery attempts and deadline.
             c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-                .values(status=WorkflowStatusString.ENQUEUED.value, recovery_attempts=0)
+                .values(
+                    status=WorkflowStatusString.ENQUEUED.value,
+                    recovery_attempts=0,
+                    workflow_deadline_epoch_ms=None,
+                )
             )
 
     def get_max_function_id(self, workflow_uuid: str) -> Optional[int]:
