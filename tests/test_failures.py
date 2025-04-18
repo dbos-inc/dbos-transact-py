@@ -13,6 +13,7 @@ from dbos._error import (
     DBOSMaxStepRetriesExceeded,
     DBOSUnexpectedStepError,
 )
+from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._sys_db import WorkflowStatusString
 
 from .conftest import queue_entries_are_cleaned_up
@@ -185,6 +186,31 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     event.set()
     assert handle.get_result() == resumed_handle.get_result() == None
     assert handle.get_status().status == WorkflowStatusString.SUCCESS.value
+
+    # Verify that retries of a completed workflow do not raise the DLQ exception
+    for _ in range(max_recovery_attempts * 2):
+        with SetWorkflowID(wfid):
+            dead_letter_workflow()
+
+    event.clear()
+
+    @DBOS.workflow(max_recovery_attempts=None)
+    def infinite_dead_letter_workflow() -> None:
+        event.wait()
+
+    # Verify that a workflow with max_recovery_attempts=None is retried infinitely.
+    wfid = str(uuid.uuid4())
+    handles = []
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(infinite_dead_letter_workflow)
+        handles.append(handle)
+
+    # Attempt to recover the blocked workflow the maximum number of times
+    for i in range(DEFAULT_MAX_RECOVERY_ATTEMPTS * 2):
+        handles.extend(DBOS._recover_pending_workflows())
+    event.set()
+    for handle in handles:
+        assert handle.get_result() == None
 
 
 def test_nondeterministic_workflow(dbos: DBOS) -> None:

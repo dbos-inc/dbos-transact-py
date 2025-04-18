@@ -134,7 +134,9 @@ class DBOSClient:
             "kwargs": kwargs,
         }
 
-        self._sys_db.init_workflow(status, _serialization.serialize_args(inputs))
+        self._sys_db.init_workflow(
+            status, _serialization.serialize_args(inputs), max_recovery_attempts=None
+        )
         return workflow_id
 
     def enqueue(
@@ -190,7 +192,9 @@ class DBOSClient:
             "app_version": None,
         }
         with self._sys_db.engine.begin() as conn:
-            self._sys_db.insert_workflow_status(status, conn)
+            self._sys_db.insert_workflow_status(
+                status, conn, max_recovery_attempts=None
+            )
         self._sys_db.send(status["workflow_uuid"], 0, destination_id, message, topic)
 
     async def send_async(
