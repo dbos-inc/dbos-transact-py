@@ -22,6 +22,15 @@ def upgrade() -> None:
     op.add_column(
         "workflow_status",
         sa.Column(
+            "workflow_timeout_ms",
+            sa.BigInteger(),
+            nullable=True,
+        ),
+        schema="dbos",
+    )
+    op.add_column(
+        "workflow_status",
+        sa.Column(
             "workflow_deadline_epoch_ms",
             sa.BigInteger(),
             nullable=True,
@@ -32,3 +41,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_column("workflow_status", "workflow_deadline_epoch_ms", schema="dbos")
+    op.drop_column("workflow_status", "workflow_timeout_ms", schema="dbos")

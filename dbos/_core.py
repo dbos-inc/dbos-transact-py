@@ -231,7 +231,7 @@ def _init_workflow(
     class_name: Optional[str],
     config_name: Optional[str],
     queue: Optional[str] = None,
-    workflow_timeout: Optional[float],
+    workflow_timeout_ms: Optional[int],
     max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
 ) -> WorkflowStatusInternal:
     wfid = (
@@ -275,9 +275,10 @@ def _init_workflow(
         "queue_name": queue,
         "created_at": None,
         "updated_at": None,
-        "workflow_deadline_epoch_ms": (  # UNIX epoch timestamp of the timeout in ms
-            int((time.time() + workflow_timeout) * 1000)
-            if workflow_timeout is not None
+        "workflow_timeout_ms": workflow_timeout_ms,
+        "workflow_deadline_epoch_ms": (
+            int(time.time() * 1000) + workflow_timeout_ms
+            if workflow_timeout_ms is not None and queue is None
             else None
         ),
     }
@@ -305,7 +306,7 @@ def _init_workflow(
                     was_stopped = evt.wait(time_to_wait_sec)
                     if was_stopped:
                         return
-                dbos.cancel_workflow(wfid)
+                dbos._sys_db.cancel_workflow(wfid)
             except Exception as e:
                 dbos.logger.warning(
                     f"Exception in timeout thread for workflow {wfid}: {e}"
@@ -531,7 +532,9 @@ def start_workflow(
     }
 
     local_ctx = get_local_dbos_context()
-    workflow_timeout = local_ctx.workflow_timeout if local_ctx is not None else None
+    workflow_timeout_ms = (
+        local_ctx.workflow_timeout_ms if local_ctx is not None else None
+    )
     new_wf_id, new_wf_ctx = _get_new_wf()
 
     ctx = new_wf_ctx
@@ -551,7 +554,7 @@ def start_workflow(
         class_name=get_dbos_class_name(fi, func, args),
         config_name=get_config_name(fi, func, args),
         queue=queue_name,
-        workflow_timeout=workflow_timeout,
+        workflow_timeout_ms=workflow_timeout_ms,
         max_recovery_attempts=fi.max_recovery_attempts,
     )
 
@@ -615,7 +618,9 @@ async def start_workflow_async(
     }
 
     local_ctx = get_local_dbos_context()
-    workflow_timeout = local_ctx.workflow_timeout if local_ctx is not None else None
+    workflow_timeout_ms = (
+        local_ctx.workflow_timeout_ms if local_ctx is not None else None
+    )
     new_wf_id, new_wf_ctx = _get_new_wf()
 
     ctx = new_wf_ctx
@@ -638,7 +643,7 @@ async def start_workflow_async(
         class_name=get_dbos_class_name(fi, func, args),
         config_name=get_config_name(fi, func, args),
         queue=queue_name,
-        workflow_timeout=workflow_timeout,
+        workflow_timeout_ms=workflow_timeout_ms,
         max_recovery_attempts=fi.max_recovery_attempts,
     )
 
@@ -713,7 +718,7 @@ def workflow_wrapper(
             "kwargs": kwargs,
         }
         ctx = get_local_dbos_context()
-        workflow_timeout = ctx.workflow_timeout if ctx is not None else None
+        workflow_timeout = ctx.workflow_timeout_ms if ctx is not None else None
         enterWorkflowCtxMgr = (
             EnterDBOSChildWorkflow if ctx and ctx.is_workflow() else EnterDBOSWorkflow
         )
@@ -751,7 +756,7 @@ def workflow_wrapper(
                 wf_name=get_dbos_func_name(func),
                 class_name=get_dbos_class_name(fi, func, args),
                 config_name=get_config_name(fi, func, args),
-                workflow_timeout=workflow_timeout,
+                workflow_timeout_ms=workflow_timeout,
                 max_recovery_attempts=max_recovery_attempts,
             )
 

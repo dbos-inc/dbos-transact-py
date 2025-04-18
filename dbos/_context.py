@@ -93,7 +93,7 @@ class DBOSContext:
         self.assumed_role: Optional[str] = None
         self.step_status: Optional[StepStatus] = None
 
-        self.workflow_timeout: Optional[float] = None
+        self.workflow_timeout_ms: Optional[int] = None
 
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()
@@ -373,14 +373,14 @@ class SetWorkflowTimeout:
         ```
     """
 
-    def __init__(self, workflow_timeout: float) -> None:
-        if not workflow_timeout > 0:
+    def __init__(self, workflow_timeout_sec: float) -> None:
+        if not workflow_timeout_sec > 0:
             raise Exception(
-                f"Invalid workflow timeout {workflow_timeout}. Timeouts must be positive."
+                f"Invalid workflow timeout {workflow_timeout_sec}. Timeouts must be positive."
             )
         self.created_ctx = False
-        self.workflow_timeout = workflow_timeout
-        self.saved_workflow_timeout: Optional[float] = None
+        self.workflow_timeout_ms = int(workflow_timeout_sec * 1000)
+        self.saved_workflow_timeout: Optional[int] = None
 
     def __enter__(self) -> SetWorkflowTimeout:
         # Code to create a basic context
@@ -389,8 +389,8 @@ class SetWorkflowTimeout:
             self.created_ctx = True
             _set_local_dbos_context(DBOSContext())
         ctx = assert_current_dbos_context()
-        self.saved_workflow_timeout = ctx.workflow_timeout
-        ctx.workflow_timeout = self.workflow_timeout
+        self.saved_workflow_timeout = ctx.workflow_timeout_ms
+        ctx.workflow_timeout_ms = self.workflow_timeout_ms
         return self
 
     def __exit__(
@@ -399,7 +399,7 @@ class SetWorkflowTimeout:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        assert_current_dbos_context().workflow_timeout = self.saved_workflow_timeout
+        assert_current_dbos_context().workflow_timeout_ms = self.saved_workflow_timeout
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()
@@ -411,7 +411,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         self.created_ctx = False
         self.attributes = attributes
         self.is_temp_workflow = attributes["name"] == "temp_wf"
-        self.saved_workflow_timeout: Optional[float] = None
+        self.saved_workflow_timeout: Optional[int] = None
 
     def __enter__(self) -> DBOSContext:
         # Code to create a basic context
@@ -422,8 +422,8 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
             _set_local_dbos_context(ctx)
         assert not ctx.is_within_workflow()
         # The workflow timeout should not be set within the workflow
-        self.saved_workflow_timeout = ctx.workflow_timeout
-        ctx.workflow_timeout = None
+        self.saved_workflow_timeout = ctx.workflow_timeout_ms
+        ctx.workflow_timeout_ms = None
         ctx.start_workflow(
             None, self.attributes, self.is_temp_workflow
         )  # Will get from the context's next workflow ID
@@ -439,7 +439,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         assert ctx.is_within_workflow()
         ctx.end_workflow(exc_value, self.is_temp_workflow)
         # Restore the saved workflow timeout
-        ctx.workflow_timeout = self.saved_workflow_timeout
+        ctx.workflow_timeout_ms = self.saved_workflow_timeout
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()

@@ -116,6 +116,7 @@ def test_endpoint_recovery(dbos_flask: Tuple[DBOS, Flask]) -> None:
             "queue_name": None,
             "created_at": None,
             "updated_at": None,
+            "workflow_timeout_ms": None,
             "workflow_deadline_epoch_ms": None,
         }
     )

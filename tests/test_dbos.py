@@ -599,6 +599,7 @@ def test_recovery_thread(config: ConfigFile) -> None:
             "queue_name": None,
             "created_at": None,
             "updated_at": None,
+            "workflow_timeout_ms": None,
             "workflow_deadline_epoch_ms": None,
         }
     )
@@ -1492,7 +1493,7 @@ def test_workflow_timeout(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def blocked_workflow() -> None:
-        assert assert_current_dbos_context().workflow_timeout is None
+        assert assert_current_dbos_context().workflow_timeout_ms is None
         while True:
             DBOS.sleep(0.1)
 
@@ -1515,8 +1516,8 @@ def test_workflow_timeout(dbos: DBOS) -> None:
     assert parent_workflow() == None
 
     with SetWorkflowTimeout(1.0):
-        assert assert_current_dbos_context().workflow_timeout == 1.0
+        assert assert_current_dbos_context().workflow_timeout_ms == 1000
         with SetWorkflowTimeout(2.0):
-            assert assert_current_dbos_context().workflow_timeout == 2.0
-        assert assert_current_dbos_context().workflow_timeout == 1.0
+            assert assert_current_dbos_context().workflow_timeout_ms == 2000
+        assert assert_current_dbos_context().workflow_timeout_ms == 1000
     assert get_local_dbos_context() is None

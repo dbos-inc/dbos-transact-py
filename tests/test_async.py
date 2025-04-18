@@ -474,7 +474,7 @@ async def test_workflow_timeout_async(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def blocked_workflow() -> None:
-        assert assert_current_dbos_context().workflow_timeout is None
+        assert assert_current_dbos_context().workflow_timeout_ms is None
         while True:
             DBOS.sleep(0.1)
 

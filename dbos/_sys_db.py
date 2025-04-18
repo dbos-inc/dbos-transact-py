@@ -83,7 +83,12 @@ class WorkflowStatusInternal(TypedDict):
     app_version: Optional[str]
     app_id: Optional[str]
     recovery_attempts: Optional[int]
-    workflow_deadline_epoch_ms: Optional[int]  # Unix epoch timestamp in ms
+    workflow_timeout_ms: Optional[
+        int
+    ]  # The start-to-close timeout of the workflow in ms
+    workflow_deadline_epoch_ms: Optional[
+        int
+    ]  # The deadline of a workflow, computed by adding its timeout to its START time (which may be different from its creation time for queued workflows). Deadlines are propagated to children. At this deadline, the workflow is cancelled.
 
 
 class RecordedResult(TypedDict):
@@ -316,6 +321,7 @@ class SystemDatabase:
                 recovery_attempts=(
                     1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
                 ),
+                workflow_timeout_ms=status["workflow_timeout_ms"],
                 workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
             )
             .on_conflict_do_update(
@@ -621,6 +627,7 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.application_version,
                     SystemSchema.workflow_status.c.application_id,
                     SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
+                    SystemSchema.workflow_status.c.workflow_timeout_ms,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -645,6 +652,7 @@ class SystemDatabase:
                 "app_version": row[13],
                 "app_id": row[14],
                 "workflow_deadline_epoch_ms": row[15],
+                "workflow_timeout_ms": row[16],
             }
             return status
 
