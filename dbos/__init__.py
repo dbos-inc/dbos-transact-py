@@ -5,8 +5,7 @@ from ._dbos import DBOS, DBOSConfiguredInstance, WorkflowHandle
 from ._dbos_config import ConfigFile, DBOSConfig, get_dbos_database_url, load_config
 from ._kafka_message import KafkaMessage
 from ._queue import Queue
-from ._sys_db import GetWorkflowsInput, WorkflowStatusString
-from ._workflow_commands import WorkflowStatus
+from ._sys_db import GetWorkflowsInput, WorkflowStatus, WorkflowStatusString
 
 __all__ = [
     "ConfigFile",

@@ -135,8 +135,8 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     gwi = GetWorkflowsInput()
     gwi.authenticated_user = "user1"
     wfl = dbos._sys_db.get_workflows(gwi)
-    assert len(wfl.workflow_uuids) == 1
-    wfs = DBOS.get_workflow_status(wfl.workflow_uuids[0])
+    assert len(wfl) == 1
+    wfs = DBOS.get_workflow_status(wfl[0].workflow_id)
     assert wfs
     assert wfs.assumed_role == "user"
     assert wfs.authenticated_user == "user1"
@@ -145,7 +145,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     # Make sure predicate is actually applied
     gwi.authenticated_user = "user2"
     wfl = dbos._sys_db.get_workflows(gwi)
-    assert len(wfl.workflow_uuids) == 0
+    assert len(wfl) == 0
 
     response = client.get("/error")
     assert response.status_code == 401

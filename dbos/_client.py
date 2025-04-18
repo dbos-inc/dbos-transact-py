@@ -20,11 +20,11 @@ from dbos._serialization import WorkflowInputs
 from dbos._sys_db import (
     StepInfo,
     SystemDatabase,
+    WorkflowStatus,
     WorkflowStatusInternal,
     WorkflowStatusString,
 )
 from dbos._workflow_commands import (
-    WorkflowStatus,
     fork_workflow,
     get_workflow,
     list_queued_workflows,
@@ -56,7 +56,7 @@ class WorkflowHandleClientPolling(Generic[R]):
         res: R = self._sys_db.await_workflow_result(self.workflow_id)
         return res
 
-    def get_status(self) -> "WorkflowStatus":
+    def get_status(self) -> WorkflowStatus:
         status = get_workflow(self._sys_db, self.workflow_id, True)
         if status is None:
             raise DBOSNonExistentWorkflowError(self.workflow_id)
@@ -78,7 +78,7 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
         )
         return res
 
-    async def get_status(self) -> "WorkflowStatus":
+    async def get_status(self) -> WorkflowStatus:
         status = await asyncio.to_thread(
             get_workflow, self._sys_db, self.workflow_id, True
         )
