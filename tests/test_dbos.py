@@ -1519,6 +1519,19 @@ def test_workflow_timeout(dbos: DBOS) -> None:
 
     assert parent_workflow_adding_timeout() == None
 
+    @DBOS.workflow()
+    def parent_workflow() -> None:
+        assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
+        with pytest.raises(DBOSWorkflowCancelledError):
+            blocked_workflow()
+        handle = DBOS.start_workflow(blocked_workflow)
+        with pytest.raises(DBOSWorkflowCancelledError):
+            handle.get_result()
+        assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
+
+    with SetWorkflowTimeout(1.0):
+        parent_workflow()
+
     with SetWorkflowTimeout(1.0):
         assert assert_current_dbos_context().workflow_timeout_ms == 1000
         with SetWorkflowTimeout(2.0):
