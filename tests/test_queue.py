@@ -929,7 +929,7 @@ def test_timeout_queue(dbos: DBOS) -> None:
     queue = Queue("regular_queue")
 
     @DBOS.workflow()
-    def exiting_parent_workflow() -> None:
+    def exiting_parent_workflow() -> str:
         handle = queue.enqueue(blocking_workflow)
         return handle.get_workflow_id()
 
