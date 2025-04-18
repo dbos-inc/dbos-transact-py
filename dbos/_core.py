@@ -280,17 +280,11 @@ def _init_workflow(
             raise DBOSNonExistentWorkflowError(wfid)
         wf_status = get_status_result["status"]
     else:
-        # Synchronously record the status and inputs for workflows
-        # TODO: Make this transactional (and with the queue step below)
-        wf_status = dbos._sys_db.insert_workflow_status(
-            status, max_recovery_attempts=max_recovery_attempts
+        wf_status = dbos._sys_db.init_workflow(
+            status,
+            _serialization.serialize_args(inputs),
+            max_recovery_attempts=max_recovery_attempts,
         )
-
-        # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
-        dbos._sys_db.update_workflow_inputs(wfid, _serialization.serialize_args(inputs))
-
-        if queue is not None and wf_status == WorkflowStatusString.ENQUEUED.value:
-            dbos._sys_db.enqueue(wfid, queue)
 
     status["status"] = wf_status
     return status

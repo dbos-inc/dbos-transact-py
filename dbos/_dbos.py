@@ -364,13 +364,13 @@ class DBOS:
             check_config_consistency(name=unvalidated_config["name"])
 
         if unvalidated_config is not None:
-            self.config: ConfigFile = process_config(data=unvalidated_config)
+            self._config: ConfigFile = process_config(data=unvalidated_config)
         else:
             raise ValueError("No valid configuration was loaded.")
 
-        set_env_vars(self.config)
-        config_logger(self.config)
-        dbos_tracer.config(self.config)
+        set_env_vars(self._config)
+        config_logger(self._config)
+        dbos_tracer.config(self._config)
         dbos_logger.info("Initializing DBOS")
 
         # If using FastAPI, set up middleware and lifecycle events
@@ -454,19 +454,19 @@ class DBOS:
             self._executor_field = ThreadPoolExecutor(max_workers=64)
             self._background_event_loop.start()
             self._sys_db_field = SystemDatabase(
-                self.config["database"], debug_mode=debug_mode
+                self._config["database"], debug_mode=debug_mode
             )
             self._app_db_field = ApplicationDatabase(
-                self.config["database"], debug_mode=debug_mode
+                self._config["database"], debug_mode=debug_mode
             )
 
             if debug_mode:
                 return
 
-            admin_port = self.config.get("runtimeConfig", {}).get("admin_port")
+            admin_port = self._config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:
                 admin_port = 3001
-            run_admin_server = self.config.get("runtimeConfig", {}).get(
+            run_admin_server = self._config.get("runtimeConfig", {}).get(
                 "run_admin_server"
             )
             if run_admin_server:
@@ -564,7 +564,7 @@ class DBOS:
         assert (
             not self._launched
         ), "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
-        reset_system_database(self.config)
+        reset_system_database(self._config)
 
     def _destroy(self) -> None:
         self._initialized = False
@@ -994,6 +994,7 @@ class DBOS:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
+        workflow_id_prefix: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         def fn() -> List[WorkflowStatus]:
             return list_workflows(
@@ -1008,6 +1009,7 @@ class DBOS:
                 limit=limit,
                 offset=offset,
                 sort_desc=sort_desc,
+                workflow_id_prefix=workflow_id_prefix,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -1065,15 +1067,15 @@ class DBOS:
         """Return the DBOS `ConfigFile` for the current context."""
         global _dbos_global_instance
         if _dbos_global_instance is not None:
-            return _dbos_global_instance.config
+            return _dbos_global_instance._config
         reg = _get_or_create_dbos_registry()
         if reg.config is not None:
             return reg.config
-        config = (
+        loaded_config = (
             load_config()
         )  # This will return the processed & validated config (with defaults)
-        reg.config = config
-        return config
+        reg.config = loaded_config
+        return loaded_config
 
     @classproperty
     def sql_session(cls) -> Session:

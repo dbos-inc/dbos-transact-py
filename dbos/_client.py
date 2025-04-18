@@ -134,12 +134,7 @@ class DBOSClient:
             "kwargs": kwargs,
         }
 
-        wf_status = self._sys_db.insert_workflow_status(status)
-        self._sys_db.update_workflow_inputs(
-            workflow_id, _serialization.serialize_args(inputs)
-        )
-        if wf_status == WorkflowStatusString.ENQUEUED.value:
-            self._sys_db.enqueue(workflow_id, queue_name)
+        self._sys_db.init_workflow(status, _serialization.serialize_args(inputs))
         return workflow_id
 
     def enqueue(
@@ -194,7 +189,8 @@ class DBOSClient:
             "app_id": None,
             "app_version": None,
         }
-        self._sys_db.insert_workflow_status(status)
+        with self._sys_db.engine.begin() as conn:
+            self._sys_db.insert_workflow_status(status, conn)
         self._sys_db.send(status["workflow_uuid"], 0, destination_id, message, topic)
 
     async def send_async(
@@ -243,6 +239,7 @@ class DBOSClient:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
+        workflow_id_prefix: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         return list_workflows(
             self._sys_db,
@@ -256,6 +253,7 @@ class DBOSClient:
             limit=limit,
             offset=offset,
             sort_desc=sort_desc,
+            workflow_id_prefix=workflow_id_prefix,
         )
 
     async def list_workflows_async(
