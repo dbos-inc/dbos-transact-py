@@ -233,7 +233,7 @@ class DBOSClient:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
-        workflow_id_substring: str = None,
+        workflow_id_substring: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         return list_workflows(
             self._sys_db,

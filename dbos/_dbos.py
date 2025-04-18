@@ -1014,7 +1014,7 @@ class DBOS:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
-        workflow_id_substring: str = None,
+        workflow_id_substring: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         def fn() -> List[WorkflowStatus]:
             return list_workflows(
