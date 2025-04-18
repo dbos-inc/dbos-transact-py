@@ -132,8 +132,8 @@ class GetWorkflowsInput:
         self.sort_desc: bool = (
             False  # If true, sort by created_at in DESC order. Default false (in ASC order).
         )
-        self.workflow_id_substring: Optional[str] = (
-            None  # If set, search for worklfow IDs containing this substring
+        self.workflow_id_prefix: Optional[str] = (
+            None  # If set, search for worklfow IDs starting with this string
         )
 
 
@@ -737,10 +737,10 @@ class SystemDatabase:
             query = query.where(
                 SystemSchema.workflow_status.c.workflow_uuid.in_(input.workflow_ids)
             )
-        if input.workflow_id_substring:
+        if input.workflow_id_prefix:
             query = query.where(
-                SystemSchema.workflow_status.c.workflow_uuid.like(
-                    "%" + input.workflow_id_substring + "%"
+                SystemSchema.workflow_status.c.workflow_uuid.startswith(
+                    input.workflow_id_prefix
                 )
             )
         if input.limit:

@@ -71,7 +71,7 @@ def list_workflows(
     offset: Optional[int] = None,
     sort_desc: bool = False,
     request: bool = False,
-    workflow_id_substring: Optional[str] = None,
+    workflow_id_prefix: Optional[str] = None,
 ) -> List[WorkflowStatus]:
     input = GetWorkflowsInput()
     input.workflow_ids = workflow_ids
@@ -84,7 +84,7 @@ def list_workflows(
     input.name = name
     input.offset = offset
     input.sort_desc = sort_desc
-    input.workflow_id_substring = workflow_id_substring
+    input.workflow_id_prefix = workflow_id_prefix
 
     output: GetWorkflowsOutput = sys_db.get_workflows(input)
     infos: List[WorkflowStatus] = []

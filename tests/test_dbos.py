@@ -949,30 +949,33 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
 
     # Test substring search
     gwi.start_time = None
-    gwi.workflow_id_substring = dest_uuid
+    gwi.workflow_id_prefix = dest_uuid
     wfs = dbos._sys_db.get_workflows(gwi)
     assert wfs.workflow_uuids[0] == dest_uuid
 
-    gwi.workflow_id_substring = dest_uuid[5:20]
+    gwi.workflow_id_prefix = dest_uuid[0:10]
     wfs = dbos._sys_db.get_workflows(gwi)
     assert dest_uuid in wfs.workflow_uuids
 
     gwi.start_time = cur_time
-    gwi.workflow_id_substring = dest_uuid[5:20]
+    gwi.workflow_id_prefix = dest_uuid[0:10]
     wfs = dbos._sys_db.get_workflows(gwi)
     assert dest_uuid in wfs.workflow_uuids
 
     x = dbos.list_workflows(
         start_time=datetime.datetime.now().isoformat(),
-        workflow_id_substring=dest_uuid[5:20],
+        workflow_id_prefix=dest_uuid[0:10],
     )
     assert len(x) == 0
 
-    x = dbos.list_workflows(workflow_id_substring=dest_uuid[5:20])
+    x = dbos.list_workflows(workflow_id_prefix=dest_uuid[0:10])
     assert len(x) >= 1
     assert dest_uuid in [w.workflow_id for w in x]
 
-    x = dbos.list_workflows(workflow_id_substring=dest_uuid + "thisdoesnotexist")
+    x = dbos.list_workflows(workflow_id_prefix=dest_uuid + "thisdoesnotexist")
+    assert len(x) == 0
+
+    x = dbos.list_workflows(workflow_id_prefix="1" + dest_uuid)
     assert len(x) == 0
 
 
