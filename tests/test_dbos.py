@@ -297,13 +297,13 @@ def test_temp_workflow(dbos: DBOS) -> None:
     assert res == "var"
 
     wfs = dbos._sys_db.get_workflows(gwi)
-    assert len(wfs.workflow_uuids) == 2
+    assert len(wfs) == 2
 
-    wfi1 = dbos._sys_db.get_workflow_status(wfs.workflow_uuids[0])
+    wfi1 = dbos._sys_db.get_workflow_status(wfs[0].workflow_id)
     assert wfi1
     assert wfi1["name"].startswith("<temp>")
 
-    wfi2 = dbos._sys_db.get_workflow_status(wfs.workflow_uuids[1])
+    wfi2 = dbos._sys_db.get_workflow_status(wfs[1].workflow_id)
     assert wfi2
     assert wfi2["name"].startswith("<temp>")
 
@@ -518,10 +518,10 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
         assert res == "bob1"
 
     wfs = dbos._sys_db.get_workflows(gwi)
-    assert len(wfs.workflow_uuids) == 1
-    assert wfs.workflow_uuids[0] == wfuuid
+    assert len(wfs) == 1
+    assert wfs[0].workflow_id == wfuuid
 
-    wfi = dbos._sys_db.get_workflow_status(wfs.workflow_uuids[0])
+    wfi = dbos._sys_db.get_workflow_status(wfs[0].workflow_id)
     assert wfi
     assert wfi["name"].startswith("<temp>")
 
@@ -539,10 +539,10 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert workflow_handles[0].get_result() == "bob1"
 
     wfs = dbos._sys_db.get_workflows(gwi)
-    assert len(wfs.workflow_uuids) == 1
-    assert wfs.workflow_uuids[0] == wfuuid
+    assert len(wfs) == 1
+    assert wfs[0].workflow_id == wfuuid
 
-    wfi = dbos._sys_db.get_workflow_status(wfs.workflow_uuids[0])
+    wfi = dbos._sys_db.get_workflow_status(wfs[0].workflow_id)
     assert wfi
     assert wfi["name"].startswith("<temp>")
     assert wfi["status"] == "SUCCESS"
@@ -937,11 +937,11 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     assert handle.get_result() == "testsend1"
 
     wfs = dbos._sys_db.get_workflows(gwi)
-    assert len(wfs.workflow_uuids) == 2
-    assert wfs.workflow_uuids[0] == dest_uuid
-    assert wfs.workflow_uuids[1] != dest_uuid
+    assert len(wfs) == 2
+    assert wfs[0].workflow_id == dest_uuid
+    assert wfs[1].workflow_id != dest_uuid
 
-    wfi = dbos._sys_db.get_workflow_status(wfs.workflow_uuids[1])
+    wfi = dbos._sys_db.get_workflow_status(wfs[1].workflow_id)
     assert wfi
     assert wfi["name"] == "<temp>.temp_send_workflow"
 
@@ -951,16 +951,16 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     gwi.start_time = None
     gwi.workflow_id_prefix = dest_uuid
     wfs = dbos._sys_db.get_workflows(gwi)
-    assert wfs.workflow_uuids[0] == dest_uuid
+    assert wfs[0].workflow_id == dest_uuid
 
     gwi.workflow_id_prefix = dest_uuid[0:10]
     wfs = dbos._sys_db.get_workflows(gwi)
-    assert dest_uuid in wfs.workflow_uuids
+    assert dest_uuid in [w.workflow_id for w in wfs]
 
     gwi.start_time = cur_time
     gwi.workflow_id_prefix = dest_uuid[0:10]
     wfs = dbos._sys_db.get_workflows(gwi)
-    assert dest_uuid in wfs.workflow_uuids
+    assert dest_uuid in [w.workflow_id for w in wfs]
 
     x = dbos.list_workflows(
         start_time=datetime.datetime.now().isoformat(),

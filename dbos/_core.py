@@ -75,6 +75,7 @@ from ._serialization import WorkflowInputs
 from ._sys_db import (
     GetEventWorkflowContext,
     OperationResultInternal,
+    WorkflowStatus,
     WorkflowStatusInternal,
     WorkflowStatusString,
 )
@@ -87,7 +88,6 @@ if TYPE_CHECKING:
         DBOSRegistry,
         IsolationLevel,
     )
-    from ._workflow_commands import WorkflowStatus
 
 from sqlalchemy.exc import DBAPIError, InvalidRequestError
 
@@ -119,7 +119,7 @@ class WorkflowHandleFuture(Generic[R]):
         self.dbos._sys_db.record_get_result(self.workflow_id, serialized_r, None)
         return r
 
-    def get_status(self) -> "WorkflowStatus":
+    def get_status(self) -> WorkflowStatus:
         stat = self.dbos.get_workflow_status(self.workflow_id)
         if stat is None:
             raise DBOSNonExistentWorkflowError(self.workflow_id)
@@ -146,7 +146,7 @@ class WorkflowHandlePolling(Generic[R]):
         self.dbos._sys_db.record_get_result(self.workflow_id, serialized_r, None)
         return r
 
-    def get_status(self) -> "WorkflowStatus":
+    def get_status(self) -> WorkflowStatus:
         stat = self.dbos.get_workflow_status(self.workflow_id)
         if stat is None:
             raise DBOSNonExistentWorkflowError(self.workflow_id)
@@ -181,7 +181,7 @@ class WorkflowHandleAsyncTask(Generic[R]):
         )
         return r
 
-    async def get_status(self) -> "WorkflowStatus":
+    async def get_status(self) -> WorkflowStatus:
         stat = await asyncio.to_thread(self.dbos.get_workflow_status, self.workflow_id)
         if stat is None:
             raise DBOSNonExistentWorkflowError(self.workflow_id)
@@ -217,7 +217,7 @@ class WorkflowHandleAsyncPolling(Generic[R]):
         )
         return r
 
-    async def get_status(self) -> "WorkflowStatus":
+    async def get_status(self) -> WorkflowStatus:
         stat = await asyncio.to_thread(self.dbos.get_workflow_status, self.workflow_id)
         if stat is None:
             raise DBOSNonExistentWorkflowError(self.workflow_id)
