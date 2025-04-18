@@ -4,6 +4,8 @@ import time
 import uuid
 from typing import Any, Generic, List, Optional, TypedDict, TypeVar
 
+from dbos._app_db import ApplicationDatabase
+
 if sys.version_info < (3, 11):
     from typing_extensions import NotRequired
 else:
@@ -15,11 +17,18 @@ from dbos._dbos_config import parse_database_url_to_dbconfig
 from dbos._error import DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._serialization import WorkflowInputs
-from dbos._sys_db import SystemDatabase, WorkflowStatusInternal, WorkflowStatusString
+from dbos._sys_db import (
+    StepInfo,
+    SystemDatabase,
+    WorkflowStatusInternal,
+    WorkflowStatusString,
+)
 from dbos._workflow_commands import (
     WorkflowStatus,
+    fork_workflow,
     get_workflow,
     list_queued_workflows,
+    list_workflow_steps,
     list_workflows,
 )
 
@@ -84,6 +93,7 @@ class DBOSClient:
         if system_database is not None:
             db_config["sys_db_name"] = system_database
         self._sys_db = SystemDatabase(db_config)
+        self._app_db = ApplicationDatabase(db_config)
 
     def destroy(self) -> None:
         self._sys_db.destroy()
@@ -330,3 +340,23 @@ class DBOSClient:
             offset=offset,
             sort_desc=sort_desc,
         )
+
+    def list_workflow_steps(self, workflow_id: str) -> List[StepInfo]:
+        return list_workflow_steps(self._sys_db, self._app_db, workflow_id)
+
+    async def list_workflow_steps_async(self, workflow_id: str) -> List[StepInfo]:
+        return await asyncio.to_thread(self.list_workflow_steps, workflow_id)
+
+    def fork_workflow(self, workflow_id: str, start_step: int) -> WorkflowHandle[R]:
+        forked_workflow_id = fork_workflow(
+            self._sys_db, self._app_db, workflow_id, start_step
+        )
+        return WorkflowHandleClientPolling[R](forked_workflow_id, self._sys_db)
+
+    async def fork_workflow_async(
+        self, workflow_id: str, start_step: int
+    ) -> WorkflowHandleAsync[R]:
+        forked_workflow_id = await asyncio.to_thread(
+            fork_workflow, self._sys_db, self._app_db, workflow_id, start_step
+        )
+        return WorkflowHandleClientAsyncPolling[R](forked_workflow_id, self._sys_db)

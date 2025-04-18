@@ -12,7 +12,7 @@ import pytest
 import sqlalchemy as sa
 
 from dbos import DBOS, ConfigFile, DBOSClient, EnqueueOptions, Queue, SetWorkflowID
-from dbos._dbos import WorkflowHandle
+from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
@@ -413,3 +413,54 @@ def test_client_retrieve_wf_done(client: DBOSClient, dbos: DBOS) -> None:
     assert handle1.get_workflow_id() == handle2.get_workflow_id()
     result2 = handle2.get_result()
     assert result2 == message
+
+
+def test_client_fork(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "fork_test",
+    }
+
+    input = 5
+    handle: WorkflowHandle[int] = client.enqueue(options, input)
+    assert handle.get_result() == input * 2
+    assert len(client.list_workflow_steps(handle.workflow_id)) == 2
+
+    forked_handle: WorkflowHandle[int] = client.fork_workflow(handle.workflow_id, 1)
+    assert forked_handle.workflow_id != handle.workflow_id
+    assert forked_handle.get_result() == input * 2
+
+    forked_handle = client.fork_workflow(handle.workflow_id, 2)
+    assert forked_handle.workflow_id != handle.workflow_id
+    assert forked_handle.get_result() == input * 2
+
+    assert len(client.list_workflows()) == 3
+
+
+@pytest.mark.asyncio
+async def test_client_fork_async(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "fork_test",
+    }
+
+    input = 5
+    handle: WorkflowHandleAsync[int] = await client.enqueue_async(options, input)
+    assert await handle.get_result() == input * 2
+    assert len(await client.list_workflow_steps_async(handle.workflow_id)) == 2
+
+    forked_handle: WorkflowHandleAsync[int] = await client.fork_workflow_async(
+        handle.workflow_id, 1
+    )
+    assert forked_handle.workflow_id != handle.workflow_id
+    assert await forked_handle.get_result() == input * 2
+
+    forked_handle = await client.fork_workflow_async(handle.workflow_id, 2)
+    assert forked_handle.workflow_id != handle.workflow_id
+    assert await forked_handle.get_result() == input * 2
+
+    assert len(await client.list_workflows_async()) == 3
