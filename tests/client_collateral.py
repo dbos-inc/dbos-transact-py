@@ -38,6 +38,12 @@ def event_test(key: str, value: str, update: Optional[int] = None) -> str:
     return f"{key}-{value}"
 
 
+@DBOS.workflow()
+def blocked_workflow() -> None:
+    while True:
+        DBOS.sleep(0.1)
+
+
 @DBOS.transaction()
 def test_txn(x: int) -> int:
     return x

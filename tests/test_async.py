@@ -8,9 +8,10 @@ import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, Queue, SetWorkflowID
+from dbos._context import SetWorkflowTimeout, assert_current_dbos_context
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._dbos_config import ConfigFile
-from dbos._error import DBOSException
+from dbos._error import DBOSException, DBOSWorkflowCancelledError
 
 
 @pytest.mark.asyncio
@@ -466,3 +467,59 @@ def test_unawaited_workflow_exception(dbos: DBOS) -> None:
     with pytest.raises(Exception) as exc_info:
         handle.get_result()
     assert input in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_workflow_timeout_async(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    async def blocked_workflow() -> None:
+        assert assert_current_dbos_context().workflow_timeout_ms is None
+        while True:
+            DBOS.sleep(0.1)
+
+    with SetWorkflowTimeout(0.1):
+        with pytest.raises(DBOSWorkflowCancelledError):
+            await blocked_workflow()
+        handle = await DBOS.start_workflow_async(blocked_workflow)
+        with pytest.raises(DBOSWorkflowCancelledError):
+            await handle.get_result()
+
+    @DBOS.workflow()
+    async def parent_workflow_with_timeout() -> None:
+        assert assert_current_dbos_context().workflow_deadline_epoch_ms is None
+        with SetWorkflowTimeout(0.1):
+            with pytest.raises(DBOSWorkflowCancelledError):
+                await blocked_workflow()
+            handle = await DBOS.start_workflow_async(blocked_workflow)
+            with pytest.raises(DBOSWorkflowCancelledError):
+                await handle.get_result()
+        assert assert_current_dbos_context().workflow_deadline_epoch_ms is None
+
+    # Verify if a parent calls a blocked workflow with a timeout, the child is cancelled
+    await parent_workflow_with_timeout()
+
+    start_child, direct_child = str(uuid.uuid4()), str(uuid.uuid4())
+
+    @DBOS.workflow()
+    async def parent_workflow() -> None:
+        assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
+        with SetWorkflowID(start_child):
+            await DBOS.start_workflow_async(blocked_workflow)
+        with SetWorkflowID(direct_child):
+            await blocked_workflow()
+
+    # Verify if a parent called with a timeout calls a blocked child
+    # the deadline propagates and the children are also cancelled.
+    with SetWorkflowTimeout(1.0):
+        with pytest.raises(DBOSWorkflowCancelledError):
+            await parent_workflow()
+
+    with pytest.raises(Exception) as exc_info:
+        await (await DBOS.retrieve_workflow_async(start_child)).get_result()
+    assert "was cancelled" in str(exc_info.value)
+
+    with pytest.raises(Exception) as exc_info:
+        await (await DBOS.retrieve_workflow_async(direct_child)).get_result()
+    assert "was cancelled" in str(exc_info.value)

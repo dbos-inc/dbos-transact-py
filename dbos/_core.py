@@ -3,6 +3,7 @@ import functools
 import inspect
 import json
 import sys
+import threading
 import time
 import traceback
 from concurrent.futures import Future
@@ -14,11 +15,9 @@ from typing import (
     Coroutine,
     Generic,
     Optional,
-    Tuple,
     TypeVar,
     Union,
     cast,
-    overload,
 )
 
 from dbos._outcome import Immediate, NoResult, Outcome, Pending
@@ -59,7 +58,6 @@ from ._error import (
 )
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
-    DBOSFuncInfo,
     get_config_name,
     get_dbos_class_name,
     get_dbos_func_name,
@@ -227,12 +225,14 @@ class WorkflowHandleAsyncPolling(Generic[R]):
 def _init_workflow(
     dbos: "DBOS",
     ctx: DBOSContext,
+    *,
     inputs: WorkflowInputs,
     wf_name: str,
     class_name: Optional[str],
     config_name: Optional[str],
-    temp_wf_type: Optional[str],
     queue: Optional[str],
+    workflow_timeout_ms: Optional[int],
+    workflow_deadline_epoch_ms: Optional[int],
     max_recovery_attempts: Optional[int],
 ) -> WorkflowStatusInternal:
     wfid = (
@@ -240,6 +240,15 @@ def _init_workflow(
         if len(ctx.workflow_id) > 0
         else ctx.id_assigned_for_next_workflow
     )
+
+    # In debug mode, just return the existing status
+    if dbos.debug_mode:
+        get_status_result = dbos._sys_db.get_workflow_status(wfid)
+        if get_status_result is None:
+            raise DBOSNonExistentWorkflowError(wfid)
+        return get_status_result
+
+    # Initialize a workflow status object from the context
     status: WorkflowStatusInternal = {
         "workflow_uuid": wfid,
         "status": (
@@ -267,25 +276,47 @@ def _init_workflow(
         "queue_name": queue,
         "created_at": None,
         "updated_at": None,
+        "workflow_timeout_ms": workflow_timeout_ms,
+        "workflow_deadline_epoch_ms": workflow_deadline_epoch_ms,
     }
 
     # If we have a class name, the first arg is the instance and do not serialize
     if class_name is not None:
         inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
 
-    wf_status = status["status"]
-    if dbos.debug_mode:
-        get_status_result = dbos._sys_db.get_workflow_status(wfid)
-        if get_status_result is None:
-            raise DBOSNonExistentWorkflowError(wfid)
-        wf_status = get_status_result["status"]
-    else:
-        wf_status = dbos._sys_db.init_workflow(
-            status,
-            _serialization.serialize_args(inputs),
-            max_recovery_attempts=max_recovery_attempts,
-        )
+    # Synchronously record the status and inputs for workflows
+    wf_status, workflow_deadline_epoch_ms = dbos._sys_db.init_workflow(
+        status,
+        _serialization.serialize_args(inputs),
+        max_recovery_attempts=max_recovery_attempts,
+    )
 
+    if workflow_deadline_epoch_ms is not None:
+        evt = threading.Event()
+        dbos.stop_events.append(evt)
+
+        def timeout_func() -> None:
+            try:
+                assert workflow_deadline_epoch_ms is not None
+                time_to_wait_sec = (
+                    workflow_deadline_epoch_ms - (time.time() * 1000)
+                ) / 1000
+                if time_to_wait_sec > 0:
+                    was_stopped = evt.wait(time_to_wait_sec)
+                    if was_stopped:
+                        return
+                dbos._sys_db.cancel_workflow(wfid)
+            except Exception as e:
+                dbos.logger.warning(
+                    f"Exception in timeout thread for workflow {wfid}: {e}"
+                )
+
+        timeout_thread = threading.Thread(target=timeout_func, daemon=True)
+        timeout_thread.start()
+        dbos._background_threads.append(timeout_thread)
+
+    ctx.workflow_deadline_epoch_ms = workflow_deadline_epoch_ms
+    status["workflow_deadline_epoch_ms"] = workflow_deadline_epoch_ms
     status["status"] = wf_status
     return status
 
@@ -501,6 +532,13 @@ def start_workflow(
         "kwargs": kwargs,
     }
 
+    local_ctx = get_local_dbos_context()
+    workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
+        local_ctx, queue_name
+    )
+    workflow_timeout_ms = (
+        local_ctx.workflow_timeout_ms if local_ctx is not None else None
+    )
     new_wf_id, new_wf_ctx = _get_new_wf()
 
     ctx = new_wf_ctx
@@ -519,8 +557,9 @@ def start_workflow(
         wf_name=get_dbos_func_name(func),
         class_name=get_dbos_class_name(fi, func, args),
         config_name=get_config_name(fi, func, args),
-        temp_wf_type=get_temp_workflow_type(func),
         queue=queue_name,
+        workflow_timeout_ms=workflow_timeout_ms,
+        workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
         max_recovery_attempts=fi.max_recovery_attempts,
     )
 
@@ -583,6 +622,10 @@ async def start_workflow_async(
         "kwargs": kwargs,
     }
 
+    local_ctx = get_local_dbos_context()
+    workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
+        local_ctx, queue_name
+    )
     new_wf_id, new_wf_ctx = _get_new_wf()
 
     ctx = new_wf_ctx
@@ -604,8 +647,9 @@ async def start_workflow_async(
         wf_name=get_dbos_func_name(func),
         class_name=get_dbos_class_name(fi, func, args),
         config_name=get_config_name(fi, func, args),
-        temp_wf_type=get_temp_workflow_type(func),
         queue=queue_name,
+        workflow_timeout_ms=workflow_timeout_ms,
+        workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
         max_recovery_attempts=fi.max_recovery_attempts,
     )
 
@@ -680,6 +724,9 @@ def workflow_wrapper(
             "kwargs": kwargs,
         }
         ctx = get_local_dbos_context()
+        workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
+            ctx, queue=None
+        )
         enterWorkflowCtxMgr = (
             EnterDBOSChildWorkflow if ctx and ctx.is_workflow() else EnterDBOSWorkflow
         )
@@ -717,8 +764,9 @@ def workflow_wrapper(
                 wf_name=get_dbos_func_name(func),
                 class_name=get_dbos_class_name(fi, func, args),
                 config_name=get_config_name(fi, func, args),
-                temp_wf_type=get_temp_workflow_type(func),
                 queue=None,
+                workflow_timeout_ms=workflow_timeout_ms,
+                workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
                 max_recovery_attempts=max_recovery_attempts,
             )
 
@@ -1212,3 +1260,24 @@ def get_event(
     else:
         # Directly call it outside of a workflow
         return dbos._sys_db.get_event(workflow_id, key, timeout_seconds)
+
+
+def _get_timeout_deadline(
+    ctx: Optional[DBOSContext], queue: Optional[str]
+) -> tuple[Optional[int], Optional[int]]:
+    if ctx is None:
+        return None, None
+    # If a timeout is explicitly specified, use it over any propagated deadline
+    if ctx.workflow_timeout_ms:
+        if queue:
+            # Queued workflows are assigned a deadline on dequeue
+            return ctx.workflow_timeout_ms, None
+        else:
+            # Otherwise, compute the deadline immediately
+            return (
+                ctx.workflow_timeout_ms,
+                int(time.time() * 1000) + ctx.workflow_timeout_ms,
+            )
+    # Otherwise, return the propagated deadline, if any
+    else:
+        return None, ctx.workflow_deadline_epoch_ms

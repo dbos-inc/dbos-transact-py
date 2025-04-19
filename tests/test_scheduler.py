@@ -224,6 +224,8 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
             "queue_name": None,
             "created_at": None,
             "updated_at": None,
+            "workflow_timeout_ms": None,
+            "workflow_deadline_epoch_ms": None,
         }
     )
 

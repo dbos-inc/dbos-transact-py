@@ -1,5 +1,6 @@
 import asyncio
 import sys
+import time
 import uuid
 from typing import Any, Generic, List, Optional, TypedDict, TypeVar
 
@@ -39,6 +40,7 @@ class EnqueueOptions(TypedDict):
     queue_name: str
     workflow_id: NotRequired[str]
     app_version: NotRequired[str]
+    workflow_timeout: NotRequired[float]
 
 
 class WorkflowHandleClientPolling(Generic[R]):
@@ -107,6 +109,7 @@ class DBOSClient:
         workflow_id = options.get("workflow_id")
         if workflow_id is None:
             workflow_id = str(uuid.uuid4())
+        workflow_timeout = options.get("workflow_timeout", None)
 
         status: WorkflowStatusInternal = {
             "workflow_uuid": workflow_id,
@@ -127,6 +130,10 @@ class DBOSClient:
             "executor_id": None,
             "recovery_attempts": None,
             "app_id": None,
+            "workflow_timeout_ms": (
+                int(workflow_timeout * 1000) if workflow_timeout is not None else None
+            ),
+            "workflow_deadline_epoch_ms": None,
         }
 
         inputs: WorkflowInputs = {
@@ -190,6 +197,8 @@ class DBOSClient:
             "recovery_attempts": None,
             "app_id": None,
             "app_version": None,
+            "workflow_timeout_ms": None,
+            "workflow_deadline_epoch_ms": None,
         }
         with self._sys_db.engine.begin() as conn:
             self._sys_db.insert_workflow_status(
