@@ -6,9 +6,9 @@ import time
 import typing
 from os import path
 from typing import Any
+from urllib.parse import quote
 
 import jsonpickle  # type: ignore
-import requests
 import sqlalchemy as sa
 import typer
 from rich import print
@@ -19,17 +19,22 @@ from dbos._debug import debug_workflow, parse_start_command
 
 from .. import load_config
 from .._app_db import ApplicationDatabase
+from .._client import DBOSClient
 from .._dbos_config import _is_valid_app_name
 from .._docker_pg_helper import start_docker_pg, stop_docker_pg
 from .._sys_db import SystemDatabase, reset_system_database
-from .._workflow_commands import (
-    get_workflow,
-    list_queued_workflows,
-    list_workflow_steps,
-    list_workflows,
-)
 from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
+
+
+def start_client() -> DBOSClient:
+    config = load_config(silent=True)
+    database = config["database"]
+    username = quote(database["username"])
+    password = quote(database["password"])
+    database_url = f"postgresql://{username}:{password}@{database['hostname']}:{database['port']}/{database['app_db_name']}"
+    return DBOSClient(database_url=database_url)
+
 
 app = typer.Typer()
 workflow = typer.Typer()
@@ -252,7 +257,7 @@ def reset(
             raise typer.Exit()
     config = load_config()
     try:
-        reset_system_database(config)
+        start_client().reset_system_database(config)
     except sa.exc.SQLAlchemyError as e:
         typer.echo(f"Error resetting system database: {str(e)}")
         return
@@ -328,12 +333,27 @@ def list(
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
     ] = False,
+    sort_desc: Annotated[
+        bool,
+        typer.Option(
+            "--sort-desc",
+            "-d",
+            help="Sort the results in descending order",
+        ),
+    ] = False,
+    offset: Annotated[
+        typing.Optional[int],
+        typer.Option(
+            "--offset",
+            "-o",
+            help="Offset for pagination",
+        ),
+    ] = None,
 ) -> None:
-    config = load_config(silent=True)
-    sys_db = SystemDatabase(config["database"])
-    workflows = list_workflows(
-        sys_db,
+    workflows = start_client().list_workflows(
         limit=limit,
+        offset=offset,
+        sort_desc=sort_desc,
         user=user,
         start_time=starttime,
         end_time=endtime,
@@ -353,24 +373,20 @@ def get(
         typer.Option("--request", help="Retrieve workflow request information"),
     ] = False,
 ) -> None:
-    config = load_config(silent=True)
-    sys_db = SystemDatabase(config["database"])
-    print(
-        jsonpickle.encode(get_workflow(sys_db, workflow_id, request), unpicklable=False)
+    status = (
+        start_client()
+        .retrieve_workflow(workflow_id=workflow_id, request=request)
+        .get_status()
     )
+    print(jsonpickle.encode(status))
 
 
 @workflow.command(help="List the steps of a workflow")
 def steps(
     workflow_id: Annotated[str, typer.Argument()],
 ) -> None:
-    config = load_config(silent=True)
-    sys_db = SystemDatabase(config["database"])
-    app_db = ApplicationDatabase(config["database"])
     print(
-        jsonpickle.encode(
-            list_workflow_steps(sys_db, app_db, workflow_id), unpicklable=False
-        )
+        jsonpickle.encode(start_client().list_workflow_steps(workflow_id=workflow_id))
     )
 
 
@@ -379,74 +395,22 @@ def steps(
 )
 def cancel(
     uuid: Annotated[str, typer.Argument()],
-    host: Annotated[
-        typing.Optional[str],
-        typer.Option("--host", "-H", help="Specify the admin host"),
-    ] = "localhost",
-    port: Annotated[
-        typing.Optional[int],
-        typer.Option("--port", "-p", help="Specify the admin port"),
-    ] = 3001,
 ) -> None:
-    response = requests.post(
-        f"http://{host}:{port}/workflows/{uuid}/cancel", json=[], timeout=5
-    )
-
-    if response.status_code == 204:
-        print(f"Workflow {uuid} has been cancelled")
-    else:
-        print(f"Failed to cancel workflow {uuid}. Status code: {response.status_code}")
+    start_client().cancel_workflow(workflow_id=uuid)
 
 
 @workflow.command(help="Resume a workflow that has been cancelled")
 def resume(
     uuid: Annotated[str, typer.Argument()],
-    host: Annotated[
-        typing.Optional[str],
-        typer.Option("--host", "-H", help="Specify the admin host"),
-    ] = "localhost",
-    port: Annotated[
-        typing.Optional[int],
-        typer.Option("--port", "-p", help="Specify the admin port"),
-    ] = 3001,
 ) -> None:
-    response = requests.post(
-        f"http://{host}:{port}/workflows/{uuid}/resume", json=[], timeout=5
-    )
-
-    if response.status_code == 204:
-        print(f"Workflow {uuid} has been resumed")
-    else:
-        print(f"Failed to resume workflow {uuid}. Status code: {response.status_code}")
+    start_client().resume_workflow(workflow_id=uuid)
 
 
 @workflow.command(help="Restart a workflow from the beginning with a new id")
 def restart(
     uuid: Annotated[str, typer.Argument()],
-    host: Annotated[
-        typing.Optional[str],
-        typer.Option("--host", "-H", help="Specify the admin host"),
-    ] = "localhost",
-    port: Annotated[
-        typing.Optional[int],
-        typer.Option("--port", "-p", help="Specify the admin port"),
-    ] = 3001,
 ) -> None:
-    response = requests.post(
-        f"http://{host}:{port}/workflows/{uuid}/restart",
-        json=[],
-        timeout=5,
-    )
-
-    if response.status_code == 204:
-        print(f"Workflow {uuid} has been restarted")
-    else:
-        error_message = response.json().get("error", "Unknown error")
-        print(
-            f"Failed to restart workflow {uuid}. "
-            f"Status code: {response.status_code}. "
-            f"Error: {error_message}"
-        )
+    start_client().fork_workflow(workflow_id=uuid, start_step=1)
 
 
 @workflow.command(
@@ -454,16 +418,8 @@ def restart(
 )
 def fork(
     uuid: Annotated[str, typer.Argument()],
-    host: Annotated[
-        typing.Optional[str],
-        typer.Option("--host", "-H", help="Specify the admin host"),
-    ] = "localhost",
-    port: Annotated[
-        typing.Optional[int],
-        typer.Option("--port", "-p", help="Specify the admin port"),
-    ] = 3001,
     step: Annotated[
-        typing.Optional[int],
+        int,
         typer.Option(
             "--step",
             "-s",
@@ -472,21 +428,7 @@ def fork(
     ] = 1,
 ) -> None:
     print(f"Forking workflow {uuid} from step {step}")
-    response = requests.post(
-        f"http://{host}:{port}/workflows/{uuid}/fork",
-        json={"start_step": step},
-        timeout=5,
-    )
-
-    if response.status_code == 204:
-        print(f"Workflow {uuid} has been forked")
-    else:
-        error_message = response.json().get("error", "Unknown error")
-        print(
-            f"Failed to fork workflow {uuid}. "
-            f"Status code: {response.status_code}. "
-            f"Error: {error_message}"
-        )
+    start_client().fork_workflow(workflow_id=uuid, start_step=step)
 
 
 @queue.command(name="list", help="List enqueued functions for your application")
@@ -539,12 +481,27 @@ def list_queue(
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
     ] = False,
+    sort_desc: Annotated[
+        bool,
+        typer.Option(
+            "--sort-desc",
+            "-d",
+            help="Sort the results in descending order",
+        ),
+    ] = False,
+    offset: Annotated[
+        typing.Optional[int],
+        typer.Option(
+            "--offset",
+            "-o",
+            help="Offset for pagination",
+        ),
+    ] = None,
 ) -> None:
-    config = load_config(silent=True)
-    sys_db = SystemDatabase(config["database"])
-    workflows = list_queued_workflows(
-        sys_db=sys_db,
+    workflows = start_client().list_queued_workflows(
         limit=limit,
+        offset=offset,
+        sort_desc=sort_desc,
         start_time=start_time,
         end_time=end_time,
         queue_name=queue_name,

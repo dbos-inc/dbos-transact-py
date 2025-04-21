@@ -1,6 +1,5 @@
 import asyncio
 import sys
-import time
 import uuid
 from typing import Any, Generic, List, Optional, TypedDict, TypeVar
 
@@ -13,7 +12,7 @@ else:
 
 from dbos import _serialization
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
-from dbos._dbos_config import parse_database_url_to_dbconfig
+from dbos._dbos_config import ConfigFile, parse_database_url_to_dbconfig
 from dbos._error import DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._serialization import WorkflowInputs
@@ -23,6 +22,7 @@ from dbos._sys_db import (
     WorkflowStatus,
     WorkflowStatusInternal,
     WorkflowStatusString,
+    reset_system_database,
 )
 from dbos._workflow_commands import (
     fork_workflow,
@@ -158,8 +158,10 @@ class DBOSClient:
         workflow_id = await asyncio.to_thread(self._enqueue, options, *args, **kwargs)
         return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
 
-    def retrieve_workflow(self, workflow_id: str) -> WorkflowHandle[R]:
-        status = get_workflow(self._sys_db, workflow_id, True)
+    def retrieve_workflow(
+        self, workflow_id: str, request: bool = True
+    ) -> WorkflowHandle[R]:
+        status = get_workflow(self._sys_db, workflow_id, request)
         if status is None:
             raise DBOSNonExistentWorkflowError(workflow_id)
         return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
@@ -253,6 +255,7 @@ class DBOSClient:
         offset: Optional[int] = None,
         sort_desc: bool = False,
         workflow_id_prefix: Optional[str] = None,
+        request: bool = False,
     ) -> List[WorkflowStatus]:
         return list_workflows(
             self._sys_db,
@@ -267,6 +270,7 @@ class DBOSClient:
             offset=offset,
             sort_desc=sort_desc,
             workflow_id_prefix=workflow_id_prefix,
+            request=request,
         )
 
     async def list_workflows_async(
@@ -308,6 +312,7 @@ class DBOSClient:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
+        request: bool = False,
     ) -> List[WorkflowStatus]:
         return list_queued_workflows(
             self._sys_db,
@@ -319,6 +324,7 @@ class DBOSClient:
             limit=limit,
             offset=offset,
             sort_desc=sort_desc,
+            request=request,
         )
 
     async def list_queued_workflows_async(
@@ -364,3 +370,6 @@ class DBOSClient:
             fork_workflow, self._sys_db, self._app_db, workflow_id, start_step
         )
         return WorkflowHandleClientAsyncPolling[R](forked_workflow_id, self._sys_db)
+
+    def reset_system_database(self, config: ConfigFile) -> None:
+        return reset_system_database(config)
