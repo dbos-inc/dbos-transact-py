@@ -319,7 +319,7 @@ def load_config(
             called_from_cli = True
     if not called_from_cli:
         dbos_logger.warning(
-            "This function is deprecated and will be removed in a future version."
+            "This function is deprecated and will be removed in a future version. Use `DBOS.config` instead."
         )
 
     with open(config_file_path, "r") as file:
