@@ -317,7 +317,7 @@ def load_config(
     for frame_record in frame_records:
         if "dbos/cli/cli.py" in frame_record.filename:
             called_from_cli = True
-    if not called_from_cli:
+    if not called_from_cli and not silent:
         dbos_logger.warning(
             "This function is deprecated and will be removed in a future version. Use `DBOS.config` instead."
         )
