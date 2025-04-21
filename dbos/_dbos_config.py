@@ -1,3 +1,4 @@
+import inspect
 import json
 import os
 import re
@@ -310,9 +311,16 @@ def load_config(
 
     """
 
-    dbos_logger.warning(
-        "This function is deprecated and will be removed in a future version."
-    )
+    # Get the current call stack
+    frame_records = inspect.stack()
+    called_from_cli = False
+    for frame_record in frame_records:
+        if "dbos/cli/cli.py" in frame_record.filename:
+            called_from_cli = True
+    if not called_from_cli:
+        dbos_logger.warning(
+            "This function is deprecated and will be removed in a future version."
+        )
 
     with open(config_file_path, "r") as file:
         content = file.read()
