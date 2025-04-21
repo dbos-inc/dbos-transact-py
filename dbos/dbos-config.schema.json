@@ -24,17 +24,17 @@
         "additionalProperties": false,
         "properties": {
           "hostname": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "The hostname or IP address of the application database",
             "deprecated": true
           },
           "port": {
-            "type": "number",
+            "type": ["number", "null"],
             "description": "The port number of the application database",
             "deprecated": true
           },
           "username": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "The username to use when connecting to the application database",
             "not": {
               "enum": ["dbos"]
@@ -47,12 +47,12 @@
             "deprecated": true
           },
           "connectionTimeoutMillis": {
-            "type": "number",
+            "type": ["number", "null"],
             "description": "The number of milliseconds the system waits before timing out when connecting to the application database",
             "deprecated": true
           },
           "app_db_name": {
-            "type": "string",
+            "type": ["string", "null"],
             "description": "The name of the application database",
             "deprecated": true
           },
@@ -61,12 +61,14 @@
             "description": "The name of the system database"
           },
           "ssl": {
-            "type": "boolean",
-            "description": "Use SSL/TLS to securely connect to the database (default: true)"
+            "type": ["boolean", "null"],
+            "description": "Use SSL/TLS to securely connect to the database (default: true)",
+            "deprecated": true
           },
           "ssl_ca": {
-            "type": "string",
-            "description": "If using SSL/TLS to securely connect to a database, path to an SSL root certificate file"
+            "type": ["string", "null"],
+            "description": "If using SSL/TLS to securely connect to a database, path to an SSL root certificate file",
+            "deprecated": true
           },
           "migrate": {
             "type": "array",

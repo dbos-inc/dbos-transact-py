@@ -31,9 +31,10 @@ from typing import (
 from opentelemetry.trace import Span
 
 from dbos._conductor.conductor import ConductorWebsocket
+from dbos._sys_db import WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import (
-    WorkflowStatus,
+    fork_workflow,
     list_queued_workflows,
     list_workflows,
 )
@@ -67,7 +68,7 @@ from ._registrations import (
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
-from ._sys_db import reset_system_database
+from ._sys_db import StepInfo, WorkflowStatus, reset_system_database
 from ._tracer import dbos_tracer
 
 if TYPE_CHECKING:
@@ -113,7 +114,7 @@ from ._error import (
 from ._event_loop import BackgroundEventLoop
 from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
 from ._sys_db import SystemDatabase
-from ._workflow_commands import WorkflowStatus, get_workflow
+from ._workflow_commands import get_workflow, list_workflow_steps
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
@@ -363,13 +364,13 @@ class DBOS:
             check_config_consistency(name=unvalidated_config["name"])
 
         if unvalidated_config is not None:
-            self.config: ConfigFile = process_config(data=unvalidated_config)
+            self._config: ConfigFile = process_config(data=unvalidated_config)
         else:
             raise ValueError("No valid configuration was loaded.")
 
-        set_env_vars(self.config)
-        config_logger(self.config)
-        dbos_tracer.config(self.config)
+        set_env_vars(self._config)
+        config_logger(self._config)
+        dbos_tracer.config(self._config)
         dbos_logger.info("Initializing DBOS")
 
         # If using FastAPI, set up middleware and lifecycle events
@@ -467,10 +468,10 @@ class DBOS:
             if debug_mode:
                 return
 
-            admin_port = self.config.get("runtimeConfig", {}).get("admin_port")
+            admin_port = self._config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:
                 admin_port = 3001
-            run_admin_server = self.config.get("runtimeConfig", {}).get(
+            run_admin_server = self._config.get("runtimeConfig", {}).get(
                 "run_admin_server"
             )
             if run_admin_server:
@@ -568,7 +569,7 @@ class DBOS:
         assert (
             not self._launched
         ), "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
-        reset_system_database(self.config)
+        reset_system_database(self._config)
 
     def _destroy(self) -> None:
         self._initialized = False
@@ -604,7 +605,7 @@ class DBOS:
     # Decorators for DBOS functionality
     @classmethod
     def workflow(
-        cls, *, max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS
+        cls, *, max_recovery_attempts: Optional[int] = DEFAULT_MAX_RECOVERY_ATTEMPTS
     ) -> Callable[[Callable[P, R]], Callable[P, R]]:
         """Decorate a function for use as a DBOS workflow."""
         return decorate_workflow(_get_or_create_dbos_registry(), max_recovery_attempts)
@@ -964,40 +965,19 @@ class DBOS:
     @classmethod
     def restart_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID"""
-
         return cls.fork_workflow(workflow_id, 1)
 
     @classmethod
-    def fork_workflow(
-        cls, workflow_id: str, start_step: int = 1
-    ) -> WorkflowHandle[Any]:
-        """Restart a workflow with a new workflow ID"""
-
-        def get_max_function_id(workflow_uuid: str) -> int:
-            max_transactions = (
-                _get_dbos_instance()._app_db.get_max_function_id(workflow_uuid) or 0
-            )
-            max_operations = (
-                _get_dbos_instance()._sys_db.get_max_function_id(workflow_uuid) or 0
-            )
-            return max(max_transactions, max_operations)
-
-        max_function_id = get_max_function_id(workflow_id)
-        if max_function_id > 0 and start_step > max_function_id:
-            raise DBOSException(
-                f"Cannot fork workflow {workflow_id} at step {start_step}. The workflow has  {max_function_id} steps."
-            )
+    def fork_workflow(cls, workflow_id: str, start_step: int) -> WorkflowHandle[Any]:
+        """Restart a workflow with a new workflow ID from a specific step"""
 
         def fn() -> str:
-            forked_workflow_id = str(uuid.uuid4())
             dbos_logger.info(f"Forking workflow: {workflow_id} from step {start_step}")
-
-            _get_dbos_instance()._app_db.clone_workflow_transactions(
-                workflow_id, forked_workflow_id, start_step
-            )
-
-            return _get_dbos_instance()._sys_db.fork_workflow(
-                workflow_id, forked_workflow_id, start_step
+            return fork_workflow(
+                _get_dbos_instance()._sys_db,
+                _get_dbos_instance()._app_db,
+                workflow_id,
+                start_step,
             )
 
         new_id = _get_dbos_instance()._sys_db.call_function_as_step(
@@ -1019,6 +999,7 @@ class DBOS:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
+        workflow_id_prefix: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         def fn() -> List[WorkflowStatus]:
             return list_workflows(
@@ -1033,6 +1014,7 @@ class DBOS:
                 limit=limit,
                 offset=offset,
                 sort_desc=sort_desc,
+                workflow_id_prefix=workflow_id_prefix,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -1069,6 +1051,17 @@ class DBOS:
             fn, "DBOS.listQueuedWorkflows"
         )
 
+    @classmethod
+    def list_workflow_steps(cls, workflow_id: str) -> List[StepInfo]:
+        def fn() -> List[StepInfo]:
+            return list_workflow_steps(
+                _get_dbos_instance()._sys_db, _get_dbos_instance()._app_db, workflow_id
+            )
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.listWorkflowSteps"
+        )
+
     @classproperty
     def logger(cls) -> Logger:
         """Return the DBOS `Logger` for the current context."""
@@ -1079,15 +1072,15 @@ class DBOS:
         """Return the DBOS `ConfigFile` for the current context."""
         global _dbos_global_instance
         if _dbos_global_instance is not None:
-            return _dbos_global_instance.config
+            return _dbos_global_instance._config
         reg = _get_or_create_dbos_registry()
         if reg.config is not None:
             return reg.config
-        config = (
+        loaded_config = (
             load_config()
         )  # This will return the processed & validated config (with defaults)
-        reg.config = config
-        return config
+        reg.config = loaded_config
+        return loaded_config
 
     @classproperty
     def sql_session(cls) -> Session:

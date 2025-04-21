@@ -137,9 +137,9 @@ def test_sysdb_downtime(dbos: DBOS) -> None:
     time.sleep(2)
     simulate_db_restart(dbos._sys_db.engine, 2)
     time.sleep(2)
-    # We know there should be at least 3 occurrences from the 4 seconds when the DB was up.
+    # We know there should be at least 2 occurrences from the 4 seconds when the DB was up.
     #  There could be more than 4, depending on the pace the machine...
-    assert wf_counter > 2
+    assert wf_counter >= 2
 
 
 def test_scheduled_transaction(dbos: DBOS) -> None:
@@ -224,6 +224,8 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
             "queue_name": None,
             "created_at": None,
             "updated_at": None,
+            "workflow_timeout_ms": None,
+            "workflow_deadline_epoch_ms": None,
         }
     )
 

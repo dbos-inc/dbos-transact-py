@@ -1,7 +1,10 @@
 import asyncio
 import sys
+import time
 import uuid
 from typing import Any, Generic, List, Optional, TypedDict, TypeVar
+
+from dbos._app_db import ApplicationDatabase
 
 if sys.version_info < (3, 11):
     from typing_extensions import NotRequired
@@ -13,11 +16,18 @@ from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._error import DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._serialization import WorkflowInputs
-from dbos._sys_db import SystemDatabase, WorkflowStatusInternal, WorkflowStatusString
-from dbos._workflow_commands import (
+from dbos._sys_db import (
+    StepInfo,
+    SystemDatabase,
     WorkflowStatus,
+    WorkflowStatusInternal,
+    WorkflowStatusString,
+)
+from dbos._workflow_commands import (
+    fork_workflow,
     get_workflow,
     list_queued_workflows,
+    list_workflow_steps,
     list_workflows,
 )
 
@@ -29,6 +39,7 @@ class EnqueueOptions(TypedDict):
     queue_name: str
     workflow_id: NotRequired[str]
     app_version: NotRequired[str]
+    workflow_timeout: NotRequired[float]
 
 
 class WorkflowHandleClientPolling(Generic[R]):
@@ -44,7 +55,7 @@ class WorkflowHandleClientPolling(Generic[R]):
         res: R = self._sys_db.await_workflow_result(self.workflow_id)
         return res
 
-    def get_status(self) -> "WorkflowStatus":
+    def get_status(self) -> WorkflowStatus:
         status = get_workflow(self._sys_db, self.workflow_id, True)
         if status is None:
             raise DBOSNonExistentWorkflowError(self.workflow_id)
@@ -66,7 +77,7 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
         )
         return res
 
-    async def get_status(self) -> "WorkflowStatus":
+    async def get_status(self) -> WorkflowStatus:
         status = await asyncio.to_thread(
             get_workflow, self._sys_db, self.workflow_id, True
         )
@@ -78,6 +89,7 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
 class DBOSClient:
     def __init__(self, database_url: str, *, system_database: Optional[str] = None):
         self._sys_db = SystemDatabase(database_url, sys_db_name=system_database)
+        self._app_db = ApplicationDatabase(database_url)
 
     def destroy(self) -> None:
         self._sys_db.destroy()
@@ -93,6 +105,7 @@ class DBOSClient:
         workflow_id = options.get("workflow_id")
         if workflow_id is None:
             workflow_id = str(uuid.uuid4())
+        workflow_timeout = options.get("workflow_timeout", None)
 
         status: WorkflowStatusInternal = {
             "workflow_uuid": workflow_id,
@@ -113,6 +126,10 @@ class DBOSClient:
             "executor_id": None,
             "recovery_attempts": None,
             "app_id": None,
+            "workflow_timeout_ms": (
+                int(workflow_timeout * 1000) if workflow_timeout is not None else None
+            ),
+            "workflow_deadline_epoch_ms": None,
         }
 
         inputs: WorkflowInputs = {
@@ -120,12 +137,9 @@ class DBOSClient:
             "kwargs": kwargs,
         }
 
-        wf_status = self._sys_db.insert_workflow_status(status)
-        self._sys_db.update_workflow_inputs(
-            workflow_id, _serialization.serialize_args(inputs)
+        self._sys_db.init_workflow(
+            status, _serialization.serialize_args(inputs), max_recovery_attempts=None
         )
-        if wf_status == WorkflowStatusString.ENQUEUED.value:
-            self._sys_db.enqueue(workflow_id, queue_name)
         return workflow_id
 
     def enqueue(
@@ -179,8 +193,13 @@ class DBOSClient:
             "recovery_attempts": None,
             "app_id": None,
             "app_version": None,
+            "workflow_timeout_ms": None,
+            "workflow_deadline_epoch_ms": None,
         }
-        self._sys_db.insert_workflow_status(status)
+        with self._sys_db.engine.begin() as conn:
+            self._sys_db.insert_workflow_status(
+                status, conn, max_recovery_attempts=None
+            )
         self._sys_db.send(status["workflow_uuid"], 0, destination_id, message, topic)
 
     async def send_async(
@@ -229,6 +248,7 @@ class DBOSClient:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
+        workflow_id_prefix: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         return list_workflows(
             self._sys_db,
@@ -242,6 +262,7 @@ class DBOSClient:
             limit=limit,
             offset=offset,
             sort_desc=sort_desc,
+            workflow_id_prefix=workflow_id_prefix,
         )
 
     async def list_workflows_async(
@@ -319,3 +340,23 @@ class DBOSClient:
             offset=offset,
             sort_desc=sort_desc,
         )
+
+    def list_workflow_steps(self, workflow_id: str) -> List[StepInfo]:
+        return list_workflow_steps(self._sys_db, self._app_db, workflow_id)
+
+    async def list_workflow_steps_async(self, workflow_id: str) -> List[StepInfo]:
+        return await asyncio.to_thread(self.list_workflow_steps, workflow_id)
+
+    def fork_workflow(self, workflow_id: str, start_step: int) -> WorkflowHandle[R]:
+        forked_workflow_id = fork_workflow(
+            self._sys_db, self._app_db, workflow_id, start_step
+        )
+        return WorkflowHandleClientPolling[R](forked_workflow_id, self._sys_db)
+
+    async def fork_workflow_async(
+        self, workflow_id: str, start_step: int
+    ) -> WorkflowHandleAsync[R]:
+        forked_workflow_id = await asyncio.to_thread(
+            fork_workflow, self._sys_db, self._app_db, workflow_id, start_step
+        )
+        return WorkflowHandleClientAsyncPolling[R](forked_workflow_id, self._sys_db)

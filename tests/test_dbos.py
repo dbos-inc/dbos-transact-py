@@ -15,8 +15,16 @@ import sqlalchemy as sa
 from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle, WorkflowStatusString
 
 # Private API because this is a test
-from dbos._context import assert_current_dbos_context, get_local_dbos_context
-from dbos._error import DBOSConflictingRegistrationError, DBOSMaxStepRetriesExceeded
+from dbos._context import (
+    SetWorkflowTimeout,
+    assert_current_dbos_context,
+    get_local_dbos_context,
+)
+from dbos._error import (
+    DBOSConflictingRegistrationError,
+    DBOSMaxStepRetriesExceeded,
+    DBOSWorkflowCancelledError,
+)
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import GetWorkflowsInput
 from dbos._utils import GlobalParams
@@ -297,13 +305,13 @@ def test_temp_workflow(dbos: DBOS) -> None:
     assert res == "var"
 
     wfs = dbos._sys_db.get_workflows(gwi)
-    assert len(wfs.workflow_uuids) == 2
+    assert len(wfs) == 2
 
-    wfi1 = dbos._sys_db.get_workflow_status(wfs.workflow_uuids[0])
+    wfi1 = dbos._sys_db.get_workflow_status(wfs[0].workflow_id)
     assert wfi1
     assert wfi1["name"].startswith("<temp>")
 
-    wfi2 = dbos._sys_db.get_workflow_status(wfs.workflow_uuids[1])
+    wfi2 = dbos._sys_db.get_workflow_status(wfs[1].workflow_id)
     assert wfi2
     assert wfi2["name"].startswith("<temp>")
 
@@ -518,10 +526,10 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
         assert res == "bob1"
 
     wfs = dbos._sys_db.get_workflows(gwi)
-    assert len(wfs.workflow_uuids) == 1
-    assert wfs.workflow_uuids[0] == wfuuid
+    assert len(wfs) == 1
+    assert wfs[0].workflow_id == wfuuid
 
-    wfi = dbos._sys_db.get_workflow_status(wfs.workflow_uuids[0])
+    wfi = dbos._sys_db.get_workflow_status(wfs[0].workflow_id)
     assert wfi
     assert wfi["name"].startswith("<temp>")
 
@@ -539,10 +547,10 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert workflow_handles[0].get_result() == "bob1"
 
     wfs = dbos._sys_db.get_workflows(gwi)
-    assert len(wfs.workflow_uuids) == 1
-    assert wfs.workflow_uuids[0] == wfuuid
+    assert len(wfs) == 1
+    assert wfs[0].workflow_id == wfuuid
 
-    wfi = dbos._sys_db.get_workflow_status(wfs.workflow_uuids[0])
+    wfi = dbos._sys_db.get_workflow_status(wfs[0].workflow_id)
     assert wfi
     assert wfi["name"].startswith("<temp>")
     assert wfi["status"] == "SUCCESS"
@@ -591,6 +599,8 @@ def test_recovery_thread(config: ConfigFile) -> None:
             "queue_name": None,
             "created_at": None,
             "updated_at": None,
+            "workflow_timeout_ms": None,
+            "workflow_deadline_epoch_ms": None,
         }
     )
 
@@ -937,15 +947,46 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     assert handle.get_result() == "testsend1"
 
     wfs = dbos._sys_db.get_workflows(gwi)
-    assert len(wfs.workflow_uuids) == 2
-    assert wfs.workflow_uuids[0] == dest_uuid
-    assert wfs.workflow_uuids[1] != dest_uuid
+    assert len(wfs) == 2
+    assert wfs[0].workflow_id == dest_uuid
+    assert wfs[1].workflow_id != dest_uuid
 
-    wfi = dbos._sys_db.get_workflow_status(wfs.workflow_uuids[1])
+    wfi = dbos._sys_db.get_workflow_status(wfs[1].workflow_id)
     assert wfi
     assert wfi["name"] == "<temp>.temp_send_workflow"
 
     assert recv_counter == 1
+
+    # Test substring search
+    gwi.start_time = None
+    gwi.workflow_id_prefix = dest_uuid
+    wfs = dbos._sys_db.get_workflows(gwi)
+    assert wfs[0].workflow_id == dest_uuid
+
+    gwi.workflow_id_prefix = dest_uuid[0:10]
+    wfs = dbos._sys_db.get_workflows(gwi)
+    assert dest_uuid in [w.workflow_id for w in wfs]
+
+    gwi.start_time = cur_time
+    gwi.workflow_id_prefix = dest_uuid[0:10]
+    wfs = dbos._sys_db.get_workflows(gwi)
+    assert dest_uuid in [w.workflow_id for w in wfs]
+
+    x = dbos.list_workflows(
+        start_time=datetime.datetime.now().isoformat(),
+        workflow_id_prefix=dest_uuid[0:10],
+    )
+    assert len(x) == 0
+
+    x = dbos.list_workflows(workflow_id_prefix=dest_uuid[0:10])
+    assert len(x) >= 1
+    assert dest_uuid in [w.workflow_id for w in x]
+
+    x = dbos.list_workflows(workflow_id_prefix=dest_uuid + "thisdoesnotexist")
+    assert len(x) == 0
+
+    x = dbos.list_workflows(workflow_id_prefix="1" + dest_uuid)
+    assert len(x) == 0
 
 
 def test_set_get_events(dbos: DBOS) -> None:
@@ -1446,3 +1487,86 @@ def test_recovery_appversion(config: ConfigFile) -> None:
 
     # Clean up the environment variable
     del os.environ["DBOS__VMID"]
+
+
+def test_workflow_timeout(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def blocked_workflow() -> None:
+        assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
+        while True:
+            DBOS.sleep(0.1)
+
+    # Verify a blocked workflow called with a timeout is cancelled
+    wfid = str(uuid.uuid4())
+    with SetWorkflowTimeout(0.1):
+        with pytest.raises(DBOSWorkflowCancelledError):
+            with SetWorkflowID(wfid):
+                blocked_workflow()
+        assert assert_current_dbos_context().workflow_deadline_epoch_ms is None
+        handle = DBOS.start_workflow(blocked_workflow)
+        with pytest.raises(DBOSWorkflowCancelledError):
+            handle.get_result()
+
+    # Change the workflow status to pending
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": "PENDING"})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+        )
+    # Recover the workflow, verify it still times out
+    handles = DBOS._recover_pending_workflows()
+    assert len(handles) == 1
+    with pytest.raises(DBOSWorkflowCancelledError):
+        handles[0].get_result()
+
+    @DBOS.workflow()
+    def parent_workflow_with_timeout() -> None:
+        assert assert_current_dbos_context().workflow_deadline_epoch_ms is None
+        with SetWorkflowTimeout(0.1):
+            with pytest.raises(DBOSWorkflowCancelledError):
+                blocked_workflow()
+            handle = DBOS.start_workflow(blocked_workflow)
+            with pytest.raises(DBOSWorkflowCancelledError):
+                handle.get_result()
+        assert assert_current_dbos_context().workflow_deadline_epoch_ms is None
+
+    # Verify if a parent calls a blocked workflow with a timeout, the child is cancelled
+    assert parent_workflow_with_timeout() == None
+
+    start_child, direct_child = str(uuid.uuid4()), str(uuid.uuid4())
+
+    @DBOS.workflow()
+    def parent_workflow() -> None:
+        assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
+        with SetWorkflowID(start_child):
+            DBOS.start_workflow(blocked_workflow)
+        with SetWorkflowID(direct_child):
+            blocked_workflow()
+
+    # Verify if a parent called with a timeout calls a blocked child
+    # the deadline propagates and the children are also cancelled.
+    with SetWorkflowTimeout(1.0):
+        with pytest.raises(DBOSWorkflowCancelledError):
+            parent_workflow()
+
+    with pytest.raises(Exception) as exc_info:
+        DBOS.retrieve_workflow(start_child).get_result()
+    assert "was cancelled" in str(exc_info.value)
+
+    with pytest.raises(Exception) as exc_info:
+        DBOS.retrieve_workflow(direct_child).get_result()
+    assert "was cancelled" in str(exc_info.value)
+
+    # Verify the context variables are set correctly
+    with SetWorkflowTimeout(1.0):
+        assert assert_current_dbos_context().workflow_timeout_ms == 1000
+        with SetWorkflowTimeout(2.0):
+            assert assert_current_dbos_context().workflow_timeout_ms == 2000
+        with SetWorkflowTimeout(None):
+            assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert assert_current_dbos_context().workflow_timeout_ms == 1000
+    assert get_local_dbos_context() is None

@@ -54,7 +54,9 @@ class SystemSchema:
             nullable=True,
             server_default=text("'0'::bigint"),
         ),
-        Column("queue_name", Text),
+        Column("queue_name", Text, nullable=True),
+        Column("workflow_timeout_ms", BigInteger, nullable=True),
+        Column("workflow_deadline_epoch_ms", BigInteger, nullable=True),
         Index("workflow_status_created_at_index", "created_at"),
         Index("workflow_status_executor_id_index", "executor_id"),
     )

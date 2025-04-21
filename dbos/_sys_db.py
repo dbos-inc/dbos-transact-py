@@ -1,4 +1,5 @@
 import datetime
+import json
 import logging
 import os
 import re
@@ -64,6 +65,50 @@ WorkflowStatuses = Literal[
 ]
 
 
+class WorkflowStatus:
+    # The workflow ID
+    workflow_id: str
+    # The workflow status. Must be one of ENQUEUED, PENDING, SUCCESS, ERROR, CANCELLED, or RETRIES_EXCEEDED
+    status: str
+    # The name of the workflow function
+    name: str
+    # The name of the workflow's class, if any
+    class_name: Optional[str]
+    # The name with which the workflow's class instance was configured, if any
+    config_name: Optional[str]
+    # The user who ran the workflow, if specified
+    authenticated_user: Optional[str]
+    # The role with which the workflow ran, if specified
+    assumed_role: Optional[str]
+    # All roles which the authenticated user could assume
+    authenticated_roles: Optional[list[str]]
+    # The deserialized workflow input object
+    input: Optional[_serialization.WorkflowInputs]
+    # The workflow's output, if any
+    output: Optional[Any] = None
+    # The error the workflow threw, if any
+    error: Optional[Exception] = None
+    # Workflow start time, as a Unix epoch timestamp in ms
+    created_at: Optional[int]
+    # Last time the workflow status was updated, as a Unix epoch timestamp in ms
+    updated_at: Optional[int]
+    # If this workflow was enqueued, on which queue
+    queue_name: Optional[str]
+    # The executor to most recently executed this workflow
+    executor_id: Optional[str]
+    # The application version on which this workflow was started
+    app_version: Optional[str]
+
+    # INTERNAL FIELDS
+
+    # The ID of the application executing this workflow
+    app_id: Optional[str]
+    # The number of times this workflow's execution has been attempted
+    recovery_attempts: Optional[int]
+    # The HTTP request that triggered the workflow, if known
+    request: Optional[str]
+
+
 class WorkflowStatusInternal(TypedDict):
     workflow_uuid: str
     status: WorkflowStatuses
@@ -83,6 +128,11 @@ class WorkflowStatusInternal(TypedDict):
     app_version: Optional[str]
     app_id: Optional[str]
     recovery_attempts: Optional[int]
+    # The start-to-close timeout of the workflow in ms
+    workflow_timeout_ms: Optional[int]
+    # The deadline of a workflow, computed by adding its timeout to its start time.
+    # Deadlines propagate to children. When the deadline is reached, the workflow is cancelled.
+    workflow_deadline_epoch_ms: Optional[int]
 
 
 class RecordedResult(TypedDict):
@@ -132,6 +182,9 @@ class GetWorkflowsInput:
         self.sort_desc: bool = (
             False  # If true, sort by created_at in DESC order. Default false (in ASC order).
         )
+        self.workflow_id_prefix: Optional[str] = (
+            None  # If set, search for workflow IDs starting with this string
+        )
 
 
 class GetQueuedWorkflowsInput(TypedDict):
@@ -143,11 +196,6 @@ class GetQueuedWorkflowsInput(TypedDict):
     offset: Optional[int]  # Offset into the matching records for pagination
     name: Optional[str]  # The name of the workflow function
     sort_desc: Optional[bool]  # Sort by created_at in DESC or ASC order
-
-
-class GetWorkflowsOutput:
-    def __init__(self, workflow_uuids: List[str]):
-        self.workflow_uuids = workflow_uuids
 
 
 class GetPendingWorkflowsOutput:
@@ -265,12 +313,14 @@ class SystemDatabase:
     def insert_workflow_status(
         self,
         status: WorkflowStatusInternal,
+        conn: sa.Connection,
         *,
-        max_recovery_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
-    ) -> WorkflowStatuses:
+        max_recovery_attempts: Optional[int],
+    ) -> tuple[WorkflowStatuses, Optional[int]]:
         if self._debug_mode:
             raise Exception("called insert_workflow_status in debug mode")
         wf_status: WorkflowStatuses = status["status"]
+        workflow_deadline_epoch_ms: Optional[int] = status["workflow_deadline_epoch_ms"]
 
         cmd = (
             pg.insert(SystemSchema.workflow_status)
@@ -293,6 +343,8 @@ class SystemDatabase:
                 recovery_attempts=(
                     1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
                 ),
+                workflow_timeout_ms=status["workflow_timeout_ms"],
+                workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
@@ -306,10 +358,9 @@ class SystemDatabase:
             )
         )
 
-        cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
+        cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.workflow_deadline_epoch_ms, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
 
-        with self.engine.begin() as c:
-            results = c.execute(cmd)
+        results = conn.execute(cmd)
 
         row = results.fetchone()
         if row is not None:
@@ -317,51 +368,58 @@ class SystemDatabase:
             # A mismatch indicates a workflow starting with the same UUID but different functions, which would throw an exception.
             recovery_attempts: int = row[0]
             wf_status = row[1]
+            workflow_deadline_epoch_ms = row[2]
             err_msg: Optional[str] = None
-            if row[2] != status["name"]:
-                err_msg = f"Workflow already exists with a different function name: {row[2]}, but the provided function name is: {status['name']}"
-            elif row[3] != status["class_name"]:
-                err_msg = f"Workflow already exists with a different class name: {row[3]}, but the provided class name is: {status['class_name']}"
-            elif row[4] != status["config_name"]:
-                err_msg = f"Workflow already exists with a different config name: {row[4]}, but the provided config name is: {status['config_name']}"
-            elif row[5] != status["queue_name"]:
+            if row[3] != status["name"]:
+                err_msg = f"Workflow already exists with a different function name: {row[3]}, but the provided function name is: {status['name']}"
+            elif row[4] != status["class_name"]:
+                err_msg = f"Workflow already exists with a different class name: {row[4]}, but the provided class name is: {status['class_name']}"
+            elif row[5] != status["config_name"]:
+                err_msg = f"Workflow already exists with a different config name: {row[5]}, but the provided config name is: {status['config_name']}"
+            elif row[6] != status["queue_name"]:
                 # This is a warning because a different queue name is not necessarily an error.
                 dbos_logger.warning(
-                    f"Workflow already exists in queue: {row[5]}, but the provided queue name is: {status['queue_name']}. The queue is not updated."
+                    f"Workflow already exists in queue: {row[6]}, but the provided queue name is: {status['queue_name']}. The queue is not updated."
                 )
             if err_msg is not None:
                 raise DBOSConflictingWorkflowError(status["workflow_uuid"], err_msg)
 
             # Every time we start executing a workflow (and thus attempt to insert its status), we increment `recovery_attempts` by 1.
             # When this number becomes equal to `maxRetries + 1`, we mark the workflow as `RETRIES_EXCEEDED`.
-            if recovery_attempts > max_recovery_attempts + 1:
-                with self.engine.begin() as c:
-                    c.execute(
-                        sa.delete(SystemSchema.workflow_queue).where(
-                            SystemSchema.workflow_queue.c.workflow_uuid
-                            == status["workflow_uuid"]
-                        )
+            if (
+                (wf_status != "SUCCESS" and wf_status != "ERROR")
+                and max_recovery_attempts is not None
+                and recovery_attempts > max_recovery_attempts + 1
+            ):
+                delete_cmd = sa.delete(SystemSchema.workflow_queue).where(
+                    SystemSchema.workflow_queue.c.workflow_uuid
+                    == status["workflow_uuid"]
+                )
+                conn.execute(delete_cmd)
+
+                dlq_cmd = (
+                    sa.update(SystemSchema.workflow_status)
+                    .where(
+                        SystemSchema.workflow_status.c.workflow_uuid
+                        == status["workflow_uuid"]
                     )
-                    c.execute(
-                        sa.update(SystemSchema.workflow_status)
-                        .where(
-                            SystemSchema.workflow_status.c.workflow_uuid
-                            == status["workflow_uuid"]
-                        )
-                        .where(
-                            SystemSchema.workflow_status.c.status
-                            == WorkflowStatusString.PENDING.value
-                        )
-                        .values(
-                            status=WorkflowStatusString.RETRIES_EXCEEDED.value,
-                            queue_name=None,
-                        )
+                    .where(
+                        SystemSchema.workflow_status.c.status
+                        == WorkflowStatusString.PENDING.value
                     )
+                    .values(
+                        status=WorkflowStatusString.RETRIES_EXCEEDED.value,
+                        queue_name=None,
+                    )
+                )
+                conn.execute(dlq_cmd)
+                # Need to commit here because we're throwing an exception
+                conn.commit()
                 raise DBOSDeadLetterQueueError(
                     status["workflow_uuid"], max_recovery_attempts
                 )
 
-        return wf_status
+        return wf_status, workflow_deadline_epoch_ms
 
     def update_workflow_status(
         self,
@@ -419,6 +477,18 @@ class SystemDatabase:
         if self._debug_mode:
             raise Exception("called cancel_workflow in debug mode")
         with self.engine.begin() as c:
+            # Check the status of the workflow. If it is complete, do nothing.
+            row = c.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.status,
+                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+            ).fetchone()
+            if (
+                row is None
+                or row[0] == WorkflowStatusString.SUCCESS.value
+                or row[0] == WorkflowStatusString.ERROR.value
+            ):
+                return
             # Remove the workflow from the queues table so it does not block the table
             c.execute(
                 sa.delete(SystemSchema.workflow_queue).where(
@@ -465,11 +535,15 @@ class SystemDatabase:
                     queue_name=INTERNAL_QUEUE_NAME,
                 )
             )
-            # Set the workflow's status to ENQUEUED and clear its recovery attempts.
+            # Set the workflow's status to ENQUEUED and clear its recovery attempts and deadline.
             c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-                .values(status=WorkflowStatusString.ENQUEUED.value, recovery_attempts=0)
+                .values(
+                    status=WorkflowStatusString.ENQUEUED.value,
+                    recovery_attempts=0,
+                    workflow_deadline_epoch_ms=None,
+                )
             )
 
     def get_max_function_id(self, workflow_uuid: str) -> Optional[int]:
@@ -582,6 +656,8 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.updated_at,
                     SystemSchema.workflow_status.c.application_version,
                     SystemSchema.workflow_status.c.application_id,
+                    SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
+                    SystemSchema.workflow_status.c.workflow_timeout_ms,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -605,6 +681,8 @@ class SystemDatabase:
                 "updated_at": row[12],
                 "app_version": row[13],
                 "app_id": row[14],
+                "workflow_deadline_epoch_ms": row[15],
+                "workflow_timeout_ms": row[16],
             }
             return status
 
@@ -635,7 +713,7 @@ class SystemDatabase:
             time.sleep(1)
 
     def update_workflow_inputs(
-        self, workflow_uuid: str, inputs: str, conn: Optional[sa.Connection] = None
+        self, workflow_uuid: str, inputs: str, conn: sa.Connection
     ) -> None:
         if self._debug_mode:
             raise Exception("called update_workflow_inputs in debug mode")
@@ -652,11 +730,8 @@ class SystemDatabase:
             )
             .returning(SystemSchema.workflow_inputs.c.inputs)
         )
-        if conn is not None:
-            row = conn.execute(cmd).fetchone()
-        else:
-            with self.engine.begin() as c:
-                row = c.execute(cmd).fetchone()
+
+        row = conn.execute(cmd).fetchone()
         if row is not None and row[0] != inputs:
             # In a distributed environment, scheduled workflows are enqueued multiple times with slightly different timestamps
             if not workflow_uuid.startswith("sched-"):
@@ -683,8 +758,37 @@ class SystemDatabase:
             )
             return inputs
 
-    def get_workflows(self, input: GetWorkflowsInput) -> GetWorkflowsOutput:
-        query = sa.select(SystemSchema.workflow_status.c.workflow_uuid)
+    def get_workflows(
+        self, input: GetWorkflowsInput, get_request: bool = False
+    ) -> List[WorkflowStatus]:
+        """
+        Retrieve a list of workflows result and inputs based on the input criteria. The result is a list of external-facing workflow status objects.
+        """
+        query = sa.select(
+            SystemSchema.workflow_status.c.workflow_uuid,
+            SystemSchema.workflow_status.c.status,
+            SystemSchema.workflow_status.c.name,
+            SystemSchema.workflow_status.c.request,
+            SystemSchema.workflow_status.c.recovery_attempts,
+            SystemSchema.workflow_status.c.config_name,
+            SystemSchema.workflow_status.c.class_name,
+            SystemSchema.workflow_status.c.authenticated_user,
+            SystemSchema.workflow_status.c.authenticated_roles,
+            SystemSchema.workflow_status.c.assumed_role,
+            SystemSchema.workflow_status.c.queue_name,
+            SystemSchema.workflow_status.c.executor_id,
+            SystemSchema.workflow_status.c.created_at,
+            SystemSchema.workflow_status.c.updated_at,
+            SystemSchema.workflow_status.c.application_version,
+            SystemSchema.workflow_status.c.application_id,
+            SystemSchema.workflow_inputs.c.inputs,
+            SystemSchema.workflow_status.c.output,
+            SystemSchema.workflow_status.c.error,
+        ).join(
+            SystemSchema.workflow_inputs,
+            SystemSchema.workflow_status.c.workflow_uuid
+            == SystemSchema.workflow_inputs.c.workflow_uuid,
+        )
         if input.sort_desc:
             query = query.order_by(SystemSchema.workflow_status.c.created_at.desc())
         else:
@@ -717,6 +821,12 @@ class SystemDatabase:
             query = query.where(
                 SystemSchema.workflow_status.c.workflow_uuid.in_(input.workflow_ids)
             )
+        if input.workflow_id_prefix:
+            query = query.where(
+                SystemSchema.workflow_status.c.workflow_uuid.startswith(
+                    input.workflow_id_prefix
+                )
+            )
         if input.limit:
             query = query.limit(input.limit)
         if input.offset:
@@ -724,18 +834,76 @@ class SystemDatabase:
 
         with self.engine.begin() as c:
             rows = c.execute(query)
-        workflow_ids = [row[0] for row in rows]
 
-        return GetWorkflowsOutput(workflow_ids)
+        infos: List[WorkflowStatus] = []
+        for row in rows:
+            info = WorkflowStatus()
+            info.workflow_id = row[0]
+            info.status = row[1]
+            info.name = row[2]
+            info.request = row[3] if get_request else None
+            info.recovery_attempts = row[4]
+            info.config_name = row[5]
+            info.class_name = row[6]
+            info.authenticated_user = row[7]
+            info.authenticated_roles = (
+                json.loads(row[8]) if row[8] is not None else None
+            )
+            info.assumed_role = row[9]
+            info.queue_name = row[10]
+            info.executor_id = row[11]
+            info.created_at = row[12]
+            info.updated_at = row[13]
+            info.app_version = row[14]
+            info.app_id = row[15]
+
+            inputs = _serialization.deserialize_args(row[16])
+            if inputs is not None:
+                info.input = inputs
+            if info.status == WorkflowStatusString.SUCCESS.value:
+                info.output = _serialization.deserialize(row[17])
+            elif info.status == WorkflowStatusString.ERROR.value:
+                info.error = _serialization.deserialize_exception(row[18])
+
+            infos.append(info)
+        return infos
 
     def get_queued_workflows(
-        self, input: GetQueuedWorkflowsInput
-    ) -> GetWorkflowsOutput:
-
-        query = sa.select(SystemSchema.workflow_queue.c.workflow_uuid).join(
-            SystemSchema.workflow_status,
-            SystemSchema.workflow_queue.c.workflow_uuid
-            == SystemSchema.workflow_status.c.workflow_uuid,
+        self, input: GetQueuedWorkflowsInput, get_request: bool = False
+    ) -> List[WorkflowStatus]:
+        """
+        Retrieve a list of queued workflows result and inputs based on the input criteria. The result is a list of external-facing workflow status objects.
+        """
+        query = sa.select(
+            SystemSchema.workflow_status.c.workflow_uuid,
+            SystemSchema.workflow_status.c.status,
+            SystemSchema.workflow_status.c.name,
+            SystemSchema.workflow_status.c.request,
+            SystemSchema.workflow_status.c.recovery_attempts,
+            SystemSchema.workflow_status.c.config_name,
+            SystemSchema.workflow_status.c.class_name,
+            SystemSchema.workflow_status.c.authenticated_user,
+            SystemSchema.workflow_status.c.authenticated_roles,
+            SystemSchema.workflow_status.c.assumed_role,
+            SystemSchema.workflow_status.c.queue_name,
+            SystemSchema.workflow_status.c.executor_id,
+            SystemSchema.workflow_status.c.created_at,
+            SystemSchema.workflow_status.c.updated_at,
+            SystemSchema.workflow_status.c.application_version,
+            SystemSchema.workflow_status.c.application_id,
+            SystemSchema.workflow_inputs.c.inputs,
+            SystemSchema.workflow_status.c.output,
+            SystemSchema.workflow_status.c.error,
+        ).select_from(
+            SystemSchema.workflow_queue.join(
+                SystemSchema.workflow_status,
+                SystemSchema.workflow_queue.c.workflow_uuid
+                == SystemSchema.workflow_status.c.workflow_uuid,
+            ).join(
+                SystemSchema.workflow_inputs,
+                SystemSchema.workflow_queue.c.workflow_uuid
+                == SystemSchema.workflow_inputs.c.workflow_uuid,
+            )
         )
         if input["sort_desc"]:
             query = query.order_by(SystemSchema.workflow_status.c.created_at.desc())
@@ -772,9 +940,40 @@ class SystemDatabase:
 
         with self.engine.begin() as c:
             rows = c.execute(query)
-        workflow_uuids = [row[0] for row in rows]
 
-        return GetWorkflowsOutput(workflow_uuids)
+        infos: List[WorkflowStatus] = []
+        for row in rows:
+            info = WorkflowStatus()
+            info.workflow_id = row[0]
+            info.status = row[1]
+            info.name = row[2]
+            info.request = row[3] if get_request else None
+            info.recovery_attempts = row[4]
+            info.config_name = row[5]
+            info.class_name = row[6]
+            info.authenticated_user = row[7]
+            info.authenticated_roles = (
+                json.loads(row[8]) if row[8] is not None else None
+            )
+            info.assumed_role = row[9]
+            info.queue_name = row[10]
+            info.executor_id = row[11]
+            info.created_at = row[12]
+            info.updated_at = row[13]
+            info.app_version = row[14]
+            info.app_id = row[15]
+
+            inputs = _serialization.deserialize_args(row[16])
+            if inputs is not None:
+                info.input = inputs
+            if info.status == WorkflowStatusString.SUCCESS.value:
+                info.output = _serialization.deserialize(row[17])
+            elif info.status == WorkflowStatusString.ERROR.value:
+                info.error = _serialization.deserialize_exception(row[18])
+
+            infos.append(info)
+
+        return infos
 
     def get_pending_workflows(
         self, executor_id: str, app_version: str
@@ -913,50 +1112,56 @@ class SystemDatabase:
         *,
         conn: Optional[sa.Connection] = None,
     ) -> Optional[RecordedResult]:
-        # Retrieve the status of the workflow. Additionally, if this step
-        # has run before, retrieve its name, output, and error.
-        sql = (
-            sa.select(
-                SystemSchema.workflow_status.c.status,
-                SystemSchema.operation_outputs.c.output,
-                SystemSchema.operation_outputs.c.error,
-                SystemSchema.operation_outputs.c.function_name,
-            )
-            .select_from(
-                SystemSchema.workflow_status.outerjoin(
-                    SystemSchema.operation_outputs,
-                    (
-                        SystemSchema.workflow_status.c.workflow_uuid
-                        == SystemSchema.operation_outputs.c.workflow_uuid
-                    )
-                    & (SystemSchema.operation_outputs.c.function_id == function_id),
-                )
-            )
-            .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+        # First query: Retrieve the workflow status
+        workflow_status_sql = sa.select(
+            SystemSchema.workflow_status.c.status,
+        ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+
+        # Second query: Retrieve operation outputs if they exist
+        operation_output_sql = sa.select(
+            SystemSchema.operation_outputs.c.output,
+            SystemSchema.operation_outputs.c.error,
+            SystemSchema.operation_outputs.c.function_name,
+        ).where(
+            (SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
+            & (SystemSchema.operation_outputs.c.function_id == function_id)
         )
-        # If in a transaction, use the provided connection
-        rows: Sequence[Any]
+
+        # Execute both queries
         if conn is not None:
-            rows = conn.execute(sql).all()
+            workflow_status_rows = conn.execute(workflow_status_sql).all()
+            operation_output_rows = conn.execute(operation_output_sql).all()
         else:
             with self.engine.begin() as c:
-                rows = c.execute(sql).all()
-        assert len(rows) > 0, f"Error: Workflow {workflow_id} does not exist"
-        workflow_status, output, error, recorded_function_name = (
-            rows[0][0],
-            rows[0][1],
-            rows[0][2],
-            rows[0][3],
-        )
+                workflow_status_rows = c.execute(workflow_status_sql).all()
+                operation_output_rows = c.execute(operation_output_sql).all()
+
+        # Check if the workflow exists
+        assert (
+            len(workflow_status_rows) > 0
+        ), f"Error: Workflow {workflow_id} does not exist"
+
+        # Get workflow status
+        workflow_status = workflow_status_rows[0][0]
+
         # If the workflow is cancelled, raise the exception
         if workflow_status == WorkflowStatusString.CANCELLED.value:
             raise DBOSWorkflowCancelledError(
                 f"Workflow {workflow_id} is cancelled. Aborting function."
             )
-        # If there is no row for the function, return None
-        if recorded_function_name is None:
+
+        # If there are no operation outputs, return None
+        if not operation_output_rows:
             return None
-        # If the provided and recorded function name are different, throw an exception.
+
+        # Extract operation output data
+        output, error, recorded_function_name = (
+            operation_output_rows[0][0],
+            operation_output_rows[0][1],
+            operation_output_rows[0][2],
+        )
+
+        # If the provided and recorded function name are different, throw an exception
         if function_name != recorded_function_name:
             raise DBOSUnexpectedStepError(
                 workflow_id=workflow_id,
@@ -964,6 +1169,7 @@ class SystemDatabase:
                 expected_name=function_name,
                 recorded_name=recorded_function_name,
             )
+
         result: RecordedResult = {
             "output": output,
             "error": error,
@@ -1363,18 +1569,17 @@ class SystemDatabase:
             )
         return value
 
-    def enqueue(self, workflow_id: str, queue_name: str) -> None:
+    def enqueue(self, workflow_id: str, queue_name: str, conn: sa.Connection) -> None:
         if self._debug_mode:
             raise Exception("called enqueue in debug mode")
-        with self.engine.begin() as c:
-            c.execute(
-                pg.insert(SystemSchema.workflow_queue)
-                .values(
-                    workflow_uuid=workflow_id,
-                    queue_name=queue_name,
-                )
-                .on_conflict_do_nothing()
+        conn.execute(
+            pg.insert(SystemSchema.workflow_queue)
+            .values(
+                workflow_uuid=workflow_id,
+                queue_name=queue_name,
             )
+            .on_conflict_do_nothing()
+        )
 
     def start_queued_workflows(
         self, queue: "Queue", executor_id: str, app_version: str
@@ -1513,6 +1718,17 @@ class SystemDatabase:
                         status=WorkflowStatusString.PENDING.value,
                         application_version=app_version,
                         executor_id=executor_id,
+                        # If a timeout is set, set the deadline on dequeue
+                        workflow_deadline_epoch_ms=sa.case(
+                            (
+                                SystemSchema.workflow_status.c.workflow_timeout_ms.isnot(
+                                    None
+                                ),
+                                sa.func.extract("epoch", sa.func.now()) * 1000
+                                + SystemSchema.workflow_status.c.workflow_timeout_ms,
+                            ),
+                            else_=SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
+                        ),
                     )
                 )
                 if res.rowcount > 0:
@@ -1628,6 +1844,30 @@ class SystemDatabase:
                 }
             )
         return result
+
+    def init_workflow(
+        self,
+        status: WorkflowStatusInternal,
+        inputs: str,
+        *,
+        max_recovery_attempts: Optional[int],
+    ) -> tuple[WorkflowStatuses, Optional[int]]:
+        """
+        Synchronously record the status and inputs for workflows in a single transaction
+        """
+        with self.engine.begin() as conn:
+            wf_status, workflow_deadline_epoch_ms = self.insert_workflow_status(
+                status, conn, max_recovery_attempts=max_recovery_attempts
+            )
+            # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
+            self.update_workflow_inputs(status["workflow_uuid"], inputs, conn)
+
+            if (
+                status["queue_name"] is not None
+                and wf_status == WorkflowStatusString.ENQUEUED.value
+            ):
+                self.enqueue(status["workflow_uuid"], status["queue_name"], conn)
+        return wf_status, workflow_deadline_epoch_ms
 
 
 def reset_system_database(config: ConfigFile) -> None:
