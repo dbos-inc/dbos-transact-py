@@ -326,7 +326,7 @@ def process_config(
     silent: bool = False,
 ) -> ConfigFile:
     """
-    If a database_url is provided, pass it as is in the config (MAYBE: and backfill the data.database fields)
+    If a database_url is provided, pass it as is in the config
 
     Else, build a database_url from the data.database fields
 
@@ -443,11 +443,15 @@ def process_config(
         assert _connect_timeout is not None
         _connect_timeout = int(_connect_timeout / 1000)
 
-        connection_string = f"postgres://{_username}:{_password}@{_hostname}:{_port}/{_app_db_name}?connect_timeout={int(_connect_timeout)}"
+        data["database_url"] = (
+            f"postgres://{_username}:{_password}@{_hostname}:{_port}/{_app_db_name}?connect_timeout={int(_connect_timeout)}"
+        )
 
         # Pretty-print where we've loaded database connection information from, respecting the log level
         if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
-            conn_string = make_url(connection_string)
+            conn_string = make_url(data["database_url"]).render_as_string(
+                hide_password=True
+            )
             if isDebugMode:
                 print(
                     f"[bold blue]Loading database connection string from debug environment variables: {conn_string}[/bold blue]"
@@ -456,9 +460,6 @@ def process_config(
                 print(
                     f"[bold blue]Using default database connection string: {conn_string}[/bold blue]"
                 )
-
-        # Finally craft the database url
-        data["database_url"] = connection_string
 
     # Return data as ConfigFile type
     return data

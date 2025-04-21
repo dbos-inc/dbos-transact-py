@@ -33,11 +33,7 @@ from opentelemetry.trace import Span
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._sys_db import WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
-from dbos._workflow_commands import (
-    fork_workflow,
-    list_queued_workflows,
-    list_workflows,
-)
+from dbos._workflow_commands import fork_workflow, list_queued_workflows, list_workflows
 
 from ._classproperty import classproperty
 from ._core import (
@@ -457,6 +453,7 @@ class DBOS:
             self._sys_db_field = SystemDatabase(
                 self.config["database_url"],
                 pool_size=self.config["database"]["sys_db_pool_size"],
+                sys_db_name=self.config["database"]["sys_db_name"],
                 debug_mode=debug_mode,
             )
             self._app_db_field = ApplicationDatabase(

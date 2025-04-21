@@ -3,7 +3,6 @@ from typing import List, Optional, TypedDict
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 from sqlalchemy import inspect, text
-from sqlalchemy.dialects.postgresql.psycopg import PGDialect_psycopg
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -32,7 +31,11 @@ class RecordedResult(TypedDict):
 class ApplicationDatabase:
 
     def __init__(
-        self, database_url: str, *, pool_size: Optional[int] = 20, debug_mode: bool = False
+        self,
+        database_url: str,
+        *,
+        pool_size: Optional[int] = 20,
+        debug_mode: bool = False,
     ):
         app_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
 
