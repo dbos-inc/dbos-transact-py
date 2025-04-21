@@ -59,7 +59,7 @@ class RuntimeConfig(TypedDict, total=False):
 
 class DatabaseConfig(TypedDict, total=False):
     """
-    Data structure containing the DBOS database configuration.
+    Internal data structure containing the DBOS database configuration.
     Attributes:
         app_db_pool_size (int): Application database pool size
         sys_db_name (str): System database name
