@@ -58,19 +58,28 @@ class RuntimeConfig(TypedDict, total=False):
 
 
 class DatabaseConfig(TypedDict, total=False):
-    hostname: str
-    port: int
-    username: str
-    password: str
-    connectionTimeoutMillis: Optional[int]
-    app_db_name: str
+    """
+    Data structure containing the DBOS database configuration.
+    Attributes:
+        app_db_pool_size (int): Application database pool size
+        sys_db_name (str): System database name
+        sys_db_pool_size (int): System database pool size
+        migrate (List[str]): Migration commands to run on startup
+    """
+
+    hostname: str  # Will be removed in a future version
+    port: int  # Will be removed in a future version
+    username: str  # Will be removed in a future version
+    password: str  # Will be removed in a future version
+    connectionTimeoutMillis: Optional[int]  # Will be removed in a future version
+    app_db_name: str  # Will be removed in a future version
     app_db_pool_size: Optional[int]
     sys_db_name: Optional[str]
     sys_db_pool_size: Optional[int]
-    ssl: Optional[bool]
-    ssl_ca: Optional[str]
+    rollback: Optional[List[str]]  # Will be removed in a future version
+    rollback: Optional[List[str]]  # Will be removed in a future version
     migrate: Optional[List[str]]
-    rollback: Optional[List[str]]
+    rollback: Optional[List[str]]  # Will be removed in a future version
 
 
 def parse_database_url_to_dbconfig(database_url: str) -> DatabaseConfig:
@@ -117,7 +126,7 @@ class ConfigFile(TypedDict, total=False):
     Attributes:
         name (str): Application name
         runtimeConfig (RuntimeConfig): Configuration for request serving
-        database (DatabaseConfig): Configuration for the application and system databases
+        database (DatabaseConfig): Configure pool sizes, migrate commands
         database_url (str): Database connection string
         telemetry (TelemetryConfig): Configuration for tracing / logging
         env (Dict[str,str]): Environment varialbes
@@ -300,6 +309,10 @@ def load_config(
         ConfigFile: The loaded configuration
 
     """
+
+    dbos_logger.warning(
+        "This function is deprecated and will be removed in a future version."
+    )
 
     with open(config_file_path, "r") as file:
         content = file.read()
