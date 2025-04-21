@@ -76,8 +76,8 @@ class DatabaseConfig(TypedDict, total=False):
     app_db_pool_size: Optional[int]
     sys_db_name: Optional[str]
     sys_db_pool_size: Optional[int]
-    rollback: Optional[List[str]]  # Will be removed in a future version
-    rollback: Optional[List[str]]  # Will be removed in a future version
+    ssl: Optional[bool]  # Will be removed in a future version
+    ssl_ca: Optional[str]  # Will be removed in a future version
     migrate: Optional[List[str]]
     rollback: Optional[List[str]]  # Will be removed in a future version
 
