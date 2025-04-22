@@ -33,11 +33,7 @@ from opentelemetry.trace import Span
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._sys_db import WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
-from dbos._workflow_commands import (
-    fork_workflow,
-    list_queued_workflows,
-    list_workflows,
-)
+from dbos._workflow_commands import fork_workflow, list_queued_workflows, list_workflows
 
 from ._classproperty import classproperty
 from ._core import (
@@ -351,6 +347,9 @@ class DBOS:
             # If no config is provided, load it from dbos-config.yaml
             unvalidated_config = load_config(run_process_config=False)
         elif is_dbos_configfile(config):
+            dbos_logger.warning(
+                "ConfigFile config strutcture detected. This will be deprecated in favor of DBOSConfig in an upcoming release."
+            )
             unvalidated_config = cast(ConfigFile, config)
             if os.environ.get("DBOS__CLOUD") == "true":
                 unvalidated_config = overwrite_config(unvalidated_config)

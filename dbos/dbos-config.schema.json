@@ -25,17 +25,17 @@
         "properties": {
           "hostname": {
             "type": ["string", "null"],
-            "description": "The hostname or IP address of the application database",
+            "description": "The hostname or IP address of the application database. DEPRECATED: Use database_url instead",
             "deprecated": true
           },
           "port": {
             "type": ["number", "null"],
-            "description": "The port number of the application database",
+            "description": "The port number of the application database. DEPRECATED: Use database_url instead",
             "deprecated": true
           },
           "username": {
             "type": ["string", "null"],
-            "description": "The username to use when connecting to the application database",
+            "description": "The username to use when connecting to the application database. DEPRECATED: Use database_url instead",
             "not": {
               "enum": ["dbos"]
             },
@@ -43,17 +43,17 @@
           },
           "password": {
             "type": ["string", "null"],
-            "description": "The password to use when connecting to the application database. Developers are strongly encouraged to use environment variable substitution (${VAR_NAME}) or Docker secrets (${DOCKER_SECRET:SECRET_NAME}) to avoid storing secrets in source.",
+            "description": "The password to use when connecting to the application database. Developers are strongly encouraged to use environment variable substitution (${VAR_NAME}) or Docker secrets (${DOCKER_SECRET:SECRET_NAME}) to avoid storing secrets in source. DEPRECATED: Use database_url instead",
             "deprecated": true
           },
           "connectionTimeoutMillis": {
             "type": ["number", "null"],
-            "description": "The number of milliseconds the system waits before timing out when connecting to the application database",
+            "description": "The number of milliseconds the system waits before timing out when connecting to the application database. DEPRECATED: Use database_url instead",
             "deprecated": true
           },
           "app_db_name": {
             "type": ["string", "null"],
-            "description": "The name of the application database",
+            "description": "The name of the application database. DEPRECATED: Use database_url instead",
             "deprecated": true
           },
           "sys_db_name": {
@@ -62,12 +62,12 @@
           },
           "ssl": {
             "type": ["boolean", "null"],
-            "description": "Use SSL/TLS to securely connect to the database (default: true)",
+            "description": "Use SSL/TLS to securely connect to the database (default: true). DEPRECATED: Use database_url instead",
             "deprecated": true
           },
           "ssl_ca": {
             "type": ["string", "null"],
-            "description": "If using SSL/TLS to securely connect to a database, path to an SSL root certificate file",
+            "description": "If using SSL/TLS to securely connect to a database, path to an SSL root certificate file. DEPRECATED: Use database_url instead",
             "deprecated": true
           },
           "app_db_client": {
@@ -86,7 +86,7 @@
           },
           "rollback": {
             "type": "array",
-            "description": "Specify a list of user DB rollback commands to run",
+            "description": "Specify a list of user DB rollback commands to run. DEPRECATED",
             "deprecated": true
           }
         }
