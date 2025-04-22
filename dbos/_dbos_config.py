@@ -315,7 +315,7 @@ def load_config(
     frame_records = inspect.stack()
     called_from_cli = False
     for frame_record in frame_records:
-        if "dbos/cli/cli.py" in frame_record.filename or or "dbos/_dbos.py" in frame_record.filename:
+        if "dbos/cli/cli.py" in frame_record.filename or "dbos/_dbos.py" in frame_record.filename:
             called_from_cli = True
     if not called_from_cli and not silent:
         dbos_logger.warning(
