@@ -288,9 +288,7 @@ def reset(
             raise typer.Exit()
     try:
         client = start_client(db_url=db_url)
-        pg_db_url = sa.make_url(client._db_url).set(
-            drivername="postgresql+psycopg", database="postgres"
-        )
+        pg_db_url = sa.make_url(client._db_url).set(drivername="postgresql+psycopg")
         assert (  # Satisfy mypy
             pg_db_url.database is not None
         ), f"Database name is required in URL: {pg_db_url.render_as_string(hide_password=True)}"
@@ -299,7 +297,7 @@ def reset(
             if sys_db_name
             else (pg_db_url.database + SystemSchema.sysdb_suffix)
         )
-        reset_system_database(pg_db_url, sysdb_name)
+        reset_system_database(pg_db_url.set(database="postgres"), sysdb_name)
     except sa.exc.SQLAlchemyError as e:
         typer.echo(f"Error resetting system database: {str(e)}")
         return
