@@ -65,7 +65,7 @@ from ._registrations import (
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
 from ._sys_db import StepInfo, WorkflowStatus, reset_system_database
-from ._tracer import dbos_tracer
+from ._tracer import DBOSTracer, dbos_tracer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -1165,6 +1165,11 @@ class DBOS:
         ctx = assert_current_dbos_context()
         ctx.authenticated_user = authenticated_user
         ctx.authenticated_roles = authenticated_roles
+
+    @classproperty
+    def tracer(self) -> DBOSTracer:
+        """Return the DBOS OpenTelemetry tracer."""
+        return dbos_tracer
 
 
 class WorkflowHandle(Generic[R], Protocol):
