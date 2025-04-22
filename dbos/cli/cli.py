@@ -288,7 +288,9 @@ def reset(
             raise typer.Exit()
     try:
         client = start_client(db_url=db_url)
-        pg_db_url = sa.make_url(client._db_url).set(drivername="postgresql+psycopg")
+        pg_db_url = sa.make_url(client._db_url).set(
+            drivername="postgresql+psycopg", database="postgres"
+        )
         assert (
             pg_db_url.database is not None
         ), f"Database name is required in URL: {pg_db_url.render_as_string(hide_password=True)}"
