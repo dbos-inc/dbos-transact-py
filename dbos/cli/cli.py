@@ -289,7 +289,7 @@ def reset(
     try:
         client = start_client(db_url=db_url)
         pg_db_url = sa.make_url(client._db_url).set(drivername="postgresql+psycopg")
-        assert (  # Satisfy mypy
+        assert (
             pg_db_url.database is not None
         ), f"Database name is required in URL: {pg_db_url.render_as_string(hide_password=True)}"
         sysdb_name = (
