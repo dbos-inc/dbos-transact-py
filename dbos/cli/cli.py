@@ -22,6 +22,7 @@ from .._app_db import ApplicationDatabase
 from .._client import DBOSClient
 from .._dbos_config import _is_valid_app_name
 from .._docker_pg_helper import start_docker_pg, stop_docker_pg
+from .._schemas.system_database import SystemSchema
 from .._sys_db import SystemDatabase, reset_system_database
 from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
@@ -260,7 +261,23 @@ def migrate() -> None:
 
 @app.command(help="Reset the DBOS system database")
 def reset(
-    yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompt")
+    yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompt"),
+    sys_db_name: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--sys-db-name",
+            "-s",
+            help="Specify the name of the system database to reset",
+        ),
+    ] = None,
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
 ) -> None:
     if not yes:
         confirm = typer.confirm(
@@ -269,9 +286,18 @@ def reset(
         if not confirm:
             typer.echo("Operation cancelled.")
             raise typer.Exit()
-    config = load_config()
     try:
-        start_client().reset_system_database(config)
+        client = start_client(db_url=db_url)
+        pg_db_url = sa.make_url(client._db_url).set(drivername="postgresql+psycopg")
+        assert (
+            pg_db_url.database is not None
+        ), f"Database name is required in URL: {pg_db_url.render_as_string(hide_password=True)}"
+        sysdb_name = (
+            sys_db_name
+            if sys_db_name
+            else (pg_db_url.database + SystemSchema.sysdb_suffix)
+        )
+        reset_system_database(pg_db_url, sysdb_name)
     except sa.exc.SQLAlchemyError as e:
         typer.echo(f"Error resetting system database: {str(e)}")
         return

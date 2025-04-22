@@ -64,7 +64,8 @@ from ._registrations import (
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
-from ._sys_db import StepInfo, WorkflowStatus, reset_system_database
+from ._schemas.system_database import SystemSchema
+from ._sys_db import StepInfo, SystemDatabase, WorkflowStatus, reset_system_database
 from ._tracer import dbos_tracer
 
 if TYPE_CHECKING:
@@ -73,14 +74,15 @@ if TYPE_CHECKING:
     from ._request import Request
     from flask import Flask
 
+from sqlalchemy import URL
 from sqlalchemy.orm import Session
 
 from ._request import Request
 
 if sys.version_info < (3, 10):
-    from typing_extensions import ParamSpec, TypeAlias
+    from typing_extensions import ParamSpec
 else:
-    from typing import ParamSpec, TypeAlias
+    from typing import ParamSpec
 
 from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
@@ -109,7 +111,6 @@ from ._error import (
 )
 from ._event_loop import BackgroundEventLoop
 from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
-from ._sys_db import SystemDatabase
 from ._workflow_commands import get_workflow, list_workflow_steps
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
@@ -563,7 +564,22 @@ class DBOS:
         assert (
             not self._launched
         ), "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
-        reset_system_database(self._config)
+
+        sysdb_name = (
+            self._config["database"]["sys_db_name"]
+            if "sys_db_name" in self._config["database"]
+            and self._config["database"]["sys_db_name"]
+            else self._config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
+        )
+        postgres_db_url = URL.create(
+            "postgresql+psycopg",
+            username=self._config["database"]["username"],
+            password=self._config["database"]["password"],
+            host=self._config["database"]["hostname"],
+            port=self._config["database"]["port"],
+            database="postgres",
+        )
+        reset_system_database(postgres_db_url, sysdb_name)
 
     def _destroy(self) -> None:
         self._initialized = False

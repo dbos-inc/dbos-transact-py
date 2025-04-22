@@ -3,6 +3,8 @@ import sys
 import uuid
 from typing import Any, Generic, List, Optional, TypedDict, TypeVar
 
+from sqlalchemy import URL
+
 from dbos._app_db import ApplicationDatabase
 
 if sys.version_info < (3, 11):
@@ -94,6 +96,7 @@ class DBOSClient:
             db_config["sys_db_name"] = system_database
         self._sys_db = SystemDatabase(db_config)
         self._app_db = ApplicationDatabase(db_config)
+        self._db_url = database_url
 
     def destroy(self) -> None:
         self._sys_db.destroy()
@@ -371,5 +374,5 @@ class DBOSClient:
         )
         return WorkflowHandleClientAsyncPolling[R](forked_workflow_id, self._sys_db)
 
-    def reset_system_database(self, config: ConfigFile) -> None:
-        return reset_system_database(config)
+    def reset_system_database(self, database_url: URL, sysdb_name: str) -> None:
+        return reset_system_database(database_url, sysdb_name)
