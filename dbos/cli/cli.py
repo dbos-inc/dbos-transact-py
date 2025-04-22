@@ -5,7 +5,7 @@ import subprocess
 import time
 import typing
 from os import path
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import quote
 
 import jsonpickle  # type: ignore
@@ -27,12 +27,16 @@ from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
 
 
-def start_client() -> DBOSClient:
-    config = load_config(silent=True)
-    database = config["database"]
-    username = quote(database["username"])
-    password = quote(database["password"])
-    database_url = f"postgresql://{username}:{password}@{database['hostname']}:{database['port']}/{database['app_db_name']}"
+def start_client(db_url: Optional[str] = None) -> DBOSClient:
+    database_url = db_url
+    if database_url is None:
+        database_url = os.getenv("DBOS_DATABASE_URL")
+        if database_url is None:
+            config = load_config(silent=True)
+            database = config["database"]
+            username = quote(database["username"])
+            password = quote(database["password"])
+            database_url = f"postgresql://{username}:{password}@{database['hostname']}:{database['port']}/{database['app_db_name']}"
     return DBOSClient(database_url=database_url)
 
 
@@ -47,6 +51,16 @@ postgres = typer.Typer()
 app.add_typer(
     postgres, name="postgres", help="Manage local Postgres database with Docker"
 )
+
+
+@workflow.callback()
+def db_url_param(
+    ctx: typer.Context,
+    db_url: str | None = typer.Option(
+        None, "--db-url", "-D", help="Your DBOS application database URL"
+    ),
+) -> None:
+    ctx.obj = {"db_url": db_url}
 
 
 @postgres.command(name="start", help="Start a local Postgres database")
@@ -281,6 +295,7 @@ def debug(
 
 @workflow.command(help="List workflows for your application")
 def list(
+    ctx: typer.Context,
     limit: Annotated[
         int,
         typer.Option("--limit", "-l", help="Limit the results returned"),
@@ -350,7 +365,7 @@ def list(
         ),
     ] = None,
 ) -> None:
-    workflows = start_client().list_workflows(
+    workflows = start_client(db_url=ctx.obj["db_url"]).list_workflows(
         limit=limit,
         offset=offset,
         sort_desc=sort_desc,
@@ -367,6 +382,7 @@ def list(
 
 @workflow.command(help="Retrieve the status of a workflow")
 def get(
+    ctx: typer.Context,
     workflow_id: Annotated[str, typer.Argument()],
     request: Annotated[
         bool,
@@ -374,7 +390,7 @@ def get(
     ] = False,
 ) -> None:
     status = (
-        start_client()
+        start_client(db_url=ctx.obj["db_url"])
         .retrieve_workflow(workflow_id=workflow_id, request=request)
         .get_status()
     )
@@ -383,10 +399,15 @@ def get(
 
 @workflow.command(help="List the steps of a workflow")
 def steps(
+    ctx: typer.Context,
     workflow_id: Annotated[str, typer.Argument()],
 ) -> None:
     print(
-        jsonpickle.encode(start_client().list_workflow_steps(workflow_id=workflow_id))
+        jsonpickle.encode(
+            start_client(db_url=ctx.obj["db_url"]).list_workflow_steps(
+                workflow_id=workflow_id
+            )
+        )
     )
 
 
@@ -394,29 +415,33 @@ def steps(
     help="Cancel a workflow so it is no longer automatically retried or restarted"
 )
 def cancel(
+    ctx: typer.Context,
     uuid: Annotated[str, typer.Argument()],
 ) -> None:
-    start_client().cancel_workflow(workflow_id=uuid)
+    start_client(db_url=ctx.obj["db_url"]).cancel_workflow(workflow_id=uuid)
 
 
 @workflow.command(help="Resume a workflow that has been cancelled")
 def resume(
+    ctx: typer.Context,
     uuid: Annotated[str, typer.Argument()],
 ) -> None:
-    start_client().resume_workflow(workflow_id=uuid)
+    start_client(db_url=ctx.obj["db_url"]).resume_workflow(workflow_id=uuid)
 
 
 @workflow.command(help="Restart a workflow from the beginning with a new id")
 def restart(
+    ctx: typer.Context,
     uuid: Annotated[str, typer.Argument()],
 ) -> None:
-    start_client().fork_workflow(workflow_id=uuid, start_step=1)
+    start_client(db_url=ctx.obj["db_url"]).fork_workflow(workflow_id=uuid, start_step=1)
 
 
 @workflow.command(
     help="fork a workflow from the beginning with a new id and from a step"
 )
 def fork(
+    ctx: typer.Context,
     uuid: Annotated[str, typer.Argument()],
     step: Annotated[
         int,
@@ -428,11 +453,14 @@ def fork(
     ] = 1,
 ) -> None:
     print(f"Forking workflow {uuid} from step {step}")
-    start_client().fork_workflow(workflow_id=uuid, start_step=step)
+    start_client(db_url=ctx.obj["db_url"]).fork_workflow(
+        workflow_id=uuid, start_step=step
+    )
 
 
 @queue.command(name="list", help="List enqueued functions for your application")
 def list_queue(
+    ctx: typer.Context,
     limit: Annotated[
         typing.Optional[int],
         typer.Option("--limit", "-l", help="Limit the results returned"),
@@ -498,7 +526,7 @@ def list_queue(
         ),
     ] = None,
 ) -> None:
-    workflows = start_client().list_queued_workflows(
+    workflows = start_client(db_url=ctx.obj["db_url"]).list_queued_workflows(
         limit=limit,
         offset=offset,
         sort_desc=sort_desc,
