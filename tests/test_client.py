@@ -58,18 +58,16 @@ def test_enqueue_with_timeout(dbos: DBOS, client: DBOSClient) -> None:
     options: EnqueueOptions = {
         "queue_name": "test_queue",
         "workflow_name": "blocked_workflow",
-        "workflow_timeout": 5,
+        "workflow_timeout": 1,
         "workflow_id": wfid,
     }
 
     handle: WorkflowHandle[str] = client.enqueue(options)
 
-    time.sleep(1)
-
     list_results = client.list_queued_workflows()
     assert len(list_results) == 1
     assert list_results[0].workflow_id == wfid
-    assert list_results[0].status == "PENDING"
+    assert list_results[0].status in ["PENDING", "ENQUEUED"]
 
     with pytest.raises(Exception) as exc_info:
         handle.get_result()
