@@ -3,8 +3,10 @@ from typing import TYPE_CHECKING, Optional
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+from opentelemetry.semconv.resource import ResourceAttributes
 from opentelemetry.trace import Span
 
 from dbos._utils import GlobalParams
@@ -23,7 +25,13 @@ class DBOSTracer:
 
     def config(self, config: ConfigFile) -> None:
         if not isinstance(trace.get_tracer_provider(), TracerProvider):
-            provider = TracerProvider()
+            resource = Resource(
+                attributes={
+                    ResourceAttributes.SERVICE_NAME: config["name"],
+                }
+            )
+
+            provider = TracerProvider(resource=resource)
             if os.environ.get("DBOS__CONSOLE_TRACES", None) is not None:
                 processor = BatchSpanProcessor(ConsoleSpanExporter())
                 provider.add_span_processor(processor)

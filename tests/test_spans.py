@@ -17,6 +17,10 @@ def test_spans(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_workflow() -> None:
         test_step()
+        current_span = DBOS.span
+        subspan = DBOS.tracer.start_span({"name": "a new span"}, parent=current_span)
+        subspan.add_event("greeting_event", {"name": "a new event"})
+        DBOS.tracer.end_span(subspan)
 
     @DBOS.step()
     def test_step() -> None:
@@ -33,20 +37,23 @@ def test_spans(dbos: DBOS) -> None:
 
     spans = exporter.get_finished_spans()
 
-    assert len(spans) == 3
+    assert len(spans) == 4
 
     for span in spans:
         assert span.attributes is not None
         assert span.attributes["applicationVersion"] == GlobalParams.app_version
+        assert span.attributes["executorID"] == GlobalParams.executor_id
         assert span.context is not None
 
     assert spans[0].name == test_step.__name__
-    assert spans[1].name == test_workflow.__name__
-    assert spans[2].name == test_step.__name__
+    assert spans[1].name == 'a new span'
+    assert spans[2].name == test_workflow.__name__
+    assert spans[3].name == test_step.__name__
 
-    assert spans[0].parent.span_id == spans[1].context.span_id  # type: ignore
-    assert spans[1].parent == None
+    assert spans[0].parent.span_id == spans[2].context.span_id  # type: ignore
+    assert spans[1].parent.span_id == spans[2].context.span_id  # type: ignore
     assert spans[2].parent == None
+    assert spans[3].parent == None
 
 
 @pytest.mark.asyncio
@@ -55,6 +62,10 @@ async def test_spans_async(dbos: DBOS) -> None:
     @DBOS.workflow()
     async def test_workflow() -> None:
         await test_step()
+        current_span = DBOS.span
+        subspan = DBOS.tracer.start_span({"name": "a new span"}, parent=current_span)
+        subspan.add_event("greeting_event", {"name": "a new event"})
+        DBOS.tracer.end_span(subspan)
 
     @DBOS.step()
     async def test_step() -> None:
@@ -71,20 +82,23 @@ async def test_spans_async(dbos: DBOS) -> None:
 
     spans = exporter.get_finished_spans()
 
-    assert len(spans) == 3
+    assert len(spans) == 4
 
     for span in spans:
         assert span.attributes is not None
         assert span.attributes["applicationVersion"] == GlobalParams.app_version
+        assert span.attributes["executorID"] == GlobalParams.executor_id
         assert span.context is not None
 
     assert spans[0].name == test_step.__name__
-    assert spans[1].name == test_workflow.__name__
-    assert spans[2].name == test_step.__name__
+    assert spans[1].name == 'a new span'
+    assert spans[2].name == test_workflow.__name__
+    assert spans[3].name == test_step.__name__
 
-    assert spans[0].parent.span_id == spans[1].context.span_id  # type: ignore
-    assert spans[1].parent == None
+    assert spans[0].parent.span_id == spans[2].context.span_id  # type: ignore
+    assert spans[1].parent.span_id == spans[2].context.span_id  # type: ignore
     assert spans[2].parent == None
+    assert spans[3].parent == None
 
 
 def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
