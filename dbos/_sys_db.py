@@ -267,12 +267,23 @@ class SystemDatabase:
         if pool_size is None:
             pool_size = 20
 
+        engine_kwargs = database.get("db_engine_kwargs")
+        if engine_kwargs is None:
+            engine_kwargs = {}
+
+        # Respect user-provided values. Otherwise, set defaults.
+        if "pool_size" not in engine_kwargs:
+            engine_kwargs["pool_size"] = pool_size
+        if "max_overflow" not in engine_kwargs:
+            engine_kwargs["max_overflow"] = 0
+        if "pool_timeout" not in engine_kwargs:
+            engine_kwargs["pool_timeout"] = 30
+        if "connect_args" not in engine_kwargs:
+            engine_kwargs["connect_args"] = {"connect_timeout": 10}
+
         self.engine = sa.create_engine(
             system_db_url,
-            pool_size=pool_size,
-            max_overflow=0,
-            pool_timeout=30,
-            connect_args={"connect_timeout": 10},
+            **engine_kwargs,
         )
 
         # Run a schema migration for the system database
@@ -378,7 +389,6 @@ class SystemDatabase:
         cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.workflow_deadline_epoch_ms, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
 
         results = conn.execute(cmd)
-
         row = results.fetchone()
         if row is not None:
             # Check the started workflow matches the expected name, class_name, config_name, and queue_name

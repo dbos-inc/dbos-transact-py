@@ -31,6 +31,7 @@ class DBOSConfig(TypedDict, total=False):
         app_db_pool_size (int): Application database pool size
         sys_db_name (str): System database name
         sys_db_pool_size (int): System database pool size
+        db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs (See https://docs.sqlalchemy.org/en/20/core/engines.html#sqlalchemy.create_engine)
         log_level (str): Log level
         otlp_traces_endpoints: List[str]: OTLP traces endpoints
         otlp_logs_endpoints: List[str]: OTLP logs endpoints
@@ -43,6 +44,7 @@ class DBOSConfig(TypedDict, total=False):
     app_db_pool_size: Optional[int]
     sys_db_name: Optional[str]
     sys_db_pool_size: Optional[int]
+    db_engine_kwargs: Optional[Dict[str, Any]]
     log_level: Optional[str]
     otlp_traces_endpoints: Optional[List[str]]
     otlp_logs_endpoints: Optional[List[str]]
@@ -64,6 +66,7 @@ class DatabaseConfig(TypedDict, total=False):
         app_db_pool_size (int): Application database pool size
         sys_db_name (str): System database name
         sys_db_pool_size (int): System database pool size
+        db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs
         migrate (List[str]): Migration commands to run on startup
     """
 
@@ -76,6 +79,7 @@ class DatabaseConfig(TypedDict, total=False):
     app_db_pool_size: Optional[int]
     sys_db_name: Optional[str]
     sys_db_pool_size: Optional[int]
+    db_engine_kwargs: Optional[Dict[str, Any]]
     ssl: Optional[bool]  # Will be removed in a future version
     ssl_ca: Optional[str]  # Will be removed in a future version
     migrate: Optional[List[str]]
@@ -183,6 +187,8 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         db_config["app_db_pool_size"] = config.get("app_db_pool_size")
     if "sys_db_pool_size" in config:
         db_config["sys_db_pool_size"] = config.get("sys_db_pool_size")
+    if "db_engine_kwargs" in config:
+        db_config["db_engine_kwargs"] = config.get("db_engine_kwargs")
     if db_config:
         translated_config["database"] = db_config
 
