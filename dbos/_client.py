@@ -24,7 +24,6 @@ from dbos._sys_db import (
     WorkflowStatus,
     WorkflowStatusInternal,
     WorkflowStatusString,
-    reset_system_database,
 )
 from dbos._workflow_commands import (
     fork_workflow,
@@ -59,7 +58,7 @@ class WorkflowHandleClientPolling(Generic[R]):
         return res
 
     def get_status(self) -> WorkflowStatus:
-        status = get_workflow(self._sys_db, self.workflow_id, True)
+        status = get_workflow(self._sys_db, self.workflow_id, False)
         if status is None:
             raise DBOSNonExistentWorkflowError(self.workflow_id)
         return status
@@ -82,7 +81,7 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
 
     async def get_status(self) -> WorkflowStatus:
         status = await asyncio.to_thread(
-            get_workflow, self._sys_db, self.workflow_id, True
+            get_workflow, self._sys_db, self.workflow_id, False
         )
         if status is None:
             raise DBOSNonExistentWorkflowError(self.workflow_id)
@@ -162,13 +161,13 @@ class DBOSClient:
         return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
 
     def retrieve_workflow(self, workflow_id: str) -> WorkflowHandle[R]:
-        status = get_workflow(self._sys_db, workflow_id, True)
+        status = get_workflow(self._sys_db, workflow_id, False)
         if status is None:
             raise DBOSNonExistentWorkflowError(workflow_id)
         return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
 
     async def retrieve_workflow_async(self, workflow_id: str) -> WorkflowHandleAsync[R]:
-        status = asyncio.to_thread(get_workflow, self._sys_db, workflow_id, True)
+        status = asyncio.to_thread(get_workflow, self._sys_db, workflow_id, False)
         if status is None:
             raise DBOSNonExistentWorkflowError(workflow_id)
         return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)

@@ -481,7 +481,12 @@ def restart(
         ),
     ] = None,
 ) -> None:
-    start_client(db_url=db_url).fork_workflow(workflow_id=uuid, start_step=1)
+    status = (
+        start_client(db_url=db_url)
+        .fork_workflow(workflow_id=uuid, start_step=1)
+        .get_status()
+    )
+    print(jsonpickle.encode(status))
 
 
 @workflow.command(
@@ -506,8 +511,12 @@ def fork(
         ),
     ] = None,
 ) -> None:
-    print(f"Forking workflow {uuid} from step {step}")
-    start_client(db_url=db_url).fork_workflow(workflow_id=uuid, start_step=step)
+    status = (
+        start_client(db_url=db_url)
+        .fork_workflow(workflow_id=uuid, start_step=step)
+        .get_status()
+    )
+    print(jsonpickle.encode(status))
 
 
 @queue.command(name="list", help="List enqueued functions for your application")
