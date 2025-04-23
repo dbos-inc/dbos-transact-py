@@ -367,6 +367,3 @@ class DBOSClient:
             fork_workflow, self._sys_db, self._app_db, workflow_id, start_step
         )
         return WorkflowHandleClientAsyncPolling[R](forked_workflow_id, self._sys_db)
-
-    def reset_system_database(self, database_url: URL, sysdb_name: str) -> None:
-        return reset_system_database(database_url, sysdb_name)
