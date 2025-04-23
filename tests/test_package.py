@@ -139,7 +139,18 @@ def test_reset(postgres_db_engine: sa.Engine) -> None:
             assert result == 0
 
         # Call reset with a specific sys db name and verify it's destroyed
-        subprocess.check_call(["dbos", "reset", "-y", "-s", sysdb_name], cwd=temp_path)
+        subprocess.check_call(
+            [
+                "dbos",
+                "reset",
+                "-y",
+                "-D",
+                postgres_db_engine.url.render_as_string(hide_password=False),
+                "-s",
+                "another_sys_db",
+            ],
+            cwd=temp_path,
+        )
         with postgres_db_engine.connect() as c:
             c.execution_options(isolation_level="AUTOCOMMIT")
             result = c.execute(
@@ -150,8 +161,11 @@ def test_reset(postgres_db_engine: sa.Engine) -> None:
             assert result == 0
 
 
-def test_workflow_commands() -> None:
+def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
     app_name = "reset-app"
+    db_url = postgres_db_engine.url.set(database="dbos_toolbox").render_as_string(
+        hide_password=False
+    )
     with tempfile.TemporaryDirectory() as temp_path:
         subprocess.check_call(
             ["dbos", "init", app_name, "--template", "dbos-toolbox"],
@@ -184,19 +198,22 @@ def test_workflow_commands() -> None:
             process.wait()
 
         # Verify the output is valid JSON
-        output = subprocess.check_output(["dbos", "workflow", "list"], cwd=temp_path)
+        output = subprocess.check_output(
+            ["dbos", "workflow", "list", "--db-url", db_url], cwd=temp_path
+        )
         data = json.loads(output)
         assert isinstance(data, list) and len(data) == 10
 
         # Verify the output is valid JSON
         output = subprocess.check_output(
-            ["dbos", "workflow", "queue", "list"], cwd=temp_path
+            ["dbos", "workflow", "queue", "list", "--db-url", db_url], cwd=temp_path
         )
         workflows = json.loads(output)
         assert isinstance(workflows, list) and len(workflows) == 10
         for wf in workflows:
             output = subprocess.check_output(
-                ["dbos", "workflow", "get", wf["workflow_id"]], cwd=temp_path
+                ["dbos", "workflow", "get", wf["workflow_id"], "--db-url", db_url],
+                cwd=temp_path,
             )
             get_wf_data = json.loads(output)
             assert isinstance(get_wf_data, dict)
@@ -205,14 +222,16 @@ def test_workflow_commands() -> None:
         # workflow ID is a preffix to each step ID
         wf_id = "-".join(workflows[0]["workflow_id"].split("-")[:-1])
         get_steps_output = subprocess.check_output(
-            ["dbos", "workflow", "steps", wf_id], cwd=temp_path
+            ["dbos", "workflow", "steps", wf_id, "--db-url", db_url], cwd=temp_path
         )
         get_steps_data = json.loads(get_steps_output)
         assert isinstance(get_steps_data, list)
         assert len(get_steps_data) == 10
 
         # cancel the workflow and check the status is CANCELED
-        subprocess.check_output(["dbos", "workflow", "cancel", wf_id], cwd=temp_path)
+        subprocess.check_output(
+            ["dbos", "workflow", "cancel", wf_id, "--db-url", db_url], cwd=temp_path
+        )
         output = subprocess.check_output(
             ["dbos", "workflow", "get", wf_id], cwd=temp_path
         )
@@ -221,7 +240,9 @@ def test_workflow_commands() -> None:
         assert get_wf_data["status"] == "CANCELLED"
 
         # resume the workflow and check the status is ENQUEUED
-        subprocess.check_output(["dbos", "workflow", "resume", wf_id], cwd=temp_path)
+        subprocess.check_output(
+            ["dbos", "workflow", "resume", wf_id, "--db-url", db_url], cwd=temp_path
+        )
         output = subprocess.check_output(
             ["dbos", "workflow", "get", wf_id], cwd=temp_path
         )
@@ -231,7 +252,7 @@ def test_workflow_commands() -> None:
 
         # restart the workflow and check it has a new ID and its status is ENQUEUED
         output = subprocess.check_output(
-            ["dbos", "workflow", "restart", wf_id], cwd=temp_path
+            ["dbos", "workflow", "restart", wf_id, "--db-url", db_url], cwd=temp_path
         )
         restart_wf_data = json.loads(output)
         assert isinstance(restart_wf_data, dict)
@@ -240,7 +261,7 @@ def test_workflow_commands() -> None:
 
         # fork the workflow at step 5 and check it has a new ID and its status is ENQUEUED
         output = subprocess.check_output(
-            ["dbos", "workflow", "fork", wf_id, "--step", "5"],
+            ["dbos", "workflow", "fork", wf_id, "--step", "5", "--db-url", db_url],
             cwd=temp_path,
         )
         fork_wf_data = json.loads(output)
