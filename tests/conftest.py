@@ -31,7 +31,7 @@ def default_config() -> ConfigFile:
             "hostname": "localhost",
             "port": 5432,
             "username": "postgres",
-            "password": os.environ["PGPASSWORD"],
+            "password": os.environ.get("PGPASSWORD", "dbos"),
             "app_db_name": "dbostestpy",
         },
     }

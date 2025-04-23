@@ -248,6 +248,7 @@ class SystemDatabase:
                     sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
                     parameters={"db_name": sysdb_name},
                 ).scalar():
+                    dbos_logger.info(f"Creating system database {sysdb_name}")
                     conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
             engine.dispose()
 
@@ -1897,20 +1898,7 @@ class SystemDatabase:
         return wf_status, workflow_deadline_epoch_ms
 
 
-def reset_system_database(config: ConfigFile) -> None:
-    sysdb_name = (
-        config["database"]["sys_db_name"]
-        if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]
-        else config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
-    )
-    postgres_db_url = sa.URL.create(
-        "postgresql+psycopg",
-        username=config["database"]["username"],
-        password=config["database"]["password"],
-        host=config["database"]["hostname"],
-        port=config["database"]["port"],
-        database="postgres",
-    )
+def reset_system_database(postgres_db_url: sa.URL, sysdb_name: str) -> None:
     try:
         # Connect to postgres default database
         engine = sa.create_engine(postgres_db_url)
