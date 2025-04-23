@@ -415,7 +415,7 @@ def get(
         .retrieve_workflow(workflow_id=workflow_id)
         .get_status()
     )
-    print(jsonpickle.encode(status), unpicklable=False)
+    print(jsonpickle.encode(status, unpicklable=False))
 
 
 @workflow.command(help="List the steps of a workflow")
@@ -487,7 +487,7 @@ def restart(
         .fork_workflow(workflow_id=uuid, start_step=1)
         .get_status()
     )
-    print(jsonpickle.encode(status), unpicklable=False)
+    print(jsonpickle.encode(status, unpicklable=False))
 
 
 @workflow.command(
@@ -517,7 +517,7 @@ def fork(
         .fork_workflow(workflow_id=uuid, start_step=step)
         .get_status()
     )
-    print(jsonpickle.encode(status), unpicklable=False)
+    print(jsonpickle.encode(status, unpicklable=False))
 
 
 @queue.command(name="list", help="List enqueued functions for your application")
