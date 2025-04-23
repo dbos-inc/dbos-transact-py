@@ -54,16 +54,6 @@ app.add_typer(
 )
 
 
-@workflow.callback()
-def db_url_param(
-    ctx: typer.Context,
-    db_url: str | None = typer.Option(
-        None, "--db-url", "-D", help="Your DBOS application database URL"
-    ),
-) -> None:
-    ctx.obj = {"db_url": db_url}
-
-
 @postgres.command(name="start", help="Start a local Postgres database")
 def pg_start() -> None:
     start_docker_pg()
@@ -321,7 +311,14 @@ def debug(
 
 @workflow.command(help="List workflows for your application")
 def list(
-    ctx: typer.Context,
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
     limit: Annotated[
         int,
         typer.Option("--limit", "-l", help="Limit the results returned"),
@@ -391,7 +388,7 @@ def list(
         ),
     ] = None,
 ) -> None:
-    workflows = start_client(db_url=ctx.obj["db_url"]).list_workflows(
+    workflows = start_client(db_url=db_url).list_workflows(
         limit=limit,
         offset=offset,
         sort_desc=sort_desc,
@@ -408,15 +405,22 @@ def list(
 
 @workflow.command(help="Retrieve the status of a workflow")
 def get(
-    ctx: typer.Context,
     workflow_id: Annotated[str, typer.Argument()],
     request: Annotated[
         bool,
         typer.Option("--request", help="Retrieve workflow request information"),
     ] = False,
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
 ) -> None:
     status = (
-        start_client(db_url=ctx.obj["db_url"])
+        start_client(db_url=db_url)
         .retrieve_workflow(workflow_id=workflow_id, request=request)
         .get_status()
     )
@@ -425,14 +429,19 @@ def get(
 
 @workflow.command(help="List the steps of a workflow")
 def steps(
-    ctx: typer.Context,
     workflow_id: Annotated[str, typer.Argument()],
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
 ) -> None:
     print(
         jsonpickle.encode(
-            start_client(db_url=ctx.obj["db_url"]).list_workflow_steps(
-                workflow_id=workflow_id
-            )
+            start_client(db_url=db_url).list_workflow_steps(workflow_id=workflow_id)
         )
     )
 
@@ -441,33 +450,53 @@ def steps(
     help="Cancel a workflow so it is no longer automatically retried or restarted"
 )
 def cancel(
-    ctx: typer.Context,
     uuid: Annotated[str, typer.Argument()],
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
 ) -> None:
-    start_client(db_url=ctx.obj["db_url"]).cancel_workflow(workflow_id=uuid)
+    start_client(db_url=db_url).cancel_workflow(workflow_id=uuid)
 
 
 @workflow.command(help="Resume a workflow that has been cancelled")
 def resume(
-    ctx: typer.Context,
     uuid: Annotated[str, typer.Argument()],
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
 ) -> None:
-    start_client(db_url=ctx.obj["db_url"]).resume_workflow(workflow_id=uuid)
+    start_client(db_url=db_url).resume_workflow(workflow_id=uuid)
 
 
 @workflow.command(help="Restart a workflow from the beginning with a new id")
 def restart(
-    ctx: typer.Context,
     uuid: Annotated[str, typer.Argument()],
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
 ) -> None:
-    start_client(db_url=ctx.obj["db_url"]).fork_workflow(workflow_id=uuid, start_step=1)
+    start_client(db_url=db_url).fork_workflow(workflow_id=uuid, start_step=1)
 
 
 @workflow.command(
     help="fork a workflow from the beginning with a new id and from a step"
 )
 def fork(
-    ctx: typer.Context,
     uuid: Annotated[str, typer.Argument()],
     step: Annotated[
         int,
@@ -477,16 +506,29 @@ def fork(
             help="Restart from this step (default: first step)",
         ),
     ] = 1,
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
 ) -> None:
     print(f"Forking workflow {uuid} from step {step}")
-    start_client(db_url=ctx.obj["db_url"]).fork_workflow(
-        workflow_id=uuid, start_step=step
-    )
+    start_client(db_url=db_url).fork_workflow(workflow_id=uuid, start_step=step)
 
 
 @queue.command(name="list", help="List enqueued functions for your application")
 def list_queue(
-    ctx: typer.Context,
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
     limit: Annotated[
         typing.Optional[int],
         typer.Option("--limit", "-l", help="Limit the results returned"),
@@ -552,7 +594,7 @@ def list_queue(
         ),
     ] = None,
 ) -> None:
-    workflows = start_client(db_url=ctx.obj["db_url"]).list_queued_workflows(
+    workflows = start_client(db_url=db_url).list_queued_workflows(
         limit=limit,
         offset=offset,
         sort_desc=sort_desc,
