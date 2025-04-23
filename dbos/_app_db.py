@@ -77,12 +77,24 @@ class ApplicationDatabase:
         pool_size = database.get("app_db_pool_size")
         if pool_size is None:
             pool_size = 20
+
+        engine_kwargs = database.get("db_engine_kwargs")
+        if engine_kwargs is None:
+            engine_kwargs = {}
+
+        # Respect user-provided values. Otherwise, set defaults.
+        if "pool_size" not in engine_kwargs:
+            engine_kwargs["pool_size"] = pool_size
+        if "max_overflow" not in engine_kwargs:
+            engine_kwargs["max_overflow"] = 0
+        if "pool_timeout" not in engine_kwargs:
+            engine_kwargs["pool_timeout"] = 30
+        if "connect_args" not in engine_kwargs:
+            engine_kwargs["connect_args"] = connect_args
+
         self.engine = sa.create_engine(
             app_db_url,
-            pool_size=pool_size,
-            max_overflow=0,
-            pool_timeout=30,
-            connect_args=connect_args,
+            **engine_kwargs,
         )
         self.sessionmaker = sessionmaker(bind=self.engine)
         self.debug_mode = debug_mode
