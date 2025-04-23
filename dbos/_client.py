@@ -14,7 +14,7 @@ else:
 
 from dbos import _serialization
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
-from dbos._dbos_config import ConfigFile, parse_database_url_to_dbconfig
+from dbos._dbos_config import parse_database_url_to_dbconfig
 from dbos._error import DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._serialization import WorkflowInputs
