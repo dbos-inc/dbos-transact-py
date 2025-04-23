@@ -367,10 +367,6 @@ def list(
             help="Retrieve workflows with this name",
         ),
     ] = None,
-    request: Annotated[
-        bool,
-        typer.Option("--request", help="Retrieve workflow request information"),
-    ] = False,
     sort_desc: Annotated[
         bool,
         typer.Option(
@@ -396,7 +392,6 @@ def list(
         start_time=starttime,
         end_time=endtime,
         status=status,
-        request=request,
         app_version=appversion,
         name=name,
     )
@@ -406,10 +401,6 @@ def list(
 @workflow.command(help="Retrieve the status of a workflow")
 def get(
     workflow_id: Annotated[str, typer.Argument()],
-    request: Annotated[
-        bool,
-        typer.Option("--request", help="Retrieve workflow request information"),
-    ] = False,
     db_url: Annotated[
         typing.Optional[str],
         typer.Option(
@@ -421,7 +412,7 @@ def get(
 ) -> None:
     status = (
         start_client(db_url=db_url)
-        .retrieve_workflow(workflow_id=workflow_id, request=request)
+        .retrieve_workflow(workflow_id=workflow_id)
         .get_status()
     )
     print(jsonpickle.encode(status))
@@ -573,10 +564,6 @@ def list_queue(
             help="Retrieve functions on this queue",
         ),
     ] = None,
-    request: Annotated[
-        bool,
-        typer.Option("--request", help="Retrieve workflow request information"),
-    ] = False,
     sort_desc: Annotated[
         bool,
         typer.Option(
@@ -602,7 +589,6 @@ def list_queue(
         end_time=end_time,
         queue_name=queue_name,
         status=status,
-        request=request,
         name=name,
     )
     print(jsonpickle.encode(workflows, unpicklable=False))

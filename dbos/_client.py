@@ -161,10 +161,8 @@ class DBOSClient:
         workflow_id = await asyncio.to_thread(self._enqueue, options, *args, **kwargs)
         return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
 
-    def retrieve_workflow(
-        self, workflow_id: str, request: bool = True
-    ) -> WorkflowHandle[R]:
-        status = get_workflow(self._sys_db, workflow_id, request)
+    def retrieve_workflow(self, workflow_id: str) -> WorkflowHandle[R]:
+        status = get_workflow(self._sys_db, workflow_id, True)
         if status is None:
             raise DBOSNonExistentWorkflowError(workflow_id)
         return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
@@ -258,7 +256,6 @@ class DBOSClient:
         offset: Optional[int] = None,
         sort_desc: bool = False,
         workflow_id_prefix: Optional[str] = None,
-        request: bool = False,
     ) -> List[WorkflowStatus]:
         return list_workflows(
             self._sys_db,
@@ -273,7 +270,6 @@ class DBOSClient:
             offset=offset,
             sort_desc=sort_desc,
             workflow_id_prefix=workflow_id_prefix,
-            request=request,
         )
 
     async def list_workflows_async(
@@ -315,7 +311,6 @@ class DBOSClient:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
-        request: bool = False,
     ) -> List[WorkflowStatus]:
         return list_queued_workflows(
             self._sys_db,
@@ -327,7 +322,6 @@ class DBOSClient:
             limit=limit,
             offset=offset,
             sort_desc=sort_desc,
-            request=request,
         )
 
     async def list_queued_workflows_async(
