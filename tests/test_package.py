@@ -127,8 +127,8 @@ def test_reset(postgres_db_engine: sa.Engine) -> None:
             cwd=temp_path,
         )
 
-        # Call reset and verify it's destroyed
-        subprocess.check_call(["dbos", "reset", "-y"], cwd=temp_path)
+        # Create a system database and verify it exists
+        subprocess.check_call(["dbos", "migrate"], cwd=temp_path)
         with postgres_db_engine.connect() as c:
             c.execution_options(isolation_level="AUTOCOMMIT")
             result = c.execute(
@@ -136,19 +136,14 @@ def test_reset(postgres_db_engine: sa.Engine) -> None:
                     f"SELECT COUNT(*) FROM pg_database WHERE datname = '{sysdb_name}'"
                 )
             ).scalar()
-            assert result == 0
+            assert result == 1
 
-        # Call reset with a specific sys db name and verify it's destroyed
+        # Call reset and verify it's destroyed
+        db_url = postgres_db_engine.url.set(database="reset_app").render_as_string(
+            hide_password=False
+        )
         subprocess.check_call(
-            [
-                "dbos",
-                "reset",
-                "-y",
-                "-D",
-                postgres_db_engine.url.render_as_string(hide_password=False),
-                "-s",
-                "another_sys_db",
-            ],
+            ["dbos", "reset", "-y", "--db-url", db_url, "--sys-db-name", sysdb_name],
             cwd=temp_path,
         )
         with postgres_db_engine.connect() as c:
