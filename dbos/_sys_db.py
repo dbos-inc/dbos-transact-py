@@ -1618,7 +1618,7 @@ class SystemDatabase:
                 if enqueue_options is not None
                 else None
             )
-            conn.execute(
+            query = (
                 pg.insert(SystemSchema.workflow_queue)
                 .values(
                     workflow_uuid=workflow_id,
@@ -1627,11 +1627,15 @@ class SystemDatabase:
                 )
                 .on_conflict_do_nothing(
                     index_elements=SystemSchema.workflow_queue.primary_key.columns
-                )  # Ignore primary key constraint violation
-            )
+                )
+            )  # Ignore primary key constraint violation
+            conn.execute(query)
         except DBAPIError as dbapi_error:
             # Unique constraint violation for the deduplication ID
             if dbapi_error.orig.sqlstate == "23505":  # type: ignore
+                assert (
+                    deduplication_id is not None
+                ), f"deduplication_id should not be None. Workflow ID: {workflow_id}, Queue name: {queue_name}."
                 raise DBOSQueueDeduplicatedError(
                     workflow_id, queue_name, deduplication_id
                 )

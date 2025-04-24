@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import multiprocessing
 import multiprocessing.synchronize
@@ -1098,9 +1099,16 @@ def test_queue_deduplication(dbos: DBOS) -> None:
     workflow_event = threading.Event()
 
     @DBOS.workflow()
-    def test_workflow(var1: str) -> str:
+    def child_workflow(var1: str) -> str:
         workflow_event.wait()
-        return var1
+        return var1 + "-c"
+
+    @DBOS.workflow()
+    def test_workflow(var1: str) -> str:
+        # Make sure the child workflow is not blocked by the same deduplication ID
+        child_handle = queue.enqueue(child_workflow, var1)
+        workflow_event.wait()
+        return child_handle.get_result() + "-p"
 
     # Make sure only one workflow is running at a time
     wfid = str(uuid.uuid4())
@@ -1109,6 +1117,18 @@ def test_queue_deduplication(dbos: DBOS) -> None:
         with SetWorkflowID(wfid):
             handle1 = queue.enqueue(test_workflow, "abc")
 
+    # Enqueue the same workflow with a different deduplication ID should be fine.
+    with SetEnqueueOptions(deduplication_id="my_other_dedup_id"):
+        another_handle = queue.enqueue(test_workflow, "ghi")
+
+    # Enqueue a workflow without deduplication ID should be fine.
+    nodedup_handle1 = queue.enqueue(test_workflow, "jkl")
+
+    # Enqueued multiple times without deduplication ID but with different inputs should be fine, but get the result of the first one.
+    with SetWorkflowID(wfid):
+        nodedup_handle2 = queue.enqueue(test_workflow, "mno")
+
+    # Enqueue the same workflow with the same deduplication ID should raise an exception.
     wfid2 = str(uuid.uuid4())
     with SetEnqueueOptions(deduplication_id=dedup_id):
         with SetWorkflowID(wfid2):
@@ -1119,12 +1139,76 @@ def test_queue_deduplication(dbos: DBOS) -> None:
             in str(exc_info.value)
         )
 
-    # Now unblock the first workflow
+    # Now unblock the first two workflows and wait for them to finish.
     workflow_event.set()
-    assert handle1.get_result() == "abc"
+    assert handle1.get_result() == "abc-c-p"
+    assert another_handle.get_result() == "ghi-c-p"
+    assert nodedup_handle1.get_result() == "jkl-c-p"
+    assert nodedup_handle2.get_result() == "abc-c-p"
 
-    # Invoke the workflow again with the same deduplication ID should be fine because it's no longer in the queue.
+    # Invoke the workflow again with the same deduplication ID now should be fine because it's no longer in the queue.
     with SetEnqueueOptions(deduplication_id=dedup_id):
         with SetWorkflowID(wfid2):
             handle2 = queue.enqueue(test_workflow, "def")
-    assert handle2.get_result() == "def"
+    assert handle2.get_result() == "def-c-p"
+
+
+@pytest.mark.asyncio
+async def test_queue_deduplication_async(dbos: DBOS) -> None:
+    queue_name = "test_dedup_queue_async"
+    queue = Queue(queue_name)
+    workflow_event = asyncio.Event()
+
+    @DBOS.workflow()
+    async def child_workflow(var1: str) -> str:
+        await workflow_event.wait()
+        return var1 + "-c"
+
+    @DBOS.workflow()
+    async def test_workflow(var1: str) -> str:
+        # Make sure the child workflow is not blocked by the same deduplication ID
+        child_handle = await queue.enqueue_async(child_workflow, var1)
+        await workflow_event.wait()
+        return (await child_handle.get_result()) + "-p"
+
+    # Make sure only one workflow is running at a time
+    wfid = str(uuid.uuid4())
+    dedup_id = "my_dedup_id"
+    with SetEnqueueOptions(deduplication_id=dedup_id):
+        with SetWorkflowID(wfid):
+            handle1 = await queue.enqueue_async(test_workflow, "abc")
+
+    # Enqueue the same workflow with a different deduplication ID should be fine.
+    with SetEnqueueOptions(deduplication_id="my_other_dedup_id"):
+        another_handle = await queue.enqueue_async(test_workflow, "ghi")
+
+    # Enqueue a workflow without deduplication ID should be fine.
+    nodedup_handle1 = await queue.enqueue_async(test_workflow, "jkl")
+
+    # Enqueued multiple times without deduplication ID but with different inputs should be fine, but get the result of the first one.
+    with SetWorkflowID(wfid):
+        nodedup_handle2 = await queue.enqueue_async(test_workflow, "mno")
+
+    # Enqueue the same workflow with the same deduplication ID should raise an exception.
+    wfid2 = str(uuid.uuid4())
+    with SetEnqueueOptions(deduplication_id=dedup_id):
+        with SetWorkflowID(wfid2):
+            with pytest.raises(Exception) as exc_info:
+                await queue.enqueue_async(test_workflow, "def")
+        assert (
+            f"Workflow {wfid2} was deduplicated due to existing workflow in the queue {queue_name} with deduplication ID {dedup_id}."
+            in str(exc_info.value)
+        )
+
+    # Now unblock the first two workflows and wait for them to finish.
+    workflow_event.set()
+    assert (await handle1.get_result()) == "abc-c-p"
+    assert (await another_handle.get_result()) == "ghi-c-p"
+    assert (await nodedup_handle1.get_result()) == "jkl-c-p"
+    assert (await nodedup_handle2.get_result()) == "abc-c-p"
+
+    # Invoke the workflow again with the same deduplication ID now should be fine because it's no longer in the queue.
+    with SetEnqueueOptions(deduplication_id=dedup_id):
+        with SetWorkflowID(wfid2):
+            handle2 = await queue.enqueue_async(test_workflow, "def")
+    assert (await handle2.get_result()) == "def-c-p"
