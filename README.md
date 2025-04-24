@@ -53,7 +53,7 @@ Workflows are particularly useful for
 
 </details>
 
-<details open><summary><strong>📫 Durable Queues</strong></summary>
+<details><summary><strong>📫 Durable Queues</strong></summary>
 
 ####
 
