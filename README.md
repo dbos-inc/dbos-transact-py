@@ -67,7 +67,8 @@ You can also rate limit how often queued tasks are executed, deduplicate tasks, 
 You can add queues to your workflows in just a couple lines of code.
 They don't require a separate queueing service or message broker&mdash;just Postgres.
 
-```from dbos import DBOS, Queue
+```python
+from dbos import DBOS, Queue
 
 queue = Queue("example_queue")
 
