@@ -101,15 +101,16 @@ Write scripts to query workflow executions, batch pause or resume workflows, or 
 Handle bugs or failures that affect thousands of workflows with power and flexibility.
 
 ```python
+# Create a DBOS client connected to your Postgres database.
 client = DBOSClient(database_url)
 # Find all workflows that errored between 3:00 and 5:00 AM UTC on 2025-04-22.
 workflows = client.list_workflows(status="ERROR", 
   start_time="2025-04-22T03:00:00Z", end_time="2025-04-22T05:00:00Z")
 for workflow in workflows:
-    # Check which workflow failed due to an outage in a service called from Step 2
+    # Check which workflow failed due to an outage in a service called from Step 2.
     steps = client.list_workflow_steps(workflow)
     if len(steps) >= 3 and isinstance(steps[2]["error"], ServiceOutage):
-        # To recover from the outage, restart those workflows from step 2
+        # To recover from the outage, restart those workflows from Step 2.
         DBOS.fork_workflow(workflow.workflow_id, 2)
 ```
 
@@ -163,7 +164,7 @@ You can schedule a workflow using a single annotation:
 @DBOS.scheduled('* * * * *') # crontab syntax to run once every minute
 @DBOS.workflow()
 def example_scheduled_workflow(scheduled_time: datetime, actual_time: datetime):
-    DBOS.logger.info("I am a workflow scheduled to run once a minute. ")
+    DBOS.logger.info("I am a workflow scheduled to run once a minute.")
 ```
 
 You can add a durable sleep to any workflow with a single line of code.
