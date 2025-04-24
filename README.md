@@ -96,6 +96,34 @@ def process_tasks(tasks):
 
 ####
 
+You can DBOS to build reliable webhooks, event listeners, or Kafka consumers by starting a workflow exactly-once in response to an event.
+Acknowledge the event immediately while reliably processing it in the background.
+
+For example:
+
+```python
+def handle_message(request: Request) -> None:
+  event_id = request.body["event_id"]
+  # Use the event ID as an idempotency key to start the workflow exactly-once
+  with SetWorkflowID(event_id):
+    # Start the workflow in the background, then acknowledge the event
+    DBOS.start_workflow(message_workflow, request.body["event"])
+```
+
+Or with Kafka:
+
+```python
+@DBOS.kafka_consumer(config,["alerts-topic"])
+@DBOS.workflow()
+def process_kafka_alerts(msg):
+    # This workflow runs exactly-once for each message on the topic
+    alerts = msg.value.decode()
+    for alert in alerts:
+        respond_to_alert(alert)
+```
+
+[Read more ↗️](https://docs.dbos.dev/python/tutorials/workflow-tutorial)
+
 </details>
 
 <details><summary><strong>📅 Durable Scheduling</strong></summary>
@@ -103,8 +131,6 @@ def process_tasks(tasks):
 ####
 
 </details>
-
-
 
 <details><summary><strong>📫 Durable Notifications</strong></summary>
 
