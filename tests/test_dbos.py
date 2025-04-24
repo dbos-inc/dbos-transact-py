@@ -12,14 +12,17 @@ import pytest
 import sqlalchemy as sa
 
 # Public API
-from dbos import DBOS, ConfigFile, SetWorkflowID, WorkflowHandle, WorkflowStatusString
+from dbos import (
+    DBOS,
+    ConfigFile,
+    SetWorkflowID,
+    SetWorkflowTimeout,
+    WorkflowHandle,
+    WorkflowStatusString,
+)
 
 # Private API because this is a test
-from dbos._context import (
-    SetWorkflowTimeout,
-    assert_current_dbos_context,
-    get_local_dbos_context,
-)
+from dbos._context import assert_current_dbos_context, get_local_dbos_context
 from dbos._error import (
     DBOSConflictingRegistrationError,
     DBOSMaxStepRetriesExceeded,
