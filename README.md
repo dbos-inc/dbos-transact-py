@@ -113,6 +113,8 @@ for workflow in workflows:
         DBOS.fork_workflow(workflow.workflow_id, 2)
 ```
 
+[Read more ↗️](https://docs.dbos.dev/python/reference/client)
+
 </details>
 
 <details><summary><strong>🎫 Exactly-Once Event Processing</strong></summary>
