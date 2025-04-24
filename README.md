@@ -185,7 +185,22 @@ def reminder_workflow(email: str, time_to_sleep: int):
 
 ####
 
-Durably pause your workflow executions until an event is received, or emit events from your workflow to send progress updates to external clients.
+Pause your workflow executions until a notification is received, or emit events from your workflow to send progress updates to external clients.
+All notifications are stored in Postgres, so they can be send and received with exactly-once semantics.
+Set durable timeouts when waiting for events, so you can wait for as long as you like (even days or weeks) through interruptions or restarts, then resume once the notification arrives or the timeout is reached.
+
+For example, build a reliably billing system that durably waits for a notification from a payments service, processing it exactly-once:
+
+```python
+@DBOS.workflow()
+def checkout_workflow():
+  ... # Validate the order, then redirect customers to a payments service.
+  payment_status = DBOS.recv(PAYMENT_STATUS, timeout=payment_service_timeout)
+  if payment_status is not None and payment_status == "paid":
+      ... # Handle a successful payment.
+  else:
+      ... # Handle a failed payment or timeout.
+```
 
 </details>
 
