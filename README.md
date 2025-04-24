@@ -17,22 +17,6 @@ To get started, follow the [quickstart](https://docs.dbos.dev/quickstart) to ins
 Then, annotate workflows and steps in your program to make it durable!
 That's all you need to do&mdash;there's no additional infrastructure for you to configure or manage.
 
-```python
-@DBOS.step()
-def step_one():
-    ...
-
-@DBOS.step()
-def step_two():
-    ...
-
-@DBOS.workflow()
-def workflow()
-    step_one()
-    step_two()
-```
-
-
 ## Features
 
 <details open><summary><strong>💾 Durable Workflows</strong></summary>
