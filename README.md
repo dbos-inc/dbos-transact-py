@@ -96,7 +96,7 @@ def process_tasks(tasks):
 
 ####
 
-You can DBOS to build reliable webhooks, event listeners, or Kafka consumers by starting a workflow exactly-once in response to an event.
+Use DBOS to build reliable webhooks, event listeners, or Kafka consumers by starting a workflow exactly-once in response to an event.
 Acknowledge the event immediately while reliably processing it in the background.
 
 For example:
@@ -129,6 +129,28 @@ def process_kafka_alerts(msg):
 <details><summary><strong>📅 Durable Scheduling</strong></summary>
 
 ####
+
+Schedule workflows using cron syntax, or use durable sleep to pause workflows for as long as you like (even days or weeks) before executing.
+
+You can schedule a workflow using a single annotation:
+
+```python
+@DBOS.scheduled('* * * * *') # crontab syntax to run once every minute
+@DBOS.workflow()
+def example_scheduled_workflow(scheduled_time: datetime, actual_time: datetime):
+    DBOS.logger.info("I am a workflow scheduled to run once a minute. ")
+```
+
+You can add a durable sleep to any workflow with a single line of code.
+It stores its wakeup time in Postgres so the workflow sleeps through any interruption or restart, then always resumes on schedule.
+
+```python
+@DBOS.workflow()
+def reminder_workflow(email: str, time_to_sleep: int):
+    send_confirmation_email(email)
+    DBOS.sleep(time_to_sleep)
+    send_reminder_email(email)
+```
 
 </details>
 
