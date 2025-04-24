@@ -92,6 +92,27 @@ def process_tasks(tasks):
 
 </details>
 
+<details><summary><strong>⚙️ Programmatic Workflow Management</strong></summary>
+
+####
+
+Your workflows are stored as rows in a Postgres table, so you have full programmatic control over them.
+Write scripts to query workflow executions, batch pause or resume workflows, or even restart failed workflows from a specific step.
+Handle bugs or failures that affect thousands of workflows with power and flexibility.
+
+```python
+client = DBOSClient(database_url)
+# Find all workflows that errored between 3:00 and 5:00 AM UTC on 2025-04-22.
+workflows = client.list_workflows(status="ERROR", start_time="2025-04-22T03:00:00Z" end_time="2025-04-22T05:00:00Z")
+for workflow in workflows:
+    # For all workflows that failed due to an outage in a service called from Step 2, restart them from Step 2.
+    steps = client.list_workflow_steps(workflow)
+    if len(steps) >= 3 and isinstance(steps[2]["error"], ServiceOutage):
+        DBOS.fork_workflow(workflow.workflow_id, 2)
+```
+
+</details>
+
 <details><summary><strong>🎫 Exactly-Once Event Processing</strong></summary>
 
 ####
@@ -164,26 +185,6 @@ Durably pause your workflow executions until an event is received, or emit event
 
 </details>
 
-<details><summary><strong>📫 Programmatic Workflow Management</strong></summary>
-
-####
-
-Your workflows are stored as rows in a Postgres table, so you have full programmatic control over it.
-Write scripts to query workflow executions, batch pause or resume workflows, or even restart failed workflows from a specific step.
-Handle bugs or failures that affect thousands of workflows with power and flexibility.
-
-```python
-client = DBOSClient(database_url)
-# Find all workflows that errored between 3:00 and 5:00 AM UTC on 2025-04-22.
-workflows = client.list_workflows(status="ERROR", start_time="2025-04-22T03:00:00Z" end_time="2025-04-22T05:00:00Z")
-for workflow in workflows:
-    # For all workflows that failed due to an outage in a service called from Step 2, restart them from Step 2.
-    steps = client.list_workflow_steps(workflow)
-    if len(steps) >= 3 and isinstance(steps[2]["error"], ServiceOutage):
-        DBOS.fork_workflow(workflow.workflow_id, 2)
-```
-
-</details>
 
 
 
