@@ -442,7 +442,7 @@ def steps(
     help="Cancel a workflow so it is no longer automatically retried or restarted"
 )
 def cancel(
-    uuid: Annotated[str, typer.Argument()],
+    workflow_id: Annotated[str, typer.Argument()],
     db_url: Annotated[
         typing.Optional[str],
         typer.Option(
@@ -452,12 +452,12 @@ def cancel(
         ),
     ] = None,
 ) -> None:
-    start_client(db_url=db_url).cancel_workflow(workflow_id=uuid)
+    start_client(db_url=db_url).cancel_workflow(workflow_id=workflow_id)
 
 
 @workflow.command(help="Resume a workflow that has been cancelled")
 def resume(
-    uuid: Annotated[str, typer.Argument()],
+    workflow_id: Annotated[str, typer.Argument()],
     db_url: Annotated[
         typing.Optional[str],
         typer.Option(
@@ -467,12 +467,12 @@ def resume(
         ),
     ] = None,
 ) -> None:
-    start_client(db_url=db_url).resume_workflow(workflow_id=uuid)
+    start_client(db_url=db_url).resume_workflow(workflow_id=workflow_id)
 
 
 @workflow.command(help="Restart a workflow from the beginning with a new id")
 def restart(
-    uuid: Annotated[str, typer.Argument()],
+    workflow_id: Annotated[str, typer.Argument()],
     db_url: Annotated[
         typing.Optional[str],
         typer.Option(
@@ -484,7 +484,7 @@ def restart(
 ) -> None:
     status = (
         start_client(db_url=db_url)
-        .fork_workflow(workflow_id=uuid, start_step=1)
+        .fork_workflow(workflow_id=workflow_id, start_step=1)
         .get_status()
     )
     print(jsonpickle.encode(status, unpicklable=False))
@@ -494,7 +494,7 @@ def restart(
     help="fork a workflow from the beginning with a new id and from a step"
 )
 def fork(
-    uuid: Annotated[str, typer.Argument()],
+    workflow_id: Annotated[str, typer.Argument()],
     step: Annotated[
         int,
         typer.Option(
@@ -514,7 +514,7 @@ def fork(
 ) -> None:
     status = (
         start_client(db_url=db_url)
-        .fork_workflow(workflow_id=uuid, start_step=step)
+        .fork_workflow(workflow_id=workflow_id, start_step=step)
         .get_status()
     )
     print(jsonpickle.encode(status, unpicklable=False))
