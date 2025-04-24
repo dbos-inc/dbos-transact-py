@@ -103,11 +103,13 @@ Handle bugs or failures that affect thousands of workflows with power and flexib
 ```python
 client = DBOSClient(database_url)
 # Find all workflows that errored between 3:00 and 5:00 AM UTC on 2025-04-22.
-workflows = client.list_workflows(status="ERROR", start_time="2025-04-22T03:00:00Z" end_time="2025-04-22T05:00:00Z")
+workflows = client.list_workflows(status="ERROR", 
+  start_time="2025-04-22T03:00:00Z", end_time="2025-04-22T05:00:00Z")
 for workflow in workflows:
-    # For all workflows that failed due to an outage in a service called from Step 2, restart them from Step 2.
+    # Check which workflow failed due to an outage in a service called from Step 2
     steps = client.list_workflow_steps(workflow)
     if len(steps) >= 3 and isinstance(steps[2]["error"], ServiceOutage):
+        # To recover from the outage, restart those workflows from step 2
         DBOS.fork_workflow(workflow.workflow_id, 2)
 ```
 
