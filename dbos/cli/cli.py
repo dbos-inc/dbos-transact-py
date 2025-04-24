@@ -368,7 +368,7 @@ def list(
         ),
     ] = None,
     sort_desc: Annotated[
-        typing.Optional[bool],
+        bool,
         typer.Option(
             "--sort-desc",
             "-d",
@@ -575,7 +575,7 @@ def list_queue(
         ),
     ] = None,
     sort_desc: Annotated[
-        typing.Optional[bool],
+        bool,
         typer.Option(
             "--sort-desc",
             "-d",
