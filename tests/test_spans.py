@@ -46,7 +46,7 @@ def test_spans(dbos: DBOS) -> None:
         assert span.context is not None
 
     assert spans[0].name == test_step.__name__
-    assert spans[1].name == 'a new span'
+    assert spans[1].name == "a new span"
     assert spans[2].name == test_workflow.__name__
     assert spans[3].name == test_step.__name__
 
@@ -91,7 +91,7 @@ async def test_spans_async(dbos: DBOS) -> None:
         assert span.context is not None
 
     assert spans[0].name == test_step.__name__
-    assert spans[1].name == 'a new span'
+    assert spans[1].name == "a new span"
     assert spans[2].name == test_workflow.__name__
     assert spans[3].name == test_step.__name__
 
