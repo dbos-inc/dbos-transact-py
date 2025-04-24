@@ -37,6 +37,8 @@ def workflow()
 
 <details open><summary><strong>💾 Durable Workflows</strong></summary>
 
+####
+
 DBOS workflows make your program **durable** by checkpointing its state in Postgres.
 If your program ever fails, when it restarts all your workflows will automatically resume from the last completed step.
 
