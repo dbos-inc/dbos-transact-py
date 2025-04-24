@@ -495,10 +495,9 @@ def test_enqueue_with_deduplication(dbos: DBOS, client: DBOSClient) -> None:
 
     # Enqueue with the same deduplication ID but different workflow ID should raise an error
     wfid2 = str(uuid.uuid4())
-    options2: EnqueueOptions = EnqueueOptions(options)
-    options2["workflow_id"] = wfid2
+    options["workflow_id"] = wfid2
     with pytest.raises(Exception) as exc_info:
-        client.enqueue(options2, "def")
+        client.enqueue(options, "def")
     assert (
         f"Workflow {wfid2} was deduplicated due to existing workflow in the queue test_queue with deduplication ID {dedup_id}."
         in str(exc_info.value)
