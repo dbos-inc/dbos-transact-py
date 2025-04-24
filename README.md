@@ -8,7 +8,14 @@
 
 ---
 
+## What is DBOS?
+
 DBOS provides lightweight durable workflows built on top of Postgres.
+Instead of managing your own workflow orchestrator or task queue system, you can use DBOS to add durable workflows to your program in just a few lines of code.
+
+To get started, follow the [quickstart](https://docs.dbos.dev/quickstart) to install this open-source library and connect it to a Postgres database.
+Then, annotate workflows and steps in your program to make it durable!
+That's all you need to do&mdash;there's no additional infrastructure for you to configure or manage.
 
 ```python
 @DBOS.step()
@@ -24,6 +31,8 @@ def workflow()
     step_one()
     step_two()
 ```
+
+## When should I use DBOS?
 
 Durable execution means your program is **resilient to any failure**.
 If it is ever interrupted or crashes, all your workflows will automatically resume from the last completed step.
