@@ -142,7 +142,7 @@ Or with Kafka:
 @DBOS.kafka_consumer(config,["alerts-topic"])
 @DBOS.workflow()
 def process_kafka_alerts(msg):
-    # This workflow runs exactly-once for each message on the topic
+    # This workflow runs exactly-once for each message sent to the topic
     alerts = msg.value.decode()
     for alert in alerts:
         respond_to_alert(alert)
