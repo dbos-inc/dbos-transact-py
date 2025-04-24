@@ -26,7 +26,7 @@ That's all you need to do&mdash;there's no additional infrastructure for you to 
 DBOS workflows make your program **durable** by checkpointing its state in Postgres.
 If your program ever fails, when it restarts all your workflows will automatically resume from the last completed step.
 
-You add durable workflows to your existing Python program by annotating workflows and steps:
+You add durable workflows to your existing Python program by annotating ordinary functions as workflows and steps:
 
 ```python
 @DBOS.step()
@@ -53,7 +53,7 @@ Workflows are particularly useful for
 
 </details>
 
-<details><summary><strong>📫 Durable Queues</strong></summary>
+<details><summary><strong>📒 Durable Queues</strong></summary>
 
 ####
 
@@ -89,6 +89,28 @@ def process_tasks(tasks):
 ```
 
 [Read more ↗️](https://docs.dbos.dev/python/tutorials/queue-tutorial)
+
+</details>
+
+<details><summary><strong>🎫 Exactly-Once Event Processing</strong></summary>
+
+####
+
+</details>
+
+<details><summary><strong>📅 Durable Scheduling</strong></summary>
+
+####
+
+</details>
+
+
+
+<details><summary><strong>📫 Durable Notifications</strong></summary>
+
+####
+
+Your workflows can 
 
 </details>
 
