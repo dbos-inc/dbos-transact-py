@@ -11,7 +11,7 @@
 ## What is DBOS?
 
 DBOS provides lightweight durable workflows built on top of Postgres.
-Instead of managing your own workflow orchestrator or task queue system, you can use DBOS to add durable workflows to your program in just a few lines of code.
+Instead of managing your own workflow orchestrator or task queue system, you can use DBOS to add durable workflows and queues to your program in just a few lines of code.
 
 To get started, follow the [quickstart](https://docs.dbos.dev/quickstart) to install this open-source library and connect it to a Postgres database.
 Then, annotate workflows and steps in your program to make it durable!
@@ -48,6 +48,8 @@ Workflows are particularly useful for
 - Orchestrating complex business processes so they seamlessly recover from any failure.
 - Processing incoming events (e.g. from Kafka) exactly once.
 - Operating an AI agent or data pipeline, or anything that connects to an unreliable or non-deterministic API.
+
+[Read more ⏩](https://docs.dbos.dev/python/tutorials/workflow-tutorial)
 
 </details>
 
