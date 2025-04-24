@@ -61,6 +61,7 @@ class DBOSErrorCode(Enum):
     ConflictingWorkflowError = 9
     WorkflowCancelled = 10
     UnexpectedStep = 11
+    QueueDeduplicated = 12
     ConflictingRegistrationError = 25
 
 
@@ -175,6 +176,18 @@ class DBOSUnexpectedStepError(DBOSException):
         super().__init__(
             f"During execution of workflow {workflow_id} step {step_id}, function {recorded_name} was recorded when {expected_name} was expected. Check that your workflow is deterministic.",
             dbos_error_code=DBOSErrorCode.UnexpectedStep.value,
+        )
+
+
+class DBOSQueueDeduplicatedError(DBOSException):
+    """Exception raised when a workflow is deduplicated in the queue."""
+
+    def __init__(
+        self, workflow_id: str, queue_name: str, deduplication_id: Optional[str]
+    ) -> None:
+        super().__init__(
+            f"Workflow {workflow_id} was deduplicated due to existing workflow in the queue {queue_name} with deduplication ID {deduplication_id}.",
+            dbos_error_code=DBOSErrorCode.QueueDeduplicated.value,
         )
 
 

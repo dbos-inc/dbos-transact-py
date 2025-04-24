@@ -37,6 +37,7 @@ from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
     DBOSNonExistentWorkflowError,
+    DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
@@ -133,6 +134,10 @@ class WorkflowStatusInternal(TypedDict):
     # The deadline of a workflow, computed by adding its timeout to its start time.
     # Deadlines propagate to children. When the deadline is reached, the workflow is cancelled.
     workflow_deadline_epoch_ms: Optional[int]
+
+
+class EnqueueOptionsInternal(TypedDict):
+    deduplication_id: Optional[str]  # Unique ID for deduplication on a queue
 
 
 class RecordedResult(TypedDict):
@@ -1596,17 +1601,39 @@ class SystemDatabase:
             )
         return value
 
-    def enqueue(self, workflow_id: str, queue_name: str, conn: sa.Connection) -> None:
+    def enqueue(
+        self,
+        workflow_id: str,
+        queue_name: str,
+        conn: sa.Connection,
+        *,
+        enqueue_options: Optional[EnqueueOptionsInternal],
+    ) -> None:
         if self._debug_mode:
             raise Exception("called enqueue in debug mode")
-        conn.execute(
-            pg.insert(SystemSchema.workflow_queue)
-            .values(
-                workflow_uuid=workflow_id,
-                queue_name=queue_name,
+        try:
+            deduplication_id = (
+                enqueue_options["deduplication_id"]
+                if enqueue_options is not None
+                else None
             )
-            .on_conflict_do_nothing()
-        )
+            conn.execute(
+                pg.insert(SystemSchema.workflow_queue)
+                .values(
+                    workflow_uuid=workflow_id,
+                    queue_name=queue_name,
+                    deduplication_id=deduplication_id,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=SystemSchema.workflow_queue.primary_key.columns
+                )  # Ignore primary key constraint violation
+            )
+        except DBAPIError as dbapi_error:
+            # Unique constraint violation for the deduplication ID
+            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
+                raise DBOSQueueDeduplicatedError(
+                    workflow_id, queue_name, deduplication_id
+                )
 
     def start_queued_workflows(
         self, queue: "Queue", executor_id: str, app_version: str
@@ -1878,6 +1905,7 @@ class SystemDatabase:
         inputs: str,
         *,
         max_recovery_attempts: Optional[int],
+        enqueue_options: Optional[EnqueueOptionsInternal],
     ) -> tuple[WorkflowStatuses, Optional[int]]:
         """
         Synchronously record the status and inputs for workflows in a single transaction
@@ -1893,7 +1921,12 @@ class SystemDatabase:
                 status["queue_name"] is not None
                 and wf_status == WorkflowStatusString.ENQUEUED.value
             ):
-                self.enqueue(status["workflow_uuid"], status["queue_name"], conn)
+                self.enqueue(
+                    status["workflow_uuid"],
+                    status["queue_name"],
+                    conn,
+                    enqueue_options=enqueue_options,
+                )
         return wf_status, workflow_deadline_epoch_ms
 
 

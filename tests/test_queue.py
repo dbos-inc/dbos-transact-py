@@ -18,7 +18,11 @@ from dbos import (
     SetWorkflowID,
     WorkflowHandle,
 )
-from dbos._context import SetWorkflowTimeout, assert_current_dbos_context
+from dbos._context import (
+    SetEnqueueOptions,
+    SetWorkflowTimeout,
+    assert_current_dbos_context,
+)
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
@@ -1086,3 +1090,41 @@ async def test_simple_queue_async(dbos: DBOS) -> None:
         assert (await test_workflow("abc", "123")) == "abcd123"
     assert wf_counter == 2
     assert step_counter == 1
+
+
+def test_queue_deduplication(dbos: DBOS) -> None:
+    queue_name = "test_dedup_queue"
+    queue = Queue(queue_name)
+    workflow_event = threading.Event()
+
+    @DBOS.workflow()
+    def test_workflow(var1: str) -> str:
+        workflow_event.wait()
+        return var1
+
+    # Make sure only one workflow is running at a time
+    wfid = str(uuid.uuid4())
+    dedup_id = "my_dedup_id"
+    with SetEnqueueOptions(deduplication_id=dedup_id):
+        with SetWorkflowID(wfid):
+            handle1 = queue.enqueue(test_workflow, "abc")
+
+    wfid2 = str(uuid.uuid4())
+    with SetEnqueueOptions(deduplication_id=dedup_id):
+        with SetWorkflowID(wfid2):
+            with pytest.raises(Exception) as exc_info:
+                queue.enqueue(test_workflow, "def")
+        assert (
+            f"Workflow {wfid2} was deduplicated due to existing workflow in the queue {queue_name} with deduplication ID {dedup_id}."
+            in str(exc_info.value)
+        )
+
+    # Now unblock the first workflow
+    workflow_event.set()
+    assert handle1.get_result() == "abc"
+
+    # Invoke the workflow again with the same deduplication ID should be fine because it's no longer in the queue.
+    with SetEnqueueOptions(deduplication_id=dedup_id):
+        with SetWorkflowID(wfid2):
+            handle2 = queue.enqueue(test_workflow, "def")
+    assert handle2.get_result() == "def"
