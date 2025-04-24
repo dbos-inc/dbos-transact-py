@@ -7,7 +7,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from . import _serialization
-from ._dbos_config import ConfigFile, DatabaseConfig
+from ._dbos_config import DatabaseConfig
 from ._error import DBOSUnexpectedStepError, DBOSWorkflowConflictIDError
 from ._schemas.application_database import ApplicationSchema
 from ._sys_db import StepInfo

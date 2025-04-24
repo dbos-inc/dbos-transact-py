@@ -1,8 +1,9 @@
 import asyncio
 import sys
-import time
 import uuid
 from typing import Any, Generic, List, Optional, TypedDict, TypeVar
+
+from sqlalchemy import URL
 
 from dbos._app_db import ApplicationDatabase
 
@@ -59,7 +60,7 @@ class WorkflowHandleClientPolling(Generic[R]):
         return res
 
     def get_status(self) -> WorkflowStatus:
-        status = get_workflow(self._sys_db, self.workflow_id, True)
+        status = get_workflow(self._sys_db, self.workflow_id, False)
         if status is None:
             raise DBOSNonExistentWorkflowError(self.workflow_id)
         return status
@@ -82,7 +83,7 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
 
     async def get_status(self) -> WorkflowStatus:
         status = await asyncio.to_thread(
-            get_workflow, self._sys_db, self.workflow_id, True
+            get_workflow, self._sys_db, self.workflow_id, False
         )
         if status is None:
             raise DBOSNonExistentWorkflowError(self.workflow_id)
@@ -96,6 +97,7 @@ class DBOSClient:
             db_config["sys_db_name"] = system_database
         self._sys_db = SystemDatabase(db_config)
         self._app_db = ApplicationDatabase(db_config)
+        self._db_url = database_url
 
     def destroy(self) -> None:
         self._sys_db.destroy()
@@ -167,13 +169,13 @@ class DBOSClient:
         return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
 
     def retrieve_workflow(self, workflow_id: str) -> WorkflowHandle[R]:
-        status = get_workflow(self._sys_db, workflow_id, True)
+        status = get_workflow(self._sys_db, workflow_id, False)
         if status is None:
             raise DBOSNonExistentWorkflowError(workflow_id)
         return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
 
     async def retrieve_workflow_async(self, workflow_id: str) -> WorkflowHandleAsync[R]:
-        status = asyncio.to_thread(get_workflow, self._sys_db, workflow_id, True)
+        status = asyncio.to_thread(get_workflow, self._sys_db, workflow_id, False)
         if status is None:
             raise DBOSNonExistentWorkflowError(workflow_id)
         return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)

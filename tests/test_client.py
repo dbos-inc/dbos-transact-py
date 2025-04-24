@@ -1,4 +1,3 @@
-import json
 import math
 import os
 import runpy
@@ -6,14 +5,13 @@ import subprocess
 import sys
 import time
 import uuid
-from typing import Any, Optional, TypedDict, cast
+from typing import Any, Optional, TypedDict
 
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, ConfigFile, DBOSClient, EnqueueOptions, Queue, SetWorkflowID
+from dbos import DBOS, ConfigFile, DBOSClient, EnqueueOptions, SetWorkflowID
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
-from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
 from tests.client_collateral import event_test, retrieve_test, send_test
@@ -47,17 +45,30 @@ def test_client_enqueue_and_get_result(dbos: DBOS, client: DBOSClient) -> None:
     result = handle.get_result()
     assert result == '42-test-{"first": "John", "last": "Doe", "age": 30}'
 
+    list_results = client.list_workflows()
+    assert len(list_results) == 1
+    assert list_results[0].workflow_id == wfid
+    assert list_results[0].status == "SUCCESS"
+
 
 def test_enqueue_with_timeout(dbos: DBOS, client: DBOSClient) -> None:
     run_client_collateral()
 
+    wfid = str(uuid.uuid4())
     options: EnqueueOptions = {
         "queue_name": "test_queue",
         "workflow_name": "blocked_workflow",
-        "workflow_timeout": 0.1,
+        "workflow_timeout": 1,
+        "workflow_id": wfid,
     }
 
     handle: WorkflowHandle[str] = client.enqueue(options)
+
+    list_results = client.list_queued_workflows()
+    assert len(list_results) == 1
+    assert list_results[0].workflow_id == wfid
+    assert list_results[0].status in ["PENDING", "ENQUEUED"]
+
     with pytest.raises(Exception) as exc_info:
         handle.get_result()
     assert "was cancelled" in str(exc_info.value)
