@@ -368,11 +368,11 @@ def list(
         ),
     ] = None,
     sort_desc: Annotated[
-        bool,
+        typing.Optional[bool],
         typer.Option(
             "--sort-desc",
             "-d",
-            help="Sort the results in descending order",
+            help="Sort the results in descending order (older first)",
         ),
     ] = False,
     offset: Annotated[
@@ -575,11 +575,11 @@ def list_queue(
         ),
     ] = None,
     sort_desc: Annotated[
-        bool,
+        typing.Optional[bool],
         typer.Option(
             "--sort-desc",
             "-d",
-            help="Sort the results in descending order",
+            help="Sort the results in descending order (older first)",
         ),
     ] = False,
     offset: Annotated[
