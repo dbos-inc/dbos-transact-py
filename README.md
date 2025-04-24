@@ -152,6 +152,8 @@ def reminder_workflow(email: str, time_to_sleep: int):
     send_reminder_email(email)
 ```
 
+[Read more ↗️](https://docs.dbos.dev/python/tutorials/scheduled-workflows)
+
 </details>
 
 <details><summary><strong>📫 Durable Notifications</strong></summary>
