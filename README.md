@@ -1,15 +1,14 @@
 
 <div align="center">
 
-# DBOS Transact: A Lightweight Durable Execution Library Built on Postgres
+# DBOS Transact: Lightweight Durable Python Workflows
 
 #### [Documentation](https://docs.dbos.dev/) &nbsp;&nbsp;•&nbsp;&nbsp;  [Examples](https://docs.dbos.dev/examples) &nbsp;&nbsp;•&nbsp;&nbsp; [Github](https://github.com/dbos-inc) &nbsp;&nbsp;•&nbsp;&nbsp; [Discord](https://discord.com/invite/jsmC6pXGgX)
 </div>
 
 ---
 
-DBOS Transact is a Python library for **ultra-lightweight durable execution**.
-For example:
+DBOS provides lightweight durable workflows built on top of Postgres.
 
 ```python
 @DBOS.step()
