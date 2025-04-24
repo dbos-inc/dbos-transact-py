@@ -62,7 +62,7 @@ You can enqueue a task as part of a durable workflow and one of your processes w
 DBOS manages the execution of your task, guaranteeing that it gets completed (and that your workflow gets the result without having to resubmit the task) if your application is interrupted.
 
 Queues also provide flow control, so you can limit the concurrency of your tasks on a per-queue or per-process basis.
-You can also rate limit how often queued tasks are executed, deduplicate tasks, or prioritize critical tasks.
+You can also set timeouts for tasks, rate limit how often queued tasks are executed, deduplicate tasks, or prioritize critical tasks.
 
 You can add queues to your workflows in just a couple lines of code.
 They don't require a separate queueing service or message broker&mdash;just Postgres.
@@ -160,9 +160,31 @@ def reminder_workflow(email: str, time_to_sleep: int):
 
 ####
 
-Your workflows can 
+Durably pause your workflow executions until an event is received, or emit events from your workflow to send progress updates to external clients.
 
 </details>
+
+<details><summary><strong>📫 Programmatic Workflow Management</strong></summary>
+
+####
+
+Your workflows are stored as rows in a Postgres table, so you have full programmatic control over it.
+Write scripts to query workflow executions, batch pause or resume workflows, or even restart failed workflows from a specific step.
+Handle bugs or failures that affect thousands of workflows with power and flexibility.
+
+```python
+client = DBOSClient(database_url)
+# Find all workflows that errored between 3:00 and 5:00 AM UTC on 2025-04-22.
+workflows = client.list_workflows(status="ERROR", start_time="2025-04-22T03:00:00Z" end_time="2025-04-22T05:00:00Z")
+for workflow in workflows:
+    # For all workflows that failed due to an outage in a service called from Step 2, restart them from Step 2.
+    steps = client.list_workflow_steps(workflow)
+    if len(steps) >= 3 and isinstance(steps[2]["error"], ServiceOutage):
+        DBOS.fork_workflow(workflow.workflow_id, 2)
+```
+
+</details>
+
 
 
 ## Getting Started
