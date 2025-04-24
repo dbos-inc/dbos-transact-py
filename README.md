@@ -58,7 +58,34 @@ Workflows are particularly useful for
 ####
 
 DBOS queues help you **durably** run tasks or workflows in the background.
+You can enqueue a task as part of a durable workflow and one of your processes will pick it up for execution.
+DBOS manages the execution of your task, guaranteeing that it gets completed (and that your workflow gets the result without having to resubmit the task) if your application is interrupted.
 
+Queues also provide flow control, so you can limit the concurrency of your tasks on a per-queue or per-process basis.
+You can also rate limit how often queued tasks are executed, deduplicate tasks, or prioritize critical tasks.
+
+You can add queues to your workflows in just a couple lines of code.
+They don't require a separate queueing service or message broker&mdash;just Postgres.
+
+```from dbos import DBOS, Queue
+
+queue = Queue("example_queue")
+
+@DBOS.step()
+def process_task(task):
+  ...
+
+@DBOS.workflow()
+def process_tasks(tasks):
+  task_handles = []
+  # Enqueue each task so all tasks are processed concurrently.
+  for task in tasks:
+    handle = queue.enqueue(process_task, task)
+    task_handles.append(handle)
+  # Wait for each task to complete and retrieve its result.
+  # Return the results of all tasks.
+  return [handle.get_result() for handle in task_handles]
+```
 
 </details>
 
