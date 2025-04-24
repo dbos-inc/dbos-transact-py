@@ -209,7 +209,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         self._end_headers()
 
     def _handle_steps(self, workflow_id: str) -> None:
-        steps = self.dbos._sys_db.get_workflow_steps(workflow_id)
+        steps = self.dbos.list_workflow_steps(workflow_id)
 
         updated_steps = [
             {
