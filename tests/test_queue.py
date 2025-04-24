@@ -16,14 +16,12 @@ from dbos import (
     ConfigFile,
     DBOSConfiguredInstance,
     Queue,
+    SetEnqueueOptions,
     SetWorkflowID,
+    SetWorkflowTimeout,
     WorkflowHandle,
 )
-from dbos._context import (
-    SetEnqueueOptions,
-    SetWorkflowTimeout,
-    assert_current_dbos_context,
-)
+from dbos._context import assert_current_dbos_context
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
