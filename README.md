@@ -49,7 +49,7 @@ Workflows are particularly useful for
 - Processing incoming events (e.g. from Kafka) exactly once.
 - Operating an AI agent or data pipeline, or anything that connects to an unreliable or non-deterministic API.
 
-[Read more ⏩](https://docs.dbos.dev/python/tutorials/workflow-tutorial)
+[Read more ↗️](https://docs.dbos.dev/python/tutorials/workflow-tutorial)
 
 </details>
 
