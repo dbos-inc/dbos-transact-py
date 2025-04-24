@@ -7,8 +7,8 @@ import pytest
 import sqlalchemy as sa
 
 # Public API
-from dbos import DBOS, Queue, SetWorkflowID
-from dbos._context import SetWorkflowTimeout, assert_current_dbos_context
+from dbos import DBOS, Queue, SetWorkflowID, SetWorkflowTimeout
+from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._dbos_config import ConfigFile
 from dbos._error import DBOSException, DBOSWorkflowCancelledError
