@@ -500,7 +500,7 @@ def fork(
         typer.Option(
             "--step",
             "-s",
-            help="Restart from this step (default: first step)",
+            help="Restart from this step",
         ),
     ] = 1,
     db_url: Annotated[
