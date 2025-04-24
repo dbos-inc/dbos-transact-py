@@ -88,6 +88,8 @@ def process_tasks(tasks):
   return [handle.get_result() for handle in task_handles]
 ```
 
+[Read more ↗️](https://docs.dbos.dev/python/tutorials/queue-tutorial)
+
 </details>
 
 
