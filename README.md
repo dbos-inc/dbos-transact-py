@@ -53,6 +53,16 @@ Workflows are particularly useful for
 
 </details>
 
+<details open><summary><strong>📫 Durable Queues</strong></summary>
+
+####
+
+DBOS queues help you **durably** run tasks or workflows in the background.
+
+
+</details>
+
+
 ## Getting Started
 
 To get started, follow the [quickstart](https://docs.dbos.dev/quickstart) to install the open-source library and connect it to a Postgres database.
