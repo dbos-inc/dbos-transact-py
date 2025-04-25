@@ -20,7 +20,7 @@ That's all you need to do&mdash;DBOS is entirely contained in this open-source l
 ## When Should I Use DBOS?
 
 You should consider using DBOS if you're **concerned about how your application handles failures**.
-For example, you might be building a payments service that must reliably process transactions even if servers crash mid-operation, or building a long-running data pipeline that needs to resume seamlessly from checkpoints rather than restarting entirely when interruptions occur.
+For example, you might be building a payments service that must reliably process transactions even if servers crash mid-operation, or a long-running data pipeline that needs to resume seamlessly from checkpoints rather than restarting entirely when interruptions occur.
 
 Handling failures is costly and complicated, requiring complex state management and recovery logic as well as heavyweight tools like external orchestration services.
 DBOS makes it simpler: annotate your code to checkpoint it in Postgres and automatically recover from any failure.
@@ -232,6 +232,8 @@ Then, check out the [programming guide](https://docs.dbos.dev/python/programming
 
 <details><summary><strong>DBOS vs. Temporal</strong></summary>
 
+####
+
 Both DBOS and Temporal provide durable execution, but DBOS is implemented in a lightweight Postgres-backed library whereas Temporal, and architecturally similar systems such as Restate and Inngest, are implemented in an externally orchestrated server.
 
 You can add DBOS to your program by installing the open-source library, connecting it to Postgres, and annotating workflows and steps.
@@ -246,6 +248,8 @@ By contrast, to add Temporal to your program, you must rearchitect your program 
 
 <details><summary><strong>DBOS vs. Airflow</strong></summary>
 
+####
+
 DBOS and Airflow both provide workflow abstractions.
 Airflow is targeted at data science use cases, providing many out-of-the-box connectors but requiring workflows be written as explicit DAGs and externally orchestrating them from an Airflow cluster.
 Airflow is designed for batch operations and does not provide good performance for streaming or real-time use cases.
@@ -258,6 +262,8 @@ DBOS is general-purpose, but is often used for data pipelines, allowing develope
 </details>
 
 <details><summary><strong>DBOS vs. Celery/BullMQ</strong></summary>
+
+####
 
 DBOS provides a similar queue abstraction to dedicating queueing systems like Celery or BullMQ: you can declare queues, submit tasks to them, and control their flow with concurrency limits, rate limits, timeouts, prioritization, etc.
 However, DBOS queues are **durable and Postgres-backed** and integrate with durable workflows.
