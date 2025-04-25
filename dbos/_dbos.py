@@ -962,12 +962,16 @@ class DBOS:
         )
 
     @classmethod
-    def resume_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
+    def resume_workflow(
+        cls, workflow_id: str, *, application_version: Optional[str] = None
+    ) -> WorkflowHandle[Any]:
         """Resume a workflow by ID."""
 
         def fn() -> None:
             dbos_logger.info(f"Resuming workflow: {workflow_id}")
-            _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
+            _get_dbos_instance()._sys_db.resume_workflow(
+                workflow_id, application_version=application_version
+            )
 
         _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.resumeWorkflow")
         return cls.retrieve_workflow(workflow_id)

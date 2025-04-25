@@ -8,7 +8,7 @@ import pytest
 from dbos import DBOS, Queue, SetWorkflowID
 from dbos._dbos import DBOSConfiguredInstance
 from dbos._error import DBOSException, DBOSWorkflowCancelledError
-from dbos._utils import INTERNAL_QUEUE_NAME
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from tests.conftest import queue_entries_are_cleaned_up
 
 
@@ -59,6 +59,56 @@ def test_cancel_resume(dbos: DBOS) -> None:
 
     # Resume the workflow again. Verify it does not run again.
     handle = DBOS.resume_workflow(wfid)
+    assert handle.get_result() == input
+    assert steps_completed == 2
+
+
+def test_resume_version(dbos: DBOS) -> None:
+    steps_completed = 0
+    workflow_event = threading.Event()
+    main_thread_event = threading.Event()
+    input = 5
+
+    @DBOS.step()
+    def step_one() -> None:
+        nonlocal steps_completed
+        steps_completed += 1
+
+    @DBOS.step()
+    def step_two() -> None:
+        nonlocal steps_completed
+        steps_completed += 1
+
+    @DBOS.workflow()
+    def simple_workflow(x: int) -> int:
+        step_one()
+        main_thread_event.set()
+        workflow_event.wait()
+        # A handler like this should not catch DBOSWorkflowCancelledError
+        try:
+            step_two()
+        except Exception:
+            raise
+        return x
+
+    # Start the workflow and cancel it.
+    # Verify it stops after step one but before step two
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(simple_workflow, input)
+    main_thread_event.wait()
+    DBOS.cancel_workflow(wfid)
+    workflow_event.set()
+    with pytest.raises(DBOSWorkflowCancelledError):
+        handle.get_result()
+    assert steps_completed == 1
+
+    # Resume the workflow with a different version. Verify it is set to that version.
+    new_version = "my_new_version"
+    handle = DBOS.resume_workflow(wfid, application_version=new_version)
+    assert handle.get_status().app_version == new_version
+    # Set the global version to this new version, verify the workflow completes
+    GlobalParams.app_version = new_version
     assert handle.get_result() == input
     assert steps_completed == 2
 
@@ -229,35 +279,35 @@ def test_fork_steps(
     stepFiveCount = 0
 
     @DBOS.workflow()
-    def simple_workflow(x: int) -> None:
+    def simple_workflow(x: int) -> int:
         return stepOne(x) + stepTwo(x) + stepThree(x) + stepFour(x) + stepFive(x)
 
     @DBOS.step()
-    def stepOne(x: int) -> None:
+    def stepOne(x: int) -> int:
         nonlocal stepOneCount
         stepOneCount += 1
         return x + 1
 
     @DBOS.step()
-    def stepTwo(x: int) -> None:
+    def stepTwo(x: int) -> int:
         nonlocal stepTwoCount
         stepTwoCount += 1
         return x + 2
 
     @DBOS.step()
-    def stepThree(x: int) -> None:
+    def stepThree(x: int) -> int:
         nonlocal stepThreeCount
         stepThreeCount += 1
         return x + 3
 
     @DBOS.step()
-    def stepFour(x: int) -> None:
+    def stepFour(x: int) -> int:
         nonlocal stepFourCount
         stepFourCount += 1
         return x + 4
 
     @DBOS.step()
-    def stepFive(x: int) -> None:
+    def stepFive(x: int) -> int:
         nonlocal stepFiveCount
         stepFiveCount += 1
         return x + 5

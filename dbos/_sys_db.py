@@ -532,22 +532,27 @@ class SystemDatabase:
                 )
             )
 
-    def resume_workflow(self, workflow_id: str) -> None:
+    def resume_workflow(
+        self, workflow_id: str, *, application_version: Optional[str]
+    ) -> None:
         if self._debug_mode:
             raise Exception("called resume_workflow in debug mode")
         with self.engine.begin() as c:
             # Execute with snapshot isolation in case of concurrent calls on the same workflow
             c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
             # Check the status of the workflow. If it is complete, do nothing.
-            row = c.execute(
+            status_row = c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.status,
+                    SystemSchema.workflow_status.c.application_version,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
             ).fetchone()
+            if status_row is None:
+                return
+            status, original_application_version = status_row[0], status_row[1]
             if (
-                row is None
-                or row[0] == WorkflowStatusString.SUCCESS.value
-                or row[0] == WorkflowStatusString.ERROR.value
+                status == WorkflowStatusString.SUCCESS.value
+                or status == WorkflowStatusString.ERROR.value
             ):
                 return
             # Remove the workflow from the queues table so resume can safely be called on an ENQUEUED workflow
@@ -571,6 +576,11 @@ class SystemDatabase:
                     status=WorkflowStatusString.ENQUEUED.value,
                     recovery_attempts=0,
                     workflow_deadline_epoch_ms=None,
+                    application_version=(
+                        application_version
+                        if application_version is not None
+                        else original_application_version
+                    ),
                 )
             )
 
