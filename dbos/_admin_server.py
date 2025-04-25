@@ -45,9 +45,10 @@ class AdminServer:
 
 
 class AdminRequestHandler(BaseHTTPRequestHandler):
+    is_deactivated = False
+
     def __init__(self, dbos: DBOS, *args: Any, **kwargs: Any) -> None:
         self.dbos = dbos
-        self.is_deactivated = False
         super().__init__(*args, **kwargs)
 
     def _end_headers(self) -> None:
@@ -63,11 +64,11 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self._end_headers()
             self.wfile.write("healthy".encode("utf-8"))
         elif self.path == _deactivate_path:
-            if not self.is_deactivated:
+            if not AdminRequestHandler.is_deactivated:
                 dbos_logger.info(
                     f"Deactivating DBOS executor {GlobalParams.executor_id} with version {GlobalParams.app_version}. This executor will complete existing workflows but will not start new workflows."
                 )
-                self.is_deactivated = True
+                AdminRequestHandler.is_deactivated = True
             # Stop all scheduled workflows, queues, and kafka loops
             for event in self.dbos.stop_events:
                 event.set()
