@@ -17,6 +17,19 @@ To get started, follow the [quickstart](https://docs.dbos.dev/quickstart) to ins
 Then, annotate workflows and steps in your program to make it durable!
 That's all you need to do&mdash;DBOS is entirely contained in this open-source library, there's no additional infrastructure for you to configure or manage.
 
+## When Should I Use DBOS?
+
+You should consider using DBOS if you're concerned about how your application handles failures.
+For example, you might be:
+
+- Building a payments service that must reliably process transactions even if servers crash mid-operation, ensuring financial consistency without duplicate charges or lost payments.
+- Building a long-running data pipeline that needs to resume seamlessly from checkpoints rather than restarting entirely when interruptions occur.
+- Building an integration that orchestrates state across multiple systems, maintaining data consistency even through network failures and service outages.
+
+Handling failures is costly and complex, requiring complex state management and recovery logic as well as heavyweight tools like external orchestration services.
+DBOS makes it simpler: annotate your code to checkpoint it in Postgres and automatically recover from any failure.
+DBOS also provides powerful Postgres-backed primitives that makes it easier to write and operate reliable code, including durable queues, notifications, scheduling, event processing, and workflow management.
+
 ## Features
 
 <details open><summary><strong>💾 Durable Workflows</strong></summary>
