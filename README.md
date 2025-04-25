@@ -22,9 +22,9 @@ That's all you need to do&mdash;DBOS is entirely contained in this open-source l
 You should consider using DBOS if you're concerned about how your application handles failures.
 For example, you might be building a payments service that must reliably process transactions even if servers crash mid-operation, or building a long-running data pipeline that needs to resume seamlessly from checkpoints rather than restarting entirely when interruptions occur.
 
-Handling failures is costly and complex, requiring complex state management and recovery logic as well as heavyweight tools like external orchestration services.
+Handling failures is costly and complicated, requiring complex state management and recovery logic as well as heavyweight tools like external orchestration services.
 DBOS makes it simpler: annotate your code to checkpoint it in Postgres and automatically recover from any failure.
-DBOS also provides powerful Postgres-backed primitives that makes it easier to write and operate reliable code, including durable queues, notifications, scheduling, event processing, and workflow management.
+DBOS also provides powerful Postgres-backed primitives that makes it easier to write and operate reliable code, including durable queues, notifications, scheduling, event processing, and programmatic workflow management.
 
 ## Features
 
