@@ -244,7 +244,7 @@ By contrast, to add Temporal to your program, you must rearchitect your program 
 
 </details>
 
-<details><summary><strong>DBOS vs. Temporal</strong></summary>
+<details><summary><strong>DBOS vs. Airflow</strong></summary>
 
 DBOS and Airflow both provide workflow abstractions.
 Airflow is targeted at data science use cases, providing many out-of-the-box connectors but requiring workflows be written as explicit DAGs and externally orchestrating them from an Airflow cluster.
@@ -257,7 +257,7 @@ DBOS is general-purpose, but is often used for data pipelines, allowing develope
 
 </details>
 
-<details><summary><strong>DBOS vs. Temporal</strong></summary>
+<details><summary><strong>DBOS vs. Celery/BullMQ</strong></summary>
 
 DBOS provides a similar queue abstraction to dedicating queueing systems like Celery or BullMQ: you can declare queues, submit tasks to them, and control their flow with concurrency limits, rate limits, timeouts, prioritization, etc.
 However, DBOS queues are **durable and Postgres-backed** and integrate with durable workflows.
