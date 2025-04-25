@@ -47,7 +47,7 @@ Workflows are particularly useful for
 
 - Orchestrating complex business processes so they seamlessly recover from any failure.
 - Building observable and fault-tolerant data pipelines.
-- Operating an AI agent, or any application that relies to unreliable or non-deterministic APIs.
+- Operating an AI agent, or any application that relies on unreliable or non-deterministic APIs.
 
 [Read more ↗️](https://docs.dbos.dev/python/tutorials/workflow-tutorial)
 
