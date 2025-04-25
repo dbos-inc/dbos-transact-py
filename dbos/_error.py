@@ -186,7 +186,7 @@ class DBOSQueueDeduplicatedError(DBOSException):
         self, workflow_id: str, queue_name: str, deduplication_id: str
     ) -> None:
         super().__init__(
-            f"Workflow {workflow_id} was deduplicated due to existing workflow in the queue {queue_name} with deduplication ID {deduplication_id}.",
+            f"Workflow {workflow_id} was deduplicated due to an existing workflow in queue {queue_name} with deduplication ID {deduplication_id}.",
             dbos_error_code=DBOSErrorCode.QueueDeduplicated.value,
         )
 

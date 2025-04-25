@@ -499,7 +499,7 @@ def test_enqueue_with_deduplication(dbos: DBOS, client: DBOSClient) -> None:
     with pytest.raises(Exception) as exc_info:
         client.enqueue(options, "def")
     assert (
-        f"Workflow {wfid2} was deduplicated due to existing workflow in the queue test_queue with deduplication ID {dedup_id}."
+        f"Workflow {wfid2} was deduplicated due to an existing workflow in queue test_queue with deduplication ID {dedup_id}."
         in str(exc_info.value)
     )
 

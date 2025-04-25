@@ -1133,7 +1133,7 @@ def test_queue_deduplication(dbos: DBOS) -> None:
             with pytest.raises(Exception) as exc_info:
                 queue.enqueue(test_workflow, "def")
         assert (
-            f"Workflow {wfid2} was deduplicated due to existing workflow in the queue {queue_name} with deduplication ID {dedup_id}."
+            f"Workflow {wfid2} was deduplicated due to an existing workflow in queue {queue_name} with deduplication ID {dedup_id}."
             in str(exc_info.value)
         )
 
@@ -1194,7 +1194,7 @@ async def test_queue_deduplication_async(dbos: DBOS) -> None:
             with pytest.raises(Exception) as exc_info:
                 await queue.enqueue_async(test_workflow, "def")
         assert (
-            f"Workflow {wfid2} was deduplicated due to existing workflow in the queue {queue_name} with deduplication ID {dedup_id}."
+            f"Workflow {wfid2} was deduplicated due to an existing workflow in queue {queue_name} with deduplication ID {dedup_id}."
             in str(exc_info.value)
         )
 
