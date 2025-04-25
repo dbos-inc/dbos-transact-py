@@ -117,6 +117,7 @@ class DBOSContext:
         )
         rv.request = self.request
         rv.assumed_role = self.assumed_role
+        rv.spans = list(self.spans)
         return rv
 
     def has_parent(self) -> bool:
