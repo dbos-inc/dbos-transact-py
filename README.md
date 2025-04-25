@@ -15,7 +15,7 @@ Instead of managing your own workflow orchestrator or task queue system, you can
 
 To get started, follow the [quickstart](https://docs.dbos.dev/quickstart) to install this open-source library and connect it to a Postgres database.
 Then, annotate workflows and steps in your program to make it durable!
-That's all you need to do&mdash;DBOS is entirely contained in this open-source library, there's no additional infrastructure for you to configure or manage.
+That's all you need to do&mdash;DBOS is entirely contained in this open-source library, there's no required infrastructure for you to configure or manage.
 
 ## When Should I Use DBOS?
 
