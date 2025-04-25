@@ -8,7 +8,7 @@ import pytest
 from dbos import DBOS, Queue, SetWorkflowID
 from dbos._dbos import DBOSConfiguredInstance
 from dbos._error import DBOSException, DBOSWorkflowCancelledError
-from dbos._utils import INTERNAL_QUEUE_NAME
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from tests.conftest import queue_entries_are_cleaned_up
 
 
@@ -54,6 +54,7 @@ def test_cancel_resume(dbos: DBOS) -> None:
 
     # Resume the workflow. Verify it completes successfully.
     handle = DBOS.resume_workflow(wfid)
+    assert handle.get_status().app_version == GlobalParams.app_version
     assert handle.get_result() == input
     assert steps_completed == 2
 
@@ -218,7 +219,7 @@ def test_restart(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_restart_fromsteps_stepsonly(
+def test_fork_steps(
     dbos: DBOS,
 ) -> None:
 
@@ -229,47 +230,45 @@ def test_restart_fromsteps_stepsonly(
     stepFiveCount = 0
 
     @DBOS.workflow()
-    def simple_workflow() -> None:
-        stepOne()
-        stepTwo()
-        stepThree()
-        stepFour()
-        stepFive()
-        return
+    def simple_workflow(x: int) -> int:
+        return stepOne(x) + stepTwo(x) + stepThree(x) + stepFour(x) + stepFive(x)
 
     @DBOS.step()
-    def stepOne() -> None:
+    def stepOne(x: int) -> int:
         nonlocal stepOneCount
         stepOneCount += 1
-        return
+        return x + 1
 
     @DBOS.step()
-    def stepTwo() -> None:
+    def stepTwo(x: int) -> int:
         nonlocal stepTwoCount
         stepTwoCount += 1
-        return
+        return x + 2
 
     @DBOS.step()
-    def stepThree() -> None:
+    def stepThree(x: int) -> int:
         nonlocal stepThreeCount
         stepThreeCount += 1
-        return
+        return x + 3
 
     @DBOS.step()
-    def stepFour() -> None:
+    def stepFour(x: int) -> int:
         nonlocal stepFourCount
         stepFourCount += 1
-        return
+        return x + 4
 
     @DBOS.step()
-    def stepFive() -> None:
+    def stepFive(x: int) -> int:
         nonlocal stepFiveCount
         stepFiveCount += 1
-        return
+        return x + 5
+
+    input = 1
+    output = 5 * input + 15
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        simple_workflow()
+        assert simple_workflow(input) == output
 
     assert stepOneCount == 1
     assert stepTwoCount == 1
@@ -277,9 +276,12 @@ def test_restart_fromsteps_stepsonly(
     assert stepFourCount == 1
     assert stepFiveCount == 1
 
-    forked_handle = DBOS.fork_workflow(wfid, 3)
-    assert forked_handle.workflow_id != wfid
-    forked_handle.get_result()
+    fork_id = str(uuid.uuid4())
+    with SetWorkflowID(fork_id):
+        forked_handle = DBOS.fork_workflow(wfid, 3)
+    assert forked_handle.workflow_id == fork_id
+    assert forked_handle.get_status().app_version == GlobalParams.app_version
+    assert forked_handle.get_result() == output
 
     assert stepOneCount == 1
     assert stepTwoCount == 1
@@ -289,7 +291,7 @@ def test_restart_fromsteps_stepsonly(
 
     forked_handle = DBOS.fork_workflow(wfid, 5)
     assert forked_handle.workflow_id != wfid
-    forked_handle.get_result()
+    assert forked_handle.get_result() == output
 
     assert stepOneCount == 1
     assert stepTwoCount == 1
@@ -299,7 +301,7 @@ def test_restart_fromsteps_stepsonly(
 
     forked_handle = DBOS.fork_workflow(wfid, 1)
     assert forked_handle.workflow_id != wfid
-    forked_handle.get_result()
+    assert forked_handle.get_result() == output
 
     assert stepOneCount == 2
     assert stepTwoCount == 2
@@ -589,3 +591,42 @@ def test_restart_fromsteps_childwf(
     assert stepOneCount == 2
     assert childwfCount == 3
     assert stepThreeCount == 4
+
+
+def test_fork_version(
+    dbos: DBOS,
+) -> None:
+
+    stepOneCount = 0
+    stepTwoCount = 0
+
+    @DBOS.workflow()
+    def simple_workflow(x: int) -> int:
+        return stepOne(x) + stepTwo(x)
+
+    @DBOS.step()
+    def stepOne(x: int) -> int:
+        nonlocal stepOneCount
+        stepOneCount += 1
+        return x + 1
+
+    @DBOS.step()
+    def stepTwo(x: int) -> int:
+        nonlocal stepTwoCount
+        stepTwoCount += 1
+        return x + 2
+
+    input = 1
+    output = 2 * input + 3
+
+    workflow_id = str(uuid.uuid4())
+    with SetWorkflowID(workflow_id):
+        assert simple_workflow(input) == output
+
+    # Fork the workflow with a different version. Verify it is set to that version.
+    new_version = "my_new_version"
+    handle = DBOS.fork_workflow(workflow_id, 2, application_version=new_version)
+    assert handle.get_status().app_version == new_version
+    # Set the global version to this new version, verify the workflow completes
+    GlobalParams.app_version = new_version
+    assert handle.get_result() == output

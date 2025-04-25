@@ -243,11 +243,13 @@ class DBOSClient:
     async def cancel_workflow_async(self, workflow_id: str) -> None:
         await asyncio.to_thread(self.cancel_workflow, workflow_id)
 
-    def resume_workflow(self, workflow_id: str) -> None:
+    def resume_workflow(self, workflow_id: str) -> WorkflowHandle[Any]:
         self._sys_db.resume_workflow(workflow_id)
+        return WorkflowHandleClientPolling[Any](workflow_id, self._sys_db)
 
-    async def resume_workflow_async(self, workflow_id: str) -> None:
+    async def resume_workflow_async(self, workflow_id: str) -> WorkflowHandleAsync[Any]:
         await asyncio.to_thread(self.resume_workflow, workflow_id)
+        return WorkflowHandleClientAsyncPolling[Any](workflow_id, self._sys_db)
 
     def list_workflows(
         self,
@@ -361,16 +363,35 @@ class DBOSClient:
     async def list_workflow_steps_async(self, workflow_id: str) -> List[StepInfo]:
         return await asyncio.to_thread(self.list_workflow_steps, workflow_id)
 
-    def fork_workflow(self, workflow_id: str, start_step: int) -> WorkflowHandle[R]:
+    def fork_workflow(
+        self,
+        workflow_id: str,
+        start_step: int,
+        *,
+        application_version: Optional[str] = None,
+    ) -> WorkflowHandle[Any]:
         forked_workflow_id = fork_workflow(
-            self._sys_db, self._app_db, workflow_id, start_step
+            self._sys_db,
+            self._app_db,
+            workflow_id,
+            start_step,
+            application_version=application_version,
         )
-        return WorkflowHandleClientPolling[R](forked_workflow_id, self._sys_db)
+        return WorkflowHandleClientPolling[Any](forked_workflow_id, self._sys_db)
 
     async def fork_workflow_async(
-        self, workflow_id: str, start_step: int
-    ) -> WorkflowHandleAsync[R]:
+        self,
+        workflow_id: str,
+        start_step: int,
+        *,
+        application_version: Optional[str] = None,
+    ) -> WorkflowHandleAsync[Any]:
         forked_workflow_id = await asyncio.to_thread(
-            fork_workflow, self._sys_db, self._app_db, workflow_id, start_step
+            fork_workflow,
+            self._sys_db,
+            self._app_db,
+            workflow_id,
+            start_step,
+            application_version=application_version,
         )
-        return WorkflowHandleClientAsyncPolling[R](forked_workflow_id, self._sys_db)
+        return WorkflowHandleClientAsyncPolling[Any](forked_workflow_id, self._sys_db)

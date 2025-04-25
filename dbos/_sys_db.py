@@ -544,15 +544,17 @@ class SystemDatabase:
             # Execute with snapshot isolation in case of concurrent calls on the same workflow
             c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
             # Check the status of the workflow. If it is complete, do nothing.
-            row = c.execute(
+            status_row = c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.status,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
             ).fetchone()
+            if status_row is None:
+                return
+            status = status_row[0]
             if (
-                row is None
-                or row[0] == WorkflowStatusString.SUCCESS.value
-                or row[0] == WorkflowStatusString.ERROR.value
+                status == WorkflowStatusString.SUCCESS.value
+                or status == WorkflowStatusString.ERROR.value
             ):
                 return
             # Remove the workflow from the queues table so resume can safely be called on an ENQUEUED workflow
@@ -592,7 +594,12 @@ class SystemDatabase:
             return max_function_id
 
     def fork_workflow(
-        self, original_workflow_id: str, forked_workflow_id: str, start_step: int = 1
+        self,
+        original_workflow_id: str,
+        forked_workflow_id: str,
+        start_step: int,
+        *,
+        application_version: Optional[str],
     ) -> str:
 
         status = self.get_workflow_status(original_workflow_id)
@@ -612,7 +619,11 @@ class SystemDatabase:
                     name=status["name"],
                     class_name=status["class_name"],
                     config_name=status["config_name"],
-                    application_version=status["app_version"],
+                    application_version=(
+                        application_version
+                        if application_version is not None
+                        else status["app_version"]
+                    ),
                     application_id=status["app_id"],
                     request=status["request"],
                     authenticated_user=status["authenticated_user"],

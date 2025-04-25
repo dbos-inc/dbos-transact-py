@@ -978,7 +978,13 @@ class DBOS:
         return cls.fork_workflow(workflow_id, 1)
 
     @classmethod
-    def fork_workflow(cls, workflow_id: str, start_step: int) -> WorkflowHandle[Any]:
+    def fork_workflow(
+        cls,
+        workflow_id: str,
+        start_step: int,
+        *,
+        application_version: Optional[str] = None,
+    ) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID from a specific step"""
 
         def fn() -> str:
@@ -988,6 +994,7 @@ class DBOS:
                 _get_dbos_instance()._app_db,
                 workflow_id,
                 start_step,
+                application_version=application_version,
             )
 
         new_id = _get_dbos_instance()._sys_db.call_function_as_step(
