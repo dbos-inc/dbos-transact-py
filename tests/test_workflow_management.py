@@ -218,7 +218,7 @@ def test_restart(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_restart_fromsteps_stepsonly(
+def test_fork_steps(
     dbos: DBOS,
 ) -> None:
 
@@ -229,47 +229,45 @@ def test_restart_fromsteps_stepsonly(
     stepFiveCount = 0
 
     @DBOS.workflow()
-    def simple_workflow() -> None:
-        stepOne()
-        stepTwo()
-        stepThree()
-        stepFour()
-        stepFive()
-        return
+    def simple_workflow(x: int) -> None:
+        return stepOne(x) + stepTwo(x) + stepThree(x) + stepFour(x) + stepFive(x)
 
     @DBOS.step()
-    def stepOne() -> None:
+    def stepOne(x: int) -> None:
         nonlocal stepOneCount
         stepOneCount += 1
-        return
+        return x + 1
 
     @DBOS.step()
-    def stepTwo() -> None:
+    def stepTwo(x: int) -> None:
         nonlocal stepTwoCount
         stepTwoCount += 1
-        return
+        return x + 2
 
     @DBOS.step()
-    def stepThree() -> None:
+    def stepThree(x: int) -> None:
         nonlocal stepThreeCount
         stepThreeCount += 1
-        return
+        return x + 3
 
     @DBOS.step()
-    def stepFour() -> None:
+    def stepFour(x: int) -> None:
         nonlocal stepFourCount
         stepFourCount += 1
-        return
+        return x + 4
 
     @DBOS.step()
-    def stepFive() -> None:
+    def stepFive(x: int) -> None:
         nonlocal stepFiveCount
         stepFiveCount += 1
-        return
+        return x + 5
+
+    input = 1
+    output = 5 * input + 15
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        simple_workflow()
+        assert simple_workflow(input) == output
 
     assert stepOneCount == 1
     assert stepTwoCount == 1
@@ -277,9 +275,11 @@ def test_restart_fromsteps_stepsonly(
     assert stepFourCount == 1
     assert stepFiveCount == 1
 
-    forked_handle = DBOS.fork_workflow(wfid, 3)
-    assert forked_handle.workflow_id != wfid
-    forked_handle.get_result()
+    fork_id = str(uuid.uuid4())
+    with SetWorkflowID(fork_id):
+        forked_handle = DBOS.fork_workflow(wfid, 3)
+    assert forked_handle.workflow_id == fork_id
+    assert forked_handle.get_result() == output
 
     assert stepOneCount == 1
     assert stepTwoCount == 1
@@ -289,7 +289,7 @@ def test_restart_fromsteps_stepsonly(
 
     forked_handle = DBOS.fork_workflow(wfid, 5)
     assert forked_handle.workflow_id != wfid
-    forked_handle.get_result()
+    assert forked_handle.get_result() == output
 
     assert stepOneCount == 1
     assert stepTwoCount == 1
@@ -299,7 +299,7 @@ def test_restart_fromsteps_stepsonly(
 
     forked_handle = DBOS.fork_workflow(wfid, 1)
     assert forked_handle.workflow_id != wfid
-    forked_handle.get_result()
+    assert forked_handle.get_result() == output
 
     assert stepOneCount == 2
     assert stepTwoCount == 2

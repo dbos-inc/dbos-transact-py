@@ -1,6 +1,7 @@
 import uuid
 from typing import List, Optional
 
+from dbos._context import get_local_dbos_context
 from dbos._error import DBOSException
 
 from ._app_db import ApplicationDatabase
@@ -114,7 +115,12 @@ def fork_workflow(
         raise DBOSException(
             f"Cannot fork workflow {workflow_id} from step {start_step}. The workflow has {max_function_id} steps."
         )
-    forked_workflow_id = str(uuid.uuid4())
+    ctx = get_local_dbos_context()
+    if ctx is not None and len(ctx.id_assigned_for_next_workflow) > 0:
+        forked_workflow_id = ctx.id_assigned_for_next_workflow
+        ctx.id_assigned_for_next_workflow = ""
+    else:
+        forked_workflow_id = str(uuid.uuid4())
     app_db.clone_workflow_transactions(workflow_id, forked_workflow_id, start_step)
     sys_db.fork_workflow(workflow_id, forked_workflow_id, start_step)
     return forked_workflow_id
