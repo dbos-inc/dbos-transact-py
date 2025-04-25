@@ -230,7 +230,7 @@ Then, check out the [programming guide](https://docs.dbos.dev/python/programming
 
 ## DBOS vs. Other Systems
 
-### DBOS vs. Temporal
+<details><summary><strong>DBOS vs. Temporal</strong></summary>
 
 Both DBOS and Temporal provide durable execution, but DBOS is implemented in a lightweight Postgres-backed library whereas Temporal, and architecturally similar systems such as Restate and Inngest, are implemented in an externally orchestrated server.
 
@@ -242,7 +242,9 @@ By contrast, to add Temporal to your program, you must rearchitect your program 
 
 **When to use Temporal:** You don't want to add Postgres to your stack, or you need a language DBOS doesn't support.
 
-### DBOS vs. Airflow
+</details>
+
+<details><summary><strong>DBOS vs. Temporal</strong></summary>
 
 DBOS and Airflow both provide workflow abstractions.
 Airflow is targeted at data science use cases, providing many out-of-the-box connectors but requiring workflows be written as explicit DAGs and externally orchestrating them from an Airflow cluster.
@@ -253,7 +255,9 @@ DBOS is general-purpose, but is often used for data pipelines, allowing develope
 
 **When to use Airflow:** You need Airflow's ecosystem of connectors.
 
-### DBOS vs. Celery/BullMQ
+</details>
+
+<details><summary><strong>DBOS vs. Temporal</strong></summary>
 
 DBOS provides a similar queue abstraction to dedicating queueing systems like Celery or BullMQ: you can declare queues, submit tasks to them, and control their flow with concurrency limits, rate limits, timeouts, prioritization, etc.
 However, DBOS queues are **durable and Postgres-backed** and integrate with durable workflows.
@@ -264,6 +268,7 @@ By contrast, Celery/BullMQ are Redis-backed and don't provide workflows, so they
 **When to use DBOS:** You need the reliability of enqueueing tasks from durable workflows.
 
 **When to use Celery/BullMQ**: You don't need durability, or you need very high throughput (>10K tasks/second).
+</details>
 
 ## Community
 
