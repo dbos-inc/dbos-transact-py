@@ -54,6 +54,7 @@ def test_cancel_resume(dbos: DBOS) -> None:
 
     # Resume the workflow. Verify it completes successfully.
     handle = DBOS.resume_workflow(wfid)
+    assert handle.get_status().app_version == GlobalParams.app_version
     assert handle.get_result() == input
     assert steps_completed == 2
 
@@ -329,6 +330,7 @@ def test_fork_steps(
     with SetWorkflowID(fork_id):
         forked_handle = DBOS.fork_workflow(wfid, 3)
     assert forked_handle.workflow_id == fork_id
+    assert forked_handle.get_status().app_version == GlobalParams.app_version
     assert forked_handle.get_result() == output
 
     assert stepOneCount == 1
@@ -639,3 +641,42 @@ def test_restart_fromsteps_childwf(
     assert stepOneCount == 2
     assert childwfCount == 3
     assert stepThreeCount == 4
+
+
+def test_fork_version(
+    dbos: DBOS,
+) -> None:
+
+    stepOneCount = 0
+    stepTwoCount = 0
+
+    @DBOS.workflow()
+    def simple_workflow(x: int) -> int:
+        return stepOne(x) + stepTwo(x)
+
+    @DBOS.step()
+    def stepOne(x: int) -> int:
+        nonlocal stepOneCount
+        stepOneCount += 1
+        return x + 1
+
+    @DBOS.step()
+    def stepTwo(x: int) -> int:
+        nonlocal stepTwoCount
+        stepTwoCount += 1
+        return x + 2
+
+    input = 1
+    output = 2 * input + 3
+
+    workflow_id = str(uuid.uuid4())
+    with SetWorkflowID(workflow_id):
+        assert simple_workflow(input) == output
+
+    # Fork the workflow with a different version. Verify it is set to that version.
+    new_version = "my_new_version"
+    handle = DBOS.fork_workflow(workflow_id, 2, application_version=new_version)
+    assert handle.get_status().app_version == new_version
+    # Set the global version to this new version, verify the workflow completes
+    GlobalParams.app_version = new_version
+    assert handle.get_result() == output

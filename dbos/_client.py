@@ -361,16 +361,35 @@ class DBOSClient:
     async def list_workflow_steps_async(self, workflow_id: str) -> List[StepInfo]:
         return await asyncio.to_thread(self.list_workflow_steps, workflow_id)
 
-    def fork_workflow(self, workflow_id: str, start_step: int) -> WorkflowHandle[R]:
+    def fork_workflow(
+        self,
+        workflow_id: str,
+        start_step: int,
+        *,
+        application_version: Optional[str] = None,
+    ) -> WorkflowHandle[R]:
         forked_workflow_id = fork_workflow(
-            self._sys_db, self._app_db, workflow_id, start_step
+            self._sys_db,
+            self._app_db,
+            workflow_id,
+            start_step,
+            application_version=application_version,
         )
         return WorkflowHandleClientPolling[R](forked_workflow_id, self._sys_db)
 
     async def fork_workflow_async(
-        self, workflow_id: str, start_step: int
+        self,
+        workflow_id: str,
+        start_step: int,
+        *,
+        application_version: Optional[str] = None,
     ) -> WorkflowHandleAsync[R]:
         forked_workflow_id = await asyncio.to_thread(
-            fork_workflow, self._sys_db, self._app_db, workflow_id, start_step
+            fork_workflow,
+            self._sys_db,
+            self._app_db,
+            workflow_id,
+            start_step,
+            application_version=application_version,
         )
         return WorkflowHandleClientAsyncPolling[R](forked_workflow_id, self._sys_db)

@@ -597,7 +597,12 @@ class SystemDatabase:
             return max_function_id
 
     def fork_workflow(
-        self, original_workflow_id: str, forked_workflow_id: str, start_step: int = 1
+        self,
+        original_workflow_id: str,
+        forked_workflow_id: str,
+        start_step: int,
+        *,
+        application_version: Optional[str],
     ) -> str:
 
         status = self.get_workflow_status(original_workflow_id)
@@ -617,7 +622,11 @@ class SystemDatabase:
                     name=status["name"],
                     class_name=status["class_name"],
                     config_name=status["config_name"],
-                    application_version=status["app_version"],
+                    application_version=(
+                        application_version
+                        if application_version is not None
+                        else status["app_version"]
+                    ),
                     application_id=status["app_id"],
                     request=status["request"],
                     authenticated_user=status["authenticated_user"],

@@ -104,6 +104,8 @@ def fork_workflow(
     app_db: ApplicationDatabase,
     workflow_id: str,
     start_step: int,
+    *,
+    application_version: Optional[str],
 ) -> str:
     def get_max_function_id(workflow_uuid: str) -> int:
         max_transactions = app_db.get_max_function_id(workflow_uuid) or 0
@@ -122,5 +124,10 @@ def fork_workflow(
     else:
         forked_workflow_id = str(uuid.uuid4())
     app_db.clone_workflow_transactions(workflow_id, forked_workflow_id, start_step)
-    sys_db.fork_workflow(workflow_id, forked_workflow_id, start_step)
+    sys_db.fork_workflow(
+        workflow_id,
+        forked_workflow_id,
+        start_step,
+        application_version=application_version,
+    )
     return forked_workflow_id
