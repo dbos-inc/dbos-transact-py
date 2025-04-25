@@ -492,7 +492,7 @@ def _get_new_wf() -> tuple[str, DBOSContext]:
     #   Pass the new context to a worker thread that will run the wf function
     cur_ctx = get_local_dbos_context()
     if cur_ctx is not None and cur_ctx.is_within_workflow():
-        assert cur_ctx.is_workflow()  # Not in a step
+        assert cur_ctx.is_workflow(), "Not in a step"  # Not in a step
         cur_ctx.function_id += 1
         if len(cur_ctx.id_assigned_for_next_workflow) == 0:
             cur_ctx.id_assigned_for_next_workflow = (
