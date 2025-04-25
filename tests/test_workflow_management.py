@@ -64,56 +64,6 @@ def test_cancel_resume(dbos: DBOS) -> None:
     assert steps_completed == 2
 
 
-def test_resume_version(dbos: DBOS) -> None:
-    steps_completed = 0
-    workflow_event = threading.Event()
-    main_thread_event = threading.Event()
-    input = 5
-
-    @DBOS.step()
-    def step_one() -> None:
-        nonlocal steps_completed
-        steps_completed += 1
-
-    @DBOS.step()
-    def step_two() -> None:
-        nonlocal steps_completed
-        steps_completed += 1
-
-    @DBOS.workflow()
-    def simple_workflow(x: int) -> int:
-        step_one()
-        main_thread_event.set()
-        workflow_event.wait()
-        # A handler like this should not catch DBOSWorkflowCancelledError
-        try:
-            step_two()
-        except Exception:
-            raise
-        return x
-
-    # Start the workflow and cancel it.
-    # Verify it stops after step one but before step two
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        handle = DBOS.start_workflow(simple_workflow, input)
-    main_thread_event.wait()
-    DBOS.cancel_workflow(wfid)
-    workflow_event.set()
-    with pytest.raises(DBOSWorkflowCancelledError):
-        handle.get_result()
-    assert steps_completed == 1
-
-    # Resume the workflow with a different version. Verify it is set to that version.
-    new_version = "my_new_version"
-    handle = DBOS.resume_workflow(wfid, application_version=new_version)
-    assert handle.get_status().app_version == new_version
-    # Set the global version to this new version, verify the workflow completes
-    GlobalParams.app_version = new_version
-    assert handle.get_result() == input
-    assert steps_completed == 2
-
-
 def test_cancel_resume_txn(dbos: DBOS) -> None:
     txn_completed = 0
     workflow_event = threading.Event()

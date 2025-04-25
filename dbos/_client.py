@@ -243,20 +243,12 @@ class DBOSClient:
     async def cancel_workflow_async(self, workflow_id: str) -> None:
         await asyncio.to_thread(self.cancel_workflow, workflow_id)
 
-    def resume_workflow(
-        self, workflow_id: str, *, application_version: Optional[str] = None
-    ) -> WorkflowHandle[Any]:
-        self._sys_db.resume_workflow(
-            workflow_id, application_version=application_version
-        )
+    def resume_workflow(self, workflow_id: str) -> WorkflowHandle[Any]:
+        self._sys_db.resume_workflow(workflow_id)
         return self.retrieve_workflow(workflow_id)
 
-    async def resume_workflow_async(
-        self, workflow_id: str, *, application_version: Optional[str] = None
-    ) -> WorkflowHandleAsync[Any]:
-        await asyncio.to_thread(
-            self.resume_workflow, workflow_id, application_version=application_version
-        )
+    async def resume_workflow_async(self, workflow_id: str) -> WorkflowHandleAsync[Any]:
+        await asyncio.to_thread(self.resume_workflow, workflow_id)
         return await self.retrieve_workflow_async(workflow_id)
 
     def list_workflows(

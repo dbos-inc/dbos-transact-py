@@ -537,9 +537,7 @@ class SystemDatabase:
                 )
             )
 
-    def resume_workflow(
-        self, workflow_id: str, *, application_version: Optional[str]
-    ) -> None:
+    def resume_workflow(self, workflow_id: str) -> None:
         if self._debug_mode:
             raise Exception("called resume_workflow in debug mode")
         with self.engine.begin() as c:
@@ -549,12 +547,11 @@ class SystemDatabase:
             status_row = c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.status,
-                    SystemSchema.workflow_status.c.application_version,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
             ).fetchone()
             if status_row is None:
                 return
-            status, original_application_version = status_row[0], status_row[1]
+            status = status_row[0]
             if (
                 status == WorkflowStatusString.SUCCESS.value
                 or status == WorkflowStatusString.ERROR.value
@@ -581,11 +578,6 @@ class SystemDatabase:
                     status=WorkflowStatusString.ENQUEUED.value,
                     recovery_attempts=0,
                     workflow_deadline_epoch_ms=None,
-                    application_version=(
-                        application_version
-                        if application_version is not None
-                        else original_application_version
-                    ),
                 )
             )
 
