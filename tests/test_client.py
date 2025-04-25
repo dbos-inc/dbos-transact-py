@@ -439,12 +439,17 @@ def test_client_fork(dbos: DBOS, client: DBOSClient) -> None:
     assert handle.get_result() == input * 2
     assert len(client.list_workflow_steps(handle.workflow_id)) == 2
 
-    forked_handle: WorkflowHandle[int] = client.fork_workflow(handle.workflow_id, 1)
-    assert forked_handle.workflow_id != handle.workflow_id
+    fork_id = str(uuid.uuid4())
+    with SetWorkflowID(fork_id):
+        forked_handle: WorkflowHandle[int] = client.fork_workflow(handle.workflow_id, 1)
+    assert forked_handle.workflow_id == fork_id
     assert forked_handle.get_result() == input * 2
 
     forked_handle = client.fork_workflow(handle.workflow_id, 2)
-    assert forked_handle.workflow_id != handle.workflow_id
+    assert (
+        forked_handle.workflow_id != handle.workflow_id
+        and forked_handle.workflow_id != fork_id
+    )
     assert forked_handle.get_result() == input * 2
 
     assert len(client.list_workflows()) == 3
