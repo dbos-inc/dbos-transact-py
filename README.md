@@ -107,7 +107,7 @@ client = DBOSClient(database_url)
 workflows = client.list_workflows(status="ERROR", 
   start_time="2025-04-22T03:00:00Z", end_time="2025-04-22T05:00:00Z")
 for workflow in workflows:
-    # Check which workflow failed due to an outage in a service called from Step 2.
+    # Check which workflows failed due to an outage in a service called from Step 2.
     steps = client.list_workflow_steps(workflow)
     if len(steps) >= 3 and isinstance(steps[2]["error"], ServiceOutage):
         # To recover from the outage, restart those workflows from Step 2.
