@@ -19,6 +19,7 @@ from dbos._error import DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._serialization import WorkflowInputs
 from dbos._sys_db import (
+    EnqueueOptionsInternal,
     StepInfo,
     SystemDatabase,
     WorkflowStatus,
@@ -42,6 +43,7 @@ class EnqueueOptions(TypedDict):
     workflow_id: NotRequired[str]
     app_version: NotRequired[str]
     workflow_timeout: NotRequired[float]
+    deduplication_id: NotRequired[str]
 
 
 class WorkflowHandleClientPolling(Generic[R]):
@@ -112,6 +114,9 @@ class DBOSClient:
         if workflow_id is None:
             workflow_id = str(uuid.uuid4())
         workflow_timeout = options.get("workflow_timeout", None)
+        enqueue_options_internal: EnqueueOptionsInternal = {
+            "deduplication_id": options.get("deduplication_id"),
+        }
 
         status: WorkflowStatusInternal = {
             "workflow_uuid": workflow_id,
@@ -144,7 +149,10 @@ class DBOSClient:
         }
 
         self._sys_db.init_workflow(
-            status, _serialization.serialize_args(inputs), max_recovery_attempts=None
+            status,
+            _serialization.serialize_args(inputs),
+            max_recovery_attempts=None,
+            enqueue_options=enqueue_options_internal,
         )
         return workflow_id
 
