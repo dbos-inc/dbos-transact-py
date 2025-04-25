@@ -245,11 +245,11 @@ class DBOSClient:
 
     def resume_workflow(self, workflow_id: str) -> WorkflowHandle[Any]:
         self._sys_db.resume_workflow(workflow_id)
-        return self.retrieve_workflow(workflow_id)
+        return WorkflowHandleClientPolling[Any](workflow_id, self._sys_db)
 
     async def resume_workflow_async(self, workflow_id: str) -> WorkflowHandleAsync[Any]:
         await asyncio.to_thread(self.resume_workflow, workflow_id)
-        return await self.retrieve_workflow_async(workflow_id)
+        return WorkflowHandleClientAsyncPolling[Any](workflow_id, self._sys_db)
 
     def list_workflows(
         self,
@@ -369,7 +369,7 @@ class DBOSClient:
         start_step: int,
         *,
         application_version: Optional[str] = None,
-    ) -> WorkflowHandle[R]:
+    ) -> WorkflowHandle[Any]:
         forked_workflow_id = fork_workflow(
             self._sys_db,
             self._app_db,
@@ -377,7 +377,7 @@ class DBOSClient:
             start_step,
             application_version=application_version,
         )
-        return WorkflowHandleClientPolling[R](forked_workflow_id, self._sys_db)
+        return WorkflowHandleClientPolling[Any](forked_workflow_id, self._sys_db)
 
     async def fork_workflow_async(
         self,
@@ -385,7 +385,7 @@ class DBOSClient:
         start_step: int,
         *,
         application_version: Optional[str] = None,
-    ) -> WorkflowHandleAsync[R]:
+    ) -> WorkflowHandleAsync[Any]:
         forked_workflow_id = await asyncio.to_thread(
             fork_workflow,
             self._sys_db,
@@ -394,4 +394,4 @@ class DBOSClient:
             start_step,
             application_version=application_version,
         )
-        return WorkflowHandleClientAsyncPolling[R](forked_workflow_id, self._sys_db)
+        return WorkflowHandleClientAsyncPolling[Any](forked_workflow_id, self._sys_db)
