@@ -46,8 +46,8 @@ def workflow()
 Workflows are particularly useful for 
 
 - Orchestrating complex business processes so they seamlessly recover from any failure.
-- Processing incoming events (e.g. from Kafka) exactly once.
-- Operating an AI agent or data pipeline, or anything that connects to an unreliable or non-deterministic API.
+- Building observable and fault-tolerant data pipelines.
+- Operating an AI agent, or any application that relies to unreliable or non-deterministic APIs.
 
 [Read more ↗️](https://docs.dbos.dev/python/tutorials/workflow-tutorial)
 
