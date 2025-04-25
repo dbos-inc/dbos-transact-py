@@ -37,6 +37,7 @@ from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
     DBOSNonExistentWorkflowError,
+    DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
@@ -133,6 +134,10 @@ class WorkflowStatusInternal(TypedDict):
     # The deadline of a workflow, computed by adding its timeout to its start time.
     # Deadlines propagate to children. When the deadline is reached, the workflow is cancelled.
     workflow_deadline_epoch_ms: Optional[int]
+
+
+class EnqueueOptionsInternal(TypedDict):
+    deduplication_id: Optional[str]  # Unique ID for deduplication on a queue
 
 
 class RecordedResult(TypedDict):
@@ -539,15 +544,17 @@ class SystemDatabase:
             # Execute with snapshot isolation in case of concurrent calls on the same workflow
             c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
             # Check the status of the workflow. If it is complete, do nothing.
-            row = c.execute(
+            status_row = c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.status,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
             ).fetchone()
+            if status_row is None:
+                return
+            status = status_row[0]
             if (
-                row is None
-                or row[0] == WorkflowStatusString.SUCCESS.value
-                or row[0] == WorkflowStatusString.ERROR.value
+                status == WorkflowStatusString.SUCCESS.value
+                or status == WorkflowStatusString.ERROR.value
             ):
                 return
             # Remove the workflow from the queues table so resume can safely be called on an ENQUEUED workflow
@@ -587,7 +594,12 @@ class SystemDatabase:
             return max_function_id
 
     def fork_workflow(
-        self, original_workflow_id: str, forked_workflow_id: str, start_step: int = 1
+        self,
+        original_workflow_id: str,
+        forked_workflow_id: str,
+        start_step: int,
+        *,
+        application_version: Optional[str],
     ) -> str:
 
         status = self.get_workflow_status(original_workflow_id)
@@ -607,7 +619,11 @@ class SystemDatabase:
                     name=status["name"],
                     class_name=status["class_name"],
                     config_name=status["config_name"],
-                    application_version=status["app_version"],
+                    application_version=(
+                        application_version
+                        if application_version is not None
+                        else status["app_version"]
+                    ),
                     application_id=status["app_id"],
                     request=status["request"],
                     authenticated_user=status["authenticated_user"],
@@ -1597,17 +1613,43 @@ class SystemDatabase:
             )
         return value
 
-    def enqueue(self, workflow_id: str, queue_name: str, conn: sa.Connection) -> None:
+    def enqueue(
+        self,
+        workflow_id: str,
+        queue_name: str,
+        conn: sa.Connection,
+        *,
+        enqueue_options: Optional[EnqueueOptionsInternal],
+    ) -> None:
         if self._debug_mode:
             raise Exception("called enqueue in debug mode")
-        conn.execute(
-            pg.insert(SystemSchema.workflow_queue)
-            .values(
-                workflow_uuid=workflow_id,
-                queue_name=queue_name,
+        try:
+            deduplication_id = (
+                enqueue_options["deduplication_id"]
+                if enqueue_options is not None
+                else None
             )
-            .on_conflict_do_nothing()
-        )
+            query = (
+                pg.insert(SystemSchema.workflow_queue)
+                .values(
+                    workflow_uuid=workflow_id,
+                    queue_name=queue_name,
+                    deduplication_id=deduplication_id,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=SystemSchema.workflow_queue.primary_key.columns
+                )
+            )  # Ignore primary key constraint violation
+            conn.execute(query)
+        except DBAPIError as dbapi_error:
+            # Unique constraint violation for the deduplication ID
+            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
+                assert (
+                    deduplication_id is not None
+                ), f"deduplication_id should not be None. Workflow ID: {workflow_id}, Queue name: {queue_name}."
+                raise DBOSQueueDeduplicatedError(
+                    workflow_id, queue_name, deduplication_id
+                )
 
     def start_queued_workflows(
         self, queue: "Queue", executor_id: str, app_version: str
@@ -1879,6 +1921,7 @@ class SystemDatabase:
         inputs: str,
         *,
         max_recovery_attempts: Optional[int],
+        enqueue_options: Optional[EnqueueOptionsInternal],
     ) -> tuple[WorkflowStatuses, Optional[int]]:
         """
         Synchronously record the status and inputs for workflows in a single transaction
@@ -1894,7 +1937,12 @@ class SystemDatabase:
                 status["queue_name"] is not None
                 and wf_status == WorkflowStatusString.ENQUEUED.value
             ):
-                self.enqueue(status["workflow_uuid"], status["queue_name"], conn)
+                self.enqueue(
+                    status["workflow_uuid"],
+                    status["queue_name"],
+                    conn,
+                    enqueue_options=enqueue_options,
+                )
         return wf_status, workflow_deadline_epoch_ms
 
 

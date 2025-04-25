@@ -8,7 +8,7 @@ import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, Queue, SetWorkflowID, SetWorkflowTimeout, WorkflowHandleAsync
-from dbos._context import SetWorkflowTimeout, assert_current_dbos_context
+from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandle
 from dbos._dbos_config import ConfigFile
 from dbos._error import DBOSException, DBOSWorkflowCancelledError

@@ -3,6 +3,7 @@ from ._client import DBOSClient, EnqueueOptions
 from ._context import (
     DBOSContextEnsure,
     DBOSContextSetAuth,
+    SetEnqueueOptions,
     SetWorkflowID,
     SetWorkflowTimeout,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "KafkaMessage",
     "SetWorkflowID",
     "SetWorkflowTimeout",
+    "SetEnqueueOptions",
     "WorkflowHandle",
     "WorkflowHandleAsync",
     "WorkflowStatus",

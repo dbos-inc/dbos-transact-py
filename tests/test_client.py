@@ -439,12 +439,17 @@ def test_client_fork(dbos: DBOS, client: DBOSClient) -> None:
     assert handle.get_result() == input * 2
     assert len(client.list_workflow_steps(handle.workflow_id)) == 2
 
-    forked_handle: WorkflowHandle[int] = client.fork_workflow(handle.workflow_id, 1)
-    assert forked_handle.workflow_id != handle.workflow_id
+    fork_id = str(uuid.uuid4())
+    with SetWorkflowID(fork_id):
+        forked_handle: WorkflowHandle[int] = client.fork_workflow(handle.workflow_id, 1)
+    assert forked_handle.workflow_id == fork_id
     assert forked_handle.get_result() == input * 2
 
     forked_handle = client.fork_workflow(handle.workflow_id, 2)
-    assert forked_handle.workflow_id != handle.workflow_id
+    assert (
+        forked_handle.workflow_id != handle.workflow_id
+        and forked_handle.workflow_id != fork_id
+    )
     assert forked_handle.get_result() == input * 2
 
     assert len(client.list_workflows()) == 3
@@ -475,3 +480,38 @@ async def test_client_fork_async(dbos: DBOS, client: DBOSClient) -> None:
     assert await forked_handle.get_result() == input * 2
 
     assert len(await client.list_workflows_async()) == 3
+
+
+def test_enqueue_with_deduplication(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    wfid = str(uuid.uuid4())
+    dedup_id = f"dedup-{wfid}"
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "retrieve_test",
+        "workflow_id": wfid,
+        "deduplication_id": dedup_id,
+    }
+
+    handle: WorkflowHandle[str] = client.enqueue(options, "abc")
+    # Enqueue itself again should not raise an error
+    handle2: WorkflowHandle[str] = client.enqueue(options, "def")
+
+    # Enqueue with the same deduplication ID but different workflow ID should raise an error
+    wfid2 = str(uuid.uuid4())
+    options["workflow_id"] = wfid2
+    with pytest.raises(Exception) as exc_info:
+        client.enqueue(options, "def")
+    assert (
+        f"Workflow {wfid2} was deduplicated due to an existing workflow in queue test_queue with deduplication ID {dedup_id}."
+        in str(exc_info.value)
+    )
+
+    list_results = client.list_queued_workflows()
+    assert len(list_results) == 1
+    assert list_results[0].workflow_id == wfid
+    assert list_results[0].status in ["PENDING", "ENQUEUED"]
+
+    assert handle.get_result() == "abc"
+    assert handle2.get_result() == "abc"

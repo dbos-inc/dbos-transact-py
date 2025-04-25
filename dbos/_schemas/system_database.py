@@ -10,6 +10,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     text,
 )
 
@@ -173,5 +174,13 @@ class SystemSchema:
         Column(
             "completed_at_epoch_ms",
             BigInteger(),
+        ),
+        Column(
+            "deduplication_id",
+            Text,
+            nullable=True,
+        ),
+        UniqueConstraint(
+            "queue_name", "deduplication_id", name="uq_workflow_queue_name_dedup_id"
         ),
     )
