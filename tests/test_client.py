@@ -532,16 +532,16 @@ def test_enqueue_with_priority(dbos: DBOS, client: DBOSClient) -> None:
     assert "Invalid priority" in str(exc_info.value)
 
     # Without priority should work
-    options["priority"] = None
+    del options["priority"]
     handle: WorkflowHandle[str] = client.enqueue(options, "abc")
 
     # Enqueue with a lower priority
     options["priority"] = 5
-    handle2 = client.enqueue(options, "def")
+    handle2: WorkflowHandle[str] = client.enqueue(options, "def")
 
     # Enqueue with a higher priority
     options["priority"] = 1
-    handle3 = client.enqueue(options, "ghi")
+    handle3: WorkflowHandle[str] = client.enqueue(options, "ghi")
 
     assert handle.get_result() == "abc"
 

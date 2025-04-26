@@ -433,12 +433,12 @@ class SetEnqueueOptions:
     """
 
     def __init__(
-        self, *, deduplication_id: Optional[str] = None, priority: Optional[int]
+        self, *, deduplication_id: Optional[str] = None, priority: Optional[int] = None
     ) -> None:
         self.created_ctx = False
         self.deduplication_id: Optional[str] = deduplication_id
         self.saved_deduplication_id: Optional[str] = None
-        if priority < MinPriority or priority > MaxPriority:
+        if priority is not None and (priority < MinPriority or priority > MaxPriority):
             raise Exception(
                 f"Invalid priority {priority}. Priority must be between {MinPriority}~{MaxPriority}."
             )
