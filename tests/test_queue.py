@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 import uuid
+from typing import List
 
 import pytest
 import sqlalchemy as sa
@@ -22,6 +23,7 @@ from dbos import (
     WorkflowHandle,
 )
 from dbos._context import assert_current_dbos_context
+from dbos._dbos import WorkflowHandleAsync
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
@@ -1150,6 +1152,8 @@ def test_queue_deduplication(dbos: DBOS) -> None:
             handle2 = queue.enqueue(test_workflow, "def")
     assert handle2.get_result() == "def-c-p"
 
+    assert queue_entries_are_cleaned_up(dbos)
+
 
 @pytest.mark.asyncio
 async def test_queue_deduplication_async(dbos: DBOS) -> None:
@@ -1210,3 +1214,112 @@ async def test_queue_deduplication_async(dbos: DBOS) -> None:
         with SetWorkflowID(wfid2):
             handle2 = await queue.enqueue_async(test_workflow, "def")
     assert (await handle2.get_result()) == "def-c-p"
+
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_priority_queue(dbos: DBOS) -> None:
+    # Make sure that we can enqueue workflows with different priorities correctly
+    queue = Queue("test_queue_priority", 1)
+    child_queue = Queue("test_queue_child")
+
+    workflow_event = threading.Event()
+    wf_priority_list = []
+
+    @DBOS.workflow()
+    def child_workflow(p: int) -> int:
+        workflow_event.wait()
+        return p
+
+    @DBOS.workflow()
+    def test_workflow(priority: int) -> int:
+        wf_priority_list.append(priority)
+        # Make sure the priority is not propagated
+        assert assert_current_dbos_context().priority == None
+        child_handle = child_queue.enqueue(child_workflow, priority)
+        workflow_event.wait()
+        return child_handle.get_result() + priority
+
+    # Enqueue an invalid priority
+    with pytest.raises(Exception) as exc_info:
+        with SetEnqueueOptions(priority=-100):
+            queue.enqueue(test_workflow, -100)
+    assert "Invalid priority" in str(exc_info.value)
+
+    wf_handles = []
+    # First, enqueue a workflow without priority
+    handle = queue.enqueue(test_workflow, 0)
+    wf_handles.append(handle)
+
+    # Then, enqueue a workflow with priority 1 to 5
+    for i in range(1, 6):
+        with SetEnqueueOptions(priority=i):
+            handle = queue.enqueue(test_workflow, i)
+        wf_handles.append(handle)
+
+    # Finally, enqueue two workflows without priority again
+    wf_handles.append(queue.enqueue(test_workflow, 6))
+    wf_handles.append(queue.enqueue(test_workflow, 7))
+
+    # The finish sequence should be 0, 6, 7, 1, 2, 3, 4, 5
+    workflow_event.set()
+    for i in range(len(wf_handles)):
+        res = wf_handles[i].get_result()
+        assert res == i * 2
+
+    assert wf_priority_list == [0, 6, 7, 1, 2, 3, 4, 5]
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+@pytest.mark.asyncio
+async def test_priority_queue_async(dbos: DBOS) -> None:
+    # Make sure that we can enqueue workflows with different priorities correctly
+    queue = Queue("test_queue_priority_async", 1)
+    child_queue = Queue("test_queue_child_async")
+
+    workflow_event = asyncio.Event()
+    wf_priority_list = []
+
+    @DBOS.workflow()
+    async def child_workflow(p: int) -> int:
+        await workflow_event.wait()
+        return p
+
+    @DBOS.workflow()
+    async def test_workflow(priority: int) -> int:
+        wf_priority_list.append(priority)
+        # Make sure the priority is not propagated
+        assert assert_current_dbos_context().priority == None
+        child_handle = await child_queue.enqueue_async(child_workflow, priority)
+        await workflow_event.wait()
+        return (await child_handle.get_result()) + priority
+
+    # Enqueue an invalid priority
+    with pytest.raises(Exception) as exc_info:
+        with SetEnqueueOptions(priority=-100):
+            await queue.enqueue_async(test_workflow, -100)
+    assert "Invalid priority" in str(exc_info.value)
+
+    wf_handles: List[WorkflowHandleAsync[int]] = []
+    # First, enqueue a workflow without priority
+    handle = await queue.enqueue_async(test_workflow, 0)
+    wf_handles.append(handle)
+
+    # Then, enqueue a workflow with priority 1 to 5
+    for i in range(1, 6):
+        with SetEnqueueOptions(priority=i):
+            handle = await queue.enqueue_async(test_workflow, i)
+        wf_handles.append(handle)
+
+    # Finally, enqueue two workflows without priority again
+    wf_handles.append(await queue.enqueue_async(test_workflow, 6))
+    wf_handles.append(await queue.enqueue_async(test_workflow, 7))
+
+    # The finish sequence should be 0, 6, 7, 1, 2, 3, 4, 5
+    workflow_event.set()
+    for i in range(len(wf_handles)):
+        res = await wf_handles[i].get_result()
+        assert res == i * 2
+
+    assert wf_priority_list == [0, 6, 7, 1, 2, 3, 4, 5]
+    assert queue_entries_are_cleaned_up(dbos)

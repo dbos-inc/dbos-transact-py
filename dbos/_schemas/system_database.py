@@ -180,6 +180,21 @@ class SystemSchema:
             Text,
             nullable=True,
         ),
+        Column(
+            "priority",
+            Integer,
+            nullable=False,
+            server_default=text("'0'::int"),
+        ),
+        Index(
+            "workflow_queue_name_index",
+            "queue_name",
+        ),
+        Index(
+            "workflow_queue_created_at_priority_index",
+            "created_at_epoch_ms",
+            "priority",
+        ),
         UniqueConstraint(
             "queue_name", "deduplication_id", name="uq_workflow_queue_name_dedup_id"
         ),

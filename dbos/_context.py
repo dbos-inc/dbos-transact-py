@@ -31,6 +31,9 @@ class OperationType(Enum):
 
 OperationTypes = Literal["handler", "workflow", "transaction", "step", "procedure"]
 
+MaxPriority = 2**31 - 1  # 2,147,483,647
+MinPriority = 1
+
 
 # Keys must be the same as in TypeScript Transact
 class TracedAttributes(TypedDict, total=False):
@@ -100,6 +103,8 @@ class DBOSContext:
 
         # A user-specified deduplication ID for the enqueuing workflow.
         self.deduplication_id: Optional[str] = None
+        # A user-specified priority for the enqueuing workflow.
+        self.priority: Optional[int] = None
 
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()
@@ -422,15 +427,23 @@ class SetEnqueueOptions:
 
     Usage:
         ```
-        with SetEnqueueOptions(deduplication_id=<deduplication id>):
+        with SetEnqueueOptions(deduplication_id=<deduplication id>, priority=<priority>):
             queue.enqueue(...)
         ```
     """
 
-    def __init__(self, *, deduplication_id: Optional[str] = None) -> None:
+    def __init__(
+        self, *, deduplication_id: Optional[str] = None, priority: Optional[int]
+    ) -> None:
         self.created_ctx = False
         self.deduplication_id: Optional[str] = deduplication_id
         self.saved_deduplication_id: Optional[str] = None
+        if priority < MinPriority or priority > MaxPriority:
+            raise Exception(
+                f"Invalid priority {priority}. Priority must be between {MinPriority}~{MaxPriority}."
+            )
+        self.priority: Optional[int] = priority
+        self.saved_priority: Optional[int] = None
 
     def __enter__(self) -> SetEnqueueOptions:
         # Code to create a basic context
@@ -441,6 +454,8 @@ class SetEnqueueOptions:
         ctx = assert_current_dbos_context()
         self.saved_deduplication_id = ctx.deduplication_id
         ctx.deduplication_id = self.deduplication_id
+        self.saved_priority = ctx.priority
+        ctx.priority = self.priority
         return self
 
     def __exit__(
@@ -449,7 +464,9 @@ class SetEnqueueOptions:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        assert_current_dbos_context().deduplication_id = self.saved_deduplication_id
+        curr_ctx = assert_current_dbos_context()
+        curr_ctx.deduplication_id = self.saved_deduplication_id
+        curr_ctx.priority = self.saved_priority
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()
@@ -463,6 +480,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         self.is_temp_workflow = attributes["name"] == "temp_wf"
         self.saved_workflow_timeout: Optional[int] = None
         self.saved_deduplication_id: Optional[str] = None
+        self.saved_priority: Optional[int] = None
 
     def __enter__(self) -> DBOSContext:
         # Code to create a basic context
@@ -476,10 +494,12 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         # workflow's children (instead we propagate the deadline)
         self.saved_workflow_timeout = ctx.workflow_timeout_ms
         ctx.workflow_timeout_ms = None
-        # Unset the deduplication_id context var so it is not applied to this
+        # Unset the deduplication_id and priority context var so it is not applied to this
         # workflow's children
         self.saved_deduplication_id = ctx.deduplication_id
         ctx.deduplication_id = None
+        self.saved_priority = ctx.priority
+        ctx.priority = None
         ctx.start_workflow(
             None, self.attributes, self.is_temp_workflow
         )  # Will get from the context's next workflow ID
@@ -498,7 +518,8 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         ctx.workflow_timeout_ms = self.saved_workflow_timeout
         # Clear any propagating timeout
         ctx.workflow_deadline_epoch_ms = None
-        # Restore the saved deduplication ID
+        # Restore the saved deduplication ID and priority
+        ctx.priority = self.saved_priority
         ctx.deduplication_id = self.saved_deduplication_id
         # Code to clean up the basic context if we created it
         if self.created_ctx:

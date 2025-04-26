@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 import uuid
+from datetime import datetime
 from typing import Any, Optional, TypedDict
 
 import pytest
@@ -515,3 +516,39 @@ def test_enqueue_with_deduplication(dbos: DBOS, client: DBOSClient) -> None:
 
     assert handle.get_result() == "abc"
     assert handle2.get_result() == "abc"
+
+
+def test_enqueue_with_priority(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    options: EnqueueOptions = {
+        "queue_name": "inorder_queue",
+        "workflow_name": "retrieve_test",
+        "priority": -1,
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        client.enqueue(options, "abc")
+    assert "Invalid priority" in str(exc_info.value)
+
+    # Without priority should work
+    options["priority"] = None
+    handle: WorkflowHandle[str] = client.enqueue(options, "abc")
+
+    # Enqueue with a lower priority
+    options["priority"] = 5
+    handle2 = client.enqueue(options, "def")
+
+    # Enqueue with a higher priority
+    options["priority"] = 1
+    handle3 = client.enqueue(options, "ghi")
+
+    assert handle.get_result() == "abc"
+
+    start = datetime.now()
+    assert handle3.get_result() == "ghi"
+    end = datetime.now()
+    assert (
+        end - start
+    ).total_seconds() < 8.0, "Workflow with higher priority did not finish first"
+    assert handle2.get_result() == "def"

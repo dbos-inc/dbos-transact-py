@@ -544,6 +544,7 @@ def start_workflow(
     )
     enqueue_options = EnqueueOptionsInternal(
         deduplication_id=local_ctx.deduplication_id if local_ctx is not None else None,
+        priority=local_ctx.priority if local_ctx is not None else None,
     )
     new_wf_id, new_wf_ctx = _get_new_wf()
 
@@ -635,6 +636,7 @@ async def start_workflow_async(
     )
     enqueue_options = EnqueueOptionsInternal(
         deduplication_id=local_ctx.deduplication_id if local_ctx is not None else None,
+        priority=local_ctx.priority if local_ctx is not None else None,
     )
     new_wf_id, new_wf_ctx = _get_new_wf()
 
