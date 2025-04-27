@@ -164,7 +164,8 @@ def init(
                     print("[red]Please enter a valid number.[/red]")
 
         if template in git_templates:
-            project_name = template
+            if project_name is None:
+                project_name = template
         else:
             if project_name is None:
                 project_name = typing.cast(
