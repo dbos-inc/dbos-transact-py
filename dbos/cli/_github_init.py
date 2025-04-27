@@ -97,8 +97,9 @@ def create_template_from_github(app_name: str, template_name: str) -> None:
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
 
-        # Replace the template name with the given app_name
-        raw_content = raw_content.replace(template_name, app_name)
+        # Replace template name with app name in required files
+        if file_path in ["dbos-config.yaml", "main.py"]:
+            raw_content = raw_content.replace(template_name, app_name)
 
         # Write file with proper permissions
         with open(target_path, "w", encoding="utf-8") as f:
