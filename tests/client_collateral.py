@@ -1,5 +1,5 @@
 import json
-from typing import Optional, TypedDict, cast
+from typing import List, Optional, TypedDict, cast
 
 from dbos import DBOS, Queue
 
@@ -12,6 +12,7 @@ class Person(TypedDict):
 
 queue = Queue("test_queue")
 inorder_queue = Queue("inorder_queue", 1)
+inorder_results: List[str] = []
 
 
 @DBOS.workflow()
@@ -27,6 +28,7 @@ def send_test(topic: Optional[str] = None) -> str:
 @DBOS.workflow()
 def retrieve_test(value: str) -> str:
     DBOS.sleep(5)
+    inorder_results.append(value)
     return value
 
 

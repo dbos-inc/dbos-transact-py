@@ -1,3 +1,4 @@
+import importlib
 import math
 import os
 import runpy
@@ -5,8 +6,7 @@ import subprocess
 import sys
 import time
 import uuid
-from datetime import datetime
-from typing import Any, Optional, TypedDict
+from typing import Optional, TypedDict
 
 import pytest
 import sqlalchemy as sa
@@ -15,6 +15,7 @@ from dbos import DBOS, ConfigFile, DBOSClient, EnqueueOptions, SetWorkflowID
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
+from tests import client_collateral
 from tests.client_collateral import event_test, retrieve_test, send_test
 
 
@@ -519,7 +520,8 @@ def test_enqueue_with_deduplication(dbos: DBOS, client: DBOSClient) -> None:
 
 
 def test_enqueue_with_priority(dbos: DBOS, client: DBOSClient) -> None:
-    run_client_collateral()
+    importlib.reload(client_collateral)
+    from tests.client_collateral import inorder_results
 
     options: EnqueueOptions = {
         "queue_name": "inorder_queue",
@@ -544,11 +546,8 @@ def test_enqueue_with_priority(dbos: DBOS, client: DBOSClient) -> None:
     handle3: WorkflowHandle[str] = client.enqueue(options, "ghi")
 
     assert handle.get_result() == "abc"
-
-    start = datetime.now()
     assert handle3.get_result() == "ghi"
-    end = datetime.now()
-    assert (
-        end - start
-    ).total_seconds() < 8.0, "Workflow with higher priority did not finish first"
     assert handle2.get_result() == "def"
+
+    # Should be in the order of priority
+    assert inorder_results == ["abc", "ghi", "def"]
