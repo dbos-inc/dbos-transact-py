@@ -138,6 +138,9 @@ class WorkflowStatusInternal(TypedDict):
 
 class EnqueueOptionsInternal(TypedDict):
     deduplication_id: Optional[str]  # Unique ID for deduplication on a queue
+    priority: Optional[
+        int
+    ]  # Priority of the workflow on the queue, starting from 1 ~ 2,147,483,647. Default 0 (highest priority).
 
 
 class RecordedResult(TypedDict):
@@ -1633,12 +1636,19 @@ class SystemDatabase:
                 if enqueue_options is not None
                 else None
             )
+            priority = (
+                enqueue_options["priority"] if enqueue_options is not None else None
+            )
+            # Default to 0 (highest priority) if not provided
+            if priority is None:
+                priority = 0
             query = (
                 pg.insert(SystemSchema.workflow_queue)
                 .values(
                     workflow_uuid=workflow_id,
                     queue_name=queue_name,
                     deduplication_id=deduplication_id,
+                    priority=priority,
                 )
                 .on_conflict_do_nothing(
                     index_elements=SystemSchema.workflow_queue.primary_key.columns
@@ -1747,7 +1757,10 @@ class SystemDatabase:
                 .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
                 .where(SystemSchema.workflow_queue.c.started_at_epoch_ms == None)
                 .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms == None)
-                .order_by(SystemSchema.workflow_queue.c.created_at_epoch_ms.asc())
+                .order_by(
+                    SystemSchema.workflow_queue.c.priority.asc(),
+                    SystemSchema.workflow_queue.c.created_at_epoch_ms.asc(),
+                )
                 .with_for_update(nowait=True)  # Error out early
             )
             # Apply limit only if max_tasks is finite

@@ -6,6 +6,7 @@ from typing import Any, Generic, List, Optional, TypedDict, TypeVar
 from sqlalchemy import URL
 
 from dbos._app_db import ApplicationDatabase
+from dbos._context import MaxPriority, MinPriority
 
 if sys.version_info < (3, 11):
     from typing_extensions import NotRequired
@@ -15,7 +16,7 @@ else:
 from dbos import _serialization
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._dbos_config import parse_database_url_to_dbconfig
-from dbos._error import DBOSNonExistentWorkflowError
+from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._serialization import WorkflowInputs
 from dbos._sys_db import (
@@ -44,6 +45,15 @@ class EnqueueOptions(TypedDict):
     app_version: NotRequired[str]
     workflow_timeout: NotRequired[float]
     deduplication_id: NotRequired[str]
+    priority: NotRequired[int]
+
+
+def validate_enqueue_options(options: EnqueueOptions) -> None:
+    priority = options.get("priority")
+    if priority is not None and (priority < MinPriority or priority > MaxPriority):
+        raise DBOSException(
+            f"Invalid priority {priority}. Priority must be between {MinPriority}~{MaxPriority}."
+        )
 
 
 class WorkflowHandleClientPolling(Generic[R]):
@@ -103,6 +113,7 @@ class DBOSClient:
         self._sys_db.destroy()
 
     def _enqueue(self, options: EnqueueOptions, *args: Any, **kwargs: Any) -> str:
+        validate_enqueue_options(options)
         workflow_name = options["workflow_name"]
         queue_name = options["queue_name"]
 
@@ -116,6 +127,7 @@ class DBOSClient:
         workflow_timeout = options.get("workflow_timeout", None)
         enqueue_options_internal: EnqueueOptionsInternal = {
             "deduplication_id": options.get("deduplication_id"),
+            "priority": options.get("priority"),
         }
 
         status: WorkflowStatusInternal = {

@@ -1,3 +1,4 @@
+import importlib
 import math
 import os
 import runpy
@@ -5,7 +6,7 @@ import subprocess
 import sys
 import time
 import uuid
-from typing import Any, Optional, TypedDict
+from typing import Optional, TypedDict
 
 import pytest
 import sqlalchemy as sa
@@ -14,6 +15,7 @@ from dbos import DBOS, ConfigFile, DBOSClient, EnqueueOptions, SetWorkflowID
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
+from tests import client_collateral
 from tests.client_collateral import event_test, retrieve_test, send_test
 
 
@@ -515,3 +517,37 @@ def test_enqueue_with_deduplication(dbos: DBOS, client: DBOSClient) -> None:
 
     assert handle.get_result() == "abc"
     assert handle2.get_result() == "abc"
+
+
+def test_enqueue_with_priority(dbos: DBOS, client: DBOSClient) -> None:
+    importlib.reload(client_collateral)
+    from tests.client_collateral import inorder_results
+
+    options: EnqueueOptions = {
+        "queue_name": "inorder_queue",
+        "workflow_name": "retrieve_test",
+        "priority": -1,
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        client.enqueue(options, "abc")
+    assert "Invalid priority" in str(exc_info.value)
+
+    # Without priority should work
+    del options["priority"]
+    handle: WorkflowHandle[str] = client.enqueue(options, "abc")
+
+    # Enqueue with a lower priority
+    options["priority"] = 5
+    handle2: WorkflowHandle[str] = client.enqueue(options, "def")
+
+    # Enqueue with a higher priority
+    options["priority"] = 1
+    handle3: WorkflowHandle[str] = client.enqueue(options, "ghi")
+
+    assert handle.get_result() == "abc"
+    assert handle3.get_result() == "ghi"
+    assert handle2.get_result() == "def"
+
+    # Should be in the order of priority
+    assert inorder_results == ["abc", "ghi", "def"]
