@@ -1,4 +1,3 @@
-import importlib.metadata
 import os
 import platform
 import signal
@@ -25,15 +24,9 @@ from .._dbos_config import _is_valid_app_name
 from .._docker_pg_helper import start_docker_pg, stop_docker_pg
 from .._schemas.system_database import SystemSchema
 from .._sys_db import SystemDatabase, reset_system_database
+from .._utils import GlobalParams
 from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
-
-try:
-    # Only works on Python >= 3.8
-    __version__ = importlib.metadata.version("dbos")
-except importlib.metadata.PackageNotFoundError:
-    # If package is not installed or during development
-    __version__ = "unknown"
 
 
 def start_client(db_url: Optional[str] = None) -> DBOSClient:
@@ -55,7 +48,7 @@ app = typer.Typer()
 @app.command(help="Show the version and exit")
 def version() -> None:
     """Display the current version of DBOS CLI."""
-    typer.echo(f"DBOS CLI version: {__version__}")
+    typer.echo(f"DBOS CLI version: {GlobalParams.dbos_version}")
 
 
 workflow = typer.Typer()

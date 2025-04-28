@@ -84,8 +84,6 @@ if sys.version_info < (3, 10):
 else:
     from typing import ParamSpec
 
-import importlib.metadata
-
 from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
 from ._context import (
@@ -114,13 +112,6 @@ from ._error import (
 from ._event_loop import BackgroundEventLoop
 from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
 from ._workflow_commands import get_workflow, list_workflow_steps
-
-try:
-    # Only works on Python >= 3.8
-    __dbos__version__ = importlib.metadata.version("dbos")
-except importlib.metadata.PackageNotFoundError:
-    # If package is not installed or during development
-    __dbos__version__ = "unknown"
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
@@ -380,7 +371,7 @@ class DBOS:
         set_env_vars(self._config)
         config_logger(self._config)
         dbos_tracer.config(self._config)
-        dbos_logger.info(f"Initializing DBOS (v{__dbos__version__})")
+        dbos_logger.info(f"Initializing DBOS (v{GlobalParams.dbos_version})")
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
