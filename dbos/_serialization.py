@@ -64,6 +64,12 @@ def safe_deserialize(
     serialized_output: Optional[str],
     serialized_exception: Optional[str],
 ) -> tuple[Optional[WorkflowInputs], Optional[Any], Optional[Exception]]:
+    """
+    This function "safely" deserializes the user-set parameters for a workflow, raising a warning
+    and returning a string if they are not deserializable. It is used in the workflow introspection methods
+    get_workflows and get_queued_workflows so that if non-deserializable objects are being used, the user
+    receives clear warnings.
+    """
     input: Optional[WorkflowInputs]
     try:
         input = (
