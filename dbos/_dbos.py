@@ -371,7 +371,7 @@ class DBOS:
         set_env_vars(self._config)
         config_logger(self._config)
         dbos_tracer.config(self._config)
-        dbos_logger.info("Initializing DBOS")
+        dbos_logger.info(f"Initializing DBOS (v{GlobalParams.dbos_version})")
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
