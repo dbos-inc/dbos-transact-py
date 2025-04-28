@@ -11,9 +11,16 @@ from dbos import DBOS, Queue, SetWorkflowID
 from dbos._error import (
     DBOSDeadLetterQueueError,
     DBOSMaxStepRetriesExceeded,
+    DBOSNotAuthorizedError,
+    DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
 )
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
+from dbos._serialization import (
+    deserialize_exception,
+    safe_deserialize,
+    serialize_exception,
+)
 from dbos._sys_db import WorkflowStatusString
 
 from .conftest import queue_entries_are_cleaned_up
@@ -434,3 +441,42 @@ def test_keyboardinterrupt_during_retries(dbos: DBOS) -> None:
     recovery_handles = DBOS._recover_pending_workflows()
     assert len(recovery_handles) == 1
     assert recovery_handles[0].get_result() == recovery_handles[0].workflow_id
+
+
+def test_error_serialization() -> None:
+    # Verify that each exception that can be thrown in a workflow
+    # is serializable and deserializable
+    # DBOSMaxStepRetriesExceeded
+    e: Exception = DBOSMaxStepRetriesExceeded("step", 1)
+    d = deserialize_exception(serialize_exception(e))
+    assert isinstance(d, DBOSMaxStepRetriesExceeded)
+    assert str(d) == str(e)
+    # DBOSNotAuthorizedError
+    e = DBOSNotAuthorizedError("no")
+    d = deserialize_exception(serialize_exception(e))
+    assert isinstance(d, DBOSNotAuthorizedError)
+    assert str(d) == str(e)
+    # DBOSQueueDeduplicatedError
+    e = DBOSQueueDeduplicatedError("id", "queue", "dedup")
+    d = deserialize_exception(serialize_exception(e))
+    assert isinstance(d, DBOSQueueDeduplicatedError)
+    assert str(d) == str(e)
+
+    # Test safe_deserialize
+    class BadException(Exception):
+        def __init__(self, one: int, two: int) -> None:
+            super().__init__(f"Message: {one}, {two}")
+
+    bad_exception = BadException(1, 2)
+    with pytest.raises(TypeError):
+        deserialize_exception(serialize_exception(bad_exception))
+    input, output, exception = safe_deserialize(
+        "my_id",
+        serialized_input=None,
+        serialized_exception=serialize_exception(bad_exception),
+        serialized_output=None,
+    )
+    assert input is None
+    assert output is None
+    assert isinstance(exception, str)
+    assert "Message: 1, 2" in exception

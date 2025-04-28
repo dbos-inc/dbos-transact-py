@@ -134,11 +134,16 @@ class DBOSNotAuthorizedError(DBOSException):
     """Exception raised by DBOS role-based security when the user is not authorized to access a function."""
 
     def __init__(self, msg: str):
+        self.msg = msg
         super().__init__(
             msg,
             dbos_error_code=DBOSErrorCode.NotAuthorized.value,
         )
         self.status_code = 403
+
+    def __reduce__(self) -> Any:
+        # Tell jsonpickle how to reconstruct this object
+        return (self.__class__, (self.msg,))
 
 
 class DBOSMaxStepRetriesExceeded(DBOSException):
@@ -185,9 +190,19 @@ class DBOSQueueDeduplicatedError(DBOSException):
     def __init__(
         self, workflow_id: str, queue_name: str, deduplication_id: str
     ) -> None:
+        self.workflow_id = workflow_id
+        self.queue_name = queue_name
+        self.deduplication_id = deduplication_id
         super().__init__(
             f"Workflow {workflow_id} was deduplicated due to an existing workflow in queue {queue_name} with deduplication ID {deduplication_id}.",
             dbos_error_code=DBOSErrorCode.QueueDeduplicated.value,
+        )
+
+    def __reduce__(self) -> Any:
+        # Tell jsonpickle how to reconstruct this object
+        return (
+            self.__class__,
+            (self.workflow_id, self.queue_name, self.deduplication_id),
         )
 
 
