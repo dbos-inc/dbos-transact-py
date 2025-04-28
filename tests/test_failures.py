@@ -11,9 +11,12 @@ from dbos import DBOS, Queue, SetWorkflowID
 from dbos._error import (
     DBOSDeadLetterQueueError,
     DBOSMaxStepRetriesExceeded,
+    DBOSNotAuthorizedError,
+    DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
 )
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
+from dbos._serialization import deserialize_exception, serialize_exception
 from dbos._sys_db import WorkflowStatusString
 
 from .conftest import queue_entries_are_cleaned_up
@@ -434,3 +437,23 @@ def test_keyboardinterrupt_during_retries(dbos: DBOS) -> None:
     recovery_handles = DBOS._recover_pending_workflows()
     assert len(recovery_handles) == 1
     assert recovery_handles[0].get_result() == recovery_handles[0].workflow_id
+
+
+def test_error_serialization():
+    # Verify that each exception that can be thrown in a workflow
+    # is fully serializable and deserializable
+    # DBOSMaxStepRetriesExceeded
+    e: Exception = DBOSMaxStepRetriesExceeded("step", 1)
+    d = deserialize_exception(serialize_exception(e))
+    assert isinstance(d, DBOSMaxStepRetriesExceeded)
+    assert str(d) == str(e)
+    # DBOSNotAuthorizedError
+    e = DBOSNotAuthorizedError("no")
+    d = deserialize_exception(serialize_exception(e))
+    assert isinstance(d, DBOSNotAuthorizedError)
+    assert str(d) == str(e)
+    # DBOSNotAuthorizedError
+    e = DBOSQueueDeduplicatedError("id", "queue", "dedup")
+    d = deserialize_exception(serialize_exception(e))
+    assert isinstance(d, DBOSQueueDeduplicatedError)
+    assert str(d) == str(e)
