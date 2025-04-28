@@ -20,7 +20,7 @@ That's all you need to do&mdash;DBOS is entirely contained in this open-source l
 ## When Should I Use DBOS?
 
 You should consider using DBOS if your application needs to **reliably handle failures**.
-For example, you might be building a payments service that must reliably process transactions even if servers crash mid-operation, or a long-running data pipeline that needs to resume seamlessly from checkpoints rather than restarting entirely when interruptions occur.
+For example, you might be building a payments service that must reliably process transactions even if servers crash mid-operation, or a long-running data pipeline that needs to resume seamlessly from checkpoints rather than restart from the beginning when interrupted.
 
 Handling failures is costly and complicated, requiring complex state management and recovery logic as well as heavyweight tools like external orchestration services.
 DBOS makes it simpler: annotate your code to checkpoint it in Postgres and automatically recover from any failure.
@@ -38,6 +38,8 @@ If your program ever fails, when it restarts all your workflows will automatical
 You add durable workflows to your existing Python program by annotating ordinary functions as workflows and steps:
 
 ```python
+from dbos import DBOS
+
 @DBOS.step()
 def step_one():
     ...
@@ -71,7 +73,7 @@ You can enqueue a task (which can be a single step or an entire workflow) from a
 DBOS manages the execution of your tasks: it guarantees that tasks complete, and that their callers get their results without needing to resubmit them, even if your application is interrupted.
 
 Queues also provide flow control, so you can limit the concurrency of your tasks on a per-queue or per-process basis.
-You can also set timeouts for tasks, rate limit how often queued tasks are executed, deduplicate tasks, or prioritize critical tasks.
+You can also set timeouts for tasks, rate limit how often queued tasks are executed, deduplicate tasks, or prioritize tasks.
 
 You can add queues to your workflows in just a couple lines of code.
 They don't require a separate queueing service or message broker&mdash;just Postgres.
@@ -196,8 +198,8 @@ def reminder_workflow(email: str, time_to_sleep: int):
 ####
 
 Pause your workflow executions until a notification is received, or emit events from your workflow to send progress updates to external clients.
-All notifications are stored in Postgres, so they can be send and received with exactly-once semantics.
-Set durable timeouts when waiting for events, so you can wait for as long as you like (even days or weeks) through interruptions or restarts, then resume once the notification arrives or the timeout is reached.
+All notifications are stored in Postgres, so they can be sent and received with exactly-once semantics.
+Set durable timeouts when waiting for events, so you can wait for as long as you like (even days or weeks) through interruptions or restarts, then resume once a notification arrives or the timeout is reached.
 
 For example, build a reliable billing workflow that durably waits for a notification from a payments service, processing it exactly-once:
 
@@ -217,7 +219,7 @@ def billing_workflow():
 
 ## Getting Started
 
-To get started, follow the [quickstart](https://docs.dbos.dev/quickstart) to install the open-source library and connect it to a Postgres database.
+To get started, follow the [quickstart](https://docs.dbos.dev/quickstart) to install this open-source library and connect it to a Postgres database.
 Then, check out the [programming guide](https://docs.dbos.dev/python/programming-guide) to learn how to build with durable workflows and queues.
 
 ## Documentation
@@ -236,8 +238,8 @@ Then, check out the [programming guide](https://docs.dbos.dev/python/programming
 
 Both DBOS and Temporal provide durable execution, but DBOS is implemented in a lightweight Postgres-backed library whereas Temporal is implemented in an externally orchestrated server.
 
-You can add DBOS to your program by installing the open-source library, connecting it to Postgres, and annotating workflows and steps.
-By contrast, to add Temporal to your program, you must rearchitect your program to move your workflows to a Temporal worker, configure a Temporal server to orchestrate those workflows, and access your workflows only through a Temporal client.
+You can add DBOS to your program by installing this open-source library, connecting it to Postgres, and annotating workflows and steps.
+By contrast, to add Temporal to your program, you must rearchitect your program to move your workflows and steps (activities) to a Temporal worker, configure a Temporal server to orchestrate those workflows, and access your workflows only through a Temporal client.
 [This blog post](https://www.dbos.dev/blog/durable-execution-coding-comparison) makes the comparison in more detail.
 
 **When to use DBOS:** You need to add durable workflows to your applications with minimal rearchitecting, or you are using Postgres.
@@ -265,9 +267,9 @@ DBOS is general-purpose, but is often used for data pipelines, allowing develope
 
 ####
 
-DBOS provides a similar queue abstraction to dedicating queueing systems like Celery or BullMQ: you can declare queues, submit tasks to them, and control their flow with concurrency limits, rate limits, timeouts, prioritization, etc.
+DBOS provides a similar queue abstraction to dedicated queueing systems like Celery or BullMQ: you can declare queues, submit tasks to them, and control their flow with concurrency limits, rate limits, timeouts, prioritization, etc.
 However, DBOS queues are **durable and Postgres-backed** and integrate with durable workflows.
-For example, in DBOS you can write a workflow that enqueues a thousand tasks and waits for their results.
+For example, in DBOS you can write a durable workflow that enqueues a thousand tasks and waits for their results.
 DBOS checkpoints the workflow and each of its tasks in Postgres, guaranteeing that even if failures or interruptions occur, the tasks will complete and the workflow will collect their results.
 By contrast, Celery/BullMQ are Redis-backed and don't provide workflows, so they provide fewer guarantees but better performance.
 
