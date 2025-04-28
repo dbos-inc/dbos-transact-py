@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:f5e5077112d91aa7e9e03b284bbae73d7686179fd94928093d37f42aa342d4d6"
+content_hash = "sha256:f503aab89787d465300f8aa63db78df7b7df2c77cb1ad91afe1b6c857bacb959"
 
 [[metadata.targets]]
 requires_python = ">=3.9"
@@ -1079,7 +1079,7 @@ name = "nodeenv"
 version = "1.9.1"
 requires_python = "!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,>=2.7"
 summary = "Node.js virtual environment builder"
-groups = ["default", "dev"]
+groups = ["dev"]
 files = [
     {file = "nodeenv-1.9.1-py2.py3-none-any.whl", hash = "sha256:ba11c9782d29c27c70ffbdda2d7415098754709be8a7056d79a737cd901155c9"},
     {file = "nodeenv-1.9.1.tar.gz", hash = "sha256:6ec12890a2dab7946721edbfbcd91f3319c6ccc9aec47be7c7e6b7011ee6645f"},
@@ -1511,17 +1511,17 @@ files = [
 
 [[package]]
 name = "pyright"
-version = "1.1.398"
+version = "1.1.400"
 requires_python = ">=3.7"
 summary = "Command line wrapper for pyright"
-groups = ["default", "dev"]
+groups = ["dev"]
 dependencies = [
     "nodeenv>=1.6.0",
     "typing-extensions>=4.1",
 ]
 files = [
-    {file = "pyright-1.1.398-py3-none-any.whl", hash = "sha256:0a70bfd007d9ea7de1cf9740e1ad1a40a122592cfe22a3f6791b06162ad08753"},
-    {file = "pyright-1.1.398.tar.gz", hash = "sha256:357a13edd9be8082dc73be51190913e475fa41a6efb6ec0d4b7aab3bc11638d8"},
+    {file = "pyright-1.1.400-py3-none-any.whl", hash = "sha256:c80d04f98b5a4358ad3a35e241dbf2a408eee33a40779df365644f8054d2517e"},
+    {file = "pyright-1.1.400.tar.gz", hash = "sha256:b8a3ba40481aa47ba08ffb3228e821d22f7d391f83609211335858bf05686bdb"},
 ]
 
 [[package]]
