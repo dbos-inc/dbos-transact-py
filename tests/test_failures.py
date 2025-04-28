@@ -456,7 +456,7 @@ def test_error_serialization() -> None:
     d = deserialize_exception(serialize_exception(e))
     assert isinstance(d, DBOSNotAuthorizedError)
     assert str(d) == str(e)
-    # DBOSNotAuthorizedError
+    # DBOSQueueDeduplicatedError
     e = DBOSQueueDeduplicatedError("id", "queue", "dedup")
     d = deserialize_exception(serialize_exception(e))
     assert isinstance(d, DBOSQueueDeduplicatedError)
