@@ -68,7 +68,7 @@ Workflows are particularly useful for
 
 DBOS queues help you **durably** run tasks in the background.
 You can enqueue a task (which can be a single step or an entire workflow) from a durable workflow and one of your processes will pick it up for execution.
-DBOS manages the execution of your tasks, guaranteeing they complete, and their callers get their results without needing to resubmit tasks, even if your application is interrupted.
+DBOS manages the execution of your tasks: it guarantees that tasks complete, and that their callers get their results without needing to resubmit them, even if your application is interrupted.
 
 Queues also provide flow control, so you can limit the concurrency of your tasks on a per-queue or per-process basis.
 You can also set timeouts for tasks, rate limit how often queued tasks are executed, deduplicate tasks, or prioritize critical tasks.
@@ -240,9 +240,9 @@ You can add DBOS to your program by installing the open-source library, connecti
 By contrast, to add Temporal to your program, you must rearchitect your program to move your workflows to a Temporal worker, configure a Temporal server to orchestrate those workflows, and access your workflows only through a Temporal client.
 [This blog post](https://www.dbos.dev/blog/durable-execution-coding-comparison) makes the comparison in more detail.
 
-**When to use DBOS:** You need to add durable workflows to your applications with minimal rearchitecting, or your stack already includes Postgres.
+**When to use DBOS:** You need to add durable workflows to your applications with minimal rearchitecting, or you are using Postgres.
 
-**When to use Temporal:** You don't want to add Postgres to your stack, or you need a language DBOS doesn't support.
+**When to use Temporal:** You don't want to add Postgres to your stack, or you need a language DBOS doesn't support yet.
 
 </details>
 
@@ -268,7 +268,7 @@ DBOS is general-purpose, but is often used for data pipelines, allowing develope
 DBOS provides a similar queue abstraction to dedicating queueing systems like Celery or BullMQ: you can declare queues, submit tasks to them, and control their flow with concurrency limits, rate limits, timeouts, prioritization, etc.
 However, DBOS queues are **durable and Postgres-backed** and integrate with durable workflows.
 For example, in DBOS you can write a workflow that enqueues a thousand tasks and waits for their results.
-DBOS checkpoints the workflow and each of its tasks in Postgres, guaranteeing that even if failures or interruptions occur, the tasks will complete and the workflow will collect their reults.
+DBOS checkpoints the workflow and each of its tasks in Postgres, guaranteeing that even if failures or interruptions occur, the tasks will complete and the workflow will collect their results.
 By contrast, Celery/BullMQ are Redis-backed and don't provide workflows, so they provide fewer guarantees but better performance.
 
 **When to use DBOS:** You need the reliability of enqueueing tasks from durable workflows.
