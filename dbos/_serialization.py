@@ -1,7 +1,9 @@
 import types
-from typing import Any, Dict, Tuple, TypedDict
+from typing import Any, Dict, Optional, Tuple, TypedDict
 
 import jsonpickle  # type: ignore
+
+from ._logger import dbos_logger
 
 
 class WorkflowInputs(TypedDict):
@@ -51,5 +53,47 @@ def deserialize_args(serialized_data: str) -> WorkflowInputs:
 
 def deserialize_exception(serialized_data: str) -> Exception:
     """Deserialize JSON string back to a Python Exception using jsonpickle."""
-    upo: Exception = jsonpickle.decode(serialized_data)
-    return upo
+    exc: Exception = jsonpickle.decode(serialized_data)
+    return exc
+
+
+def safe_deserialize(
+    workflow_id: str,
+    *,
+    serialized_input: str,
+    serialized_output: str,
+    serialized_exception: str,
+) -> tuple[Optional[WorkflowInputs], Optional[Any], Optional[Exception]]:
+    input: Optional[WorkflowInputs]
+    try:
+        input = (
+            deserialize_args(serialized_input) if serialized_input is not None else None
+        )
+    except Exception as e:
+        dbos_logger.warning(
+            f"Warning: input object could not be deserialized for workflow {workflow_id}, returning as string: {e}"
+        )
+        input = serialized_input  # type: ignore
+    output: Optional[Any]
+    try:
+        output = (
+            deserialize(serialized_output) if serialized_output is not None else None
+        )
+    except Exception as e:
+        dbos_logger.warning(
+            f"Warning: output object could not be deserialized for workflow {workflow_id}, returning as string: {e}"
+        )
+        output = serialized_output
+    exception: Optional[Exception]
+    try:
+        exception = (
+            deserialize_exception(serialized_exception)
+            if serialized_exception is not None
+            else None
+        )
+    except Exception as e:
+        dbos_logger.warning(
+            f"Warning: exception object could not be deserialized for workflow {workflow_id}, returning as string: {e}"
+        )
+        exception = serialized_exception  # type: ignore
+    return input, output, exception

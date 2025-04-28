@@ -439,9 +439,9 @@ def test_keyboardinterrupt_during_retries(dbos: DBOS) -> None:
     assert recovery_handles[0].get_result() == recovery_handles[0].workflow_id
 
 
-def test_error_serialization():
+def test_error_serialization() -> None:
     # Verify that each exception that can be thrown in a workflow
-    # is fully serializable and deserializable
+    # is serializable and deserializable
     # DBOSMaxStepRetriesExceeded
     e: Exception = DBOSMaxStepRetriesExceeded("step", 1)
     d = deserialize_exception(serialize_exception(e))

@@ -901,13 +901,15 @@ class SystemDatabase:
             info.app_version = row[14]
             info.app_id = row[15]
 
-            inputs = _serialization.deserialize_args(row[16])
-            if inputs is not None:
-                info.input = inputs
-            if info.status == WorkflowStatusString.SUCCESS.value:
-                info.output = _serialization.deserialize(row[17])
-            elif info.status == WorkflowStatusString.ERROR.value:
-                info.error = _serialization.deserialize_exception(row[18])
+            inputs, output, exception = _serialization.safe_deserialize(
+                info.workflow_id,
+                serialized_input=row[16],
+                serialized_output=row[17],
+                serialized_exception=row[18],
+            )
+            info.input = inputs
+            info.output = output
+            info.error = exception
 
             infos.append(info)
         return infos
