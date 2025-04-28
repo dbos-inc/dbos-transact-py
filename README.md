@@ -1,7 +1,7 @@
 
 <div align="center">
 
-# DBOS Transact: Lightweight Durable Python Workflows
+# DBOS Transact: Lightweight Durable Workflows
 
 #### [Documentation](https://docs.dbos.dev/) &nbsp;&nbsp;•&nbsp;&nbsp;  [Examples](https://docs.dbos.dev/examples) &nbsp;&nbsp;•&nbsp;&nbsp; [Github](https://github.com/dbos-inc) &nbsp;&nbsp;•&nbsp;&nbsp; [Discord](https://discord.com/invite/jsmC6pXGgX)
 </div>
@@ -15,11 +15,11 @@ Instead of managing your own workflow orchestrator or task queue system, you can
 
 To get started, follow the [quickstart](https://docs.dbos.dev/quickstart) to install this open-source library and connect it to a Postgres database.
 Then, annotate workflows and steps in your program to make it durable!
-That's all you need to do&mdash;DBOS is entirely contained in this open-source library, there's no required infrastructure for you to configure or manage.
+That's all you need to do&mdash;DBOS is entirely contained in this open-source library, there's no additional infrastructure for you to configure or manage.
 
 ## When Should I Use DBOS?
 
-You should consider using DBOS if you're **concerned about how your application handles failures**.
+You should consider using DBOS if your application needs to **reliably handle failures**.
 For example, you might be building a payments service that must reliably process transactions even if servers crash mid-operation, or a long-running data pipeline that needs to resume seamlessly from checkpoints rather than restarting entirely when interruptions occur.
 
 Handling failures is costly and complicated, requiring complex state management and recovery logic as well as heavyweight tools like external orchestration services.
@@ -273,7 +273,7 @@ By contrast, Celery/BullMQ are Redis-backed and don't provide workflows, so they
 
 **When to use DBOS:** You need the reliability of enqueueing tasks from durable workflows.
 
-**When to use Celery/BullMQ**: You don't need durability, or you need very high throughput (>10K tasks/second).
+**When to use Celery/BullMQ**: You don't need durability, or you need very high throughput beyond what your Postgres server can support.
 </details>
 
 ## Community
