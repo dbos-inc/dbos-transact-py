@@ -54,7 +54,7 @@ def workflow()
 
 Workflows are particularly useful for 
 
-- Orchestrating complex business processes so they seamlessly recover from any failure.
+- Orchestrating business processes so they seamlessly recover from any failure.
 - Building observable and fault-tolerant data pipelines.
 - Operating an AI agent, or any application that relies on unreliable or non-deterministic APIs.
 
@@ -68,7 +68,7 @@ Workflows are particularly useful for
 
 DBOS queues help you **durably** run tasks in the background.
 You can enqueue a task (which can be a single step or an entire workflow) from a durable workflow and one of your processes will pick it up for execution.
-DBOS manages the execution of your tasks, guaranteeing that they gets completed, and their callers gets their results without needing to resubmit tasks, even if your application is interrupted.
+DBOS manages the execution of your tasks, guaranteeing they complete, and their callers get their results without needing to resubmit tasks, even if your application is interrupted.
 
 Queues also provide flow control, so you can limit the concurrency of your tasks on a per-queue or per-process basis.
 You can also set timeouts for tasks, rate limit how often queued tasks are executed, deduplicate tasks, or prioritize critical tasks.
@@ -234,10 +234,10 @@ Then, check out the [programming guide](https://docs.dbos.dev/python/programming
 
 ####
 
-Both DBOS and Temporal provide durable execution, but DBOS is implemented in a lightweight Postgres-backed library whereas Temporal, and architecturally similar systems such as Restate and Inngest, are implemented in an externally orchestrated server.
+Both DBOS and Temporal provide durable execution, but DBOS is implemented in a lightweight Postgres-backed library whereas Temporal is implemented in an externally orchestrated server.
 
 You can add DBOS to your program by installing the open-source library, connecting it to Postgres, and annotating workflows and steps.
-By contrast, to add Temporal to your program, you must rearchitect your program to move your durable workflows to a Temporal worker, configure a Temporal server to orchestrate those workflows, and access your workflows only through a Temporal client.
+By contrast, to add Temporal to your program, you must rearchitect your program to move your workflows to a Temporal worker, configure a Temporal server to orchestrate those workflows, and access your workflows only through a Temporal client.
 [This blog post](https://www.dbos.dev/blog/durable-execution-coding-comparison) makes the comparison in more detail.
 
 **When to use DBOS:** You need to add durable workflows to your applications with minimal rearchitecting, or your stack already includes Postgres.
