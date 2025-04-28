@@ -60,9 +60,9 @@ def deserialize_exception(serialized_data: str) -> Exception:
 def safe_deserialize(
     workflow_id: str,
     *,
-    serialized_input: str,
-    serialized_output: str,
-    serialized_exception: str,
+    serialized_input: Optional[str],
+    serialized_output: Optional[str],
+    serialized_exception: Optional[str],
 ) -> tuple[Optional[WorkflowInputs], Optional[Any], Optional[Exception]]:
     input: Optional[WorkflowInputs]
     try:
