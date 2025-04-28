@@ -30,34 +30,6 @@ def upgrade() -> None:
         schema="dbos",
     )
 
-    # Create index on queue name
-    op.create_index(
-        "workflow_queue_name_index",
-        "workflow_queue",
-        ["queue_name"],
-        unique=False,
-        schema="dbos",
-    )
-
-    # Create index on created_at and priority
-    op.create_index(
-        "workflow_queue_created_at_priority_index",
-        "workflow_queue",
-        ["created_at_epoch_ms", "priority"],
-        unique=False,
-        schema="dbos",
-    )
-
 
 def downgrade() -> None:
-    op.drop_index(
-        "workflow_queue_created_at_priority_index",
-        table_name="workflow_queue",
-        schema="dbos",
-    )
-    op.drop_index(
-        "workflow_queue_name_index",
-        table_name="workflow_queue",
-        schema="dbos",
-    )
     op.drop_column("workflow_queue", "priority", schema="dbos")
