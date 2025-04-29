@@ -64,7 +64,7 @@ class ConductorWebsocket(threading.Thread):
                     f"< Received pong from conductor after {elapsed_time:.2f} seconds"
                 )
                 wait_time = self.ping_interval - elapsed_time
-                time.sleep(max(0, wait_time))
+                self.evt.wait(max(0, wait_time))
             except ConnectionClosed:
                 self.dbos.logger.warning("Connection to conductor closed.")
             except Exception as e:
