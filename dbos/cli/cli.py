@@ -33,7 +33,7 @@ def start_client(db_url: Optional[str] = None) -> DBOSClient:
         database_url = os.getenv("DBOS_DATABASE_URL")
     if database_url is None:
         raise ValueError(
-            "No --db-url flag or DBOS_DATABASE_URL environment variable were set. Please provide either."
+            "Missing database URL: please set it using the --db-url flag or the DBOS_DATABASE_URL environment variable."
         )
 
     return DBOSClient(database_url=database_url)
