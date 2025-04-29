@@ -24,8 +24,6 @@ def test_flask_endpoint(
     @app.route("/workflow/<var1>/<var2>")
     @DBOS.workflow()
     def test_workflow(var1: str, var2: str) -> Response:
-        assert DBOS.request is not None
-        assert DBOS.request.headers.get("Host") == "localhost"
         res1 = test_transaction(var1)
         res2 = test_step(var2)
         result = res1 + res2
@@ -74,12 +72,10 @@ def test_endpoint_recovery(dbos_flask: Tuple[DBOS, Flask]) -> None:
 
     @DBOS.workflow()
     def test_workflow(var1: str) -> tuple[str, str]:
-        assert DBOS.request is not None
         return var1, DBOS.workflow_id
 
     @app.route("/<var1>/<var2>")
     def test_endpoint(var1: str, var2: str) -> dict[str, str]:
-        assert DBOS.request is not None
         res1, id1 = test_workflow(var1)
         res2, id2 = test_workflow(var2)
         return {"res1": res1, "res2": res2, "id1": id1, "id2": id2}
@@ -108,7 +104,6 @@ def test_endpoint_recovery(dbos_flask: Tuple[DBOS, Flask]) -> None:
             "executor_id": None,
             "app_id": None,
             "app_version": None,
-            "request": None,
             "recovery_attempts": None,
             "authenticated_user": None,
             "authenticated_roles": None,
