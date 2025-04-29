@@ -149,7 +149,7 @@ class WorkflowsOutput:
         inputs_str = str(info.input) if info.input is not None else None
         outputs_str = str(info.output) if info.output is not None else None
         error_str = str(info.error) if info.error is not None else None
-        request_str = str(info.request) if info.request is not None else None
+        request_str = None
         roles_str = (
             str(info.authenticated_roles)
             if info.authenticated_roles is not None

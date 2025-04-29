@@ -99,6 +99,8 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                         f"Exception encountered in queue thread: {traceback.format_exc()}"
                     )
             except Exception:
-                dbos.logger.warning(
-                    f"Exception encountered in queue thread: {traceback.format_exc()}"
-                )
+                if not stop_event.is_set():
+                    # Only print the error if the thread is not stopping
+                    dbos.logger.warning(
+                        f"Exception encountered in queue thread: {traceback.format_exc()}"
+                    )

@@ -1,4 +1,4 @@
-import json
+import importlib
 import math
 import os
 import runpy
@@ -6,16 +6,16 @@ import subprocess
 import sys
 import time
 import uuid
-from typing import Optional, TypedDict, cast
+from typing import Optional, TypedDict
 
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, ConfigFile, DBOSClient, EnqueueOptions, Queue, SetWorkflowID
+from dbos import DBOS, ConfigFile, DBOSClient, EnqueueOptions, SetWorkflowID
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
-from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
+from tests import client_collateral
 from tests.client_collateral import event_test, retrieve_test, send_test
 
 
@@ -47,17 +47,30 @@ def test_client_enqueue_and_get_result(dbos: DBOS, client: DBOSClient) -> None:
     result = handle.get_result()
     assert result == '42-test-{"first": "John", "last": "Doe", "age": 30}'
 
+    list_results = client.list_workflows()
+    assert len(list_results) == 1
+    assert list_results[0].workflow_id == wfid
+    assert list_results[0].status == "SUCCESS"
+
 
 def test_enqueue_with_timeout(dbos: DBOS, client: DBOSClient) -> None:
     run_client_collateral()
 
+    wfid = str(uuid.uuid4())
     options: EnqueueOptions = {
         "queue_name": "test_queue",
         "workflow_name": "blocked_workflow",
-        "workflow_timeout": 0.1,
+        "workflow_timeout": 1,
+        "workflow_id": wfid,
     }
 
     handle: WorkflowHandle[str] = client.enqueue(options)
+
+    list_results = client.list_queued_workflows()
+    assert len(list_results) == 1
+    assert list_results[0].workflow_id == wfid
+    assert list_results[0].status in ["PENDING", "ENQUEUED"]
+
     with pytest.raises(Exception) as exc_info:
         handle.get_result()
     assert "was cancelled" in str(exc_info.value)
@@ -428,12 +441,17 @@ def test_client_fork(dbos: DBOS, client: DBOSClient) -> None:
     assert handle.get_result() == input * 2
     assert len(client.list_workflow_steps(handle.workflow_id)) == 2
 
-    forked_handle: WorkflowHandle[int] = client.fork_workflow(handle.workflow_id, 1)
-    assert forked_handle.workflow_id != handle.workflow_id
+    fork_id = str(uuid.uuid4())
+    with SetWorkflowID(fork_id):
+        forked_handle: WorkflowHandle[int] = client.fork_workflow(handle.workflow_id, 1)
+    assert forked_handle.workflow_id == fork_id
     assert forked_handle.get_result() == input * 2
 
     forked_handle = client.fork_workflow(handle.workflow_id, 2)
-    assert forked_handle.workflow_id != handle.workflow_id
+    assert (
+        forked_handle.workflow_id != handle.workflow_id
+        and forked_handle.workflow_id != fork_id
+    )
     assert forked_handle.get_result() == input * 2
 
     assert len(client.list_workflows()) == 3
@@ -464,3 +482,72 @@ async def test_client_fork_async(dbos: DBOS, client: DBOSClient) -> None:
     assert await forked_handle.get_result() == input * 2
 
     assert len(await client.list_workflows_async()) == 3
+
+
+def test_enqueue_with_deduplication(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    wfid = str(uuid.uuid4())
+    dedup_id = f"dedup-{wfid}"
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "retrieve_test",
+        "workflow_id": wfid,
+        "deduplication_id": dedup_id,
+    }
+
+    handle: WorkflowHandle[str] = client.enqueue(options, "abc")
+    # Enqueue itself again should not raise an error
+    handle2: WorkflowHandle[str] = client.enqueue(options, "def")
+
+    # Enqueue with the same deduplication ID but different workflow ID should raise an error
+    wfid2 = str(uuid.uuid4())
+    options["workflow_id"] = wfid2
+    with pytest.raises(Exception) as exc_info:
+        client.enqueue(options, "def")
+    assert (
+        f"Workflow {wfid2} was deduplicated due to an existing workflow in queue test_queue with deduplication ID {dedup_id}."
+        in str(exc_info.value)
+    )
+
+    list_results = client.list_queued_workflows()
+    assert len(list_results) == 1
+    assert list_results[0].workflow_id == wfid
+    assert list_results[0].status in ["PENDING", "ENQUEUED"]
+
+    assert handle.get_result() == "abc"
+    assert handle2.get_result() == "abc"
+
+
+def test_enqueue_with_priority(dbos: DBOS, client: DBOSClient) -> None:
+    importlib.reload(client_collateral)
+    from tests.client_collateral import inorder_results
+
+    options: EnqueueOptions = {
+        "queue_name": "inorder_queue",
+        "workflow_name": "retrieve_test",
+        "priority": -1,
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        client.enqueue(options, "abc")
+    assert "Invalid priority" in str(exc_info.value)
+
+    # Without priority should work
+    del options["priority"]
+    handle: WorkflowHandle[str] = client.enqueue(options, "abc")
+
+    # Enqueue with a lower priority
+    options["priority"] = 5
+    handle2: WorkflowHandle[str] = client.enqueue(options, "def")
+
+    # Enqueue with a higher priority
+    options["priority"] = 1
+    handle3: WorkflowHandle[str] = client.enqueue(options, "ghi")
+
+    assert handle.get_result() == "abc"
+    assert handle3.get_result() == "ghi"
+    assert handle2.get_result() == "def"
+
+    # Should be in the order of priority
+    assert inorder_results == ["abc", "ghi", "def"]

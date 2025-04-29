@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 from dbos._utils import GlobalParams
 
 from ._logger import dbos_logger
-from ._request import Request
 from ._tracer import dbos_tracer
 
 
@@ -30,6 +29,9 @@ class OperationType(Enum):
 
 
 OperationTypes = Literal["handler", "workflow", "transaction", "step", "procedure"]
+
+MaxPriority = 2**31 - 1  # 2,147,483,647
+MinPriority = 1
 
 
 # Keys must be the same as in TypeScript Transact
@@ -73,8 +75,6 @@ class DBOSContext:
 
         self.logger = dbos_logger
 
-        self.request: Optional["Request"] = None
-
         self.id_assigned_for_next_workflow: str = ""
         self.is_within_set_workflow_id_block: bool = False
 
@@ -98,6 +98,11 @@ class DBOSContext:
         # A propagated workflow deadline.
         self.workflow_deadline_epoch_ms: Optional[int] = None
 
+        # A user-specified deduplication ID for the enqueuing workflow.
+        self.deduplication_id: Optional[str] = None
+        # A user-specified priority for the enqueuing workflow.
+        self.priority: Optional[int] = None
+
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()
         rv.logger = self.logger
@@ -112,7 +117,6 @@ class DBOSContext:
             if self.authenticated_roles is not None
             else None
         )
-        rv.request = self.request
         rv.assumed_role = self.assumed_role
         return rv
 
@@ -413,12 +417,66 @@ class SetWorkflowTimeout:
         return False  # Did not handle
 
 
+class SetEnqueueOptions:
+    """
+    Set the workflow enqueue options for the enclosed enqueue operation.
+
+    Usage:
+        ```
+        with SetEnqueueOptions(deduplication_id=<deduplication id>, priority=<priority>):
+            queue.enqueue(...)
+        ```
+    """
+
+    def __init__(
+        self, *, deduplication_id: Optional[str] = None, priority: Optional[int] = None
+    ) -> None:
+        self.created_ctx = False
+        self.deduplication_id: Optional[str] = deduplication_id
+        self.saved_deduplication_id: Optional[str] = None
+        if priority is not None and (priority < MinPriority or priority > MaxPriority):
+            raise Exception(
+                f"Invalid priority {priority}. Priority must be between {MinPriority}~{MaxPriority}."
+            )
+        self.priority: Optional[int] = priority
+        self.saved_priority: Optional[int] = None
+
+    def __enter__(self) -> SetEnqueueOptions:
+        # Code to create a basic context
+        ctx = get_local_dbos_context()
+        if ctx is None:
+            self.created_ctx = True
+            _set_local_dbos_context(DBOSContext())
+        ctx = assert_current_dbos_context()
+        self.saved_deduplication_id = ctx.deduplication_id
+        ctx.deduplication_id = self.deduplication_id
+        self.saved_priority = ctx.priority
+        ctx.priority = self.priority
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        curr_ctx = assert_current_dbos_context()
+        curr_ctx.deduplication_id = self.saved_deduplication_id
+        curr_ctx.priority = self.saved_priority
+        # Code to clean up the basic context if we created it
+        if self.created_ctx:
+            _clear_local_dbos_context()
+        return False
+
+
 class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
     def __init__(self, attributes: TracedAttributes) -> None:
         self.created_ctx = False
         self.attributes = attributes
         self.is_temp_workflow = attributes["name"] == "temp_wf"
         self.saved_workflow_timeout: Optional[int] = None
+        self.saved_deduplication_id: Optional[str] = None
+        self.saved_priority: Optional[int] = None
 
     def __enter__(self) -> DBOSContext:
         # Code to create a basic context
@@ -432,6 +490,12 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         # workflow's children (instead we propagate the deadline)
         self.saved_workflow_timeout = ctx.workflow_timeout_ms
         ctx.workflow_timeout_ms = None
+        # Unset the deduplication_id and priority context var so it is not applied to this
+        # workflow's children
+        self.saved_deduplication_id = ctx.deduplication_id
+        ctx.deduplication_id = None
+        self.saved_priority = ctx.priority
+        ctx.priority = None
         ctx.start_workflow(
             None, self.attributes, self.is_temp_workflow
         )  # Will get from the context's next workflow ID
@@ -450,6 +514,9 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         ctx.workflow_timeout_ms = self.saved_workflow_timeout
         # Clear any propagating timeout
         ctx.workflow_deadline_epoch_ms = None
+        # Restore the saved deduplication ID and priority
+        ctx.priority = self.saved_priority
+        ctx.deduplication_id = self.saved_deduplication_id
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()

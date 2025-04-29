@@ -35,6 +35,7 @@ class ApplicationDatabase:
         database_url: str,
         *,
         pool_size: Optional[int] = 20,
+        engine_kwargs: Optional[Dict[str, Any]] = None,
         debug_mode: bool = False,
     ):
         app_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
@@ -53,11 +54,22 @@ class ApplicationDatabase:
                     conn.execute(sa.text(f"CREATE DATABASE {app_db_url.database}"))
             postgres_db_engine.dispose()
 
+        if engine_kwargs is None:
+            engine_kwargs = {}
+
+        # Respect user-provided values. Otherwise, set defaults.
+        # FIXME move, post-merge, in _dbos_config.py
+        if "pool_size" not in engine_kwargs:
+            engine_kwargs["pool_size"] = pool_size
+        if "max_overflow" not in engine_kwargs:
+            engine_kwargs["max_overflow"] = 0
+        if "pool_timeout" not in engine_kwargs:
+            engine_kwargs["pool_timeout"] = 30
+
+
         self.engine = sa.create_engine(
             app_db_url,
-            pool_size=pool_size,
-            max_overflow=0,
-            pool_timeout=30,
+            **engine_kwargs,
         )
         self.sessionmaker = sessionmaker(bind=self.engine)
         self.debug_mode = debug_mode

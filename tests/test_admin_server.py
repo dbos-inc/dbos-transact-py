@@ -3,6 +3,7 @@ import socket
 import threading
 import time
 import uuid
+from datetime import datetime
 
 import pytest
 import requests
@@ -65,8 +66,59 @@ def test_admin_endpoints(dbos: DBOS) -> None:
     response = requests.get("http://localhost:3001/deactivate", timeout=5)
     assert response.status_code == 200
 
-    for event in dbos.stop_events:
-        assert event.is_set(), "Event is not set!"
+    for event in dbos.poller_stop_events:
+        assert event.is_set()
+
+
+def test_deactivate(dbos: DBOS, config: ConfigFile) -> None:
+    wf_counter: int = 0
+
+    queue = Queue("example-queue")
+
+    @DBOS.scheduled("* * * * * *")
+    @DBOS.workflow()
+    def test_workflow(scheduled: datetime, actual: datetime) -> None:
+        nonlocal wf_counter
+        wf_counter += 1
+
+    @DBOS.workflow()
+    def regular_workflow() -> int:
+        return 5
+
+    # Let the scheduled workflow run
+    time.sleep(2)
+    val = wf_counter
+    assert val > 0
+    # Deactivate--scheduled workflow should stop
+    response = requests.get("http://localhost:3001/deactivate", timeout=5)
+    assert response.status_code == 200
+    for event in dbos.poller_stop_events:
+        assert event.is_set()
+    # Verify the scheduled workflow does not run anymore
+    time.sleep(3)
+    assert wf_counter <= val + 1
+    # Enqueue a workflow, verify it still runs
+    assert queue.enqueue(regular_workflow).get_result() == 5
+
+    # Test deferred event receivers
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.scheduled("* * * * * *")
+    @DBOS.workflow()
+    def deferred_workflow(scheduled: datetime, actual: datetime) -> None:
+        nonlocal wf_counter
+        wf_counter += 1
+
+    DBOS.launch()
+    assert len(dbos.poller_stop_events) > 0
+    for event in dbos.poller_stop_events:
+        assert not event.is_set()
+    # Deactivate--scheduled workflow should stop
+    response = requests.get("http://localhost:3001/deactivate", timeout=5)
+    assert response.status_code == 200
+    for event in dbos.poller_stop_events:
+        assert event.is_set()
 
 
 def test_admin_recovery(config: ConfigFile) -> None:
@@ -260,7 +312,7 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert len(output) == 1
     assert output[0] != None
     wfid = output[0].workflow_id
-    info = _workflow_commands.get_workflow(sys_db, wfid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfid)
     assert info is not None
     assert info.status == "PENDING"
 
@@ -272,7 +324,7 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
     event.set()
     with pytest.raises(DBOSWorkflowCancelledError):
         handle.get_result()
-    info = _workflow_commands.get_workflow(sys_db, wfid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfid)
     assert info is not None
     assert info.status == "CANCELLED"
 
@@ -294,7 +346,7 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert response.status_code == 204
     # Wait for the workflow to finish
     DBOS.retrieve_workflow(wfid).get_result()
-    info = _workflow_commands.get_workflow(sys_db, wfid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfid)
     assert info is not None
     assert info.status == "SUCCESS"
     assert info.executor_id == GlobalParams.executor_id
@@ -319,7 +371,7 @@ def test_admin_workflow_restart(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     wfUuid = output[0].workflow_id
 
-    info = _workflow_commands.get_workflow(sys_db, wfUuid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfUuid)
     assert info is not None, "Expected output to be not None"
 
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
@@ -339,7 +391,7 @@ def test_admin_workflow_restart(dbos: DBOS, sys_db: SystemDatabase) -> None:
     else:
         new_wfUuid = output[0].workflow_id
 
-    info = _workflow_commands.get_workflow(sys_db, new_wfUuid, True)
+    info = _workflow_commands.get_workflow(sys_db, new_wfUuid)
     if info is not None:
         assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
     else:

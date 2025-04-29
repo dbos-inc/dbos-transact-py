@@ -7,15 +7,9 @@ from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import DBOS
-from ._context import (
-    EnterDBOSHandler,
-    OperationType,
-    SetWorkflowID,
-    TracedAttributes,
-    assert_current_dbos_context,
-)
+from ._context import EnterDBOSHandler, OperationType, SetWorkflowID, TracedAttributes
 from ._error import DBOSException
-from ._request import Address, Request, request_id_header
+from ._utils import request_id_header
 
 
 def _get_or_generate_request_id(request: FastAPIRequest) -> str:
@@ -24,19 +18,6 @@ def _get_or_generate_request_id(request: FastAPIRequest) -> str:
         return request_id
     else:
         return str(uuid.uuid4())
-
-
-def _make_request(request: FastAPIRequest) -> Request:
-    return Request(
-        headers=request.headers,
-        path_params=request.path_params,
-        query_params=request.query_params,
-        url=str(request.url),
-        base_url=str(request.base_url),
-        client=Address(*request.client) if request.client is not None else None,
-        cookies=request.cookies,
-        method=request.method,
-    )
 
 
 async def _dbos_error_handler(request: FastAPIRequest, gexc: Exception) -> JSONResponse:
@@ -96,8 +77,6 @@ def setup_fastapi_middleware(app: FastAPI, dbos: DBOS) -> None:
             "operationType": OperationType.HANDLER.value,
         }
         with EnterDBOSHandler(attributes):
-            ctx = assert_current_dbos_context()
-            ctx.request = _make_request(request)
             workflow_id = request.headers.get("dbos-idempotency-key")
             if workflow_id is not None:
                 # Set the workflow ID for the handler

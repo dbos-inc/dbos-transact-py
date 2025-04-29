@@ -202,7 +202,8 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
                 time.sleep(1)
 
     # Stop the scheduled workflow
-    dbos.stop_events[0].set()
+    for evt in dbos.poller_stop_events:
+        evt.set()
 
     dbos._sys_db.update_workflow_status(
         {
@@ -216,7 +217,6 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
             "executor_id": None,
             "app_id": None,
             "app_version": None,
-            "request": None,
             "recovery_attempts": None,
             "authenticated_user": None,
             "authenticated_roles": None,

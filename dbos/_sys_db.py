@@ -37,6 +37,7 @@ from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
     DBOSNonExistentWorkflowError,
+    DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
@@ -105,8 +106,6 @@ class WorkflowStatus:
     app_id: Optional[str]
     # The number of times this workflow's execution has been attempted
     recovery_attempts: Optional[int]
-    # The HTTP request that triggered the workflow, if known
-    request: Optional[str]
 
 
 class WorkflowStatusInternal(TypedDict):
@@ -119,7 +118,6 @@ class WorkflowStatusInternal(TypedDict):
     assumed_role: Optional[str]
     authenticated_roles: Optional[str]  # JSON list of roles
     output: Optional[str]  # JSON (jsonpickle)
-    request: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
     created_at: Optional[int]  # Unix epoch timestamp in ms
     updated_at: Optional[int]  # Unix epoch timestamp in ms
@@ -133,6 +131,13 @@ class WorkflowStatusInternal(TypedDict):
     # The deadline of a workflow, computed by adding its timeout to its start time.
     # Deadlines propagate to children. When the deadline is reached, the workflow is cancelled.
     workflow_deadline_epoch_ms: Optional[int]
+
+
+class EnqueueOptionsInternal(TypedDict):
+    deduplication_id: Optional[str]  # Unique ID for deduplication on a queue
+    priority: Optional[
+        int
+    ]  # Priority of the workflow on the queue, starting from 1 ~ 2,147,483,647. Default 0 (highest priority).
 
 
 class RecordedResult(TypedDict):
@@ -227,6 +232,7 @@ class SystemDatabase:
         database_url: str,
         *,
         pool_size: Optional[int] = 2,
+        engine_kwargs: Optional[Dict[str, Any]] = None,
         sys_db_name: Optional[str] = None,
         debug_mode: bool = False,
     ):
@@ -246,15 +252,26 @@ class SystemDatabase:
                     sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
                     parameters={"db_name": sysdb_name},
                 ).scalar():
+                    dbos_logger.info(f"Creating system database {sysdb_name}")
                     conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
             engine.dispose()
 
+        if engine_kwargs is None:
+            engine_kwargs = {}
+
+        # Respect user-provided values. Otherwise, set defaults.
+        if "pool_size" not in engine_kwargs:
+            engine_kwargs["pool_size"] = pool_size
+        if "max_overflow" not in engine_kwargs:
+            engine_kwargs["max_overflow"] = 0
+        if "pool_timeout" not in engine_kwargs:
+            engine_kwargs["pool_timeout"] = 30
+        if "connect_args" not in engine_kwargs:
+            engine_kwargs["connect_args"] = {"connect_timeout": 10}
+
         self.engine = sa.create_engine(
             system_db_url,
-            pool_size=pool_size,
-            max_overflow=0,
-            pool_timeout=30,
-            connect_args={"connect_timeout": 10},
+            **engine_kwargs,
         )
 
         # Run a schema migration for the system database
@@ -334,7 +351,6 @@ class SystemDatabase:
                 executor_id=status["executor_id"],
                 application_version=status["app_version"],
                 application_id=status["app_id"],
-                request=status["request"],
                 authenticated_user=status["authenticated_user"],
                 authenticated_roles=status["authenticated_roles"],
                 assumed_role=status["assumed_role"],
@@ -360,7 +376,6 @@ class SystemDatabase:
         cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.workflow_deadline_epoch_ms, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
 
         results = conn.execute(cmd)
-
         row = results.fetchone()
         if row is not None:
             # Check the started workflow matches the expected name, class_name, config_name, and queue_name
@@ -443,7 +458,6 @@ class SystemDatabase:
                 executor_id=status["executor_id"],
                 application_version=status["app_version"],
                 application_id=status["app_id"],
-                request=status["request"],
                 authenticated_user=status["authenticated_user"],
                 authenticated_roles=status["authenticated_roles"],
                 assumed_role=status["assumed_role"],
@@ -510,15 +524,17 @@ class SystemDatabase:
             # Execute with snapshot isolation in case of concurrent calls on the same workflow
             c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
             # Check the status of the workflow. If it is complete, do nothing.
-            row = c.execute(
+            status_row = c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.status,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
             ).fetchone()
+            if status_row is None:
+                return
+            status = status_row[0]
             if (
-                row is None
-                or row[0] == WorkflowStatusString.SUCCESS.value
-                or row[0] == WorkflowStatusString.ERROR.value
+                status == WorkflowStatusString.SUCCESS.value
+                or status == WorkflowStatusString.ERROR.value
             ):
                 return
             # Remove the workflow from the queues table so resume can safely be called on an ENQUEUED workflow
@@ -558,7 +574,12 @@ class SystemDatabase:
             return max_function_id
 
     def fork_workflow(
-        self, original_workflow_id: str, forked_workflow_id: str, start_step: int = 1
+        self,
+        original_workflow_id: str,
+        forked_workflow_id: str,
+        start_step: int,
+        *,
+        application_version: Optional[str],
     ) -> str:
 
         status = self.get_workflow_status(original_workflow_id)
@@ -578,9 +599,12 @@ class SystemDatabase:
                     name=status["name"],
                     class_name=status["class_name"],
                     config_name=status["config_name"],
-                    application_version=status["app_version"],
+                    application_version=(
+                        application_version
+                        if application_version is not None
+                        else status["app_version"]
+                    ),
                     application_id=status["app_id"],
-                    request=status["request"],
                     authenticated_user=status["authenticated_user"],
                     authenticated_roles=status["authenticated_roles"],
                     assumed_role=status["assumed_role"],
@@ -642,7 +666,6 @@ class SystemDatabase:
                 sa.select(
                     SystemSchema.workflow_status.c.status,
                     SystemSchema.workflow_status.c.name,
-                    SystemSchema.workflow_status.c.request,
                     SystemSchema.workflow_status.c.recovery_attempts,
                     SystemSchema.workflow_status.c.config_name,
                     SystemSchema.workflow_status.c.class_name,
@@ -667,21 +690,20 @@ class SystemDatabase:
                 "error": None,
                 "status": row[0],
                 "name": row[1],
-                "request": row[2],
-                "recovery_attempts": row[3],
-                "config_name": row[4],
-                "class_name": row[5],
-                "authenticated_user": row[6],
-                "authenticated_roles": row[7],
-                "assumed_role": row[8],
-                "queue_name": row[9],
-                "executor_id": row[10],
-                "created_at": row[11],
-                "updated_at": row[12],
-                "app_version": row[13],
-                "app_id": row[14],
-                "workflow_deadline_epoch_ms": row[15],
-                "workflow_timeout_ms": row[16],
+                "recovery_attempts": row[2],
+                "config_name": row[3],
+                "class_name": row[4],
+                "authenticated_user": row[5],
+                "authenticated_roles": row[6],
+                "assumed_role": row[7],
+                "queue_name": row[8],
+                "executor_id": row[9],
+                "created_at": row[10],
+                "updated_at": row[11],
+                "app_version": row[12],
+                "app_id": row[13],
+                "workflow_deadline_epoch_ms": row[14],
+                "workflow_timeout_ms": row[15],
             }
             return status
 
@@ -757,9 +779,7 @@ class SystemDatabase:
             )
             return inputs
 
-    def get_workflows(
-        self, input: GetWorkflowsInput, get_request: bool = False
-    ) -> List[WorkflowStatus]:
+    def get_workflows(self, input: GetWorkflowsInput) -> List[WorkflowStatus]:
         """
         Retrieve a list of workflows result and inputs based on the input criteria. The result is a list of external-facing workflow status objects.
         """
@@ -767,7 +787,6 @@ class SystemDatabase:
             SystemSchema.workflow_status.c.workflow_uuid,
             SystemSchema.workflow_status.c.status,
             SystemSchema.workflow_status.c.name,
-            SystemSchema.workflow_status.c.request,
             SystemSchema.workflow_status.c.recovery_attempts,
             SystemSchema.workflow_status.c.config_name,
             SystemSchema.workflow_status.c.class_name,
@@ -840,35 +859,36 @@ class SystemDatabase:
             info.workflow_id = row[0]
             info.status = row[1]
             info.name = row[2]
-            info.request = row[3] if get_request else None
-            info.recovery_attempts = row[4]
-            info.config_name = row[5]
-            info.class_name = row[6]
-            info.authenticated_user = row[7]
+            info.recovery_attempts = row[3]
+            info.config_name = row[4]
+            info.class_name = row[5]
+            info.authenticated_user = row[6]
             info.authenticated_roles = (
-                json.loads(row[8]) if row[8] is not None else None
+                json.loads(row[7]) if row[7] is not None else None
             )
-            info.assumed_role = row[9]
-            info.queue_name = row[10]
-            info.executor_id = row[11]
-            info.created_at = row[12]
-            info.updated_at = row[13]
-            info.app_version = row[14]
-            info.app_id = row[15]
+            info.assumed_role = row[8]
+            info.queue_name = row[9]
+            info.executor_id = row[10]
+            info.created_at = row[11]
+            info.updated_at = row[12]
+            info.app_version = row[13]
+            info.app_id = row[14]
 
-            inputs = _serialization.deserialize_args(row[16])
-            if inputs is not None:
-                info.input = inputs
-            if info.status == WorkflowStatusString.SUCCESS.value:
-                info.output = _serialization.deserialize(row[17])
-            elif info.status == WorkflowStatusString.ERROR.value:
-                info.error = _serialization.deserialize_exception(row[18])
+            inputs, output, exception = _serialization.safe_deserialize(
+                info.workflow_id,
+                serialized_input=row[15],
+                serialized_output=row[16],
+                serialized_exception=row[17],
+            )
+            info.input = inputs
+            info.output = output
+            info.error = exception
 
             infos.append(info)
         return infos
 
     def get_queued_workflows(
-        self, input: GetQueuedWorkflowsInput, get_request: bool = False
+        self, input: GetQueuedWorkflowsInput
     ) -> List[WorkflowStatus]:
         """
         Retrieve a list of queued workflows result and inputs based on the input criteria. The result is a list of external-facing workflow status objects.
@@ -877,7 +897,6 @@ class SystemDatabase:
             SystemSchema.workflow_status.c.workflow_uuid,
             SystemSchema.workflow_status.c.status,
             SystemSchema.workflow_status.c.name,
-            SystemSchema.workflow_status.c.request,
             SystemSchema.workflow_status.c.recovery_attempts,
             SystemSchema.workflow_status.c.config_name,
             SystemSchema.workflow_status.c.class_name,
@@ -946,29 +965,30 @@ class SystemDatabase:
             info.workflow_id = row[0]
             info.status = row[1]
             info.name = row[2]
-            info.request = row[3] if get_request else None
-            info.recovery_attempts = row[4]
-            info.config_name = row[5]
-            info.class_name = row[6]
-            info.authenticated_user = row[7]
+            info.recovery_attempts = row[3]
+            info.config_name = row[4]
+            info.class_name = row[5]
+            info.authenticated_user = row[6]
             info.authenticated_roles = (
-                json.loads(row[8]) if row[8] is not None else None
+                json.loads(row[7]) if row[7] is not None else None
             )
-            info.assumed_role = row[9]
-            info.queue_name = row[10]
-            info.executor_id = row[11]
-            info.created_at = row[12]
-            info.updated_at = row[13]
-            info.app_version = row[14]
-            info.app_id = row[15]
+            info.assumed_role = row[8]
+            info.queue_name = row[9]
+            info.executor_id = row[10]
+            info.created_at = row[11]
+            info.updated_at = row[12]
+            info.app_version = row[13]
+            info.app_id = row[14]
 
-            inputs = _serialization.deserialize_args(row[16])
-            if inputs is not None:
-                info.input = inputs
-            if info.status == WorkflowStatusString.SUCCESS.value:
-                info.output = _serialization.deserialize(row[17])
-            elif info.status == WorkflowStatusString.ERROR.value:
-                info.error = _serialization.deserialize_exception(row[18])
+            inputs, output, exception = _serialization.safe_deserialize(
+                info.workflow_id,
+                serialized_input=row[15],
+                serialized_output=row[16],
+                serialized_exception=row[17],
+            )
+            info.input = inputs
+            info.output = output
+            info.error = exception
 
             infos.append(info)
 
@@ -1568,17 +1588,50 @@ class SystemDatabase:
             )
         return value
 
-    def enqueue(self, workflow_id: str, queue_name: str, conn: sa.Connection) -> None:
+    def enqueue(
+        self,
+        workflow_id: str,
+        queue_name: str,
+        conn: sa.Connection,
+        *,
+        enqueue_options: Optional[EnqueueOptionsInternal],
+    ) -> None:
         if self._debug_mode:
             raise Exception("called enqueue in debug mode")
-        conn.execute(
-            pg.insert(SystemSchema.workflow_queue)
-            .values(
-                workflow_uuid=workflow_id,
-                queue_name=queue_name,
+        try:
+            deduplication_id = (
+                enqueue_options["deduplication_id"]
+                if enqueue_options is not None
+                else None
             )
-            .on_conflict_do_nothing()
-        )
+            priority = (
+                enqueue_options["priority"] if enqueue_options is not None else None
+            )
+            # Default to 0 (highest priority) if not provided
+            if priority is None:
+                priority = 0
+            query = (
+                pg.insert(SystemSchema.workflow_queue)
+                .values(
+                    workflow_uuid=workflow_id,
+                    queue_name=queue_name,
+                    deduplication_id=deduplication_id,
+                    priority=priority,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=SystemSchema.workflow_queue.primary_key.columns
+                )
+            )  # Ignore primary key constraint violation
+            conn.execute(query)
+        except DBAPIError as dbapi_error:
+            # Unique constraint violation for the deduplication ID
+            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
+                assert (
+                    deduplication_id is not None
+                ), f"deduplication_id should not be None. Workflow ID: {workflow_id}, Queue name: {queue_name}."
+                raise DBOSQueueDeduplicatedError(
+                    workflow_id, queue_name, deduplication_id
+                )
 
     def start_queued_workflows(
         self, queue: "Queue", executor_id: str, app_version: str
@@ -1672,7 +1725,10 @@ class SystemDatabase:
                 .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
                 .where(SystemSchema.workflow_queue.c.started_at_epoch_ms == None)
                 .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms == None)
-                .order_by(SystemSchema.workflow_queue.c.created_at_epoch_ms.asc())
+                .order_by(
+                    SystemSchema.workflow_queue.c.priority.asc(),
+                    SystemSchema.workflow_queue.c.created_at_epoch_ms.asc(),
+                )
                 .with_for_update(nowait=True)  # Error out early
             )
             # Apply limit only if max_tasks is finite
@@ -1850,6 +1906,7 @@ class SystemDatabase:
         inputs: str,
         *,
         max_recovery_attempts: Optional[int],
+        enqueue_options: Optional[EnqueueOptionsInternal],
     ) -> tuple[WorkflowStatuses, Optional[int]]:
         """
         Synchronously record the status and inputs for workflows in a single transaction
@@ -1865,19 +1922,16 @@ class SystemDatabase:
                 status["queue_name"] is not None
                 and wf_status == WorkflowStatusString.ENQUEUED.value
             ):
-                self.enqueue(status["workflow_uuid"], status["queue_name"], conn)
+                self.enqueue(
+                    status["workflow_uuid"],
+                    status["queue_name"],
+                    conn,
+                    enqueue_options=enqueue_options,
+                )
         return wf_status, workflow_deadline_epoch_ms
 
 
-def reset_system_database(config: ConfigFile) -> None:
-    assert config["database_url"] is not None
-    db_url = sa.make_url(config["database_url"]).set(drivername="postgresql+psycopg")
-    assert db_url.database is not None
-    sysdb_name = (
-        config["database"]["sys_db_name"]
-        if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]
-        else db_url.database + SystemSchema.sysdb_suffix
-    )
+def reset_system_database(postgres_db_url: sa.URL, sysdb_name: str) -> None:
     try:
         # Connect to postgres default database
         engine = sa.create_engine(db_url.set(database="postgres"))

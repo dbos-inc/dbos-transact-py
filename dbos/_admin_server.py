@@ -45,9 +45,10 @@ class AdminServer:
 
 
 class AdminRequestHandler(BaseHTTPRequestHandler):
+    is_deactivated = False
+
     def __init__(self, dbos: DBOS, *args: Any, **kwargs: Any) -> None:
         self.dbos = dbos
-        self.is_deactivated = False
         super().__init__(*args, **kwargs)
 
     def _end_headers(self) -> None:
@@ -63,13 +64,13 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self._end_headers()
             self.wfile.write("healthy".encode("utf-8"))
         elif self.path == _deactivate_path:
-            if not self.is_deactivated:
+            if not AdminRequestHandler.is_deactivated:
                 dbos_logger.info(
-                    f"Deactivating DBOS executor {GlobalParams.executor_id} with version {GlobalParams.app_version}. This executor will complete existing workflows but will not start new workflows."
+                    f"Deactivating DBOS executor {GlobalParams.executor_id} with version {GlobalParams.app_version}. This executor will complete existing workflows but will not create new workflows."
                 )
-                self.is_deactivated = True
-            # Stop all scheduled workflows, queues, and kafka loops
-            for event in self.dbos.stop_events:
+                AdminRequestHandler.is_deactivated = True
+            # Stop all event receivers (scheduler and Kafka threads)
+            for event in self.dbos.poller_stop_events:
                 event.set()
             self.send_response(200)
             self._end_headers()
@@ -209,7 +210,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         self._end_headers()
 
     def _handle_steps(self, workflow_id: str) -> None:
-        steps = self.dbos._sys_db.get_workflow_steps(workflow_id)
+        steps = self.dbos.list_workflow_steps(workflow_id)
 
         updated_steps = [
             {

@@ -71,6 +71,7 @@ from ._registrations import (
 from ._roles import check_required_roles
 from ._serialization import WorkflowInputs
 from ._sys_db import (
+    EnqueueOptionsInternal,
     GetEventWorkflowContext,
     OperationResultInternal,
     WorkflowStatus,
@@ -234,6 +235,7 @@ def _init_workflow(
     workflow_timeout_ms: Optional[int],
     workflow_deadline_epoch_ms: Optional[int],
     max_recovery_attempts: Optional[int],
+    enqueue_options: Optional[EnqueueOptionsInternal],
 ) -> WorkflowStatusInternal:
     wfid = (
         ctx.workflow_id
@@ -264,9 +266,6 @@ def _init_workflow(
         "app_id": ctx.app_id,
         "app_version": GlobalParams.app_version,
         "executor_id": ctx.executor_id,
-        "request": (
-            _serialization.serialize(ctx.request) if ctx.request is not None else None
-        ),
         "recovery_attempts": None,
         "authenticated_user": ctx.authenticated_user,
         "authenticated_roles": (
@@ -289,11 +288,12 @@ def _init_workflow(
         status,
         _serialization.serialize_args(inputs),
         max_recovery_attempts=max_recovery_attempts,
+        enqueue_options=enqueue_options,
     )
 
     if workflow_deadline_epoch_ms is not None:
         evt = threading.Event()
-        dbos.stop_events.append(evt)
+        dbos.background_thread_stop_events.append(evt)
 
         def timeout_func() -> None:
             try:
@@ -440,10 +440,6 @@ def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[An
         )
     with DBOSContextEnsure():
         ctx = assert_current_dbos_context()
-        request = status["request"]
-        ctx.request = (
-            _serialization.deserialize(request) if request is not None else None
-        )
         # If this function belongs to a configured class, add that class instance as its first argument
         if status["config_name"] is not None:
             config_name = status["config_name"]
@@ -539,6 +535,10 @@ def start_workflow(
     workflow_timeout_ms = (
         local_ctx.workflow_timeout_ms if local_ctx is not None else None
     )
+    enqueue_options = EnqueueOptionsInternal(
+        deduplication_id=local_ctx.deduplication_id if local_ctx is not None else None,
+        priority=local_ctx.priority if local_ctx is not None else None,
+    )
     new_wf_id, new_wf_ctx = _get_new_wf()
 
     ctx = new_wf_ctx
@@ -561,6 +561,7 @@ def start_workflow(
         workflow_timeout_ms=workflow_timeout_ms,
         workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
         max_recovery_attempts=fi.max_recovery_attempts,
+        enqueue_options=enqueue_options,
     )
 
     wf_status = status["status"]
@@ -626,6 +627,10 @@ async def start_workflow_async(
     workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
         local_ctx, queue_name
     )
+    enqueue_options = EnqueueOptionsInternal(
+        deduplication_id=local_ctx.deduplication_id if local_ctx is not None else None,
+        priority=local_ctx.priority if local_ctx is not None else None,
+    )
     new_wf_id, new_wf_ctx = _get_new_wf()
 
     ctx = new_wf_ctx
@@ -651,6 +656,7 @@ async def start_workflow_async(
         workflow_timeout_ms=workflow_timeout_ms,
         workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
         max_recovery_attempts=fi.max_recovery_attempts,
+        enqueue_options=enqueue_options,
     )
 
     if ctx.has_parent():
@@ -727,6 +733,7 @@ def workflow_wrapper(
         workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
             ctx, queue=None
         )
+
         enterWorkflowCtxMgr = (
             EnterDBOSChildWorkflow if ctx and ctx.is_workflow() else EnterDBOSWorkflow
         )
@@ -768,6 +775,7 @@ def workflow_wrapper(
                 workflow_timeout_ms=workflow_timeout_ms,
                 workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
                 max_recovery_attempts=max_recovery_attempts,
+                enqueue_options=None,
             )
 
             # TODO: maybe modify the parameters if they've been changed by `_init_workflow`

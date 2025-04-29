@@ -41,7 +41,6 @@ def test_list_workflow(dbos: DBOS) -> None:
     assert output.authenticated_user == None
     assert output.assumed_role == None
     assert output.authenticated_roles == None
-    assert output.request == None
     assert output.created_at is not None and output.created_at > 0
     assert output.updated_at is not None and output.updated_at > 0
     assert output.queue_name == None
@@ -181,7 +180,7 @@ def test_get_workflow(dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase) ->
 
     wfUuid = output[0].workflow_id
 
-    info = _workflow_commands.get_workflow(sys_db, wfUuid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfUuid)
     assert info is not None, "Expected output to be not None"
 
     if info is not None:

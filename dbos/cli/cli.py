@@ -5,10 +5,10 @@ import subprocess
 import time
 import typing
 from os import path
-from typing import Any
+from typing import Any, Optional
+from urllib.parse import quote
 
 import jsonpickle  # type: ignore
-import requests
 import sqlalchemy as sa
 import typer
 from rich import print
@@ -19,19 +19,38 @@ from dbos._debug import debug_workflow, parse_start_command
 
 from .. import load_config
 from .._app_db import ApplicationDatabase
+from .._client import DBOSClient
 from .._dbos_config import _is_valid_app_name
 from .._docker_pg_helper import start_docker_pg, stop_docker_pg
+from .._schemas.system_database import SystemSchema
 from .._sys_db import SystemDatabase, reset_system_database
-from .._workflow_commands import (
-    get_workflow,
-    list_queued_workflows,
-    list_workflow_steps,
-    list_workflows,
-)
+from .._utils import GlobalParams
 from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
 
+
+def start_client(db_url: Optional[str] = None) -> DBOSClient:
+    database_url = db_url
+    if database_url is None:
+        database_url = os.getenv("DBOS_DATABASE_URL")
+        if database_url is None:
+            config = load_config(silent=True)
+            database = config["database"]
+            username = quote(database["username"])
+            password = quote(database["password"])
+            database_url = f"postgresql://{username}:{password}@{database['hostname']}:{database['port']}/{database['app_db_name']}"
+    return DBOSClient(database_url=database_url)
+
+
 app = typer.Typer()
+
+
+@app.command(help="Show the version and exit")
+def version() -> None:
+    """Display the current version of DBOS CLI."""
+    typer.echo(f"DBOS CLI version: {GlobalParams.dbos_version}")
+
+
 workflow = typer.Typer()
 queue = typer.Typer()
 
@@ -239,7 +258,23 @@ def migrate() -> None:
 
 @app.command(help="Reset the DBOS system database")
 def reset(
-    yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompt")
+    yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompt"),
+    sys_db_name: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--sys-db-name",
+            "-s",
+            help="Specify the name of the system database to reset",
+        ),
+    ] = None,
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
 ) -> None:
     if not yes:
         confirm = typer.confirm(
@@ -248,9 +283,18 @@ def reset(
         if not confirm:
             typer.echo("Operation cancelled.")
             raise typer.Exit()
-    config = load_config()
     try:
-        reset_system_database(config)
+        client = start_client(db_url=db_url)
+        pg_db_url = sa.make_url(client._db_url).set(drivername="postgresql+psycopg")
+        assert (
+            pg_db_url.database is not None
+        ), f"Database name is required in URL: {pg_db_url.render_as_string(hide_password=True)}"
+        sysdb_name = (
+            sys_db_name
+            if sys_db_name
+            else (pg_db_url.database + SystemSchema.sysdb_suffix)
+        )
+        reset_system_database(pg_db_url.set(database="postgres"), sysdb_name)
     except sa.exc.SQLAlchemyError as e:
         typer.echo(f"Error resetting system database: {str(e)}")
         return
@@ -274,6 +318,14 @@ def debug(
 
 @workflow.command(help="List workflows for your application")
 def list(
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
     limit: Annotated[
         int,
         typer.Option("--limit", "-l", help="Limit the results returned"),
@@ -322,22 +374,31 @@ def list(
             help="Retrieve workflows with this name",
         ),
     ] = None,
-    request: Annotated[
+    sort_desc: Annotated[
         bool,
-        typer.Option("--request", help="Retrieve workflow request information"),
+        typer.Option(
+            "--sort-desc",
+            "-d",
+            help="Sort the results in descending order (older first)",
+        ),
     ] = False,
+    offset: Annotated[
+        typing.Optional[int],
+        typer.Option(
+            "--offset",
+            "-o",
+            help="Offset for pagination",
+        ),
+    ] = None,
 ) -> None:
-    config = load_config(silent=True)
-    assert config["database_url"] is not None
-    sys_db = SystemDatabase(config["database_url"])
-    workflows = list_workflows(
-        sys_db,
+    workflows = start_client(db_url=db_url).list_workflows(
         limit=limit,
+        offset=offset,
+        sort_desc=sort_desc,
         user=user,
         start_time=starttime,
         end_time=endtime,
         status=status,
-        request=request,
         app_version=appversion,
         name=name,
     )
@@ -347,30 +408,39 @@ def list(
 @workflow.command(help="Retrieve the status of a workflow")
 def get(
     workflow_id: Annotated[str, typer.Argument()],
-    request: Annotated[
-        bool,
-        typer.Option("--request", help="Retrieve workflow request information"),
-    ] = False,
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
 ) -> None:
-    config = load_config(silent=True)
-    assert config["database_url"] is not None
-    sys_db = SystemDatabase(config["database_url"])
-    print(
-        jsonpickle.encode(get_workflow(sys_db, workflow_id, request), unpicklable=False)
+    status = (
+        start_client(db_url=db_url)
+        .retrieve_workflow(workflow_id=workflow_id)
+        .get_status()
     )
+    print(jsonpickle.encode(status, unpicklable=False))
 
 
 @workflow.command(help="List the steps of a workflow")
 def steps(
     workflow_id: Annotated[str, typer.Argument()],
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
 ) -> None:
-    config = load_config(silent=True)
-    assert config["database_url"] is not None
-    sys_db = SystemDatabase(config["database_url"])
-    app_db = ApplicationDatabase(config["database_url"])
     print(
         jsonpickle.encode(
-            list_workflow_steps(sys_db, app_db, workflow_id), unpicklable=False
+            start_client(db_url=db_url).list_workflow_steps(workflow_id=workflow_id),
+            unpicklable=False,
         )
     )
 
@@ -379,119 +449,94 @@ def steps(
     help="Cancel a workflow so it is no longer automatically retried or restarted"
 )
 def cancel(
-    uuid: Annotated[str, typer.Argument()],
-    host: Annotated[
+    workflow_id: Annotated[str, typer.Argument()],
+    db_url: Annotated[
         typing.Optional[str],
-        typer.Option("--host", "-H", help="Specify the admin host"),
-    ] = "localhost",
-    port: Annotated[
-        typing.Optional[int],
-        typer.Option("--port", "-p", help="Specify the admin port"),
-    ] = 3001,
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
 ) -> None:
-    response = requests.post(
-        f"http://{host}:{port}/workflows/{uuid}/cancel", json=[], timeout=5
-    )
-
-    if response.status_code == 204:
-        print(f"Workflow {uuid} has been cancelled")
-    else:
-        print(f"Failed to cancel workflow {uuid}. Status code: {response.status_code}")
+    start_client(db_url=db_url).cancel_workflow(workflow_id=workflow_id)
 
 
 @workflow.command(help="Resume a workflow that has been cancelled")
 def resume(
-    uuid: Annotated[str, typer.Argument()],
-    host: Annotated[
+    workflow_id: Annotated[str, typer.Argument()],
+    db_url: Annotated[
         typing.Optional[str],
-        typer.Option("--host", "-H", help="Specify the admin host"),
-    ] = "localhost",
-    port: Annotated[
-        typing.Optional[int],
-        typer.Option("--port", "-p", help="Specify the admin port"),
-    ] = 3001,
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
 ) -> None:
-    response = requests.post(
-        f"http://{host}:{port}/workflows/{uuid}/resume", json=[], timeout=5
-    )
-
-    if response.status_code == 204:
-        print(f"Workflow {uuid} has been resumed")
-    else:
-        print(f"Failed to resume workflow {uuid}. Status code: {response.status_code}")
+    start_client(db_url=db_url).resume_workflow(workflow_id=workflow_id)
 
 
 @workflow.command(help="Restart a workflow from the beginning with a new id")
 def restart(
-    uuid: Annotated[str, typer.Argument()],
-    host: Annotated[
+    workflow_id: Annotated[str, typer.Argument()],
+    db_url: Annotated[
         typing.Optional[str],
-        typer.Option("--host", "-H", help="Specify the admin host"),
-    ] = "localhost",
-    port: Annotated[
-        typing.Optional[int],
-        typer.Option("--port", "-p", help="Specify the admin port"),
-    ] = 3001,
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
 ) -> None:
-    response = requests.post(
-        f"http://{host}:{port}/workflows/{uuid}/restart",
-        json=[],
-        timeout=5,
+    status = (
+        start_client(db_url=db_url)
+        .fork_workflow(workflow_id=workflow_id, start_step=1)
+        .get_status()
     )
-
-    if response.status_code == 204:
-        print(f"Workflow {uuid} has been restarted")
-    else:
-        error_message = response.json().get("error", "Unknown error")
-        print(
-            f"Failed to restart workflow {uuid}. "
-            f"Status code: {response.status_code}. "
-            f"Error: {error_message}"
-        )
+    print(jsonpickle.encode(status, unpicklable=False))
 
 
 @workflow.command(
     help="fork a workflow from the beginning with a new id and from a step"
 )
 def fork(
-    uuid: Annotated[str, typer.Argument()],
-    host: Annotated[
-        typing.Optional[str],
-        typer.Option("--host", "-H", help="Specify the admin host"),
-    ] = "localhost",
-    port: Annotated[
-        typing.Optional[int],
-        typer.Option("--port", "-p", help="Specify the admin port"),
-    ] = 3001,
+    workflow_id: Annotated[str, typer.Argument()],
     step: Annotated[
-        typing.Optional[int],
+        int,
         typer.Option(
             "--step",
             "-s",
-            help="Restart from this step (default: first step)",
+            help="Restart from this step",
         ),
     ] = 1,
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
 ) -> None:
-    print(f"Forking workflow {uuid} from step {step}")
-    response = requests.post(
-        f"http://{host}:{port}/workflows/{uuid}/fork",
-        json={"start_step": step},
-        timeout=5,
+    status = (
+        start_client(db_url=db_url)
+        .fork_workflow(workflow_id=workflow_id, start_step=step)
+        .get_status()
     )
-
-    if response.status_code == 204:
-        print(f"Workflow {uuid} has been forked")
-    else:
-        error_message = response.json().get("error", "Unknown error")
-        print(
-            f"Failed to fork workflow {uuid}. "
-            f"Status code: {response.status_code}. "
-            f"Error: {error_message}"
-        )
+    print(jsonpickle.encode(status, unpicklable=False))
 
 
 @queue.command(name="list", help="List enqueued functions for your application")
 def list_queue(
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
     limit: Annotated[
         typing.Optional[int],
         typer.Option("--limit", "-l", help="Limit the results returned"),
@@ -536,22 +581,31 @@ def list_queue(
             help="Retrieve functions on this queue",
         ),
     ] = None,
-    request: Annotated[
+    sort_desc: Annotated[
         bool,
-        typer.Option("--request", help="Retrieve workflow request information"),
+        typer.Option(
+            "--sort-desc",
+            "-d",
+            help="Sort the results in descending order (older first)",
+        ),
     ] = False,
+    offset: Annotated[
+        typing.Optional[int],
+        typer.Option(
+            "--offset",
+            "-o",
+            help="Offset for pagination",
+        ),
+    ] = None,
 ) -> None:
-    config = load_config(silent=True)
-    assert config["database_url"] is not None
-    sys_db = SystemDatabase(config["database_url"])
-    workflows = list_queued_workflows(
-        sys_db=sys_db,
+    workflows = start_client(db_url=db_url).list_queued_workflows(
         limit=limit,
+        offset=offset,
+        sort_desc=sort_desc,
         start_time=start_time,
         end_time=end_time,
         queue_name=queue_name,
         status=status,
-        request=request,
         name=name,
     )
     print(jsonpickle.encode(workflows, unpicklable=False))

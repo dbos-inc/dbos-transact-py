@@ -10,6 +10,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     text,
 )
 
@@ -28,7 +29,6 @@ class SystemSchema:
         Column("authenticated_user", Text, nullable=True),
         Column("assumed_role", Text, nullable=True),
         Column("authenticated_roles", Text, nullable=True),
-        Column("request", Text, nullable=True),
         Column("output", Text, nullable=True),
         Column("error", Text, nullable=True),
         Column("executor_id", Text, nullable=True),
@@ -173,5 +173,19 @@ class SystemSchema:
         Column(
             "completed_at_epoch_ms",
             BigInteger(),
+        ),
+        Column(
+            "deduplication_id",
+            Text,
+            nullable=True,
+        ),
+        Column(
+            "priority",
+            Integer,
+            nullable=False,
+            server_default=text("'0'::int"),
+        ),
+        UniqueConstraint(
+            "queue_name", "deduplication_id", name="uq_workflow_queue_name_dedup_id"
         ),
     )

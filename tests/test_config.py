@@ -1140,6 +1140,8 @@ def test_configured_pool_sizes():
     dbos.launch()
     assert dbos._app_db.engine.pool._pool.maxsize == 42
     assert dbos._sys_db.engine.pool._pool.maxsize == 43
+    assert dbos._app_db.engine.pool._pre_ping == False
+    assert dbos._sys_db.engine.pool._pre_ping == False
     dbos.destroy()
 
 
@@ -1216,3 +1218,21 @@ def test_get_dbos_database_url(mocker):
         query={"connect_timeout": "10"},
     ).render_as_string(hide_password=False)
     assert get_dbos_database_url() == expected_url
+
+
+def test_db_engine_kwargs():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "db_engine_kwargs": {
+            "pool_pre_ping": True,
+        },
+    }
+
+    dbos = DBOS(config=config)
+    dbos.launch()
+    assert dbos._app_db.engine.pool._pre_ping == True
+    assert dbos._sys_db.engine.pool._pre_ping == True
+    # Default values should be set
+    assert dbos._app_db.engine.pool._pool.maxsize == 20
+    assert dbos._sys_db.engine.pool._pool.maxsize == 20
+    dbos.destroy()

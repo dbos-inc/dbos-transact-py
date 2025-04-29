@@ -64,23 +64,22 @@ from ._registrations import (
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
-from ._sys_db import StepInfo, WorkflowStatus, reset_system_database
-from ._tracer import dbos_tracer
+from ._schemas.system_database import SystemSchema
+from ._sys_db import StepInfo, SystemDatabase, WorkflowStatus, reset_system_database
+from ._tracer import DBOSTracer, dbos_tracer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
     from ._kafka import _KafkaConsumerWorkflow
-    from ._request import Request
     from flask import Flask
 
+from sqlalchemy import URL
 from sqlalchemy.orm import Session
 
-from ._request import Request
-
 if sys.version_info < (3, 10):
-    from typing_extensions import ParamSpec, TypeAlias
+    from typing_extensions import ParamSpec
 else:
-    from typing import ParamSpec, TypeAlias
+    from typing import ParamSpec
 
 from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
@@ -109,7 +108,6 @@ from ._error import (
 )
 from ._event_loop import BackgroundEventLoop
 from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
-from ._sys_db import SystemDatabase
 from ._workflow_commands import get_workflow, list_workflow_steps
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
@@ -196,7 +194,7 @@ class DBOSRegistry:
         self, evt: threading.Event, func: Callable[..., Any], *args: Any, **kwargs: Any
     ) -> None:
         if self.dbos and self.dbos._launched:
-            self.dbos.stop_events.append(evt)
+            self.dbos.poller_stop_events.append(evt)
             self.dbos._executor.submit(func, *args, **kwargs)
         else:
             self.pollers.append((evt, func, args, kwargs))
@@ -246,7 +244,7 @@ class DBOS:
     2. Starting workflow functions
     3. Retrieving workflow status information
     4. Interacting with workflows via events and messages
-    5. Accessing context, including the current user, request, SQL session, logger, and tracer
+    5. Accessing context, including the current user, SQL session, logger, and tracer
 
     """
 
@@ -329,7 +327,10 @@ class DBOS:
         self._registry: DBOSRegistry = _get_or_create_dbos_registry()
         self._registry.dbos = self
         self._admin_server_field: Optional[AdminServer] = None
-        self.stop_events: List[threading.Event] = []
+        # Stop internal background threads (queue thread, timeout threads, etc.)
+        self.background_thread_stop_events: List[threading.Event] = []
+        # Stop pollers (event receivers) that can create new workflows (scheduler, Kafka)
+        self.poller_stop_events: List[threading.Event] = []
         self.fastapi: Optional["FastAPI"] = fastapi
         self.flask: Optional["Flask"] = flask
         self._executor_field: Optional[ThreadPoolExecutor] = None
@@ -347,6 +348,9 @@ class DBOS:
             # If no config is provided, load it from dbos-config.yaml
             unvalidated_config = load_config(run_process_config=False)
         elif is_dbos_configfile(config):
+            dbos_logger.warning(
+                "ConfigFile config strutcture detected. This will be deprecated in favor of DBOSConfig in an upcoming release."
+            )
             unvalidated_config = cast(ConfigFile, config)
             if os.environ.get("DBOS__CLOUD") == "true":
                 unvalidated_config = overwrite_config(unvalidated_config)
@@ -367,7 +371,7 @@ class DBOS:
         set_env_vars(self._config)
         config_logger(self._config)
         dbos_tracer.config(self._config)
-        dbos_logger.info("Initializing DBOS")
+        dbos_logger.info(f"Initializing DBOS (v{GlobalParams.dbos_version})")
 
         # If using FastAPI, set up middleware and lifecycle events
         if self.fastapi is not None:
@@ -504,7 +508,7 @@ class DBOS:
 
             # Start the queue thread
             evt = threading.Event()
-            self.stop_events.append(evt)
+            self.background_thread_stop_events.append(evt)
             bg_queue_thread = threading.Thread(
                 target=queue_thread, args=(evt, self), daemon=True
             )
@@ -517,7 +521,7 @@ class DBOS:
                     dbos_domain = os.environ.get("DBOS_DOMAIN", "cloud.dbos.dev")
                     self.conductor_url = f"wss://{dbos_domain}/conductor/v1alpha1"
                 evt = threading.Event()
-                self.stop_events.append(evt)
+                self.background_thread_stop_events.append(evt)
                 self.conductor_websocket = ConductorWebsocket(
                     self,
                     conductor_url=self.conductor_url,
@@ -529,7 +533,7 @@ class DBOS:
 
             # Grab any pollers that were deferred and start them
             for evt, func, args, kwargs in self._registry.pollers:
-                self.stop_events.append(evt)
+                self.poller_stop_events.append(evt)
                 poller_thread = threading.Thread(
                     target=func, args=args, kwargs=kwargs, daemon=True
                 )
@@ -566,11 +570,28 @@ class DBOS:
         assert (
             not self._launched
         ), "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
-        reset_system_database(self._config)
+
+        sysdb_name = (
+            self._config["database"]["sys_db_name"]
+            if "sys_db_name" in self._config["database"]
+            and self._config["database"]["sys_db_name"]
+            else self._config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
+        )
+        postgres_db_url = URL.create(
+            "postgresql+psycopg",
+            username=self._config["database"]["username"],
+            password=self._config["database"]["password"],
+            host=self._config["database"]["hostname"],
+            port=self._config["database"]["port"],
+            database="postgres",
+        )
+        reset_system_database(postgres_db_url, sysdb_name)
 
     def _destroy(self) -> None:
         self._initialized = False
-        for event in self.stop_events:
+        for event in self.poller_stop_events:
+            event.set()
+        for event in self.background_thread_stop_events:
             event.set()
         self._background_event_loop.stop()
         if self._sys_db_field is not None:
@@ -747,7 +768,7 @@ class DBOS:
         """Return the status of a workflow execution."""
 
         def fn() -> Optional[WorkflowStatus]:
-            return get_workflow(_get_dbos_instance()._sys_db, workflow_id, True)
+            return get_workflow(_get_dbos_instance()._sys_db, workflow_id)
 
         return _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.getStatus")
 
@@ -965,7 +986,13 @@ class DBOS:
         return cls.fork_workflow(workflow_id, 1)
 
     @classmethod
-    def fork_workflow(cls, workflow_id: str, start_step: int) -> WorkflowHandle[Any]:
+    def fork_workflow(
+        cls,
+        workflow_id: str,
+        start_step: int,
+        *,
+        application_version: Optional[str] = None,
+    ) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID from a specific step"""
 
         def fn() -> str:
@@ -975,6 +1002,7 @@ class DBOS:
                 _get_dbos_instance()._app_db,
                 workflow_id,
                 start_step,
+                application_version=application_version,
             )
 
         new_id = _get_dbos_instance()._sys_db.call_function_as_step(
@@ -1137,12 +1165,6 @@ class DBOS:
         return span
 
     @classproperty
-    def request(cls) -> Optional["Request"]:
-        """Return the HTTP `Request`, if any, associated with the current context."""
-        ctx = assert_current_dbos_context()
-        return ctx.request
-
-    @classproperty
     def authenticated_user(cls) -> Optional[str]:
         """Return the current authenticated user, if any, associated with the current context."""
         ctx = assert_current_dbos_context()
@@ -1168,6 +1190,11 @@ class DBOS:
         ctx = assert_current_dbos_context()
         ctx.authenticated_user = authenticated_user
         ctx.authenticated_roles = authenticated_roles
+
+    @classproperty
+    def tracer(self) -> DBOSTracer:
+        """Return the DBOS OpenTelemetry tracer."""
+        return dbos_tracer
 
 
 class WorkflowHandle(Generic[R], Protocol):
