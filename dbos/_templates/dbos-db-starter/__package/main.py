@@ -15,7 +15,7 @@ from dbos import DBOS
 from .schema import dbos_hello
 
 app = FastAPI()
-DBOS(fastapi=app)
+DBOS(fastapi=app, config={"name": "dbos-db-starter"})
 
 # Next, let's write a function that greets visitors.
 # To make it more interesting, we'll keep track of how
