@@ -296,7 +296,7 @@ def _init_workflow(
 
     if workflow_deadline_epoch_ms is not None:
         evt = threading.Event()
-        dbos.stop_events.append(evt)
+        dbos.background_thread_stop_events.append(evt)
 
         def timeout_func() -> None:
             try:

@@ -66,11 +66,11 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         elif self.path == _deactivate_path:
             if not AdminRequestHandler.is_deactivated:
                 dbos_logger.info(
-                    f"Deactivating DBOS executor {GlobalParams.executor_id} with version {GlobalParams.app_version}. This executor will complete existing workflows but will not start new workflows."
+                    f"Deactivating DBOS executor {GlobalParams.executor_id} with version {GlobalParams.app_version}. This executor will complete existing workflows but will not create new workflows."
                 )
                 AdminRequestHandler.is_deactivated = True
-            # Stop all scheduled workflows, queues, and kafka loops
-            for event in self.dbos.stop_events:
+            # Stop all event receivers (scheduler and Kafka threads)
+            for event in self.dbos.poller_stop_events:
                 event.set()
             self.send_response(200)
             self._end_headers()
