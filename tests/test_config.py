@@ -64,12 +64,12 @@ def test_dbosconfig_type_provided():
         "name": "some-app",
     }
     dbos = DBOS(config=config)
-    assert dbos.config["name"] == "some-app"
-    assert dbos.config["database"]["hostname"] == "localhost"
-    assert dbos.config["database"]["port"] == 5432
-    assert dbos.config["database"]["username"] == "postgres"
-    assert dbos.config["database"]["password"] == os.environ["PGPASSWORD"]
-    assert dbos.config["database"]["app_db_name"] == "some_app"
+    assert dbos._config["name"] == "some-app"
+    assert dbos._config["database"]["hostname"] == "localhost"
+    assert dbos._config["database"]["port"] == 5432
+    assert dbos._config["database"]["username"] == "postgres"
+    assert dbos._config["database"]["password"] == os.environ["PGPASSWORD"]
+    assert dbos._config["database"]["app_db_name"] == "some_app"
     dbos.destroy()
 
 
@@ -1183,6 +1183,7 @@ def test_no_config_file():
 
 
 def test_configured_pool_sizes():
+    DBOS.destroy()
     config: DBOSConfig = {
         "name": "test-app",
         "app_db_pool_size": 42,
@@ -1199,6 +1200,7 @@ def test_configured_pool_sizes():
 
 
 def test_default_pool_params():
+    DBOS.destroy()
     config: DBOSConfig = {
         "name": "test-app",
     }
@@ -1224,6 +1226,7 @@ def test_default_pool_params():
 
 
 def test_configured_app_db_connect_timeout():
+    DBOS.destroy()
     config: DBOSConfig = {
         "name": "test-app",
         "database_url": f"postgresql://postgres:@localhost:5432/dbname?connect_timeout=7",
@@ -1273,6 +1276,7 @@ def test_get_dbos_database_url(mocker):
 
 
 def test_db_engine_kwargs():
+    DBOS.destroy()
     config: DBOSConfig = {
         "name": "test-app",
         "db_engine_kwargs": {

@@ -166,7 +166,7 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
             ["dbos", "init", app_name, "--template", "dbos-toolbox"],
             cwd=temp_path,
         )
-        subprocess.check_call(["dbos", "reset", "-y"], cwd=temp_path)
+        subprocess.check_call(["dbos", "reset", "-y", "-D", db_url], cwd=temp_path)
         subprocess.check_call(["dbos", "migrate"], cwd=temp_path)
 
         # Get some workflows enqueued on the toolbox, then kill the toolbox
@@ -223,12 +223,12 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
         assert isinstance(get_steps_data, list)
         assert len(get_steps_data) == 10
 
-        # cancel the workflow and check the status is CANCELED
+        # cancel the workflow and check the status is CANCELLED
         subprocess.check_output(
             ["dbos", "workflow", "cancel", wf_id, "--db-url", db_url], cwd=temp_path
         )
         output = subprocess.check_output(
-            ["dbos", "workflow", "get", wf_id], cwd=temp_path
+            ["dbos", "workflow", "get", wf_id, "-D", db_url], cwd=temp_path
         )
         get_wf_data = json.loads(output)
         assert isinstance(get_wf_data, dict)
@@ -239,7 +239,7 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
             ["dbos", "workflow", "resume", wf_id, "--db-url", db_url], cwd=temp_path
         )
         output = subprocess.check_output(
-            ["dbos", "workflow", "get", wf_id], cwd=temp_path
+            ["dbos", "workflow", "get", wf_id, "-D", db_url], cwd=temp_path
         )
         get_wf_data = json.loads(output)
         assert isinstance(get_wf_data, dict)
