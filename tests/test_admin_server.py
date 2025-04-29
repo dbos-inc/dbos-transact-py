@@ -70,7 +70,7 @@ def test_admin_endpoints(dbos: DBOS) -> None:
         assert event.is_set()
 
 
-def test_deactivate(dbos: DBOS) -> None:
+def test_deactivate(dbos: DBOS, config: ConfigFile) -> None:
     wf_counter: int = 0
 
     queue = Queue("example-queue")
@@ -99,6 +99,26 @@ def test_deactivate(dbos: DBOS) -> None:
     assert wf_counter <= val + 1
     # Enqueue a workflow, verify it still runs
     assert queue.enqueue(regular_workflow).get_result() == 5
+
+    # Test deferred event receivers
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.scheduled("* * * * * *")
+    @DBOS.workflow()
+    def deferred_workflow(scheduled: datetime, actual: datetime) -> None:
+        nonlocal wf_counter
+        wf_counter += 1
+
+    DBOS.launch()
+    assert len(dbos.poller_stop_events) > 0
+    for event in dbos.poller_stop_events:
+        assert not event.is_set()
+    # Deactivate--scheduled workflow should stop
+    response = requests.get("http://localhost:3001/deactivate", timeout=5)
+    assert response.status_code == 200
+    for event in dbos.poller_stop_events:
+        assert event.is_set()
 
 
 def test_admin_recovery(config: ConfigFile) -> None:
