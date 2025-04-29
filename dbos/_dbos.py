@@ -94,8 +94,6 @@ from ._dbos_config import (
     ConfigFile,
     DBOSConfig,
     check_config_consistency,
-    is_dbos_configfile,
-    load_config,
     overwrite_config,
     process_config,
     set_env_vars,
@@ -160,7 +158,7 @@ class DBOSRegistry:
         self.queue_info_map: dict[str, Queue] = {}
         self.pollers: list[RegisteredJob] = []
         self.dbos: Optional[DBOS] = None
-        self.config: Optional[ConfigFile] = None
+        self.config: Optional[DBOSConfig] = None
 
     def register_wf_function(self, name: str, wrapped_func: F, functype: str) -> None:
         if name in self.function_type_map:
@@ -264,7 +262,7 @@ class DBOS:
     def __new__(
         cls: Type[DBOS],
         *,
-        config: Optional[Union[ConfigFile, DBOSConfig]] = None,
+        config: DBOSConfig,
         fastapi: Optional["FastAPI"] = None,
         flask: Optional["Flask"] = None,
         conductor_url: Optional[str] = None,
@@ -277,7 +275,7 @@ class DBOS:
                 _dbos_global_registry is not None
                 and _dbos_global_registry.config is not None
             ):
-                if config is not None and config is not _dbos_global_registry.config:
+                if config is not _dbos_global_registry.config:
                     raise DBOSException(
                         f"DBOS configured multiple times with conflicting information"
                     )
@@ -286,7 +284,7 @@ class DBOS:
             _dbos_global_instance = super().__new__(cls)
             _dbos_global_instance.__init__(fastapi=fastapi, config=config, flask=flask, conductor_url=conductor_url, conductor_key=conductor_key)  # type: ignore
         else:
-            if (config is not None and _dbos_global_instance.config is not config) or (
+            if (_dbos_global_instance._provided_config is not config) or (
                 _dbos_global_instance.fastapi is not fastapi
             ):
                 raise DBOSException(
@@ -309,7 +307,7 @@ class DBOS:
     def __init__(
         self,
         *,
-        config: Optional[Union[ConfigFile, DBOSConfig]] = None,
+        config: DBOSConfig,
         fastapi: Optional["FastAPI"] = None,
         flask: Optional["Flask"] = None,
         conductor_url: Optional[str] = None,
@@ -320,6 +318,7 @@ class DBOS:
 
         self._initialized: bool = True
 
+        self._provided_config: DBOSConfig = config
         self._launched: bool = False
         self._debug_mode: bool = False
         self._sys_db_field: Optional[SystemDatabase] = None
@@ -342,26 +341,11 @@ class DBOS:
 
         init_logger()
 
-        unvalidated_config: Optional[ConfigFile] = None
-
-        if config is None:
-            # If no config is provided, load it from dbos-config.yaml
-            unvalidated_config = load_config(run_process_config=False)
-        elif is_dbos_configfile(config):
-            dbos_logger.warning(
-                "ConfigFile config strutcture detected. This will be deprecated in favor of DBOSConfig in an upcoming release."
-            )
-            unvalidated_config = cast(ConfigFile, config)
-            if os.environ.get("DBOS__CLOUD") == "true":
-                unvalidated_config = overwrite_config(unvalidated_config)
-            check_config_consistency(name=unvalidated_config["name"])
-        else:
-            unvalidated_config = translate_dbos_config_to_config_file(
-                cast(DBOSConfig, config)
-            )
-            if os.environ.get("DBOS__CLOUD") == "true":
-                unvalidated_config = overwrite_config(unvalidated_config)
-            check_config_consistency(name=unvalidated_config["name"])
+        # Translate user provided config to an internal format
+        unvalidated_config = translate_dbos_config_to_config_file(config)
+        if os.environ.get("DBOS__CLOUD") == "true":
+            unvalidated_config = overwrite_config(unvalidated_config)
+        check_config_consistency(name=unvalidated_config["name"])
 
         if unvalidated_config is not None:
             self._config: ConfigFile = process_config(data=unvalidated_config)
@@ -1085,21 +1069,6 @@ class DBOS:
     def logger(cls) -> Logger:
         """Return the DBOS `Logger` for the current context."""
         return dbos_logger  # TODO get from context if appropriate...
-
-    @classproperty
-    def config(cls) -> ConfigFile:
-        """Return the DBOS `ConfigFile` for the current context."""
-        global _dbos_global_instance
-        if _dbos_global_instance is not None:
-            return _dbos_global_instance._config
-        reg = _get_or_create_dbos_registry()
-        if reg.config is not None:
-            return reg.config
-        loaded_config = (
-            load_config()
-        )  # This will return the processed & validated config (with defaults)
-        reg.config = loaded_config
-        return loaded_config
 
     @classproperty
     def sql_session(cls) -> Session:
