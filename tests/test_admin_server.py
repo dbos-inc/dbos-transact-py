@@ -3,6 +3,7 @@ import socket
 import threading
 import time
 import uuid
+from datetime import datetime
 
 import pytest
 import requests
@@ -67,6 +68,37 @@ def test_admin_endpoints(dbos: DBOS) -> None:
 
     for event in dbos.poller_stop_events:
         assert event.is_set()
+
+
+def test_deactivate(dbos: DBOS):
+    wf_counter: int = 0
+
+    queue = Queue("example-queue")
+
+    @DBOS.scheduled("* * * * * *")
+    @DBOS.workflow()
+    def test_workflow(scheduled: datetime, actual: datetime) -> None:
+        nonlocal wf_counter
+        wf_counter += 1
+
+    @DBOS.workflow()
+    def regular_workflow() -> int:
+        return 5
+
+    # Let the scheduled workflow run
+    time.sleep(2)
+    val = wf_counter
+    assert val > 0
+    # Deactivate--scheduled workflow should stop
+    response = requests.get("http://localhost:3001/deactivate", timeout=5)
+    assert response.status_code == 200
+    for event in dbos.poller_stop_events:
+        assert event.is_set()
+    # Verify the scheduled workflow does not run anymore
+    time.sleep(3)
+    assert wf_counter <= val + 1
+    # Enqueue a workflow, verify it still runs
+    assert queue.enqueue(regular_workflow).get_result() == 5
 
 
 def test_admin_recovery(config: ConfigFile) -> None:
