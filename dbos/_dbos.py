@@ -527,7 +527,7 @@ class DBOS:
 
             # Grab any pollers that were deferred and start them
             for evt, func, args, kwargs in self._registry.pollers:
-                self.background_thread_stop_events.append(evt)
+                self.poller_stop_events.append(evt)
                 poller_thread = threading.Thread(
                     target=func, args=args, kwargs=kwargs, daemon=True
                 )
