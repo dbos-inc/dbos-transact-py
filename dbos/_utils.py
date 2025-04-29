@@ -3,6 +3,8 @@ import os
 
 INTERNAL_QUEUE_NAME = "_dbos_internal_queue"
 
+request_id_header = "x-request-id"
+
 
 class GlobalParams:
     app_version: str = os.environ.get("DBOS__APPVERSION", "")

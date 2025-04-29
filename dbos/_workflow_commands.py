@@ -27,7 +27,6 @@ def list_workflows(
     limit: Optional[int] = None,
     offset: Optional[int] = None,
     sort_desc: bool = False,
-    request: bool = False,
     workflow_id_prefix: Optional[str] = None,
 ) -> List[WorkflowStatus]:
     input = GetWorkflowsInput()
@@ -43,7 +42,7 @@ def list_workflows(
     input.sort_desc = sort_desc
     input.workflow_id_prefix = workflow_id_prefix
 
-    infos: List[WorkflowStatus] = sys_db.get_workflows(input, request)
+    infos: List[WorkflowStatus] = sys_db.get_workflows(input)
 
     return infos
 
@@ -59,7 +58,6 @@ def list_queued_workflows(
     limit: Optional[int] = None,
     offset: Optional[int] = None,
     sort_desc: bool = False,
-    request: bool = False,
 ) -> List[WorkflowStatus]:
     input: GetQueuedWorkflowsInput = {
         "queue_name": queue_name,
@@ -72,17 +70,15 @@ def list_queued_workflows(
         "sort_desc": sort_desc,
     }
 
-    infos: List[WorkflowStatus] = sys_db.get_queued_workflows(input, request)
+    infos: List[WorkflowStatus] = sys_db.get_queued_workflows(input)
     return infos
 
 
-def get_workflow(
-    sys_db: SystemDatabase, workflow_id: str, get_request: bool
-) -> Optional[WorkflowStatus]:
+def get_workflow(sys_db: SystemDatabase, workflow_id: str) -> Optional[WorkflowStatus]:
     input = GetWorkflowsInput()
     input.workflow_ids = [workflow_id]
 
-    infos: List[WorkflowStatus] = sys_db.get_workflows(input, get_request)
+    infos: List[WorkflowStatus] = sys_db.get_workflows(input)
     if not infos:
         return None
 

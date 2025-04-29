@@ -35,7 +35,6 @@ def test_simple_endpoint(
     @DBOS.workflow()
     def test_workflow(var1: str, var2: str) -> str:
         DBOS.span.set_attribute("test_key", "test_value")
-        assert DBOS.request is not None
         res1 = test_transaction(var1)
         res2 = test_step(var2)
         return res1 + res2
@@ -87,7 +86,6 @@ def test_start_workflow(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     @DBOS.workflow()
     def test_workflow(var1: str, var2: str) -> str:
         DBOS.span.set_attribute("test_key", "test_value")
-        assert DBOS.request is not None
         res1 = test_transaction(var1)
         res2 = test_step(var2)
         return res1 + res2
@@ -110,34 +108,29 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     dbos, app = dbos_fastapi
     client = TestClient(app)
 
-    wfuuid = str(uuid.uuid4())
+    workflow_id = str(uuid.uuid4())
 
     @DBOS.workflow()
     def test_workflow(var1: str) -> tuple[str, str]:
-        assert DBOS.request is not None
         return var1, DBOS.workflow_id
 
     @app.get("/{var1}/{var2}")
     def test_endpoint(var1: str, var2: str) -> dict[str, str]:
-        assert (
-            DBOS.request is not None
-            and DBOS.request.headers["dbos-idempotency-key"] == wfuuid
-        )
         res1, id1 = test_workflow(var1)
         res2, id2 = test_workflow(var2)
         return {"res1": res1, "res2": res2, "id1": id1, "id2": id2}
 
-    response = client.get("/a/b", headers={"dbos-idempotency-key": wfuuid})
+    response = client.get("/a/b", headers={"dbos-idempotency-key": workflow_id})
     assert response.status_code == 200
     assert response.json().get("res1") == "a"
     assert response.json().get("res2") == "b"
-    assert response.json().get("id1") == wfuuid
-    assert response.json().get("id2") != wfuuid
+    assert response.json().get("id1") == workflow_id
+    assert response.json().get("id2") != workflow_id
 
     # Change the workflow status to pending
     dbos._sys_db.update_workflow_status(
         {
-            "workflow_uuid": wfuuid,
+            "workflow_uuid": workflow_id,
             "status": "PENDING",
             "name": test_workflow.__qualname__,
             "class_name": None,
@@ -147,7 +140,6 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
             "executor_id": None,
             "app_id": None,
             "app_version": None,
-            "request": None,
             "recovery_attempts": None,
             "authenticated_user": None,
             "authenticated_roles": None,
@@ -163,7 +155,7 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     # Recovery should execute the workflow again but skip the transaction
     workflow_handles = DBOS._recover_pending_workflows()
     assert len(workflow_handles) == 1
-    assert workflow_handles[0].get_result() == ("a", wfuuid)
+    assert workflow_handles[0].get_result() == ("a", workflow_id)
 
 
 @pytest.mark.asyncio

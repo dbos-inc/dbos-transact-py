@@ -594,7 +594,6 @@ def test_recovery_thread(config: ConfigFile) -> None:
             "executor_id": None,
             "app_id": None,
             "app_version": None,
-            "request": None,
             "recovery_attempts": None,
             "authenticated_user": None,
             "authenticated_roles": None,

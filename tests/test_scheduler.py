@@ -216,7 +216,6 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
             "executor_id": None,
             "app_id": None,
             "app_version": None,
-            "request": None,
             "recovery_attempts": None,
             "authenticated_user": None,
             "authenticated_roles": None,

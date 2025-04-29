@@ -260,7 +260,7 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert len(output) == 1
     assert output[0] != None
     wfid = output[0].workflow_id
-    info = _workflow_commands.get_workflow(sys_db, wfid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfid)
     assert info is not None
     assert info.status == "PENDING"
 
@@ -272,7 +272,7 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
     event.set()
     with pytest.raises(DBOSWorkflowCancelledError):
         handle.get_result()
-    info = _workflow_commands.get_workflow(sys_db, wfid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfid)
     assert info is not None
     assert info.status == "CANCELLED"
 
@@ -294,7 +294,7 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert response.status_code == 204
     # Wait for the workflow to finish
     DBOS.retrieve_workflow(wfid).get_result()
-    info = _workflow_commands.get_workflow(sys_db, wfid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfid)
     assert info is not None
     assert info.status == "SUCCESS"
     assert info.executor_id == GlobalParams.executor_id
@@ -319,7 +319,7 @@ def test_admin_workflow_restart(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     wfUuid = output[0].workflow_id
 
-    info = _workflow_commands.get_workflow(sys_db, wfUuid, True)
+    info = _workflow_commands.get_workflow(sys_db, wfUuid)
     assert info is not None, "Expected output to be not None"
 
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
@@ -339,7 +339,7 @@ def test_admin_workflow_restart(dbos: DBOS, sys_db: SystemDatabase) -> None:
     else:
         new_wfUuid = output[0].workflow_id
 
-    info = _workflow_commands.get_workflow(sys_db, new_wfUuid, True)
+    info = _workflow_commands.get_workflow(sys_db, new_wfUuid)
     if info is not None:
         assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
     else:

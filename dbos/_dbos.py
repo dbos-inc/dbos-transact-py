@@ -71,13 +71,10 @@ from ._tracer import DBOSTracer, dbos_tracer
 if TYPE_CHECKING:
     from fastapi import FastAPI
     from ._kafka import _KafkaConsumerWorkflow
-    from ._request import Request
     from flask import Flask
 
 from sqlalchemy import URL
 from sqlalchemy.orm import Session
-
-from ._request import Request
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec
@@ -247,7 +244,7 @@ class DBOS:
     2. Starting workflow functions
     3. Retrieving workflow status information
     4. Interacting with workflows via events and messages
-    5. Accessing context, including the current user, request, SQL session, logger, and tracer
+    5. Accessing context, including the current user, SQL session, logger, and tracer
 
     """
 
@@ -760,7 +757,7 @@ class DBOS:
         """Return the status of a workflow execution."""
 
         def fn() -> Optional[WorkflowStatus]:
-            return get_workflow(_get_dbos_instance()._sys_db, workflow_id, True)
+            return get_workflow(_get_dbos_instance()._sys_db, workflow_id)
 
         return _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.getStatus")
 
@@ -1155,12 +1152,6 @@ class DBOS:
         span = ctx.get_current_span()
         assert span
         return span
-
-    @classproperty
-    def request(cls) -> Optional["Request"]:
-        """Return the HTTP `Request`, if any, associated with the current context."""
-        ctx = assert_current_dbos_context()
-        return ctx.request
 
     @classproperty
     def authenticated_user(cls) -> Optional[str]:

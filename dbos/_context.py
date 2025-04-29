@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 from dbos._utils import GlobalParams
 
 from ._logger import dbos_logger
-from ._request import Request
 from ._tracer import dbos_tracer
 
 
@@ -76,8 +75,6 @@ class DBOSContext:
 
         self.logger = dbos_logger
 
-        self.request: Optional["Request"] = None
-
         self.id_assigned_for_next_workflow: str = ""
         self.is_within_set_workflow_id_block: bool = False
 
@@ -120,7 +117,6 @@ class DBOSContext:
             if self.authenticated_roles is not None
             else None
         )
-        rv.request = self.request
         rv.assumed_role = self.assumed_role
         return rv
 
