@@ -2,10 +2,10 @@ import socket
 import threading
 import time
 import traceback
+from importlib.metadata import version
 from typing import TYPE_CHECKING, Optional
 
 from websockets import ConnectionClosed, ConnectionClosedOK, InvalidStatus
-from websockets import __version__ as ws_version
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
@@ -22,6 +22,7 @@ from . import protocol as p
 if TYPE_CHECKING:
     from dbos import DBOS
 
+ws_version = version("websockets")
 use_keepalive = ws_version < "15.0"
 
 
@@ -91,11 +92,9 @@ class ConductorWebsocket(threading.Thread):
                 ) as websocket:
                     self.websocket = websocket
                     if use_keepalive and self.keepalive_thread is None:
-                        self.keepalive_thread: Optional[threading.Thread] = (
-                            threading.Thread(
-                                target=self.keepalive,
-                                daemon=True,
-                            )
+                        self.keepalive_thread = threading.Thread(
+                            target=self.keepalive,
+                            daemon=True,
                         )
                         self.keepalive_thread.start()
                     while not self.evt.is_set():
