@@ -35,19 +35,17 @@ class ConductorWebsocket(threading.Thread):
         self.url = (
             conductor_url.rstrip("/") + f"/websocket/{self.app_name}/{conductor_key}"
         )
+        # TODO: once we can upgrade to websockets>=15.0, we can always use the built-in keepalive
         self.ping_interval = 20  # Time between pings in seconds
         self.ping_timeout = 15  # Time to wait for a pong response in seconds
-        self.keepalive_thread: threading.Thread = threading.Thread(
-            target=self.keepalive,
-            daemon=True,
-        )
+        self.keepalive_thread: Optional[threading.Thread] = None
         self.last_ping_time = -1.0
 
     def keepalive(self) -> None:
         self.dbos.logger.debug("Starting keepalive thread")
         while not self.evt.is_set():
-            if self.websocket is None:
-                time.sleep(5)
+            if self.websocket is None or self.websocket.close_code is not None:
+                time.sleep(1)
                 continue
             try:
                 self.last_ping_time = time.time()
@@ -68,25 +66,27 @@ class ConductorWebsocket(threading.Thread):
                 wait_time = self.ping_interval - elapsed_time
                 time.sleep(max(0, wait_time))
             except ConnectionClosed:
-                self.dbos.logger.warning(
-                    "Connection to conductor closed. Reconnecting..."
-                )
+                self.dbos.logger.warning("Connection to conductor closed.")
             except Exception as e:
-                self.dbos.logger.warning(
-                    f"Failed to send ping to conductor: {e}. Reconnecting..."
-                )
+                self.dbos.logger.warning(f"Failed to send ping to conductor: {e}.")
 
     def run(self) -> None:
         while not self.evt.is_set():
             try:
-                # TODO: once we can upgrade to websockets>=15.0, we can use the built-in keepalive
                 with connect(
                     self.url,
                     open_timeout=5,
                     logger=self.dbos.logger,
-                    ping_interval=None,  # Disable keepalive for websockets>=15.0
                 ) as websocket:
                     self.websocket = websocket
+                    if self.keepalive_thread is None:
+                        self.keepalive_thread: Optional[threading.Thread] = (
+                            threading.Thread(
+                                target=self.keepalive,
+                                daemon=True,
+                            )
+                        )
+                        self.keepalive_thread.start()
                     while not self.evt.is_set():
                         message = websocket.recv()
                         if not isinstance(message, str):
@@ -350,3 +350,7 @@ class ConductorWebsocket(threading.Thread):
                 )
                 time.sleep(1)
                 continue
+
+        # Wait for the keepalive thread to finish
+        if self.keepalive_thread is not None:
+            self.keepalive_thread.join()
