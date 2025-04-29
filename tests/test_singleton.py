@@ -3,6 +3,7 @@ import subprocess
 import sys
 import time
 from os import path
+from urllib.parse import quote
 
 import pytest
 
@@ -146,7 +147,7 @@ def test_config_before_singleton(cleanup_test_databases: None) -> None:
 
         config: DBOSConfig = {
             "name": "test-app",
-            "database_url": f"postgresql://postgres:{os.environ.get('PGPASSWORD', 'dbos')}@localhost:5432/dbostestpy",
+            "database_url": f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'))}@localhost:5432/dbostestpy",
         }
         dbos: DBOS = DBOS(config=config)
 

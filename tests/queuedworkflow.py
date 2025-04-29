@@ -1,5 +1,6 @@
 # Public API
 import os
+from urllib.parse import quote
 
 from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID
 
@@ -7,7 +8,7 @@ from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID
 def default_config() -> DBOSConfig:
     return {
         "name": "test-app",
-        "database_url": f"postgresql://postgres:{os.environ.get('PGPASSWORD', 'dbos')}@localhost:5432/dbostestpy",
+        "database_url": f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'))}@localhost:5432/dbostestpy",
     }
 
 
