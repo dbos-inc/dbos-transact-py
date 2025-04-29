@@ -194,7 +194,7 @@ class DBOSRegistry:
         self, evt: threading.Event, func: Callable[..., Any], *args: Any, **kwargs: Any
     ) -> None:
         if self.dbos and self.dbos._launched:
-            self.dbos.stop_events.append(evt)
+            self.dbos.poller_stop_events.append(evt)
             self.dbos._executor.submit(func, *args, **kwargs)
         else:
             self.pollers.append((evt, func, args, kwargs))
@@ -327,7 +327,10 @@ class DBOS:
         self._registry: DBOSRegistry = _get_or_create_dbos_registry()
         self._registry.dbos = self
         self._admin_server_field: Optional[AdminServer] = None
-        self.stop_events: List[threading.Event] = []
+        # Stop internal background threads (queue thread, timeout threads, etc.)
+        self.background_thread_stop_events: List[threading.Event] = []
+        # Stop pollers (event receivers) that can create new workflows (scheduler, Kafka)
+        self.poller_stop_events: List[threading.Event] = []
         self.fastapi: Optional["FastAPI"] = fastapi
         self.flask: Optional["Flask"] = flask
         self._executor_field: Optional[ThreadPoolExecutor] = None
@@ -499,7 +502,7 @@ class DBOS:
 
             # Start the queue thread
             evt = threading.Event()
-            self.stop_events.append(evt)
+            self.background_thread_stop_events.append(evt)
             bg_queue_thread = threading.Thread(
                 target=queue_thread, args=(evt, self), daemon=True
             )
@@ -512,7 +515,7 @@ class DBOS:
                     dbos_domain = os.environ.get("DBOS_DOMAIN", "cloud.dbos.dev")
                     self.conductor_url = f"wss://{dbos_domain}/conductor/v1alpha1"
                 evt = threading.Event()
-                self.stop_events.append(evt)
+                self.background_thread_stop_events.append(evt)
                 self.conductor_websocket = ConductorWebsocket(
                     self,
                     conductor_url=self.conductor_url,
@@ -524,7 +527,7 @@ class DBOS:
 
             # Grab any pollers that were deferred and start them
             for evt, func, args, kwargs in self._registry.pollers:
-                self.stop_events.append(evt)
+                self.poller_stop_events.append(evt)
                 poller_thread = threading.Thread(
                     target=func, args=args, kwargs=kwargs, daemon=True
                 )
@@ -580,7 +583,9 @@ class DBOS:
 
     def _destroy(self) -> None:
         self._initialized = False
-        for event in self.stop_events:
+        for event in self.poller_stop_events:
+            event.set()
+        for event in self.background_thread_stop_events:
             event.set()
         self._background_event_loop.stop()
         if self._sys_db_field is not None:
