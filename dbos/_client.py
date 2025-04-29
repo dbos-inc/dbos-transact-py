@@ -70,7 +70,7 @@ class WorkflowHandleClientPolling(Generic[R]):
         return res
 
     def get_status(self) -> WorkflowStatus:
-        status = get_workflow(self._sys_db, self.workflow_id, False)
+        status = get_workflow(self._sys_db, self.workflow_id)
         if status is None:
             raise DBOSNonExistentWorkflowError(self.workflow_id)
         return status
@@ -92,9 +92,7 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
         return res
 
     async def get_status(self) -> WorkflowStatus:
-        status = await asyncio.to_thread(
-            get_workflow, self._sys_db, self.workflow_id, False
-        )
+        status = await asyncio.to_thread(get_workflow, self._sys_db, self.workflow_id)
         if status is None:
             raise DBOSNonExistentWorkflowError(self.workflow_id)
         return status
@@ -141,7 +139,6 @@ class DBOSClient:
             "authenticated_user": None,
             "assumed_role": None,
             "authenticated_roles": None,
-            "request": None,
             "output": None,
             "error": None,
             "created_at": None,
@@ -181,13 +178,13 @@ class DBOSClient:
         return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
 
     def retrieve_workflow(self, workflow_id: str) -> WorkflowHandle[R]:
-        status = get_workflow(self._sys_db, workflow_id, False)
+        status = get_workflow(self._sys_db, workflow_id)
         if status is None:
             raise DBOSNonExistentWorkflowError(workflow_id)
         return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
 
     async def retrieve_workflow_async(self, workflow_id: str) -> WorkflowHandleAsync[R]:
-        status = asyncio.to_thread(get_workflow, self._sys_db, workflow_id, False)
+        status = asyncio.to_thread(get_workflow, self._sys_db, workflow_id)
         if status is None:
             raise DBOSNonExistentWorkflowError(workflow_id)
         return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
@@ -210,7 +207,6 @@ class DBOSClient:
             "authenticated_user": None,
             "assumed_role": None,
             "authenticated_roles": None,
-            "request": None,
             "output": None,
             "error": None,
             "created_at": None,

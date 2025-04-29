@@ -266,9 +266,6 @@ def _init_workflow(
         "app_id": ctx.app_id,
         "app_version": GlobalParams.app_version,
         "executor_id": ctx.executor_id,
-        "request": (
-            _serialization.serialize(ctx.request) if ctx.request is not None else None
-        ),
         "recovery_attempts": None,
         "authenticated_user": ctx.authenticated_user,
         "authenticated_roles": (
@@ -443,10 +440,6 @@ def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[An
         )
     with DBOSContextEnsure():
         ctx = assert_current_dbos_context()
-        request = status["request"]
-        ctx.request = (
-            _serialization.deserialize(request) if request is not None else None
-        )
         # If this function belongs to a configured class, add that class instance as its first argument
         if status["config_name"] is not None:
             config_name = status["config_name"]

@@ -143,7 +143,6 @@ class ConductorWebsocket(threading.Thread):
                                     start_time=body["start_time"],
                                     end_time=body["end_time"],
                                     status=body["status"],
-                                    request=False,
                                     app_version=body["application_version"],
                                     name=body["workflow_name"],
                                     limit=body["limit"],
@@ -176,7 +175,6 @@ class ConductorWebsocket(threading.Thread):
                                     start_time=q_body["start_time"],
                                     end_time=q_body["end_time"],
                                     status=q_body["status"],
-                                    request=False,
                                     name=q_body["workflow_name"],
                                     limit=q_body["limit"],
                                     offset=q_body["offset"],
@@ -206,9 +204,7 @@ class ConductorWebsocket(threading.Thread):
                             info = None
                             try:
                                 info = get_workflow(
-                                    self.dbos._sys_db,
-                                    get_workflow_message.workflow_id,
-                                    get_request=False,
+                                    self.dbos._sys_db, get_workflow_message.workflow_id
                                 )
                             except Exception as e:
                                 error_message = f"Exception encountered when getting workflow {get_workflow_message.workflow_id}: {traceback.format_exc()}"

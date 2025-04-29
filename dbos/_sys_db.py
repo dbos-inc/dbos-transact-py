@@ -106,8 +106,6 @@ class WorkflowStatus:
     app_id: Optional[str]
     # The number of times this workflow's execution has been attempted
     recovery_attempts: Optional[int]
-    # The HTTP request that triggered the workflow, if known
-    request: Optional[str]
 
 
 class WorkflowStatusInternal(TypedDict):
@@ -120,7 +118,6 @@ class WorkflowStatusInternal(TypedDict):
     assumed_role: Optional[str]
     authenticated_roles: Optional[str]  # JSON list of roles
     output: Optional[str]  # JSON (jsonpickle)
-    request: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
     created_at: Optional[int]  # Unix epoch timestamp in ms
     updated_at: Optional[int]  # Unix epoch timestamp in ms
@@ -372,7 +369,6 @@ class SystemDatabase:
                 executor_id=status["executor_id"],
                 application_version=status["app_version"],
                 application_id=status["app_id"],
-                request=status["request"],
                 authenticated_user=status["authenticated_user"],
                 authenticated_roles=status["authenticated_roles"],
                 assumed_role=status["assumed_role"],
@@ -480,7 +476,6 @@ class SystemDatabase:
                 executor_id=status["executor_id"],
                 application_version=status["app_version"],
                 application_id=status["app_id"],
-                request=status["request"],
                 authenticated_user=status["authenticated_user"],
                 authenticated_roles=status["authenticated_roles"],
                 assumed_role=status["assumed_role"],
@@ -628,7 +623,6 @@ class SystemDatabase:
                         else status["app_version"]
                     ),
                     application_id=status["app_id"],
-                    request=status["request"],
                     authenticated_user=status["authenticated_user"],
                     authenticated_roles=status["authenticated_roles"],
                     assumed_role=status["assumed_role"],
@@ -690,7 +684,6 @@ class SystemDatabase:
                 sa.select(
                     SystemSchema.workflow_status.c.status,
                     SystemSchema.workflow_status.c.name,
-                    SystemSchema.workflow_status.c.request,
                     SystemSchema.workflow_status.c.recovery_attempts,
                     SystemSchema.workflow_status.c.config_name,
                     SystemSchema.workflow_status.c.class_name,
@@ -715,21 +708,20 @@ class SystemDatabase:
                 "error": None,
                 "status": row[0],
                 "name": row[1],
-                "request": row[2],
-                "recovery_attempts": row[3],
-                "config_name": row[4],
-                "class_name": row[5],
-                "authenticated_user": row[6],
-                "authenticated_roles": row[7],
-                "assumed_role": row[8],
-                "queue_name": row[9],
-                "executor_id": row[10],
-                "created_at": row[11],
-                "updated_at": row[12],
-                "app_version": row[13],
-                "app_id": row[14],
-                "workflow_deadline_epoch_ms": row[15],
-                "workflow_timeout_ms": row[16],
+                "recovery_attempts": row[2],
+                "config_name": row[3],
+                "class_name": row[4],
+                "authenticated_user": row[5],
+                "authenticated_roles": row[6],
+                "assumed_role": row[7],
+                "queue_name": row[8],
+                "executor_id": row[9],
+                "created_at": row[10],
+                "updated_at": row[11],
+                "app_version": row[12],
+                "app_id": row[13],
+                "workflow_deadline_epoch_ms": row[14],
+                "workflow_timeout_ms": row[15],
             }
             return status
 
@@ -805,9 +797,7 @@ class SystemDatabase:
             )
             return inputs
 
-    def get_workflows(
-        self, input: GetWorkflowsInput, get_request: bool = False
-    ) -> List[WorkflowStatus]:
+    def get_workflows(self, input: GetWorkflowsInput) -> List[WorkflowStatus]:
         """
         Retrieve a list of workflows result and inputs based on the input criteria. The result is a list of external-facing workflow status objects.
         """
@@ -815,7 +805,6 @@ class SystemDatabase:
             SystemSchema.workflow_status.c.workflow_uuid,
             SystemSchema.workflow_status.c.status,
             SystemSchema.workflow_status.c.name,
-            SystemSchema.workflow_status.c.request,
             SystemSchema.workflow_status.c.recovery_attempts,
             SystemSchema.workflow_status.c.config_name,
             SystemSchema.workflow_status.c.class_name,
@@ -888,27 +877,26 @@ class SystemDatabase:
             info.workflow_id = row[0]
             info.status = row[1]
             info.name = row[2]
-            info.request = row[3] if get_request else None
-            info.recovery_attempts = row[4]
-            info.config_name = row[5]
-            info.class_name = row[6]
-            info.authenticated_user = row[7]
+            info.recovery_attempts = row[3]
+            info.config_name = row[4]
+            info.class_name = row[5]
+            info.authenticated_user = row[6]
             info.authenticated_roles = (
-                json.loads(row[8]) if row[8] is not None else None
+                json.loads(row[7]) if row[7] is not None else None
             )
-            info.assumed_role = row[9]
-            info.queue_name = row[10]
-            info.executor_id = row[11]
-            info.created_at = row[12]
-            info.updated_at = row[13]
-            info.app_version = row[14]
-            info.app_id = row[15]
+            info.assumed_role = row[8]
+            info.queue_name = row[9]
+            info.executor_id = row[10]
+            info.created_at = row[11]
+            info.updated_at = row[12]
+            info.app_version = row[13]
+            info.app_id = row[14]
 
             inputs, output, exception = _serialization.safe_deserialize(
                 info.workflow_id,
-                serialized_input=row[16],
-                serialized_output=row[17],
-                serialized_exception=row[18],
+                serialized_input=row[15],
+                serialized_output=row[16],
+                serialized_exception=row[17],
             )
             info.input = inputs
             info.output = output
@@ -918,7 +906,7 @@ class SystemDatabase:
         return infos
 
     def get_queued_workflows(
-        self, input: GetQueuedWorkflowsInput, get_request: bool = False
+        self, input: GetQueuedWorkflowsInput
     ) -> List[WorkflowStatus]:
         """
         Retrieve a list of queued workflows result and inputs based on the input criteria. The result is a list of external-facing workflow status objects.
@@ -927,7 +915,6 @@ class SystemDatabase:
             SystemSchema.workflow_status.c.workflow_uuid,
             SystemSchema.workflow_status.c.status,
             SystemSchema.workflow_status.c.name,
-            SystemSchema.workflow_status.c.request,
             SystemSchema.workflow_status.c.recovery_attempts,
             SystemSchema.workflow_status.c.config_name,
             SystemSchema.workflow_status.c.class_name,
@@ -996,27 +983,26 @@ class SystemDatabase:
             info.workflow_id = row[0]
             info.status = row[1]
             info.name = row[2]
-            info.request = row[3] if get_request else None
-            info.recovery_attempts = row[4]
-            info.config_name = row[5]
-            info.class_name = row[6]
-            info.authenticated_user = row[7]
+            info.recovery_attempts = row[3]
+            info.config_name = row[4]
+            info.class_name = row[5]
+            info.authenticated_user = row[6]
             info.authenticated_roles = (
-                json.loads(row[8]) if row[8] is not None else None
+                json.loads(row[7]) if row[7] is not None else None
             )
-            info.assumed_role = row[9]
-            info.queue_name = row[10]
-            info.executor_id = row[11]
-            info.created_at = row[12]
-            info.updated_at = row[13]
-            info.app_version = row[14]
-            info.app_id = row[15]
+            info.assumed_role = row[8]
+            info.queue_name = row[9]
+            info.executor_id = row[10]
+            info.created_at = row[11]
+            info.updated_at = row[12]
+            info.app_version = row[13]
+            info.app_id = row[14]
 
             inputs, output, exception = _serialization.safe_deserialize(
                 info.workflow_id,
-                serialized_input=row[16],
-                serialized_output=row[17],
-                serialized_exception=row[18],
+                serialized_input=row[15],
+                serialized_output=row[16],
+                serialized_exception=row[17],
             )
             info.input = inputs
             info.output = output

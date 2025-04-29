@@ -29,7 +29,6 @@ class SystemSchema:
         Column("authenticated_user", Text, nullable=True),
         Column("assumed_role", Text, nullable=True),
         Column("authenticated_roles", Text, nullable=True),
-        Column("request", Text, nullable=True),
         Column("output", Text, nullable=True),
         Column("error", Text, nullable=True),
         Column("executor_id", Text, nullable=True),

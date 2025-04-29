@@ -2,17 +2,11 @@ import uuid
 from typing import Any
 from urllib.parse import urlparse
 
-from flask import Flask, request
+from flask import Flask
 from werkzeug.wrappers import Request as WRequest
 
-from ._context import (
-    EnterDBOSHandler,
-    OperationType,
-    SetWorkflowID,
-    TracedAttributes,
-    assert_current_dbos_context,
-)
-from ._request import Address, Request, request_id_header
+from ._context import EnterDBOSHandler, OperationType, SetWorkflowID, TracedAttributes
+from ._utils import request_id_header
 
 
 class FlaskMiddleware:
@@ -32,8 +26,6 @@ class FlaskMiddleware:
             "operationType": OperationType.HANDLER.value,
         }
         with EnterDBOSHandler(attributes):
-            ctx = assert_current_dbos_context()
-            ctx.request = _make_request(request)
             workflow_id = request.headers.get("dbos-idempotency-key")
             if workflow_id is not None:
                 # Set the workflow ID for the handler
@@ -50,32 +42,6 @@ def _get_or_generate_request_id(request: WRequest) -> str:
         return request_id
     else:
         return str(uuid.uuid4())
-
-
-def _make_request(request: WRequest) -> Request:
-    parsed_url = urlparse(request.url)
-    base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-
-    client = None
-    if request.remote_addr:
-        hostname = request.remote_addr
-        port = request.environ.get("REMOTE_PORT")
-        if port:
-            client = Address(hostname=hostname, port=int(port))
-        else:
-            # If port is not available, use 0 as a placeholder
-            client = Address(hostname=hostname, port=0)
-
-    return Request(
-        headers=dict(request.headers),
-        path_params={},
-        query_params=dict(request.args),
-        url=request.url,
-        base_url=base_url,
-        client=client,
-        cookies=dict(request.cookies),
-        method=request.method,
-    )
 
 
 def setup_flask_middleware(app: Flask) -> None:
