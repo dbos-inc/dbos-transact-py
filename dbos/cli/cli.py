@@ -17,10 +17,9 @@ from typing_extensions import Annotated
 
 from dbos._debug import debug_workflow, parse_start_command
 
-from .. import load_config
 from .._app_db import ApplicationDatabase
 from .._client import DBOSClient
-from .._dbos_config import _is_valid_app_name
+from .._dbos_config import _is_valid_app_name, load_config
 from .._docker_pg_helper import start_docker_pg, stop_docker_pg
 from .._schemas.system_database import SystemSchema
 from .._sys_db import SystemDatabase, reset_system_database
