@@ -9,11 +9,12 @@ import pytest_mock
 from sqlalchemy import URL, event
 
 # Public API
-from dbos import DBOS, get_dbos_database_url, load_config
+from dbos import DBOS, get_dbos_database_url
 from dbos._dbos_config import (
     ConfigFile,
     DBOSConfig,
     check_config_consistency,
+    load_config,
     overwrite_config,
     parse_database_url_to_dbconfig,
     process_config,
@@ -50,74 +51,15 @@ Test all the possible ways to configure DBOS.
 
 
 ####################
-# SWITCHES
+# DBOS launch
 ####################
-def test_no_config_provided(mocker):
-    mock_config = """
-        name: "some-app"
-        language: "python"
-        runtimeConfig:
-            start:
-                - "python3 main.py"
-            admin_port: 8001
-        database:
-          hostname: 'localhost'
-          port: 5432
-          username: 'postgres'
-          password: ${PGPASSWORD}
-          app_db_name: 'some db'
-          connectionTimeoutMillis: 3000
-        env:
-            foo: ${BARBAR}
-            bazbaz: BAZBAZ
-            bob: ${BOBBOB}
-            test_number: 123
-    """
-    os.environ["BARBAR"] = "FOOFOO"
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-
-    dbos = DBOS()
-    assert dbos.config["name"] == "some-app"
-    assert dbos.config["language"] == "python"
-    assert dbos.config["database"]["hostname"] == "localhost"
-    assert dbos.config["database"]["port"] == 5432
-    assert dbos.config["database"]["username"] == "postgres"
-    assert dbos.config["database"]["password"] == os.environ["PGPASSWORD"]
-    assert dbos.config["database"]["app_db_name"] == "some db"
-    assert dbos.config["database"]["connectionTimeoutMillis"] == 3000
-    assert dbos.config["env"]["foo"] == "FOOFOO"
-    assert dbos.config["env"]["bob"] is None  # Unset environment variable
-    assert dbos.config["env"]["test_number"] == 123
-
-    set_env_vars(dbos.config)
-    assert os.environ["bazbaz"] == "BAZBAZ"
-    assert os.environ["foo"] == "FOOFOO"
-    assert os.environ["test_number"] == "123"
-    assert "bob" not in os.environ
-
-    dbos.destroy()
+def test_no_config_provided():
+    with pytest.raises(TypeError) as exc_info:
+        DBOS()
+    assert "missing 1 required keyword-only argument: 'config'" in str(exc_info.value)
 
 
-def test_configfile_type_provided():
-    config: ConfigFile = {
-        "name": "some-app",
-        "database": {
-            "hostname": "localhost",
-        },
-    }
-    dbos = DBOS(config=config)
-    assert dbos.config["name"] == "some-app"
-    assert dbos.config["database"]["hostname"] == "localhost"
-    assert dbos.config["database"]["port"] == 5432
-    assert dbos.config["database"]["username"] == "postgres"
-    assert dbos.config["database"]["password"] == os.environ["PGPASSWORD"]
-    assert dbos.config["database"]["app_db_name"] == "some_app"
-    dbos.destroy()
-
-
-def test_dbosconfig_type_provided(mocker):
+def test_dbosconfig_type_provided():
     config: DBOSConfig = {
         "name": "some-app",
     }

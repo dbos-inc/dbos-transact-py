@@ -14,7 +14,7 @@ import sqlalchemy as sa
 
 from dbos import (
     DBOS,
-    ConfigFile,
+    DBOSConfig,
     DBOSConfiguredInstance,
     Queue,
     SetEnqueueOptions,
@@ -426,21 +426,10 @@ def run_dbos_test_in_process(
     start_signal: multiprocessing.synchronize.Event,
     end_signal: multiprocessing.synchronize.Event,
 ) -> None:
-    dbos_config: ConfigFile = {
+    dbos_config: DBOSConfig = {
         "name": "test-app",
-        "database": {
-            "hostname": "localhost",
-            "port": 5432,
-            "username": "postgres",
-            "password": os.environ["PGPASSWORD"],
-            "app_db_name": "dbostestpy",
-        },
-        "runtimeConfig": {
-            "start": ["python3 main.py"],
-            "admin_port": 8001 + i,
-        },
-        "telemetry": {},
-        "env": {},
+        "database_url": f"postgres://postgres:{os.environ.get('PGPASSWORD', 'dbos')}@localhost:5432/dbostestpy",
+        "admin_port": 8001 + i,
     }
     dbos = DBOS(config=dbos_config)
     DBOS.launch()
