@@ -32,12 +32,11 @@ def start_client(db_url: Optional[str] = None) -> DBOSClient:
     database_url = db_url
     if database_url is None:
         database_url = os.getenv("DBOS_DATABASE_URL")
-        if database_url is None:
-            config = load_config(silent=True)
-            database = config["database"]
-            username = quote(database["username"])
-            password = quote(database["password"])
-            database_url = f"postgresql://{username}:{password}@{database['hostname']}:{database['port']}/{database['app_db_name']}"
+    if database_url is None:
+        raise ValueError(
+            "no --db-url flag or DBOS_DATABASE_URL environment variable were set."
+        )
+
     return DBOSClient(database_url=database_url)
 
 
