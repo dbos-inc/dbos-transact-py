@@ -70,7 +70,7 @@ def test_admin_endpoints(dbos: DBOS) -> None:
         assert event.is_set()
 
 
-def test_deactivate(dbos: DBOS, config: ConfigFile) -> None:
+def test_deactivate(dbos: DBOS, config: DBOSConfig) -> None:
     wf_counter: int = 0
 
     queue = Queue("example-queue")
