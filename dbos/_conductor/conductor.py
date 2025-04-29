@@ -5,6 +5,7 @@ import traceback
 from typing import TYPE_CHECKING, Optional
 
 from websockets import ConnectionClosed, ConnectionClosedOK, InvalidStatus
+from websockets import __version__ as ws_version
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
@@ -20,6 +21,8 @@ from . import protocol as p
 
 if TYPE_CHECKING:
     from dbos import DBOS
+
+use_keepalive = ws_version < "15.0"
 
 
 class ConductorWebsocket(threading.Thread):
@@ -39,7 +42,12 @@ class ConductorWebsocket(threading.Thread):
         self.ping_interval = 20  # Time between pings in seconds
         self.ping_timeout = 15  # Time to wait for a pong response in seconds
         self.keepalive_thread: Optional[threading.Thread] = None
+        self.pong_event: Optional[threading.Event] = None
         self.last_ping_time = -1.0
+
+        self.dbos.logger.debug(
+            f"Connecting to conductor at {self.url} using websockets version {ws_version}"
+        )
 
     def keepalive(self) -> None:
         self.dbos.logger.debug("Starting keepalive thread")
@@ -49,13 +57,13 @@ class ConductorWebsocket(threading.Thread):
                 continue
             try:
                 self.last_ping_time = time.time()
-                pong_event = self.websocket.ping()
+                self.pong_event = self.websocket.ping()
                 self.dbos.logger.debug("> Sent ping to conductor")
-                pong_result = pong_event.wait(self.ping_timeout)
+                pong_result = self.pong_event.wait(self.ping_timeout)
                 elapsed_time = time.time() - self.last_ping_time
                 if not pong_result:
                     self.dbos.logger.warning(
-                        "Connection to conductor lost. Reconnecting..."
+                        f"Failed to receive pong from conductor after {elapsed_time:.2f} seconds. Reconnecting."
                     )
                     self.websocket.close()
                     continue
@@ -66,9 +74,11 @@ class ConductorWebsocket(threading.Thread):
                 wait_time = self.ping_interval - elapsed_time
                 self.evt.wait(max(0, wait_time))
             except ConnectionClosed:
-                self.dbos.logger.warning("Connection to conductor closed.")
+                # The main loop will try to reconnect
+                self.dbos.logger.debug("Connection to conductor closed.")
             except Exception as e:
                 self.dbos.logger.warning(f"Failed to send ping to conductor: {e}.")
+                self.websocket.close()
 
     def run(self) -> None:
         while not self.evt.is_set():
@@ -76,10 +86,11 @@ class ConductorWebsocket(threading.Thread):
                 with connect(
                     self.url,
                     open_timeout=5,
+                    close_timeout=5,
                     logger=self.dbos.logger,
                 ) as websocket:
                     self.websocket = websocket
-                    if self.keepalive_thread is None:
+                    if use_keepalive and self.keepalive_thread is None:
                         self.keepalive_thread: Optional[threading.Thread] = (
                             threading.Thread(
                                 target=self.keepalive,
@@ -327,7 +338,13 @@ class ConductorWebsocket(threading.Thread):
                             # Still need to send a response to the conductor
                             websocket.send(unknown_message.to_json())
             except ConnectionClosedOK:
-                self.dbos.logger.info("Conductor connection terminated")
+                if self.evt.is_set():
+                    self.dbos.logger.info("Conductor connection terminated")
+                    break
+                # Otherwise, we are trying to reconnect
+                self.dbos.logger.warning(
+                    "Connection to conductor lost. Reconnecting..."
+                )
                 time.sleep(1)
                 continue
             except ConnectionClosed as e:
@@ -353,4 +370,6 @@ class ConductorWebsocket(threading.Thread):
 
         # Wait for the keepalive thread to finish
         if self.keepalive_thread is not None:
+            if self.pong_event is not None:
+                self.pong_event.set()
             self.keepalive_thread.join()
