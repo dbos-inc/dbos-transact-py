@@ -223,12 +223,16 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
         assert isinstance(get_steps_data, list)
         assert len(get_steps_data) == 10
 
+        # From now pass database url in the environment
+        env = os.environ.copy()
+        env["DBOS_DATABASE_URL"] = db_url
+
         # cancel the workflow and check the status is CANCELLED
         subprocess.check_output(
-            ["dbos", "workflow", "cancel", wf_id, "--db-url", db_url], cwd=temp_path
+            ["dbos", "workflow", "cancel", wf_id], cwd=temp_path, env=env
         )
         output = subprocess.check_output(
-            ["dbos", "workflow", "get", wf_id, "-D", db_url], cwd=temp_path
+            ["dbos", "workflow", "get", wf_id], cwd=temp_path, env=env
         )
         get_wf_data = json.loads(output)
         assert isinstance(get_wf_data, dict)
@@ -236,10 +240,10 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
 
         # resume the workflow and check the status is ENQUEUED
         subprocess.check_output(
-            ["dbos", "workflow", "resume", wf_id, "--db-url", db_url], cwd=temp_path
+            ["dbos", "workflow", "resume", wf_id], cwd=temp_path, env=env
         )
         output = subprocess.check_output(
-            ["dbos", "workflow", "get", wf_id, "-D", db_url], cwd=temp_path
+            ["dbos", "workflow", "get", wf_id], cwd=temp_path, env=env
         )
         get_wf_data = json.loads(output)
         assert isinstance(get_wf_data, dict)
@@ -247,7 +251,7 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
 
         # restart the workflow and check it has a new ID and its status is ENQUEUED
         output = subprocess.check_output(
-            ["dbos", "workflow", "restart", wf_id, "--db-url", db_url], cwd=temp_path
+            ["dbos", "workflow", "restart", wf_id], cwd=temp_path, env=env
         )
         restart_wf_data = json.loads(output)
         assert isinstance(restart_wf_data, dict)
@@ -256,8 +260,9 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
 
         # fork the workflow at step 5 and check it has a new ID and its status is ENQUEUED
         output = subprocess.check_output(
-            ["dbos", "workflow", "fork", wf_id, "--step", "5", "--db-url", db_url],
+            ["dbos", "workflow", "fork", wf_id, "--step", "5"],
             cwd=temp_path,
+            env=env,
         )
         fork_wf_data = json.loads(output)
         assert isinstance(fork_wf_data, dict)
