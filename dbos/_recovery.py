@@ -29,7 +29,7 @@ def startup_recovery_thread(
 ) -> None:
     """Attempt to recover local pending workflows on startup using a background thread."""
     stop_event = threading.Event()
-    dbos.stop_events.append(stop_event)
+    dbos.background_thread_stop_events.append(stop_event)
     while not stop_event.is_set() and len(pending_workflows) > 0:
         try:
             for pending_workflow in list(pending_workflows):
