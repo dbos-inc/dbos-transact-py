@@ -1,14 +1,8 @@
 import json
 import os
 import re
-import sys
 from importlib import resources
-from typing import Any, Dict, List, Optional, TypedDict, Union, cast
-
-if sys.version_info < (3, 10):
-    from typing_extensions import TypeGuard
-else:
-    from typing import TypeGuard
+from typing import Any, Dict, List, Optional, TypedDict, cast
 
 import yaml
 from jsonschema import ValidationError, validate
@@ -144,28 +138,6 @@ class ConfigFile(TypedDict, total=False):
     database_url: Optional[str]
     telemetry: Optional[TelemetryConfig]
     env: Dict[str, str]
-
-
-def is_dbos_configfile(data: Union[ConfigFile, DBOSConfig]) -> TypeGuard[DBOSConfig]:
-    """
-    Type guard to check if the provided data is a DBOSConfig.
-
-    Args:
-        data: The configuration object to check
-
-    Returns:
-        True if the data is a DBOSConfig, False otherwise
-    """
-    return (
-        isinstance(data, dict)
-        and "name" in data
-        and (
-            "runtimeConfig" in data
-            or "database" in data
-            or "env" in data
-            or "telemetry" in data
-        )
-    )
 
 
 def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
