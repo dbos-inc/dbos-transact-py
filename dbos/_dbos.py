@@ -283,13 +283,6 @@ class DBOS:
 
             _dbos_global_instance = super().__new__(cls)
             _dbos_global_instance.__init__(fastapi=fastapi, config=config, flask=flask, conductor_url=conductor_url, conductor_key=conductor_key)  # type: ignore
-        else:
-            if (_dbos_global_instance._provided_config is not config) or (
-                _dbos_global_instance.fastapi is not fastapi
-            ):
-                raise DBOSException(
-                    f"DBOS Initialized multiple times with conflicting configuration / fastapi information"
-                )
         return _dbos_global_instance
 
     @classmethod
@@ -318,7 +311,6 @@ class DBOS:
 
         self._initialized: bool = True
 
-        self._provided_config: DBOSConfig = config
         self._launched: bool = False
         self._debug_mode: bool = False
         self._sys_db_field: Optional[SystemDatabase] = None
