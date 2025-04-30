@@ -2,6 +2,7 @@ import socket
 import threading
 import time
 import traceback
+from importlib.metadata import version
 from typing import TYPE_CHECKING, Optional
 
 from websockets import ConnectionClosed, ConnectionClosedOK, InvalidStatus
@@ -21,6 +22,9 @@ from . import protocol as p
 if TYPE_CHECKING:
     from dbos import DBOS
 
+ws_version = version("websockets")
+use_keepalive = ws_version < "15.0"
+
 
 class ConductorWebsocket(threading.Thread):
 
@@ -35,14 +39,64 @@ class ConductorWebsocket(threading.Thread):
         self.url = (
             conductor_url.rstrip("/") + f"/websocket/{self.app_name}/{conductor_key}"
         )
+        # TODO: once we can upgrade to websockets>=15.0, we can always use the built-in keepalive
+        self.ping_interval = 20  # Time between pings in seconds
+        self.ping_timeout = 15  # Time to wait for a pong response in seconds
+        self.keepalive_thread: Optional[threading.Thread] = None
+        self.pong_event: Optional[threading.Event] = None
+        self.last_ping_time = -1.0
+
+        self.dbos.logger.debug(
+            f"Connecting to conductor at {self.url} using websockets version {ws_version}"
+        )
+
+    def keepalive(self) -> None:
+        self.dbos.logger.debug("Starting keepalive thread")
+        while not self.evt.is_set():
+            if self.websocket is None or self.websocket.close_code is not None:
+                time.sleep(1)
+                continue
+            try:
+                self.last_ping_time = time.time()
+                self.pong_event = self.websocket.ping()
+                self.dbos.logger.debug("> Sent ping to conductor")
+                pong_result = self.pong_event.wait(self.ping_timeout)
+                elapsed_time = time.time() - self.last_ping_time
+                if not pong_result:
+                    self.dbos.logger.warning(
+                        f"Failed to receive pong from conductor after {elapsed_time:.2f} seconds. Reconnecting."
+                    )
+                    self.websocket.close()
+                    continue
+                # Wait for the next ping interval
+                self.dbos.logger.debug(
+                    f"< Received pong from conductor after {elapsed_time:.2f} seconds"
+                )
+                wait_time = self.ping_interval - elapsed_time
+                self.evt.wait(max(0, wait_time))
+            except ConnectionClosed:
+                # The main loop will try to reconnect
+                self.dbos.logger.debug("Connection to conductor closed.")
+            except Exception as e:
+                self.dbos.logger.warning(f"Failed to send ping to conductor: {e}.")
+                self.websocket.close()
 
     def run(self) -> None:
         while not self.evt.is_set():
             try:
                 with connect(
-                    self.url, open_timeout=5, logger=self.dbos.logger
+                    self.url,
+                    open_timeout=5,
+                    close_timeout=5,
+                    logger=self.dbos.logger,
                 ) as websocket:
                     self.websocket = websocket
+                    if use_keepalive and self.keepalive_thread is None:
+                        self.keepalive_thread = threading.Thread(
+                            target=self.keepalive,
+                            daemon=True,
+                        )
+                        self.keepalive_thread.start()
                     while not self.evt.is_set():
                         message = websocket.recv()
                         if not isinstance(message, str):
@@ -283,8 +337,15 @@ class ConductorWebsocket(threading.Thread):
                             # Still need to send a response to the conductor
                             websocket.send(unknown_message.to_json())
             except ConnectionClosedOK:
-                self.dbos.logger.info("Conductor connection terminated")
-                break
+                if self.evt.is_set():
+                    self.dbos.logger.info("Conductor connection terminated")
+                    break
+                # Otherwise, we are trying to reconnect
+                self.dbos.logger.warning(
+                    "Connection to conductor lost. Reconnecting..."
+                )
+                time.sleep(1)
+                continue
             except ConnectionClosed as e:
                 self.dbos.logger.warning(
                     f"Connection to conductor lost. Reconnecting: {e}"
@@ -305,3 +366,9 @@ class ConductorWebsocket(threading.Thread):
                 )
                 time.sleep(1)
                 continue
+
+        # Wait for the keepalive thread to finish
+        if self.keepalive_thread is not None:
+            if self.pong_event is not None:
+                self.pong_event.set()
+            self.keepalive_thread.join()
