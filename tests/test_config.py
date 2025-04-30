@@ -9,7 +9,7 @@ import pytest_mock
 from sqlalchemy import URL, event
 
 # Public API
-from dbos import DBOS, get_dbos_database_url
+from dbos import DBOS
 from dbos._dbos_config import (
     ConfigFile,
     DBOSConfig,
@@ -1248,31 +1248,6 @@ def test_configured_app_db_connect_timeout():
         pass
 
     dbos.destroy()
-
-
-def test_get_dbos_database_url(mocker):
-    mock_config = """
-        name: "some-app"
-        database:
-          hostname: 'localhost'
-          port: 5432
-          username: 'postgres'
-          password: ${PGPASSWORD}
-          app_db_name: 'some_db'
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-
-    expected_url = URL.create(
-        "postgresql+psycopg",
-        username="postgres",
-        password=os.environ.get("PGPASSWORD"),
-        host="localhost",
-        port=5432,
-        database="some_db",
-    ).render_as_string(hide_password=False)
-    assert get_dbos_database_url() == expected_url
 
 
 def test_db_engine_kwargs():

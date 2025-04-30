@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, TypedDict, cast
 import yaml
 from jsonschema import ValidationError, validate
 from rich import print
-from sqlalchemy import URL, make_url
+from sqlalchemy import make_url
 
 from ._error import DBOSInitializationError
 from ._logger import dbos_logger
@@ -241,32 +241,6 @@ def _substitute_env_vars(content: str, silent: bool = False) -> str:
     content = re.sub(secret_regex, replace_secret_func, content)
     # Then replace environment variables
     return re.sub(env_regex, replace_env_func, content)
-
-
-def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
-    """
-    Retrieve application database URL from configuration `.yaml` file.
-
-    Loads the DBOS `ConfigFile` from the specified path (typically `dbos-config.yaml`),
-        and returns the database URL for the application database.
-
-    Args:
-        config_file_path (str): The path to the yaml configuration file.
-
-    Returns:
-        str: Database URL for the application database
-
-    """
-    dbos_config = load_config(config_file_path, run_process_config=True)
-    db_url = URL.create(
-        "postgresql+psycopg",
-        username=dbos_config["database"]["username"],
-        password=dbos_config["database"]["password"],
-        host=dbos_config["database"]["hostname"],
-        port=dbos_config["database"]["port"],
-        database=dbos_config["database"]["app_db_name"],
-    )
-    return db_url.render_as_string(hide_password=False)
 
 
 def load_config(

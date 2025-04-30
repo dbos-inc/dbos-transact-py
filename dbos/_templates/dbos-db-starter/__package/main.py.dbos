@@ -6,16 +6,21 @@
 
 # First, let's do imports, create a FastAPI app, and initialize DBOS.
 
+import os
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
-from dbos import DBOS
+from dbos import DBOS, DBOSConfig
 
 from .schema import dbos_hello
 
 app = FastAPI()
-DBOS(fastapi=app, config={"name": "${project_name}"})
+dbos_config: DBOSConfig = {
+    "name": "${project_name}",
+    "database_url": os.environ.get("DBOS_DATABASE_URL", "postgresql+psycopg://postgres:dbos@localhost:5432/${default_db_name}?connect_timeout=5")
+}
+DBOS(fastapi=app, config=dbos_config)
 
 # Next, let's write a function that greets visitors.
 # To make it more interesting, we'll keep track of how
