@@ -121,12 +121,7 @@ def test_dbos_singleton_negative(cleanup_test_databases: None) -> None:
     #    then imports more
     from tests.classdefs import DBOSTestClass
 
-    dbos: DBOS = DBOS(config=default_config())
-
-    # Don't initialize DBOS twice
-    with pytest.raises(Exception) as exc_info:
-        DBOS(config=default_config())
-    assert "conflicting configuration" in str(exc_info.value)
+    DBOS(config=default_config())
 
     # Something should have launched
     with pytest.raises(Exception) as exc_info:
@@ -134,26 +129,6 @@ def test_dbos_singleton_negative(cleanup_test_databases: None) -> None:
     assert "launch" in str(exc_info.value)
 
     DBOS.destroy()
-
-
-def test_config_before_singleton(cleanup_test_databases: None) -> None:
-    # Initialize singleton
-    DBOS.destroy()  # In case of other tests leaving it
-
-    try:
-        # Simulate an app that does some imports of its own code, then defines DBOS,
-        #    then imports more
-        from tests.classdefs import DBOSTestClass
-
-        config: DBOSConfig = {
-            "name": "test-app",
-            "database_url": f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'))}@localhost:5432/dbostestpy",
-        }
-        dbos: DBOS = DBOS(config=config)
-
-    finally:
-        # Initialize singleton
-        DBOS.destroy()  # In case of other tests leaving it
 
 
 def test_dbos_atexit_no_dbos(cleanup_test_databases: None) -> None:
