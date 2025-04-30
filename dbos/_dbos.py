@@ -158,7 +158,6 @@ class DBOSRegistry:
         self.queue_info_map: dict[str, Queue] = {}
         self.pollers: list[RegisteredJob] = []
         self.dbos: Optional[DBOS] = None
-        self.config: Optional[DBOSConfig] = None
 
     def register_wf_function(self, name: str, wrapped_func: F, functype: str) -> None:
         if name in self.function_type_map:
@@ -271,16 +270,6 @@ class DBOS:
         global _dbos_global_instance
         global _dbos_global_registry
         if _dbos_global_instance is None:
-            if (
-                _dbos_global_registry is not None
-                and _dbos_global_registry.config is not None
-            ):
-                if config is not _dbos_global_registry.config:
-                    raise DBOSException(
-                        f"DBOS configured multiple times with conflicting information"
-                    )
-                config = _dbos_global_registry.config
-
             _dbos_global_instance = super().__new__(cls)
             _dbos_global_instance.__init__(fastapi=fastapi, config=config, flask=flask, conductor_url=conductor_url, conductor_key=conductor_key)  # type: ignore
         return _dbos_global_instance
