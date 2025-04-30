@@ -390,6 +390,7 @@ def test_admin_workflow_restart(dbos: DBOS, sys_db: SystemDatabase) -> None:
     while count < 5:
         # Check if the workflow is in the database
         info = _workflow_commands.get_workflow(sys_db, new_workflow_id)
+        assert info is not None, "Expected output to be not None"
         if info.status == "SUCCESS":
             worked = True
             break
@@ -436,6 +437,7 @@ def test_admin_workflow_fork(dbos: DBOS, sys_db: SystemDatabase) -> None:
     while count < 5:
         # Check if the workflow is in the database
         info = _workflow_commands.get_workflow(sys_db, new_workflow_id)
+        assert info is not None, "Expected output to be not None"
         if info.status == "SUCCESS":
             worked = True
             break
