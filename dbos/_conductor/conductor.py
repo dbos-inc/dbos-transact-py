@@ -2,6 +2,7 @@ import socket
 import threading
 import time
 import traceback
+import uuid
 from importlib.metadata import version
 from typing import TYPE_CHECKING, Optional
 
@@ -9,6 +10,7 @@ from websockets import ConnectionClosed, ConnectionClosedOK, InvalidStatus
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
+from dbos._context import SetWorkflowID
 from dbos._utils import GlobalParams
 from dbos._workflow_commands import (
     get_workflow,
@@ -168,10 +170,11 @@ class ConductorWebsocket(threading.Thread):
                             )
                             websocket.send(resume_response.to_json())
                         elif msg_type == p.MessageType.RESTART:
+                            # TODO: deprecate this message type in favor of Fork
                             restart_message = p.RestartRequest.from_json(message)
                             success = True
                             try:
-                                self.dbos.restart_workflow(restart_message.workflow_id)
+                                self.dbos.fork_workflow(restart_message.workflow_id, 1)
                             except Exception as e:
                                 error_message = f"Exception encountered when restarting workflow {restart_message.workflow_id}: {traceback.format_exc()}"
                                 self.dbos.logger.error(error_message)
@@ -183,6 +186,44 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(restart_response.to_json())
+                        elif msg_type == p.MessageType.FORK_WORKFLOW:
+                            fork_message = p.ForkWorkflowRequest.from_json(message)
+                            new_workflow_id = fork_message.body["new_workflow_id"]
+                            if new_workflow_id is None:
+                                new_workflow_id = str(uuid.uuid4())
+                            workflow_id = fork_message.body["workflow_id"]
+                            start_step = fork_message.body["start_step"]
+                            app_version = fork_message.body["application_version"]
+                            try:
+                                with SetWorkflowID(new_workflow_id):
+                                    new_handle = self.dbos.fork_workflow(
+                                        workflow_id,
+                                        start_step,
+                                        application_version=app_version,
+                                    )
+                                    new_info = (
+                                        p.WorkflowsOutput.from_workflow_information(
+                                            new_handle.get_status()
+                                        )
+                                    )
+                            except Exception as e:
+                                error_message = f"Exception encountered when forking workflow {workflow_id} to new workflow {new_workflow_id} on step {start_step}, app version {app_version}: {traceback.format_exc()}"
+                                new_info = None
+                                self.dbos.logger.error(error_message)
+
+                            fork_response = p.ForkWorkflowResponse(
+                                type=p.MessageType.FORK_WORKFLOW,
+                                request_id=base_message.request_id,
+                                output=(
+                                    p.WorkflowsOutput.from_workflow_information(
+                                        new_info
+                                    )
+                                    if new_info is not None
+                                    else None
+                                ),
+                                error_message=error_message,
+                            )
+                            websocket.send(fork_response.to_json())
                         elif msg_type == p.MessageType.LIST_WORKFLOWS:
                             list_workflows_message = p.ListWorkflowsRequest.from_json(
                                 message

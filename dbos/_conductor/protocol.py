@@ -17,6 +17,7 @@ class MessageType(str, Enum):
     GET_WORKFLOW = "get_workflow"
     EXIST_PENDING_WORKFLOWS = "exist_pending_workflows"
     LIST_STEPS = "list_steps"
+    FORK_WORKFLOW = "fork_workflow"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -262,4 +263,22 @@ class ListStepsRequest(BaseMessage):
 @dataclass
 class ListStepsResponse(BaseMessage):
     output: Optional[List[WorkflowSteps]]
+    error_message: Optional[str] = None
+
+
+class ForkWorkflowBody(TypedDict):
+    workflow_id: str
+    start_step: int
+    application_version: Optional[str]
+    new_workflow_id: Optional[str]
+
+
+@dataclass
+class ForkWorkflowRequest(BaseMessage):
+    body: ForkWorkflowBody
+
+
+@dataclass
+class ForkWorkflowResponse(BaseMessage):
+    output: Optional[WorkflowsOutput]
     error_message: Optional[str] = None
