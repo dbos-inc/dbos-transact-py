@@ -379,20 +379,67 @@ def test_admin_workflow_restart(dbos: DBOS, sys_db: SystemDatabase) -> None:
     response = requests.post(
         f"http://localhost:3001/workflows/{wfUuid}/restart", json=[], timeout=5
     )
-    assert response.status_code == 204
+    assert response.status_code == 200
 
-    time.sleep(1)
+    new_workflow_id = response.json().get("workflow_id")
+    print(f"New workflow ID: {new_workflow_id}")
+    assert new_workflow_id is not None, "Expected new workflow ID to be not None"
 
+    worked = False
+    count = 0
+    while count < 5:
+        # Check if the workflow is in the database
+        info = _workflow_commands.get_workflow(sys_db, new_workflow_id)
+        if info.status == "SUCCESS":
+            worked = True
+            break
+        time.sleep(1)
+        count += 1
+
+    assert worked, "Workflow did not finish successfully"
+
+
+def test_admin_workflow_fork(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        print("Executed Simple workflow")
+        return
+
+    # run the workflow
+    simple_workflow()
+
+    # get the workflow list
     output = DBOS.list_workflows()
-    assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
+    assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
 
-    if output[0].workflow_id == wfUuid:
-        new_wfUuid = output[1].workflow_id
-    else:
-        new_wfUuid = output[0].workflow_id
+    assert output[0] != None, "Expected output to be not None"
 
-    info = _workflow_commands.get_workflow(sys_db, new_wfUuid)
-    if info is not None:
-        assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
-    else:
-        assert False, "Expected info to be not None"
+    wfUuid = output[0].workflow_id
+
+    info = _workflow_commands.get_workflow(sys_db, wfUuid)
+    assert info is not None, "Expected output to be not None"
+
+    assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
+
+    response = requests.post(
+        f"http://localhost:3001/workflows/{wfUuid}/fork", json={}, timeout=5
+    )
+    assert response.status_code == 200
+
+    new_workflow_id = response.json().get("workflow_id")
+    print(f"New workflow ID: {new_workflow_id}")
+    assert new_workflow_id is not None, "Expected new workflow ID to be not None"
+
+    worked = False
+    count = 0
+    while count < 5:
+        # Check if the workflow is in the database
+        info = _workflow_commands.get_workflow(sys_db, new_workflow_id)
+        if info.status == "SUCCESS":
+            worked = True
+            break
+        time.sleep(1)
+        count += 1
+
+    assert worked, "Workflow did not finish successfully"
