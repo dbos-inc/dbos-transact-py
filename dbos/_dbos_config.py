@@ -3,6 +3,7 @@ import os
 import re
 from importlib import resources
 from typing import Any, Dict, List, Optional, TypedDict, cast
+from urllib.parse import quote
 
 import yaml
 from jsonschema import ValidationError, validate
@@ -361,7 +362,7 @@ def process_config(
     data["database"]["password"] = (
         os.getenv("DBOS_DBPASSWORD")
         or data["database"].get("password")
-        or os.environ.get("PGPASSWORD")
+        or quote(os.environ.get("PGPASSWORD"))
         or "dbos"
     )
 
