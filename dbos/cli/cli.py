@@ -6,7 +6,6 @@ import time
 import typing
 from os import path
 from typing import Any, Optional
-from urllib.parse import quote
 
 import jsonpickle  # type: ignore
 import sqlalchemy as sa
@@ -17,10 +16,9 @@ from typing_extensions import Annotated
 
 from dbos._debug import debug_workflow, parse_start_command
 
-from .. import load_config
 from .._app_db import ApplicationDatabase
 from .._client import DBOSClient
-from .._dbos_config import _is_valid_app_name
+from .._dbos_config import _is_valid_app_name, load_config
 from .._docker_pg_helper import start_docker_pg, stop_docker_pg
 from .._schemas.system_database import SystemSchema
 from .._sys_db import SystemDatabase, reset_system_database
@@ -33,12 +31,11 @@ def start_client(db_url: Optional[str] = None) -> DBOSClient:
     database_url = db_url
     if database_url is None:
         database_url = os.getenv("DBOS_DATABASE_URL")
-        if database_url is None:
-            config = load_config(silent=True)
-            database = config["database"]
-            username = quote(database["username"])
-            password = quote(database["password"])
-            database_url = f"postgresql://{username}:{password}@{database['hostname']}:{database['port']}/{database['app_db_name']}"
+    if database_url is None:
+        raise ValueError(
+            "Missing database URL: please set it using the --db-url flag or the DBOS_DATABASE_URL environment variable."
+        )
+
     return DBOSClient(database_url=database_url)
 
 

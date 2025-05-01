@@ -7,6 +7,8 @@ from typing import Any
 import tomlkit
 from rich import print
 
+from dbos._dbos_config import _app_name_to_db_name
+
 
 def get_templates_directory() -> str:
     import dbos
@@ -64,6 +66,7 @@ def copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
 """
     ctx = {
         "project_name": project_name,
+        "default_db_name": _app_name_to_db_name(project_name),
         "package_name": package_name,
         "start_command": f"python3 -m {package_name}.main",
         "migration_section": default_migration_section,

@@ -10,8 +10,9 @@ import sqlalchemy as sa
 from fastapi import FastAPI
 from flask import Flask
 
-from dbos import DBOS, ConfigFile, DBOSClient
+from dbos import DBOS, DBOSClient, DBOSConfig
 from dbos._app_db import ApplicationDatabase
+from dbos._dbos_config import translate_dbos_config_to_config_file
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 
@@ -24,20 +25,20 @@ def build_wheel() -> str:
     return wheel_files[0]
 
 
-def default_config() -> ConfigFile:
+def default_config() -> DBOSConfig:
     return {
         "name": "test-app",
-        "database_url": f"postgresql://postgres:{os.environ.get('PGPASSWORD','dbos')}@localhost:5432/dbostestpy",
+        "database_url": f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy",
     }
 
 
 @pytest.fixture()
-def config() -> ConfigFile:
+def config() -> DBOSConfig:
     return default_config()
 
 
 @pytest.fixture()
-def sys_db(config: ConfigFile) -> Generator[SystemDatabase, Any, None]:
+def sys_db(config: DBOSConfig) -> Generator[SystemDatabase, Any, None]:
     assert config["database_url"] is not None
     sys_db = SystemDatabase(config["database_url"])
     yield sys_db
@@ -45,7 +46,7 @@ def sys_db(config: ConfigFile) -> Generator[SystemDatabase, Any, None]:
 
 
 @pytest.fixture()
-def app_db(config: ConfigFile) -> Generator[ApplicationDatabase, Any, None]:
+def app_db(config: DBOSConfig) -> Generator[ApplicationDatabase, Any, None]:
     assert config["database_url"] is not None
     app_db = ApplicationDatabase(config["database_url"])
     yield app_db
@@ -65,7 +66,7 @@ def postgres_db_engine() -> sa.Engine:
 
 
 @pytest.fixture()
-def cleanup_test_databases(config: ConfigFile, postgres_db_engine: sa.Engine) -> None:
+def cleanup_test_databases(config: DBOSConfig, postgres_db_engine: sa.Engine) -> None:
     assert config["database_url"] is not None
     app_db_name = sa.make_url(config["database_url"]).database
     sys_db_name = f"{app_db_name}_dbos_sys"
@@ -103,7 +104,7 @@ def cleanup_test_databases(config: ConfigFile, postgres_db_engine: sa.Engine) ->
 
 @pytest.fixture()
 def dbos(
-    config: ConfigFile, cleanup_test_databases: None
+    config: DBOSConfig, cleanup_test_databases: None
 ) -> Generator[DBOS, Any, None]:
     DBOS.destroy(destroy_registry=True)
 
@@ -120,7 +121,7 @@ def dbos(
 
 
 @pytest.fixture()
-def client(config: ConfigFile) -> Generator[DBOSClient, Any, None]:
+def client(config: DBOSConfig) -> Generator[DBOSClient, Any, None]:
     assert config["database_url"] is not None
     client = DBOSClient(config["database_url"])
     yield client
@@ -129,7 +130,7 @@ def client(config: ConfigFile) -> Generator[DBOSClient, Any, None]:
 
 @pytest.fixture()
 def dbos_fastapi(
-    config: ConfigFile, cleanup_test_databases: None
+    config: DBOSConfig, cleanup_test_databases: None
 ) -> Generator[Tuple[DBOS, FastAPI], Any, None]:
     DBOS.destroy(destroy_registry=True)
     app = FastAPI()
@@ -145,7 +146,7 @@ def dbos_fastapi(
 
 @pytest.fixture()
 def dbos_flask(
-    config: ConfigFile, cleanup_test_databases: None
+    config: DBOSConfig, cleanup_test_databases: None
 ) -> Generator[Tuple[DBOS, Flask], Any, None]:
     DBOS.destroy(destroy_registry=True)
     app = Flask(__name__)

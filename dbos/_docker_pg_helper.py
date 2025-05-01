@@ -83,6 +83,7 @@ def start_docker_postgres(pool_config: Dict[str, Any]) -> bool:
     logging.info("Starting a Postgres Docker container...")
     container_name = "dbos-db"
     pg_data = "/var/lib/postgresql/data"
+    image_name = "pgvector/pgvector:pg16"
 
     try:
         client = docker.from_env()
@@ -103,9 +104,15 @@ def start_docker_postgres(pool_config: Dict[str, Any]) -> bool:
             # Container doesn't exist, proceed with creation
             pass
 
+        # Pull the image if it doesn't exist
+        imgs = client.images.list(name=image_name)
+        if len(imgs) == 0:
+            logging.info(f"Pulling Docker image {image_name}...")
+            client.images.pull(image_name)
+
         # Create and start the container
         container = client.containers.run(
-            image="pgvector/pgvector:pg16",
+            image=image_name,
             name=container_name,
             detach=True,
             environment={

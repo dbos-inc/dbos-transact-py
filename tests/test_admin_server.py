@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from requests.exceptions import ConnectionError
 
 # Public API
-from dbos import DBOS, ConfigFile, DBOSConfig, Queue, SetWorkflowID, _workflow_commands
+from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID, _workflow_commands
 from dbos._error import DBOSWorkflowCancelledError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase, WorkflowStatusString
@@ -70,7 +70,7 @@ def test_admin_endpoints(dbos: DBOS) -> None:
         assert event.is_set()
 
 
-def test_deactivate(dbos: DBOS, config: ConfigFile) -> None:
+def test_deactivate(dbos: DBOS, config: DBOSConfig) -> None:
     wf_counter: int = 0
 
     queue = Queue("example-queue")
@@ -121,7 +121,7 @@ def test_deactivate(dbos: DBOS, config: ConfigFile) -> None:
         assert event.is_set()
 
 
-def test_admin_recovery(config: ConfigFile) -> None:
+def test_admin_recovery(config: DBOSConfig) -> None:
     os.environ["DBOS__VMID"] = "testexecutor"
     os.environ["DBOS__APPVERSION"] = "testversion"
     os.environ["DBOS__APPID"] = "testappid"
@@ -191,30 +191,14 @@ def test_admin_recovery(config: ConfigFile) -> None:
     assert succeeded, "Workflow did not recover"
 
 
-def test_admin_diff_port(cleanup_test_databases: None) -> None:
+def test_admin_diff_port(config: DBOSConfig, cleanup_test_databases: None) -> None:
     # Initialize singleton
     DBOS.destroy()  # In case of other tests leaving it
 
-    config_string = """name: test-app
-language: python
-database:
-  hostname: localhost
-  port: 5432
-  username: postgres
-  password: ${PGPASSWORD}
-  app_db_name: dbostestpy
-runtimeConfig:
-  start:
-    - python3 main.py
-  admin_port: 8001
-"""
-    # Write the config to a text file for the moment
-    with open("dbos-config.yaml", "w") as file:
-        file.write(config_string)
-
     try:
         # Initialize DBOS
-        DBOS()
+        config["admin_port"] = 8001
+        DBOS(config=config)
         DBOS.launch()
 
         # Test GET /dbos-healthz
@@ -224,17 +208,13 @@ runtimeConfig:
     finally:
         # Clean up after the test
         DBOS.destroy()
-        os.remove("dbos-config.yaml")
 
 
-def test_disable_admin_server(cleanup_test_databases: None) -> None:
+def test_disable_admin_server(config: DBOSConfig, cleanup_test_databases: None) -> None:
     # Initialize singleton
     DBOS.destroy()  # In case of other tests leaving it
 
-    config: DBOSConfig = {
-        "name": "test-app",
-        "run_admin_server": False,
-    }
+    config["run_admin_server"] = False
     try:
         DBOS(config=config)
         DBOS.launch()
@@ -246,13 +226,10 @@ def test_disable_admin_server(cleanup_test_databases: None) -> None:
         DBOS.destroy()
 
 
-def test_busy_admin_server_port_does_not_throw() -> None:
+def test_busy_admin_server_port_does_not_throw(config: DBOSConfig) -> None:
     # Initialize singleton
     DBOS.destroy()  # In case of other tests leaving it
 
-    config: DBOSConfig = {
-        "name": "test-app",
-    }
     server_thread = None
     stop_event = threading.Event()
     try:
@@ -379,20 +356,73 @@ def test_admin_workflow_restart(dbos: DBOS, sys_db: SystemDatabase) -> None:
     response = requests.post(
         f"http://localhost:3001/workflows/{wfUuid}/restart", json=[], timeout=5
     )
-    assert response.status_code == 204
+    assert response.status_code == 200
 
-    time.sleep(1)
+    new_workflow_id = response.json().get("workflow_id")
+    print(f"New workflow ID: {new_workflow_id}")
+    assert new_workflow_id is not None, "Expected new workflow ID to be not None"
+
+    worked = False
+    count = 0
+    while count < 5:
+        # Check if the workflow is in the database
+        info = _workflow_commands.get_workflow(sys_db, new_workflow_id)
+        assert info is not None, "Expected output to be not None"
+        if info.status == "SUCCESS":
+            worked = True
+            break
+        time.sleep(1)
+        count += 1
+
+    assert worked, "Workflow did not finish successfully"
+
+
+def test_admin_workflow_fork(dbos: DBOS, sys_db: SystemDatabase) -> None:
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        print("Executed Simple workflow")
+        return
+
+    # run the workflow
+    simple_workflow()
+
+    # get the workflow list
+    output = DBOS.list_workflows()
+    assert len(output) == 1, f"Expected list length to be 1, but got {len(output)}"
+
+    assert output[0] != None, "Expected output to be not None"
+
+    wfUuid = output[0].workflow_id
+
+    info = _workflow_commands.get_workflow(sys_db, wfUuid)
+    assert info is not None, "Expected output to be not None"
+
+    assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
+
+    response = requests.post(
+        f"http://localhost:3001/workflows/{wfUuid}/fork", json={}, timeout=5
+    )
+    assert response.status_code == 200
+
+    new_workflow_id = response.json().get("workflow_id")
+    print(f"New workflow ID: {new_workflow_id}")
+    assert new_workflow_id is not None, "Expected new workflow ID to be not None"
+    assert new_workflow_id != wfUuid, "Expected new workflow ID to be different"
 
     output = DBOS.list_workflows()
     assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
 
-    if output[0].workflow_id == wfUuid:
-        new_wfUuid = output[1].workflow_id
-    else:
-        new_wfUuid = output[0].workflow_id
+    worked = False
+    count = 0
+    while count < 5:
+        # Check if the workflow is in the database
+        info = _workflow_commands.get_workflow(sys_db, new_workflow_id)
+        assert info is not None, "Expected output to be not None"
+        if info.status == "SUCCESS":
+            worked = True
+            break
+        time.sleep(1)
+        count += 1
 
-    info = _workflow_commands.get_workflow(sys_db, new_wfUuid)
-    if info is not None:
-        assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
-    else:
-        assert False, "Expected info to be not None"
+    assert worked, "Workflow did not finish successfully"

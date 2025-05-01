@@ -1,5 +1,5 @@
 from dbos import DBOS
-from dbos._dbos_config import ConfigFile
+from dbos._dbos_config import DBOSConfig
 
 
 @DBOS.workflow()
@@ -7,21 +7,10 @@ def my_function(foo: str) -> str:
     return foo
 
 
-def default_config() -> ConfigFile:
+def default_config() -> DBOSConfig:
     return {
         "name": "forgot-launch",
-        "database": {
-            "hostname": "localhost",
-            "port": 5432,
-            "username": "postgres",
-            "password": "doesntmatter",
-            "app_db_name": "doesntmatter",
-        },
-        "runtimeConfig": {
-            "start": ["doesntmatter"],
-        },
-        "telemetry": {},
-        "env": {},
+        "database_url": f"postgresql://postgres:doesntmatter@localhost:5432/notneeded",
     }
 
 
