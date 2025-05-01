@@ -1137,7 +1137,7 @@ def test_configured_app_db_connect_timeout():
 
     dbos.destroy()
 
-    
+
 def test_db_engine_kwargs():
     DBOS.destroy()
     config: DBOSConfig = {
