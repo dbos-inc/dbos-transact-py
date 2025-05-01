@@ -124,7 +124,7 @@ def test_init_config() -> None:
 def test_reset(postgres_db_engine: sa.Engine) -> None:
     app_name = "reset-app"
     sysdb_name = "reset_app_dbos_sys"
-    db_url = postgres_db_engine.url.set(database="dbos_db_starter").render_as_string(
+    db_url = postgres_db_engine.url.set(database="reset_app").render_as_string(
         hide_password=False
     )
     with tempfile.TemporaryDirectory() as temp_path:
@@ -137,7 +137,7 @@ def test_reset(postgres_db_engine: sa.Engine) -> None:
         )
 
         # Create a system database and verify it exists
-        subprocess.check_call(["dbos", "migrate"], cwd=temp_path)
+        subprocess.check_call(["dbos", "migrate"], cwd=temp_path, env=env)
         with postgres_db_engine.connect() as c:
             c.execution_options(isolation_level="AUTOCOMMIT")
             result = c.execute(
@@ -148,9 +148,6 @@ def test_reset(postgres_db_engine: sa.Engine) -> None:
             assert result == 1
 
         # Call reset and verify it's destroyed
-        db_url = postgres_db_engine.url.set(database="reset_app").render_as_string(
-            hide_password=False
-        )
         subprocess.check_call(
             ["dbos", "reset", "-y", "--db-url", db_url, "--sys-db-name", sysdb_name],
             cwd=temp_path,
@@ -184,7 +181,7 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
         )  # For the alembic migration
 
         # Get some workflows enqueued on the toolbox, then kill the toolbox
-        process = subprocess.Popen(["dbos", "start"], cwd=temp_path)
+        process = subprocess.Popen(["dbos", "start"], cwd=temp_path, env=env)
         try:
             session = requests.Session()
             for i in range(10):
