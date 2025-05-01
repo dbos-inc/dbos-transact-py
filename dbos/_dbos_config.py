@@ -291,7 +291,8 @@ def process_config(
 
     Else, build a database_url from the data.database fields
 
-    Pool sizes still need to be set in data.database
+    Also build SQL Alchemy "kwargs" base on user input + defaults.
+    Specifically, db_engine_kwargs takes precedence over app_db_pool_size
 
     In debug mode, apply overrides from DBOS_DBHOST, DBOS_DBPORT, DBOS_DBUSER, and DBOS_DBPASSWORD.
 
@@ -330,13 +331,33 @@ def process_config(
 
     isDebugMode = os.getenv("DBOS_DBHOST") is not None
 
-    if "database" not in data:
-        data["database"] = {}
-    data["database"]["app_db_pool_size"] = data["database"].get("app_db_pool_size", 20)
+    # Ensure database dict exists
+    data.setdefault("database", {})
     data["database"]["sys_db_pool_size"] = data["database"].get("sys_db_pool_size", 20)
 
+    # User DB SQLAlchemy engine parameters
+    default_engine_kwargs = {
+        "pool_timeout": 30,
+        "max_overflow": 0,
+        "pool_size": 20,
+    }
+    # Set pool sizes with defaults
+    app_db_pool_size = data["database"].get("app_db_pool_size", 20)
+    data["database"]["app_db_pool_size"] = app_db_pool_size
+
+    # Create engine kwargs by starting with defaults and updating with user values
+    engine_kwargs = default_engine_kwargs.copy()
+    if "db_engine_kwargs" in data["database"]:
+        engine_kwargs.update(data["database"]["db_engine_kwargs"])
+    else:
+        # Only override pool_size with app_db_pool_size if user didn't provide db_engine_kwargs
+        engine_kwargs["pool_size"] = app_db_pool_size
+
+    # Store the final result
+    data["database"]["db_engine_kwargs"] = engine_kwargs
+
+    # Database URL resolution
     if data.get("database_url") is not None:
-        print(data)
         # Parse the db string and check required fields
         assert data["database_url"] is not None
         url = make_url(data["database_url"])
@@ -393,7 +414,7 @@ def process_config(
         _username = (
             os.getenv("DBOS_DBUSER") or data["database"].get("username") or "postgres"
         )
-        _password = (
+        _password = (  # We specifically don't escape the password and expect users to do so
             os.getenv("DBOS_DBPASSWORD")
             or data["database"].get("password")
             or os.environ.get("PGPASSWORD")

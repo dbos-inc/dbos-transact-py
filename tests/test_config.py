@@ -2,11 +2,10 @@
 
 import os
 from unittest.mock import mock_open
-from urllib.parse import quote
 
 import pytest
 import pytest_mock
-from sqlalchemy import URL, event
+from sqlalchemy import event
 
 # Public API
 from dbos import DBOS
