@@ -431,6 +431,10 @@ def test_admin_workflow_fork(dbos: DBOS, sys_db: SystemDatabase) -> None:
     new_workflow_id = response.json().get("workflow_id")
     print(f"New workflow ID: {new_workflow_id}")
     assert new_workflow_id is not None, "Expected new workflow ID to be not None"
+    assert new_workflow_id != wfUuid, "Expected new workflow ID to be different"
+
+    output = DBOS.list_workflows()
+    assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
 
     worked = False
     count = 0
