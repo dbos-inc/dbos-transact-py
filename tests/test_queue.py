@@ -1326,16 +1326,16 @@ async def test_priority_queue_async(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient):
+def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient) -> None:
     queue = Queue("test_worker_concurrency_across_versions", worker_concurrency=1)
 
     @DBOS.workflow()
-    def test_workflow():
+    def test_workflow() -> str:
         return DBOS.workflow_id
 
     # First enqueue a workflow on the other version, then on the current version
     other_version = "other_version"
-    other_version_handle = client.enqueue(
+    other_version_handle: WorkflowHandle[None] = client.enqueue(
         {
             "queue_name": "test_worker_concurrency_across_versions",
             "workflow_name": test_workflow.__qualname__,
@@ -1344,9 +1344,9 @@ def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient):
     )
     handle = queue.enqueue(test_workflow)
 
-    # Verify the workflow on the current version completes, but the other version is still pending
+    # Verify the workflow on the current version completes, but the other version is still ENQUEUED
     assert handle.get_result()
-    assert other_version_handle.get_status().status == "PENDING"
+    assert other_version_handle.get_status().status == "ENQUEUED"
 
     # Change the version, verify the other version complets
     GlobalParams.app_version = other_version

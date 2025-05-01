@@ -1735,14 +1735,29 @@ class SystemDatabase:
                 available_tasks = max(0, queue.concurrency - total_running_tasks)
                 max_tasks = min(max_tasks, available_tasks)
 
-            # Lookup unstarted/uncompleted tasks (not running)
+            # Retrieve the first max_tasks workflows in the queue.
+            # Only retrieve workflows of the appropriate version (or without version set)
             query = (
                 sa.select(
                     SystemSchema.workflow_queue.c.workflow_uuid,
                 )
+                .select_from(
+                    SystemSchema.workflow_queue.join(
+                        SystemSchema.workflow_status,
+                        SystemSchema.workflow_queue.c.workflow_uuid
+                        == SystemSchema.workflow_status.c.workflow_uuid,
+                    )
+                )
                 .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
                 .where(SystemSchema.workflow_queue.c.started_at_epoch_ms == None)
                 .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms == None)
+                .where(
+                    sa.or_(
+                        SystemSchema.workflow_status.c.application_version
+                        == app_version,
+                        SystemSchema.workflow_status.c.application_version.is_(None),
+                    )
+                )
                 .order_by(
                     SystemSchema.workflow_queue.c.priority.asc(),
                     SystemSchema.workflow_queue.c.created_at_epoch_ms.asc(),
@@ -1777,15 +1792,6 @@ class SystemDatabase:
                     .where(
                         SystemSchema.workflow_status.c.status
                         == WorkflowStatusString.ENQUEUED.value
-                    )
-                    .where(
-                        sa.or_(
-                            SystemSchema.workflow_status.c.application_version
-                            == app_version,
-                            SystemSchema.workflow_status.c.application_version.is_(
-                                None
-                            ),
-                        )
                     )
                     .values(
                         status=WorkflowStatusString.PENDING.value,
