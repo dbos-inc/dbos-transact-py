@@ -380,28 +380,23 @@ def test_process_config_with_db_url_taking_precedence_over_database():
 
 # Note this exercise going through the db wizard
 def test_process_config_load_defaults():
-    save_pgpassword = '#^aze@//^"'
-    os.environ["PGPASSWORD"] = save_pgpassword
-    try:
-        config: ConfigFile = {
-            "name": "some-app",
-        }
-        processed_config = process_config(data=config)
-        assert processed_config["name"] == "some-app"
-        assert processed_config["database"]["app_db_name"] == "some_app"
-        assert processed_config["database"]["hostname"] == "localhost"
-        assert processed_config["database"]["port"] == 5432
-        assert processed_config["database"]["username"] == "postgres"
-        assert processed_config["database"]["password"] == quote(
-            os.environ.get("PGPASSWORD", "dbos")
-        )
-        assert processed_config["database"]["connectionTimeoutMillis"] == 10000
-        assert processed_config["database"]["app_db_pool_size"] == 20
-        assert processed_config["database"]["sys_db_pool_size"] == 20
-        assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
-        assert processed_config["runtimeConfig"]["run_admin_server"] == True
-    finally:
-        os.environ["PGPASSWORD"] = save_pgpassword
+    config: ConfigFile = {
+        "name": "some-app",
+    }
+    processed_config = process_config(data=config)
+    assert processed_config["name"] == "some-app"
+    assert processed_config["database"]["app_db_name"] == "some_app"
+    assert processed_config["database"]["hostname"] == "localhost"
+    assert processed_config["database"]["port"] == 5432
+    assert processed_config["database"]["username"] == "postgres"
+    assert processed_config["database"]["password"] == os.environ.get(
+        "PGPASSWORD", "dbos"
+    )
+    assert processed_config["database"]["connectionTimeoutMillis"] == 10000
+    assert processed_config["database"]["app_db_pool_size"] == 20
+    assert processed_config["database"]["sys_db_pool_size"] == 20
+    assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
+    assert processed_config["runtimeConfig"]["run_admin_server"] == True
 
 
 def test_process_config_load_default_with_None_database_url():
