@@ -15,6 +15,7 @@ import sqlalchemy as sa
 from dbos import (
     DBOS,
     ConfigFile,
+    DBOSClient,
     DBOSConfiguredInstance,
     Queue,
     SetEnqueueOptions,
@@ -1323,3 +1324,30 @@ async def test_priority_queue_async(dbos: DBOS) -> None:
 
     assert wf_priority_list == [0, 6, 7, 1, 2, 3, 4, 5]
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient):
+    queue = Queue("test_worker_concurrency_across_versions", worker_concurrency=1)
+
+    @DBOS.workflow()
+    def test_workflow():
+        return DBOS.workflow_id
+
+    # First enqueue a workflow on the other version, then on the current version
+    other_version = "other_version"
+    other_version_handle = client.enqueue(
+        {
+            "queue_name": "test_worker_concurrency_across_versions",
+            "workflow_name": test_workflow.__qualname__,
+            "app_version": other_version,
+        }
+    )
+    handle = queue.enqueue(test_workflow)
+
+    # Verify the workflow on the current version completes, but the other version is still pending
+    assert handle.get_result()
+    assert other_version_handle.get_status().status == "PENDING"
+
+    # Change the version, verify the other version complets
+    GlobalParams.app_version = other_version
+    assert other_version_handle.get_result()
