@@ -8,13 +8,12 @@ from ._context import (
     SetWorkflowTimeout,
 )
 from ._dbos import DBOS, DBOSConfiguredInstance, WorkflowHandle, WorkflowHandleAsync
-from ._dbos_config import ConfigFile, DBOSConfig
+from ._dbos_config import DBOSConfig
 from ._kafka_message import KafkaMessage
 from ._queue import Queue
 from ._sys_db import GetWorkflowsInput, WorkflowStatus, WorkflowStatusString
 
 __all__ = [
-    "ConfigFile",
     "DBOSConfig",
     "DBOS",
     "DBOSClient",
