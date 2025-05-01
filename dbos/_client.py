@@ -302,6 +302,7 @@ class DBOSClient:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
+        workflow_id_prefix: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_workflows,
@@ -315,6 +316,7 @@ class DBOSClient:
             limit=limit,
             offset=offset,
             sort_desc=sort_desc,
+            workflow_id_prefix=workflow_id_prefix,
         )
 
     def list_queued_workflows(
