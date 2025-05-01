@@ -171,9 +171,17 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
     def _handle_restart(self, workflow_id: str) -> None:
         try:
             print(f"Restarting workflow {workflow_id}")
-            self.dbos.restart_workflow(workflow_id)
-            self.send_response(204)
+            handle = self.dbos.restart_workflow(workflow_id)
+            response_body = json.dumps(
+                {
+                    "workflow_id": handle.workflow_id,
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response_body)))
             self._end_headers()
+            self.wfile.write(response_body)
         except DBOSException as e:
             print(f"Error restarting workflow: {e}")
             self.send_response(500)
@@ -185,9 +193,17 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_fork(self, workflow_id: str, start_step: int) -> None:
         try:
-            self.dbos.fork_workflow(workflow_id, start_step)
-            self.send_response(204)
+            handle = self.dbos.fork_workflow(workflow_id, start_step)
+            response_body = json.dumps(
+                {
+                    "workflow_id": handle.workflow_id,
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response_body)))
             self._end_headers()
+            self.wfile.write(response_body)
         except DBOSException as e:
             print(f"Error forking workflow: {e}")
             self.send_response(500)
