@@ -280,5 +280,5 @@ class ForkWorkflowRequest(BaseMessage):
 
 @dataclass
 class ForkWorkflowResponse(BaseMessage):
-    output: Optional[WorkflowsOutput]
+    new_workflow_id: Optional[str]
     error_message: Optional[str] = None

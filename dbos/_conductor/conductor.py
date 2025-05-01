@@ -201,26 +201,16 @@ class ConductorWebsocket(threading.Thread):
                                         start_step,
                                         application_version=app_version,
                                     )
-                                    new_info = (
-                                        p.WorkflowsOutput.from_workflow_information(
-                                            new_handle.get_status()
-                                        )
-                                    )
+                                new_workflow_id = new_handle.workflow_id
                             except Exception as e:
                                 error_message = f"Exception encountered when forking workflow {workflow_id} to new workflow {new_workflow_id} on step {start_step}, app version {app_version}: {traceback.format_exc()}"
-                                new_info = None
                                 self.dbos.logger.error(error_message)
+                                new_workflow_id = None
 
                             fork_response = p.ForkWorkflowResponse(
                                 type=p.MessageType.FORK_WORKFLOW,
                                 request_id=base_message.request_id,
-                                output=(
-                                    p.WorkflowsOutput.from_workflow_information(
-                                        new_info
-                                    )
-                                    if new_info is not None
-                                    else None
-                                ),
+                                new_workflow_id=new_workflow_id,
                                 error_message=error_message,
                             )
                             websocket.send(fork_response.to_json())
