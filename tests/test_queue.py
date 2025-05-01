@@ -14,6 +14,7 @@ import sqlalchemy as sa
 from dbos import (
     DBOS,
     ConfigFile,
+    DBOSClient,
     DBOSConfiguredInstance,
     Queue,
     SetEnqueueOptions,
@@ -1210,3 +1211,29 @@ async def test_queue_deduplication_async(dbos: DBOS) -> None:
         with SetWorkflowID(wfid2):
             handle2 = await queue.enqueue_async(test_workflow, "def")
     assert (await handle2.get_result()) == "def-c-p"
+
+def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient) -> None:
+    queue = Queue("test_worker_concurrency_across_versions", worker_concurrency=1)
+
+    @DBOS.workflow()
+    def test_workflow() -> str:
+        return DBOS.workflow_id
+
+    # First enqueue a workflow on the other version, then on the current version
+    other_version = "other_version"
+    other_version_handle: WorkflowHandle[None] = client.enqueue(
+        {
+            "queue_name": "test_worker_concurrency_across_versions",
+            "workflow_name": test_workflow.__qualname__,
+            "app_version": other_version,
+        }
+    )
+    handle = queue.enqueue(test_workflow)
+
+    # Verify the workflow on the current version completes, but the other version is still ENQUEUED
+    assert handle.get_result()
+    assert other_version_handle.get_status().status == "ENQUEUED"
+
+    # Change the version, verify the other version complets
+    GlobalParams.app_version = other_version
+    assert other_version_handle.get_result()
