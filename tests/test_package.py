@@ -162,12 +162,16 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
         hide_password=False
     )
     with tempfile.TemporaryDirectory() as temp_path:
+        env = os.environ.copy()
+        env["DBOS_DATABASE_URL"] = db_url
         subprocess.check_call(
             ["dbos", "init", app_name, "--template", "dbos-toolbox"],
             cwd=temp_path,
         )
         subprocess.check_call(["dbos", "reset", "-y", "-D", db_url], cwd=temp_path)
-        subprocess.check_call(["dbos", "migrate"], cwd=temp_path)
+        subprocess.check_call(
+            ["dbos", "migrate"], cwd=temp_path, env=env
+        )  # For the alembic migration
 
         # Get some workflows enqueued on the toolbox, then kill the toolbox
         process = subprocess.Popen(["dbos", "start"], cwd=temp_path)
@@ -224,8 +228,6 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
         assert len(get_steps_data) == 10
 
         # From now pass database url in the environment
-        env = os.environ.copy()
-        env["DBOS_DATABASE_URL"] = db_url
 
         # cancel the workflow and check the status is CANCELLED
         subprocess.check_output(
