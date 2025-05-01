@@ -429,7 +429,7 @@ def run_dbos_test_in_process(
 ) -> None:
     dbos_config: DBOSConfig = {
         "name": "test-app",
-        "database_url": f"postgres://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'))}@localhost:5432/dbostestpy",
+        "database_url": f"postgres://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy",
         "admin_port": 8001 + i,
     }
     dbos = DBOS(config=dbos_config)

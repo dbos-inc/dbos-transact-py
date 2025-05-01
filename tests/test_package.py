@@ -56,7 +56,6 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
             subprocess.check_call(
                 ["dbos", "init", template_name, "--template", template_name],
                 cwd=temp_path,
-                env=venv,
             )
 
             # Run schema migration
@@ -133,7 +132,6 @@ def test_reset(postgres_db_engine: sa.Engine) -> None:
         subprocess.check_call(
             ["dbos", "init", app_name, "--template", "dbos-db-starter"],
             cwd=temp_path,
-            env=env,
         )
 
         # Create a system database and verify it exists
