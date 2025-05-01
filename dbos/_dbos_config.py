@@ -1,19 +1,13 @@
 import json
 import os
 import re
-import sys
 from importlib import resources
-from typing import Any, Dict, List, Optional, TypedDict, Union, cast
-
-if sys.version_info < (3, 10):
-    from typing_extensions import TypeGuard
-else:
-    from typing import TypeGuard
+from typing import Any, Dict, List, Optional, TypedDict, cast
 
 import yaml
 from jsonschema import ValidationError, validate
 from rich import print
-from sqlalchemy import URL, make_url
+from sqlalchemy import make_url
 
 from ._error import DBOSInitializationError
 from ._logger import dbos_logger
@@ -146,28 +140,6 @@ class ConfigFile(TypedDict, total=False):
     env: Dict[str, str]
 
 
-def is_dbos_configfile(data: Union[ConfigFile, DBOSConfig]) -> TypeGuard[DBOSConfig]:
-    """
-    Type guard to check if the provided data is a DBOSConfig.
-
-    Args:
-        data: The configuration object to check
-
-    Returns:
-        True if the data is a DBOSConfig, False otherwise
-    """
-    return (
-        isinstance(data, dict)
-        and "name" in data
-        and (
-            "runtimeConfig" in data
-            or "database" in data
-            or "env" in data
-            or "telemetry" in data
-        )
-    )
-
-
 def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     if "name" not in config:
         raise DBOSInitializationError(f"Configuration must specify an application name")
@@ -269,32 +241,6 @@ def _substitute_env_vars(content: str, silent: bool = False) -> str:
     content = re.sub(secret_regex, replace_secret_func, content)
     # Then replace environment variables
     return re.sub(env_regex, replace_env_func, content)
-
-
-def get_dbos_database_url(config_file_path: str = DBOS_CONFIG_PATH) -> str:
-    """
-    Retrieve application database URL from configuration `.yaml` file.
-
-    Loads the DBOS `ConfigFile` from the specified path (typically `dbos-config.yaml`),
-        and returns the database URL for the application database.
-
-    Args:
-        config_file_path (str): The path to the yaml configuration file.
-
-    Returns:
-        str: Database URL for the application database
-
-    """
-    dbos_config = load_config(config_file_path, run_process_config=True)
-    db_url = URL.create(
-        "postgresql+psycopg",
-        username=dbos_config["database"]["username"],
-        password=dbos_config["database"]["password"],
-        host=dbos_config["database"]["hostname"],
-        port=dbos_config["database"]["port"],
-        database=dbos_config["database"]["app_db_name"],
-    )
-    return db_url.render_as_string(hide_password=False)
 
 
 def load_config(

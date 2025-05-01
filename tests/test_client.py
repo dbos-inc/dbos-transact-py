@@ -11,7 +11,7 @@ from typing import Optional, TypedDict
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, ConfigFile, DBOSClient, EnqueueOptions, SetWorkflowID
+from dbos import DBOS, DBOSClient, DBOSConfig, EnqueueOptions, SetWorkflowID
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
@@ -152,7 +152,7 @@ def test_client_enqueue_wrong_appver(dbos: DBOS, client: DBOSClient) -> None:
 
 
 def test_client_enqueue_idempotent(
-    config: ConfigFile, client: DBOSClient, sys_db: SystemDatabase
+    config: DBOSConfig, client: DBOSClient, sys_db: SystemDatabase
 ) -> None:
     DBOS.destroy(destroy_registry=True)
 

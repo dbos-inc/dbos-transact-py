@@ -3,11 +3,12 @@ import subprocess
 import sys
 import time
 from os import path
+from urllib.parse import quote
 
 import pytest
 
 # Public API
-from dbos import DBOS, SetWorkflowID, WorkflowHandle
+from dbos import DBOS, DBOSConfig, SetWorkflowID, WorkflowHandle
 
 # Private API used because this is a test
 from dbos._context import DBOSContextEnsure, assert_current_dbos_context
@@ -120,12 +121,7 @@ def test_dbos_singleton_negative(cleanup_test_databases: None) -> None:
     #    then imports more
     from tests.classdefs import DBOSTestClass
 
-    dbos: DBOS = DBOS(config=default_config())
-
-    # Don't initialize DBOS twice
-    with pytest.raises(Exception) as exc_info:
-        DBOS(config=default_config())
-    assert "conflicting configuration" in str(exc_info.value)
+    DBOS(config=default_config())
 
     # Something should have launched
     with pytest.raises(Exception) as exc_info:
@@ -133,75 +129,6 @@ def test_dbos_singleton_negative(cleanup_test_databases: None) -> None:
     assert "launch" in str(exc_info.value)
 
     DBOS.destroy()
-
-
-config_string = """name: test-app
-language: python
-database:
-  hostname: localhost
-  port: 5432
-  username: postgres
-  password: ${PGPASSWORD}
-  app_db_name: dbostestpy
-runtimeConfig:
-  start:
-    - python3 main.py
-application:
-  service_url: 'https://service.org'
-  service_config:
-    port: 80
-    user: "user"
-    password: "password"
-"""
-
-
-def test_config_before_singleton(cleanup_test_databases: None) -> None:
-    # Initialize singleton
-    DBOS.destroy()  # In case of other tests leaving it
-
-    # Write the config to a text file for the moment
-    with open("dbos-config.yaml", "w") as file:
-        file.write(config_string)
-
-    try:
-        # Simulate an app that does some imports of its own code, then defines DBOS,
-        #    then imports more
-        from tests.classdefs import DBOSTestClass
-
-        port = DBOS.config["database"]["hostname"]
-        assert port == "localhost"
-
-        name = DBOS.config["name"]
-        assert name == "test-app"
-
-        # This is OK, it meant load_config anyway
-        dbos: DBOS = DBOS()
-
-    finally:
-        # Initialize singleton
-        DBOS.destroy()  # In case of other tests leaving it
-        os.remove("dbos-config.yaml")
-
-
-def test_config_before_singleton_negative(cleanup_test_databases: None) -> None:
-    # Initialize singleton
-    DBOS.destroy()  # In case of other tests leaving it
-
-    # Write the config to a text file for the moment
-    with open("dbos-config.yaml", "w") as file:
-        file.write(config_string)
-
-    try:
-        x = DBOS.config.get("language")
-        assert x == "python"
-
-        # Not OK, config already loaded in the default way
-        with pytest.raises(Exception) as exc_info:
-            DBOS(config=default_config())
-        assert "configured multiple" in str(exc_info.value)
-    finally:
-        DBOS.destroy()
-        os.remove("dbos-config.yaml")
 
 
 def test_dbos_atexit_no_dbos(cleanup_test_databases: None) -> None:

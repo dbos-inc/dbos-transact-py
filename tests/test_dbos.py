@@ -14,7 +14,7 @@ import sqlalchemy as sa
 # Public API
 from dbos import (
     DBOS,
-    ConfigFile,
+    DBOSConfig,
     SetWorkflowID,
     SetWorkflowTimeout,
     WorkflowHandle,
@@ -561,7 +561,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert txn_counter == 1
 
 
-def test_recovery_thread(config: ConfigFile) -> None:
+def test_recovery_thread(config: DBOSConfig) -> None:
     wf_counter: int = 0
     test_var = "dbos"
 
@@ -1171,7 +1171,7 @@ def test_multi_set_event(dbos: DBOS) -> None:
 
 
 def test_debug_logging(
-    dbos: DBOS, caplog: pytest.LogCaptureFixture, config: ConfigFile
+    dbos: DBOS, caplog: pytest.LogCaptureFixture, config: DBOSConfig
 ) -> None:
     wfid = str(uuid.uuid4())
     dest_wfid = str(uuid.uuid4())
@@ -1270,7 +1270,7 @@ def test_debug_logging(
     logging.getLogger("dbos").propagate = original_propagate
 
 
-def test_destroy_semantics(dbos: DBOS, config: ConfigFile) -> None:
+def test_destroy_semantics(dbos: DBOS, config: DBOSConfig) -> None:
 
     @DBOS.workflow()
     def test_workflow(var: str) -> str:
@@ -1301,7 +1301,7 @@ def test_double_decoration(dbos: DBOS) -> None:
 
 
 def test_duplicate_registration(
-    dbos: DBOS, caplog: pytest.LogCaptureFixture, config: ConfigFile
+    dbos: DBOS, caplog: pytest.LogCaptureFixture, config: DBOSConfig
 ) -> None:
     original_propagate = logging.getLogger("dbos").propagate
     caplog.set_level(logging.WARNING, "dbos")
@@ -1357,7 +1357,7 @@ def test_duplicate_registration(
     logging.getLogger("dbos").propagate = original_propagate
 
 
-def test_app_version(config: ConfigFile) -> None:
+def test_app_version(config: DBOSConfig) -> None:
     def is_hex(s: str) -> bool:
         return all(c in "0123456789abcdefABCDEF" for c in s)
 
@@ -1424,7 +1424,7 @@ def test_app_version(config: ConfigFile) -> None:
     del os.environ["DBOS__APPVERSION"]
 
 
-def test_recovery_appversion(config: ConfigFile) -> None:
+def test_recovery_appversion(config: DBOSConfig) -> None:
     input = 5
     os.environ["DBOS__VMID"] = "testexecutor"
 

@@ -6,14 +6,7 @@ from typing import Any
 import pytest
 
 # Public API
-from dbos import (
-    DBOS,
-    ConfigFile,
-    Queue,
-    SetWorkflowID,
-    WorkflowStatusString,
-    _workflow_commands,
-)
+from dbos import DBOS, Queue, SetWorkflowID, WorkflowStatusString, _workflow_commands
 from dbos._app_db import ApplicationDatabase
 from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
@@ -166,7 +159,7 @@ def test_list_workflow_end_times_positive(dbos: DBOS) -> None:
     assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
 
 
-def test_get_workflow(dbos: DBOS, config: ConfigFile, sys_db: SystemDatabase) -> None:
+def test_get_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
     @DBOS.workflow()
     def simple_workflow() -> None:
         print("Executed Simple workflow")

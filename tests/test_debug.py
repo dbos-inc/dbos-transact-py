@@ -3,7 +3,7 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, ConfigFile, SetWorkflowID
+from dbos import DBOS, DBOSConfig, SetWorkflowID
 from dbos._dbos import _get_dbos_instance
 from dbos._debug import PythonModule, parse_start_command
 from dbos._schemas.system_database import SystemSchema
@@ -58,7 +58,7 @@ def get_recovery_attempts(wfuuid: str) -> int:
         return int(recovery_attempts)
 
 
-def test_wf_debug(dbos: DBOS, config: ConfigFile) -> None:
+def test_wf_debug(dbos: DBOS, config: DBOSConfig) -> None:
     wf_counter: int = 0
     step_counter: int = 0
 
@@ -101,7 +101,7 @@ def test_wf_debug(dbos: DBOS, config: ConfigFile) -> None:
     assert actual_retry_attempts == expected_retry_attempts
 
 
-def test_wf_debug_exception(dbos: DBOS, config: ConfigFile) -> None:
+def test_wf_debug_exception(dbos: DBOS, config: DBOSConfig) -> None:
     wf_counter: int = 0
     step_counter: int = 0
 

@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 # Public API
-from dbos import DBOS, ConfigFile
+from dbos import DBOS, DBOSConfig
 
 # Private API because this is a unit test
 from dbos._context import assert_current_dbos_context
@@ -160,7 +160,7 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
 @pytest.mark.asyncio
 async def test_custom_lifespan(
-    config: ConfigFile, cleanup_test_databases: None
+    config: DBOSConfig, cleanup_test_databases: None
 ) -> None:
     resource = None
     port = 8000

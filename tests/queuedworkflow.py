@@ -1,24 +1,14 @@
 # Public API
 import os
+from urllib.parse import quote
 
-from dbos import DBOS, ConfigFile, Queue, SetWorkflowID
+from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID
 
 
-def default_config() -> ConfigFile:
+def default_config() -> DBOSConfig:
     return {
         "name": "test-app",
-        "database": {
-            "hostname": "localhost",
-            "port": 5432,
-            "username": "postgres",
-            "password": os.environ["PGPASSWORD"],
-            "app_db_name": "dbostestpy",
-        },
-        "runtimeConfig": {
-            "start": ["python3 main.py"],
-        },
-        "telemetry": {},
-        "env": {},
+        "database_url": f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy",
     }
 
 
