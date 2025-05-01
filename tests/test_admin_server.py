@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from requests.exceptions import ConnectionError
 
 # Public API
-from dbos import DBOS, ConfigFile, DBOSConfig, Queue, SetWorkflowID, _workflow_commands
+from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID, _workflow_commands
 from dbos._error import DBOSWorkflowCancelledError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase, WorkflowStatusString
@@ -70,7 +70,7 @@ def test_admin_endpoints(dbos: DBOS) -> None:
         assert event.is_set()
 
 
-def test_deactivate(dbos: DBOS, config: ConfigFile) -> None:
+def test_deactivate(dbos: DBOS, config: DBOSConfig) -> None:
     wf_counter: int = 0
 
     queue = Queue("example-queue")
@@ -121,7 +121,7 @@ def test_deactivate(dbos: DBOS, config: ConfigFile) -> None:
         assert event.is_set()
 
 
-def test_admin_recovery(config: ConfigFile) -> None:
+def test_admin_recovery(config: DBOSConfig) -> None:
     os.environ["DBOS__VMID"] = "testexecutor"
     os.environ["DBOS__APPVERSION"] = "testversion"
     os.environ["DBOS__APPID"] = "testappid"
@@ -191,30 +191,14 @@ def test_admin_recovery(config: ConfigFile) -> None:
     assert succeeded, "Workflow did not recover"
 
 
-def test_admin_diff_port(cleanup_test_databases: None) -> None:
+def test_admin_diff_port(config: DBOSConfig, cleanup_test_databases: None) -> None:
     # Initialize singleton
     DBOS.destroy()  # In case of other tests leaving it
 
-    config_string = """name: test-app
-language: python
-database:
-  hostname: localhost
-  port: 5432
-  username: postgres
-  password: ${PGPASSWORD}
-  app_db_name: dbostestpy
-runtimeConfig:
-  start:
-    - python3 main.py
-  admin_port: 8001
-"""
-    # Write the config to a text file for the moment
-    with open("dbos-config.yaml", "w") as file:
-        file.write(config_string)
-
     try:
         # Initialize DBOS
-        DBOS()
+        config["admin_port"] = 8001
+        DBOS(config=config)
         DBOS.launch()
 
         # Test GET /dbos-healthz
@@ -224,17 +208,13 @@ runtimeConfig:
     finally:
         # Clean up after the test
         DBOS.destroy()
-        os.remove("dbos-config.yaml")
 
 
-def test_disable_admin_server(cleanup_test_databases: None) -> None:
+def test_disable_admin_server(config: DBOSConfig, cleanup_test_databases: None) -> None:
     # Initialize singleton
     DBOS.destroy()  # In case of other tests leaving it
 
-    config: DBOSConfig = {
-        "name": "test-app",
-        "run_admin_server": False,
-    }
+    config["run_admin_server"] = False
     try:
         DBOS(config=config)
         DBOS.launch()
@@ -246,13 +226,10 @@ def test_disable_admin_server(cleanup_test_databases: None) -> None:
         DBOS.destroy()
 
 
-def test_busy_admin_server_port_does_not_throw() -> None:
+def test_busy_admin_server_port_does_not_throw(config: DBOSConfig) -> None:
     # Initialize singleton
     DBOS.destroy()  # In case of other tests leaving it
 
-    config: DBOSConfig = {
-        "name": "test-app",
-    }
     server_thread = None
     stop_event = threading.Event()
     try:

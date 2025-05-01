@@ -7,7 +7,7 @@ from alembic import command
 from alembic.config import Config
 
 # Public API
-from dbos import DBOS, ConfigFile
+from dbos import DBOS, DBOSConfig
 
 # Private API because this is a unit test
 from dbos._schemas.system_database import SystemSchema
@@ -53,10 +53,10 @@ def test_systemdb_migration(dbos: DBOS) -> None:
 
 
 def test_custom_sysdb_name_migration(
-    config: ConfigFile, postgres_db_engine: sa.Engine
+    config: DBOSConfig, postgres_db_engine: sa.Engine
 ) -> None:
     sysdb_name = "custom_sysdb_name"
-    config["database"]["sys_db_name"] = sysdb_name
+    config["sys_db_name"] = sysdb_name
 
     # Clean up from previous runs
     with postgres_db_engine.connect() as connection:
@@ -104,7 +104,7 @@ def rollback_system_db(sysdb_url: str) -> None:
     command.downgrade(alembic_cfg, "base")  # Rollback all migrations
 
 
-def test_reset(config: ConfigFile, postgres_db_engine: sa.Engine) -> None:
+def test_reset(config: DBOSConfig, postgres_db_engine: sa.Engine) -> None:
     DBOS.destroy()
     dbos = DBOS(config=config)
     DBOS.launch()
@@ -114,16 +114,12 @@ def test_reset(config: ConfigFile, postgres_db_engine: sa.Engine) -> None:
         sql = SystemSchema.workflow_status.select()
         result = c.execute(sql)
         assert result.fetchall() == []
+    sysdb_name = dbos._sys_db.engine.url.database
 
     DBOS.destroy()
     dbos = DBOS(config=config)
     DBOS.reset_system_database()
 
-    sysdb_name = (
-        config["database"]["sys_db_name"]
-        if "sys_db_name" in config["database"] and config["database"]["sys_db_name"]
-        else config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
-    )
     with postgres_db_engine.connect() as c:
         c.execution_options(isolation_level="AUTOCOMMIT")
         count: int = c.execute(
