@@ -43,6 +43,9 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
             venv = os.environ.copy()
             venv["PATH"] = f"{os.path.join(venv_path, 'bin')}:{venv['PATH']}"
             venv["VIRTUAL_ENV"] = venv_path
+            venv["DBOS_DATABASE_URL"] = postgres_db_engine.url.set(
+                database=app_db_name
+            ).render_as_string(hide_password=False)
 
             # Install the dbos package into the virtual environment
             subprocess.check_call(
@@ -121,10 +124,16 @@ def test_init_config() -> None:
 def test_reset(postgres_db_engine: sa.Engine) -> None:
     app_name = "reset-app"
     sysdb_name = "reset_app_dbos_sys"
+    db_url = postgres_db_engine.url.set(database="dbos_db_starter").render_as_string(
+        hide_password=False
+    )
     with tempfile.TemporaryDirectory() as temp_path:
+        env = os.environ.copy()
+        env["DBOS_DATABASE_URL"] = db_url
         subprocess.check_call(
             ["dbos", "init", app_name, "--template", "dbos-db-starter"],
             cwd=temp_path,
+            env=env,
         )
 
         # Create a system database and verify it exists
@@ -167,6 +176,7 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
         subprocess.check_call(
             ["dbos", "init", app_name, "--template", "dbos-toolbox"],
             cwd=temp_path,
+            env=env,
         )
         subprocess.check_call(["dbos", "reset", "-y", "-D", db_url], cwd=temp_path)
         subprocess.check_call(
