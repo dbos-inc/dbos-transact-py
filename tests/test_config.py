@@ -89,7 +89,7 @@ def test_load_valid_config_file(mocker):
           hostname: 'localhost'
           port: 5432
           username: 'postgres'
-          password: ${PGPASSWORD}
+          password: '${PGPASSWORD}'
           app_db_name: 'some db'
           connectionTimeoutMillis: 3000
         env:
@@ -156,7 +156,7 @@ def test_load_config_database_url_and_database(mocker):
             hostname: 'localhost'
             port: 5432
             username: 'postgres'
-            password: ${PGPASSWORD}
+            password: '${PGPASSWORD}'
             app_db_name: 'some db'
             connectionTimeoutMillis: 3000
     """
