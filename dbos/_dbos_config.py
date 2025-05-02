@@ -464,30 +464,18 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Name
     provided_config["name"] = config_from_file["name"]
 
-    # Database config. We build a connection string with sslmode set based on the presence of ssl_ca in the config file.
-
-    # If ssl_ca is present, set sslmode to verify-full
-    # If ssl_ca is not present, set sslmode to no-verify
-    username = config_from_file["database"]["username"]
-    password = config_from_file["database"]["password"]
-    hostname = config_from_file["database"]["hostname"]
-    port = config_from_file["database"]["port"]
-    dbname = config_from_file["database"]["app_db_name"]
-    provided_config["database_url"] = (
-        f"postgres://{username}:{password}@{hostname}:{port}/{dbname}?connect_timeout=10"
-    )
-    assert provided_config["database_url"] is not None
-    if "ssl_ca" in config_from_file["database"]:
-        ssl_ca = config_from_file["database"]["ssl_ca"]
-        provided_config["database_url"] += f"&sslmode=verify-full&sslrootcert={ssl_ca}"
-    else:
-        provided_config["database_url"] += "&sslmode=no-verify"
-
     if "database" not in provided_config:
         provided_config["database"] = {}
     provided_config["database"]["sys_db_name"] = config_from_file["database"][
         "sys_db_name"
     ]
+
+    db_url = os.environ.get("DBOS_DATABASE_URL")
+    if db_url is None:
+        raise DBOSInitializationError(
+            "DBOS_DATABASE_URL environment variable is not set. This is required to connect to the database."
+        )
+    provided_config["database_url"] = db_url
 
     # Telemetry config
     if "telemetry" not in provided_config or provided_config["telemetry"] is None:
