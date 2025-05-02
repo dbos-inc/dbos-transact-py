@@ -279,7 +279,7 @@ def process_config(
     """
     If a database_url is provided, pass it as is in the config.
 
-    Else, build a database_url from the env vars / defaults.
+    Else, build a database_url from defaults.
 
     Also build SQL Alchemy "kwargs" base on user input + defaults.
     Specifically, db_engine_kwargs takes precedence over app_db_pool_size
@@ -291,7 +291,7 @@ def process_config(
         - Port: 5432
         - Username: postgres
         - Password: $PGPASSWORD
-        - Database name: transformed application name. [TODO: update]
+        - Database name: transformed application name.
     """
 
     if "name" not in data:
@@ -316,7 +316,7 @@ def process_config(
         data["runtimeConfig"] = {
             "run_admin_server": True,
         }
-    elif data["runtimeConfig"].get("run_admin_server") is None:
+    elif "run_admin_server" not in data["runtimeConfig"]:
         data["runtimeConfig"]["run_admin_server"] = True
 
     isDebugMode = os.getenv("DBOS_DBHOST") is not None
