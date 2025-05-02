@@ -436,22 +436,19 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Name
     provided_config["name"] = config_from_file["name"]
 
-    # Database config. Note we disregard a potential database_url in config_from_file because it is not expected from DBOS Cloud
+    # Database config. Expects DBOS_DATABASE_URL to be set
     if "database" not in provided_config:
         provided_config["database"] = {}
-    provided_config["database"]["hostname"] = config_from_file["database"]["hostname"]
-    provided_config["database"]["port"] = config_from_file["database"]["port"]
-    provided_config["database"]["username"] = config_from_file["database"]["username"]
-    provided_config["database"]["password"] = config_from_file["database"]["password"]
-    provided_config["database"]["app_db_name"] = config_from_file["database"][
-        "app_db_name"
-    ]
     provided_config["database"]["sys_db_name"] = config_from_file["database"][
         "sys_db_name"
     ]
-    provided_config["database"]["ssl"] = config_from_file["database"]["ssl"]
-    if "ssl_ca" in config_from_file["database"]:
-        provided_config["database"]["ssl_ca"] = config_from_file["database"]["ssl_ca"]
+
+    db_url = os.environ.get("DBOS_DATABASE_URL")
+    if db_url is None:
+        raise DBOSInitializationError(
+            "DBOS_DATABASE_URL environment variable is not set. This is required to connect to the database."
+        )
+    provided_config["database_url"] = db_url
 
     # Telemetry config
     if "telemetry" not in provided_config or provided_config["telemetry"] is None:
