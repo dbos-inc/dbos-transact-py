@@ -219,14 +219,21 @@ def migrate(
             help="Your DBOS application database URL",
         ),
     ] = None,
+    sys_db_name: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--sys-db-name",
+            "-s",
+            help="Specify the name of the system database to reset",
+        ),
+    ] = None,
 ) -> None:
     config = load_config(run_process_config=False, silent=True)
     connection_string = _get_db_url(db_url)
     app_db_name = sa.make_url(connection_string).database
     assert app_db_name is not None, "Database name is required in URL"
-    sys_db_name = config["database"].get(
-        "sys_db_name", app_db_name + SystemSchema.sysdb_suffix
-    )
+    if sys_db_name is None:
+        sys_db_name = app_db_name + SystemSchema.sysdb_suffix
 
     typer.echo(f"Starting schema migration for database {app_db_name}")
 
