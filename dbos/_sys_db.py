@@ -235,7 +235,7 @@ class SystemDatabase:
     ):
         # Set driver
         system_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
-        # Resolve system datbase name
+        # Resolve system database name
         sysdb_name = sys_db_name
         if not sysdb_name:
             assert system_db_url.database is not None
