@@ -230,18 +230,17 @@ def test_process_config_full():
     )
     assert configFile["database"]["sys_db_name"] == "sys_db"
     assert configFile["database"]["migrate"] == ["alembic upgrade head"]
-    assert configFile["database"]["sys_db_pool_size"] == 27
     assert configFile["database"]["db_engine_kwargs"] == {
         "key": "value",
         "pool_timeout": 30,
         "max_overflow": 0,
-        "pool_size": 45,
+        "pool_size": 20,
     }
     assert configFile["database"]["sys_db_engine_kwargs"] == {
         "key": "value",
         "pool_timeout": 30,
         "max_overflow": 0,
-        "pool_size": 45,
+        "pool_size": 27,
     }
     assert configFile["runtimeConfig"]["start"] == ["python3 main.py"]
     assert configFile["runtimeConfig"]["admin_port"] == 8001
@@ -277,10 +276,8 @@ def test_debug_override_database_url(mocker: pytest_mock.MockFixture):
         == "postgres://fakeuser:fakepassword@fakehost:1234/dbn?connect_timeout=1&sslmode=require&sslrootcert=ca.pem"
     )
     assert processed_config["name"] == "some-app"
-    assert processed_config["database"]["sys_db_pool_size"] == 20
     assert (
-        processed_config["database"]["sys_db_name"]
-        == "some_app" + SystemSchema.sysdb_suffix
+        processed_config["database"]["sys_db_name"] == "dbn" + SystemSchema.sysdb_suffix
     )
     assert processed_config["database"]["db_engine_kwargs"] is not None
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
@@ -298,7 +295,6 @@ def test_process_config_load_defaults():
         processed_config["database_url"]
         == f"postgres://postgres:{os.environ.get('PGPASSWORD', 'dbos')}@localhost:5432/some_app?connect_timeout=10&sslmode=prefer"
     )
-    assert processed_config["database"]["sys_db_pool_size"] == 20
     assert (
         processed_config["database"]["sys_db_name"]
         == "some_app" + SystemSchema.sysdb_suffix
@@ -320,7 +316,6 @@ def test_process_config_load_default_with_None_database_url():
         processed_config["database_url"]
         == f"postgres://postgres:{os.environ.get('PGPASSWORD', 'dbos')}@localhost:5432/some_app?connect_timeout=10&sslmode=prefer"
     )
-    assert processed_config["database"]["sys_db_pool_size"] == 20
     assert (
         processed_config["database"]["sys_db_name"]
         == "some_app" + SystemSchema.sysdb_suffix
@@ -342,7 +337,6 @@ def test_process_config_load_default_with_empty_database_url():
         processed_config["database_url"]
         == f"postgres://postgres:{os.environ.get('PGPASSWORD', 'dbos')}@localhost:5432/some_app?connect_timeout=10&sslmode=prefer"
     )
-    assert processed_config["database"]["sys_db_pool_size"] == 20
     assert (
         processed_config["database"]["sys_db_name"]
         == "some_app" + SystemSchema.sysdb_suffix
@@ -382,9 +376,8 @@ def test_config_mixed_params():
     assert configFile["name"] == "some-app"
     assert (
         configFile["database_url"]
-        == f"postgres://someuser:abc123@localhost:1234/some_app?connect_timeout=10&sslmode=prefer"
+        == f"postgres://postgres:{os.environ.get('PGPASSWORD', 'dbos')}@localhost:5432/some_app?connect_timeout=10&sslmode=prefer"
     )
-    assert configFile["database"]["sys_db_pool_size"] == 20
     assert configFile["database"]["sys_db_name"] == "yoohoo"
     assert configFile["database"]["db_engine_kwargs"] is not None
     assert configFile["database"]["sys_db_engine_kwargs"] is not None

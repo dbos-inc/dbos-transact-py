@@ -366,7 +366,8 @@ def process_config(
         data["database_url"] = (
             f"postgres://postgres:{_password}@localhost:5432/{_app_db_name}?connect_timeout=10&sslmode=prefer"
         )
-        data["database"]["sys_db_name"] = _app_db_name + SystemSchema.sysdb_suffix
+        if not data["database"].get("sys_db_name"):
+            data["database"]["sys_db_name"] = _app_db_name + SystemSchema.sysdb_suffix
         assert data["database_url"] is not None
 
     # Pretty-print where we've loaded database connection information from, respecting the log level
