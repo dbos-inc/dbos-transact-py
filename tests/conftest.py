@@ -40,7 +40,14 @@ def config() -> DBOSConfig:
 @pytest.fixture()
 def sys_db(config: DBOSConfig) -> Generator[SystemDatabase, Any, None]:
     assert config["database_url"] is not None
-    sys_db = SystemDatabase(config["database_url"])
+    sys_db = SystemDatabase(
+        database_url=config["database_url"],
+        engine_kwargs={
+            "pool_timeout": 30,
+            "max_overflow": 0,
+            "pool_size": 2,
+        },
+    )
     yield sys_db
     sys_db.destroy()
 
@@ -48,7 +55,14 @@ def sys_db(config: DBOSConfig) -> Generator[SystemDatabase, Any, None]:
 @pytest.fixture()
 def app_db(config: DBOSConfig) -> Generator[ApplicationDatabase, Any, None]:
     assert config["database_url"] is not None
-    app_db = ApplicationDatabase(config["database_url"])
+    app_db = ApplicationDatabase(
+        database_url=config["database_url"],
+        engine_kwargs={
+            "pool_timeout": 30,
+            "max_overflow": 0,
+            "pool_size": 2,
+        },
+    )
     yield app_db
     app_db.destroy()
 

@@ -4,6 +4,8 @@ import unittest
 from typing import Any, Dict, List, TypedDict, cast
 from unittest.mock import mock_open, patch
 
+from sqlalchemy import make_url
+
 from dbos._dbos_config import _substitute_env_vars, load_config
 
 
@@ -108,13 +110,7 @@ database:
         # Create a mock dictionary that would be returned by yaml.safe_load
         mock_config_dict: ConfigFile = {
             "name": "test-app",
-            "database": {
-                "hostname": "localhost",
-                "port": 5432,
-                "username": "postgres",
-                "password": "secret_password",
-                "app_db_name": "test_db",
-            },
+            "database_url": "postgresql://postgres:secret_password@localhost:5432/test_db",
         }
 
         # Mock the schema validation to always pass
@@ -140,7 +136,8 @@ database:
             config = load_config(run_process_config=False)
 
             # Verify that the Docker secret was correctly substituted
-            self.assertEqual(config["database"]["password"], "secret_password")
+            password = make_url(config["database_url"]).password
+            self.assertEqual(password, "secret_password")
 
             # Verify that the schema validation was called
             mock_validate.assert_called_once()

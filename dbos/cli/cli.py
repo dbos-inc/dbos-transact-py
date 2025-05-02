@@ -228,7 +228,14 @@ def migrate() -> None:
             },
             sys_db_name=config["database"]["sys_db_name"],
         )
-        app_db = ApplicationDatabase(config["database_url"])
+        app_db = ApplicationDatabase(
+            database_url=config["database_url"],
+            engine_kwargs={
+                "pool_timeout": 30,
+                "max_overflow": 0,
+                "pool_size": 2,
+            },
+        )
     except Exception as e:
         typer.echo(f"DBOS system schema migration failed: {e}")
     finally:
@@ -290,16 +297,19 @@ def reset(
             raise typer.Exit()
     try:
         client = start_client(db_url=db_url)
+        # Make a SA url out of the user-provided URL and verify a database name is present
         pg_db_url = sa.make_url(client._db_url).set(drivername="postgresql+psycopg")
         assert (
             pg_db_url.database is not None
         ), f"Database name is required in URL: {pg_db_url.render_as_string(hide_password=True)}"
+        # Resolve system database name and set it in the URL for reset_system_database
         sysdb_name = (
             sys_db_name
             if sys_db_name
             else (pg_db_url.database + SystemSchema.sysdb_suffix)
         )
-        reset_system_database(pg_db_url.set(database="postgres"), sysdb_name)
+        pg_db_url = pg_db_url.set(database=sysdb_name)
+        reset_system_database(pg_db_url)
     except sa.exc.SQLAlchemyError as e:
         typer.echo(f"Error resetting system database: {str(e)}")
         return

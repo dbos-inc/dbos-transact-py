@@ -416,14 +416,16 @@ class DBOS:
             self._executor_field = ThreadPoolExecutor(max_workers=64)
             self._background_event_loop.start()
             assert self._config["database_url"] is not None
+            assert self._config["database"]["sys_db_engine_kwargs"] is not None
             self._sys_db_field = SystemDatabase(
                 database_url=self._config["database_url"],
                 engine_kwargs=self._config["database"]["sys_db_engine_kwargs"],
                 sys_db_name=self._config["database"]["sys_db_name"],
                 debug_mode=debug_mode,
             )
+            assert self._config["database"]["db_engine_kwargs"] is not None
             self._app_db_field = ApplicationDatabase(
-                database_url=self.config["database_url"],
+                database_url=self._config["database_url"],
                 engine_kwargs=self._config["database"]["db_engine_kwargs"],
                 debug_mode=debug_mode,
             )

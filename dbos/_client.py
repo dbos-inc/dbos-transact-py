@@ -99,8 +99,23 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
 
 class DBOSClient:
     def __init__(self, database_url: str, *, system_database: Optional[str] = None):
-        self._sys_db = SystemDatabase(database_url, sys_db_name=system_database)
-        self._app_db = ApplicationDatabase(database_url)
+        self._sys_db = SystemDatabase(
+            database_url=database_url,
+            engine_kwargs={
+                "pool_timeout": 30,
+                "max_overflow": 0,
+                "pool_size": 2,
+            },
+            sys_db_name=system_database,
+        )
+        self._app_db = ApplicationDatabase(
+            database_url=database_url,
+            engine_kwargs={
+                "pool_timeout": 30,
+                "max_overflow": 0,
+                "pool_size": 2,
+            },
+        )
         self._db_url = database_url
 
     def destroy(self) -> None:
