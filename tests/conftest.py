@@ -10,8 +10,9 @@ import sqlalchemy as sa
 from fastapi import FastAPI
 from flask import Flask
 
-from dbos import DBOS, ConfigFile, DBOSClient
+from dbos import DBOS, DBOSClient, DBOSConfig
 from dbos._app_db import ApplicationDatabase
+from dbos._dbos_config import translate_dbos_config_to_config_file
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 
@@ -24,41 +25,37 @@ def build_wheel() -> str:
     return wheel_files[0]
 
 
-def default_config() -> ConfigFile:
+def default_config() -> DBOSConfig:
     return {
         "name": "test-app",
-        "database": {
-            "hostname": "localhost",
-            "port": 5432,
-            "username": "postgres",
-            "password": os.environ.get("PGPASSWORD", "dbos"),
-            "app_db_name": "dbostestpy",
-        },
+        "database_url": f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy",
     }
 
 
 @pytest.fixture()
-def config() -> ConfigFile:
+def config() -> DBOSConfig:
     return default_config()
 
 
 @pytest.fixture()
-def sys_db(config: ConfigFile) -> Generator[SystemDatabase, Any, None]:
-    sys_db = SystemDatabase(config["database"])
+def sys_db(config: DBOSConfig) -> Generator[SystemDatabase, Any, None]:
+    cfg = translate_dbos_config_to_config_file(config)
+    sys_db = SystemDatabase(cfg["database"])
     yield sys_db
     sys_db.destroy()
 
 
 @pytest.fixture()
-def app_db(config: ConfigFile) -> Generator[ApplicationDatabase, Any, None]:
-    app_db = ApplicationDatabase(config["database"])
+def app_db(config: DBOSConfig) -> Generator[ApplicationDatabase, Any, None]:
+    cfg = translate_dbos_config_to_config_file(config)
+    app_db = ApplicationDatabase(cfg["database"])
     yield app_db
     app_db.destroy()
 
 
 @pytest.fixture(scope="session")
 def postgres_db_engine() -> sa.Engine:
-    cfg = default_config()
+    cfg = translate_dbos_config_to_config_file(default_config())
     postgres_db_url = sa.URL.create(
         "postgresql+psycopg",
         username=cfg["database"]["username"],
@@ -71,8 +68,9 @@ def postgres_db_engine() -> sa.Engine:
 
 
 @pytest.fixture()
-def cleanup_test_databases(config: ConfigFile, postgres_db_engine: sa.Engine) -> None:
-    app_db_name = config["database"]["app_db_name"]
+def cleanup_test_databases(config: DBOSConfig, postgres_db_engine: sa.Engine) -> None:
+    cfg = translate_dbos_config_to_config_file(config)
+    app_db_name = cfg["database"]["app_db_name"]
     sys_db_name = f"{app_db_name}_dbos_sys"
 
     with postgres_db_engine.connect() as connection:
@@ -108,7 +106,7 @@ def cleanup_test_databases(config: ConfigFile, postgres_db_engine: sa.Engine) ->
 
 @pytest.fixture()
 def dbos(
-    config: ConfigFile, cleanup_test_databases: None
+    config: DBOSConfig, cleanup_test_databases: None
 ) -> Generator[DBOS, Any, None]:
     DBOS.destroy(destroy_registry=True)
 
@@ -125,19 +123,16 @@ def dbos(
 
 
 @pytest.fixture()
-def client(config: ConfigFile) -> Generator[DBOSClient, Any, None]:
-    database = config["database"]
-    username = quote(database["username"])
-    password = quote(database["password"])
-    database_url = f"postgresql://{username}:{password}@{database['hostname']}:{database['port']}/{database['app_db_name']}"
-    client = DBOSClient(database_url)
+def client(config: DBOSConfig) -> Generator[DBOSClient, Any, None]:
+    assert config["database_url"] is not None
+    client = DBOSClient(config["database_url"])
     yield client
     client.destroy()
 
 
 @pytest.fixture()
 def dbos_fastapi(
-    config: ConfigFile, cleanup_test_databases: None
+    config: DBOSConfig, cleanup_test_databases: None
 ) -> Generator[Tuple[DBOS, FastAPI], Any, None]:
     DBOS.destroy(destroy_registry=True)
     app = FastAPI()
@@ -153,7 +148,7 @@ def dbos_fastapi(
 
 @pytest.fixture()
 def dbos_flask(
-    config: ConfigFile, cleanup_test_databases: None
+    config: DBOSConfig, cleanup_test_databases: None
 ) -> Generator[Tuple[DBOS, Flask], Any, None]:
     DBOS.destroy(destroy_registry=True)
     app = Flask(__name__)

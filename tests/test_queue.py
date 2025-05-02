@@ -8,13 +8,15 @@ import threading
 import time
 import uuid
 from typing import List
+from urllib.parse import quote
 
 import pytest
 import sqlalchemy as sa
 
 from dbos import (
     DBOS,
-    ConfigFile,
+    DBOSClient,
+    DBOSConfig,
     DBOSConfiguredInstance,
     Queue,
     SetEnqueueOptions,
@@ -426,21 +428,10 @@ def run_dbos_test_in_process(
     start_signal: multiprocessing.synchronize.Event,
     end_signal: multiprocessing.synchronize.Event,
 ) -> None:
-    dbos_config: ConfigFile = {
+    dbos_config: DBOSConfig = {
         "name": "test-app",
-        "database": {
-            "hostname": "localhost",
-            "port": 5432,
-            "username": "postgres",
-            "password": os.environ["PGPASSWORD"],
-            "app_db_name": "dbostestpy",
-        },
-        "runtimeConfig": {
-            "start": ["python3 main.py"],
-            "admin_port": 8001 + i,
-        },
-        "telemetry": {},
-        "env": {},
+        "database_url": f"postgres://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy",
+        "admin_port": 8001 + i,
     }
     dbos = DBOS(config=dbos_config)
     DBOS.launch()
@@ -1323,3 +1314,30 @@ async def test_priority_queue_async(dbos: DBOS) -> None:
 
     assert wf_priority_list == [0, 6, 7, 1, 2, 3, 4, 5]
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient) -> None:
+    queue = Queue("test_worker_concurrency_across_versions", worker_concurrency=1)
+
+    @DBOS.workflow()
+    def test_workflow() -> str:
+        return DBOS.workflow_id
+
+    # First enqueue a workflow on the other version, then on the current version
+    other_version = "other_version"
+    other_version_handle: WorkflowHandle[None] = client.enqueue(
+        {
+            "queue_name": "test_worker_concurrency_across_versions",
+            "workflow_name": test_workflow.__qualname__,
+            "app_version": other_version,
+        }
+    )
+    handle = queue.enqueue(test_workflow)
+
+    # Verify the workflow on the current version completes, but the other version is still ENQUEUED
+    assert handle.get_result()
+    assert other_version_handle.get_status().status == "ENQUEUED"
+
+    # Change the version, verify the other version complets
+    GlobalParams.app_version = other_version
+    assert other_version_handle.get_result()

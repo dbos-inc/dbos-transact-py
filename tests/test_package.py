@@ -43,6 +43,9 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
             venv = os.environ.copy()
             venv["PATH"] = f"{os.path.join(venv_path, 'bin')}:{venv['PATH']}"
             venv["VIRTUAL_ENV"] = venv_path
+            venv["DBOS_DATABASE_URL"] = postgres_db_engine.url.set(
+                database=app_db_name
+            ).render_as_string(hide_password=False)
 
             # Install the dbos package into the virtual environment
             subprocess.check_call(
@@ -53,7 +56,6 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
             subprocess.check_call(
                 ["dbos", "init", template_name, "--template", template_name],
                 cwd=temp_path,
-                env=venv,
             )
 
             # Run schema migration
@@ -121,14 +123,19 @@ def test_init_config() -> None:
 def test_reset(postgres_db_engine: sa.Engine) -> None:
     app_name = "reset-app"
     sysdb_name = "reset_app_dbos_sys"
+    db_url = postgres_db_engine.url.set(database="reset_app").render_as_string(
+        hide_password=False
+    )
     with tempfile.TemporaryDirectory() as temp_path:
+        env = os.environ.copy()
+        env["DBOS_DATABASE_URL"] = db_url
         subprocess.check_call(
             ["dbos", "init", app_name, "--template", "dbos-db-starter"],
             cwd=temp_path,
         )
 
         # Create a system database and verify it exists
-        subprocess.check_call(["dbos", "migrate"], cwd=temp_path)
+        subprocess.check_call(["dbos", "migrate"], cwd=temp_path, env=env)
         with postgres_db_engine.connect() as c:
             c.execution_options(isolation_level="AUTOCOMMIT")
             result = c.execute(
@@ -139,9 +146,6 @@ def test_reset(postgres_db_engine: sa.Engine) -> None:
             assert result == 1
 
         # Call reset and verify it's destroyed
-        db_url = postgres_db_engine.url.set(database="reset_app").render_as_string(
-            hide_password=False
-        )
         subprocess.check_call(
             ["dbos", "reset", "-y", "--db-url", db_url, "--sys-db-name", sysdb_name],
             cwd=temp_path,
@@ -162,15 +166,20 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
         hide_password=False
     )
     with tempfile.TemporaryDirectory() as temp_path:
+        env = os.environ.copy()
+        env["DBOS_DATABASE_URL"] = db_url
         subprocess.check_call(
             ["dbos", "init", app_name, "--template", "dbos-toolbox"],
             cwd=temp_path,
+            env=env,
         )
-        subprocess.check_call(["dbos", "reset", "-y"], cwd=temp_path)
-        subprocess.check_call(["dbos", "migrate"], cwd=temp_path)
+        subprocess.check_call(["dbos", "reset", "-y", "-D", db_url], cwd=temp_path)
+        subprocess.check_call(
+            ["dbos", "migrate"], cwd=temp_path, env=env
+        )  # For the alembic migration
 
         # Get some workflows enqueued on the toolbox, then kill the toolbox
-        process = subprocess.Popen(["dbos", "start"], cwd=temp_path)
+        process = subprocess.Popen(["dbos", "start"], cwd=temp_path, env=env)
         try:
             session = requests.Session()
             for i in range(10):
@@ -223,12 +232,14 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
         assert isinstance(get_steps_data, list)
         assert len(get_steps_data) == 10
 
-        # cancel the workflow and check the status is CANCELED
+        # From now pass database url in the environment
+
+        # cancel the workflow and check the status is CANCELLED
         subprocess.check_output(
-            ["dbos", "workflow", "cancel", wf_id, "--db-url", db_url], cwd=temp_path
+            ["dbos", "workflow", "cancel", wf_id], cwd=temp_path, env=env
         )
         output = subprocess.check_output(
-            ["dbos", "workflow", "get", wf_id], cwd=temp_path
+            ["dbos", "workflow", "get", wf_id], cwd=temp_path, env=env
         )
         get_wf_data = json.loads(output)
         assert isinstance(get_wf_data, dict)
@@ -236,10 +247,10 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
 
         # resume the workflow and check the status is ENQUEUED
         subprocess.check_output(
-            ["dbos", "workflow", "resume", wf_id, "--db-url", db_url], cwd=temp_path
+            ["dbos", "workflow", "resume", wf_id], cwd=temp_path, env=env
         )
         output = subprocess.check_output(
-            ["dbos", "workflow", "get", wf_id], cwd=temp_path
+            ["dbos", "workflow", "get", wf_id], cwd=temp_path, env=env
         )
         get_wf_data = json.loads(output)
         assert isinstance(get_wf_data, dict)
@@ -247,7 +258,7 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
 
         # restart the workflow and check it has a new ID and its status is ENQUEUED
         output = subprocess.check_output(
-            ["dbos", "workflow", "restart", wf_id, "--db-url", db_url], cwd=temp_path
+            ["dbos", "workflow", "restart", wf_id], cwd=temp_path, env=env
         )
         restart_wf_data = json.loads(output)
         assert isinstance(restart_wf_data, dict)
@@ -256,8 +267,9 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
 
         # fork the workflow at step 5 and check it has a new ID and its status is ENQUEUED
         output = subprocess.check_output(
-            ["dbos", "workflow", "fork", wf_id, "--step", "5", "--db-url", db_url],
+            ["dbos", "workflow", "fork", wf_id, "--step", "5"],
             cwd=temp_path,
+            env=env,
         )
         fork_wf_data = json.loads(output)
         assert isinstance(fork_wf_data, dict)

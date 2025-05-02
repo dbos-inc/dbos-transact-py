@@ -9,11 +9,12 @@ import pytest_mock
 from sqlalchemy import URL, event
 
 # Public API
-from dbos import DBOS, get_dbos_database_url, load_config
+from dbos import DBOS
 from dbos._dbos_config import (
     ConfigFile,
     DBOSConfig,
     check_config_consistency,
+    load_config,
     overwrite_config,
     parse_database_url_to_dbconfig,
     process_config,
@@ -50,84 +51,25 @@ Test all the possible ways to configure DBOS.
 
 
 ####################
-# SWITCHES
+# DBOS launch
 ####################
-def test_no_config_provided(mocker):
-    mock_config = """
-        name: "some-app"
-        language: "python"
-        runtimeConfig:
-            start:
-                - "python3 main.py"
-            admin_port: 8001
-        database:
-          hostname: 'localhost'
-          port: 5432
-          username: 'postgres'
-          password: ${PGPASSWORD}
-          app_db_name: 'some db'
-          connectionTimeoutMillis: 3000
-        env:
-            foo: ${BARBAR}
-            bazbaz: BAZBAZ
-            bob: ${BOBBOB}
-            test_number: 123
-    """
-    os.environ["BARBAR"] = "FOOFOO"
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-
-    dbos = DBOS()
-    assert dbos.config["name"] == "some-app"
-    assert dbos.config["language"] == "python"
-    assert dbos.config["database"]["hostname"] == "localhost"
-    assert dbos.config["database"]["port"] == 5432
-    assert dbos.config["database"]["username"] == "postgres"
-    assert dbos.config["database"]["password"] == os.environ["PGPASSWORD"]
-    assert dbos.config["database"]["app_db_name"] == "some db"
-    assert dbos.config["database"]["connectionTimeoutMillis"] == 3000
-    assert dbos.config["env"]["foo"] == "FOOFOO"
-    assert dbos.config["env"]["bob"] is None  # Unset environment variable
-    assert dbos.config["env"]["test_number"] == 123
-
-    set_env_vars(dbos.config)
-    assert os.environ["bazbaz"] == "BAZBAZ"
-    assert os.environ["foo"] == "FOOFOO"
-    assert os.environ["test_number"] == "123"
-    assert "bob" not in os.environ
-
-    dbos.destroy()
+def test_no_config_provided():
+    with pytest.raises(TypeError) as exc_info:
+        DBOS()
+    assert "missing 1 required keyword-only argument: 'config'" in str(exc_info.value)
 
 
-def test_configfile_type_provided():
-    config: ConfigFile = {
-        "name": "some-app",
-        "database": {
-            "hostname": "localhost",
-        },
-    }
-    dbos = DBOS(config=config)
-    assert dbos.config["name"] == "some-app"
-    assert dbos.config["database"]["hostname"] == "localhost"
-    assert dbos.config["database"]["port"] == 5432
-    assert dbos.config["database"]["username"] == "postgres"
-    assert dbos.config["database"]["password"] == os.environ["PGPASSWORD"]
-    assert dbos.config["database"]["app_db_name"] == "some_app"
-    dbos.destroy()
-
-
-def test_dbosconfig_type_provided(mocker):
+def test_dbosconfig_type_provided():
     config: DBOSConfig = {
         "name": "some-app",
     }
     dbos = DBOS(config=config)
-    assert dbos.config["name"] == "some-app"
-    assert dbos.config["database"]["hostname"] == "localhost"
-    assert dbos.config["database"]["port"] == 5432
-    assert dbos.config["database"]["username"] == "postgres"
-    assert dbos.config["database"]["password"] == os.environ["PGPASSWORD"]
-    assert dbos.config["database"]["app_db_name"] == "some_app"
+    assert dbos._config["name"] == "some-app"
+    assert dbos._config["database"]["hostname"] == "localhost"
+    assert dbos._config["database"]["port"] == 5432
+    assert dbos._config["database"]["username"] == "postgres"
+    assert dbos._config["database"]["password"] == os.environ["PGPASSWORD"]
+    assert dbos._config["database"]["app_db_name"] == "some_app"
     dbos.destroy()
 
 
@@ -147,7 +89,7 @@ def test_load_valid_config_file(mocker):
           hostname: 'localhost'
           port: 5432
           username: 'postgres'
-          password: ${PGPASSWORD}
+          password: '${PGPASSWORD}'
           app_db_name: 'some db'
           connectionTimeoutMillis: 3000
         env:
@@ -214,7 +156,7 @@ def test_load_config_database_url_and_database(mocker):
             hostname: 'localhost'
             port: 5432
             username: 'postgres'
-            password: ${PGPASSWORD}
+            password: '${PGPASSWORD}'
             app_db_name: 'some db'
             connectionTimeoutMillis: 3000
     """
@@ -923,18 +865,14 @@ def test_overwrite_config(mocker):
             "FOO": "BAR",
         },
     }
+    exported_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
+    os.environ["DBOS_DATABASE_URL"] = exported_db_url
+
     config = overwrite_config(provided_config)
 
     assert config["name"] == "stock-prices"
-    assert config["database"]["hostname"] == "hostname"
-    assert config["database"]["port"] == 1234
-    assert config["database"]["username"] == "dbosadmin"
-    assert config["database"]["password"] == "pwd"
-    assert config["database"]["app_db_name"] == "appdbname"
+    assert config["database_url"] == exported_db_url
     assert config["database"]["sys_db_name"] == "sysdbname"
-    assert config["database"]["ssl"] == True
-    assert config["database"]["ssl_ca"] == "cert.pem"
-    assert config["database"]["connectionTimeoutMillis"] == 10000
     assert config["database"]["app_db_pool_size"] == 10
     assert "sys_db_pool_size" not in config["database"]
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
@@ -949,6 +887,8 @@ def test_overwrite_config(mocker):
     assert "admin_port" not in config["runtimeConfig"]
     assert "run_admin_server" not in config["runtimeConfig"]
     assert "env" not in config
+
+    del os.environ["DBOS_DATABASE_URL"]
 
 
 def test_overwrite_config_minimal(mocker):
@@ -982,23 +922,23 @@ def test_overwrite_config_minimal(mocker):
     provided_config: ConfigFile = {
         "name": "test-app",
     }
+
+    exported_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
+    os.environ["DBOS_DATABASE_URL"] = exported_db_url
+
     config = overwrite_config(provided_config)
 
     assert config["name"] == "stock-prices"
-    assert config["database"]["hostname"] == "hostname"
-    assert config["database"]["port"] == 1234
-    assert config["database"]["username"] == "dbosadmin"
-    assert config["database"]["password"] == "pwd"
-    assert config["database"]["app_db_name"] == "appdbname"
+    assert config["database_url"] == exported_db_url
     assert config["database"]["sys_db_name"] == "sysdbname"
-    assert config["database"]["ssl"] == True
-    assert "ssl_ca" not in config["database"]
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
         "thetracesendpoint"
     ]
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["thelogsendpoint"]
     assert "runtimeConfig" not in config
     assert "env" not in config
+
+    del os.environ["DBOS_DATABASE_URL"]
 
 
 def test_overwrite_config_has_telemetry(mocker):
@@ -1041,17 +981,15 @@ def test_overwrite_config_has_telemetry(mocker):
         },
         "telemetry": {"logs": {"logLevel": "DEBUG"}},
     }
+
+    exported_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
+    os.environ["DBOS_DATABASE_URL"] = exported_db_url
+
     config = overwrite_config(provided_config)
 
     assert config["name"] == "stock-prices"
-    assert config["database"]["hostname"] == "hostname"
-    assert config["database"]["port"] == 1234
-    assert config["database"]["username"] == "dbosadmin"
-    assert config["database"]["password"] == "pwd"
-    assert config["database"]["app_db_name"] == "appdbname"
+    assert config["database_url"] == exported_db_url
     assert config["database"]["sys_db_name"] == "sysdbname"
-    assert config["database"]["ssl"] == True
-    assert config["database"]["ssl_ca"] == "cert.pem"
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
         "thetracesendpoint"
     ]
@@ -1059,6 +997,8 @@ def test_overwrite_config_has_telemetry(mocker):
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert "runtimeConfig" not in config
     assert "env" not in config
+
+    del os.environ["DBOS_DATABASE_URL"]
 
 
 # Not expected in practice, but exercise the code path
@@ -1092,13 +1032,19 @@ def test_overwrite_config_no_telemetry_in_file(mocker):
         "telemetry": {"logs": {"logLevel": "DEBUG"}},
     }
 
+    exported_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
+    os.environ["DBOS_DATABASE_URL"] = exported_db_url
+
     config = overwrite_config(provided_config)
     # Test that telemetry from provided_config is preserved
+    assert config["database_url"] == exported_db_url
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert config["telemetry"]["OTLPExporter"] == {
         "tracesEndpoint": [],
         "logsEndpoint": [],
     }
+
+    del os.environ["DBOS_DATABASE_URL"]
 
 
 # Not expected in practice, but exercise the code path
@@ -1140,11 +1086,17 @@ def test_overwrite_config_no_otlp_in_file(mocker):
         },
     }
 
+    exported_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
+    os.environ["DBOS_DATABASE_URL"] = exported_db_url
+
     config = overwrite_config(provided_config)
+    assert config["database_url"] == exported_db_url
     # Test that OTLPExporter from provided_config is preserved
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == ["original-trace"]
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["original-log"]
     assert "logs" not in config["telemetry"]
+
+    del os.environ["DBOS_DATABASE_URL"]
 
 
 # Not expected in practice, but exercise the code path
@@ -1181,23 +1133,45 @@ def test_overwrite_config_with_provided_database_url(mocker):
         "name": "test-app",
         "database_url": "ignored",
     }
+
+    exported_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
+    os.environ["DBOS_DATABASE_URL"] = exported_db_url
+
     config = overwrite_config(provided_config)
 
     assert config["name"] == "stock-prices"
-    assert config["database"]["hostname"] == "hostname"
-    assert config["database"]["port"] == 1234
-    assert config["database"]["username"] == "dbosadmin"
-    assert config["database"]["password"] == "pwd"
-    assert config["database"]["app_db_name"] == "appdbname"
+    assert config["database_url"] == exported_db_url
     assert config["database"]["sys_db_name"] == "sysdbname"
-    assert config["database"]["ssl"] == True
-    assert config["database"]["ssl_ca"] == "cert.pem"
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
         "thetracesendpoint"
     ]
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["thelogsendpoint"]
     assert "runtimeConfig" not in config
     assert "env" not in config
+
+    del os.environ["DBOS_DATABASE_URL"]
+
+
+def test_overwrite_config_missing_dbos_database_url(mocker):
+    mock_config = """
+    name: "stock-prices"
+    database:
+        sys_db_name: "sysdbname"
+    """
+
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
+    )
+
+    provided_config: ConfigFile = {
+        "name": "test-app",
+    }
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        overwrite_config(provided_config)
+    assert (
+        "DBOS_DATABASE_URL environment variable is not set. This is required to connect to the database."
+        in str(exc_info.value)
+    )
 
 
 ####################
@@ -1241,6 +1215,7 @@ def test_no_config_file():
 
 
 def test_configured_pool_sizes():
+    DBOS.destroy()
     config: DBOSConfig = {
         "name": "test-app",
         "app_db_pool_size": 42,
@@ -1257,6 +1232,7 @@ def test_configured_pool_sizes():
 
 
 def test_default_pool_params():
+    DBOS.destroy()
     config: DBOSConfig = {
         "name": "test-app",
     }
@@ -1282,6 +1258,7 @@ def test_default_pool_params():
 
 
 def test_configured_app_db_connect_timeout():
+    DBOS.destroy()
     config: DBOSConfig = {
         "name": "test-app",
         "database_url": f"postgresql://postgres:@localhost:5432/dbname?connect_timeout=7",
@@ -1305,32 +1282,8 @@ def test_configured_app_db_connect_timeout():
     dbos.destroy()
 
 
-def test_get_dbos_database_url(mocker):
-    mock_config = """
-        name: "some-app"
-        database:
-          hostname: 'localhost'
-          port: 5432
-          username: 'postgres'
-          password: ${PGPASSWORD}
-          app_db_name: 'some_db'
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-
-    expected_url = URL.create(
-        "postgresql+psycopg",
-        username="postgres",
-        password=os.environ.get("PGPASSWORD"),
-        host="localhost",
-        port=5432,
-        database="some_db",
-    ).render_as_string(hide_password=False)
-    assert get_dbos_database_url() == expected_url
-
-
 def test_db_engine_kwargs():
+    DBOS.destroy()
     config: DBOSConfig = {
         "name": "test-app",
         "db_engine_kwargs": {
