@@ -219,7 +219,15 @@ def migrate() -> None:
     sys_db = None
     try:
         assert config["database_url"] is not None
-        sys_db = SystemDatabase(config["database_url"])
+        sys_db = SystemDatabase(
+            database_url=config["database_url"],
+            engine_kwargs={
+                "pool_timeout": 30,
+                "max_overflow": 0,
+                "pool_size": 2,
+            },
+            sys_db_name=config["database"]["sys_db_name"],
+        )
         app_db = ApplicationDatabase(config["database_url"])
     except Exception as e:
         typer.echo(f"DBOS system schema migration failed: {e}")

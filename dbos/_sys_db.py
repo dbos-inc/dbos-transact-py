@@ -5,7 +5,6 @@ import os
 import re
 import threading
 import time
-import uuid
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -32,7 +31,6 @@ from dbos._utils import INTERNAL_QUEUE_NAME
 
 from . import _serialization
 from ._context import get_local_dbos_context
-from ._dbos_config import ConfigFile
 from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
@@ -231,12 +229,13 @@ class SystemDatabase:
         self,
         database_url: str,
         *,
-        pool_size: Optional[int] = 2,
-        engine_kwargs: Optional[Dict[str, Any]] = None,
+        engine_kwargs: Dict[str, Any],
         sys_db_name: Optional[str] = None,
         debug_mode: bool = False,
     ):
+        # Set driver
         system_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
+        # Resolve system datbase name
         sysdb_name = sys_db_name
         if not sysdb_name:
             assert system_db_url.database is not None
@@ -255,19 +254,6 @@ class SystemDatabase:
                     dbos_logger.info(f"Creating system database {sysdb_name}")
                     conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
             engine.dispose()
-
-        if engine_kwargs is None:
-            engine_kwargs = {}
-
-        # Respect user-provided values. Otherwise, set defaults.
-        if "pool_size" not in engine_kwargs:
-            engine_kwargs["pool_size"] = pool_size
-        if "max_overflow" not in engine_kwargs:
-            engine_kwargs["max_overflow"] = 0
-        if "pool_timeout" not in engine_kwargs:
-            engine_kwargs["pool_timeout"] = 30
-        if "connect_args" not in engine_kwargs:
-            engine_kwargs["connect_args"] = {"connect_timeout": 10}
 
         self.engine = sa.create_engine(
             system_db_url,
@@ -1931,10 +1917,10 @@ class SystemDatabase:
         return wf_status, workflow_deadline_epoch_ms
 
 
-def reset_system_database(postgres_db_url: sa.URL, sysdb_name: str) -> None:
+def reset_system_database(system_db_url: sa.URL) -> None:
     try:
-        # Connect to postgres default database
-        engine = sa.create_engine(db_url.set(database="postgres"))
+        sysdb_name = system_db_url.database
+        engine = sa.create_engine(system_db_url.set(database="postgres"))
 
         with engine.connect() as conn:
             # Set autocommit required for database dropping

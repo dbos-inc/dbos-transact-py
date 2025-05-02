@@ -24,8 +24,6 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
-    Union,
-    cast,
 )
 
 from opentelemetry.trace import Span
@@ -64,7 +62,6 @@ from ._registrations import (
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
-from ._schemas.system_database import SystemSchema
 from ._sys_db import StepInfo, SystemDatabase, WorkflowStatus, reset_system_database
 from ._tracer import DBOSTracer, dbos_tracer
 
@@ -421,7 +418,7 @@ class DBOS:
             assert self.config["database_url"] is not None
             self._sys_db_field = SystemDatabase(
                 self.config["database_url"],
-                pool_size=self.config["database"]["sys_db_pool_size"],
+                engine_kwargs=self.config["database"]["sys_db_engine_kwargs"],
                 sys_db_name=self.config["database"]["sys_db_name"],
                 debug_mode=debug_mode,
             )
@@ -535,22 +532,7 @@ class DBOS:
         assert (
             not self._launched
         ), "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
-
-        sysdb_name = (
-            self._config["database"]["sys_db_name"]
-            if "sys_db_name" in self._config["database"]
-            and self._config["database"]["sys_db_name"]
-            else self._config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
-        )
-        postgres_db_url = URL.create(
-            "postgresql+psycopg",
-            username=self._config["database"]["username"],
-            password=self._config["database"]["password"],
-            host=self._config["database"]["hostname"],
-            port=self._config["database"]["port"],
-            database="postgres",
-        )
-        reset_system_database(postgres_db_url, sysdb_name)
+        reset_system_database(self._sys_db.engine.url)
 
     def _destroy(self) -> None:
         self._initialized = False

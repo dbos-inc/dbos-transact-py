@@ -64,18 +64,11 @@ class DatabaseConfig(TypedDict, total=False):
         migrate (List[str]): Migration commands to run on startup
     """
 
-    hostname: str  # Will be removed in a future version
-    port: int  # Will be removed in a future version
-    username: str  # Will be removed in a future version
-    password: str  # Will be removed in a future version
-    connectionTimeoutMillis: Optional[int]  # Will be removed in a future version
-    app_db_name: str  # Will be removed in a future version
     app_db_pool_size: Optional[int]
     sys_db_name: Optional[str]
-    sys_db_pool_size: Optional[int]
+    # sys_db_pool_size: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
-    ssl: Optional[bool]  # Will be removed in a future version
-    ssl_ca: Optional[str]  # Will be removed in a future version
+    sys_db_engine_kwargs: Optional[Dict[str, Any]]
     migrate: Optional[List[str]]
     rollback: Optional[List[str]]  # Will be removed in a future version
 
@@ -333,28 +326,29 @@ def process_config(
 
     # Ensure database dict exists
     data.setdefault("database", {})
-    data["database"]["sys_db_pool_size"] = data["database"].get("sys_db_pool_size", 20)
 
     # User DB SQLAlchemy engine parameters
     default_engine_kwargs = {
         "pool_timeout": 30,
         "max_overflow": 0,
-        "pool_size": 20,
+        "pool_size": data["database"].get("app_db_pool_size", 20),
     }
-    # Set pool sizes with defaults
-    app_db_pool_size = data["database"].get("app_db_pool_size", 20)
-    data["database"]["app_db_pool_size"] = app_db_pool_size
-
     # Create engine kwargs by starting with defaults and updating with user values
     engine_kwargs = default_engine_kwargs.copy()
-    if "db_engine_kwargs" in data["database"]:
+    if (
+        "db_engine_kwargs" in data["database"]
+        and data["database"]["db_engine_kwargs"] is not None
+    ):
         engine_kwargs.update(data["database"]["db_engine_kwargs"])
-    else:
-        # Only override pool_size with app_db_pool_size if user didn't provide db_engine_kwargs
-        engine_kwargs["pool_size"] = app_db_pool_size
 
     # Store the final result
     data["database"]["db_engine_kwargs"] = engine_kwargs
+
+    # Also build engine parameters for the system database
+    data["database"]["sys_db_engine_kwargs"] = default_engine_kwargs.copy()
+    sys_db_pool_size = data["database"].get("sys_db_pool_size", 20)
+    assert sys_db_pool_size is not None
+    data["database"]["sys_db_engine_kwargs"]["pool_size"] = sys_db_pool_size
 
     # Database URL resolution
     if data.get("database_url") is not None:
@@ -394,10 +388,7 @@ def process_config(
             )
             print(f"[bold blue]Using database connection string: {log_url}[/bold blue]")
     else:
-        if "app_db_name" not in data["database"] or not data["database"]["app_db_name"]:
-            _app_db_name = _app_name_to_db_name(data["name"])
-        else:
-            _app_db_name = data["database"]["app_db_name"]
+        _app_db_name = _app_name_to_db_name(data["name"])
 
         dbos_dbport: Optional[int] = None
         dbport_env = os.getenv("DBOS_DBPORT")
@@ -407,27 +398,17 @@ def process_config(
             except ValueError:
                 pass
 
-        _hostname = (
-            os.getenv("DBOS_DBHOST") or data["database"].get("hostname") or "localhost"
-        )
-        _port = dbos_dbport or data["database"].get("port") or 5432
-        _username = (
-            os.getenv("DBOS_DBUSER") or data["database"].get("username") or "postgres"
-        )
+        _hostname = os.getenv("DBOS_DBHOST") or "localhost"
+        _port = dbos_dbport or 5432
+        _username = os.getenv("DBOS_DBUSER") or "postgres"
         _password = (  # We specifically don't escape the password and expect users to do so
-            os.getenv("DBOS_DBPASSWORD")
-            or data["database"].get("password")
-            or os.environ.get("PGPASSWORD")
-            or "dbos"
+            os.getenv("DBOS_DBPASSWORD") or os.environ.get("PGPASSWORD") or "dbos"
         )
-
-        _connect_timeout = data["database"].get("connectionTimeoutMillis", 10000)
-        assert _connect_timeout is not None
-        _connect_timeout = int(_connect_timeout / 1000)
 
         data["database_url"] = (
-            f"postgres://{_username}:{_password}@{_hostname}:{_port}/{_app_db_name}?connect_timeout={int(_connect_timeout)}"
+            f"postgres://{_username}:{_password}@{_hostname}:{_port}/{_app_db_name}?connect_timeout=10"
         )
+        assert data["database_url"] is not None
 
         # Pretty-print where we've loaded database connection information from, respecting the log level
         if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
