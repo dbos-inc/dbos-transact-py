@@ -269,6 +269,9 @@ def migrate(
     # Next, run any custom migration commands specified in the configuration
     typer.echo("Executing migration commands from 'dbos-config.yaml'")
     try:
+        # handle the case where the user has not specified migrations commands
+        if "database" not in config:
+            config["database"] = {}
         migrate_commands = (
             config["database"]["migrate"]
             if "migrate" in config["database"] and config["database"]["migrate"]
