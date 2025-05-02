@@ -1060,7 +1060,7 @@ def test_configured_pool_default():
     DBOS.destroy()
     config: DBOSConfig = {
         "name": "test-app",
-        "database_url": f"postgres://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'))}@localhost:5432/postgres",
+        "database_url": f"postgres://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'))}@localhost:5432/postgres?connect_timeout=10",
     }
 
     dbos = DBOS(config=config)
