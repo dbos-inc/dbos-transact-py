@@ -220,9 +220,13 @@ def migrate(
         ),
     ] = None,
 ) -> None:
-    config = load_config()
+    config = load_config(run_process_config=False, silent=True)
     connection_string = _get_db_url(db_url)
     app_db_name = sa.make_url(connection_string).database
+    assert app_db_name is not None, "Database name is required in URL"
+    sys_db_name = config["database"].get(
+        "sys_db_name", app_db_name + SystemSchema.sysdb_suffix
+    )
 
     typer.echo(f"Starting schema migration for database {app_db_name}")
 
@@ -237,7 +241,7 @@ def migrate(
                 "max_overflow": 0,
                 "pool_size": 2,
             },
-            sys_db_name=config["database"]["sys_db_name"],
+            sys_db_name=sys_db_name,
         )
         app_db = ApplicationDatabase(
             database_url=connection_string,
