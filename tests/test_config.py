@@ -2,6 +2,7 @@
 
 import os
 from unittest.mock import mock_open
+from urllib.parse import quote
 
 import pytest
 import pytest_mock
@@ -1059,6 +1060,7 @@ def test_configured_pool_default():
     DBOS.destroy()
     config: DBOSConfig = {
         "name": "test-app",
+        "database_url": f"postgres://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'))}@localhost:5432/postgres",
     }
 
     dbos = DBOS(config=config)
@@ -1094,7 +1096,7 @@ def test_configured_pool_user_provided():
     config: DBOSConfig = {
         "name": "test-app",
         "sys_db_pool_size": 43,
-        "database_url": f"postgres://postgres:{os.environ.get('PGPASSWORD', 'dbos')}@localhost:5432/dbname?connect_timeout=22",  # connect_args will take precedence
+        "database_url": f"postgres://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'))}@localhost:5432/postgres?connect_timeout=22",  # connect_args will take precedence
         "db_engine_kwargs": {
             "pool_size": 22,
             "pool_timeout": 42,
