@@ -534,7 +534,11 @@ class DBOS:
         assert (
             not self._launched
         ), "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
-        reset_system_database(self._sys_db.engine.url)
+        assert self._sys_db.engine.url.database is not None
+        reset_system_database(
+            self._sys_db.engine.url.set(database="postgres"),
+            self._sys_db.engine.url.database,
+        )
 
     def _destroy(self) -> None:
         self._initialized = False

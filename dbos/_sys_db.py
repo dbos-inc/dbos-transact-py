@@ -1923,10 +1923,10 @@ class SystemDatabase:
         return wf_status, workflow_deadline_epoch_ms
 
 
-def reset_system_database(system_db_url: sa.URL) -> None:
+def reset_system_database(postgres_db_url: sa.URL, sysdb_name: str) -> None:
     try:
-        sysdb_name = system_db_url.database
-        engine = sa.create_engine(system_db_url.set(database="postgres"))
+        # Connect to postgres default database
+        engine = sa.create_engine(postgres_db_url.set(drivername="postgresql+psycopg"))
 
         with engine.connect() as conn:
             # Set autocommit required for database dropping

@@ -27,7 +27,7 @@ from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
 
 
-def start_client(db_url: Optional[str] = None) -> DBOSClient:
+def _get_db_url(db_url: Optional[str]) -> str:
     database_url = db_url
     if database_url is None:
         database_url = os.getenv("DBOS_DATABASE_URL")
@@ -35,7 +35,11 @@ def start_client(db_url: Optional[str] = None) -> DBOSClient:
         raise ValueError(
             "Missing database URL: please set it using the --db-url flag or the DBOS_DATABASE_URL environment variable."
         )
+    return database_url
 
+
+def start_client(db_url: Optional[str] = None) -> DBOSClient:
+    database_url = _get_db_url(db_url)
     return DBOSClient(database_url=database_url)
 
 
@@ -296,20 +300,21 @@ def reset(
             typer.echo("Operation cancelled.")
             raise typer.Exit()
     try:
-        client = start_client(db_url=db_url)
         # Make a SA url out of the user-provided URL and verify a database name is present
-        pg_db_url = sa.make_url(client._db_url).set(drivername="postgresql+psycopg")
+        database_url = _get_db_url(db_url)
+        pg_db_url = sa.make_url(database_url)
         assert (
             pg_db_url.database is not None
         ), f"Database name is required in URL: {pg_db_url.render_as_string(hide_password=True)}"
-        # Resolve system database name and set it in the URL for reset_system_database
+        # Resolve system database name
         sysdb_name = (
             sys_db_name
             if sys_db_name
             else (pg_db_url.database + SystemSchema.sysdb_suffix)
         )
-        pg_db_url = pg_db_url.set(database=sysdb_name)
-        reset_system_database(pg_db_url)
+        reset_system_database(
+            postgres_db_url=pg_db_url.set(database="postgres"), sysdb_name=sysdb_name
+        )
     except sa.exc.SQLAlchemyError as e:
         typer.echo(f"Error resetting system database: {str(e)}")
         return
