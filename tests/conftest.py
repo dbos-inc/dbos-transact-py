@@ -46,6 +46,7 @@ def sys_db(config: DBOSConfig) -> Generator[SystemDatabase, Any, None]:
             "pool_timeout": 30,
             "max_overflow": 0,
             "pool_size": 2,
+            "connect_args": {"connect_timeout": 30},
         },
     )
     yield sys_db
@@ -61,6 +62,7 @@ def app_db(config: DBOSConfig) -> Generator[ApplicationDatabase, Any, None]:
             "pool_timeout": 30,
             "max_overflow": 0,
             "pool_size": 2,
+            "connect_args": {"connect_timeout": 30},
         },
     )
     yield app_db
@@ -75,7 +77,10 @@ def postgres_db_engine() -> sa.Engine:
         sa.make_url(cfg["database_url"]).set(
             drivername="postgresql+psycopg",
             database="postgres",
-        )
+        ),
+        connect_args={
+            "connect_timeout": 30,
+        },
     )
 
 
