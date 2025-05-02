@@ -280,9 +280,9 @@ def process_config(
     silent: bool = False,
 ) -> ConfigFile:
     """
-    If a database_url is provided, pass it as is in the config
+    If a database_url is provided, pass it as is in the config.
 
-    Else, build a database_url from the data.database fields
+    Else, build a database_url from the env vars / defaults.
 
     Also build SQL Alchemy "kwargs" base on user input + defaults.
     Specifically, db_engine_kwargs takes precedence over app_db_pool_size
