@@ -11,6 +11,7 @@ from sqlalchemy import make_url
 
 from ._error import DBOSInitializationError
 from ._logger import dbos_logger
+from ._schemas.system_database import SystemSchema
 
 DBOS_CONFIG_PATH = "dbos-config.yaml"
 
@@ -326,6 +327,8 @@ def process_config(
 
     # Ensure database dict exists
     data.setdefault("database", {})
+    if "sys_db_name" not in data["database"]:
+        data["database"]["sys_db_name"] = None  # Resolved in the db constructors
     configure_db_engine_parameters(data["database"])
 
     # Database URL resolution
@@ -343,6 +346,9 @@ def process_config(
             field_value = getattr(url, field_name, None)
             if not field_value:
                 raise DBOSInitializationError(error_message)
+
+        if data["database"].get("sys_db_name") is None:
+            data["database"]["sys_db_name"] = url.database + SystemSchema.sysdb_suffix
 
         # In debug mode perform env vars overrides
         if isDebugMode:
@@ -365,6 +371,7 @@ def process_config(
         data["database_url"] = (
             f"postgres://postgres:{_password}@localhost:5432/{_app_db_name}?connect_timeout=10&sslmode=prefer"
         )
+        data["database"]["sys_db_name"] = _app_db_name + SystemSchema.sysdb_suffix
         assert data["database_url"] is not None
 
     # Pretty-print where we've loaded database connection information from, respecting the log level
