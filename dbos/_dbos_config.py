@@ -478,6 +478,7 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Name
     provided_config["name"] = config_from_file["name"]
 
+    # Database config. Expects DBOS_DATABASE_URL to be set
     if "database" not in provided_config:
         provided_config["database"] = {}
     provided_config["database"]["sys_db_name"] = config_from_file["database"][
