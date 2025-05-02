@@ -415,16 +415,16 @@ class DBOS:
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             self._executor_field = ThreadPoolExecutor(max_workers=64)
             self._background_event_loop.start()
-            assert self.config["database_url"] is not None
+            assert self._config["database_url"] is not None
             self._sys_db_field = SystemDatabase(
-                self.config["database_url"],
-                engine_kwargs=self.config["database"]["sys_db_engine_kwargs"],
-                sys_db_name=self.config["database"]["sys_db_name"],
+                database_url=self._config["database_url"],
+                engine_kwargs=self._config["database"]["sys_db_engine_kwargs"],
+                sys_db_name=self._config["database"]["sys_db_name"],
                 debug_mode=debug_mode,
             )
             self._app_db_field = ApplicationDatabase(
-                self.config["database_url"],
-                pool_size=self.config["database"]["app_db_pool_size"],
+                database_url=self.config["database_url"],
+                engine_kwargs=self._config["database"]["db_engine_kwargs"],
                 debug_mode=debug_mode,
             )
 

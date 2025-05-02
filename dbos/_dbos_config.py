@@ -66,7 +66,7 @@ class DatabaseConfig(TypedDict, total=False):
 
     app_db_pool_size: Optional[int]
     sys_db_name: Optional[str]
-    # sys_db_pool_size: Optional[int]
+    sys_db_pool_size: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
     sys_db_engine_kwargs: Optional[Dict[str, Any]]
     migrate: Optional[List[str]]
@@ -346,9 +346,10 @@ def process_config(
 
     # Also build engine parameters for the system database
     data["database"]["sys_db_engine_kwargs"] = default_engine_kwargs.copy()
-    sys_db_pool_size = data["database"].get("sys_db_pool_size", 20)
-    assert sys_db_pool_size is not None
-    data["database"]["sys_db_engine_kwargs"]["pool_size"] = sys_db_pool_size
+    assert data["database"]["sys_db_engine_kwargs"] is not None
+    data["database"]["sys_db_engine_kwargs"]["pool_size"] = data["database"].get(
+        "sys_db_pool_size", 20
+    )
 
     # Database URL resolution
     if data.get("database_url") is not None:
