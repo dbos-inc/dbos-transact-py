@@ -210,11 +210,19 @@ def init(
 @app.command(
     help="Run your database schema migrations using the migration commands in 'dbos-config.yaml'"
 )
-def migrate() -> None:
+def migrate(
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
+) -> None:
     config = load_config()
-    assert config["database_url"] is not None
-    db_url = sa.make_url(config["database_url"])
-    app_db_name = db_url.database
+    connection_string = _get_db_url(db_url)
+    app_db_name = sa.make_url(connection_string).database
 
     typer.echo(f"Starting schema migration for database {app_db_name}")
 
@@ -222,9 +230,8 @@ def migrate() -> None:
     app_db = None
     sys_db = None
     try:
-        assert config["database_url"] is not None
         sys_db = SystemDatabase(
-            database_url=config["database_url"],
+            database_url=connection_string,
             engine_kwargs={
                 "pool_timeout": 30,
                 "max_overflow": 0,
@@ -233,7 +240,7 @@ def migrate() -> None:
             sys_db_name=config["database"]["sys_db_name"],
         )
         app_db = ApplicationDatabase(
-            database_url=config["database_url"],
+            database_url=connection_string,
             engine_kwargs={
                 "pool_timeout": 30,
                 "max_overflow": 0,
