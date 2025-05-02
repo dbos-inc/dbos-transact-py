@@ -134,7 +134,6 @@ class WorkflowsOutput:
     AuthenticatedRoles: Optional[str]
     Input: Optional[str]
     Output: Optional[str]
-    Request: Optional[str]
     Error: Optional[str]
     CreatedAt: Optional[str]
     UpdatedAt: Optional[str]
@@ -168,7 +167,6 @@ class WorkflowsOutput:
             AuthenticatedRoles=roles_str,
             Input=inputs_str,
             Output=outputs_str,
-            Request=request_str,
             Error=error_str,
             CreatedAt=created_at_str,
             UpdatedAt=updated_at_str,
