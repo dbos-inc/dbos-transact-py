@@ -404,24 +404,9 @@ def process_config(
             print(f"[bold blue]Using database connection string: {log_url}[/bold blue]")
     else:
         _app_db_name = _app_name_to_db_name(data["name"])
-
-        dbos_dbport: Optional[int] = None
-        dbport_env = os.getenv("DBOS_DBPORT")
-        if dbport_env:
-            try:
-                dbos_dbport = int(dbport_env)
-            except ValueError:
-                pass
-
-        _hostname = os.getenv("DBOS_DBHOST") or "localhost"
-        _port = dbos_dbport or 5432
-        _username = os.getenv("DBOS_DBUSER") or "postgres"
-        _password = (  # We specifically don't escape the password and expect users to do so
-            os.getenv("DBOS_DBPASSWORD") or os.environ.get("PGPASSWORD") or "dbos"
-        )
-
+        _password = "dbos"
         data["database_url"] = (
-            f"postgres://{_username}:{_password}@{_hostname}:{_port}/{_app_db_name}?connect_timeout=10"
+            f"postgres://postgres:{_password}@localhost:5432/{_app_db_name}?connect_timeout=10&sslmode=prefer"
         )
         assert data["database_url"] is not None
 
@@ -430,14 +415,9 @@ def process_config(
             conn_string = make_url(data["database_url"]).render_as_string(
                 hide_password=True
             )
-            if isDebugMode:
-                print(
-                    f"[bold blue]Loading database connection string from debug environment variables: {conn_string}[/bold blue]"
-                )
-            else:
-                print(
-                    f"[bold blue]Using default database connection string: {conn_string}[/bold blue]"
-                )
+            print(
+                f"[bold blue]Using default database connection string: {conn_string}[/bold blue]"
+            )
 
     # Return data as ConfigFile type
     return data
