@@ -367,7 +367,7 @@ def process_config(
             print(f"[bold blue]Using database connection string: {log_url}[/bold blue]")
     else:
         _app_db_name = _app_name_to_db_name(data["name"])
-        _password = "dbos"
+        _password = os.environ.get("PGPASSWORD", "dbos")
         data["database_url"] = (
             f"postgres://postgres:{_password}@localhost:5432/{_app_db_name}?connect_timeout=10&sslmode=prefer"
         )
