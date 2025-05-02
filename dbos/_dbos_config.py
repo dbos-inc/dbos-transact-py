@@ -341,6 +341,12 @@ def process_config(
     ):
         engine_kwargs.update(data["database"]["db_engine_kwargs"])
 
+    # Set a default connect_timeout on the user database
+    if "connect_args" not in engine_kwargs:
+        engine_kwargs["connect_args"] = {}
+    if "connect_timeout" not in engine_kwargs["connect_args"]:
+        engine_kwargs["connect_args"]["connect_timeout"] = 10
+
     # Store the final result
     data["database"]["db_engine_kwargs"] = engine_kwargs
 
@@ -350,6 +356,14 @@ def process_config(
     data["database"]["sys_db_engine_kwargs"]["pool_size"] = data["database"].get(
         "sys_db_pool_size", 20
     )
+    # Set a default connect_timeout on the system database
+    if "connect_args" not in data["database"]["sys_db_engine_kwargs"]:
+        data["database"]["sys_db_engine_kwargs"]["connect_args"] = {}
+    if (
+        "connect_timeout"
+        not in data["database"]["sys_db_engine_kwargs"]["connect_args"]
+    ):
+        data["database"]["sys_db_engine_kwargs"]["connect_args"]["connect_timeout"] = 10
 
     # Database URL resolution
     if data.get("database_url") is not None:
