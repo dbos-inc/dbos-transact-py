@@ -326,44 +326,7 @@ def process_config(
 
     # Ensure database dict exists
     data.setdefault("database", {})
-
-    # User DB SQLAlchemy engine parameters
-    default_engine_kwargs = {
-        "pool_timeout": 30,
-        "max_overflow": 0,
-        "pool_size": data["database"].get("app_db_pool_size", 20),
-    }
-    # Create engine kwargs by starting with defaults and updating with user values
-    engine_kwargs = default_engine_kwargs.copy()
-    if (
-        "db_engine_kwargs" in data["database"]
-        and data["database"]["db_engine_kwargs"] is not None
-    ):
-        engine_kwargs.update(data["database"]["db_engine_kwargs"])
-
-    # Set a default connect_timeout on the user database
-    if "connect_args" not in engine_kwargs:
-        engine_kwargs["connect_args"] = {}
-    if "connect_timeout" not in engine_kwargs["connect_args"]:
-        engine_kwargs["connect_args"]["connect_timeout"] = 10
-
-    # Store the final result
-    data["database"]["db_engine_kwargs"] = engine_kwargs
-
-    # Also build engine parameters for the system database
-    data["database"]["sys_db_engine_kwargs"] = default_engine_kwargs.copy()
-    assert data["database"]["sys_db_engine_kwargs"] is not None
-    data["database"]["sys_db_engine_kwargs"]["pool_size"] = data["database"].get(
-        "sys_db_pool_size", 20
-    )
-    # Set a default connect_timeout on the system database
-    if "connect_args" not in data["database"]["sys_db_engine_kwargs"]:
-        data["database"]["sys_db_engine_kwargs"]["connect_args"] = {}
-    if (
-        "connect_timeout"
-        not in data["database"]["sys_db_engine_kwargs"]["connect_args"]
-    ):
-        data["database"]["sys_db_engine_kwargs"]["connect_args"]["connect_timeout"] = 10
+    configure_db_engine_parameters(data["database"])
 
     # Database URL resolution
     if data.get("database_url") is not None:
@@ -421,6 +384,72 @@ def process_config(
 
     # Return data as ConfigFile type
     return data
+
+
+def configure_db_engine_parameters(data: DatabaseConfig) -> None:
+    """
+    Configure SQLAlchemy engine parameters for both user and system databases.
+
+    Args:
+        data: Configuration dictionary containing database settings
+    """
+
+    # Get pool sizes with defaults
+    app_db_pool_size = data.get("app_db_pool_size", 20)
+    assert app_db_pool_size is not None
+    sys_db_pool_size = data.get("sys_db_pool_size", 20)
+    assert sys_db_pool_size is not None
+
+    # Store pool sizes in data
+    data["app_db_pool_size"] = app_db_pool_size
+    data["sys_db_pool_size"] = sys_db_pool_size
+
+    # Configure user database engine parameters
+    user_engine_kwargs = _create_engine_kwargs(
+        pool_size=app_db_pool_size, user_kwargs=data.get("db_engine_kwargs")
+    )
+    data["db_engine_kwargs"] = user_engine_kwargs
+
+    # Configure system database engine parameters
+    system_engine_kwargs = _create_engine_kwargs(
+        pool_size=sys_db_pool_size, user_kwargs=data.get("db_engine_kwargs")
+    )
+    data["sys_db_engine_kwargs"] = system_engine_kwargs
+
+
+def _create_engine_kwargs(
+    pool_size: int, user_kwargs: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Create engine kwargs with defaults and user overrides.
+
+    Args:
+        pool_size: The pool size to use
+        user_kwargs: Optional user-provided kwargs to override defaults
+
+    Returns:
+        Complete engine kwargs dictionary
+    """
+    # Set default engine parameters
+    engine_kwargs: dict[str, Any] = {
+        "pool_timeout": 30,
+        "max_overflow": 0,
+        "pool_size": pool_size,
+    }
+
+    # Apply user overrides if provided
+    if user_kwargs is not None:
+        engine_kwargs.update(user_kwargs)
+
+    # Set default connect arguments
+    if "connect_args" not in engine_kwargs:
+        engine_kwargs["connect_args"] = {}
+
+    # Set default connect timeout
+    if "connect_timeout" not in engine_kwargs["connect_args"]:
+        engine_kwargs["connect_args"]["connect_timeout"] = 10
+
+    return engine_kwargs
 
 
 def _is_valid_app_name(name: str) -> bool:
