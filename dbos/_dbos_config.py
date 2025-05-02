@@ -23,7 +23,6 @@ class DBOSConfig(TypedDict, total=False):
     Attributes:
         name (str): Application name
         database_url (str): Database connection string
-        app_db_pool_size (int): Application database pool size
         sys_db_name (str): System database name
         sys_db_pool_size (int): System database pool size
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs (See https://docs.sqlalchemy.org/en/20/core/engines.html#sqlalchemy.create_engine)
@@ -36,7 +35,6 @@ class DBOSConfig(TypedDict, total=False):
 
     name: str
     database_url: Optional[str]
-    app_db_pool_size: Optional[int]
     sys_db_name: Optional[str]
     sys_db_pool_size: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
@@ -58,16 +56,16 @@ class DatabaseConfig(TypedDict, total=False):
     """
     Internal data structure containing the DBOS database configuration.
     Attributes:
-        app_db_pool_size (int): Application database pool size
         sys_db_name (str): System database name
         sys_db_pool_size (int): System database pool size
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs
         migrate (List[str]): Migration commands to run on startup
     """
 
-    app_db_pool_size: Optional[int]
     sys_db_name: Optional[str]
-    sys_db_pool_size: Optional[int]
+    sys_db_pool_size: Optional[
+        int
+    ]  # For internal use, will be removed in a future version
     db_engine_kwargs: Optional[Dict[str, Any]]
     sys_db_engine_kwargs: Optional[Dict[str, Any]]
     migrate: Optional[List[str]]
@@ -126,8 +124,6 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     db_config: DatabaseConfig = {}
     if "sys_db_name" in config:
         db_config["sys_db_name"] = config.get("sys_db_name")
-    if "app_db_pool_size" in config:
-        db_config["app_db_pool_size"] = config.get("app_db_pool_size")
     if "sys_db_pool_size" in config:
         db_config["sys_db_pool_size"] = config.get("sys_db_pool_size")
     if "db_engine_kwargs" in config:
@@ -320,19 +316,17 @@ def process_config(
         data["runtimeConfig"] = {
             "run_admin_server": True,
         }
-    elif "run_admin_server" not in data["runtimeConfig"]:
+    elif data["runtimeConfig"].get("run_admin_server") is None:
         data["runtimeConfig"]["run_admin_server"] = True
 
     isDebugMode = os.getenv("DBOS_DBHOST") is not None
 
     # Ensure database dict exists
     data.setdefault("database", {})
-    if "sys_db_name" not in data["database"]:
-        data["database"]["sys_db_name"] = None  # Resolved in the db constructors
     configure_db_engine_parameters(data["database"])
 
     # Database URL resolution
-    if data.get("database_url") is not None:
+    if data.get("database_url") is not None and data["database_url"] != "":
         # Parse the db string and check required fields
         assert data["database_url"] is not None
         url = make_url(data["database_url"])
@@ -347,7 +341,8 @@ def process_config(
             if not field_value:
                 raise DBOSInitializationError(error_message)
 
-        if data["database"].get("sys_db_name") is None:
+        if not data["database"].get("sys_db_name"):
+            assert url.database is not None
             data["database"]["sys_db_name"] = url.database + SystemSchema.sysdb_suffix
 
         # In debug mode perform env vars overrides
@@ -387,66 +382,30 @@ def configure_db_engine_parameters(data: DatabaseConfig) -> None:
     """
     Configure SQLAlchemy engine parameters for both user and system databases.
 
+    If provided, sys_db_pool_size will take precedence over user_kwargs for the system db engine.
+
     Args:
         data: Configuration dictionary containing database settings
     """
 
-    # Get pool sizes with defaults
-    app_db_pool_size = data.get("app_db_pool_size", 20)
-    assert app_db_pool_size is not None
-    sys_db_pool_size = data.get("sys_db_pool_size", 20)
-    assert sys_db_pool_size is not None
-
-    # Store pool sizes in data
-    data["app_db_pool_size"] = app_db_pool_size
-    data["sys_db_pool_size"] = sys_db_pool_size
-
     # Configure user database engine parameters
-    user_engine_kwargs = _create_engine_kwargs(
-        pool_size=app_db_pool_size, user_kwargs=data.get("db_engine_kwargs")
-    )
-    data["db_engine_kwargs"] = user_engine_kwargs
-
-    # Configure system database engine parameters
-    system_engine_kwargs = _create_engine_kwargs(
-        pool_size=sys_db_pool_size, user_kwargs=data.get("db_engine_kwargs")
-    )
-    data["sys_db_engine_kwargs"] = system_engine_kwargs
-
-
-def _create_engine_kwargs(
-    pool_size: int, user_kwargs: Optional[Dict[str, Any]]
-) -> Dict[str, Any]:
-    """
-    Create engine kwargs with defaults and user overrides.
-
-    Args:
-        pool_size: The pool size to use
-        user_kwargs: Optional user-provided kwargs to override defaults
-
-    Returns:
-        Complete engine kwargs dictionary
-    """
-    # Set default engine parameters
-    engine_kwargs: dict[str, Any] = {
+    app_engine_kwargs: dict[str, Any] = {
         "pool_timeout": 30,
         "max_overflow": 0,
-        "pool_size": pool_size,
+        "pool_size": 20,
     }
-
-    # Apply user overrides if provided
+    # If user-provided kwargs are present, use them instead
+    user_kwargs = data.get("db_engine_kwargs")
     if user_kwargs is not None:
-        engine_kwargs.update(user_kwargs)
+        app_engine_kwargs.update(user_kwargs)
 
-    # Set default connect arguments
-    if "connect_args" not in engine_kwargs:
-        engine_kwargs["connect_args"] = {}
+    # Configure system database engine parameters. User-provided sys_db_pool_size takes precedence
+    system_engine_kwargs = app_engine_kwargs.copy()
+    if data.get("sys_db_pool_size") is not None:
+        system_engine_kwargs["pool_size"] = data["sys_db_pool_size"]
 
-    # Set default connect timeout
-    if "connect_timeout" not in engine_kwargs["connect_args"]:
-        engine_kwargs["connect_args"]["connect_timeout"] = 10
-
-    return engine_kwargs
+    data["db_engine_kwargs"] = app_engine_kwargs
+    data["sys_db_engine_kwargs"] = system_engine_kwargs
 
 
 def _is_valid_app_name(name: str) -> bool:
@@ -470,7 +429,7 @@ def set_env_vars(config: ConfigFile) -> None:
 
 def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Load the DBOS configuration file and force the use of:
-    # 1. The database connection parameters (sub the file data to the provided config)
+    # 1. The database url provided by DBOS_DATABASE_URL
     # 2. OTLP traces endpoints (add the config data to the provided config)
     # 3. Use the application name from the file. This is a defensive measure to ensure the application name is whatever it was registered with in the cloud
     # 4. Remove admin_port is provided in code
