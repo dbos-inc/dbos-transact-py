@@ -359,12 +359,6 @@ def process_config(
                 host=os.getenv("DBOS_DBHOST", url.host),
                 port=port,
             ).render_as_string(hide_password=False)
-
-        if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
-            log_url = make_url(data["database_url"]).render_as_string(
-                hide_password=True
-            )
-            print(f"[bold blue]Using database connection string: {log_url}[/bold blue]")
     else:
         _app_db_name = _app_name_to_db_name(data["name"])
         _password = os.environ.get("PGPASSWORD", "dbos")
@@ -373,14 +367,10 @@ def process_config(
         )
         assert data["database_url"] is not None
 
-        # Pretty-print where we've loaded database connection information from, respecting the log level
-        if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
-            conn_string = make_url(data["database_url"]).render_as_string(
-                hide_password=True
-            )
-            print(
-                f"[bold blue]Using default database connection string: {conn_string}[/bold blue]"
-            )
+    # Pretty-print where we've loaded database connection information from, respecting the log level
+    if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
+        log_url = make_url(data["database_url"]).render_as_string(hide_password=True)
+        print(f"[bold blue]Using database connection string: {log_url}[/bold blue]")
 
     # Return data as ConfigFile type
     return data
