@@ -17,6 +17,7 @@ class MessageType(str, Enum):
     GET_WORKFLOW = "get_workflow"
     EXIST_PENDING_WORKFLOWS = "exist_pending_workflows"
     LIST_STEPS = "list_steps"
+    FORK_WORKFLOW = "fork_workflow"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -133,7 +134,6 @@ class WorkflowsOutput:
     AuthenticatedRoles: Optional[str]
     Input: Optional[str]
     Output: Optional[str]
-    Request: Optional[str]
     Error: Optional[str]
     CreatedAt: Optional[str]
     UpdatedAt: Optional[str]
@@ -167,7 +167,6 @@ class WorkflowsOutput:
             AuthenticatedRoles=roles_str,
             Input=inputs_str,
             Output=outputs_str,
-            Request=request_str,
             Error=error_str,
             CreatedAt=created_at_str,
             UpdatedAt=updated_at_str,
@@ -262,4 +261,22 @@ class ListStepsRequest(BaseMessage):
 @dataclass
 class ListStepsResponse(BaseMessage):
     output: Optional[List[WorkflowSteps]]
+    error_message: Optional[str] = None
+
+
+class ForkWorkflowBody(TypedDict):
+    workflow_id: str
+    start_step: int
+    application_version: Optional[str]
+    new_workflow_id: Optional[str]
+
+
+@dataclass
+class ForkWorkflowRequest(BaseMessage):
+    body: ForkWorkflowBody
+
+
+@dataclass
+class ForkWorkflowResponse(BaseMessage):
+    new_workflow_id: Optional[str]
     error_message: Optional[str] = None
