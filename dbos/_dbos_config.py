@@ -323,9 +323,9 @@ def process_config(
 
     # Ensure database dict exists
     data.setdefault("database", {})
-    configure_db_engine_parameters(data["database"])
 
     # Database URL resolution
+    connect_timeout = None
     if data.get("database_url") is not None and data["database_url"] != "":
         # Parse the db string and check required fields
         assert data["database_url"] is not None
@@ -344,6 +344,15 @@ def process_config(
         if not data["database"].get("sys_db_name"):
             assert url.database is not None
             data["database"]["sys_db_name"] = url.database + SystemSchema.sysdb_suffix
+
+        # Gather connect_timeout from the URL if provided. It should be used in engine kwargs if not provided there (instead of our default)
+        connect_timeout_str = url.query.get("connect_timeout")
+        if connect_timeout_str is not None:
+            assert isinstance(
+                connect_timeout_str, str
+            ), "connect_timeout must be a string and defined once in the URL"
+            if connect_timeout_str.isdigit():
+                connect_timeout = int(connect_timeout_str)
 
         # In debug mode perform env vars overrides
         if isDebugMode:
@@ -370,6 +379,8 @@ def process_config(
             data["database"]["sys_db_name"] = _app_db_name + SystemSchema.sysdb_suffix
         assert data["database_url"] is not None
 
+    configure_db_engine_parameters(data["database"], connect_timeout=connect_timeout)
+
     # Pretty-print where we've loaded database connection information from, respecting the log level
     if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
         log_url = make_url(data["database_url"]).render_as_string(hide_password=True)
@@ -379,7 +390,9 @@ def process_config(
     return data
 
 
-def configure_db_engine_parameters(data: DatabaseConfig) -> None:
+def configure_db_engine_parameters(
+    data: DatabaseConfig, connect_timeout: Optional[int] = None
+) -> None:
     """
     Configure SQLAlchemy engine parameters for both user and system databases.
 
@@ -399,6 +412,15 @@ def configure_db_engine_parameters(data: DatabaseConfig) -> None:
     user_kwargs = data.get("db_engine_kwargs")
     if user_kwargs is not None:
         app_engine_kwargs.update(user_kwargs)
+
+    # If user-provided kwargs do not contain connect_timeout, check if their URL did (this function connect_timeout parameter).
+    # Else default to 10
+    if "connect_args" not in app_engine_kwargs:
+        app_engine_kwargs["connect_args"] = {}
+    if "connect_timeout" not in app_engine_kwargs["connect_args"]:
+        app_engine_kwargs["connect_args"]["connect_timeout"] = (
+            connect_timeout if connect_timeout else 10
+        )
 
     # Configure system database engine parameters. User-provided sys_db_pool_size takes precedence
     system_engine_kwargs = app_engine_kwargs.copy()

@@ -7,6 +7,7 @@ from urllib.parse import quote
 import pytest
 import pytest_mock
 from sqlalchemy import event
+from sqlalchemy.exc import OperationalError
 
 # Public API
 from dbos import DBOS
@@ -236,12 +237,14 @@ def test_process_config_full():
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,
+        "connect_args": {"connect_timeout": 1},
     }
     assert configFile["database"]["sys_db_engine_kwargs"] == {
         "key": "value",
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 27,
+        "connect_args": {"connect_timeout": 1},
     }
     assert configFile["runtimeConfig"]["start"] == ["python3 main.py"]
     assert configFile["runtimeConfig"]["admin_port"] == 8001
@@ -399,11 +402,13 @@ def test_configure_db_engine_parameters_defaults():
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,
+        "connect_args": {"connect_timeout": 10},
     }
     assert data["sys_db_engine_kwargs"] == {
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,
+        "connect_args": {"connect_timeout": 10},
     }
 
 
@@ -417,11 +422,13 @@ def test_configure_db_engine_parameters_custom_sys_db_pool_sizes():
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,
+        "connect_args": {"connect_timeout": 10},
     }
     assert data["sys_db_engine_kwargs"] == {
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 35,
+        "connect_args": {"connect_timeout": 10},
     }
 
 
@@ -435,7 +442,7 @@ def test_configure_db_engine_parameters_user_kwargs_override():
             "pool_pre_ping": True,
             "custom_param": "value",
             "pool_size": 50,
-            "connect_args": {"connect_timeout": 30},
+            "connect_args": {"connect_timeout": 30, "key": "value"},
         },
     }
 
@@ -448,7 +455,7 @@ def test_configure_db_engine_parameters_user_kwargs_override():
         "pool_pre_ping": True,
         "custom_param": "value",
         "pool_size": 50,
-        "connect_args": {"connect_timeout": 30},
+        "connect_args": {"connect_timeout": 30, "key": "value"},
     }
 
     # System engine kwargs should use system pool size but same user overrides
@@ -458,7 +465,76 @@ def test_configure_db_engine_parameters_user_kwargs_override():
         "pool_pre_ping": True,
         "custom_param": "value",
         "pool_size": 35,
-        "connect_args": {"connect_timeout": 30},
+        "connect_args": {"connect_timeout": 30, "key": "value"},
+    }
+
+
+def test_configure_db_engine_parameters_user_kwargs_and_db_url_connect_timeout():
+    """Test that user-provided db_engine_kwargs override defaults and include connect_timeout from db_url."""
+    data: DatabaseConfig = {
+        "db_engine_kwargs": {
+            "pool_timeout": 60,
+            "pool_pre_ping": True,
+            "custom_param": "value",
+            "pool_size": 50,
+        },
+    }
+
+    configure_db_engine_parameters(data, connect_timeout=22)
+
+    # User kwargs should override defaults and include custom params
+    assert data["db_engine_kwargs"] == {
+        "pool_timeout": 60,
+        "max_overflow": 0,
+        "pool_pre_ping": True,
+        "custom_param": "value",
+        "pool_size": 50,
+        "connect_args": {"connect_timeout": 22},
+    }
+
+    # System engine kwargs should use system pool size but same user overrides
+    assert data["sys_db_engine_kwargs"] == {
+        "pool_timeout": 60,
+        "max_overflow": 0,
+        "pool_pre_ping": True,
+        "custom_param": "value",
+        "pool_size": 50,
+        "connect_args": {"connect_timeout": 22},
+    }
+
+
+def test_configure_db_engine_parameters_user_kwargs_plus_db_url_connect_timeout():
+    """Test that user-provided db_engine_kwargs override defaults and connect_timeout from db_url."""
+    data: DatabaseConfig = {
+        "db_engine_kwargs": {
+            "pool_timeout": 60,
+            "pool_pre_ping": True,
+            "custom_param": "value",
+            "pool_size": 50,
+            "connect_args": {"connect_timeout": 1},
+        },
+    }
+
+    configure_db_engine_parameters(data, connect_timeout=22)
+
+    # User kwargs should override defaults and include custom params
+    assert data["db_engine_kwargs"] == {
+        "pool_timeout": 60,
+        "max_overflow": 0,
+        "pool_pre_ping": True,
+        "custom_param": "value",
+        "pool_size": 50,
+        "connect_args": {"connect_timeout": 1},
+    }
+
+    # System engine kwargs should use system pool size but same user overrides
+    assert data["sys_db_engine_kwargs"] == {
+        "pool_timeout": 60,
+        "max_overflow": 0,
+        "pool_pre_ping": True,
+        "custom_param": "value",
+        "pool_size": 50,
+        "connect_args": {"connect_timeout": 1},
     }
 
 
@@ -482,6 +558,7 @@ def test_configure_db_engine_parameters_user_kwargs_mixed_params():
         "pool_pre_ping": True,
         "custom_param": "value",
         "pool_size": 50,
+        "connect_args": {"connect_timeout": 10},
     }
 
     # System engine kwargs should use system pool size but same user overrides
@@ -491,6 +568,7 @@ def test_configure_db_engine_parameters_user_kwargs_mixed_params():
         "pool_pre_ping": True,
         "custom_param": "value",
         "pool_size": 50,
+        "connect_args": {"connect_timeout": 10},
     }
 
 
@@ -504,11 +582,13 @@ def test_configure_db_engine_parameters_empty_user_kwargs():
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,
+        "connect_args": {"connect_timeout": 10},
     }
     assert data["sys_db_engine_kwargs"] == {
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,
+        "connect_args": {"connect_timeout": 10},
     }
 
 
@@ -1060,7 +1140,7 @@ def test_configured_pool_default():
     DBOS.destroy()
     config: DBOSConfig = {
         "name": "test-app",
-        "database_url": f"postgres://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'))}@localhost:5432/postgres?connect_timeout=10",
+        "database_url": f"postgres://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'))}@localhost:5432/postgres",
     }
 
     dbos = DBOS(config=config)
@@ -1092,6 +1172,89 @@ def test_configured_pool_default():
 
 
 def test_configured_pool_user_provided():
+    DBOS.destroy()
+    config: DBOSConfig = {
+        "name": "test-app",
+        "sys_db_pool_size": 43,
+        "database_url": f"postgres://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'))}@localhost:5432/postgres",
+        "db_engine_kwargs": {
+            "pool_size": 22,
+            "pool_timeout": 42,
+            "max_overflow": 27,
+            "pool_pre_ping": True,
+            "connect_args": {"connect_timeout": 7},
+        },
+    }
+
+    dbos = DBOS(config=config)
+    dbos.launch()
+    assert dbos._app_db.engine.pool._pool.maxsize == 22
+    assert dbos._app_db.engine.pool._timeout == 42
+    assert dbos._app_db.engine.pool._max_overflow == 27
+    assert dbos._app_db.engine.pool._pre_ping == True
+
+    assert dbos._sys_db.engine.pool._pool.maxsize == 43
+    assert dbos._sys_db.engine.pool._timeout == 42
+    assert dbos._sys_db.engine.pool._max_overflow == 27
+    assert dbos._sys_db.engine.pool._pre_ping == True
+
+    # force the release of connections so we can intercept on connect.
+    app_db_engine = dbos._app_db.engine
+    app_db_engine.dispose()
+
+    @event.listens_for(app_db_engine, "connect")
+    def inspect_connection(dbapi_connection, connection_record):
+        connect_timeout = dbapi_connection.info.get_parameters()["connect_timeout"]
+        assert connect_timeout == "7"
+
+    with app_db_engine.connect() as conn:
+        pass
+
+    dbos.destroy()
+
+
+def test_configured_pool_user_provided_dburl_connect_timeout():
+    DBOS.destroy()
+    config: DBOSConfig = {
+        "name": "test-app",
+        "sys_db_pool_size": 43,
+        "database_url": f"postgres://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'))}@localhost:5432/postgres?connect_timeout=22",
+        "db_engine_kwargs": {
+            "pool_size": 22,
+            "pool_timeout": 42,
+            "max_overflow": 27,
+            "pool_pre_ping": True,
+        },
+    }
+
+    dbos = DBOS(config=config)
+    dbos.launch()
+    assert dbos._app_db.engine.pool._pool.maxsize == 22
+    assert dbos._app_db.engine.pool._timeout == 42
+    assert dbos._app_db.engine.pool._max_overflow == 27
+    assert dbos._app_db.engine.pool._pre_ping == True
+
+    assert dbos._sys_db.engine.pool._pool.maxsize == 43
+    assert dbos._sys_db.engine.pool._timeout == 42
+    assert dbos._sys_db.engine.pool._max_overflow == 27
+    assert dbos._sys_db.engine.pool._pre_ping == True
+
+    # force the release of connections so we can intercept on connect.
+    app_db_engine = dbos._app_db.engine
+    app_db_engine.dispose()
+
+    @event.listens_for(app_db_engine, "connect")
+    def inspect_connection(dbapi_connection, connection_record):
+        connect_timeout = dbapi_connection.info.get_parameters()["connect_timeout"]
+        assert connect_timeout == "22"
+
+    with app_db_engine.connect() as conn:
+        pass
+
+    dbos.destroy()
+
+
+def test_configured_pool_user_provided_dburl_connect_timeout_precedence():
     DBOS.destroy()
     config: DBOSConfig = {
         "name": "test-app",
@@ -1130,4 +1293,19 @@ def test_configured_pool_user_provided():
     with app_db_engine.connect() as conn:
         pass
 
+    dbos.destroy()
+
+
+def test_pool_connection_times_out_by_default():
+    DBOS.destroy()
+    config: DBOSConfig = {
+        "name": "test-app",
+        "database_url": "postgres://postgres:dbos@example.com/postgres",
+    }
+
+    dbos = DBOS(config=config)
+    with pytest.raises(OperationalError) as exc_info:
+        dbos.launch()
+
+    assert "timeout" in str(exc_info.value).lower()
     dbos.destroy()

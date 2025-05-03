@@ -244,7 +244,9 @@ class SystemDatabase:
 
         if not debug_mode:
             # If the system database does not already exist, create it
-            engine = sa.create_engine(system_db_url.set(database="postgres"))
+            engine = sa.create_engine(
+                system_db_url.set(database="postgres"), **engine_kwargs
+            )
             with engine.connect() as conn:
                 conn.execution_options(isolation_level="AUTOCOMMIT")
                 if not conn.execute(
@@ -1926,7 +1928,10 @@ class SystemDatabase:
 def reset_system_database(postgres_db_url: sa.URL, sysdb_name: str) -> None:
     try:
         # Connect to postgres default database
-        engine = sa.create_engine(postgres_db_url.set(drivername="postgresql+psycopg"))
+        engine = sa.create_engine(
+            postgres_db_url.set(drivername="postgresql+psycopg"),
+            connect_args={"connect_timeout": 10},
+        )
 
         with engine.connect() as conn:
             # Set autocommit required for database dropping

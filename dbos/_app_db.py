@@ -43,6 +43,7 @@ class ApplicationDatabase:
         if not debug_mode:
             postgres_db_engine = sa.create_engine(
                 app_db_url.set(database="postgres"),
+                **engine_kwargs,
             )
             with postgres_db_engine.connect() as conn:
                 conn.execution_options(isolation_level="AUTOCOMMIT")
