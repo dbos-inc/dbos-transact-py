@@ -1296,10 +1296,14 @@ def test_configured_pool_user_provided_dburl_connect_timeout_precedence():
 
 
 def test_pool_connection_times_out_by_default():
+    import socket
+
+    ipv4_addr = socket.gethostbyname("example.com")
+
     DBOS.destroy()
     config: DBOSConfig = {
         "name": "test-app",
-        "database_url": "postgres://postgres:dbos@example.com/postgres",
+        "database_url": f"postgres://postgres:dbos@{ipv4_addr}/postgres",
     }
 
     dbos = DBOS(config=config)
