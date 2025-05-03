@@ -1162,7 +1162,6 @@ def test_configured_pool_default():
     @event.listens_for(app_db_engine, "connect")
     def inspect_connection(dbapi_connection, connection_record):
         connect_timeout = dbapi_connection.info.get_parameters()["connect_timeout"]
-        print(connect_timeout)
         assert connect_timeout == "10"
 
     with app_db_engine.connect() as conn:
