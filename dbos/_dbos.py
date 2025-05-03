@@ -24,8 +24,6 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
-    Union,
-    cast,
 )
 
 from opentelemetry.trace import Span
@@ -64,7 +62,6 @@ from ._registrations import (
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
-from ._schemas.system_database import SystemSchema
 from ._sys_db import StepInfo, SystemDatabase, WorkflowStatus, reset_system_database
 from ._tracer import DBOSTracer, dbos_tracer
 
@@ -73,7 +70,7 @@ if TYPE_CHECKING:
     from ._kafka import _KafkaConsumerWorkflow
     from flask import Flask
 
-from sqlalchemy import URL
+from sqlalchemy import make_url
 from sqlalchemy.orm import Session
 
 if sys.version_info < (3, 10):
@@ -418,11 +415,19 @@ class DBOS:
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             self._executor_field = ThreadPoolExecutor(max_workers=64)
             self._background_event_loop.start()
+            assert self._config["database_url"] is not None
+            assert self._config["database"]["sys_db_engine_kwargs"] is not None
             self._sys_db_field = SystemDatabase(
-                self._config["database"], debug_mode=debug_mode
+                database_url=self._config["database_url"],
+                engine_kwargs=self._config["database"]["sys_db_engine_kwargs"],
+                sys_db_name=self._config["database"]["sys_db_name"],
+                debug_mode=debug_mode,
             )
+            assert self._config["database"]["db_engine_kwargs"] is not None
             self._app_db_field = ApplicationDatabase(
-                self._config["database"], debug_mode=debug_mode
+                database_url=self._config["database_url"],
+                engine_kwargs=self._config["database"]["db_engine_kwargs"],
+                debug_mode=debug_mode,
             )
 
             if debug_mode:
@@ -530,21 +535,13 @@ class DBOS:
             not self._launched
         ), "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
 
-        sysdb_name = (
-            self._config["database"]["sys_db_name"]
-            if "sys_db_name" in self._config["database"]
-            and self._config["database"]["sys_db_name"]
-            else self._config["database"]["app_db_name"] + SystemSchema.sysdb_suffix
-        )
-        postgres_db_url = URL.create(
-            "postgresql+psycopg",
-            username=self._config["database"]["username"],
-            password=self._config["database"]["password"],
-            host=self._config["database"]["hostname"],
-            port=self._config["database"]["port"],
-            database="postgres",
-        )
-        reset_system_database(postgres_db_url, sysdb_name)
+        sysdb_name = self._config["database"]["sys_db_name"]
+        assert sysdb_name is not None
+
+        assert self._config["database_url"] is not None
+        pg_db_url = make_url(self._config["database_url"]).set(database="postgres")
+
+        reset_system_database(pg_db_url, sysdb_name)
 
     def _destroy(self) -> None:
         self._initialized = False
