@@ -5,7 +5,6 @@ import os
 import re
 import threading
 import time
-import uuid
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -32,7 +31,7 @@ from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
 from . import _serialization
 from ._context import get_local_dbos_context
-from ._dbos_config import ConfigFile, DatabaseConfig
+from ._dbos_config import DatabaseConfig
 from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
@@ -43,7 +42,6 @@ from ._error import (
     DBOSWorkflowConflictIDError,
 )
 from ._logger import dbos_logger
-from ._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from ._schemas.system_database import SystemSchema
 
 if TYPE_CHECKING:

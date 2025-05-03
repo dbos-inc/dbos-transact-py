@@ -4,7 +4,7 @@ from enum import Enum
 from types import FunctionType
 from typing import Any, Callable, List, Literal, Optional, Tuple, Type, cast
 
-DEFAULT_MAX_RECOVERY_ATTEMPTS = 50
+DEFAULT_MAX_RECOVERY_ATTEMPTS = 100
 
 
 def get_dbos_func_name(f: Any) -> str:
