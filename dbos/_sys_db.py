@@ -27,11 +27,10 @@ from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.sql import func
 
-from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
+from dbos._utils import INTERNAL_QUEUE_NAME
 
 from . import _serialization
 from ._context import get_local_dbos_context
-from ._dbos_config import DatabaseConfig
 from ._error import (
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
@@ -225,26 +224,28 @@ _dbos_null_topic = "__null__topic__"
 
 class SystemDatabase:
 
-    def __init__(self, database: DatabaseConfig, *, debug_mode: bool = False):
-        sysdb_name = (
-            database["sys_db_name"]
-            if "sys_db_name" in database and database["sys_db_name"]
-            else database["app_db_name"] + SystemSchema.sysdb_suffix
-        )
+    def __init__(
+        self,
+        *,
+        database_url: str,
+        engine_kwargs: Dict[str, Any],
+        sys_db_name: Optional[str] = None,
+        debug_mode: bool = False,
+    ):
+        # Set driver
+        system_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
+        # Resolve system database name
+        sysdb_name = sys_db_name
+        if not sysdb_name:
+            assert system_db_url.database is not None
+            sysdb_name = system_db_url.database + SystemSchema.sysdb_suffix
+        system_db_url = system_db_url.set(database=sysdb_name)
 
         if not debug_mode:
             # If the system database does not already exist, create it
-            postgres_db_url = sa.URL.create(
-                "postgresql+psycopg",
-                username=database["username"],
-                password=database["password"],
-                host=database["hostname"],
-                port=database["port"],
-                database="postgres",
-                # fills the "application_name" column in pg_stat_activity
-                query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
+            engine = sa.create_engine(
+                system_db_url.set(database="postgres"), **engine_kwargs
             )
-            engine = sa.create_engine(postgres_db_url)
             with engine.connect() as conn:
                 conn.execution_options(isolation_level="AUTOCOMMIT")
                 if not conn.execute(
@@ -254,36 +255,6 @@ class SystemDatabase:
                     dbos_logger.info(f"Creating system database {sysdb_name}")
                     conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
             engine.dispose()
-
-        system_db_url = sa.URL.create(
-            "postgresql+psycopg",
-            username=database["username"],
-            password=database["password"],
-            host=database["hostname"],
-            port=database["port"],
-            database=sysdb_name,
-            # fills the "application_name" column in pg_stat_activity
-            query={"application_name": f"dbos_transact_{GlobalParams.executor_id}"},
-        )
-
-        # Create a connection pool for the system database
-        pool_size = database.get("sys_db_pool_size")
-        if pool_size is None:
-            pool_size = 20
-
-        engine_kwargs = database.get("db_engine_kwargs")
-        if engine_kwargs is None:
-            engine_kwargs = {}
-
-        # Respect user-provided values. Otherwise, set defaults.
-        if "pool_size" not in engine_kwargs:
-            engine_kwargs["pool_size"] = pool_size
-        if "max_overflow" not in engine_kwargs:
-            engine_kwargs["max_overflow"] = 0
-        if "pool_timeout" not in engine_kwargs:
-            engine_kwargs["pool_timeout"] = 30
-        if "connect_args" not in engine_kwargs:
-            engine_kwargs["connect_args"] = {"connect_timeout": 10}
 
         self.engine = sa.create_engine(
             system_db_url,
@@ -1956,7 +1927,10 @@ class SystemDatabase:
 def reset_system_database(postgres_db_url: sa.URL, sysdb_name: str) -> None:
     try:
         # Connect to postgres default database
-        engine = sa.create_engine(postgres_db_url)
+        engine = sa.create_engine(
+            postgres_db_url.set(drivername="postgresql+psycopg"),
+            connect_args={"connect_timeout": 10},
+        )
 
         with engine.connect() as conn:
             # Set autocommit required for database dropping

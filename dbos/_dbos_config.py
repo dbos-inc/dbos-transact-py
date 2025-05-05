@@ -11,6 +11,7 @@ from sqlalchemy import make_url
 
 from ._error import DBOSInitializationError
 from ._logger import dbos_logger
+from ._schemas.system_database import SystemSchema
 
 DBOS_CONFIG_PATH = "dbos-config.yaml"
 
@@ -22,7 +23,6 @@ class DBOSConfig(TypedDict, total=False):
     Attributes:
         name (str): Application name
         database_url (str): Database connection string
-        app_db_pool_size (int): Application database pool size
         sys_db_name (str): System database name
         sys_db_pool_size (int): System database pool size
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs (See https://docs.sqlalchemy.org/en/20/core/engines.html#sqlalchemy.create_engine)
@@ -35,7 +35,6 @@ class DBOSConfig(TypedDict, total=False):
 
     name: str
     database_url: Optional[str]
-    app_db_pool_size: Optional[int]
     sys_db_name: Optional[str]
     sys_db_pool_size: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
@@ -57,47 +56,20 @@ class DatabaseConfig(TypedDict, total=False):
     """
     Internal data structure containing the DBOS database configuration.
     Attributes:
-        app_db_pool_size (int): Application database pool size
         sys_db_name (str): System database name
         sys_db_pool_size (int): System database pool size
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs
         migrate (List[str]): Migration commands to run on startup
     """
 
-    hostname: str  # Will be removed in a future version
-    port: int  # Will be removed in a future version
-    username: str  # Will be removed in a future version
-    password: str  # Will be removed in a future version
-    connectionTimeoutMillis: Optional[int]  # Will be removed in a future version
-    app_db_name: str  # Will be removed in a future version
-    app_db_pool_size: Optional[int]
     sys_db_name: Optional[str]
-    sys_db_pool_size: Optional[int]
+    sys_db_pool_size: Optional[
+        int
+    ]  # For internal use, will be removed in a future version
     db_engine_kwargs: Optional[Dict[str, Any]]
-    ssl: Optional[bool]  # Will be removed in a future version
-    ssl_ca: Optional[str]  # Will be removed in a future version
+    sys_db_engine_kwargs: Optional[Dict[str, Any]]
     migrate: Optional[List[str]]
     rollback: Optional[List[str]]  # Will be removed in a future version
-
-
-def parse_database_url_to_dbconfig(database_url: str) -> DatabaseConfig:
-    db_url = make_url(database_url)
-    db_config = {
-        "hostname": db_url.host,
-        "port": db_url.port or 5432,
-        "username": db_url.username,
-        "password": db_url.password,
-        "app_db_name": db_url.database,
-    }
-    for key, value in db_url.query.items():
-        str_value = value[0] if isinstance(value, tuple) else value
-        if key == "connect_timeout":
-            db_config["connectionTimeoutMillis"] = int(str_value) * 1000
-        elif key == "sslmode":
-            db_config["ssl"] = str_value == "require"
-        elif key == "sslrootcert":
-            db_config["ssl_ca"] = str_value
-    return cast(DatabaseConfig, db_config)
 
 
 class OTLPExporterConfig(TypedDict, total=False):
@@ -150,19 +122,17 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
 
     # Database config
     db_config: DatabaseConfig = {}
-    database_url = config.get("database_url")
-    if database_url:
-        db_config = parse_database_url_to_dbconfig(database_url)
     if "sys_db_name" in config:
         db_config["sys_db_name"] = config.get("sys_db_name")
-    if "app_db_pool_size" in config:
-        db_config["app_db_pool_size"] = config.get("app_db_pool_size")
     if "sys_db_pool_size" in config:
         db_config["sys_db_pool_size"] = config.get("sys_db_pool_size")
     if "db_engine_kwargs" in config:
         db_config["db_engine_kwargs"] = config.get("db_engine_kwargs")
     if db_config:
         translated_config["database"] = db_config
+
+    if "database_url" in config:
+        translated_config["database_url"] = config.get("database_url")
 
     # Runtime config
     translated_config["runtimeConfig"] = {"run_admin_server": True}
@@ -306,6 +276,24 @@ def process_config(
     data: ConfigFile,
     silent: bool = False,
 ) -> ConfigFile:
+    """
+    If a database_url is provided, pass it as is in the config.
+
+    Else, build a database_url from defaults.
+
+    Also build SQL Alchemy "kwargs" base on user input + defaults.
+    Specifically, db_engine_kwargs takes precedence over app_db_pool_size
+
+    In debug mode, apply overrides from DBOS_DBHOST, DBOS_DBPORT, DBOS_DBUSER, and DBOS_DBPASSWORD.
+
+    Default configuration:
+        - Hostname: localhost
+        - Port: 5432
+        - Username: postgres
+        - Password: $PGPASSWORD
+        - Database name: transformed application name.
+    """
+
     if "name" not in data:
         raise DBOSInitializationError(f"Configuration must specify an application name")
 
@@ -323,55 +311,7 @@ def process_config(
     if logs.get("logLevel") is None:
         logs["logLevel"] = "INFO"
 
-    if "database" not in data:
-        data["database"] = {}
-
-    # database_url takes precedence over database config, but we need to preserve rollback and migrate if they exist
-    migrate = data["database"].get("migrate", False)
-    rollback = data["database"].get("rollback", False)
-    if data.get("database_url"):
-        dbconfig = parse_database_url_to_dbconfig(cast(str, data["database_url"]))
-        if migrate:
-            dbconfig["migrate"] = cast(List[str], migrate)
-        if rollback:
-            dbconfig["rollback"] = cast(List[str], rollback)
-        data["database"] = dbconfig
-
-    if "app_db_name" not in data["database"] or not (data["database"]["app_db_name"]):
-        data["database"]["app_db_name"] = _app_name_to_db_name(data["name"])
-
-    connection_passed_in = data["database"].get("hostname", None) is not None
-
-    dbos_dbport: Optional[int] = None
-    dbport_env = os.getenv("DBOS_DBPORT")
-    if dbport_env:
-        try:
-            dbos_dbport = int(dbport_env)
-        except ValueError:
-            pass
-
-    data["database"]["hostname"] = (
-        os.getenv("DBOS_DBHOST") or data["database"].get("hostname") or "localhost"
-    )
-
-    data["database"]["port"] = dbos_dbport or data["database"].get("port") or 5432
-    data["database"]["username"] = (
-        os.getenv("DBOS_DBUSER") or data["database"].get("username") or "postgres"
-    )
-    data["database"]["password"] = (
-        os.getenv("DBOS_DBPASSWORD")
-        or data["database"].get("password")
-        or os.environ.get("PGPASSWORD")
-        or "dbos"
-    )
-
-    if not data["database"].get("app_db_pool_size"):
-        data["database"]["app_db_pool_size"] = 20
-    if not data["database"].get("sys_db_pool_size"):
-        data["database"]["sys_db_pool_size"] = 20
-    if not data["database"].get("connectionTimeoutMillis"):
-        data["database"]["connectionTimeoutMillis"] = 10000
-
+    # Handle admin server config
     if not data.get("runtimeConfig"):
         data["runtimeConfig"] = {
             "run_admin_server": True,
@@ -379,25 +319,116 @@ def process_config(
     elif "run_admin_server" not in data["runtimeConfig"]:
         data["runtimeConfig"]["run_admin_server"] = True
 
+    isDebugMode = os.getenv("DBOS_DBHOST") is not None
+
+    # Ensure database dict exists
+    data.setdefault("database", {})
+
+    # Database URL resolution
+    connect_timeout = None
+    if data.get("database_url") is not None and data["database_url"] != "":
+        # Parse the db string and check required fields
+        assert data["database_url"] is not None
+        url = make_url(data["database_url"])
+        required_fields = [
+            ("username", "Username must be specified in the connection URL"),
+            ("password", "Password must be specified in the connection URL"),
+            ("host", "Host must be specified in the connection URL"),
+            ("database", "Database name must be specified in the connection URL"),
+        ]
+        for field_name, error_message in required_fields:
+            field_value = getattr(url, field_name, None)
+            if not field_value:
+                raise DBOSInitializationError(error_message)
+
+        if not data["database"].get("sys_db_name"):
+            assert url.database is not None
+            data["database"]["sys_db_name"] = url.database + SystemSchema.sysdb_suffix
+
+        # Gather connect_timeout from the URL if provided. It should be used in engine kwargs if not provided there (instead of our default)
+        connect_timeout_str = url.query.get("connect_timeout")
+        if connect_timeout_str is not None:
+            assert isinstance(
+                connect_timeout_str, str
+            ), "connect_timeout must be a string and defined once in the URL"
+            if connect_timeout_str.isdigit():
+                connect_timeout = int(connect_timeout_str)
+
+        # In debug mode perform env vars overrides
+        if isDebugMode:
+            # Override the username, password, host, and port
+            port_str = os.getenv("DBOS_DBPORT")
+            port = (
+                int(port_str)
+                if port_str is not None and port_str.isdigit()
+                else url.port
+            )
+            data["database_url"] = url.set(
+                username=os.getenv("DBOS_DBUSER", url.username),
+                password=os.getenv("DBOS_DBPASSWORD", url.password),
+                host=os.getenv("DBOS_DBHOST", url.host),
+                port=port,
+            ).render_as_string(hide_password=False)
+    else:
+        _app_db_name = _app_name_to_db_name(data["name"])
+        _password = os.environ.get("PGPASSWORD", "dbos")
+        data["database_url"] = (
+            f"postgres://postgres:{_password}@localhost:5432/{_app_db_name}?connect_timeout=10&sslmode=prefer"
+        )
+        if not data["database"].get("sys_db_name"):
+            data["database"]["sys_db_name"] = _app_db_name + SystemSchema.sysdb_suffix
+        assert data["database_url"] is not None
+
+    configure_db_engine_parameters(data["database"], connect_timeout=connect_timeout)
+
     # Pretty-print where we've loaded database connection information from, respecting the log level
     if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
-        d = data["database"]
-        conn_string = f"postgresql://{d['username']}:*****@{d['hostname']}:{d['port']}/{d['app_db_name']}"
-        if os.getenv("DBOS_DBHOST"):
-            print(
-                f"[bold blue]Loading database connection string from debug environment variables: {conn_string}[/bold blue]"
-            )
-        elif connection_passed_in:
-            print(
-                f"[bold blue]Using database connection string: {conn_string}[/bold blue]"
-            )
-        else:
-            print(
-                f"[bold blue]Using default database connection string: {conn_string}[/bold blue]"
-            )
+        log_url = make_url(data["database_url"]).render_as_string(hide_password=True)
+        print(f"[bold blue]Using database connection string: {log_url}[/bold blue]")
 
     # Return data as ConfigFile type
     return data
+
+
+def configure_db_engine_parameters(
+    data: DatabaseConfig, connect_timeout: Optional[int] = None
+) -> None:
+    """
+    Configure SQLAlchemy engine parameters for both user and system databases.
+
+    If provided, sys_db_pool_size will take precedence over user_kwargs for the system db engine.
+
+    Args:
+        data: Configuration dictionary containing database settings
+    """
+
+    # Configure user database engine parameters
+    app_engine_kwargs: dict[str, Any] = {
+        "pool_timeout": 30,
+        "max_overflow": 0,
+        "pool_size": 20,
+    }
+    # If user-provided kwargs are present, use them instead
+    user_kwargs = data.get("db_engine_kwargs")
+    if user_kwargs is not None:
+        app_engine_kwargs.update(user_kwargs)
+
+    # If user-provided kwargs do not contain connect_timeout, check if their URL did (this function connect_timeout parameter).
+    # Else default to 10
+    if "connect_args" not in app_engine_kwargs:
+        app_engine_kwargs["connect_args"] = {}
+    if "connect_timeout" not in app_engine_kwargs["connect_args"]:
+        app_engine_kwargs["connect_args"]["connect_timeout"] = (
+            connect_timeout if connect_timeout else 10
+        )
+
+    # Configure system database engine parameters. User-provided sys_db_pool_size takes precedence
+    system_engine_kwargs = app_engine_kwargs.copy()
+    if data.get("sys_db_pool_size") is not None:
+        system_engine_kwargs["pool_size"] = data["sys_db_pool_size"]
+
+    data["db_engine_kwargs"] = app_engine_kwargs
+    data["sys_db_engine_kwargs"] = system_engine_kwargs
 
 
 def _is_valid_app_name(name: str) -> bool:
@@ -409,7 +440,7 @@ def _is_valid_app_name(name: str) -> bool:
 
 
 def _app_name_to_db_name(app_name: str) -> str:
-    name = app_name.replace("-", "_")
+    name = app_name.replace("-", "_").replace(" ", "_").lower()
     return name if not name[0].isdigit() else f"_{name}"
 
 
@@ -421,7 +452,7 @@ def set_env_vars(config: ConfigFile) -> None:
 
 def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Load the DBOS configuration file and force the use of:
-    # 1. The database connection parameters (sub the file data to the provided config)
+    # 1. The database url provided by DBOS_DATABASE_URL
     # 2. OTLP traces endpoints (add the config data to the provided config)
     # 3. Use the application name from the file. This is a defensive measure to ensure the application name is whatever it was registered with in the cloud
     # 4. Remove admin_port is provided in code

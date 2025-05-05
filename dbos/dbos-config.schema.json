@@ -70,16 +70,6 @@
             "description": "If using SSL/TLS to securely connect to a database, path to an SSL root certificate file. DEPRECATED: Use database_url instead",
             "deprecated": true
           },
-          "app_db_client": {
-            "type": "string",
-            "description": "Specify the database client to use to connect to the application database",
-            "enum": [
-              "pg-node",
-              "prisma",
-              "typeorm",
-              "knex"
-            ]
-          },
           "migrate": {
             "type": "array",
             "description": "Specify a list of user DB migration commands to run"

@@ -27,7 +27,7 @@ from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
 
 
-def start_client(db_url: Optional[str] = None) -> DBOSClient:
+def _get_db_url(db_url: Optional[str]) -> str:
     database_url = db_url
     if database_url is None:
         database_url = os.getenv("DBOS_DATABASE_URL")
@@ -35,7 +35,11 @@ def start_client(db_url: Optional[str] = None) -> DBOSClient:
         raise ValueError(
             "Missing database URL: please set it using the --db-url flag or the DBOS_DATABASE_URL environment variable."
         )
+    return database_url
 
+
+def start_client(db_url: Optional[str] = None) -> DBOSClient:
+    database_url = _get_db_url(db_url)
     return DBOSClient(database_url=database_url)
 
 
@@ -206,14 +210,30 @@ def init(
 @app.command(
     help="Run your database schema migrations using the migration commands in 'dbos-config.yaml'"
 )
-def migrate() -> None:
-    config = load_config()
-    if not config["database"]["password"]:
-        typer.echo(
-            "DBOS configuration does not contain database password, please check your config file and retry!"
-        )
-        raise typer.Exit(code=1)
-    app_db_name = config["database"]["app_db_name"]
+def migrate(
+    db_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--db-url",
+            "-D",
+            help="Your DBOS application database URL",
+        ),
+    ] = None,
+    sys_db_name: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--sys-db-name",
+            "-s",
+            help="Specify the name of the system database to reset",
+        ),
+    ] = None,
+) -> None:
+    config = load_config(run_process_config=False, silent=True)
+    connection_string = _get_db_url(db_url)
+    app_db_name = sa.make_url(connection_string).database
+    assert app_db_name is not None, "Database name is required in URL"
+    if sys_db_name is None:
+        sys_db_name = app_db_name + SystemSchema.sysdb_suffix
 
     typer.echo(f"Starting schema migration for database {app_db_name}")
 
@@ -221,8 +241,23 @@ def migrate() -> None:
     app_db = None
     sys_db = None
     try:
-        sys_db = SystemDatabase(config["database"])
-        app_db = ApplicationDatabase(config["database"])
+        sys_db = SystemDatabase(
+            database_url=connection_string,
+            engine_kwargs={
+                "pool_timeout": 30,
+                "max_overflow": 0,
+                "pool_size": 2,
+            },
+            sys_db_name=sys_db_name,
+        )
+        app_db = ApplicationDatabase(
+            database_url=connection_string,
+            engine_kwargs={
+                "pool_timeout": 30,
+                "max_overflow": 0,
+                "pool_size": 2,
+            },
+        )
     except Exception as e:
         typer.echo(f"DBOS system schema migration failed: {e}")
     finally:
@@ -234,6 +269,9 @@ def migrate() -> None:
     # Next, run any custom migration commands specified in the configuration
     typer.echo("Executing migration commands from 'dbos-config.yaml'")
     try:
+        # handle the case where the user has not specified migrations commands
+        if "database" not in config:
+            config["database"] = {}
         migrate_commands = (
             config["database"]["migrate"]
             if "migrate" in config["database"] and config["database"]["migrate"]
@@ -283,17 +321,21 @@ def reset(
             typer.echo("Operation cancelled.")
             raise typer.Exit()
     try:
-        client = start_client(db_url=db_url)
-        pg_db_url = sa.make_url(client._db_url).set(drivername="postgresql+psycopg")
+        # Make a SA url out of the user-provided URL and verify a database name is present
+        database_url = _get_db_url(db_url)
+        pg_db_url = sa.make_url(database_url)
         assert (
             pg_db_url.database is not None
         ), f"Database name is required in URL: {pg_db_url.render_as_string(hide_password=True)}"
+        # Resolve system database name
         sysdb_name = (
             sys_db_name
             if sys_db_name
             else (pg_db_url.database + SystemSchema.sysdb_suffix)
         )
-        reset_system_database(pg_db_url.set(database="postgres"), sysdb_name)
+        reset_system_database(
+            postgres_db_url=pg_db_url.set(database="postgres"), sysdb_name=sysdb_name
+        )
     except sa.exc.SQLAlchemyError as e:
         typer.echo(f"Error resetting system database: {str(e)}")
         return

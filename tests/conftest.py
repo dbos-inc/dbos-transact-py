@@ -39,38 +39,55 @@ def config() -> DBOSConfig:
 
 @pytest.fixture()
 def sys_db(config: DBOSConfig) -> Generator[SystemDatabase, Any, None]:
-    cfg = translate_dbos_config_to_config_file(config)
-    sys_db = SystemDatabase(cfg["database"])
+    assert config["database_url"] is not None
+    sys_db = SystemDatabase(
+        database_url=config["database_url"],
+        engine_kwargs={
+            "pool_timeout": 30,
+            "max_overflow": 0,
+            "pool_size": 2,
+            "connect_args": {"connect_timeout": 30},
+        },
+    )
     yield sys_db
     sys_db.destroy()
 
 
 @pytest.fixture()
 def app_db(config: DBOSConfig) -> Generator[ApplicationDatabase, Any, None]:
-    cfg = translate_dbos_config_to_config_file(config)
-    app_db = ApplicationDatabase(cfg["database"])
+    assert config["database_url"] is not None
+    app_db = ApplicationDatabase(
+        database_url=config["database_url"],
+        engine_kwargs={
+            "pool_timeout": 30,
+            "max_overflow": 0,
+            "pool_size": 2,
+            "connect_args": {"connect_timeout": 30},
+        },
+    )
     yield app_db
     app_db.destroy()
 
 
 @pytest.fixture(scope="session")
 def postgres_db_engine() -> sa.Engine:
-    cfg = translate_dbos_config_to_config_file(default_config())
-    postgres_db_url = sa.URL.create(
-        "postgresql+psycopg",
-        username=cfg["database"]["username"],
-        password=cfg["database"]["password"],
-        host=cfg["database"]["hostname"],
-        port=cfg["database"]["port"],
-        database="postgres",
+    cfg = default_config()
+    assert cfg["database_url"] is not None
+    return sa.create_engine(
+        sa.make_url(cfg["database_url"]).set(
+            drivername="postgresql+psycopg",
+            database="postgres",
+        ),
+        connect_args={
+            "connect_timeout": 30,
+        },
     )
-    return sa.create_engine(postgres_db_url)
 
 
 @pytest.fixture()
 def cleanup_test_databases(config: DBOSConfig, postgres_db_engine: sa.Engine) -> None:
-    cfg = translate_dbos_config_to_config_file(config)
-    app_db_name = cfg["database"]["app_db_name"]
+    assert config["database_url"] is not None
+    app_db_name = sa.make_url(config["database_url"]).database
     sys_db_name = f"{app_db_name}_dbos_sys"
 
     with postgres_db_engine.connect() as connection:
