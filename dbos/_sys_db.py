@@ -41,7 +41,6 @@ from ._error import (
     DBOSWorkflowConflictIDError,
 )
 from ._logger import dbos_logger
-from ._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from ._schemas.system_database import SystemSchema
 
 if TYPE_CHECKING:
