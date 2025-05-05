@@ -55,6 +55,7 @@ def test_cancel_resume(dbos: DBOS) -> None:
     # Resume the workflow. Verify it completes successfully.
     handle = DBOS.resume_workflow(wfid)
     assert handle.get_status().app_version == GlobalParams.app_version
+    assert handle.get_status().queue_name == INTERNAL_QUEUE_NAME
     assert handle.get_result() == input
     assert steps_completed == 2
 
@@ -62,6 +63,8 @@ def test_cancel_resume(dbos: DBOS) -> None:
     handle = DBOS.resume_workflow(wfid)
     assert handle.get_result() == input
     assert steps_completed == 2
+
+    assert queue_entries_are_cleaned_up(dbos)
 
 
 def test_cancel_resume_txn(dbos: DBOS) -> None:
@@ -627,6 +630,8 @@ def test_fork_version(
     new_version = "my_new_version"
     handle = DBOS.fork_workflow(workflow_id, 2, application_version=new_version)
     assert handle.get_status().app_version == new_version
+    assert handle.get_status().queue_name == INTERNAL_QUEUE_NAME
     # Set the global version to this new version, verify the workflow completes
     GlobalParams.app_version = new_version
     assert handle.get_result() == output
+    assert queue_entries_are_cleaned_up(dbos)
