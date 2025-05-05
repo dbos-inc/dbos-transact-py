@@ -543,6 +543,7 @@ class SystemDatabase:
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
+                    queue_name=INTERNAL_QUEUE_NAME,
                     recovery_attempts=0,
                     workflow_deadline_epoch_ms=None,
                 )
