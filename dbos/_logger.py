@@ -7,6 +7,7 @@ from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
+from opentelemetry.semconv.resource import ResourceAttributes
 from opentelemetry.trace.span import format_trace_id
 
 from dbos._utils import GlobalParams
@@ -77,7 +78,7 @@ def config_logger(config: "ConfigFile") -> None:
         log_provider = PatchedOTLPLoggerProvider(
             Resource.create(
                 attributes={
-                    "service.name": "dbos-application",
+                    ResourceAttributes.SERVICE_NAME: config["name"],
                 }
             )
         )
