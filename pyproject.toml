@@ -59,6 +59,7 @@ addopts = "-s"
 log_cli_format = "%(asctime)s [%(levelname)8s] (%(name)s:%(filename)s:%(lineno)s) %(message)s"
 log_cli_level = "INFO"
 log_cli = true
+timeout = 120 # Terminate any test that takes longer than 120 seconds
 
 [dependency-groups]
 dev = [
@@ -83,4 +84,5 @@ dev = [
     "pytest-asyncio>=0.25.0",
     "pyright>=1.1.398",
     "types-docker>=7.1.0.20241229",
+    "pytest-timeout>=2.3.1",
 ]
