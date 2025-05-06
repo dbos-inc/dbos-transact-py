@@ -31,6 +31,19 @@ def run_client_collateral() -> None:
     runpy.run_path(filename)
 
 
+def test_client_no_migrate(dbos: DBOS, config: DBOSConfig) -> None:
+    # Drop the system database
+    DBOS.destroy()
+    DBOS(config=config)
+    DBOS.reset_system_database()
+
+    # The client should not be able to connect to the system database
+    with pytest.raises(Exception) as exc_info:
+        client = DBOSClient(config["database_url"])
+        client.list_workflows()
+    assert f'database "dbostestpy_dbos_sys" does not exist' in str(exc_info.value)
+
+
 def test_client_enqueue_and_get_result(dbos: DBOS, client: DBOSClient) -> None:
     run_client_collateral()
 
