@@ -231,6 +231,7 @@ class SystemDatabase:
         engine_kwargs: Dict[str, Any],
         sys_db_name: Optional[str] = None,
         debug_mode: bool = False,
+        client_mode: bool = False,
     ):
         # Set driver
         system_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
@@ -241,7 +242,7 @@ class SystemDatabase:
             sysdb_name = system_db_url.database + SystemSchema.sysdb_suffix
         system_db_url = system_db_url.set(database=sysdb_name)
 
-        if not debug_mode:
+        if not debug_mode and not client_mode:
             # If the system database does not already exist, create it
             engine = sa.create_engine(
                 system_db_url.set(database="postgres"), **engine_kwargs
@@ -262,7 +263,7 @@ class SystemDatabase:
         )
 
         # Run a schema migration for the system database
-        if not debug_mode:
+        if not debug_mode and not client_mode:
             migration_dir = os.path.join(
                 os.path.dirname(os.path.realpath(__file__)), "_migrations"
             )

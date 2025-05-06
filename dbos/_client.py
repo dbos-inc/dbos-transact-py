@@ -107,6 +107,7 @@ class DBOSClient:
                 "pool_size": 2,
             },
             sys_db_name=system_database,
+            client_mode=True,
         )
         self._app_db = ApplicationDatabase(
             database_url=database_url,
@@ -115,6 +116,7 @@ class DBOSClient:
                 "max_overflow": 0,
                 "pool_size": 2,
             },
+            client_mode=True,
         )
         self._db_url = database_url
 

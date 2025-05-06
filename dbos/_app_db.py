@@ -36,11 +36,12 @@ class ApplicationDatabase:
         database_url: str,
         engine_kwargs: Dict[str, Any],
         debug_mode: bool = False,
+        client_mode: bool = False,
     ):
         app_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
 
         # If the application database does not already exist, create it
-        if not debug_mode:
+        if not debug_mode and not client_mode:
             postgres_db_engine = sa.create_engine(
                 app_db_url.set(database="postgres"),
                 **engine_kwargs,
@@ -65,7 +66,7 @@ class ApplicationDatabase:
         self.debug_mode = debug_mode
 
         # Create the dbos schema and transaction_outputs table in the application database
-        if not debug_mode:
+        if not debug_mode and not client_mode:
             with self.engine.begin() as conn:
                 schema_creation_query = sa.text(
                     f"CREATE SCHEMA IF NOT EXISTS {ApplicationSchema.schema}"
