@@ -147,55 +147,16 @@ def init(
     ] = False,
 ) -> None:
     try:
-
         git_templates = ["dbos-toolbox", "dbos-app-starter", "dbos-cron-starter"]
         templates_dir = get_templates_directory()
-        templates = git_templates + [
-            x.name for x in os.scandir(templates_dir) if x.is_dir()
-        ]
 
-        if config and template is None:
-            template = templates[-1]
-
-        if template:
-            if template not in templates:
-                raise Exception(f"Template {template} not found in {templates_dir}")
-        else:
-            print("\n[bold]Available templates:[/bold]")
-            for idx, template_name in enumerate(templates, 1):
-                print(f"  {idx}. {template_name}")
-            while True:
-                try:
-                    choice = IntPrompt.ask(
-                        "\nSelect template number",
-                        show_choices=False,
-                        show_default=False,
-                    )
-                    if 1 <= choice <= len(templates):
-                        template = templates[choice - 1]
-                        break
-                    else:
-                        print(
-                            "[red]Invalid selection. Please choose a number from the list.[/red]"
-                        )
-                except (KeyboardInterrupt, EOFError):
-                    raise typer.Abort()
-                except ValueError:
-                    print("[red]Please enter a valid number.[/red]")
-
-        if template in git_templates:
-            project_name = template
-        else:
-            if project_name is None:
-                project_name = typing.cast(
-                    str,
-                    typer.prompt("What is your project's name?", get_project_name()),
-                )
-
-        if not _is_valid_app_name(project_name):
-            raise Exception(
-                f"{project_name} is an invalid DBOS app name. App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores."
-            )
+        project_name, template = _resolve_project_name_and_template(
+            project_name=project_name,
+            template=template,
+            config=config,
+            git_templates=git_templates,
+            templates_dir=templates_dir,
+        )
 
         if template in git_templates:
             create_template_from_github(app_name=project_name, template_name=template)
@@ -205,6 +166,64 @@ def init(
             )
     except Exception as e:
         print(f"[red]{e}[/red]")
+
+
+def _resolve_project_name_and_template(
+    project_name: Optional[str],
+    template: Optional[str],
+    config: bool,
+    git_templates: list[str],
+    templates_dir: str,
+) -> tuple[str, str]:
+    templates = git_templates + [
+        x.name for x in os.scandir(templates_dir) if x.is_dir()
+    ]
+
+    if config and template is None:
+        template = templates[-1]
+
+    if template:
+        if template not in templates:
+            raise Exception(f"Template {template} not found in {templates_dir}")
+    else:
+        print("\n[bold]Available templates:[/bold]")
+        for idx, template_name in enumerate(templates, 1):
+            print(f"  {idx}. {template_name}")
+        while True:
+            try:
+                choice = IntPrompt.ask(
+                    "\nSelect template number",
+                    show_choices=False,
+                    show_default=False,
+                )
+                if 1 <= choice <= len(templates):
+                    template = templates[choice - 1]
+                    break
+                else:
+                    print(
+                        "[red]Invalid selection. Please choose a number from the list.[/red]"
+                    )
+            except (KeyboardInterrupt, EOFError):
+                raise typer.Abort()
+            except ValueError:
+                print("[red]Please enter a valid number.[/red]")
+
+    if template in git_templates:
+        if project_name is None:
+            project_name = template
+    else:
+        if project_name is None:
+            project_name = typing.cast(
+                str,
+                typer.prompt("What is your project's name?", get_project_name()),
+            )
+
+    if not _is_valid_app_name(project_name):
+        raise Exception(
+            f"{project_name} is an invalid DBOS app name. App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores."
+        )
+
+    return project_name, template
 
 
 @app.command(
