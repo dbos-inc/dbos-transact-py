@@ -49,6 +49,7 @@ def sys_db(config: DBOSConfig) -> Generator[SystemDatabase, Any, None]:
             "connect_args": {"connect_timeout": 30},
         },
     )
+    sys_db.run_migrations()
     yield sys_db
     sys_db.destroy()
 
@@ -65,6 +66,7 @@ def app_db(config: DBOSConfig) -> Generator[ApplicationDatabase, Any, None]:
             "connect_args": {"connect_timeout": 30},
         },
     )
+    app_db.run_migrations()
     yield app_db
     app_db.destroy()
 

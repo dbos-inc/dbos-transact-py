@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from . import _serialization
 from ._error import DBOSUnexpectedStepError, DBOSWorkflowConflictIDError
+from ._logger import dbos_logger
 from ._schemas.application_database import ApplicationSchema
 from ._sys_db import StepInfo
 
@@ -36,24 +37,8 @@ class ApplicationDatabase:
         database_url: str,
         engine_kwargs: Dict[str, Any],
         debug_mode: bool = False,
-        client_mode: bool = False,
     ):
         app_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
-
-        # If the application database does not already exist, create it
-        if not debug_mode and not client_mode:
-            postgres_db_engine = sa.create_engine(
-                app_db_url.set(database="postgres"),
-                **engine_kwargs,
-            )
-            with postgres_db_engine.connect() as conn:
-                conn.execution_options(isolation_level="AUTOCOMMIT")
-                if not conn.execute(
-                    sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
-                    parameters={"db_name": app_db_url.database},
-                ).scalar():
-                    conn.execute(sa.text(f"CREATE DATABASE {app_db_url.database}"))
-            postgres_db_engine.dispose()
 
         if engine_kwargs is None:
             engine_kwargs = {}
@@ -62,40 +47,61 @@ class ApplicationDatabase:
             app_db_url,
             **engine_kwargs,
         )
+        self._engine_kwargs = engine_kwargs
         self.sessionmaker = sessionmaker(bind=self.engine)
         self.debug_mode = debug_mode
 
+    def run_migrations(self) -> None:
+        if self.debug_mode:
+            dbos_logger.warning(
+                "Application database migrations are skipped in debug mode."
+            )
+            return
+        # Check if the database exists
+        app_db_url = self.engine.url
+        postgres_db_engine = sa.create_engine(
+            app_db_url.set(database="postgres"),
+            **self._engine_kwargs,
+        )
+        with postgres_db_engine.connect() as conn:
+            conn.execution_options(isolation_level="AUTOCOMMIT")
+            if not conn.execute(
+                sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
+                parameters={"db_name": app_db_url.database},
+            ).scalar():
+                conn.execute(sa.text(f"CREATE DATABASE {app_db_url.database}"))
+        postgres_db_engine.dispose()
+
         # Create the dbos schema and transaction_outputs table in the application database
-        if not debug_mode and not client_mode:
-            with self.engine.begin() as conn:
-                schema_creation_query = sa.text(
-                    f"CREATE SCHEMA IF NOT EXISTS {ApplicationSchema.schema}"
-                )
-                conn.execute(schema_creation_query)
+        with self.engine.begin() as conn:
+            schema_creation_query = sa.text(
+                f"CREATE SCHEMA IF NOT EXISTS {ApplicationSchema.schema}"
+            )
+            conn.execute(schema_creation_query)
 
-            inspector = inspect(self.engine)
-            if not inspector.has_table(
+        inspector = inspect(self.engine)
+        if not inspector.has_table(
+            "transaction_outputs", schema=ApplicationSchema.schema
+        ):
+            ApplicationSchema.metadata_obj.create_all(self.engine)
+        else:
+            columns = inspector.get_columns(
                 "transaction_outputs", schema=ApplicationSchema.schema
-            ):
-                ApplicationSchema.metadata_obj.create_all(self.engine)
-            else:
-                columns = inspector.get_columns(
-                    "transaction_outputs", schema=ApplicationSchema.schema
-                )
-                column_names = [col["name"] for col in columns]
+            )
+            column_names = [col["name"] for col in columns]
 
-                if "function_name" not in column_names:
-                    # Column missing, alter table to add it
-                    with self.engine.connect() as conn:
-                        conn.execute(
-                            text(
-                                f"""
-                            ALTER TABLE {ApplicationSchema.schema}.transaction_outputs
-                            ADD COLUMN function_name TEXT NOT NULL DEFAULT '';
-                            """
-                            )
+            if "function_name" not in column_names:
+                # Column missing, alter table to add it
+                with self.engine.connect() as conn:
+                    conn.execute(
+                        text(
+                            f"""
+                        ALTER TABLE {ApplicationSchema.schema}.transaction_outputs
+                        ADD COLUMN function_name TEXT NOT NULL DEFAULT '';
+                        """
                         )
-                        conn.commit()
+                    )
+                    conn.commit()
 
     def destroy(self) -> None:
         self.engine.dispose()

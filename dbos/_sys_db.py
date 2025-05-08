@@ -231,7 +231,6 @@ class SystemDatabase:
         engine_kwargs: Dict[str, Any],
         sys_db_name: Optional[str] = None,
         debug_mode: bool = False,
-        client_mode: bool = False,
     ):
         # Set driver
         system_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
@@ -242,34 +241,63 @@ class SystemDatabase:
             sysdb_name = system_db_url.database + SystemSchema.sysdb_suffix
         system_db_url = system_db_url.set(database=sysdb_name)
 
-        if not debug_mode and not client_mode:
-            # If the system database does not already exist, create it
-            engine = sa.create_engine(
-                system_db_url.set(database="postgres"), **engine_kwargs
-            )
-            with engine.connect() as conn:
-                conn.execution_options(isolation_level="AUTOCOMMIT")
-                if not conn.execute(
-                    sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
-                    parameters={"db_name": sysdb_name},
-                ).scalar():
-                    dbos_logger.info(f"Creating system database {sysdb_name}")
-                    conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
-            engine.dispose()
-
         self.engine = sa.create_engine(
             system_db_url,
             **engine_kwargs,
         )
+        self._engine_kwargs = engine_kwargs
+
+        self.notification_conn: Optional[psycopg.connection.Connection] = None
+        self.notifications_map: Dict[str, threading.Condition] = {}
+        self.workflow_events_map: Dict[str, threading.Condition] = {}
+
+        # Now we can run background processes
+        self._run_background_processes = True
+        self._debug_mode = debug_mode
+
+    # Run migrations
+    def run_migrations(self) -> None:
+        if self._debug_mode:
+            dbos_logger.warning("System database migrations are skipped in debug mode.")
+            return
+        system_db_url = self.engine.url
+        sysdb_name = system_db_url.database
+        # If the system database does not already exist, create it
+        engine = sa.create_engine(
+            system_db_url.set(database="postgres"), **self._engine_kwargs
+        )
+        with engine.connect() as conn:
+            conn.execution_options(isolation_level="AUTOCOMMIT")
+            if not conn.execute(
+                sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
+                parameters={"db_name": sysdb_name},
+            ).scalar():
+                dbos_logger.info(f"Creating system database {sysdb_name}")
+                conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
+        engine.dispose()
 
         # Run a schema migration for the system database
-        if not debug_mode and not client_mode:
-            migration_dir = os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), "_migrations"
+        migration_dir = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)), "_migrations"
+        )
+        alembic_cfg = Config()
+        alembic_cfg.set_main_option("script_location", migration_dir)
+        logging.getLogger("alembic").setLevel(logging.WARNING)
+        # Alembic requires the % in URL-escaped parameters to itself be escaped to %%.
+        escaped_conn_string = re.sub(
+            r"%(?=[0-9A-Fa-f]{2})",
+            "%%",
+            self.engine.url.render_as_string(hide_password=False),
+        )
+        alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
+        try:
+            command.upgrade(alembic_cfg, "head")
+        except Exception as e:
+            dbos_logger.warning(
+                f"Exception during system database construction. This is most likely because the system database was configured using a later version of DBOS: {e}"
             )
             alembic_cfg = Config()
             alembic_cfg.set_main_option("script_location", migration_dir)
-            logging.getLogger("alembic").setLevel(logging.WARNING)
             # Alembic requires the % in URL-escaped parameters to itself be escaped to %%.
             escaped_conn_string = re.sub(
                 r"%(?=[0-9A-Fa-f]{2})",
@@ -283,29 +311,6 @@ class SystemDatabase:
                 dbos_logger.warning(
                     f"Exception during system database construction. This is most likely because the system database was configured using a later version of DBOS: {e}"
                 )
-                alembic_cfg = Config()
-                alembic_cfg.set_main_option("script_location", migration_dir)
-                # Alembic requires the % in URL-escaped parameters to itself be escaped to %%.
-                escaped_conn_string = re.sub(
-                    r"%(?=[0-9A-Fa-f]{2})",
-                    "%%",
-                    self.engine.url.render_as_string(hide_password=False),
-                )
-                alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
-                try:
-                    command.upgrade(alembic_cfg, "head")
-                except Exception as e:
-                    dbos_logger.warning(
-                        f"Exception during system database construction. This is most likely because the system database was configured using a later version of DBOS: {e}"
-                    )
-
-        self.notification_conn: Optional[psycopg.connection.Connection] = None
-        self.notifications_map: Dict[str, threading.Condition] = {}
-        self.workflow_events_map: Dict[str, threading.Condition] = {}
-
-        # Now we can run background processes
-        self._run_background_processes = True
-        self._debug_mode = debug_mode
 
     # Destroy the pool when finished
     def destroy(self) -> None:
