@@ -280,6 +280,8 @@ def migrate(
                 "pool_size": 2,
             },
         )
+        sys_db.run_migrations()
+        app_db.run_migrations()
     except Exception as e:
         typer.echo(f"DBOS system schema migration failed: {e}")
     finally:
