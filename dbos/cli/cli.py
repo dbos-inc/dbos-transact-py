@@ -12,7 +12,7 @@ import sqlalchemy as sa
 import typer
 from rich import print
 from rich.prompt import IntPrompt
-from typing_extensions import Annotated
+from typing_extensions import Annotated, List
 
 from dbos._debug import debug_workflow, parse_start_command
 
@@ -172,7 +172,7 @@ def _resolve_project_name_and_template(
     project_name: Optional[str],
     template: Optional[str],
     config: bool,
-    git_templates: list[str],
+    git_templates: List[str],
     templates_dir: str,
 ) -> tuple[str, str]:
     templates = git_templates + [
@@ -222,6 +222,9 @@ def _resolve_project_name_and_template(
         raise Exception(
             f"{project_name} is an invalid DBOS app name. App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores."
         )
+
+    assert project_name is not None, "Project name cannot be None"
+    assert template is not None, "Template name cannot be None"
 
     return project_name, template
 

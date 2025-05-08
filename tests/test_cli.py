@@ -1,4 +1,5 @@
-from dbos.cli.cli import _resolve_project_name_and_template, get_templates_directory
+from dbos.cli._template_init import get_templates_directory
+from dbos.cli.cli import _resolve_project_name_and_template
 
 
 def test_resolve_project_name_and_template() -> None:
