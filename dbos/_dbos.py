@@ -433,6 +433,10 @@ class DBOS:
             if debug_mode:
                 return
 
+            # Run migrations for the system and application databases
+            self._sys_db.run_migrations()
+            self._app_db.run_migrations()
+
             admin_port = self._config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:
                 admin_port = 3001

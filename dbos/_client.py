@@ -99,6 +99,7 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
 
 class DBOSClient:
     def __init__(self, database_url: str, *, system_database: Optional[str] = None):
+        # We only create database connections but do not run migrations
         self._sys_db = SystemDatabase(
             database_url=database_url,
             engine_kwargs={
