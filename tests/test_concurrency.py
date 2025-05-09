@@ -2,7 +2,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Tuple
+from typing import Tuple, cast
 
 from sqlalchemy import text
 
@@ -108,3 +108,67 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
 
     assert future1.result() == wfuuid
     assert future2.result() == wfuuid
+
+
+def test_concurrent_recv(dbos: DBOS) -> None:
+    condition = threading.Condition()
+    counter = 0
+
+    @DBOS.workflow()
+    def test_workflow(topic: str) -> str:
+        nonlocal counter
+        condition.acquire()
+        counter += 1
+        if counter % 2 == 1:
+            # Wait for the other one to notify
+            condition.wait()
+        else:
+            # Notify the other one
+            condition.notify()
+        condition.release()
+        m = cast(str, DBOS.recv(topic, 5))
+        return m
+
+    def test_thread(id: str, topic: str) -> str:
+        with SetWorkflowID(id):
+            return test_workflow(topic)
+
+    wfuuid = str(uuid.uuid4())
+    topic = "test_topic"
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future1 = executor.submit(test_thread, wfuuid, topic)
+        future2 = executor.submit(test_thread, wfuuid, topic)
+
+        expected_message = "test message"
+        DBOS.send(wfuuid, expected_message, topic)
+        # Both should return the same message
+        assert future1.result() == future2.result()
+        assert future1.result() == expected_message
+        # Make sure the notification map is empty
+        assert not dbos._sys_db.notifications_map._dict
+
+
+def test_concurrent_getevent(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def test_workflow(event_name: str, value: str) -> str:
+        DBOS.set_event(event_name, value)
+        return value
+
+    def test_thread(id: str, event_name: str) -> str:
+        return cast(str, DBOS.get_event(id, event_name, 5))
+
+    wfuuid = str(uuid.uuid4())
+    event_name = "test_event"
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future1 = executor.submit(test_thread, wfuuid, event_name)
+        future2 = executor.submit(test_thread, wfuuid, event_name)
+
+        expected_message = "test message"
+        with SetWorkflowID(wfuuid):
+            test_workflow(event_name, expected_message)
+
+        # Both should return the same message
+        assert future1.result() == future2.result()
+        assert future1.result() == expected_message
+        # Make sure the event map is empty
+        assert not dbos._sys_db.workflow_events_map._dict

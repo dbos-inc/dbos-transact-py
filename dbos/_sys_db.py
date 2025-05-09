@@ -15,6 +15,7 @@ from typing import (
     Literal,
     Optional,
     Sequence,
+    Tuple,
     TypedDict,
     TypeVar,
 )
@@ -222,6 +223,47 @@ class StepInfo(TypedDict):
 _dbos_null_topic = "__null__topic__"
 
 
+class ConditionCount(TypedDict):
+    condition: threading.Condition
+    count: int
+
+
+class ThreadSafeConditionDict:
+    def __init__(self) -> None:
+        self._dict: Dict[str, ConditionCount] = {}
+        self._lock = threading.Lock()
+
+    def get(self, key: str) -> Optional[threading.Condition]:
+        with self._lock:
+            if key not in self._dict:
+                # Key does not exist, return None
+                return None
+            return self._dict[key]["condition"]
+
+    def set(
+        self, key: str, value: threading.Condition
+    ) -> Tuple[bool, threading.Condition]:
+        with self._lock:
+            if key in self._dict:
+                # Key already exists, do not overwrite. Increment the wait count.
+                cc = self._dict[key]
+                cc["count"] += 1
+                return False, cc["condition"]
+            self._dict[key] = ConditionCount(condition=value, count=1)
+            return True, value
+
+    def pop(self, key: str) -> None:
+        with self._lock:
+            if key in self._dict:
+                cc = self._dict[key]
+                cc["count"] -= 1
+                if cc["count"] == 0:
+                    # No more threads waiting on this condition, remove it
+                    del self._dict[key]
+            else:
+                dbos_logger.warning(f"Key {key} not found in condition dictionary.")
+
+
 class SystemDatabase:
 
     def __init__(
@@ -248,8 +290,8 @@ class SystemDatabase:
         self._engine_kwargs = engine_kwargs
 
         self.notification_conn: Optional[psycopg.connection.Connection] = None
-        self.notifications_map: Dict[str, threading.Condition] = {}
-        self.workflow_events_map: Dict[str, threading.Condition] = {}
+        self.notifications_map = ThreadSafeConditionDict()
+        self.workflow_events_map = ThreadSafeConditionDict()
 
         # Now we can run background processes
         self._run_background_processes = True
@@ -1288,7 +1330,12 @@ class SystemDatabase:
         condition = threading.Condition()
         # Must acquire first before adding to the map. Otherwise, the notification listener may notify it before the condition is acquired and waited.
         condition.acquire()
-        self.notifications_map[payload] = condition
+        success, _ = self.notifications_map.set(payload, condition)
+        if not success:
+            # This should not happen, but if it does, it means the workflow is executed concurrently.
+            condition.release()
+            self.notifications_map.pop(payload)
+            raise DBOSWorkflowConflictIDError(workflow_uuid)
 
         # Check if the key is already in the database. If not, wait for the notification.
         init_recv: Sequence[Any]
@@ -1381,11 +1428,11 @@ class SystemDatabase:
                             f"Received notification on channel: {channel}, payload: {notify.payload}"
                         )
                         if channel == "dbos_notifications_channel":
-                            if (
-                                notify.payload
-                                and notify.payload in self.notifications_map
-                            ):
-                                condition = self.notifications_map[notify.payload]
+                            if notify.payload:
+                                condition = self.notifications_map.get(notify.payload)
+                                if condition is None:
+                                    # No condition found for this payload
+                                    continue
                                 condition.acquire()
                                 condition.notify_all()
                                 condition.release()
@@ -1393,11 +1440,11 @@ class SystemDatabase:
                                     f"Signaled notifications condition for {notify.payload}"
                                 )
                         elif channel == "dbos_workflow_events_channel":
-                            if (
-                                notify.payload
-                                and notify.payload in self.workflow_events_map
-                            ):
-                                condition = self.workflow_events_map[notify.payload]
+                            if notify.payload:
+                                condition = self.workflow_events_map.get(notify.payload)
+                                if condition is None:
+                                    # No condition found for this payload
+                                    continue
                                 condition.acquire()
                                 condition.notify_all()
                                 condition.release()
@@ -1535,8 +1582,13 @@ class SystemDatabase:
 
         payload = f"{target_uuid}::{key}"
         condition = threading.Condition()
-        self.workflow_events_map[payload] = condition
         condition.acquire()
+        success, existing_condition = self.workflow_events_map.set(payload, condition)
+        if not success:
+            # Wait on the existing condition
+            condition.release()
+            condition = existing_condition
+            condition.acquire()
 
         # Check if the key is already in the database. If not, wait for the notification.
         init_recv: Sequence[Any]
