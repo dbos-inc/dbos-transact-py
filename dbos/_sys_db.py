@@ -15,7 +15,6 @@ from typing import (
     Literal,
     Optional,
     Sequence,
-    Tuple,
     TypedDict,
     TypeVar,
 )
@@ -242,7 +241,7 @@ class ThreadSafeConditionDict:
 
     def set(
         self, key: str, value: threading.Condition
-    ) -> Tuple[bool, threading.Condition]:
+    ) -> tuple[bool, threading.Condition]:
         with self._lock:
             if key in self._dict:
                 # Key already exists, do not overwrite. Increment the wait count.
