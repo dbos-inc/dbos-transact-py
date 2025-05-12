@@ -24,6 +24,7 @@ from dbos import (
 # Private API because this is a test
 from dbos._context import assert_current_dbos_context, get_local_dbos_context
 from dbos._error import (
+    DBOSAwaitedWorkflowCancelledError,
     DBOSConflictingRegistrationError,
     DBOSMaxStepRetriesExceeded,
     DBOSWorkflowCancelledError,
@@ -1508,6 +1509,9 @@ def test_workflow_timeout(dbos: DBOS) -> None:
                 blocked_workflow()
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is None
         handle = DBOS.start_workflow(blocked_workflow)
+        status = handle.get_status()
+        assert status.workflow_timeout_ms == 100
+        assert status.workflow_deadline_epoch_ms is not None and status.workflow_deadline_epoch_ms > time.time() * 1000
         with pytest.raises(DBOSWorkflowCancelledError):
             handle.get_result()
 
@@ -1555,13 +1559,11 @@ def test_workflow_timeout(dbos: DBOS) -> None:
         with pytest.raises(DBOSWorkflowCancelledError):
             parent_workflow()
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         DBOS.retrieve_workflow(start_child).get_result()
-    assert "was cancelled" in str(exc_info.value)
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         DBOS.retrieve_workflow(direct_child).get_result()
-    assert "was cancelled" in str(exc_info.value)
 
     # Verify the context variables are set correctly
     with SetWorkflowTimeout(1.0):

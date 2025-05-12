@@ -925,8 +925,8 @@ class SystemDatabase:
             info.input = inputs
             info.output = output
             info.error = exception
-            info.workflow_timeout_ms = row[18]
-            info.workflow_deadline_epoch_ms = row[19]
+            info.workflow_deadline_epoch_ms = row[18]
+            info.workflow_timeout_ms = row[19]
 
             infos.append(info)
         return infos
@@ -1035,8 +1035,8 @@ class SystemDatabase:
             info.input = inputs
             info.output = output
             info.error = exception
-            info.workflow_timeout_ms = row[18]
-            info.workflow_deadline_epoch_ms = row[19]
+            info.workflow_deadline_epoch_ms = row[18]
+            info.workflow_timeout_ms = row[19]
 
             infos.append(info)
 
