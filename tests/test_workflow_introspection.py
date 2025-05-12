@@ -41,6 +41,8 @@ def test_list_workflow(dbos: DBOS) -> None:
     assert output.app_version == GlobalParams.app_version
     assert output.app_id == ""
     assert output.recovery_attempts == 1
+    assert output.workflow_timeout_ms is None
+    assert output.workflow_deadline_epoch_ms is None
 
     # Test searching by status
     outputs = DBOS.list_workflows(status="PENDING")
@@ -222,6 +224,8 @@ def test_queued_workflows(dbos: DBOS) -> None:
         assert workflow.created_at is not None and workflow.created_at > 0
         assert workflow.updated_at is not None and workflow.updated_at > 0
         assert workflow.recovery_attempts == 1
+        assert workflow.workflow_timeout_ms is None
+        assert workflow.workflow_deadline_epoch_ms is None
 
     # Test sort_desc inverts the order
     workflows = DBOS.list_queued_workflows(sort_desc=True)

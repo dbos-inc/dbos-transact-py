@@ -842,6 +842,8 @@ class SystemDatabase:
             SystemSchema.workflow_inputs.c.inputs,
             SystemSchema.workflow_status.c.output,
             SystemSchema.workflow_status.c.error,
+            SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
+            SystemSchema.workflow_status.c.workflow_timeout_ms,
         ).join(
             SystemSchema.workflow_inputs,
             SystemSchema.workflow_status.c.workflow_uuid
@@ -923,6 +925,8 @@ class SystemDatabase:
             info.input = inputs
             info.output = output
             info.error = exception
+            info.workflow_timeout_ms = row[18]
+            info.workflow_deadline_epoch_ms = row[19]
 
             infos.append(info)
         return infos
@@ -952,6 +956,8 @@ class SystemDatabase:
             SystemSchema.workflow_inputs.c.inputs,
             SystemSchema.workflow_status.c.output,
             SystemSchema.workflow_status.c.error,
+            SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
+            SystemSchema.workflow_status.c.workflow_timeout_ms,
         ).select_from(
             SystemSchema.workflow_queue.join(
                 SystemSchema.workflow_status,
@@ -1029,6 +1035,8 @@ class SystemDatabase:
             info.input = inputs
             info.output = output
             info.error = exception
+            info.workflow_timeout_ms = row[18]
+            info.workflow_deadline_epoch_ms = row[19]
 
             infos.append(info)
 
