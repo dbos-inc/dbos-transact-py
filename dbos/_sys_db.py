@@ -1840,8 +1840,13 @@ class SystemDatabase:
                         # If a timeout is set, set the deadline on dequeue
                         workflow_deadline_epoch_ms=sa.case(
                             (
-                                SystemSchema.workflow_status.c.workflow_timeout_ms.isnot(
-                                    None
+                                sa.and_(
+                                    SystemSchema.workflow_status.c.workflow_timeout_ms.isnot(
+                                        None
+                                    ),
+                                    SystemSchema.workflow_status.c.workflow_deadline_epoch_ms.is_(
+                                        None
+                                    ),
                                 ),
                                 sa.func.extract("epoch", sa.func.now()) * 1000
                                 + SystemSchema.workflow_status.c.workflow_timeout_ms,

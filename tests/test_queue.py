@@ -1357,7 +1357,10 @@ def test_timeout_queue_recovery(dbos: DBOS) -> None:
     evt.wait()
     original_status = original_handle.get_status()
     assert original_status.workflow_timeout_ms == timeout * 1000
-    assert original_status.workflow_deadline_epoch_ms is not None and original_status.workflow_deadline_epoch_ms > time.time() * 1000
+    assert (
+        original_status.workflow_deadline_epoch_ms is not None
+        and original_status.workflow_deadline_epoch_ms > time.time() * 1000
+    )
 
     # Recover the workflow. Verify its deadline remains the same
     evt.clear()
@@ -1367,7 +1370,10 @@ def test_timeout_queue_recovery(dbos: DBOS) -> None:
     recovered_handle = handles[0]
     recovered_status = recovered_handle.get_status()
     assert recovered_status.workflow_timeout_ms == timeout * 1000
-    assert recovered_status.workflow_deadline_epoch_ms == original_status.workflow_deadline_epoch_ms
+    assert (
+        recovered_status.workflow_deadline_epoch_ms
+        == original_status.workflow_deadline_epoch_ms
+    )
 
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         original_handle.get_result()
