@@ -392,6 +392,7 @@ class SetWorkflowTimeout:
             else None
         )
         self.saved_workflow_timeout: Optional[int] = None
+        self.saved_workflow_deadline_epoch_ms: Optional[int] = None
 
     def __enter__(self) -> SetWorkflowTimeout:
         # Code to create a basic context
@@ -402,6 +403,8 @@ class SetWorkflowTimeout:
         ctx = assert_current_dbos_context()
         self.saved_workflow_timeout = ctx.workflow_timeout_ms
         ctx.workflow_timeout_ms = self.workflow_timeout_ms
+        self.saved_workflow_deadline_epoch_ms = ctx.workflow_deadline_epoch_ms
+        ctx.workflow_deadline_epoch_ms = None
         return self
 
     def __exit__(
@@ -411,6 +414,9 @@ class SetWorkflowTimeout:
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
         assert_current_dbos_context().workflow_timeout_ms = self.saved_workflow_timeout
+        assert_current_dbos_context().workflow_deadline_epoch_ms = (
+            self.saved_workflow_deadline_epoch_ms
+        )
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()

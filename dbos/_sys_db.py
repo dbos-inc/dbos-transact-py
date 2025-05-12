@@ -32,6 +32,7 @@ from dbos._utils import INTERNAL_QUEUE_NAME
 from . import _serialization
 from ._context import get_local_dbos_context
 from ._error import (
+    DBOSAwaitedWorkflowCancelledError,
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
     DBOSNonExistentWorkflowError,
@@ -96,6 +97,10 @@ class WorkflowStatus:
     executor_id: Optional[str]
     # The application version on which this workflow was started
     app_version: Optional[str]
+    # The start-to-close timeout of the workflow in ms
+    workflow_timeout_ms: Optional[int]
+    # The deadline of a workflow, computed by adding its timeout to its start time.
+    workflow_deadline_epoch_ms: Optional[int]
 
     # INTERNAL FIELDS
 
@@ -761,9 +766,9 @@ class SystemDatabase:
                         error = row[2]
                         raise _serialization.deserialize_exception(error)
                     elif status == WorkflowStatusString.CANCELLED.value:
-                        # Raise a normal exception here, not the cancellation exception
+                        # Raise AwaitedWorkflowCancelledError here, not the cancellation exception
                         # because the awaiting workflow is not being cancelled.
-                        raise Exception(f"Awaited workflow {workflow_id} was cancelled")
+                        raise DBOSAwaitedWorkflowCancelledError(workflow_id)
                 else:
                     pass  # CB: I guess we're assuming the WF will show up eventually.
             time.sleep(1)
@@ -837,6 +842,8 @@ class SystemDatabase:
             SystemSchema.workflow_inputs.c.inputs,
             SystemSchema.workflow_status.c.output,
             SystemSchema.workflow_status.c.error,
+            SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
+            SystemSchema.workflow_status.c.workflow_timeout_ms,
         ).join(
             SystemSchema.workflow_inputs,
             SystemSchema.workflow_status.c.workflow_uuid
@@ -918,6 +925,8 @@ class SystemDatabase:
             info.input = inputs
             info.output = output
             info.error = exception
+            info.workflow_deadline_epoch_ms = row[18]
+            info.workflow_timeout_ms = row[19]
 
             infos.append(info)
         return infos
@@ -947,6 +956,8 @@ class SystemDatabase:
             SystemSchema.workflow_inputs.c.inputs,
             SystemSchema.workflow_status.c.output,
             SystemSchema.workflow_status.c.error,
+            SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
+            SystemSchema.workflow_status.c.workflow_timeout_ms,
         ).select_from(
             SystemSchema.workflow_queue.join(
                 SystemSchema.workflow_status,
@@ -1024,6 +1035,8 @@ class SystemDatabase:
             info.input = inputs
             info.output = output
             info.error = exception
+            info.workflow_deadline_epoch_ms = row[18]
+            info.workflow_timeout_ms = row[19]
 
             infos.append(info)
 
@@ -1827,8 +1840,13 @@ class SystemDatabase:
                         # If a timeout is set, set the deadline on dequeue
                         workflow_deadline_epoch_ms=sa.case(
                             (
-                                SystemSchema.workflow_status.c.workflow_timeout_ms.isnot(
-                                    None
+                                sa.and_(
+                                    SystemSchema.workflow_status.c.workflow_timeout_ms.isnot(
+                                        None
+                                    ),
+                                    SystemSchema.workflow_status.c.workflow_deadline_epoch_ms.is_(
+                                        None
+                                    ),
                                 ),
                                 sa.func.extract("epoch", sa.func.now()) * 1000
                                 + SystemSchema.workflow_status.c.workflow_timeout_ms,
