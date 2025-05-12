@@ -1382,6 +1382,7 @@ def test_timeout_queue_recovery(dbos: DBOS) -> None:
             DBOS.sleep(0.1)
 
     timeout = 3.0
+    enqueue_time = time.time()
     with SetWorkflowTimeout(timeout):
         original_handle = queue.enqueue(blocking_workflow)
 
@@ -1391,7 +1392,7 @@ def test_timeout_queue_recovery(dbos: DBOS) -> None:
     assert original_status.workflow_timeout_ms == timeout * 1000
     assert (
         original_status.workflow_deadline_epoch_ms is not None
-        and original_status.workflow_deadline_epoch_ms > time.time() * 1000
+        and original_status.workflow_deadline_epoch_ms > enqueue_time * 1000
     )
 
     # Recover the workflow. Verify its deadline remains the same

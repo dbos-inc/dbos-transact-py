@@ -1508,12 +1508,13 @@ def test_workflow_timeout(dbos: DBOS) -> None:
             with SetWorkflowID(wfid):
                 blocked_workflow()
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is None
+        start_time = time.time() * 1000
         handle = DBOS.start_workflow(blocked_workflow)
         status = handle.get_status()
         assert status.workflow_timeout_ms == 100
         assert (
             status.workflow_deadline_epoch_ms is not None
-            and status.workflow_deadline_epoch_ms > time.time() * 1000
+            and status.workflow_deadline_epoch_ms > start_time
         )
         with pytest.raises(DBOSWorkflowCancelledError):
             handle.get_result()
