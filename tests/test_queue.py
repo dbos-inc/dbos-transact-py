@@ -1413,3 +1413,36 @@ def test_timeout_queue_recovery(dbos: DBOS) -> None:
 
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         recovered_handle.get_result()
+
+
+def test_unsetting_timeout(dbos: DBOS) -> None:
+
+    queue = Queue("test_queue")
+
+    @DBOS.workflow()
+    def child() -> str:
+        for _ in range(5):
+            DBOS.sleep(1)
+        return DBOS.workflow_id
+
+    @DBOS.workflow()
+    def parent(child_one: str, child_two: str) -> None:
+        with SetWorkflowID(child_two):
+            with SetWorkflowTimeout(None):
+                queue.enqueue(child)
+
+        with SetWorkflowID(child_one):
+            queue.enqueue(child)
+
+    child_one, child_two = str(uuid.uuid4()), str(uuid.uuid4())
+    with SetWorkflowTimeout(1.0):
+        queue.enqueue(parent, child_one, child_two).get_result()
+
+    # Verify child one, which has a propagated timeout, is cancelled
+    handle: WorkflowHandle[str] = DBOS.retrieve_workflow(child_one)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        handle.get_result()
+
+    # Verify child two, which doesn't have a timeout, succeeds
+    handle = DBOS.retrieve_workflow(child_two)
+    assert handle.get_result() == child_two
