@@ -207,7 +207,7 @@ class DBOSQueueDeduplicatedError(DBOSException):
         )
 
 
-class AwaitedWorkflowCancelledError(DBOSException):
+class DBOSAwaitedWorkflowCancelledError(DBOSException):
     def __init__(self, workflow_id: str):
         self.workflow_id = workflow_id
         super().__init__(
@@ -217,7 +217,7 @@ class AwaitedWorkflowCancelledError(DBOSException):
 
     def __reduce__(self) -> Any:
         # Tell jsonpickle how to reconstruct this object
-        return (self.__class__, (self.workflow_id, self.workflow_id))
+        return (self.__class__, (self.workflow_id,))
 
 
 #######################################

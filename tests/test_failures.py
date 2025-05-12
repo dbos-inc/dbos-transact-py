@@ -9,6 +9,7 @@ from sqlalchemy.exc import InvalidRequestError, OperationalError
 
 from dbos import DBOS, Queue, SetWorkflowID
 from dbos._error import (
+    DBOSAwaitedWorkflowCancelledError,
     DBOSDeadLetterQueueError,
     DBOSMaxStepRetriesExceeded,
     DBOSNotAuthorizedError,
@@ -460,6 +461,11 @@ def test_error_serialization() -> None:
     e = DBOSQueueDeduplicatedError("id", "queue", "dedup")
     d = deserialize_exception(serialize_exception(e))
     assert isinstance(d, DBOSQueueDeduplicatedError)
+    assert str(d) == str(e)
+    # AwaitedWorkflowCancelledError
+    e = DBOSAwaitedWorkflowCancelledError("id")
+    d = deserialize_exception(serialize_exception(e))
+    assert isinstance(d, DBOSAwaitedWorkflowCancelledError)
     assert str(d) == str(e)
 
     # Test safe_deserialize

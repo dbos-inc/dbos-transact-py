@@ -32,7 +32,7 @@ from dbos._utils import INTERNAL_QUEUE_NAME
 from . import _serialization
 from ._context import get_local_dbos_context
 from ._error import (
-    AwaitedWorkflowCancelledError,
+    DBOSAwaitedWorkflowCancelledError,
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
     DBOSNonExistentWorkflowError,
@@ -768,7 +768,7 @@ class SystemDatabase:
                     elif status == WorkflowStatusString.CANCELLED.value:
                         # Raise AwaitedWorkflowCancelledError here, not the cancellation exception
                         # because the awaiting workflow is not being cancelled.
-                        raise AwaitedWorkflowCancelledError(workflow_id)
+                        raise DBOSAwaitedWorkflowCancelledError(workflow_id)
                 else:
                     pass  # CB: I guess we're assuming the WF will show up eventually.
             time.sleep(1)

@@ -26,7 +26,7 @@ from dbos import (
 )
 from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandleAsync
-from dbos._error import AwaitedWorkflowCancelledError
+from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
@@ -854,9 +854,8 @@ def test_cancelling_queued_workflows(dbos: DBOS) -> None:
 
     # Complete the blocked workflow
     blocking_event.set()
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         blocked_handle.get_result()
-    assert "was cancelled" in str(exc_info.value)
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
@@ -892,9 +891,8 @@ def test_timeout_queue(dbos: DBOS) -> None:
 
     # Verify the blocked workflows are cancelled
     for handle in handles:
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
             handle.get_result()
-        assert "was cancelled" in str(exc_info.value)
 
     # Verify the normal workflow succeeds
     normal_handle.get_result()
@@ -912,13 +910,11 @@ def test_timeout_queue(dbos: DBOS) -> None:
 
     with SetWorkflowTimeout(1.0):
         handle = queue.enqueue(parent_workflow)
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
-    assert "was cancelled" in str(exc_info.value)
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         DBOS.retrieve_workflow(child_id).get_result()
-    assert "was cancelled" in str(exc_info.value)
 
     # Verify if a parent called with a timeout enqueues a blocked child
     # then exits the deadline propagates and the child is cancelled.
@@ -932,9 +928,8 @@ def test_timeout_queue(dbos: DBOS) -> None:
 
     with SetWorkflowTimeout(1.0):
         child_id = exiting_parent_workflow()
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         DBOS.retrieve_workflow(child_id).get_result()
-    assert "was cancelled" in str(exc_info.value)
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
@@ -1355,5 +1350,5 @@ def test_timeout_queue_recovery(dbos: DBOS) -> None:
     with SetWorkflowTimeout(2.0):
         handle = queue.enqueue(normal_workflow)
 
-    with pytest.raises(AwaitedWorkflowCancelledError):
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
