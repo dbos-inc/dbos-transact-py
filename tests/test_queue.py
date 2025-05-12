@@ -26,6 +26,7 @@ from dbos import (
 )
 from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandleAsync
+from dbos._error import AwaitedWorkflowCancelledError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
@@ -1341,3 +1342,18 @@ def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient) -> N
     # Change the version, verify the other version complets
     GlobalParams.app_version = other_version
     assert other_version_handle.get_result()
+
+
+def test_timeout_queue_recovery(dbos: DBOS) -> None:
+    queue = Queue("test_queue")
+
+    @DBOS.workflow()
+    def normal_workflow() -> None:
+        while True:
+            DBOS.sleep(0.1)
+
+    with SetWorkflowTimeout(2.0):
+        handle = queue.enqueue(normal_workflow)
+
+    with pytest.raises(AwaitedWorkflowCancelledError):
+        handle.get_result()

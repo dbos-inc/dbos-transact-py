@@ -32,6 +32,7 @@ from dbos._utils import INTERNAL_QUEUE_NAME
 from . import _serialization
 from ._context import get_local_dbos_context
 from ._error import (
+    AwaitedWorkflowCancelledError,
     DBOSConflictingWorkflowError,
     DBOSDeadLetterQueueError,
     DBOSNonExistentWorkflowError,
@@ -96,6 +97,10 @@ class WorkflowStatus:
     executor_id: Optional[str]
     # The application version on which this workflow was started
     app_version: Optional[str]
+    # The start-to-close timeout of the workflow in ms
+    workflow_timeout_ms: Optional[int]
+    # The deadline of a workflow, computed by adding its timeout to its start time.
+    workflow_deadline_epoch_ms: Optional[int]
 
     # INTERNAL FIELDS
 
@@ -761,9 +766,9 @@ class SystemDatabase:
                         error = row[2]
                         raise _serialization.deserialize_exception(error)
                     elif status == WorkflowStatusString.CANCELLED.value:
-                        # Raise a normal exception here, not the cancellation exception
+                        # Raise AwaitedWorkflowCancelledError here, not the cancellation exception
                         # because the awaiting workflow is not being cancelled.
-                        raise Exception(f"Awaited workflow {workflow_id} was cancelled")
+                        raise AwaitedWorkflowCancelledError(workflow_id)
                 else:
                     pass  # CB: I guess we're assuming the WF will show up eventually.
             time.sleep(1)
