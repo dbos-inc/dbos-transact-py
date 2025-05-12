@@ -1349,21 +1349,24 @@ def test_timeout_queue_recovery(dbos: DBOS) -> None:
         while True:
             DBOS.sleep(0.1)
 
-    with SetWorkflowTimeout(2.0):
+    timeout = 3.0
+    with SetWorkflowTimeout(timeout):
         original_handle = queue.enqueue(blocking_workflow)
 
     # Verify the workflow's timeout is properly configured
     evt.wait()
     original_status = original_handle.get_status()
-    assert original_status.workflow_timeout_ms == 2000
-    assert original_status.workflow_deadline_epoch_ms > time.time() * 1000
+    assert original_status.workflow_timeout_ms == timeout * 1000
+    assert original_status.workflow_deadline_epoch_ms is not None and original_status.workflow_deadline_epoch_ms > time.time() * 1000
 
     # Recover the workflow. Verify its deadline remains the same
+    evt.clear()
     handles = DBOS._recover_pending_workflows()
     assert len(handles) == 1
+    evt.wait()
     recovered_handle = handles[0]
     recovered_status = recovered_handle.get_status()
-    assert recovered_status.workflow_timeout_ms == 2000
+    assert recovered_status.workflow_timeout_ms == timeout * 1000
     assert recovered_status.workflow_deadline_epoch_ms == original_status.workflow_deadline_epoch_ms
 
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
