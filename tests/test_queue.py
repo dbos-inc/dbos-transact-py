@@ -26,7 +26,7 @@ from dbos import (
 )
 from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandleAsync
-from dbos._error import DBOSAwaitedWorkflowCancelledError
+from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSWorkflowCancelledError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
@@ -918,7 +918,6 @@ def test_timeout_queue(dbos: DBOS) -> None:
 
     # Verify if a parent called with a timeout enqueues a blocked child
     # then exits the deadline propagates and the child is cancelled.
-    child_id = str(uuid.uuid4())
     queue = Queue("regular_queue")
 
     @DBOS.workflow()
@@ -930,6 +929,39 @@ def test_timeout_queue(dbos: DBOS) -> None:
         child_id = exiting_parent_workflow()
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         DBOS.retrieve_workflow(child_id).get_result()
+
+    # Verify if a parent called with a timeout enqueues a child that
+    # never starts because the queue is blocked, the deadline propagates
+    # and both parent and child are cancelled.
+    child_id = str(uuid.uuid4())
+    queue = Queue("stuck_queue", concurrency=1)
+
+    start_event = threading.Event()
+    blocking_event = threading.Event()
+
+    @DBOS.workflow()
+    def stuck_workflow() -> None:
+        start_event.set()
+        blocking_event.wait()
+
+    stuck_handle = queue.enqueue(stuck_workflow)
+    start_event.wait()
+
+    @DBOS.workflow()
+    def blocked_parent_workflow() -> None:
+        with SetWorkflowID(child_id):
+            queue.enqueue(blocking_workflow)
+        while True:
+            DBOS.sleep(0.1)
+
+    with SetWorkflowTimeout(1.0):
+        handle = DBOS.start_workflow(blocked_parent_workflow)
+    with pytest.raises(DBOSWorkflowCancelledError):
+        handle.get_result()
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        DBOS.retrieve_workflow(child_id).get_result()
+    blocking_event.set()
+    stuck_handle.get_result()
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
