@@ -237,6 +237,7 @@ def test_process_config_full():
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,
+        "pool_pre_ping": True,
         "connect_args": {"connect_timeout": 1},
     }
     assert configFile["database"]["sys_db_engine_kwargs"] == {
@@ -244,6 +245,7 @@ def test_process_config_full():
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 27,
+        "pool_pre_ping": True,
         "connect_args": {"connect_timeout": 1},
     }
     assert configFile["runtimeConfig"]["start"] == ["python3 main.py"]
@@ -402,12 +404,14 @@ def test_configure_db_engine_parameters_defaults():
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,
+        "pool_pre_ping": True,
         "connect_args": {"connect_timeout": 10},
     }
     assert data["sys_db_engine_kwargs"] == {
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,
+        "pool_pre_ping": True,
         "connect_args": {"connect_timeout": 10},
     }
 
@@ -422,12 +426,14 @@ def test_configure_db_engine_parameters_custom_sys_db_pool_sizes():
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,
+        "pool_pre_ping": True,
         "connect_args": {"connect_timeout": 10},
     }
     assert data["sys_db_engine_kwargs"] == {
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 35,
+        "pool_pre_ping": True,
         "connect_args": {"connect_timeout": 10},
     }
 
@@ -582,12 +588,14 @@ def test_configure_db_engine_parameters_empty_user_kwargs():
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,
+        "pool_pre_ping": True,
         "connect_args": {"connect_timeout": 10},
     }
     assert data["sys_db_engine_kwargs"] == {
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,
+        "pool_pre_ping": True,
         "connect_args": {"connect_timeout": 10},
     }
 
@@ -1148,12 +1156,12 @@ def test_configured_pool_default():
     assert dbos._app_db.engine.pool._pool.maxsize == 20
     assert dbos._app_db.engine.pool._timeout == 30
     assert dbos._app_db.engine.pool._max_overflow == 0
-    assert dbos._app_db.engine.pool._pre_ping == False
+    assert dbos._app_db.engine.pool._pre_ping == True
 
     assert dbos._sys_db.engine.pool._pool.maxsize == 20
     assert dbos._sys_db.engine.pool._timeout == 30
     assert dbos._sys_db.engine.pool._max_overflow == 0
-    assert dbos._sys_db.engine.pool._pre_ping == False
+    assert dbos._sys_db.engine.pool._pre_ping == True
 
     # force the release of connections so we can intercept on connect.
     app_db_engine = dbos._app_db.engine
