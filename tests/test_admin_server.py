@@ -427,14 +427,22 @@ def test_admin_workflow_fork(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     # test for new_workflow_id and app version
 
+    new_version = "my_new_version"
+    GlobalParams.app_version = new_version
+
     response = requests.post(
         f"http://localhost:3001/workflows/{wfUuid}/fork",
-        json={"new_workflow_id": "123456"},
+        json={"new_workflow_id": "123456", "application_version": new_version},
         timeout=5,
     )
     assert response.status_code == 200
 
     new_workflow_id = response.json().get("workflow_id")
     assert new_workflow_id == "123456", "Expected new workflow ID is not 123456"
+
+    handle = dbos.retrieve_workflow(new_workflow_id)
+    assert (
+        handle.get_status().app_version == new_version
+    ), f"Expected application version to be {new_version}, but got {handle.get_status().application_version}"
 
     assert worked, "Workflow did not finish successfully"
