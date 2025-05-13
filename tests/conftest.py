@@ -12,7 +12,6 @@ from flask import Flask
 
 from dbos import DBOS, DBOSClient, DBOSConfig
 from dbos._app_db import ApplicationDatabase
-from dbos._dbos_config import translate_dbos_config_to_config_file
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 
