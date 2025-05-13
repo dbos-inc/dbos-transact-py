@@ -477,50 +477,42 @@ class SystemDatabase:
     def update_workflow_status(
         self,
         status: WorkflowStatusInternal,
-        *,
-        conn: Optional[sa.Connection] = None,
     ) -> None:
         if self._debug_mode:
             raise Exception("called update_workflow_status in debug mode")
         wf_status: WorkflowStatuses = status["status"]
-
-        cmd = (
-            pg.insert(SystemSchema.workflow_status)
-            .values(
-                workflow_uuid=status["workflow_uuid"],
-                status=status["status"],
-                name=status["name"],
-                class_name=status["class_name"],
-                config_name=status["config_name"],
-                output=status["output"],
-                error=status["error"],
-                executor_id=status["executor_id"],
-                application_version=status["app_version"],
-                application_id=status["app_id"],
-                authenticated_user=status["authenticated_user"],
-                authenticated_roles=status["authenticated_roles"],
-                assumed_role=status["assumed_role"],
-                queue_name=status["queue_name"],
-                recovery_attempts=(
-                    1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
-                ),
-            )
-            .on_conflict_do_update(
-                index_elements=["workflow_uuid"],
-                set_=dict(
+        with self.engine.begin() as c:
+            c.execute(
+                pg.insert(SystemSchema.workflow_status)
+                .values(
+                    workflow_uuid=status["workflow_uuid"],
                     status=status["status"],
+                    name=status["name"],
+                    class_name=status["class_name"],
+                    config_name=status["config_name"],
                     output=status["output"],
                     error=status["error"],
-                    updated_at=func.extract("epoch", func.now()) * 1000,
-                ),
+                    executor_id=status["executor_id"],
+                    application_version=status["app_version"],
+                    application_id=status["app_id"],
+                    authenticated_user=status["authenticated_user"],
+                    authenticated_roles=status["authenticated_roles"],
+                    assumed_role=status["assumed_role"],
+                    queue_name=status["queue_name"],
+                    recovery_attempts=(
+                        1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
+                    ),
+                )
+                .on_conflict_do_update(
+                    index_elements=["workflow_uuid"],
+                    set_=dict(
+                        status=status["status"],
+                        output=status["output"],
+                        error=status["error"],
+                        updated_at=func.extract("epoch", func.now()) * 1000,
+                    ),
+                )
             )
-        )
-
-        if conn is not None:
-            conn.execute(cmd)
-        else:
-            with self.engine.begin() as c:
-                c.execute(cmd)
 
     def cancel_workflow(
         self,
