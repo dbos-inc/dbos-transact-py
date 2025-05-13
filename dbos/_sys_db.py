@@ -1088,8 +1088,8 @@ class SystemDatabase:
                 for row in rows
             ]
 
-    def record_operation_result(
-        self, result: OperationResultInternal, conn: Optional[sa.Connection] = None
+    def _record_operation_result_txn(
+        self, result: OperationResultInternal, conn: sa.Connection
     ) -> None:
         if self._debug_mode:
             raise Exception("called record_operation_result in debug mode")
@@ -1104,15 +1104,15 @@ class SystemDatabase:
             error=error,
         )
         try:
-            if conn is not None:
-                conn.execute(sql)
-            else:
-                with self.engine.begin() as c:
-                    c.execute(sql)
+            conn.execute(sql)
         except DBAPIError as dbapi_error:
             if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
             raise
+
+    def record_operation_result(self, result: OperationResultInternal) -> None:
+        with self.engine.begin() as c:
+            self._record_operation_result_txn(result, c)
 
     def record_get_result(
         self, result_workflow_id: str, output: Optional[str], error: Optional[str]
@@ -1163,13 +1163,12 @@ class SystemDatabase:
                 raise DBOSWorkflowConflictIDError(parentUUID)
             raise
 
-    def check_operation_execution(
+    def _check_operation_execution_txn(
         self,
         workflow_id: str,
         function_id: int,
         function_name: str,
-        *,
-        conn: Optional[sa.Connection] = None,
+        conn: sa.Connection,
     ) -> Optional[RecordedResult]:
         # First query: Retrieve the workflow status
         workflow_status_sql = sa.select(
@@ -1187,13 +1186,8 @@ class SystemDatabase:
         )
 
         # Execute both queries
-        if conn is not None:
-            workflow_status_rows = conn.execute(workflow_status_sql).all()
-            operation_output_rows = conn.execute(operation_output_sql).all()
-        else:
-            with self.engine.begin() as c:
-                workflow_status_rows = c.execute(workflow_status_sql).all()
-                operation_output_rows = c.execute(operation_output_sql).all()
+        workflow_status_rows = conn.execute(workflow_status_sql).all()
+        operation_output_rows = conn.execute(operation_output_sql).all()
 
         # Check if the workflow exists
         assert (
@@ -1235,6 +1229,14 @@ class SystemDatabase:
         }
         return result
 
+    def check_operation_execution(
+        self, workflow_id: str, function_id: int, function_name: str
+    ) -> Optional[RecordedResult]:
+        with self.engine.begin() as c:
+            return self._check_operation_execution_txn(
+                workflow_id, function_id, function_name, c
+            )
+
     def check_child_workflow(
         self, workflow_uuid: str, function_id: int
     ) -> Optional[str]:
@@ -1263,7 +1265,7 @@ class SystemDatabase:
         function_name = "DBOS.send"
         topic = topic if topic is not None else _dbos_null_topic
         with self.engine.begin() as c:
-            recorded_output = self.check_operation_execution(
+            recorded_output = self._check_operation_execution_txn(
                 workflow_uuid, function_id, function_name, conn=c
             )
             if self._debug_mode and recorded_output is None:
@@ -1301,7 +1303,7 @@ class SystemDatabase:
                 "output": None,
                 "error": None,
             }
-            self.record_operation_result(output, conn=c)
+            self._record_operation_result_txn(output, conn=c)
 
     def recv(
         self,
@@ -1395,7 +1397,7 @@ class SystemDatabase:
             message: Any = None
             if len(rows) > 0:
                 message = _serialization.deserialize(rows[0][0])
-            self.record_operation_result(
+            self._record_operation_result_txn(
                 {
                     "workflow_uuid": workflow_uuid,
                     "function_id": function_id,
@@ -1514,7 +1516,7 @@ class SystemDatabase:
     ) -> None:
         function_name = "DBOS.setEvent"
         with self.engine.begin() as c:
-            recorded_output = self.check_operation_execution(
+            recorded_output = self._check_operation_execution_txn(
                 workflow_uuid, function_id, function_name, conn=c
             )
             if self._debug_mode and recorded_output is None:
@@ -1546,7 +1548,7 @@ class SystemDatabase:
                 "output": None,
                 "error": None,
             }
-            self.record_operation_result(output, conn=c)
+            self._record_operation_result_txn(output, conn=c)
 
     def get_event(
         self,
