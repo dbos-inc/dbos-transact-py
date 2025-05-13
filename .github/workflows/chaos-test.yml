@@ -41,5 +41,5 @@ jobs:
       working-directory: ./
 
     - name: Run Chaos Tests
-      run: pdm run pytest chaos-tests
+      run: pdm run pytest --timeout 600 chaos-tests
       working-directory: ./
