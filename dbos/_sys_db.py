@@ -365,7 +365,7 @@ class SystemDatabase:
             self.notification_conn.close()
         self.engine.dispose()
 
-    def insert_workflow_status(
+    def _insert_workflow_status(
         self,
         status: WorkflowStatusInternal,
         conn: sa.Connection,
@@ -765,7 +765,7 @@ class SystemDatabase:
                     pass  # CB: I guess we're assuming the WF will show up eventually.
             time.sleep(1)
 
-    def update_workflow_inputs(
+    def _update_workflow_inputs(
         self, workflow_uuid: str, inputs: str, conn: sa.Connection
     ) -> None:
         if self._debug_mode:
@@ -1638,7 +1638,7 @@ class SystemDatabase:
             )
         return value
 
-    def enqueue(
+    def _enqueue(
         self,
         workflow_id: str,
         queue_name: str,
@@ -1973,17 +1973,17 @@ class SystemDatabase:
         Synchronously record the status and inputs for workflows in a single transaction
         """
         with self.engine.begin() as conn:
-            wf_status, workflow_deadline_epoch_ms = self.insert_workflow_status(
+            wf_status, workflow_deadline_epoch_ms = self._insert_workflow_status(
                 status, conn, max_recovery_attempts=max_recovery_attempts
             )
             # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
-            self.update_workflow_inputs(status["workflow_uuid"], inputs, conn)
+            self._update_workflow_inputs(status["workflow_uuid"], inputs, conn)
 
             if (
                 status["queue_name"] is not None
                 and wf_status == WorkflowStatusString.ENQUEUED.value
             ):
-                self.enqueue(
+                self._enqueue(
                     status["workflow_uuid"],
                     status["queue_name"],
                     conn,
