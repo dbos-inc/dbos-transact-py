@@ -1,6 +1,7 @@
 import os
 import random
 import threading
+import time
 from typing import Any, Generator, Optional
 from urllib.parse import quote
 
@@ -54,9 +55,7 @@ def cleanup_test_databases(config: DBOSConfig, postgres: None) -> None:
 
 class PostgresChaosMonkey:
 
-    def __init__(self, min_time=5, max_time=20):
-        self.min_time = min_time
-        self.max_time = max_time
+    def __init__(self):
         self.stop_event = threading.Event()
         self.chaos_thread: Optional[threading.Thread] = None
 
@@ -65,12 +64,12 @@ class PostgresChaosMonkey:
 
         def _chaos_thread():
             while not self.stop_event.is_set():
-                wait_time = random.uniform(self.min_time, self.max_time)
+                wait_time = random.uniform(5, 20)
                 if not self.stop_event.wait(wait_time):
-                    print(
-                        "\n🐒 ChaosMonkey strikes after {wait_time:.2f} seconds! Restarting Postgres..."
-                    )
+                    print(f"🐒 ChaosMonkey strikes after {wait_time:.2f} seconds! Restarting Postgres...")
                     stop_docker_pg()
+                    down_time = random.uniform(0, 5)
+                    time.sleep(down_time)
                     start_docker_pg()
 
         self.chaos_thread = threading.Thread(target=_chaos_thread)
