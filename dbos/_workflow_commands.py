@@ -104,16 +104,6 @@ def fork_workflow(
     application_version: Optional[str],
 ) -> str:
 
-    def get_max_function_id(workflow_uuid: str) -> int:
-        max_transactions = app_db.get_max_function_id(workflow_uuid) or 0
-        max_operations = sys_db.get_max_function_id(workflow_uuid) or 0
-        return max(max_transactions, max_operations)
-
-    max_function_id = get_max_function_id(workflow_id)
-    if max_function_id > 0 and start_step > max_function_id:
-        raise DBOSException(
-            f"Cannot fork workflow {workflow_id} from step {start_step}. The workflow has {max_function_id} steps."
-        )
     ctx = get_local_dbos_context()
     if ctx is not None and len(ctx.id_assigned_for_next_workflow) > 0:
         forked_workflow_id = ctx.id_assigned_for_next_workflow

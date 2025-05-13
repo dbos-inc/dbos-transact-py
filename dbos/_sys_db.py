@@ -601,18 +601,6 @@ class SystemDatabase:
                 )
             )
 
-    def get_max_function_id(self, workflow_uuid: str) -> Optional[int]:
-        with self.engine.begin() as conn:
-            max_function_id_row = conn.execute(
-                sa.select(
-                    sa.func.max(SystemSchema.operation_outputs.c.function_id)
-                ).where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid)
-            ).fetchone()
-
-            max_function_id = max_function_id_row[0] if max_function_id_row else None
-
-            return max_function_id
-
     def fork_workflow(
         self,
         original_workflow_id: str,
