@@ -55,27 +55,28 @@ def cleanup_test_databases(config: DBOSConfig, postgres: None) -> None:
 
 class PostgresChaosMonkey:
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.stop_event = threading.Event()
         self.chaos_thread: Optional[threading.Thread] = None
 
-    def start(self):
-        self.stop_event.clear()
-
-        def _chaos_thread():
+    def start(self) -> None:
+        def _chaos_thread() -> None:
             while not self.stop_event.is_set():
                 wait_time = random.uniform(5, 20)
                 if not self.stop_event.wait(wait_time):
-                    print(f"🐒 ChaosMonkey strikes after {wait_time:.2f} seconds! Restarting Postgres...")
+                    print(
+                        f"🐒 ChaosMonkey strikes after {wait_time:.2f} seconds! Restarting Postgres..."
+                    )
                     stop_docker_pg()
                     down_time = random.uniform(0, 5)
                     time.sleep(down_time)
                     start_docker_pg()
 
+        self.stop_event.clear()
         self.chaos_thread = threading.Thread(target=_chaos_thread)
         self.chaos_thread.start()
 
-    def stop(self):
+    def stop(self) -> None:
         if self.chaos_thread is None:
             return
         self.stop_event.set()
