@@ -6,9 +6,11 @@ import pytest
 import sqlalchemy as sa
 
 from dbos import DBOS, DBOSConfig
+from dbos._docker_pg_helper import start_docker_pg, stop_docker_pg
 
 
-def default_config() -> DBOSConfig:
+@pytest.fixture()
+def config() -> DBOSConfig:
     return {
         "name": "test-app",
         "database_url": f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy",
@@ -16,16 +18,11 @@ def default_config() -> DBOSConfig:
 
 
 @pytest.fixture()
-def config() -> DBOSConfig:
-    return default_config()
-
-
-@pytest.fixture(scope="session")
-def postgres_db_engine() -> sa.Engine:
-    cfg = default_config()
-    assert cfg["database_url"] is not None
-    return sa.create_engine(
-        sa.make_url(cfg["database_url"]).set(
+def postgres_db_engine(config: DBOSConfig) -> Generator[sa.Engine, Any, None]:
+    start_docker_pg()
+    assert config["database_url"] is not None
+    engine = sa.create_engine(
+        sa.make_url(config["database_url"]).set(
             drivername="postgresql+psycopg",
             database="postgres",
         ),
@@ -33,6 +30,9 @@ def postgres_db_engine() -> sa.Engine:
             "connect_timeout": 30,
         },
     )
+    yield engine
+    engine.dispose()
+    stop_docker_pg()
 
 
 @pytest.fixture()
@@ -44,27 +44,11 @@ def cleanup_test_databases(config: DBOSConfig, postgres_db_engine: sa.Engine) ->
     with postgres_db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(
-            sa.text(
-                f"""
-            SELECT pg_terminate_backend(pg_stat_activity.pid)
-            FROM pg_stat_activity
-            WHERE pg_stat_activity.datname = '{app_db_name}'
-            AND pid <> pg_backend_pid()
-        """
-            )
+            sa.text(f"DROP DATABASE IF EXISTS {app_db_name} WITH (FORCE)")
         )
-        connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}"))
         connection.execute(
-            sa.text(
-                f"""
-            SELECT pg_terminate_backend(pg_stat_activity.pid)
-            FROM pg_stat_activity
-            WHERE pg_stat_activity.datname = '{sys_db_name}'
-            AND pid <> pg_backend_pid()
-        """
-            )
+            sa.text(f"DROP DATABASE IF EXISTS {sys_db_name} WITH (FORCE)")
         )
-        connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sys_db_name}"))
 
 
 @pytest.fixture()
