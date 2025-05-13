@@ -27,7 +27,6 @@ import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
 from alembic import command
 from alembic.config import Config
-from psycopg import OperationalError
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.sql import func
 
@@ -289,10 +288,14 @@ def db_retry(
                 except DBAPIError as e:
 
                     def is_retriable_exception(e: DBAPIError) -> bool:
-                        if isinstance(e.orig, OperationalError):
-                            driver_error: OperationalError = e.orig
+                        if isinstance(e.orig, psycopg.OperationalError):
+                            driver_error: psycopg.OperationalError = e.orig
                             pgcode = driver_error.sqlstate or ""
+                            # Failure to establish connection
                             if "connection failed" in str(driver_error):
+                                return True
+                            # Connection timeout
+                            if isinstance(driver_error, psycopg.errors.ConnectionTimeout):
                                 return True
                             # Insufficient resources
                             elif pgcode.startswith("53"):
