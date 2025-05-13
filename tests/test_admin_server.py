@@ -447,7 +447,7 @@ def test_admin_workflow_fork(dbos: DBOS, sys_db: SystemDatabase) -> None:
     new_workflow_id = response.json().get("workflow_id")
     assert new_workflow_id == "123456", "Expected new workflow ID is not 123456"
 
-    handle: WorkflowHandle = dbos.retrieve_workflow(new_workflow_id)
+    handle: WorkflowHandle[None] = dbos.retrieve_workflow(new_workflow_id)
     assert (
         handle.get_status().app_version == new_version
     ), f"Expected application version to be {new_version}, but got {handle.get_status().app_version}"
