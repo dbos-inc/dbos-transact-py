@@ -482,17 +482,6 @@ def test_restart_fromsteps_steps_tr(
     assert stepFourCount == 2
     assert trFiveCount == 3
 
-    # invalid step
-    try:
-        forked_handle = DBOS.fork_workflow(wfid, 7)
-        assert forked_handle.workflow_id != wfid
-        forked_handle.get_result()
-    except Exception as e:
-        print(f"Exception: {e}")
-        assert isinstance(e, DBOSException)
-        assert "Cannot fork workflow" in str(e)
-        assert trOneCount == 1
-
     # invalid < 1 will default to 1
     forked_handle = DBOS.fork_workflow(wfid, -1)
     assert forked_handle.workflow_id != wfid

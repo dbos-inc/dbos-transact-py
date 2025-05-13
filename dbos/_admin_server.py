@@ -5,8 +5,9 @@ import re
 import threading
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import TYPE_CHECKING, Any, List, TypedDict
+from typing import TYPE_CHECKING, Any, List, Optional, TypedDict
 
+from ._context import SetWorkflowID
 from ._error import DBOSException
 from ._logger import dbos_logger
 from ._recovery import recover_pending_workflows
@@ -141,7 +142,11 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 try:
                     data = json.loads(post_data.decode("utf-8"))
                     start_step: int = data.get("start_step", 1)
-                    self._handle_fork(workflow_id, start_step)
+                    new_workflow_id: Optional[str] = data.get("new_workflow_id")
+                    application_version: Optional[str] = data.get("application_version")
+                    self._handle_fork(
+                        workflow_id, start_step, new_workflow_id, application_version
+                    )
                 except (json.JSONDecodeError, AttributeError) as e:
                     self.send_response(500)
                     self.send_header("Content-Type", "application/json")
@@ -191,9 +196,24 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(response_body)
 
-    def _handle_fork(self, workflow_id: str, start_step: int) -> None:
+    def _handle_fork(
+        self,
+        workflow_id: str,
+        start_step: int,
+        new_workflow_id: Optional[str],
+        application_version: Optional[str],
+    ) -> None:
         try:
-            handle = self.dbos.fork_workflow(workflow_id, start_step)
+            print(f"Forking workflow {workflow_id} from step {start_step}")
+            if new_workflow_id is not None:
+                with SetWorkflowID(new_workflow_id):
+                    handle = self.dbos.fork_workflow(
+                        workflow_id, start_step, application_version=application_version
+                    )
+            else:
+                handle = self.dbos.fork_workflow(
+                    workflow_id, start_step, application_version=application_version
+                )
             response_body = json.dumps(
                 {
                     "workflow_id": handle.workflow_id,
