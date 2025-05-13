@@ -141,16 +141,13 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 workflow_id = fork_match.group("workflow_id")
                 try:
                     data = json.loads(post_data.decode("utf-8"))
-                    print(f"got fork data: {data}")
                     start_step: int = data.get("start_step", 1)
                     new_workflow_id: Optional[str] = data.get("new_workflow_id")
-                    print(f"got new_workflow_id: {new_workflow_id}")
                     application_version: Optional[str] = data.get("application_version")
                     self._handle_fork(
                         workflow_id, start_step, new_workflow_id, application_version
                     )
                 except (json.JSONDecodeError, AttributeError) as e:
-                    print(f"Error : {e}")
                     self.send_response(500)
                     self.send_header("Content-Type", "application/json")
                     self.end_headers()
@@ -208,9 +205,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
     ) -> None:
         try:
             print(f"Forking workflow {workflow_id} from step {start_step}")
-            print(f"handle fork got new_workflow_id: {new_workflow_id}")
             if new_workflow_id is not None:
-                print(f"calling set new_workflow_id: {new_workflow_id}")
                 with SetWorkflowID(new_workflow_id):
                     handle = self.dbos.fork_workflow(
                         workflow_id, start_step, application_version=application_version
