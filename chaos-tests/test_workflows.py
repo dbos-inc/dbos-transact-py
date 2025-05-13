@@ -1,5 +1,6 @@
 from dbos import DBOS
 
+
 def test_workflow(dbos: DBOS) -> None:
 
     def step_one(x: int) -> int:
@@ -15,7 +16,7 @@ def test_workflow(dbos: DBOS) -> None:
         x = step_two(x)
         return x
 
-    num_workflows = 5
+    num_workflows = 100
 
     for i in range(num_workflows):
         assert workflow(i) == i + 3

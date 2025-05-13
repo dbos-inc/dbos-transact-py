@@ -1,5 +1,7 @@
 import os
-from typing import Any, Generator
+import random
+import threading
+from typing import Any, Generator, Optional
 from urllib.parse import quote
 
 import pytest
@@ -50,6 +52,37 @@ def cleanup_test_databases(config: DBOSConfig, postgres: None) -> None:
     engine.dispose()
 
 
+class PostgresChaosMonkey:
+
+    def __init__(self, min_time=5, max_time=20):
+        self.min_time = min_time
+        self.max_time = max_time
+        self.stop_event = threading.Event()
+        self.chaos_thread: Optional[threading.Thread] = None
+
+    def start(self):
+        self.stop_event.clear()
+
+        def _chaos_thread():
+            while not self.stop_event.is_set():
+                wait_time = random.uniform(self.min_time, self.max_time)
+                if not self.stop_event.wait(wait_time):
+                    print(
+                        "\n🐒 ChaosMonkey strikes after {wait_time:.2f} seconds! Restarting Postgres..."
+                    )
+                    stop_docker_pg()
+                    start_docker_pg()
+
+        self.chaos_thread = threading.Thread(target=_chaos_thread)
+        self.chaos_thread.start()
+
+    def stop(self):
+        if self.chaos_thread is None:
+            return
+        self.stop_event.set()
+        self.chaos_thread.join()
+
+
 @pytest.fixture()
 def dbos(
     config: DBOSConfig, cleanup_test_databases: None
@@ -57,6 +90,8 @@ def dbos(
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
     DBOS.launch()
-
+    monkey = PostgresChaosMonkey()
+    monkey.start()
     yield dbos
+    monkey.stop()
     DBOS.destroy(destroy_registry=True)
