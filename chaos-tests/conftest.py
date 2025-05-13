@@ -18,8 +18,14 @@ def config() -> DBOSConfig:
 
 
 @pytest.fixture()
-def postgres_db_engine(config: DBOSConfig) -> Generator[sa.Engine, Any, None]:
+def postgres(config: DBOSConfig) -> Generator[None, Any, None]:
     start_docker_pg()
+    yield
+    stop_docker_pg()
+
+
+@pytest.fixture()
+def cleanup_test_databases(config: DBOSConfig, postgres: None) -> None:
     assert config["database_url"] is not None
     engine = sa.create_engine(
         sa.make_url(config["database_url"]).set(
@@ -30,18 +36,10 @@ def postgres_db_engine(config: DBOSConfig) -> Generator[sa.Engine, Any, None]:
             "connect_timeout": 30,
         },
     )
-    yield engine
-    engine.dispose()
-    stop_docker_pg()
-
-
-@pytest.fixture()
-def cleanup_test_databases(config: DBOSConfig, postgres_db_engine: sa.Engine) -> None:
-    assert config["database_url"] is not None
     app_db_name = sa.make_url(config["database_url"]).database
     sys_db_name = f"{app_db_name}_dbos_sys"
 
-    with postgres_db_engine.connect() as connection:
+    with engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(
             sa.text(f"DROP DATABASE IF EXISTS {app_db_name} WITH (FORCE)")
@@ -49,6 +47,7 @@ def cleanup_test_databases(config: DBOSConfig, postgres_db_engine: sa.Engine) ->
         connection.execute(
             sa.text(f"DROP DATABASE IF EXISTS {sys_db_name} WITH (FORCE)")
         )
+    engine.dispose()
 
 
 @pytest.fixture()
