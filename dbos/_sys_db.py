@@ -30,7 +30,7 @@ from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.sql import func
 
-from dbos._utils import INTERNAL_QUEUE_NAME
+from dbos._utils import INTERNAL_QUEUE_NAME, retriable_postgres_exception
 
 from . import _serialization
 from ._context import get_local_dbos_context
@@ -287,32 +287,8 @@ def db_retry(
                     return func(*args, **kwargs)
                 except DBAPIError as e:
 
-                    def is_retriable_exception(e: DBAPIError) -> bool:
-                        if isinstance(e.orig, psycopg.OperationalError):
-                            driver_error: psycopg.OperationalError = e.orig
-                            pgcode = driver_error.sqlstate or ""
-                            # Failure to establish connection
-                            if "connection failed" in str(driver_error):
-                                return True
-                            # Connection timeout
-                            if isinstance(driver_error, psycopg.errors.ConnectionTimeout):
-                                return True
-                            # Insufficient resources
-                            elif pgcode.startswith("53"):
-                                return True
-                            # Connection exception
-                            elif pgcode.startswith("08"):
-                                return True
-                            # Operator intervention
-                            elif pgcode.startswith("57"):
-                                return True
-                            else:
-                                return False
-                        else:
-                            return False
-
                     # Determine if this is a retriable exception
-                    if not is_retriable_exception(e):
+                    if not retriable_postgres_exception(e):
                         raise
 
                     retries += 1

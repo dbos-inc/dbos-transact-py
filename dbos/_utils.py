@@ -1,6 +1,9 @@
 import importlib.metadata
 import os
 
+import psycopg
+from sqlalchemy.exc import DBAPIError
+
 INTERNAL_QUEUE_NAME = "_dbos_internal_queue"
 
 request_id_header = "x-request-id"
@@ -15,3 +18,28 @@ class GlobalParams:
     except importlib.metadata.PackageNotFoundError:
         # If package is not installed or during development
         dbos_version = "unknown"
+
+
+def retriable_postgres_exception(e: DBAPIError) -> bool:
+    if isinstance(e.orig, psycopg.OperationalError):
+        driver_error: psycopg.OperationalError = e.orig
+        pgcode = driver_error.sqlstate or ""
+        # Failure to establish connection
+        if "connection failed" in str(driver_error):
+            return True
+        # Connection timeout
+        if isinstance(driver_error, psycopg.errors.ConnectionTimeout):
+            return True
+        # Insufficient resources
+        elif pgcode.startswith("53"):
+            return True
+        # Connection exception
+        elif pgcode.startswith("08"):
+            return True
+        # Operator intervention
+        elif pgcode.startswith("57"):
+            return True
+        else:
+            return False
+    else:
+        return False
