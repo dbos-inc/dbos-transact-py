@@ -555,7 +555,6 @@ class SystemDatabase:
                 )
             )
 
-    @db_retry()
     def cancel_workflow(
         self,
         workflow_id: str,
@@ -590,7 +589,6 @@ class SystemDatabase:
                 )
             )
 
-    @db_retry()
     def resume_workflow(self, workflow_id: str) -> None:
         if self._debug_mode:
             raise Exception("called resume_workflow in debug mode")
@@ -636,19 +634,6 @@ class SystemDatabase:
                 )
             )
 
-    def get_max_function_id(self, workflow_uuid: str) -> Optional[int]:
-        with self.engine.begin() as conn:
-            max_function_id_row = conn.execute(
-                sa.select(
-                    sa.func.max(SystemSchema.operation_outputs.c.function_id)
-                ).where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid)
-            ).fetchone()
-
-            max_function_id = max_function_id_row[0] if max_function_id_row else None
-
-            return max_function_id
-
-    @db_retry()
     def fork_workflow(
         self,
         original_workflow_id: str,
@@ -858,7 +843,6 @@ class SystemDatabase:
             )
             return inputs
 
-    @db_retry()
     def get_workflows(self, input: GetWorkflowsInput) -> List[WorkflowStatus]:
         """
         Retrieve a list of workflows result and inputs based on the input criteria. The result is a list of external-facing workflow status objects.
@@ -971,7 +955,6 @@ class SystemDatabase:
             infos.append(info)
         return infos
 
-    @db_retry()
     def get_queued_workflows(
         self, input: GetQueuedWorkflowsInput
     ) -> List[WorkflowStatus]:
@@ -1083,7 +1066,6 @@ class SystemDatabase:
 
         return infos
 
-    @db_retry()
     def get_pending_workflows(
         self, executor_id: str, app_version: str
     ) -> list[GetPendingWorkflowsOutput]:
@@ -1108,7 +1090,6 @@ class SystemDatabase:
                 for row in rows
             ]
 
-    @db_retry()
     def get_workflow_steps(self, workflow_id: str) -> List[StepInfo]:
         with self.engine.begin() as c:
             rows = c.execute(
@@ -1955,7 +1936,6 @@ class SystemDatabase:
                     .values(completed_at_epoch_ms=int(time.time() * 1000))
                 )
 
-    @db_retry()
     def clear_queue_assignment(self, workflow_id: str) -> bool:
         if self._debug_mode:
             raise Exception("called clear_queue_assignment in debug mode")

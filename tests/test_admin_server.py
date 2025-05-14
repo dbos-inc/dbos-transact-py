@@ -11,7 +11,14 @@ import sqlalchemy as sa
 from requests.exceptions import ConnectionError
 
 # Public API
-from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID, _workflow_commands
+from dbos import (
+    DBOS,
+    DBOSConfig,
+    Queue,
+    SetWorkflowID,
+    WorkflowHandle,
+    _workflow_commands,
+)
 from dbos._error import DBOSWorkflowCancelledError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase, WorkflowStatusString
@@ -424,5 +431,25 @@ def test_admin_workflow_fork(dbos: DBOS, sys_db: SystemDatabase) -> None:
             break
         time.sleep(1)
         count += 1
+
+    # test for new_workflow_id and app version
+
+    new_version = "my_new_version"
+    GlobalParams.app_version = new_version
+
+    response = requests.post(
+        f"http://localhost:3001/workflows/{wfUuid}/fork",
+        json={"new_workflow_id": "123456", "application_version": new_version},
+        timeout=5,
+    )
+    assert response.status_code == 200
+
+    new_workflow_id = response.json().get("workflow_id")
+    assert new_workflow_id == "123456", "Expected new workflow ID is not 123456"
+
+    handle: WorkflowHandle[None] = dbos.retrieve_workflow(new_workflow_id)
+    assert (
+        handle.get_status().app_version == new_version
+    ), f"Expected application version to be {new_version}, but got {handle.get_status().app_version}"
 
     assert worked, "Workflow did not finish successfully"
