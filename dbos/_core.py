@@ -604,7 +604,6 @@ async def start_workflow_async(
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> "WorkflowHandleAsync[R]":
-
     # If the function has a class, add the class object as its first argument
     fself: Optional[object] = None
     if hasattr(func, "__self__"):
