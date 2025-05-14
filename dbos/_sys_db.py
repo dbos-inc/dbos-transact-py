@@ -277,6 +277,14 @@ F = TypeVar("F", bound=Callable[..., Any])
 def db_retry(
     initial_backoff: float = 1.0, max_backoff: float = 60.0
 ) -> Callable[[F], F]:
+    """
+    If a workflow encounters a database connection issue while performing an operation,
+    block the workflow and retry the operation until it reconnects and succeeds.
+
+    In other words, if DBOS loses its database connection, everything pauses until the connection is recovered,
+    trading off availability for correctness.
+    """
+
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -2036,6 +2044,14 @@ class SystemDatabase:
                     enqueue_options=enqueue_options,
                 )
         return wf_status, workflow_deadline_epoch_ms
+
+    def check_connection(self) -> None:
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(sa.text("SELECT 1")).fetchall()
+        except Exception as e:
+            dbos_logger.error(f"Error connecting to the DBOS system database: {e}")
+            raise
 
 
 def reset_system_database(postgres_db_url: sa.URL, sysdb_name: str) -> None:

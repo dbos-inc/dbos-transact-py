@@ -125,7 +125,7 @@ def dbos(
 
 
 @pytest.fixture()
-def client(config: DBOSConfig) -> Generator[DBOSClient, Any, None]:
+def client(config: DBOSConfig, dbos: DBOS) -> Generator[DBOSClient, Any, None]:
     assert config["database_url"] is not None
     client = DBOSClient(config["database_url"])
     yield client

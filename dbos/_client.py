@@ -109,6 +109,7 @@ class DBOSClient:
             },
             sys_db_name=system_database,
         )
+        self._sys_db.check_connection()
         self._app_db = ApplicationDatabase(
             database_url=database_url,
             engine_kwargs={
