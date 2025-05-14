@@ -27,6 +27,9 @@ def retriable_postgres_exception(e: DBAPIError) -> bool:
         # Failure to establish connection
         if "connection failed" in str(driver_error):
             return True
+        # Error within database transaction
+        elif "server closed the connection unexpectedly" in str(driver_error):
+            return True
         # Connection timeout
         if isinstance(driver_error, psycopg.errors.ConnectionTimeout):
             return True
