@@ -21,6 +21,8 @@ class GlobalParams:
 
 
 def retriable_postgres_exception(e: DBAPIError) -> bool:
+    if e.connection_invalidated:
+        return True
     if isinstance(e.orig, psycopg.OperationalError):
         driver_error: psycopg.OperationalError = e.orig
         pgcode = driver_error.sqlstate or ""
