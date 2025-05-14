@@ -1740,7 +1740,7 @@ class SystemDatabase:
                 # Print a warning if the local concurrency limit is violated
                 if local_pending_workflows > queue.worker_concurrency:
                     dbos_logger.warning(
-                        f"Local pending workflows ({local_pending_workflows}) on queue {queue.name} exceeds the local concurrency limit ({queue.worker_concurrency})"
+                        f"The number of local pending workflows ({local_pending_workflows}) on queue {queue.name} exceeds the local concurrency limit ({queue.worker_concurrency})"
                     )
                 max_tasks = max(0, queue.worker_concurrency - local_pending_workflows)
 
@@ -1749,7 +1749,7 @@ class SystemDatabase:
                 # Print a warning if the global concurrency limit is violated
                 if global_pending_workflows > queue.concurrency:
                     dbos_logger.warning(
-                        f"Total pending workflows ({global_pending_workflows}) on queue {queue.name} exceeds the global concurrency limit ({queue.concurrency})"
+                        f"The total number of pending workflows ({global_pending_workflows}) on queue {queue.name} exceeds the global concurrency limit ({queue.concurrency})"
                     )
                 available_tasks = max(0, queue.concurrency - global_pending_workflows)
                 max_tasks = min(max_tasks, available_tasks)
