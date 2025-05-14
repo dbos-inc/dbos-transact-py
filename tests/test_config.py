@@ -14,7 +14,6 @@ from dbos import DBOS
 from dbos._dbos_config import (
     ConfigFile,
     DBOSConfig,
-    check_config_consistency,
     configure_db_engine_parameters,
     load_config,
     overwrite_config,
@@ -1102,41 +1101,6 @@ def test_overwrite_config_missing_dbos_database_url(mocker):
         "DBOS_DATABASE_URL environment variable is not set. This is required to connect to the database."
         in str(exc_info.value)
     )
-
-
-####################
-# PROVIDED CONFIGS vs CONFIG FILE
-####################
-
-
-def test_no_discrepancy(mocker):
-    mock_config = """
-    name: "stock-prices" \
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
-    )
-    check_config_consistency(name="stock-prices")
-
-
-def test_name_does_no_match(mocker):
-    mock_config = """
-    name: "stock-prices" \
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
-    )
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        check_config_consistency(name="stock-prices-wrong")
-    assert (
-        "Provided app name 'stock-prices-wrong' does not match the app name 'stock-prices' in dbos-config.yaml"
-        in str(exc_info.value)
-    )
-
-
-def test_no_config_file():
-    # Handles FileNotFoundError
-    check_config_consistency(name="stock-prices")
 
 
 ####################
