@@ -1,7 +1,7 @@
 import asyncio
 import time
 import uuid
-from typing import Optional
+from typing import List, Optional
 
 import pytest
 import sqlalchemy as sa
@@ -523,3 +523,44 @@ async def test_workflow_timeout_async(dbos: DBOS) -> None:
     with pytest.raises(Exception) as exc_info:
         await (await DBOS.retrieve_workflow_async(direct_child)).get_result()
     assert "was cancelled" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_max_parallel_workflows(dbos: DBOS) -> None:
+    queue = Queue("parallel_queue")
+
+    @DBOS.workflow()
+    async def test_workflow(i: int) -> int:
+        await DBOS.sleep_async(5)
+        return i
+
+    begin_time = time.time()
+
+    tasks: List[WorkflowHandleAsync[int]] = []
+    for i in range(50):
+        tasks.append(await DBOS.start_workflow_async(test_workflow, i))
+
+    # Wait for all tasks to complete
+    for i in range(50):
+        assert (await tasks[i].get_result()) == i, f"Task {i} should return {i}"
+
+    end_time = time.time()
+    assert (
+        end_time - begin_time < 10
+    ), "All tasks should complete in less than 10 seconds"
+
+    # Test enqueues
+    begin_time = time.time()
+    tasks = []
+
+    for i in range(50):
+        tasks.append(await queue.enqueue_async(test_workflow, i))
+
+    # Wait for all tasks to complete
+    for i in range(50):
+        assert (await tasks[i].get_result()) == i, f"Task {i} should return {i}"
+
+    end_time = time.time()
+    assert (
+        end_time - begin_time < 10
+    ), "All enqueued tasks should complete in less than 10 seconds"
