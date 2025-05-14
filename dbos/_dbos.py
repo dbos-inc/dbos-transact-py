@@ -947,9 +947,9 @@ class DBOS:
         """
         if _get_dbos_instance()._configured_threadpool:
             return
-        _get_dbos_instance()._configured_threadpool = True
         loop = asyncio.get_running_loop()
         loop.set_default_executor(_get_dbos_instance()._executor)
+        _get_dbos_instance()._configured_threadpool = True
 
     @classmethod
     def resume_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
