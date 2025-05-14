@@ -1,3 +1,5 @@
+import uuid
+
 import sqlalchemy as sa
 
 from dbos import DBOS
@@ -29,3 +31,22 @@ def test_workflow(dbos: DBOS) -> None:
 
     for i in range(num_workflows):
         assert workflow(i) == i + 6
+
+
+def test_recv(dbos: DBOS):
+
+    topic = "test_topic"
+
+    @DBOS.workflow()
+    def recv_workflow():
+        return DBOS.recv(topic, timeout_seconds=10)
+
+    num_workflows = 1000
+
+    for i in range(num_workflows):
+        handle = DBOS.start_workflow(recv_workflow)
+
+        value = str(uuid.uuid4())
+        DBOS.send(handle.workflow_id, value, topic)
+
+        assert handle.get_result() == value
