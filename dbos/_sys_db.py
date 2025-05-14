@@ -1810,10 +1810,6 @@ class SystemDatabase:
                 c.execute(
                     SystemSchema.workflow_status.update()
                     .where(SystemSchema.workflow_status.c.workflow_uuid == id)
-                    .where(
-                        SystemSchema.workflow_status.c.status
-                        == WorkflowStatusString.ENQUEUED.value
-                    )
                     .values(
                         status=WorkflowStatusString.PENDING.value,
                         application_version=app_version,
