@@ -1,8 +1,9 @@
 import uuid
+from typing import Any
 
 import sqlalchemy as sa
 
-from dbos import DBOS
+from dbos import DBOS, SetWorkflowID
 
 
 def test_workflow(dbos: DBOS) -> None:
@@ -33,12 +34,12 @@ def test_workflow(dbos: DBOS) -> None:
         assert workflow(i) == i + 6
 
 
-def test_recv(dbos: DBOS):
+def test_recv(dbos: DBOS) -> None:
 
     topic = "test_topic"
 
     @DBOS.workflow()
-    def recv_workflow():
+    def recv_workflow() -> Any:
         return DBOS.recv(topic, timeout_seconds=10)
 
     num_workflows = 1000
@@ -50,3 +51,22 @@ def test_recv(dbos: DBOS):
         DBOS.send(handle.workflow_id, value, topic)
 
         assert handle.get_result() == value
+
+
+def test_events(dbos: DBOS) -> None:
+
+    key = "test_key"
+
+    @DBOS.workflow()
+    def event_workflow() -> str:
+        value = str(uuid.uuid4())
+        DBOS.set_event(key, value)
+        return value
+
+    num_workflows = 5000
+
+    for i in range(num_workflows):
+        id = str(uuid.uuid4())
+        with SetWorkflowID(id):
+            value = event_workflow()
+        assert DBOS.get_event(id, key, timeout_seconds=0) == value
