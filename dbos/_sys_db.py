@@ -1710,12 +1710,7 @@ class SystemDatabase:
                 if num_recent_queries >= queue.limiter["limit"]:
                     return []
 
-            # Dequeue functions eligible for this worker and ordered by the time at which they were enqueued.
-            # If there is a global or local concurrency limit N, select only the N oldest enqueued
-            # functions, else select all of them.
-
-            # First lets figure out how many tasks are eligible for dequeue.
-            # This means figuring out how many tasks are currently PENDING both locally and globally.
+            # Count how many workflows on this queue are currently PENDING both locally and globally.
             pending_tasks_query = (
                 sa.select(
                     SystemSchema.workflow_status.c.executor_id,
@@ -1739,6 +1734,7 @@ class SystemDatabase:
             pending_workflows_dict = {row[0]: row[1] for row in pending_workflows}
             local_pending_workflows = pending_workflows_dict.get(executor_id, 0)
 
+            # Compute max_tasks, the number of workflows that can be dequeued given local and global concurrency limits,
             max_tasks = float("inf")
             if queue.worker_concurrency is not None:
                 # Print a warning if the local concurrency limit is violated
@@ -1759,7 +1755,7 @@ class SystemDatabase:
                 max_tasks = min(max_tasks, available_tasks)
 
             # Retrieve the first max_tasks workflows in the queue.
-            # Only retrieve workflows of the appropriate version (or without version set)
+            # Only retrieve workflows of the local version (or without version set)
             query = (
                 sa.select(
                     SystemSchema.workflow_queue.c.workflow_uuid,
@@ -1804,14 +1800,14 @@ class SystemDatabase:
             ret_ids: list[str] = []
 
             for id in dequeued_ids:
-                # If we have a limiter, stop starting functions when the number
-                # of functions started this period exceeds the limit.
+                # If we have a limiter, stop dequeueing workflows when the number
+                # of workflows started this period exceeds the limit.
                 if queue.limiter is not None:
                     if len(ret_ids) + num_recent_queries >= queue.limiter["limit"]:
                         break
 
-                # To start a function, first set its status to PENDING and update its executor ID
-                res = c.execute(
+                # To start a workflow, first set its status to PENDING and update its executor ID
+                c.execute(
                     SystemSchema.workflow_status.update()
                     .where(SystemSchema.workflow_status.c.workflow_uuid == id)
                     .where(
@@ -1848,7 +1844,7 @@ class SystemDatabase:
                 )
                 ret_ids.append(id)
 
-            # If we have a limiter, garbage-collect all completed functions started
+            # If we have a limiter, garbage-collect all completed workflows started
             # before the period. If there's no limiter, there's no need--they were
             # deleted on completion.
             if queue.limiter is not None:
