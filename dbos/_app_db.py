@@ -216,21 +216,6 @@ class ApplicationDatabase:
             for row in rows
         ]
 
-    def get_max_function_id(self, workflow_uuid: str) -> Optional[int]:
-        with self.engine.begin() as conn:
-            max_function_id_row = conn.execute(
-                sa.select(
-                    sa.func.max(ApplicationSchema.transaction_outputs.c.function_id)
-                ).where(
-                    ApplicationSchema.transaction_outputs.c.workflow_uuid
-                    == workflow_uuid
-                )
-            ).fetchone()
-
-            max_function_id = max_function_id_row[0] if max_function_id_row else None
-
-            return max_function_id
-
     def clone_workflow_transactions(
         self, src_workflow_id: str, forked_workflow_id: str, start_step: int
     ) -> None:
