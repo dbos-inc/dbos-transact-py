@@ -90,7 +90,6 @@ from ._context import (
 from ._dbos_config import (
     ConfigFile,
     DBOSConfig,
-    check_config_consistency,
     overwrite_config,
     process_config,
     set_env_vars,
@@ -324,7 +323,6 @@ class DBOS:
         unvalidated_config = translate_dbos_config_to_config_file(config)
         if os.environ.get("DBOS__CLOUD") == "true":
             unvalidated_config = overwrite_config(unvalidated_config)
-        check_config_consistency(name=unvalidated_config["name"])
 
         if unvalidated_config is not None:
             self._config: ConfigFile = process_config(data=unvalidated_config)
