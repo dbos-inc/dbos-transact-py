@@ -10,6 +10,7 @@ from typing import Optional, TypedDict
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.exc import DBAPIError
 
 from dbos import DBOS, DBOSClient, DBOSConfig, EnqueueOptions, SetWorkflowID
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
@@ -565,3 +566,8 @@ def test_enqueue_with_priority(dbos: DBOS, client: DBOSClient) -> None:
 
     # Should be in the order of priority
     assert inorder_results == ["abc", "ghi", "def"]
+
+
+def test_client_bad_url() -> None:
+    with pytest.raises(DBAPIError) as exc_info:
+        DBOSClient("postgresql://postgres:fakepassword@localhost:5433/fake_database")

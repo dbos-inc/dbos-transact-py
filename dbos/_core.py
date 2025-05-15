@@ -20,8 +20,10 @@ from typing import (
     cast,
 )
 
+import psycopg
+
 from dbos._outcome import Immediate, NoResult, Outcome, Pending
-from dbos._utils import GlobalParams
+from dbos._utils import GlobalParams, retriable_postgres_exception
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 
@@ -931,12 +933,18 @@ def decorate_transaction(
                                 )
                                 break
                         except DBAPIError as dbapi_error:
-                            if dbapi_error.orig.sqlstate == "40001":  # type: ignore
+                            driver_error = cast(
+                                Optional[psycopg.OperationalError], dbapi_error.orig
+                            )
+                            if retriable_postgres_exception(dbapi_error) or (
+                                driver_error is not None
+                                and driver_error.sqlstate == "40001"
+                            ):
                                 # Retry on serialization failure
                                 span = ctx.get_current_span()
                                 if span:
                                     span.add_event(
-                                        "Transaction Serialization Failure",
+                                        "Transaction Failure",
                                         {"retry_wait_seconds": retry_wait_seconds},
                                     )
                                 time.sleep(retry_wait_seconds)

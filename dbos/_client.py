@@ -109,6 +109,7 @@ class DBOSClient:
             },
             sys_db_name=system_database,
         )
+        self._sys_db.check_connection()
         self._app_db = ApplicationDatabase(
             database_url=database_url,
             engine_kwargs={
@@ -231,7 +232,7 @@ class DBOSClient:
             "workflow_deadline_epoch_ms": None,
         }
         with self._sys_db.engine.begin() as conn:
-            self._sys_db.insert_workflow_status(
+            self._sys_db._insert_workflow_status(
                 status, conn, max_recovery_attempts=None
             )
         self._sys_db.send(status["workflow_uuid"], 0, destination_id, message, topic)

@@ -1,7 +1,9 @@
 import datetime
+import functools
 import json
 import logging
 import os
+import random
 import re
 import threading
 import time
@@ -17,6 +19,7 @@ from typing import (
     Sequence,
     TypedDict,
     TypeVar,
+    cast,
 )
 
 import psycopg
@@ -27,7 +30,7 @@ from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.sql import func
 
-from dbos._utils import INTERNAL_QUEUE_NAME
+from dbos._utils import INTERNAL_QUEUE_NAME, retriable_postgres_exception
 
 from . import _serialization
 from ._context import get_local_dbos_context
@@ -268,6 +271,51 @@ class ThreadSafeConditionDict:
                 dbos_logger.warning(f"Key {key} not found in condition dictionary.")
 
 
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def db_retry(
+    initial_backoff: float = 1.0, max_backoff: float = 60.0
+) -> Callable[[F], F]:
+    """
+    If a workflow encounters a database connection issue while performing an operation,
+    block the workflow and retry the operation until it reconnects and succeeds.
+
+    In other words, if DBOS loses its database connection, everything pauses until the connection is recovered,
+    trading off availability for correctness.
+    """
+
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            retries: int = 0
+            backoff: float = initial_backoff
+            while True:
+                try:
+                    return func(*args, **kwargs)
+                except DBAPIError as e:
+
+                    # Determine if this is a retriable exception
+                    if not retriable_postgres_exception(e):
+                        raise
+
+                    retries += 1
+                    # Calculate backoff with jitter
+                    actual_backoff: float = backoff * (0.5 + random.random())
+                    dbos_logger.warning(
+                        f"Database connection failed: {str(e)}. "
+                        f"Retrying in {actual_backoff:.2f}s (attempt {retries})"
+                    )
+                    # Sleep with backoff
+                    time.sleep(actual_backoff)
+                    # Increase backoff for next attempt (exponential)
+                    backoff = min(backoff * 2, max_backoff)
+
+        return cast(F, wrapper)
+
+    return decorator
+
+
 class SystemDatabase:
 
     def __init__(
@@ -365,7 +413,7 @@ class SystemDatabase:
             self.notification_conn.close()
         self.engine.dispose()
 
-    def insert_workflow_status(
+    def _insert_workflow_status(
         self,
         status: WorkflowStatusInternal,
         conn: sa.Connection,
@@ -474,53 +522,46 @@ class SystemDatabase:
 
         return wf_status, workflow_deadline_epoch_ms
 
+    @db_retry()
     def update_workflow_status(
         self,
         status: WorkflowStatusInternal,
-        *,
-        conn: Optional[sa.Connection] = None,
     ) -> None:
         if self._debug_mode:
             raise Exception("called update_workflow_status in debug mode")
         wf_status: WorkflowStatuses = status["status"]
-
-        cmd = (
-            pg.insert(SystemSchema.workflow_status)
-            .values(
-                workflow_uuid=status["workflow_uuid"],
-                status=status["status"],
-                name=status["name"],
-                class_name=status["class_name"],
-                config_name=status["config_name"],
-                output=status["output"],
-                error=status["error"],
-                executor_id=status["executor_id"],
-                application_version=status["app_version"],
-                application_id=status["app_id"],
-                authenticated_user=status["authenticated_user"],
-                authenticated_roles=status["authenticated_roles"],
-                assumed_role=status["assumed_role"],
-                queue_name=status["queue_name"],
-                recovery_attempts=(
-                    1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
-                ),
-            )
-            .on_conflict_do_update(
-                index_elements=["workflow_uuid"],
-                set_=dict(
+        with self.engine.begin() as c:
+            c.execute(
+                pg.insert(SystemSchema.workflow_status)
+                .values(
+                    workflow_uuid=status["workflow_uuid"],
                     status=status["status"],
+                    name=status["name"],
+                    class_name=status["class_name"],
+                    config_name=status["config_name"],
                     output=status["output"],
                     error=status["error"],
-                    updated_at=func.extract("epoch", func.now()) * 1000,
-                ),
+                    executor_id=status["executor_id"],
+                    application_version=status["app_version"],
+                    application_id=status["app_id"],
+                    authenticated_user=status["authenticated_user"],
+                    authenticated_roles=status["authenticated_roles"],
+                    assumed_role=status["assumed_role"],
+                    queue_name=status["queue_name"],
+                    recovery_attempts=(
+                        1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
+                    ),
+                )
+                .on_conflict_do_update(
+                    index_elements=["workflow_uuid"],
+                    set_=dict(
+                        status=status["status"],
+                        output=status["output"],
+                        error=status["error"],
+                        updated_at=func.extract("epoch", func.now()) * 1000,
+                    ),
+                )
             )
-        )
-
-        if conn is not None:
-            conn.execute(cmd)
-        else:
-            with self.engine.begin() as c:
-                c.execute(cmd)
 
     def cancel_workflow(
         self,
@@ -686,6 +727,7 @@ class SystemDatabase:
             )
         return forked_workflow_id
 
+    @db_retry()
     def get_workflow_status(
         self, workflow_uuid: str
     ) -> Optional[WorkflowStatusInternal]:
@@ -735,6 +777,7 @@ class SystemDatabase:
             }
             return status
 
+    @db_retry()
     def await_workflow_result(self, workflow_id: str) -> Any:
         while True:
             with self.engine.begin() as c:
@@ -761,7 +804,7 @@ class SystemDatabase:
                     pass  # CB: I guess we're assuming the WF will show up eventually.
             time.sleep(1)
 
-    def update_workflow_inputs(
+    def _update_workflow_inputs(
         self, workflow_uuid: str, inputs: str, conn: sa.Connection
     ) -> None:
         if self._debug_mode:
@@ -791,6 +834,7 @@ class SystemDatabase:
 
         return
 
+    @db_retry()
     def get_workflow_inputs(
         self, workflow_uuid: str
     ) -> Optional[_serialization.WorkflowInputs]:
@@ -1084,8 +1128,8 @@ class SystemDatabase:
                 for row in rows
             ]
 
-    def record_operation_result(
-        self, result: OperationResultInternal, conn: Optional[sa.Connection] = None
+    def _record_operation_result_txn(
+        self, result: OperationResultInternal, conn: sa.Connection
     ) -> None:
         if self._debug_mode:
             raise Exception("called record_operation_result in debug mode")
@@ -1100,16 +1144,18 @@ class SystemDatabase:
             error=error,
         )
         try:
-            if conn is not None:
-                conn.execute(sql)
-            else:
-                with self.engine.begin() as c:
-                    c.execute(sql)
+            conn.execute(sql)
         except DBAPIError as dbapi_error:
             if dbapi_error.orig.sqlstate == "23505":  # type: ignore
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
             raise
 
+    @db_retry()
+    def record_operation_result(self, result: OperationResultInternal) -> None:
+        with self.engine.begin() as c:
+            self._record_operation_result_txn(result, c)
+
+    @db_retry()
     def record_get_result(
         self, result_workflow_id: str, output: Optional[str], error: Optional[str]
     ) -> None:
@@ -1135,6 +1181,7 @@ class SystemDatabase:
         with self.engine.begin() as c:
             c.execute(sql)
 
+    @db_retry()
     def record_child_workflow(
         self,
         parentUUID: str,
@@ -1159,13 +1206,12 @@ class SystemDatabase:
                 raise DBOSWorkflowConflictIDError(parentUUID)
             raise
 
-    def check_operation_execution(
+    def _check_operation_execution_txn(
         self,
         workflow_id: str,
         function_id: int,
         function_name: str,
-        *,
-        conn: Optional[sa.Connection] = None,
+        conn: sa.Connection,
     ) -> Optional[RecordedResult]:
         # First query: Retrieve the workflow status
         workflow_status_sql = sa.select(
@@ -1183,13 +1229,8 @@ class SystemDatabase:
         )
 
         # Execute both queries
-        if conn is not None:
-            workflow_status_rows = conn.execute(workflow_status_sql).all()
-            operation_output_rows = conn.execute(operation_output_sql).all()
-        else:
-            with self.engine.begin() as c:
-                workflow_status_rows = c.execute(workflow_status_sql).all()
-                operation_output_rows = c.execute(operation_output_sql).all()
+        workflow_status_rows = conn.execute(workflow_status_sql).all()
+        operation_output_rows = conn.execute(operation_output_sql).all()
 
         # Check if the workflow exists
         assert (
@@ -1231,6 +1272,16 @@ class SystemDatabase:
         }
         return result
 
+    @db_retry()
+    def check_operation_execution(
+        self, workflow_id: str, function_id: int, function_name: str
+    ) -> Optional[RecordedResult]:
+        with self.engine.begin() as c:
+            return self._check_operation_execution_txn(
+                workflow_id, function_id, function_name, c
+            )
+
+    @db_retry()
     def check_child_workflow(
         self, workflow_uuid: str, function_id: int
     ) -> Optional[str]:
@@ -1248,6 +1299,7 @@ class SystemDatabase:
             return None
         return str(row[0])
 
+    @db_retry()
     def send(
         self,
         workflow_uuid: str,
@@ -1259,7 +1311,7 @@ class SystemDatabase:
         function_name = "DBOS.send"
         topic = topic if topic is not None else _dbos_null_topic
         with self.engine.begin() as c:
-            recorded_output = self.check_operation_execution(
+            recorded_output = self._check_operation_execution_txn(
                 workflow_uuid, function_id, function_name, conn=c
             )
             if self._debug_mode and recorded_output is None:
@@ -1297,8 +1349,9 @@ class SystemDatabase:
                 "output": None,
                 "error": None,
             }
-            self.record_operation_result(output, conn=c)
+            self._record_operation_result_txn(output, conn=c)
 
+    @db_retry()
     def recv(
         self,
         workflow_uuid: str,
@@ -1391,7 +1444,7 @@ class SystemDatabase:
             message: Any = None
             if len(rows) > 0:
                 message = _serialization.deserialize(rows[0][0])
-            self.record_operation_result(
+            self._record_operation_result_txn(
                 {
                     "workflow_uuid": workflow_uuid,
                     "function_id": function_id,
@@ -1455,13 +1508,14 @@ class SystemDatabase:
                             dbos_logger.error(f"Unknown channel: {channel}")
             except Exception as e:
                 if self._run_background_processes:
-                    dbos_logger.error(f"Notification listener error: {e}")
+                    dbos_logger.warning(f"Notification listener error: {e}")
                     time.sleep(1)
                     # Then the loop will try to reconnect and restart the listener
             finally:
                 if self.notification_conn is not None:
                     self.notification_conn.close()
 
+    @db_retry()
     def sleep(
         self,
         workflow_uuid: str,
@@ -1501,6 +1555,7 @@ class SystemDatabase:
             time.sleep(duration)
         return duration
 
+    @db_retry()
     def set_event(
         self,
         workflow_uuid: str,
@@ -1510,7 +1565,7 @@ class SystemDatabase:
     ) -> None:
         function_name = "DBOS.setEvent"
         with self.engine.begin() as c:
-            recorded_output = self.check_operation_execution(
+            recorded_output = self._check_operation_execution_txn(
                 workflow_uuid, function_id, function_name, conn=c
             )
             if self._debug_mode and recorded_output is None:
@@ -1542,8 +1597,9 @@ class SystemDatabase:
                 "output": None,
                 "error": None,
             }
-            self.record_operation_result(output, conn=c)
+            self._record_operation_result_txn(output, conn=c)
 
+    @db_retry()
     def get_event(
         self,
         target_uuid: str,
@@ -1634,7 +1690,7 @@ class SystemDatabase:
             )
         return value
 
-    def enqueue(
+    def _enqueue(
         self,
         workflow_id: str,
         queue_name: str,
@@ -1857,6 +1913,7 @@ class SystemDatabase:
             # Return the IDs of all functions we started
             return ret_ids
 
+    @db_retry()
     def remove_from_queue(self, workflow_id: str, queue: "Queue") -> None:
         if self._debug_mode:
             raise Exception("called remove_from_queue in debug mode")
@@ -1945,6 +2002,7 @@ class SystemDatabase:
             )
         return result
 
+    @db_retry()
     def init_workflow(
         self,
         status: WorkflowStatusInternal,
@@ -1957,23 +2015,31 @@ class SystemDatabase:
         Synchronously record the status and inputs for workflows in a single transaction
         """
         with self.engine.begin() as conn:
-            wf_status, workflow_deadline_epoch_ms = self.insert_workflow_status(
+            wf_status, workflow_deadline_epoch_ms = self._insert_workflow_status(
                 status, conn, max_recovery_attempts=max_recovery_attempts
             )
             # TODO: Modify the inputs if they were changed by `update_workflow_inputs`
-            self.update_workflow_inputs(status["workflow_uuid"], inputs, conn)
+            self._update_workflow_inputs(status["workflow_uuid"], inputs, conn)
 
             if (
                 status["queue_name"] is not None
                 and wf_status == WorkflowStatusString.ENQUEUED.value
             ):
-                self.enqueue(
+                self._enqueue(
                     status["workflow_uuid"],
                     status["queue_name"],
                     conn,
                     enqueue_options=enqueue_options,
                 )
         return wf_status, workflow_deadline_epoch_ms
+
+    def check_connection(self) -> None:
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(sa.text("SELECT 1")).fetchall()
+        except Exception as e:
+            dbos_logger.error(f"Error connecting to the DBOS system database: {e}")
+            raise
 
 
 def reset_system_database(postgres_db_url: sa.URL, sysdb_name: str) -> None:

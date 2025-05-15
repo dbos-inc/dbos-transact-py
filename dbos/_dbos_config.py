@@ -407,6 +407,7 @@ def configure_db_engine_parameters(
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,
+        "pool_pre_ping": True,
     }
     # If user-provided kwargs are present, use them instead
     user_kwargs = data.get("db_engine_kwargs")

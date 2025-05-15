@@ -12,7 +12,6 @@ from flask import Flask
 
 from dbos import DBOS, DBOSClient, DBOSConfig
 from dbos._app_db import ApplicationDatabase
-from dbos._dbos_config import translate_dbos_config_to_config_file
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 
@@ -95,27 +94,11 @@ def cleanup_test_databases(config: DBOSConfig, postgres_db_engine: sa.Engine) ->
     with postgres_db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(
-            sa.text(
-                f"""
-            SELECT pg_terminate_backend(pg_stat_activity.pid)
-            FROM pg_stat_activity
-            WHERE pg_stat_activity.datname = '{app_db_name}'
-            AND pid <> pg_backend_pid()
-        """
-            )
+            sa.text(f"DROP DATABASE IF EXISTS {app_db_name} WITH (FORCE)")
         )
-        connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}"))
         connection.execute(
-            sa.text(
-                f"""
-            SELECT pg_terminate_backend(pg_stat_activity.pid)
-            FROM pg_stat_activity
-            WHERE pg_stat_activity.datname = '{sys_db_name}'
-            AND pid <> pg_backend_pid()
-        """
-            )
+            sa.text(f"DROP DATABASE IF EXISTS {sys_db_name} WITH (FORCE)")
         )
-        connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sys_db_name}"))
 
     # Clean up environment variables
     os.environ.pop("DBOS__VMID") if "DBOS__VMID" in os.environ else None
@@ -142,7 +125,7 @@ def dbos(
 
 
 @pytest.fixture()
-def client(config: DBOSConfig) -> Generator[DBOSClient, Any, None]:
+def client(config: DBOSConfig, dbos: DBOS) -> Generator[DBOSClient, Any, None]:
     assert config["database_url"] is not None
     client = DBOSClient(config["database_url"])
     yield client
