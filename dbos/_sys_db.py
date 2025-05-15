@@ -1710,13 +1710,8 @@ class SystemDatabase:
                 if num_recent_queries >= queue.limiter["limit"]:
                     return []
 
-            # Dequeue functions eligible for this worker and ordered by the time at which they were enqueued.
-            # If there is a global or local concurrency limit N, select only the N oldest enqueued
-            # functions, else select all of them.
-
-            # First lets figure out how many tasks are eligible for dequeue.
-            # This means figuring out how many unstarted tasks are within the local and global concurrency limits
-            running_tasks_query = (
+            # Count how many workflows on this queue are currently PENDING both locally and globally.
+            pending_tasks_query = (
                 sa.select(
                     SystemSchema.workflow_status.c.executor_id,
                     sa.func.count().label("task_count"),
@@ -1730,41 +1725,37 @@ class SystemDatabase:
                 )
                 .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
                 .where(
-                    SystemSchema.workflow_queue.c.started_at_epoch_ms.isnot(
-                        None
-                    )  # Task is started
-                )
-                .where(
-                    SystemSchema.workflow_queue.c.completed_at_epoch_ms.is_(
-                        None
-                    )  # Task is not completed.
+                    SystemSchema.workflow_status.c.status
+                    == WorkflowStatusString.PENDING.value
                 )
                 .group_by(SystemSchema.workflow_status.c.executor_id)
             )
-            running_tasks_result = c.execute(running_tasks_query).fetchall()
-            running_tasks_result_dict = {row[0]: row[1] for row in running_tasks_result}
-            running_tasks_for_this_worker = running_tasks_result_dict.get(
-                executor_id, 0
-            )  # Get count for current executor
+            pending_workflows = c.execute(pending_tasks_query).fetchall()
+            pending_workflows_dict = {row[0]: row[1] for row in pending_workflows}
+            local_pending_workflows = pending_workflows_dict.get(executor_id, 0)
 
+            # Compute max_tasks, the number of workflows that can be dequeued given local and global concurrency limits,
             max_tasks = float("inf")
             if queue.worker_concurrency is not None:
-                max_tasks = max(
-                    0, queue.worker_concurrency - running_tasks_for_this_worker
-                )
-            if queue.concurrency is not None:
-                total_running_tasks = sum(running_tasks_result_dict.values())
-                # Queue global concurrency limit should always be >= running_tasks_count
-                # This should never happen but a check + warning doesn't hurt
-                if total_running_tasks > queue.concurrency:
+                # Print a warning if the local concurrency limit is violated
+                if local_pending_workflows > queue.worker_concurrency:
                     dbos_logger.warning(
-                        f"Total running tasks ({total_running_tasks}) exceeds the global concurrency limit ({queue.concurrency})"
+                        f"The number of local pending workflows ({local_pending_workflows}) on queue {queue.name} exceeds the local concurrency limit ({queue.worker_concurrency})"
                     )
-                available_tasks = max(0, queue.concurrency - total_running_tasks)
+                max_tasks = max(0, queue.worker_concurrency - local_pending_workflows)
+
+            if queue.concurrency is not None:
+                global_pending_workflows = sum(pending_workflows_dict.values())
+                # Print a warning if the global concurrency limit is violated
+                if global_pending_workflows > queue.concurrency:
+                    dbos_logger.warning(
+                        f"The total number of pending workflows ({global_pending_workflows}) on queue {queue.name} exceeds the global concurrency limit ({queue.concurrency})"
+                    )
+                available_tasks = max(0, queue.concurrency - global_pending_workflows)
                 max_tasks = min(max_tasks, available_tasks)
 
             # Retrieve the first max_tasks workflows in the queue.
-            # Only retrieve workflows of the appropriate version (or without version set)
+            # Only retrieve workflows of the local version (or without version set)
             query = (
                 sa.select(
                     SystemSchema.workflow_queue.c.workflow_uuid,
@@ -1777,8 +1768,10 @@ class SystemDatabase:
                     )
                 )
                 .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
-                .where(SystemSchema.workflow_queue.c.started_at_epoch_ms == None)
-                .where(SystemSchema.workflow_queue.c.completed_at_epoch_ms == None)
+                .where(
+                    SystemSchema.workflow_status.c.status
+                    == WorkflowStatusString.ENQUEUED.value
+                )
                 .where(
                     sa.or_(
                         SystemSchema.workflow_status.c.application_version
@@ -1807,20 +1800,16 @@ class SystemDatabase:
             ret_ids: list[str] = []
 
             for id in dequeued_ids:
-                # If we have a limiter, stop starting functions when the number
-                # of functions started this period exceeds the limit.
+                # If we have a limiter, stop dequeueing workflows when the number
+                # of workflows started this period exceeds the limit.
                 if queue.limiter is not None:
                     if len(ret_ids) + num_recent_queries >= queue.limiter["limit"]:
                         break
 
-                # To start a function, first set its status to PENDING and update its executor ID
-                res = c.execute(
+                # To start a workflow, first set its status to PENDING and update its executor ID
+                c.execute(
                     SystemSchema.workflow_status.update()
                     .where(SystemSchema.workflow_status.c.workflow_uuid == id)
-                    .where(
-                        SystemSchema.workflow_status.c.status
-                        == WorkflowStatusString.ENQUEUED.value
-                    )
                     .values(
                         status=WorkflowStatusString.PENDING.value,
                         application_version=app_version,
@@ -1843,16 +1832,15 @@ class SystemDatabase:
                         ),
                     )
                 )
-                if res.rowcount > 0:
-                    # Then give it a start time and assign the executor ID
-                    c.execute(
-                        SystemSchema.workflow_queue.update()
-                        .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
-                        .values(started_at_epoch_ms=start_time_ms)
-                    )
-                    ret_ids.append(id)
+                # Then give it a start time
+                c.execute(
+                    SystemSchema.workflow_queue.update()
+                    .where(SystemSchema.workflow_queue.c.workflow_uuid == id)
+                    .values(started_at_epoch_ms=start_time_ms)
+                )
+                ret_ids.append(id)
 
-            # If we have a limiter, garbage-collect all completed functions started
+            # If we have a limiter, garbage-collect all completed workflows started
             # before the period. If there's no limiter, there's no need--they were
             # deleted on completion.
             if queue.limiter is not None:
