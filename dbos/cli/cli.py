@@ -36,6 +36,7 @@ def _get_db_url(db_url: Optional[str]) -> str:
             "Missing database URL: please set it using the --db-url flag or the DBOS_DATABASE_URL environment variable."
         )
     assert is_valid_database_url(database_url)
+    return database_url
 
 
 def start_client(db_url: Optional[str] = None) -> DBOSClient:
