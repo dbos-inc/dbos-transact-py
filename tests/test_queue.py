@@ -1446,3 +1446,33 @@ def test_unsetting_timeout(dbos: DBOS) -> None:
     # Verify child two, which doesn't have a timeout, succeeds
     handle = DBOS.retrieve_workflow(child_two)
     assert handle.get_result() == child_two
+
+
+def test_queue_executor_id(dbos: DBOS) -> None:
+
+    queue = Queue("test-queue")
+
+    @DBOS.workflow()
+    def example_workflow() -> str:
+        return DBOS.workflow_id
+
+    # Set an executor ID
+    original_executor_id = str(uuid.uuid4())
+    GlobalParams.executor_id = original_executor_id
+
+    # Enqueue the workflow, validate its executor ID
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = queue.enqueue(example_workflow)
+    assert handle.get_result() == wfid
+    assert handle.get_status().executor_id == original_executor_id
+
+    # Set a new executor ID
+    new_executor_id = str(uuid.uuid4())
+    GlobalParams.executor_id = new_executor_id
+
+    # Re-enqueue the workflow, verify its executor ID does not change.
+    with SetWorkflowID(wfid):
+        handle = queue.enqueue(example_workflow)
+        assert handle.get_result() == wfid
+    assert handle.get_status().executor_id == original_executor_id
