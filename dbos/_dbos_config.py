@@ -445,12 +445,6 @@ def _app_name_to_db_name(app_name: str) -> str:
     return name if not name[0].isdigit() else f"_{name}"
 
 
-def set_env_vars(config: ConfigFile) -> None:
-    for env, value in config.get("env", {}).items():
-        if value is not None:
-            os.environ[env] = str(value)
-
-
 def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Load the DBOS configuration file and force the use of:
     # 1. The database url provided by DBOS_DATABASE_URL
