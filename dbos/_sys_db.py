@@ -425,6 +425,15 @@ class SystemDatabase:
         wf_status: WorkflowStatuses = status["status"]
         workflow_deadline_epoch_ms: Optional[int] = status["workflow_deadline_epoch_ms"]
 
+        # Values to update when a row already exists for this workflow
+        update_values = {
+            "recovery_attempts": SystemSchema.workflow_status.c.recovery_attempts + 1,
+            "updated_at": func.extract("epoch", func.now()) * 1000,
+        }
+        # Don't update an existing executor ID when enqueueing a workflow.
+        if wf_status != WorkflowStatusString.ENQUEUED.value:
+            update_values["executor_id"] = status["executor_id"]
+
         cmd = (
             pg.insert(SystemSchema.workflow_status)
             .values(
@@ -450,13 +459,7 @@ class SystemDatabase:
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
-                set_=dict(
-                    executor_id=status["executor_id"],
-                    recovery_attempts=(
-                        SystemSchema.workflow_status.c.recovery_attempts + 1
-                    ),
-                    updated_at=func.extract("epoch", func.now()) * 1000,
-                ),
+                set_=update_values,
             )
         )
 
