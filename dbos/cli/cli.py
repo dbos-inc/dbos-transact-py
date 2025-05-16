@@ -18,7 +18,7 @@ from dbos._debug import debug_workflow, parse_start_command
 
 from .._app_db import ApplicationDatabase
 from .._client import DBOSClient
-from .._dbos_config import _is_valid_app_name, load_config
+from .._dbos_config import _is_valid_app_name, is_valid_database_url, load_config
 from .._docker_pg_helper import start_docker_pg, stop_docker_pg
 from .._schemas.system_database import SystemSchema
 from .._sys_db import SystemDatabase, reset_system_database
@@ -35,7 +35,7 @@ def _get_db_url(db_url: Optional[str]) -> str:
         raise ValueError(
             "Missing database URL: please set it using the --db-url flag or the DBOS_DATABASE_URL environment variable."
         )
-    return database_url
+    assert is_valid_database_url(database_url)
 
 
 def start_client(db_url: Optional[str] = None) -> DBOSClient:
