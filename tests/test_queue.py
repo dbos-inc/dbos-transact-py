@@ -1448,12 +1448,12 @@ def test_unsetting_timeout(dbos: DBOS) -> None:
     assert handle.get_result() == child_two
 
 
-def test_queue_executor_id(dbos: DBOS):
+def test_queue_executor_id(dbos: DBOS) -> None:
 
     queue = Queue("test-queue")
 
     @DBOS.workflow()
-    def example_workflow():
+    def example_workflow() -> str:
         return DBOS.workflow_id
 
     # Set an executor ID

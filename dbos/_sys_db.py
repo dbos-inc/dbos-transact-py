@@ -426,7 +426,7 @@ class SystemDatabase:
         workflow_deadline_epoch_ms: Optional[int] = status["workflow_deadline_epoch_ms"]
 
         # Values to update when a row already exists for this workflow
-        update_values = {
+        update_values: dict[str, Any] = {
             "recovery_attempts": SystemSchema.workflow_status.c.recovery_attempts + 1,
             "updated_at": func.extract("epoch", func.now()) * 1000,
         }
