@@ -3,7 +3,7 @@ name: Run Chaos Tests
 on:
     schedule:
         # Runs every hour on the hour
-        - cron: '0 * * * *'
+        - cron: '0 */2 * * *'
     workflow_dispatch:
 
 jobs:
