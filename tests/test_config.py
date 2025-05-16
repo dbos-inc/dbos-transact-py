@@ -18,7 +18,6 @@ from dbos._dbos_config import (
     load_config,
     overwrite_config,
     process_config,
-    set_env_vars,
     translate_dbos_config_to_config_file,
 )
 from dbos._error import DBOSInitializationError
@@ -84,17 +83,11 @@ def test_load_valid_config_file(mocker):
                 - "python3 main.py"
             admin_port: 8001
         database_url: "postgres://user:dbos@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
-        env:
-            foo: ${BARBAR}
-            bazbaz: BAZBAZ
-            bob: ${BOBBOB}
-            test_number: 123
         telemetry:
             OTLPExporter:
                 logsEndpoint: 'fooLogs'
                 tracesEndpoint: 'fooTraces'
     """
-    os.environ["BARBAR"] = "FOOFOO"
     mocker.patch(
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
     )
@@ -105,15 +98,6 @@ def test_load_valid_config_file(mocker):
         configFile["database_url"]
         == f"postgres://user:dbos@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
     )
-    assert configFile["env"]["foo"] == "FOOFOO"
-    assert configFile["env"]["bob"] is None  # Unset environment variable
-    assert configFile["env"]["test_number"] == 123
-
-    set_env_vars(configFile)
-    assert os.environ["bazbaz"] == "BAZBAZ"
-    assert os.environ["foo"] == "FOOFOO"
-    assert os.environ["test_number"] == "123"
-    assert "bob" not in os.environ
 
     assert configFile["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["fooLogs"]
     assert configFile["telemetry"]["OTLPExporter"]["tracesEndpoint"] == ["fooTraces"]
@@ -817,8 +801,6 @@ def test_overwrite_config(mocker):
         OTLPExporter:
             logsEndpoint: thelogsendpoint
             tracesEndpoint:  thetracesendpoint
-    env:
-        KEY: "VALUE"
     runtimeConfig:
         start:
             - "a start command"
