@@ -92,7 +92,6 @@ from ._dbos_config import (
     DBOSConfig,
     overwrite_config,
     process_config,
-    set_env_vars,
     translate_dbos_config_to_config_file,
 )
 from ._error import (
@@ -329,7 +328,6 @@ class DBOS:
         else:
             raise ValueError("No valid configuration was loaded.")
 
-        set_env_vars(self._config)
         config_logger(self._config)
         dbos_tracer.config(self._config)
         dbos_logger.info(f"Initializing DBOS (v{GlobalParams.dbos_version})")
