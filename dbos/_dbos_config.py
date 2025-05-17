@@ -329,17 +329,9 @@ def process_config(
     if data.get("database_url") is not None and data["database_url"] != "":
         # Parse the db string and check required fields
         assert data["database_url"] is not None
+        assert is_valid_database_url(data["database_url"])
+
         url = make_url(data["database_url"])
-        required_fields = [
-            ("username", "Username must be specified in the connection URL"),
-            ("password", "Password must be specified in the connection URL"),
-            ("host", "Host must be specified in the connection URL"),
-            ("database", "Database name must be specified in the connection URL"),
-        ]
-        for field_name, error_message in required_fields:
-            field_value = getattr(url, field_name, None)
-            if not field_value:
-                raise DBOSInitializationError(error_message)
 
         if not data["database"].get("sys_db_name"):
             assert url.database is not None
@@ -385,6 +377,9 @@ def process_config(
     if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
         log_url = make_url(data["database_url"]).render_as_string(hide_password=True)
         print(f"[bold blue]Using database connection string: {log_url}[/bold blue]")
+        print(
+            f"[bold blue]Database engine parameters: {data['database']['db_engine_kwargs']}[/bold blue]"
+        )
 
     # Return data as ConfigFile type
     return data
@@ -430,6 +425,21 @@ def configure_db_engine_parameters(
 
     data["db_engine_kwargs"] = app_engine_kwargs
     data["sys_db_engine_kwargs"] = system_engine_kwargs
+
+
+def is_valid_database_url(database_url: str) -> bool:
+    url = make_url(database_url)
+    required_fields = [
+        ("username", "Username must be specified in the connection URL"),
+        ("password", "Password must be specified in the connection URL"),
+        ("host", "Host must be specified in the connection URL"),
+        ("database", "Database name must be specified in the connection URL"),
+    ]
+    for field_name, error_message in required_fields:
+        field_value = getattr(url, field_name, None)
+        if not field_value:
+            raise DBOSInitializationError(error_message)
+    return True
 
 
 def _is_valid_app_name(name: str) -> bool:

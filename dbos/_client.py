@@ -3,8 +3,6 @@ import sys
 import uuid
 from typing import Any, Generic, List, Optional, TypedDict, TypeVar
 
-from sqlalchemy import URL
-
 from dbos._app_db import ApplicationDatabase
 from dbos._context import MaxPriority, MinPriority
 
@@ -15,6 +13,7 @@ else:
 
 from dbos import _serialization
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
+from dbos._dbos_config import is_valid_database_url
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._serialization import WorkflowInputs
@@ -99,6 +98,7 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
 
 class DBOSClient:
     def __init__(self, database_url: str, *, system_database: Optional[str] = None):
+        assert is_valid_database_url(database_url)
         # We only create database connections but do not run migrations
         self._sys_db = SystemDatabase(
             database_url=database_url,
