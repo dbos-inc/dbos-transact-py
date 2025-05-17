@@ -377,6 +377,9 @@ def process_config(
     if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
         log_url = make_url(data["database_url"]).render_as_string(hide_password=True)
         print(f"[bold blue]Using database connection string: {log_url}[/bold blue]")
+        print(
+            f"[bold blue]Database engine parameters: {data['database']['db_engine_kwargs']}[/bold blue]"
+        )
 
     # Return data as ConfigFile type
     return data
