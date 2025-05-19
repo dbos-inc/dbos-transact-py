@@ -62,13 +62,13 @@ class PostgresChaosMonkey:
     def start(self) -> None:
         def _chaos_thread() -> None:
             while not self.stop_event.is_set():
-                wait_time = random.uniform(5, 20)
+                wait_time = random.uniform(5, 40)
                 if not self.stop_event.wait(wait_time):
                     print(
                         f"🐒 ChaosMonkey strikes after {wait_time:.2f} seconds! Restarting Postgres..."
                     )
                     stop_docker_pg()
-                    down_time = random.uniform(0, 5)
+                    down_time = random.uniform(0, 2)
                     time.sleep(down_time)
                     start_docker_pg()
 
