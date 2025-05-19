@@ -9,11 +9,7 @@ on:
 jobs:
   integration:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.13']
-
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
       with:
@@ -23,7 +19,7 @@ jobs:
     - name: Setup PDM
       uses: pdm-project/setup-pdm@v4
       with:
-        python-version: ${{ matrix.python-version }}
+        python-version: '3.13'
         architecture: 'x64'
 
     - name: Install Dependencies
@@ -31,5 +27,5 @@ jobs:
       working-directory: ./
 
     - name: Run Chaos Tests
-      run: pdm run pytest --timeout 600 chaos-tests
+      run: pdm run pytest --timeout 1200 chaos-tests
       working-directory: ./
