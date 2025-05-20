@@ -42,7 +42,7 @@ def test_recv(dbos: DBOS) -> None:
     def recv_workflow() -> Any:
         return DBOS.recv(topic, timeout_seconds=10)
 
-    num_workflows = 5000
+    num_workflows = 10000
 
     for i in range(num_workflows):
         handle = DBOS.start_workflow(recv_workflow)

@@ -1385,35 +1385,35 @@ class SystemDatabase:
         payload = f"{workflow_uuid}::{topic}"
         condition = threading.Condition()
         # Must acquire first before adding to the map. Otherwise, the notification listener may notify it before the condition is acquired and waited.
-        condition.acquire()
-        success, _ = self.notifications_map.set(payload, condition)
-        if not success:
-            # This should not happen, but if it does, it means the workflow is executed concurrently.
+        try:
+            condition.acquire()
+            success, _ = self.notifications_map.set(payload, condition)
+            if not success:
+                # This should not happen, but if it does, it means the workflow is executed concurrently.
+                raise DBOSWorkflowConflictIDError(workflow_uuid)
+
+            # Check if the key is already in the database. If not, wait for the notification.
+            init_recv: Sequence[Any]
+            with self.engine.begin() as c:
+                init_recv = c.execute(
+                    sa.select(
+                        SystemSchema.notifications.c.topic,
+                    ).where(
+                        SystemSchema.notifications.c.destination_uuid == workflow_uuid,
+                        SystemSchema.notifications.c.topic == topic,
+                    )
+                ).fetchall()
+
+            if len(init_recv) == 0:
+                # Wait for the notification
+                # Support OAOO sleep
+                actual_timeout = self.sleep(
+                    workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
+                )
+                condition.wait(timeout=actual_timeout)
+        finally:
             condition.release()
             self.notifications_map.pop(payload)
-            raise DBOSWorkflowConflictIDError(workflow_uuid)
-
-        # Check if the key is already in the database. If not, wait for the notification.
-        init_recv: Sequence[Any]
-        with self.engine.begin() as c:
-            init_recv = c.execute(
-                sa.select(
-                    SystemSchema.notifications.c.topic,
-                ).where(
-                    SystemSchema.notifications.c.destination_uuid == workflow_uuid,
-                    SystemSchema.notifications.c.topic == topic,
-                )
-            ).fetchall()
-
-        if len(init_recv) == 0:
-            # Wait for the notification
-            # Support OAOO sleep
-            actual_timeout = self.sleep(
-                workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
-            )
-            condition.wait(timeout=actual_timeout)
-        condition.release()
-        self.notifications_map.pop(payload)
 
         # Transactionally consume and return the message if it's in the database, otherwise return null.
         with self.engine.begin() as c:
