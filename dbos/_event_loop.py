@@ -1,6 +1,5 @@
 import asyncio
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Coroutine, Optional, TypeVar
 
 
@@ -34,17 +33,15 @@ class BackgroundEventLoop:
 
     def _run_event_loop(self) -> None:
         self._loop = asyncio.new_event_loop()
-        with ThreadPoolExecutor(max_workers=64) as thread_pool:
-            self._loop.set_default_executor(thread_pool)
-            asyncio.set_event_loop(self._loop)
+        asyncio.set_event_loop(self._loop)
 
-            self._running = True
-            self._ready.set()  # Signal that the loop is ready
+        self._running = True
+        self._ready.set()  # Signal that the loop is ready
 
-            try:
-                self._loop.run_forever()
-            finally:
-                self._loop.close()
+        try:
+            self._loop.run_forever()
+        finally:
+            self._loop.close()
 
     async def _shutdown(self) -> None:
         if self._loop is None:
