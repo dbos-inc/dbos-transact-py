@@ -1764,12 +1764,15 @@ class SystemDatabase:
                         SystemSchema.workflow_status.c.application_version.is_(None),
                     )
                 )
-                .order_by(
+                .with_for_update(nowait=True)  # Error out early
+            )
+            if queue.priority_enabled:
+                query = query.order_by(
                     SystemSchema.workflow_status.c.priority.asc(),
                     SystemSchema.workflow_status.c.created_at.asc(),
                 )
-                .with_for_update(nowait=True)  # Error out early
-            )
+            else:
+                query = query.order_by(SystemSchema.workflow_status.c.created_at.asc())
             # Apply limit only if max_tasks is finite
             if max_tasks != float("inf"):
                 query = query.limit(int(max_tasks))
