@@ -62,7 +62,6 @@ class SystemSchema:
         Index("workflow_status_created_at_index", "created_at"),
         Index("workflow_status_executor_id_index", "executor_id"),
         Index("workflow_status_status_index", "status"),
-        Index("workflow_status_queue_name_index", "queue_name"),
         UniqueConstraint(
             "queue_name",
             "deduplication_id",

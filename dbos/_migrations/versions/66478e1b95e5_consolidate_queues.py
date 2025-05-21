@@ -48,25 +48,14 @@ def upgrade() -> None:
         schema="dbos",
     )
 
-    # Add indexes on status and queue_name
+    # Add index on status field
     op.create_index(
         "workflow_status_status_index", "workflow_status", ["status"], schema="dbos"
-    )
-
-    op.create_index(
-        "workflow_status_queue_name_index",
-        "workflow_status",
-        ["queue_name"],
-        schema="dbos",
     )
 
 
 def downgrade() -> None:
     # Drop indexes
-    op.drop_index(
-        "workflow_status_queue_name_index", table_name="workflow_status", schema="dbos"
-    )
-
     op.drop_index(
         "workflow_status_status_index", table_name="workflow_status", schema="dbos"
     )
