@@ -1781,14 +1781,8 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.executor_id,
                     sa.func.count().label("task_count"),
                 )
-                .select_from(
-                    SystemSchema.workflow_queue.join(
-                        SystemSchema.workflow_status,
-                        SystemSchema.workflow_queue.c.workflow_uuid
-                        == SystemSchema.workflow_status.c.workflow_uuid,
-                    )
-                )
-                .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
+                .select_from(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.queue_name == queue.name)
                 .where(
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value
@@ -1823,16 +1817,10 @@ class SystemDatabase:
             # Only retrieve workflows of the local version (or without version set)
             query = (
                 sa.select(
-                    SystemSchema.workflow_queue.c.workflow_uuid,
+                    SystemSchema.workflow_status.c.workflow_uuid,
                 )
-                .select_from(
-                    SystemSchema.workflow_queue.join(
-                        SystemSchema.workflow_status,
-                        SystemSchema.workflow_queue.c.workflow_uuid
-                        == SystemSchema.workflow_status.c.workflow_uuid,
-                    )
-                )
-                .where(SystemSchema.workflow_queue.c.queue_name == queue.name)
+                .select_from(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.queue_name == queue.name)
                 .where(
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.ENQUEUED.value
@@ -1845,8 +1833,8 @@ class SystemDatabase:
                     )
                 )
                 .order_by(
-                    SystemSchema.workflow_queue.c.priority.asc(),
-                    SystemSchema.workflow_queue.c.created_at_epoch_ms.asc(),
+                    SystemSchema.workflow_status.c.priority.asc(),
+                    SystemSchema.workflow_status.c.created_at.asc(),
                 )
                 .with_for_update(nowait=True)  # Error out early
             )
