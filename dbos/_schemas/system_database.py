@@ -1,6 +1,5 @@
 from sqlalchemy import (
     BigInteger,
-    Boolean,
     Column,
     ForeignKey,
     Index,
@@ -57,8 +56,18 @@ class SystemSchema:
         Column("queue_name", Text, nullable=True),
         Column("workflow_timeout_ms", BigInteger, nullable=True),
         Column("workflow_deadline_epoch_ms", BigInteger, nullable=True),
+        Column("started_at_epoch_ms", BigInteger(), nullable=True),
+        Column("deduplication_id", Text(), nullable=True),
+        Column("priority", Integer(), nullable=False, server_default=text("'0'::int")),
         Index("workflow_status_created_at_index", "created_at"),
         Index("workflow_status_executor_id_index", "executor_id"),
+        Index("workflow_status_status_index", "status"),
+        Index("workflow_status_queue_name_index", "queue_name"),
+        UniqueConstraint(
+            "queue_name",
+            "deduplication_id",
+            name="uq_workflow_status_queue_name_dedup_id",
+        ),
     )
 
     operation_outputs = Table(
