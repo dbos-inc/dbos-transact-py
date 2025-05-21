@@ -532,44 +532,28 @@ class SystemDatabase:
         return wf_status, workflow_deadline_epoch_ms
 
     @db_retry()
-    def update_workflow_status(
+    def update_workflow_outcome(
         self,
-        status: WorkflowStatusInternal,
+        workflow_id: str,
+        status: WorkflowStatuses,
+        *,
+        output: Optional[str] = None,
+        error: Optional[str] = None,
     ) -> None:
         if self._debug_mode:
             raise Exception("called update_workflow_status in debug mode")
-        wf_status: WorkflowStatuses = status["status"]
         with self.engine.begin() as c:
             c.execute(
-                pg.insert(SystemSchema.workflow_status)
+                sa.update(SystemSchema.workflow_status)
                 .values(
-                    workflow_uuid=status["workflow_uuid"],
-                    status=status["status"],
-                    name=status["name"],
-                    class_name=status["class_name"],
-                    config_name=status["config_name"],
-                    output=status["output"],
-                    error=status["error"],
-                    executor_id=status["executor_id"],
-                    application_version=status["app_version"],
-                    application_id=status["app_id"],
-                    authenticated_user=status["authenticated_user"],
-                    authenticated_roles=status["authenticated_roles"],
-                    assumed_role=status["assumed_role"],
-                    queue_name=status["queue_name"],
-                    recovery_attempts=(
-                        1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
-                    ),
+                    status=status,
+                    output=output,
+                    error=error,
+                    # As the workflow is complete, remove its deduplication ID
+                    deduplication_id=None,
+                    updated_at=func.extract("epoch", func.now()) * 1000,
                 )
-                .on_conflict_do_update(
-                    index_elements=["workflow_uuid"],
-                    set_=dict(
-                        status=status["status"],
-                        output=status["output"],
-                        error=status["error"],
-                        updated_at=func.extract("epoch", func.now()) * 1000,
-                    ),
-                )
+                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
             )
 
     def cancel_workflow(

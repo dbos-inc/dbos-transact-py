@@ -92,31 +92,7 @@ def test_endpoint_recovery(dbos_flask: Tuple[DBOS, Flask]) -> None:
     assert response.json.get("id2") != wfuuid
 
     # Change the workflow status to pending
-    dbos._sys_db.update_workflow_status(
-        {
-            "workflow_uuid": wfuuid,
-            "status": "PENDING",
-            "name": test_workflow.__qualname__,
-            "class_name": None,
-            "config_name": None,
-            "output": None,
-            "error": None,
-            "executor_id": None,
-            "app_id": None,
-            "app_version": None,
-            "recovery_attempts": None,
-            "authenticated_user": None,
-            "authenticated_roles": None,
-            "assumed_role": None,
-            "queue_name": None,
-            "created_at": None,
-            "updated_at": None,
-            "workflow_timeout_ms": None,
-            "workflow_deadline_epoch_ms": None,
-            "deduplication_id": None,
-            "priority": 0,
-        }
-    )
+    dbos._sys_db.update_workflow_outcome(wfuuid, "PENDING")
 
     # Recovery should execute the workflow again but skip the transaction
     workflow_handles = DBOS._recover_pending_workflows()

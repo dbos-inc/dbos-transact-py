@@ -205,31 +205,7 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
     for evt in dbos.poller_stop_events:
         evt.set()
 
-    dbos._sys_db.update_workflow_status(
-        {
-            "workflow_uuid": workflow_id,
-            "status": "PENDING",
-            "name": test_workflow.__qualname__,
-            "class_name": None,
-            "config_name": None,
-            "output": None,
-            "error": None,
-            "executor_id": None,
-            "app_id": None,
-            "app_version": None,
-            "recovery_attempts": None,
-            "authenticated_user": None,
-            "authenticated_roles": None,
-            "assumed_role": None,
-            "queue_name": None,
-            "created_at": None,
-            "updated_at": None,
-            "workflow_timeout_ms": None,
-            "workflow_deadline_epoch_ms": None,
-            "deduplication_id": None,
-            "priority": 0,
-        }
-    )
+    dbos._sys_db.update_workflow_outcome(workflow_id, "PENDING")
 
     workflow_handles = DBOS._recover_pending_workflows()
     assert len(workflow_handles) == 1
