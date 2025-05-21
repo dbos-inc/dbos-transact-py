@@ -302,7 +302,6 @@ def _init_workflow(
         status,
         _serialization.serialize_args(inputs),
         max_recovery_attempts=max_recovery_attempts,
-        enqueue_options=enqueue_options,
     )
 
     if workflow_deadline_epoch_ms is not None:
@@ -355,9 +354,6 @@ def _get_wf_invoke_func(
         try:
             output = func()
             if not dbos.debug_mode:
-                if status["queue_name"] is not None:
-                    queue = dbos._registry.queue_info_map[status["queue_name"]]
-                    dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
                 dbos._sys_db.update_workflow_outcome(
                     status["workflow_uuid"],
                     "SUCCESS",
@@ -372,9 +368,6 @@ def _get_wf_invoke_func(
             raise
         except Exception as error:
             if not dbos.debug_mode:
-                if status["queue_name"] is not None:
-                    queue = dbos._registry.queue_info_map[status["queue_name"]]
-                    dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
                 dbos._sys_db.update_workflow_outcome(
                     status["workflow_uuid"],
                     "ERROR",

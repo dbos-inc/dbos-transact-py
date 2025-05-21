@@ -180,7 +180,6 @@ class DBOSClient:
             status,
             _serialization.serialize_args(inputs),
             max_recovery_attempts=None,
-            enqueue_options=enqueue_options_internal,
         )
         return workflow_id
 
