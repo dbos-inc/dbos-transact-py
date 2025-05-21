@@ -1833,6 +1833,7 @@ class SystemDatabase:
             res = c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .where(SystemSchema.workflow_status.c.queue_name.isnot(None))
                 .where(
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value
