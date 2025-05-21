@@ -471,7 +471,19 @@ class SystemDatabase:
 
         cmd = cmd.returning(SystemSchema.workflow_status.c.recovery_attempts, SystemSchema.workflow_status.c.status, SystemSchema.workflow_status.c.workflow_deadline_epoch_ms, SystemSchema.workflow_status.c.name, SystemSchema.workflow_status.c.class_name, SystemSchema.workflow_status.c.config_name, SystemSchema.workflow_status.c.queue_name)  # type: ignore
 
-        results = conn.execute(cmd)
+        try:
+            results = conn.execute(cmd)
+        except DBAPIError as dbapi_error:
+            # Unique constraint violation for the deduplication ID
+            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
+                assert (
+                    status["deduplication_id"] is not None
+                ), f"deduplication_id should not be None. Workflow ID: {status["workflow_uuid"]}, Queue name: {status["queue_name"]}."
+                raise DBOSQueueDeduplicatedError(
+                    status["workflow_uuid"],
+                    status["queue_name"],
+                    status["deduplication_id"],
+                )
         row = results.fetchone()
         if row is not None:
             # Check the started workflow matches the expected name, class_name, config_name, and queue_name
