@@ -951,36 +951,39 @@ class SystemDatabase:
         """
         Retrieve a list of queued workflows result and inputs based on the input criteria. The result is a list of external-facing workflow status objects.
         """
-        query = sa.select(
-            SystemSchema.workflow_status.c.workflow_uuid,
-            SystemSchema.workflow_status.c.status,
-            SystemSchema.workflow_status.c.name,
-            SystemSchema.workflow_status.c.recovery_attempts,
-            SystemSchema.workflow_status.c.config_name,
-            SystemSchema.workflow_status.c.class_name,
-            SystemSchema.workflow_status.c.authenticated_user,
-            SystemSchema.workflow_status.c.authenticated_roles,
-            SystemSchema.workflow_status.c.assumed_role,
-            SystemSchema.workflow_status.c.queue_name,
-            SystemSchema.workflow_status.c.executor_id,
-            SystemSchema.workflow_status.c.created_at,
-            SystemSchema.workflow_status.c.updated_at,
-            SystemSchema.workflow_status.c.application_version,
-            SystemSchema.workflow_status.c.application_id,
-            SystemSchema.workflow_inputs.c.inputs,
-            SystemSchema.workflow_status.c.output,
-            SystemSchema.workflow_status.c.error,
-            SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
-            SystemSchema.workflow_status.c.workflow_timeout_ms,
-        ).select_from(
-            SystemSchema.workflow_queue.join(
-                SystemSchema.workflow_status,
-                SystemSchema.workflow_queue.c.workflow_uuid
-                == SystemSchema.workflow_status.c.workflow_uuid,
-            ).join(
+        query = (
+            sa.select(
+                SystemSchema.workflow_status.c.workflow_uuid,
+                SystemSchema.workflow_status.c.status,
+                SystemSchema.workflow_status.c.name,
+                SystemSchema.workflow_status.c.recovery_attempts,
+                SystemSchema.workflow_status.c.config_name,
+                SystemSchema.workflow_status.c.class_name,
+                SystemSchema.workflow_status.c.authenticated_user,
+                SystemSchema.workflow_status.c.authenticated_roles,
+                SystemSchema.workflow_status.c.assumed_role,
+                SystemSchema.workflow_status.c.queue_name,
+                SystemSchema.workflow_status.c.executor_id,
+                SystemSchema.workflow_status.c.created_at,
+                SystemSchema.workflow_status.c.updated_at,
+                SystemSchema.workflow_status.c.application_version,
+                SystemSchema.workflow_status.c.application_id,
+                SystemSchema.workflow_inputs.c.inputs,
+                SystemSchema.workflow_status.c.output,
+                SystemSchema.workflow_status.c.error,
+                SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
+                SystemSchema.workflow_status.c.workflow_timeout_ms,
+            )
+            .join(
                 SystemSchema.workflow_inputs,
-                SystemSchema.workflow_queue.c.workflow_uuid
+                SystemSchema.workflow_status.c.workflow_uuid
                 == SystemSchema.workflow_inputs.c.workflow_uuid,
+            )
+            .where(
+                sa.and_(
+                    SystemSchema.workflow_status.c.queue_name.isnot(None),
+                    SystemSchema.workflow_status.c.status.in_(["ENQUEUED", "PENDING"]),
+                )
             )
         )
         if input["sort_desc"]:
@@ -993,7 +996,7 @@ class SystemDatabase:
 
         if input.get("queue_name"):
             query = query.where(
-                SystemSchema.workflow_queue.c.queue_name == input["queue_name"]
+                SystemSchema.workflow_status.c.queue_name == input["queue_name"]
             )
 
         if input.get("status"):

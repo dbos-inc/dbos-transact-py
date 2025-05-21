@@ -176,7 +176,18 @@ def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
     success = False
     for i in range(max_tries):
         with dbos._sys_db.engine.begin() as c:
-            query = sa.select(sa.func.count()).select_from(SystemSchema.workflow_queue)
+            query = (
+                sa.select(sa.func.count())
+                .select_from(SystemSchema.workflow_status)
+                .where(
+                    sa.and_(
+                        SystemSchema.workflow_status.c.queue_name.isnot(None),
+                        SystemSchema.workflow_status.c.status.in_(
+                            ["ENQUEUED", "PENDING"]
+                        ),
+                    )
+                )
+            )
             row = c.execute(query).fetchone()
             assert row is not None
             count = row[0]
