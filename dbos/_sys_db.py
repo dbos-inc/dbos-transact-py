@@ -136,13 +136,17 @@ class WorkflowStatusInternal(TypedDict):
     # The deadline of a workflow, computed by adding its timeout to its start time.
     # Deadlines propagate to children. When the deadline is reached, the workflow is cancelled.
     workflow_deadline_epoch_ms: Optional[int]
+    # Unique ID for deduplication on a queue
+    deduplication_id: Optional[str]
+    # Priority of the workflow on the queue, starting from 1 ~ 2,147,483,647. Default 0 (highest priority).
+    priority: int
 
 
 class EnqueueOptionsInternal(TypedDict):
-    deduplication_id: Optional[str]  # Unique ID for deduplication on a queue
-    priority: Optional[
-        int
-    ]  # Priority of the workflow on the queue, starting from 1 ~ 2,147,483,647. Default 0 (highest priority).
+    # Unique ID for deduplication on a queue
+    deduplication_id: Optional[str]
+    # Priority of the workflow on the queue, starting from 1 ~ 2,147,483,647. Default 0 (highest priority).
+    priority: Optional[int]
 
 
 class RecordedResult(TypedDict):
@@ -456,6 +460,8 @@ class SystemDatabase:
                 ),
                 workflow_timeout_ms=status["workflow_timeout_ms"],
                 workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
+                deduplication_id=status["deduplication_id"],
+                priority=status["priority"],
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
@@ -753,6 +759,8 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.application_id,
                     SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
                     SystemSchema.workflow_status.c.workflow_timeout_ms,
+                    SystemSchema.workflow_status.c.deduplication_id,
+                    SystemSchema.workflow_status.c.priority,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -777,6 +785,8 @@ class SystemDatabase:
                 "app_id": row[13],
                 "workflow_deadline_epoch_ms": row[14],
                 "workflow_timeout_ms": row[15],
+                "deduplication_id": row[16],
+                "priority": row[17],
             }
             return status
 

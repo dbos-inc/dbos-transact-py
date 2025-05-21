@@ -163,6 +163,12 @@ class DBOSClient:
                 int(workflow_timeout * 1000) if workflow_timeout is not None else None
             ),
             "workflow_deadline_epoch_ms": None,
+            "deduplication_id": enqueue_options_internal["deduplication_id"],
+            "priority": (
+                enqueue_options_internal["priority"]
+                if enqueue_options_internal["priority"] is not None
+                else 0
+            ),
         }
 
         inputs: WorkflowInputs = {
@@ -230,6 +236,8 @@ class DBOSClient:
             "app_version": None,
             "workflow_timeout_ms": None,
             "workflow_deadline_epoch_ms": None,
+            "deduplication_id": None,
+            "priority": 0,
         }
         with self._sys_db.engine.begin() as conn:
             self._sys_db._insert_workflow_status(

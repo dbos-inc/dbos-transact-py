@@ -279,6 +279,18 @@ def _init_workflow(
         "updated_at": None,
         "workflow_timeout_ms": workflow_timeout_ms,
         "workflow_deadline_epoch_ms": workflow_deadline_epoch_ms,
+        "deduplication_id": (
+            enqueue_options["deduplication_id"] if enqueue_options is not None else None
+        ),
+        "priority": (
+            (
+                enqueue_options["priority"]
+                if enqueue_options["priority"] is not None
+                else 0
+            )
+            if enqueue_options is not None
+            else 0
+        ),
     }
 
     # If we have a class name, the first arg is the instance and do not serialize
