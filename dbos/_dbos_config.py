@@ -91,7 +91,7 @@ class ConfigFile(TypedDict, total=False):
     Data structure containing the DBOS Configuration.
 
     This configuration data is typically loaded from `dbos-config.yaml`.
-    See `https://docs.dbos.dev/api-reference/configuration`_
+    See `https://docs.dbos.dev/python/reference/configuration#dbos-configuration-file`
 
     Attributes:
         name (str): Application name
