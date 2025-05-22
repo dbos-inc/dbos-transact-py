@@ -1707,27 +1707,27 @@ class SystemDatabase:
                 if num_recent_queries >= queue.limiter["limit"]:
                     return []
 
-            # Count how many workflows on this queue are currently PENDING both locally and globally.
-            pending_tasks_query = (
-                sa.select(
-                    SystemSchema.workflow_status.c.executor_id,
-                    sa.func.count().label("task_count"),
-                )
-                .select_from(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.queue_name == queue.name)
-                .where(
-                    SystemSchema.workflow_status.c.status
-                    == WorkflowStatusString.PENDING.value
-                )
-                .group_by(SystemSchema.workflow_status.c.executor_id)
-            )
-            pending_workflows = c.execute(pending_tasks_query).fetchall()
-            pending_workflows_dict = {row[0]: row[1] for row in pending_workflows}
-            local_pending_workflows = pending_workflows_dict.get(executor_id, 0)
-
             # Compute max_tasks, the number of workflows that can be dequeued given local and global concurrency limits,
             max_tasks = float("inf")
             if queue.worker_concurrency is not None or queue.concurrency is not None:
+                # Count how many workflows on this queue are currently PENDING both locally and globally.
+                pending_tasks_query = (
+                    sa.select(
+                        SystemSchema.workflow_status.c.executor_id,
+                        sa.func.count().label("task_count"),
+                    )
+                    .select_from(SystemSchema.workflow_status)
+                    .where(SystemSchema.workflow_status.c.queue_name == queue.name)
+                    .where(
+                        SystemSchema.workflow_status.c.status
+                        == WorkflowStatusString.PENDING.value
+                    )
+                    .group_by(SystemSchema.workflow_status.c.executor_id)
+                )
+                pending_workflows = c.execute(pending_tasks_query).fetchall()
+                pending_workflows_dict = {row[0]: row[1] for row in pending_workflows}
+                local_pending_workflows = pending_workflows_dict.get(executor_id, 0)
+
                 if queue.worker_concurrency is not None:
                     # Print a warning if the local concurrency limit is violated
                     if local_pending_workflows > queue.worker_concurrency:
