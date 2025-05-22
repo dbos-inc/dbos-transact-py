@@ -36,10 +36,6 @@ def test_systemdb_migration(dbos: DBOS) -> None:
         result = connection.execute(sql)
         assert result.fetchall() == []
 
-        sql = SystemSchema.scheduler_state.select()
-        result = connection.execute(sql)
-        assert result.fetchall() == []
-
     # Test migrating down
     rollback_system_db(
         sysdb_url=dbos._sys_db.engine.url.render_as_string(hide_password=False)

@@ -1239,7 +1239,7 @@ async def test_queue_deduplication_async(dbos: DBOS) -> None:
 
 def test_priority_queue(dbos: DBOS) -> None:
     # Make sure that we can enqueue workflows with different priorities correctly
-    queue = Queue("test_queue_priority", 1)
+    queue = Queue("test_queue_priority", 1, priority_enabled=True)
     child_queue = Queue("test_queue_child")
 
     workflow_event = threading.Event()
@@ -1293,7 +1293,7 @@ def test_priority_queue(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_priority_queue_async(dbos: DBOS) -> None:
     # Make sure that we can enqueue workflows with different priorities correctly
-    queue = Queue("test_queue_priority_async", 1)
+    queue = Queue("test_queue_priority_async", 1, priority_enabled=True)
     child_queue = Queue("test_queue_child_async")
 
     workflow_event = asyncio.Event()

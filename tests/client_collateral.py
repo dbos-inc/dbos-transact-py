@@ -11,7 +11,7 @@ class Person(TypedDict):
 
 
 queue = Queue("test_queue")
-inorder_queue = Queue("inorder_queue", 1)
+inorder_queue = Queue("inorder_queue", 1, priority_enabled=True)
 inorder_results: List[str] = []
 
 

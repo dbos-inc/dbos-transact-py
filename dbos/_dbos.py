@@ -215,6 +215,8 @@ class DBOSRegistry:
         sources = sorted(
             [inspect.getsource(wf) for wf in self.workflow_info_map.values()]
         )
+        # Different DBOS versions should produce different app versions
+        sources.append(GlobalParams.dbos_version)
         for source in sources:
             hasher.update(source.encode("utf-8"))
         return hasher.hexdigest()

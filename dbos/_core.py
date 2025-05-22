@@ -279,6 +279,18 @@ def _init_workflow(
         "updated_at": None,
         "workflow_timeout_ms": workflow_timeout_ms,
         "workflow_deadline_epoch_ms": workflow_deadline_epoch_ms,
+        "deduplication_id": (
+            enqueue_options["deduplication_id"] if enqueue_options is not None else None
+        ),
+        "priority": (
+            (
+                enqueue_options["priority"]
+                if enqueue_options["priority"] is not None
+                else 0
+            )
+            if enqueue_options is not None
+            else 0
+        ),
     }
 
     # If we have a class name, the first arg is the instance and do not serialize
@@ -290,7 +302,6 @@ def _init_workflow(
         status,
         _serialization.serialize_args(inputs),
         max_recovery_attempts=max_recovery_attempts,
-        enqueue_options=enqueue_options,
     )
 
     if workflow_deadline_epoch_ms is not None:
@@ -342,13 +353,12 @@ def _get_wf_invoke_func(
             return recorded_result
         try:
             output = func()
-            status["status"] = "SUCCESS"
-            status["output"] = _serialization.serialize(output)
             if not dbos.debug_mode:
-                if status["queue_name"] is not None:
-                    queue = dbos._registry.queue_info_map[status["queue_name"]]
-                    dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-                dbos._sys_db.update_workflow_status(status)
+                dbos._sys_db.update_workflow_outcome(
+                    status["workflow_uuid"],
+                    "SUCCESS",
+                    output=_serialization.serialize(output),
+                )
             return output
         except DBOSWorkflowConflictIDError:
             # Await the workflow result
@@ -357,13 +367,12 @@ def _get_wf_invoke_func(
         except DBOSWorkflowCancelledError as error:
             raise
         except Exception as error:
-            status["status"] = "ERROR"
-            status["error"] = _serialization.serialize_exception(error)
             if not dbos.debug_mode:
-                if status["queue_name"] is not None:
-                    queue = dbos._registry.queue_info_map[status["queue_name"]]
-                    dbos._sys_db.remove_from_queue(status["workflow_uuid"], queue)
-                dbos._sys_db.update_workflow_status(status)
+                dbos._sys_db.update_workflow_outcome(
+                    status["workflow_uuid"],
+                    "ERROR",
+                    error=_serialization.serialize_exception(error),
+                )
             raise
 
     return persist
