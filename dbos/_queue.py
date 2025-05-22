@@ -75,7 +75,7 @@ class Queue:
             and context.priority is not None
             and not self.priority_enabled
         ):
-            dbos_logger.warning(f"Priority is not enabled for queue {self.name}")
+            dbos_logger.warning(f"Priority is not enabled for queue {self.name}. Setting priority will not have any effect.")
 
         dbos = _get_dbos_instance()
         return start_workflow(dbos, func, self.name, False, *args, **kwargs)
