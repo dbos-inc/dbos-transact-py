@@ -1727,23 +1727,28 @@ class SystemDatabase:
 
             # Compute max_tasks, the number of workflows that can be dequeued given local and global concurrency limits,
             max_tasks = float("inf")
-            if queue.worker_concurrency is not None:
-                # Print a warning if the local concurrency limit is violated
-                if local_pending_workflows > queue.worker_concurrency:
-                    dbos_logger.warning(
-                        f"The number of local pending workflows ({local_pending_workflows}) on queue {queue.name} exceeds the local concurrency limit ({queue.worker_concurrency})"
+            if queue.worker_concurrency is not None or queue.concurrency is not None:
+                if queue.worker_concurrency is not None:
+                    # Print a warning if the local concurrency limit is violated
+                    if local_pending_workflows > queue.worker_concurrency:
+                        dbos_logger.warning(
+                            f"The number of local pending workflows ({local_pending_workflows}) on queue {queue.name} exceeds the local concurrency limit ({queue.worker_concurrency})"
+                        )
+                    max_tasks = max(
+                        0, queue.worker_concurrency - local_pending_workflows
                     )
-                max_tasks = max(0, queue.worker_concurrency - local_pending_workflows)
 
-            if queue.concurrency is not None:
-                global_pending_workflows = sum(pending_workflows_dict.values())
-                # Print a warning if the global concurrency limit is violated
-                if global_pending_workflows > queue.concurrency:
-                    dbos_logger.warning(
-                        f"The total number of pending workflows ({global_pending_workflows}) on queue {queue.name} exceeds the global concurrency limit ({queue.concurrency})"
+                if queue.concurrency is not None:
+                    global_pending_workflows = sum(pending_workflows_dict.values())
+                    # Print a warning if the global concurrency limit is violated
+                    if global_pending_workflows > queue.concurrency:
+                        dbos_logger.warning(
+                            f"The total number of pending workflows ({global_pending_workflows}) on queue {queue.name} exceeds the global concurrency limit ({queue.concurrency})"
+                        )
+                    available_tasks = max(
+                        0, queue.concurrency - global_pending_workflows
                     )
-                available_tasks = max(0, queue.concurrency - global_pending_workflows)
-                max_tasks = min(max_tasks, available_tasks)
+                    max_tasks = min(max_tasks, available_tasks)
 
             # Retrieve the first max_tasks workflows in the queue.
             # Only retrieve workflows of the local version (or without version set)
