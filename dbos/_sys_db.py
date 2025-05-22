@@ -483,6 +483,8 @@ class SystemDatabase:
                     status["queue_name"],
                     status["deduplication_id"],
                 )
+            else:
+                raise
         row = results.fetchone()
         if row is not None:
             # Check the started workflow matches the expected name, class_name, config_name, and queue_name
