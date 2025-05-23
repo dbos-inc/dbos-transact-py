@@ -252,6 +252,10 @@ def _init_workflow(
             raise DBOSNonExistentWorkflowError(wfid)
         return get_status_result
 
+    # If we have a class name, the first arg is the instance and do not serialize
+    if class_name is not None:
+        inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
+
     # Initialize a workflow status object from the context
     status: WorkflowStatusInternal = {
         "workflow_uuid": wfid,
@@ -291,16 +295,12 @@ def _init_workflow(
             if enqueue_options is not None
             else 0
         ),
+        "inputs": _serialization.serialize_args(inputs),
     }
-
-    # If we have a class name, the first arg is the instance and do not serialize
-    if class_name is not None:
-        inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
 
     # Synchronously record the status and inputs for workflows
     wf_status, workflow_deadline_epoch_ms = dbos._sys_db.init_workflow(
         status,
-        _serialization.serialize_args(inputs),
         max_recovery_attempts=max_recovery_attempts,
     )
 
@@ -441,16 +441,13 @@ def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[An
     status = dbos._sys_db.get_workflow_status(workflow_id)
     if not status:
         raise DBOSRecoveryError(workflow_id, "Workflow status not found")
-    inputs = dbos._sys_db.get_workflow_inputs(workflow_id)
-    if not inputs:
-        raise DBOSRecoveryError(workflow_id, "Workflow inputs not found")
+    inputs = _serialization.deserialize_args(status["inputs"])
     wf_func = dbos._registry.workflow_info_map.get(status["name"], None)
     if not wf_func:
         raise DBOSWorkflowFunctionNotFoundError(
             workflow_id, "Workflow function not found"
         )
     with DBOSContextEnsure():
-        ctx = assert_current_dbos_context()
         # If this function belongs to a configured class, add that class instance as its first argument
         if status["config_name"] is not None:
             config_name = status["config_name"]

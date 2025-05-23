@@ -140,6 +140,8 @@ class WorkflowStatusInternal(TypedDict):
     deduplication_id: Optional[str]
     # Priority of the workflow on the queue, starting from 1 ~ 2,147,483,647. Default 0 (highest priority).
     priority: int
+    # Serialized workflow inputs
+    inputs: str
 
 
 class EnqueueOptionsInternal(TypedDict):
@@ -462,6 +464,7 @@ class SystemDatabase:
                 workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
                 deduplication_id=status["deduplication_id"],
                 priority=status["priority"],
+                inputs=status["inputs"],
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
@@ -642,9 +645,6 @@ class SystemDatabase:
         status = self.get_workflow_status(original_workflow_id)
         if status is None:
             raise Exception(f"Workflow {original_workflow_id} not found")
-        inputs = self.get_workflow_inputs(original_workflow_id)
-        if inputs is None:
-            raise Exception(f"Workflow {original_workflow_id} not found")
 
         with self.engine.begin() as c:
             # Create an entry for the forked workflow with the same
@@ -666,13 +666,7 @@ class SystemDatabase:
                     authenticated_roles=status["authenticated_roles"],
                     assumed_role=status["assumed_role"],
                     queue_name=INTERNAL_QUEUE_NAME,
-                )
-            )
-            # Copy the original workflow's inputs into the forked workflow
-            c.execute(
-                pg.insert(SystemSchema.workflow_inputs).values(
-                    workflow_uuid=forked_workflow_id,
-                    inputs=_serialization.serialize_args(inputs),
+                    inputs=status["inputs"],
                 )
             )
 
@@ -732,6 +726,7 @@ class SystemDatabase:
                     SystemSchema.workflow_status.c.workflow_timeout_ms,
                     SystemSchema.workflow_status.c.deduplication_id,
                     SystemSchema.workflow_status.c.priority,
+                    SystemSchema.workflow_status.c.inputs,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -758,6 +753,7 @@ class SystemDatabase:
                 "workflow_timeout_ms": row[15],
                 "deduplication_id": row[16],
                 "priority": row[17],
+                "inputs": row[18],
             }
             return status
 
@@ -788,53 +784,6 @@ class SystemDatabase:
                     pass  # CB: I guess we're assuming the WF will show up eventually.
             time.sleep(1)
 
-    def _update_workflow_inputs(
-        self, workflow_uuid: str, inputs: str, conn: sa.Connection
-    ) -> None:
-        if self._debug_mode:
-            raise Exception("called update_workflow_inputs in debug mode")
-
-        cmd = (
-            pg.insert(SystemSchema.workflow_inputs)
-            .values(
-                workflow_uuid=workflow_uuid,
-                inputs=inputs,
-            )
-            .on_conflict_do_update(
-                index_elements=["workflow_uuid"],
-                set_=dict(workflow_uuid=SystemSchema.workflow_inputs.c.workflow_uuid),
-            )
-            .returning(SystemSchema.workflow_inputs.c.inputs)
-        )
-
-        row = conn.execute(cmd).fetchone()
-        if row is not None and row[0] != inputs:
-            # In a distributed environment, scheduled workflows are enqueued multiple times with slightly different timestamps
-            if not workflow_uuid.startswith("sched-"):
-                dbos_logger.warning(
-                    f"Workflow {workflow_uuid} has been called multiple times with different inputs"
-                )
-            # TODO: actually changing the input
-
-        return
-
-    @db_retry()
-    def get_workflow_inputs(
-        self, workflow_uuid: str
-    ) -> Optional[_serialization.WorkflowInputs]:
-        with self.engine.begin() as c:
-            row = c.execute(
-                sa.select(SystemSchema.workflow_inputs.c.inputs).where(
-                    SystemSchema.workflow_inputs.c.workflow_uuid == workflow_uuid
-                )
-            ).fetchone()
-            if row is None:
-                return None
-            inputs: _serialization.WorkflowInputs = _serialization.deserialize_args(
-                row[0]
-            )
-            return inputs
-
     def get_workflows(self, input: GetWorkflowsInput) -> List[WorkflowStatus]:
         """
         Retrieve a list of workflows result and inputs based on the input criteria. The result is a list of external-facing workflow status objects.
@@ -855,15 +804,11 @@ class SystemDatabase:
             SystemSchema.workflow_status.c.updated_at,
             SystemSchema.workflow_status.c.application_version,
             SystemSchema.workflow_status.c.application_id,
-            SystemSchema.workflow_inputs.c.inputs,
+            SystemSchema.workflow_status.c.inputs,
             SystemSchema.workflow_status.c.output,
             SystemSchema.workflow_status.c.error,
             SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
             SystemSchema.workflow_status.c.workflow_timeout_ms,
-        ).join(
-            SystemSchema.workflow_inputs,
-            SystemSchema.workflow_status.c.workflow_uuid
-            == SystemSchema.workflow_inputs.c.workflow_uuid,
         )
         if input.sort_desc:
             query = query.order_by(SystemSchema.workflow_status.c.created_at.desc())
@@ -953,39 +898,31 @@ class SystemDatabase:
         """
         Retrieve a list of queued workflows result and inputs based on the input criteria. The result is a list of external-facing workflow status objects.
         """
-        query = (
-            sa.select(
-                SystemSchema.workflow_status.c.workflow_uuid,
-                SystemSchema.workflow_status.c.status,
-                SystemSchema.workflow_status.c.name,
-                SystemSchema.workflow_status.c.recovery_attempts,
-                SystemSchema.workflow_status.c.config_name,
-                SystemSchema.workflow_status.c.class_name,
-                SystemSchema.workflow_status.c.authenticated_user,
-                SystemSchema.workflow_status.c.authenticated_roles,
-                SystemSchema.workflow_status.c.assumed_role,
-                SystemSchema.workflow_status.c.queue_name,
-                SystemSchema.workflow_status.c.executor_id,
-                SystemSchema.workflow_status.c.created_at,
-                SystemSchema.workflow_status.c.updated_at,
-                SystemSchema.workflow_status.c.application_version,
-                SystemSchema.workflow_status.c.application_id,
-                SystemSchema.workflow_inputs.c.inputs,
-                SystemSchema.workflow_status.c.output,
-                SystemSchema.workflow_status.c.error,
-                SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
-                SystemSchema.workflow_status.c.workflow_timeout_ms,
-            )
-            .join(
-                SystemSchema.workflow_inputs,
-                SystemSchema.workflow_status.c.workflow_uuid
-                == SystemSchema.workflow_inputs.c.workflow_uuid,
-            )
-            .where(
-                sa.and_(
-                    SystemSchema.workflow_status.c.queue_name.isnot(None),
-                    SystemSchema.workflow_status.c.status.in_(["ENQUEUED", "PENDING"]),
-                )
+        query = sa.select(
+            SystemSchema.workflow_status.c.workflow_uuid,
+            SystemSchema.workflow_status.c.status,
+            SystemSchema.workflow_status.c.name,
+            SystemSchema.workflow_status.c.recovery_attempts,
+            SystemSchema.workflow_status.c.config_name,
+            SystemSchema.workflow_status.c.class_name,
+            SystemSchema.workflow_status.c.authenticated_user,
+            SystemSchema.workflow_status.c.authenticated_roles,
+            SystemSchema.workflow_status.c.assumed_role,
+            SystemSchema.workflow_status.c.queue_name,
+            SystemSchema.workflow_status.c.executor_id,
+            SystemSchema.workflow_status.c.created_at,
+            SystemSchema.workflow_status.c.updated_at,
+            SystemSchema.workflow_status.c.application_version,
+            SystemSchema.workflow_status.c.application_id,
+            SystemSchema.workflow_status.c.inputs,
+            SystemSchema.workflow_status.c.output,
+            SystemSchema.workflow_status.c.error,
+            SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
+            SystemSchema.workflow_status.c.workflow_timeout_ms,
+        ).where(
+            sa.and_(
+                SystemSchema.workflow_status.c.queue_name.isnot(None),
+                SystemSchema.workflow_status.c.status.in_(["ENQUEUED", "PENDING"]),
             )
         )
         if input["sort_desc"]:
@@ -1895,7 +1832,6 @@ class SystemDatabase:
     def init_workflow(
         self,
         status: WorkflowStatusInternal,
-        inputs: str,
         *,
         max_recovery_attempts: Optional[int],
     ) -> tuple[WorkflowStatuses, Optional[int]]:
@@ -1906,7 +1842,6 @@ class SystemDatabase:
             wf_status, workflow_deadline_epoch_ms = self._insert_workflow_status(
                 status, conn, max_recovery_attempts=max_recovery_attempts
             )
-            self._update_workflow_inputs(status["workflow_uuid"], inputs, conn)
         return wf_status, workflow_deadline_epoch_ms
 
     def check_connection(self) -> None:
