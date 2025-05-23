@@ -58,6 +58,7 @@ class SystemSchema:
         Column("workflow_deadline_epoch_ms", BigInteger, nullable=True),
         Column("started_at_epoch_ms", BigInteger(), nullable=True),
         Column("deduplication_id", Text(), nullable=True),
+        Column("inputs", Text()),
         Column("priority", Integer(), nullable=False, server_default=text("'0'::int")),
         Index("workflow_status_created_at_index", "created_at"),
         Index("workflow_status_executor_id_index", "executor_id"),
@@ -86,21 +87,6 @@ class SystemSchema:
         Column("error", Text, nullable=True),
         Column("child_workflow_id", Text, nullable=True),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
-    )
-
-    workflow_inputs = Table(
-        "workflow_inputs",
-        metadata_obj,
-        Column(
-            "workflow_uuid",
-            Text,
-            ForeignKey(
-                "workflow_status.workflow_uuid", onupdate="CASCADE", ondelete="CASCADE"
-            ),
-            primary_key=True,
-            nullable=False,
-        ),
-        Column("inputs", Text, nullable=False),
     )
 
     notifications = Table(

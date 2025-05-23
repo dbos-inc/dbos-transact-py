@@ -20,10 +20,6 @@ def test_systemdb_migration(dbos: DBOS) -> None:
         result = connection.execute(sql)
         assert result.fetchall() == []
 
-        sql = SystemSchema.workflow_inputs.select()
-        result = connection.execute(sql)
-        assert result.fetchall() == []
-
         sql = SystemSchema.operation_outputs.select()
         result = connection.execute(sql)
         assert result.fetchall() == []
