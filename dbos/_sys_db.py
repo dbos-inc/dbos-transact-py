@@ -140,6 +140,8 @@ class WorkflowStatusInternal(TypedDict):
     deduplication_id: Optional[str]
     # Priority of the workflow on the queue, starting from 1 ~ 2,147,483,647. Default 0 (highest priority).
     priority: int
+    # Serialized workflow inputs
+    input: str
 
 
 class EnqueueOptionsInternal(TypedDict):
