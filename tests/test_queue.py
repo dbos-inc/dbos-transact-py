@@ -574,7 +574,7 @@ def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
 
 
 # Test error cases where we have duplicated workflows starting with the same workflow ID.
-def test_duplicate_workflow_id(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
+def test_duplicate_workflow_id(dbos: DBOS) -> None:
     wfid = str(uuid.uuid4())
 
     @DBOS.workflow()
@@ -606,16 +606,10 @@ def test_duplicate_workflow_id(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> 
             DBOS.sleep(0.1)
             return self.config_name + ":" + var1
 
-    original_propagate = logging.getLogger("dbos").propagate
-    caplog.set_level(logging.WARNING, "dbos")
-    logging.getLogger("dbos").propagate = True
-
     with SetWorkflowID(wfid):
         origHandle = DBOS.start_workflow(test_workflow, "abc")
         # The second one will generate a warning message but no error.
         test_dup_workflow()
-
-    assert "Multiple workflows started in the same SetWorkflowID block." in caplog.text
 
     # It's okay to call the same workflow with the same ID again.
     with SetWorkflowID(wfid):
@@ -661,24 +655,16 @@ def test_duplicate_workflow_id(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> 
     with SetWorkflowID(wfid):
         handle = queue.enqueue(test_workflow, "abc")
     assert handle.get_result() == "abc"
-    assert "Workflow already exists in queue" in caplog.text
 
-    # Call with a different input would generate a warning, but still use the recorded input.
+    # Call with a different input still uses the recorded input.
     with SetWorkflowID(wfid):
         res = test_workflow("def")
         # We want to see the warning message, but the result is non-deterministic
         # TODO: in the future, we may want to always use the recorded inputs.
         assert res == "abc" or res == "def"
-    assert (
-        f"Workflow {wfid} has been called multiple times with different inputs"
-        in caplog.text
-    )
 
     assert origHandle.get_result() == "abc"
     assert same_handle.get_result() == "abc"
-
-    # Reset logging
-    logging.getLogger("dbos").propagate = original_propagate
 
 
 def test_queue_recovery(dbos: DBOS) -> None:
