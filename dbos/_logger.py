@@ -93,13 +93,13 @@ def config_logger(config: "ConfigFile") -> None:
         global _otlp_handler
         _otlp_handler = LoggingHandler(logger_provider=log_provider)
 
-        # Attach DBOS-specific attributes to all log entries.
-        global _otlp_transformer
-        _otlp_transformer = DBOSLogTransformer()
-
         # Direct DBOS logs to OTLP
         dbos_logger.addHandler(_otlp_handler)
-        dbos_logger.addFilter(_otlp_transformer)
+
+    # Attach DBOS-specific attributes to all log entries.
+    global _otlp_transformer
+    _otlp_transformer = DBOSLogTransformer()
+    dbos_logger.addFilter(_otlp_transformer)
 
 
 def add_otlp_to_all_loggers() -> None:
