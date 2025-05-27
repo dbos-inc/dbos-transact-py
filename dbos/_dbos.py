@@ -100,7 +100,13 @@ from ._error import (
     DBOSNonExistentWorkflowError,
 )
 from ._event_loop import BackgroundEventLoop
-from ._logger import add_otlp_to_all_loggers, config_logger, dbos_logger, init_logger
+from ._logger import (
+    add_otlp_to_all_loggers,
+    add_transformer_to_all_loggers,
+    config_logger,
+    dbos_logger,
+    init_logger,
+)
 from ._workflow_commands import get_workflow, list_workflow_steps
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
@@ -514,6 +520,7 @@ class DBOS:
             for handler in dbos_logger.handlers:
                 handler.flush()
             add_otlp_to_all_loggers()
+            add_transformer_to_all_loggers()
         except Exception:
             dbos_logger.error(f"DBOS failed to launch: {traceback.format_exc()}")
             raise
