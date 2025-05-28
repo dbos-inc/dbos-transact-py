@@ -8,14 +8,14 @@ from dbos._schemas.system_database import SystemSchema
 from tests.conftest import queue_entries_are_cleaned_up
 
 
-def test_workflow_status_count(dbos: DBOS):
+def test_workflow_status_count(dbos: DBOS) -> None:
     """
     Test workflow_status_count with global count and filtering.
     """
 
     # Define a simple workflow
     @dbos.workflow()
-    def simple_workflow():
+    def simple_workflow() -> str:
         return "test_result"
 
     # Run the workflow N times
@@ -56,14 +56,14 @@ def test_workflow_status_count(dbos: DBOS):
     assert filtered_counts[0].workflow_count == N // 4
 
 
-def test_workflow_completion_rate(dbos: DBOS):
+def test_workflow_completion_rate(dbos: DBOS) -> None:
     """
     Test completion_rate metric with different time windows.
     """
 
     # Define a simple workflow
     @dbos.workflow()
-    def simple_workflow():
+    def simple_workflow() -> str:
         return "test_result"
 
     # Run 10 workflows, 1 per second
@@ -98,7 +98,7 @@ def test_workflow_completion_rate(dbos: DBOS):
             expected_bucket_count = 1
         else:
             # Calculate expected bucket counts and rates
-            expected_bucket_count = (
+            expected_bucket_count = int(
                 ceil(duration / bucket_size) / 2
             )  # Two statuses: SUCCESS and ERROR
 
@@ -126,7 +126,7 @@ def test_workflow_completion_rate(dbos: DBOS):
             assert rate.status == WorkflowStatusString.ERROR.value
 
 
-def test_enqueued_count(dbos: DBOS):
+def test_enqueued_count(dbos: DBOS) -> None:
     """
     Test enqueued_count with global count, filtering by queue names, and filtering by status.
     """
@@ -142,15 +142,15 @@ def test_enqueued_count(dbos: DBOS):
 
     # Define a single workflow that waits for an event
     @dbos.workflow()
-    def event_workflow(i: int):
-        start_events[i].set()
-        end_events[i].wait()
+    def event_workflow(ei: int) -> None:
+        start_events[ei].set()
+        end_events[ei].wait()
 
     # Enqueue workflows into the pre-created queues
     for i, queue in enumerate(queues):
         for j in range(wf_per_queue):
             event_idx = i * wf_per_queue + j
-            h = queue.enqueue(event_workflow, i=event_idx)
+            h = queue.enqueue(event_workflow, ei=event_idx)
             # Wait for `worker_concurrency` workflows to start
             if j < worker_concurrency:
                 start_events[event_idx].wait()
@@ -196,14 +196,14 @@ def test_enqueued_count(dbos: DBOS):
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_queue_completion_rate(dbos: DBOS):
+def test_queue_completion_rate(dbos: DBOS) -> None:
     """
     Test queue_completion_rate metric with different time windows and queue filtering.
     """
 
     # Define a simple workflow
     @dbos.workflow()
-    def simple_workflow():
+    def simple_workflow() -> str:
         return "test_result"
 
     # Define queue names
@@ -237,8 +237,8 @@ def test_queue_completion_rate(dbos: DBOS):
             expected_bucket_count_per_queue = 1
         else:
             # Calculate expected bucket counts and rates
-            expected_bucket_count_per_queue = ceil(duration / bucket_size) / len(
-                queue_names
+            expected_bucket_count_per_queue = int(
+                ceil(duration / bucket_size) / len(queue_names)
             )  # divide by number of queues because we enqueued in all during `duration`
         workflows_per_bucket = num_workflows / expected_bucket_count_per_queue
         expected_rate_per_queue = (workflows_per_bucket / bucket_size) / len(
@@ -264,8 +264,8 @@ def test_queue_completion_rate(dbos: DBOS):
             expected_bucket_count = 1
         else:
             # Calculate expected bucket counts and rates for each queue
-            expected_bucket_count = ceil(duration / bucket_size) / len(
-                queue_names
+            expected_bucket_count = int(
+                ceil(duration / bucket_size) / len(queue_names)
             )  # divide by number of queues because we enqueued in all during `duration`
         workflows_per_bucket = workflows_per_queue / expected_bucket_count
         expected_rate = workflows_per_bucket / bucket_size

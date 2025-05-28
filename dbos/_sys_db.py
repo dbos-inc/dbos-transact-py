@@ -237,27 +237,26 @@ _dbos_null_topic = "__null__topic__"
 
 
 class WorkflowStatusCountOutput:
-    def __init__(self, status: str, workflow_count: int) -> None:
+    def __init__(self, *, status: str, workflow_count: int) -> None:
         self.status = status
         self.workflow_count = workflow_count
 
 
 class QueueStatusCountOutput:
-    def __init__(self, queue_name: str, tasks_count: int) -> None:
+    def __init__(self, *, queue_name: str, tasks_count: int, status: str) -> None:
         self.queue_name = queue_name
         self.tasks_count = tasks_count
-
-
-class CompletionRateOutput:
-    def __init__(self, bucket: str, rate: float, status: Optional[str]) -> None:
-        self.bucket = bucket
-        self.rate = rate
         self.status = status
 
 
-class QueueCompletionRateOutput:
+class RateOutput:
     def __init__(
-        self, queue_name: str, bucket: str, rate: float, status: Optional[str] = None
+        self,
+        *,
+        queue_name: Optional[str] = None,
+        bucket: str,
+        rate: float,
+        status: Optional[str] = None,
     ) -> None:
         self.queue_name = queue_name
         self.bucket = bucket
@@ -1916,7 +1915,7 @@ class SystemDatabase:
         self,
         status: str = WorkflowStatusString.SUCCESS.value,
         time_bucket_seconds: int = 60,
-    ) -> List[CompletionRateOutput]:
+    ) -> List[RateOutput]:
         """
         Retrieves the completion rate of workflows grouped by time bucket.
 
@@ -1925,7 +1924,7 @@ class SystemDatabase:
             time_bucket_seconds (int): The size of the time bucket in seconds.
 
         Returns:
-            List[CompletionRateOutput]: A list of CompletionRateOutput objects containing bucket and a rate.
+            List[RateOutput]: A list of RateOutput objects containing bucket and a rate.
         """
         query = sa.text(
             f"""
@@ -1943,8 +1942,7 @@ class SystemDatabase:
             rows = conn.execute(query, {"status": status}).fetchall()
 
         return [
-            CompletionRateOutput(bucket=row[0], rate=float(row[1]), status=status)
-            for row in rows
+            RateOutput(bucket=row[0], rate=float(row[1]), status=status) for row in rows
         ]
 
     def queue_status_count(
@@ -1965,6 +1963,7 @@ class SystemDatabase:
         query = (
             sa.select(
                 SystemSchema.workflow_status.c.queue_name,
+                SystemSchema.workflow_status.c.status,
                 sa.func.count().label("tasks_count"),
             )
             .where(SystemSchema.workflow_status.c.queue_name.isnot(None))
@@ -1983,7 +1982,7 @@ class SystemDatabase:
             rows = conn.execute(query).fetchall()
 
         return [
-            QueueStatusCountOutput(queue_name=row[0], tasks_count=row[1])
+            QueueStatusCountOutput(queue_name=row[0], tasks_count=row[1], status=row[2])
             for row in rows
         ]
 
@@ -1992,7 +1991,7 @@ class SystemDatabase:
         queue_name: Optional[str] = None,
         time_bucket_seconds: int = 60,
         status: Optional[str] = WorkflowStatusString.SUCCESS.value,
-    ) -> List[QueueCompletionRateOutput]:
+    ) -> List[RateOutput]:
         """
         Retrieves the completion rate of workflows grouped by time bucket, filtered by queue name and status.
 
@@ -2002,7 +2001,7 @@ class SystemDatabase:
             status (Optional[str]): The workflow status to filter by. If None, considers all statuses.
 
         Returns:
-            List[CompletionRateOutput]: A list of CompletionRateOutput objects containing bucket and a rate.
+            List[RateOutput]: A list of RateOutput objects containing bucket and a rate.
         """
         query = sa.text(
             f"""
@@ -2031,7 +2030,7 @@ class SystemDatabase:
             rows = conn.execute(query, params).fetchall()
 
         return [
-            QueueCompletionRateOutput(
+            RateOutput(
                 bucket=row[0], rate=float(row[1]), queue_name=row[2], status=status
             )
             for row in rows
