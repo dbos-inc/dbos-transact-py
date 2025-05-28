@@ -236,6 +236,27 @@ class StepInfo(TypedDict):
 _dbos_null_topic = "__null__topic__"
 
 
+class WorkflowStatusCountOutput:
+    def __init__(self, status: str, workflow_count: int) -> None:
+        self.status = status
+        self.workflow_count = workflow_count
+        self.label = "dbos.workflow.status_count"
+
+
+class EnqueuedCountOutput:
+    def __init__(self, queue_name: str, queue_length: int) -> None:
+        self.queue_name = queue_name
+        self.queue_length = queue_length
+        self.label = "dbos.queue.enqueued_count"
+
+
+class CompletionRateOutput:
+    def __init__(self, bucket: str, rate: float, label: str) -> None:
+        self.bucket = bucket
+        self.rate = rate
+        self.label = label
+
+
 class ConditionCount(TypedDict):
     condition: threading.Condition
     count: int
@@ -1851,6 +1872,111 @@ class SystemDatabase:
         except Exception as e:
             dbos_logger.error(f"Error connecting to the DBOS system database: {e}")
             raise
+
+    ##### METRICS #####
+    def workflow_status_count(
+        self, status_filter: Optional[List[str]] = None
+    ) -> List[WorkflowStatusCountOutput]:
+        """
+        Retrieves the count of workflows grouped by their status.
+
+        Args:
+            status_filter (Optional[List[str]]): A list of statuses to filter the query.
+
+        Returns:
+            List[WorkflowStatusCountOutput]: A list of WorkflowStatusCountOutput objects containing status and count.
+        """
+        query = sa.select(
+            SystemSchema.workflow_status.c.status,
+            sa.func.count().label("workflow_count"),
+        ).group_by(SystemSchema.workflow_status.c.status)
+
+        if status_filter:
+            query = query.where(
+                SystemSchema.workflow_status.c.status.in_(status_filter)
+            )
+
+        with self.engine.begin() as conn:
+            rows = conn.execute(query).fetchall()
+
+        return [
+            WorkflowStatusCountOutput(status=row[0], workflow_count=row[1])
+            for row in rows
+        ]
+
+    def workflow_completion_rate(
+        self,
+        status: str = WorkflowStatusString.SUCCESS.value,
+        time_bucket_seconds: int = 60,
+    ) -> List[CompletionRateOutput]:
+        """
+        Retrieves the completion rate of workflows grouped by time bucket.
+
+        Args:
+            status (str): The workflow status to filter by.
+            time_bucket_seconds (int): The size of the time bucket in seconds.
+
+        Returns:
+            List[CompletionRateOutput]: A list of CompletionRateOutput objects containing bucket, rate, and label.
+        """
+        query = sa.text(
+            f"""
+            SELECT
+                to_timestamp(FLOOR(updated_at / 1000 / {time_bucket_seconds}) * {time_bucket_seconds}) AT TIME ZONE 'UTC' AS bucket,
+                COUNT(*)::numeric / {time_bucket_seconds}.0 AS rate
+            FROM dbos.workflow_status
+            WHERE status = :status
+            GROUP BY bucket
+            ORDER BY bucket;
+            """
+        )
+        print(query)
+
+        with self.engine.begin() as conn:
+            rows = conn.execute(query, {"status": status}).fetchall()
+
+        label = f"dbos.workflow.{status.lower()}_rate"
+        return [
+            CompletionRateOutput(bucket=row[0], rate=float(row[1]), label=label)
+            for row in rows
+        ]
+
+    def enqueued_count(
+        self, queue_name_filter: Optional[List[str]] = None
+    ) -> List[EnqueuedCountOutput]:
+        """
+        Retrieves the count of enqueued workflows grouped by their queue name.
+
+        Args:
+            queue_name_filter (Optional[List[str]]): A list of queue names to filter the query.
+
+        Returns:
+            List[EnqueuedCountOutput]: A list of EnqueuedCountOutput objects containing queue_name and queue_length.
+        """
+        query = (
+            sa.select(
+                SystemSchema.workflow_status.c.queue_name,
+                sa.func.count().label("queue_length"),
+            )
+            .where(
+                SystemSchema.workflow_status.c.status
+                == WorkflowStatusString.ENQUEUED.value,
+                SystemSchema.workflow_status.c.queue_name.isnot(None),
+            )
+            .group_by(SystemSchema.workflow_status.c.queue_name)
+        )
+
+        if queue_name_filter:
+            query = query.where(
+                SystemSchema.workflow_status.c.queue_name.in_(queue_name_filter)
+            )
+
+        with self.engine.begin() as conn:
+            rows = conn.execute(query).fetchall()
+
+        return [
+            EnqueuedCountOutput(queue_name=row[0], queue_length=row[1]) for row in rows
+        ]
 
 
 def reset_system_database(postgres_db_url: sa.URL, sysdb_name: str) -> None:
