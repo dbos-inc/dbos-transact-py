@@ -249,9 +249,20 @@ class QueueStatusCountOutput:
 
 
 class CompletionRateOutput:
-    def __init__(self, bucket: str, rate: float) -> None:
+    def __init__(self, bucket: str, rate: float, status: Optional[str]) -> None:
         self.bucket = bucket
         self.rate = rate
+        self.status = status
+
+
+class QueueCompletionRateOutput:
+    def __init__(
+        self, queue_name: str, bucket: str, rate: float, status: Optional[str] = None
+    ) -> None:
+        self.queue_name = queue_name
+        self.bucket = bucket
+        self.rate = rate
+        self.status = status
 
 
 class ConditionCount(TypedDict):
@@ -1931,7 +1942,10 @@ class SystemDatabase:
         with self.engine.begin() as conn:
             rows = conn.execute(query, {"status": status}).fetchall()
 
-        return [CompletionRateOutput(bucket=row[0], rate=float(row[1])) for row in rows]
+        return [
+            CompletionRateOutput(bucket=row[0], rate=float(row[1]), status=status)
+            for row in rows
+        ]
 
     def queue_status_count(
         self,
@@ -1970,6 +1984,56 @@ class SystemDatabase:
 
         return [
             QueueStatusCountOutput(queue_name=row[0], tasks_count=row[1])
+            for row in rows
+        ]
+
+    def queue_completion_rate(
+        self,
+        queue_name: Optional[str] = None,
+        time_bucket_seconds: int = 60,
+        status: Optional[str] = WorkflowStatusString.SUCCESS.value,
+    ) -> List[QueueCompletionRateOutput]:
+        """
+        Retrieves the completion rate of workflows grouped by time bucket, filtered by queue name and status.
+
+        Args:
+            queue_name (Optional[str]): The queue name to filter by. If None, considers all tasks with a queue name.
+            time_bucket_seconds (int): The size of the time bucket in seconds.
+            status (Optional[str]): The workflow status to filter by. If None, considers all statuses.
+
+        Returns:
+            List[CompletionRateOutput]: A list of CompletionRateOutput objects containing bucket and a rate.
+        """
+        query = sa.text(
+            f"""
+            SELECT
+            to_timestamp(FLOOR(updated_at / 1000 / {time_bucket_seconds}) * {time_bucket_seconds}) AT TIME ZONE 'UTC' AS bucket,
+            COUNT(*)::numeric / {time_bucket_seconds}.0 AS rate,
+            queue_name
+            FROM dbos.workflow_status
+            WHERE queue_name IS NOT NULL
+            AND status = :status
+            """
+            + ("AND queue_name = :queue_name" if queue_name else "")
+            + """
+            GROUP BY bucket, queue_name
+            ORDER BY bucket;
+            """
+        )
+
+        params = {}
+        if queue_name:
+            params["queue_name"] = queue_name
+        if status:
+            params["status"] = status
+
+        with self.engine.begin() as conn:
+            rows = conn.execute(query, params).fetchall()
+
+        return [
+            QueueCompletionRateOutput(
+                bucket=row[0], rate=float(row[1]), queue_name=row[2], status=status
+            )
             for row in rows
         ]
 

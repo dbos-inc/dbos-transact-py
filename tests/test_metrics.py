@@ -96,32 +96,34 @@ def test_workflow_completion_rate(dbos: DBOS):
         if bucket_size > duration:
             # If the bucket size is larger than the total duration, we expect only one bucket
             expected_bucket_count = 1
-            expected_rate = workflows_for_status / duration
         else:
             # Calculate expected bucket counts and rates
             expected_bucket_count = (
                 ceil(duration / bucket_size) / 2
             )  # Two statuses: SUCCESS and ERROR
-            workflows_per_bucket = workflows_for_status / expected_bucket_count
-            expected_rate = workflows_per_bucket / bucket_size
 
-            # Query the metric for the current time bucket
-            success_rates = dbos._sys_db.workflow_completion_rate(
-                status=WorkflowStatusString.SUCCESS.value,
-                time_bucket_seconds=bucket_size,
-            )
-            error_rates = dbos._sys_db.workflow_completion_rate(
-                status=WorkflowStatusString.ERROR.value, time_bucket_seconds=bucket_size
-            )
+        workflows_per_bucket = workflows_for_status / expected_bucket_count
+        expected_rate = workflows_per_bucket / bucket_size
 
-            # Assert the number of entries matches the expected bucket size behavior
-            assert len(success_rates) == len(error_rates) == expected_bucket_count
+        # Query the metric for the current time bucket
+        success_rates = dbos._sys_db.workflow_completion_rate(
+            status=WorkflowStatusString.SUCCESS.value,
+            time_bucket_seconds=bucket_size,
+        )
+        error_rates = dbos._sys_db.workflow_completion_rate(
+            status=WorkflowStatusString.ERROR.value, time_bucket_seconds=bucket_size
+        )
 
-            # Assert the rates match the expected values
-            for rate in success_rates:
-                assert rate.rate == expected_rate
-            for rate in error_rates:
-                assert rate.rate == expected_rate
+        # Assert the number of entries matches the expected bucket size behavior
+        assert len(success_rates) == len(error_rates) == expected_bucket_count
+
+        # Assert the rates match the expected values
+        for rate in success_rates:
+            assert rate.rate == expected_rate
+            assert rate.status == WorkflowStatusString.SUCCESS.value
+        for rate in error_rates:
+            assert rate.rate == expected_rate
+            assert rate.status == WorkflowStatusString.ERROR.value
 
 
 def test_enqueued_count(dbos: DBOS):
@@ -192,3 +194,90 @@ def test_enqueued_count(dbos: DBOS):
     for end_event in end_events:
         end_event.set()
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_queue_completion_rate(dbos: DBOS):
+    """
+    Test queue_completion_rate metric with different time windows and queue filtering.
+    """
+
+    # Define a simple workflow
+    @dbos.workflow()
+    def simple_workflow():
+        return "test_result"
+
+    # Define queue names
+    queue_names = ["queue_one", "queue_two"]
+
+    # Run workflows and assign them to queues
+    rate_per_second = 1
+    workflow_ids = []
+    num_workflows = 10  # should be an even number for this test
+    for i in range(num_workflows):
+        handler = dbos.start_workflow(simple_workflow)
+        workflow_ids.append(handler.get_workflow_id())
+        time.sleep(1 / rate_per_second)
+    duration = num_workflows / rate_per_second
+
+    # Manually update statuses and assign queues in the database
+    for i, workflow_id in enumerate(workflow_ids):
+        queue_name = queue_names[i % len(queue_names)]
+        with dbos._sys_db.engine.begin() as conn:
+            conn.execute(
+                SystemSchema.workflow_status.update()
+                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .values(queue_name=queue_name)
+            )
+
+    bucket_sizes = [60, 1]
+    for bucket_size in bucket_sizes:
+        # First test the rate across all queues are computed correctly
+        if bucket_size > duration:
+            # If the bucket size is larger than the total duration, we expect one bucket
+            expected_bucket_count_per_queue = 1
+        else:
+            # Calculate expected bucket counts and rates
+            expected_bucket_count_per_queue = ceil(duration / bucket_size) / len(
+                queue_names
+            )  # divide by number of queues because we enqueued in all during `duration`
+        workflows_per_bucket = num_workflows / expected_bucket_count_per_queue
+        expected_rate_per_queue = (workflows_per_bucket / bucket_size) / len(
+            queue_names
+        )
+        # Query the metric for all queues
+        all_queue_rates = dbos._sys_db.queue_completion_rate(
+            time_bucket_seconds=bucket_size
+        )
+        # Assert the number of entries matches the expected bucket size behavior
+        assert (
+            len(all_queue_rates) == len(queue_names) * expected_bucket_count_per_queue
+        )
+        # Assert the rates match the expected values
+        for rate in all_queue_rates:
+            assert rate.rate == expected_rate_per_queue
+            assert rate.status == WorkflowStatusString.SUCCESS.value
+
+        # Now test the rate for each queue individually
+        workflows_per_queue = num_workflows // len(queue_names)
+        if bucket_size > duration:
+            # If the bucket size is larger than the total duration, we expect only one bucket
+            expected_bucket_count = 1
+        else:
+            # Calculate expected bucket counts and rates for each queue
+            expected_bucket_count = ceil(duration / bucket_size) / len(
+                queue_names
+            )  # divide by number of queues because we enqueued in all during `duration`
+        workflows_per_bucket = workflows_per_queue / expected_bucket_count
+        expected_rate = workflows_per_bucket / bucket_size
+
+        for queue_name in queue_names:
+            # Query the metric for the current time bucket
+            queue_rates = dbos._sys_db.queue_completion_rate(
+                queue_name=queue_name, time_bucket_seconds=bucket_size
+            )
+            assert len(queue_rates) == expected_bucket_count
+            # Assert the rates match the expected values
+            for rate in queue_rates:
+                assert rate.rate == expected_rate
+                assert rate.queue_name == queue_name
+                assert rate.status == WorkflowStatusString.SUCCESS.value
