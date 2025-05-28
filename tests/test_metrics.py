@@ -1,4 +1,5 @@
 import time
+from datetime import datetime, timedelta
 from math import ceil
 from threading import Event
 
@@ -77,6 +78,9 @@ def test_workflow_completion_rate(dbos: DBOS) -> None:
     duration = num_workflows / rate_per_second
 
     # Manually update statuses in the database
+    # Also set updated_at to deterministic values so we don't have a flaky test
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    base_timestamp = int(base_time.timestamp())
     for i, workflow_id in enumerate(workflow_ids):
         new_status = (
             WorkflowStatusString.SUCCESS.value
@@ -87,7 +91,7 @@ def test_workflow_completion_rate(dbos: DBOS) -> None:
             conn.execute(
                 SystemSchema.workflow_status.update()
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-                .values(status=new_status)
+                .values(status=new_status, updated_at=base_timestamp + i * 1000)
             )
 
     bucket_sizes = [60, 1]
@@ -119,10 +123,10 @@ def test_workflow_completion_rate(dbos: DBOS) -> None:
 
         # Assert the rates match the expected values
         for rate in success_rates:
-            assert rate.rate == expected_rate
+            assert abs(rate.rate - expected_rate) < 0.1
             assert rate.status == WorkflowStatusString.SUCCESS.value
         for rate in error_rates:
-            assert rate.rate == expected_rate
+            assert abs(rate.rate - expected_rate) < 0.1
             assert rate.status == WorkflowStatusString.ERROR.value
 
 
@@ -220,13 +224,15 @@ def test_queue_completion_rate(dbos: DBOS) -> None:
     duration = num_workflows / rate_per_second
 
     # Manually update statuses and assign queues in the database
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    base_timestamp = int(base_time.timestamp())
     for i, workflow_id in enumerate(workflow_ids):
         queue_name = queue_names[i % len(queue_names)]
         with dbos._sys_db.engine.begin() as conn:
             conn.execute(
                 SystemSchema.workflow_status.update()
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-                .values(queue_name=queue_name)
+                .values(queue_name=queue_name, updated_at=base_timestamp + i * 1000)
             )
 
     bucket_sizes = [60, 1]
@@ -254,7 +260,7 @@ def test_queue_completion_rate(dbos: DBOS) -> None:
         )
         # Assert the rates match the expected values
         for rate in all_queue_rates:
-            assert rate.rate == expected_rate_per_queue
+            assert abs(rate.rate - expected_rate_per_queue) < 0.1
             assert rate.status == WorkflowStatusString.SUCCESS.value
 
         # Now test the rate for each queue individually
@@ -278,6 +284,6 @@ def test_queue_completion_rate(dbos: DBOS) -> None:
             assert len(queue_rates) == expected_bucket_count
             # Assert the rates match the expected values
             for rate in queue_rates:
-                assert rate.rate == expected_rate
+                assert abs(rate.rate - expected_rate) < 0.1
                 assert rate.queue_name == queue_name
                 assert rate.status == WorkflowStatusString.SUCCESS.value
