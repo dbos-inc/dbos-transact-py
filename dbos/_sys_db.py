@@ -1967,7 +1967,10 @@ class SystemDatabase:
                 sa.func.count().label("tasks_count"),
             )
             .where(SystemSchema.workflow_status.c.queue_name.isnot(None))
-            .group_by(SystemSchema.workflow_status.c.queue_name)
+            .group_by(
+                SystemSchema.workflow_status.c.queue_name,
+                SystemSchema.workflow_status.c.status,
+            )
         )
 
         if status:
@@ -1982,7 +1985,7 @@ class SystemDatabase:
             rows = conn.execute(query).fetchall()
 
         return [
-            QueueStatusCountOutput(queue_name=row[0], tasks_count=row[1], status=row[2])
+            QueueStatusCountOutput(queue_name=row[0], status=row[1], tasks_count=row[2])
             for row in rows
         ]
 

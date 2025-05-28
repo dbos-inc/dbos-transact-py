@@ -154,7 +154,7 @@ def test_enqueued_count(dbos: DBOS) -> None:
     for i, queue in enumerate(queues):
         for j in range(wf_per_queue):
             event_idx = i * wf_per_queue + j
-            h = queue.enqueue(event_workflow, ei=event_idx)
+            queue.enqueue(event_workflow, ei=event_idx)
             # Wait for `worker_concurrency` workflows to start
             if j < worker_concurrency:
                 start_events[event_idx].wait()
@@ -190,9 +190,11 @@ def test_enqueued_count(dbos: DBOS) -> None:
 
     # Check counting tasks without filtering by status
     all_counts = dbos._sys_db.queue_status_count()
-    assert len(all_counts) == len(queues)
+    assert len(all_counts) == len(queues) * 2
     for count in all_counts:
-        assert count.tasks_count == wf_per_queue
+        assert (
+            count.tasks_count == wf_per_queue / 2
+        )  # because we have two statuses: PENDING and ENQUEUED
 
     # unblock all workflows
     for end_event in end_events:
