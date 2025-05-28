@@ -237,16 +237,20 @@ _dbos_null_topic = "__null__topic__"
 
 
 class WorkflowStatusCountOutput:
-    def __init__(self, *, status: str, workflow_count: int) -> None:
+    def __init__(self, *, status: str, workflow_count: int, event_time: int) -> None:
         self.status = status
         self.workflow_count = workflow_count
+        self.event_time = event_time
 
 
 class QueueStatusCountOutput:
-    def __init__(self, *, queue_name: str, tasks_count: int, status: str) -> None:
+    def __init__(
+        self, *, queue_name: str, tasks_count: int, status: str, event_time: int
+    ) -> None:
         self.queue_name = queue_name
         self.tasks_count = tasks_count
         self.status = status
+        self.event_time = event_time
 
 
 class RateOutput:
@@ -257,11 +261,13 @@ class RateOutput:
         bucket: str,
         rate: float,
         status: Optional[str] = None,
+        event_time: Optional[int] = None,
     ) -> None:
         self.queue_name = queue_name
         self.bucket = bucket
         self.rate = rate
         self.status = status
+        self.event_time = event_time
 
 
 class ConditionCount(TypedDict):
@@ -1896,6 +1902,7 @@ class SystemDatabase:
         query = sa.select(
             SystemSchema.workflow_status.c.status,
             sa.func.count().label("workflow_count"),
+            sa.text("EXTRACT(EPOCH FROM NOW()) AS event_time"),
         ).group_by(SystemSchema.workflow_status.c.status)
 
         if status_filter:
@@ -1907,7 +1914,9 @@ class SystemDatabase:
             rows = conn.execute(query).fetchall()
 
         return [
-            WorkflowStatusCountOutput(status=row[0], workflow_count=row[1])
+            WorkflowStatusCountOutput(
+                status=row[0], workflow_count=row[1], event_time=row[2]
+            )
             for row in rows
         ]
 
@@ -1930,7 +1939,8 @@ class SystemDatabase:
             f"""
             SELECT
                 to_timestamp(FLOOR(updated_at / 1000 / {time_bucket_seconds}) * {time_bucket_seconds}) AT TIME ZONE 'UTC' AS bucket,
-                COUNT(*)::numeric / {time_bucket_seconds}.0 AS rate
+                COUNT(*)::numeric / {time_bucket_seconds}.0 AS rate,
+                EXTRACT(EPOCH FROM NOW()) AS event_time
             FROM dbos.workflow_status
             WHERE status = :status
             GROUP BY bucket
@@ -1942,7 +1952,10 @@ class SystemDatabase:
             rows = conn.execute(query, {"status": status}).fetchall()
 
         return [
-            RateOutput(bucket=row[0], rate=float(row[1]), status=status) for row in rows
+            RateOutput(
+                bucket=row[0], rate=float(row[1]), status=status, event_time=row[2]
+            )
+            for row in rows
         ]
 
     def queue_status_count(
@@ -1965,6 +1978,7 @@ class SystemDatabase:
                 SystemSchema.workflow_status.c.queue_name,
                 SystemSchema.workflow_status.c.status,
                 sa.func.count().label("tasks_count"),
+                sa.text("EXTRACT(EPOCH FROM NOW()) AS event_time"),
             )
             .where(SystemSchema.workflow_status.c.queue_name.isnot(None))
             .group_by(
@@ -1985,7 +1999,9 @@ class SystemDatabase:
             rows = conn.execute(query).fetchall()
 
         return [
-            QueueStatusCountOutput(queue_name=row[0], status=row[1], tasks_count=row[2])
+            QueueStatusCountOutput(
+                queue_name=row[0], status=row[1], tasks_count=row[2], event_time=row[3]
+            )
             for row in rows
         ]
 
@@ -2011,7 +2027,8 @@ class SystemDatabase:
             SELECT
             to_timestamp(FLOOR(updated_at / 1000 / {time_bucket_seconds}) * {time_bucket_seconds}) AT TIME ZONE 'UTC' AS bucket,
             COUNT(*)::numeric / {time_bucket_seconds}.0 AS rate,
-            queue_name
+            queue_name,
+            EXTRACT(EPOCH FROM NOW()) AS event_time
             FROM dbos.workflow_status
             WHERE queue_name IS NOT NULL
             AND status = :status
@@ -2034,7 +2051,11 @@ class SystemDatabase:
 
         return [
             RateOutput(
-                bucket=row[0], rate=float(row[1]), queue_name=row[2], status=status
+                bucket=row[0],
+                rate=float(row[1]),
+                queue_name=row[2],
+                status=status,
+                event_time=row[3],
             )
             for row in rows
         ]
