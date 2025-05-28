@@ -161,15 +161,18 @@ def test_enqueued_count(dbos: DBOS):
     for count in pending_counts:
         assert count.tasks_count == worker_concurrency
 
-    # Check filtering by status for ENQUEUED tasks (the default)
-    enqueued_counts = dbos._sys_db.queue_status_count()
+    # Check filtering by status for ENQUEUED tasks
+    enqueued_counts = dbos._sys_db.queue_status_count(
+        status=WorkflowStatusString.ENQUEUED.value
+    )
     assert len(enqueued_counts) == len(queues)
     for count in enqueued_counts:
         assert count.tasks_count == wf_per_queue - worker_concurrency
 
     # Check filtering by specific queue names for ENQUEUED status
     filtered_counts = dbos._sys_db.queue_status_count(
-        queue_name_filter=["queue_one", "queue_two"]
+        queue_name_filter=["queue_one", "queue_two"],
+        status=WorkflowStatusString.ENQUEUED.value,
     )
     assert len(filtered_counts) == 2
     for count in filtered_counts:
@@ -178,6 +181,12 @@ def test_enqueued_count(dbos: DBOS):
         "queue_one",
         "queue_two",
     }
+
+    # Check counting tasks without filtering by status
+    all_counts = dbos._sys_db.queue_status_count()
+    assert len(all_counts) == len(queues)
+    for count in all_counts:
+        assert count.tasks_count == wf_per_queue
 
     # unblock all workflows
     for end_event in end_events:

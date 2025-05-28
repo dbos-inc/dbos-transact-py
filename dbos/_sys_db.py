@@ -240,21 +240,18 @@ class WorkflowStatusCountOutput:
     def __init__(self, status: str, workflow_count: int) -> None:
         self.status = status
         self.workflow_count = workflow_count
-        self.label = "dbos.workflow.status_count"
 
 
 class QueueStatusCountOutput:
-    def __init__(self, queue_name: str, tasks_count: int, label: str) -> None:
+    def __init__(self, queue_name: str, tasks_count: int) -> None:
         self.queue_name = queue_name
         self.tasks_count = tasks_count
-        self.label = label
 
 
 class CompletionRateOutput:
-    def __init__(self, bucket: str, rate: float, label: str) -> None:
+    def __init__(self, bucket: str, rate: float) -> None:
         self.bucket = bucket
         self.rate = rate
-        self.label = label
 
 
 class ConditionCount(TypedDict):
@@ -1917,7 +1914,7 @@ class SystemDatabase:
             time_bucket_seconds (int): The size of the time bucket in seconds.
 
         Returns:
-            List[CompletionRateOutput]: A list of CompletionRateOutput objects containing bucket, rate, and label.
+            List[CompletionRateOutput]: A list of CompletionRateOutput objects containing bucket and a rate.
         """
         query = sa.text(
             f"""
@@ -1930,43 +1927,38 @@ class SystemDatabase:
             ORDER BY bucket;
             """
         )
-        print(query)
 
         with self.engine.begin() as conn:
             rows = conn.execute(query, {"status": status}).fetchall()
 
-        label = f"dbos.workflow.{status.lower()}_rate"
-        return [
-            CompletionRateOutput(bucket=row[0], rate=float(row[1]), label=label)
-            for row in rows
-        ]
+        return [CompletionRateOutput(bucket=row[0], rate=float(row[1])) for row in rows]
 
     def queue_status_count(
         self,
         queue_name_filter: Optional[List[str]] = None,
-        status: str = WorkflowStatusString.ENQUEUED.value,
+        status: Optional[str] = None,
     ) -> List[QueueStatusCountOutput]:
         """
         Retrieves the count of workflows grouped by their queue name and filtered by status.
 
         Args:
             queue_name_filter (Optional[List[str]]): A list of queue names to filter the query.
-            status (str): The workflow status to filter by. Defaults to ENQUEUED.
+            status (Optional[str]): The workflow status to filter by. Defaults to None.
 
         Returns:
-            List[EnqueuedCountOutput]: A list of EnqueuedCountOutput objects containing queue_name and queue_length.
+            List[QueueStatusCountOutput]: A list of QueueStatusCountOutput objects containing queue_name and tasks_count.
         """
         query = (
             sa.select(
                 SystemSchema.workflow_status.c.queue_name,
                 sa.func.count().label("tasks_count"),
             )
-            .where(
-                SystemSchema.workflow_status.c.status == status,
-                SystemSchema.workflow_status.c.queue_name.isnot(None),
-            )
+            .where(SystemSchema.workflow_status.c.queue_name.isnot(None))
             .group_by(SystemSchema.workflow_status.c.queue_name)
         )
+
+        if status:
+            query = query.where(SystemSchema.workflow_status.c.status == status)
 
         if queue_name_filter:
             query = query.where(
@@ -1976,9 +1968,8 @@ class SystemDatabase:
         with self.engine.begin() as conn:
             rows = conn.execute(query).fetchall()
 
-        label = f"dbos.queue.{status.lower()}_count"
         return [
-            QueueStatusCountOutput(queue_name=row[0], tasks_count=row[1], label=label)
+            QueueStatusCountOutput(queue_name=row[0], tasks_count=row[1])
             for row in rows
         ]
 
