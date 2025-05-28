@@ -243,11 +243,11 @@ class WorkflowStatusCountOutput:
         self.label = "dbos.workflow.status_count"
 
 
-class EnqueuedCountOutput:
-    def __init__(self, queue_name: str, queue_length: int) -> None:
+class QueueStatusCountOutput:
+    def __init__(self, queue_name: str, tasks_count: int, label: str) -> None:
         self.queue_name = queue_name
-        self.queue_length = queue_length
-        self.label = "dbos.queue.enqueued_count"
+        self.tasks_count = tasks_count
+        self.label = label
 
 
 class CompletionRateOutput:
@@ -1941,14 +1941,17 @@ class SystemDatabase:
             for row in rows
         ]
 
-    def enqueued_count(
-        self, queue_name_filter: Optional[List[str]] = None
-    ) -> List[EnqueuedCountOutput]:
+    def queue_status_count(
+        self,
+        queue_name_filter: Optional[List[str]] = None,
+        status: str = WorkflowStatusString.ENQUEUED.value,
+    ) -> List[QueueStatusCountOutput]:
         """
-        Retrieves the count of enqueued workflows grouped by their queue name.
+        Retrieves the count of workflows grouped by their queue name and filtered by status.
 
         Args:
             queue_name_filter (Optional[List[str]]): A list of queue names to filter the query.
+            status (str): The workflow status to filter by. Defaults to ENQUEUED.
 
         Returns:
             List[EnqueuedCountOutput]: A list of EnqueuedCountOutput objects containing queue_name and queue_length.
@@ -1956,11 +1959,10 @@ class SystemDatabase:
         query = (
             sa.select(
                 SystemSchema.workflow_status.c.queue_name,
-                sa.func.count().label("queue_length"),
+                sa.func.count().label("tasks_count"),
             )
             .where(
-                SystemSchema.workflow_status.c.status
-                == WorkflowStatusString.ENQUEUED.value,
+                SystemSchema.workflow_status.c.status == status,
                 SystemSchema.workflow_status.c.queue_name.isnot(None),
             )
             .group_by(SystemSchema.workflow_status.c.queue_name)
@@ -1974,8 +1976,10 @@ class SystemDatabase:
         with self.engine.begin() as conn:
             rows = conn.execute(query).fetchall()
 
+        label = f"dbos.queue.{status.lower()}_count"
         return [
-            EnqueuedCountOutput(queue_name=row[0], queue_length=row[1]) for row in rows
+            QueueStatusCountOutput(queue_name=row[0], tasks_count=row[1], label=label)
+            for row in rows
         ]
 
 

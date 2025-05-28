@@ -1,9 +1,11 @@
 import time
 from math import ceil
+from threading import Event
 
 from dbos import DBOS, WorkflowStatusString
 from dbos._queue import Queue
 from dbos._schemas.system_database import SystemSchema
+from tests.conftest import queue_entries_are_cleaned_up
 
 
 def test_workflow_status_count(dbos: DBOS):
@@ -52,48 +54,6 @@ def test_workflow_status_count(dbos: DBOS):
     assert len(filtered_counts) == 1
     assert filtered_counts[0].status == WorkflowStatusString.PENDING.value
     assert filtered_counts[0].workflow_count == N // 4
-
-
-queue_names = ["queue_one", "queue_two", "queue_three"]
-queues = [Queue(name) for name in queue_names]
-
-
-def test_enqueued_count(dbos: DBOS):
-    """
-    Test enqueued_count with global count and filtering.
-    """
-
-    # Define a single workflow
-    @dbos.workflow()
-    def simple_workflow():
-        return "result"
-
-    # Enqueue workflows into the pre-created queues
-    for queue in queues:
-        for _ in range(10):
-            queue.enqueue(simple_workflow)
-
-    # Create non-enqueued workflows
-    for _ in range(5):
-        dbos.start_workflow(simple_workflow)
-
-    # Check global count
-    global_counts = dbos._sys_db.enqueued_count()
-    assert len(global_counts) == 3
-    for count in global_counts:
-        assert count.queue_length == 10
-
-    # Check filtering by specific queue names
-    filtered_counts = dbos._sys_db.enqueued_count(
-        queue_name_filter=["queue_one", "queue_two"]
-    )
-    assert len(filtered_counts) == 2
-    for count in filtered_counts:
-        assert count.queue_length == 10
-    assert set([count.queue_name for count in filtered_counts]) == {
-        "queue_one",
-        "queue_two",
-    }
 
 
 def test_workflow_completion_rate(dbos: DBOS):
@@ -162,3 +122,64 @@ def test_workflow_completion_rate(dbos: DBOS):
                 assert rate.rate == expected_rate
             for rate in error_rates:
                 assert rate.rate == expected_rate
+
+
+def test_enqueued_count(dbos: DBOS):
+    """
+    Test enqueued_count with global count, filtering by queue names, and filtering by status.
+    """
+
+    queue_names = ["queue_one", "queue_two", "queue_three"]
+    worker_concurrency = 5
+    queues = [
+        Queue(name, worker_concurrency=worker_concurrency) for name in queue_names
+    ]
+    wf_per_queue = 10
+    start_events = [Event() for _ in range(len(queues) * wf_per_queue)]
+    end_events = [Event() for _ in range(len(queues) * wf_per_queue)]
+
+    # Define a single workflow that waits for an event
+    @dbos.workflow()
+    def event_workflow(i: int):
+        start_events[i].set()
+        end_events[i].wait()
+
+    # Enqueue workflows into the pre-created queues
+    for i, queue in enumerate(queues):
+        for j in range(wf_per_queue):
+            event_idx = i * wf_per_queue + j
+            h = queue.enqueue(event_workflow, i=event_idx)
+            # Wait for `worker_concurrency` workflows to start
+            if j < worker_concurrency:
+                start_events[event_idx].wait()
+
+    # Check counting number of running tasks
+    pending_counts = dbos._sys_db.queue_status_count(
+        status=WorkflowStatusString.PENDING.value
+    )
+    assert len(pending_counts) == len(queues)
+    for count in pending_counts:
+        assert count.tasks_count == worker_concurrency
+
+    # Check filtering by status for ENQUEUED tasks (the default)
+    enqueued_counts = dbos._sys_db.queue_status_count()
+    assert len(enqueued_counts) == len(queues)
+    for count in enqueued_counts:
+        assert count.tasks_count == wf_per_queue - worker_concurrency
+
+    # Check filtering by specific queue names for ENQUEUED status
+    filtered_counts = dbos._sys_db.queue_status_count(
+        queue_name_filter=["queue_one", "queue_two"]
+    )
+    assert len(filtered_counts) == 2
+    for count in filtered_counts:
+        assert count.tasks_count == wf_per_queue - worker_concurrency
+    assert set([count.queue_name for count in filtered_counts]) == {
+        "queue_one",
+        "queue_two",
+    }
+
+    # unblock all workflows
+    for end_event in end_events:
+        end_event.set()
+    assert queue_entries_are_cleaned_up(dbos)
