@@ -10,6 +10,7 @@ class BackgroundEventLoop:
     """
 
     def __init__(self) -> None:
+        self._main_loop: Optional[asyncio.AbstractEventLoop] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
@@ -18,6 +19,12 @@ class BackgroundEventLoop:
     def start(self) -> None:
         if self._running:
             return
+
+        try:
+            self.set_main_loop(asyncio.get_running_loop())
+        except:
+            # There's no event loop on the main thread
+            pass
 
         self._thread = threading.Thread(target=self._run_event_loop, daemon=True)
         self._thread.start()
@@ -58,10 +65,15 @@ class BackgroundEventLoop:
         await asyncio.gather(*tasks, return_exceptions=True)
         self._loop.stop()
 
+    def set_main_loop(self, loop: asyncio.AbstractEventLoop):
+        self._main_loop = loop
+
     T = TypeVar("T")
 
     def submit_coroutine(self, coro: Coroutine[Any, Any, T]) -> T:
         """Submit a coroutine to the background event loop"""
+        if self._main_loop is not None and self._main_loop.is_running():
+            return asyncio.run_coroutine_threadsafe(coro, self._main_loop).result()
         if self._loop is None:
             raise RuntimeError("Event loop not started")
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
