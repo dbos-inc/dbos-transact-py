@@ -7,6 +7,9 @@ class BackgroundEventLoop:
     """
     This is the event loop to which DBOS submits any coroutines that are not started from within an event loop.
     In particular, coroutines submitted to queues (such as from scheduled workflows) run on this event loop.
+
+    If a main event loop is known (whether because an event loop existed in the thread that called DBOS.launch
+    or because a FastAPI event loop was detected) then coroutines are submitted there instead.
     """
 
     def __init__(self) -> None:
