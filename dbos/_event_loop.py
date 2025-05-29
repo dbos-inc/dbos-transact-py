@@ -20,12 +20,7 @@ class BackgroundEventLoop:
         if self._running:
             return
 
-        try:
-            self.set_main_loop(asyncio.get_running_loop())
-        except:
-            # There's no event loop on the main thread
-            pass
-
+        self.set_main_loop()
         self._thread = threading.Thread(target=self._run_event_loop, daemon=True)
         self._thread.start()
         self._ready.wait()  # Wait until the loop is running
@@ -65,8 +60,16 @@ class BackgroundEventLoop:
         await asyncio.gather(*tasks, return_exceptions=True)
         self._loop.stop()
 
-    def set_main_loop(self, loop: asyncio.AbstractEventLoop):
-        self._main_loop = loop
+    def set_main_loop(self):
+        """
+        Set the main loop to the currently running event loop.
+        Should be called from the main thread.
+        """
+        try:
+            self._main_loop = asyncio.get_running_loop()
+        except:
+            # There's no running event loop to set
+            pass
 
     T = TypeVar("T")
 
