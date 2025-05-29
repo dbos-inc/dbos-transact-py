@@ -253,23 +253,6 @@ class QueueStatusCountOutput:
         self.event_time = event_time
 
 
-class RateOutput:
-    def __init__(
-        self,
-        *,
-        queue_name: Optional[str] = None,
-        bucket: str,
-        rate: float,
-        status: Optional[str] = None,
-        event_time: Optional[int] = None,
-    ) -> None:
-        self.queue_name = queue_name
-        self.bucket = bucket
-        self.rate = rate
-        self.status = status
-        self.event_time = event_time
-
-
 class ConditionCount(TypedDict):
     condition: threading.Condition
     count: int
@@ -1920,44 +1903,6 @@ class SystemDatabase:
             for row in rows
         ]
 
-    def workflow_completion_rate(
-        self,
-        status: str = WorkflowStatusString.SUCCESS.value,
-        time_bucket_seconds: int = 60,
-    ) -> List[RateOutput]:
-        """
-        Retrieves the completion rate of workflows grouped by time bucket.
-
-        Args:
-            status (str): The workflow status to filter by.
-            time_bucket_seconds (int): The size of the time bucket in seconds.
-
-        Returns:
-            List[RateOutput]: A list of RateOutput objects containing bucket and a rate.
-        """
-        query = sa.text(
-            f"""
-            SELECT
-                to_timestamp(FLOOR(updated_at / 1000 / {time_bucket_seconds}) * {time_bucket_seconds}) AT TIME ZONE 'UTC' AS bucket,
-                COUNT(*)::numeric / {time_bucket_seconds}.0 AS rate,
-                EXTRACT(EPOCH FROM NOW()) AS event_time
-            FROM dbos.workflow_status
-            WHERE status = :status
-            GROUP BY bucket
-            ORDER BY bucket;
-            """
-        )
-
-        with self.engine.begin() as conn:
-            rows = conn.execute(query, {"status": status}).fetchall()
-
-        return [
-            RateOutput(
-                bucket=row[0], rate=float(row[1]), status=status, event_time=row[2]
-            )
-            for row in rows
-        ]
-
     def queue_status_count(
         self,
         queue_name_filter: Optional[List[str]] = None,
@@ -2001,61 +1946,6 @@ class SystemDatabase:
         return [
             QueueStatusCountOutput(
                 queue_name=row[0], status=row[1], tasks_count=row[2], event_time=row[3]
-            )
-            for row in rows
-        ]
-
-    def queue_completion_rate(
-        self,
-        queue_name: Optional[str] = None,
-        time_bucket_seconds: int = 60,
-        status: Optional[str] = WorkflowStatusString.SUCCESS.value,
-    ) -> List[RateOutput]:
-        """
-        Retrieves the completion rate of workflows grouped by time bucket, filtered by queue name and status.
-
-        Args:
-            queue_name (Optional[str]): The queue name to filter by. If None, considers all tasks with a queue name.
-            time_bucket_seconds (int): The size of the time bucket in seconds.
-            status (Optional[str]): The workflow status to filter by. If None, considers all statuses.
-
-        Returns:
-            List[RateOutput]: A list of RateOutput objects containing bucket and a rate.
-        """
-        query = sa.text(
-            f"""
-            SELECT
-            to_timestamp(FLOOR(updated_at / 1000 / {time_bucket_seconds}) * {time_bucket_seconds}) AT TIME ZONE 'UTC' AS bucket,
-            COUNT(*)::numeric / {time_bucket_seconds}.0 AS rate,
-            queue_name,
-            EXTRACT(EPOCH FROM NOW()) AS event_time
-            FROM dbos.workflow_status
-            WHERE queue_name IS NOT NULL
-            AND status = :status
-            """
-            + ("AND queue_name = :queue_name" if queue_name else "")
-            + """
-            GROUP BY bucket, queue_name
-            ORDER BY bucket;
-            """
-        )
-
-        params = {}
-        if queue_name:
-            params["queue_name"] = queue_name
-        if status:
-            params["status"] = status
-
-        with self.engine.begin() as conn:
-            rows = conn.execute(query, params).fetchall()
-
-        return [
-            RateOutput(
-                bucket=row[0],
-                rate=float(row[1]),
-                queue_name=row[2],
-                status=status,
-                event_time=row[3],
             )
             for row in rows
         ]
