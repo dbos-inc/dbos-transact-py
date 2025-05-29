@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 # Public API
-from dbos import DBOS, DBOSConfig
+from dbos import DBOS, DBOSConfig, Queue
 
 # Private API because this is a unit test
 from dbos._context import assert_current_dbos_context
@@ -155,10 +155,21 @@ async def test_custom_lifespan(
     DBOS.destroy()
     DBOS(fastapi=app, config=config)
 
+    queue = Queue("queue")
+
     @app.get("/")
     @DBOS.workflow()
     async def resource_workflow() -> Any:
-        return {"resource": resource}
+        handle = await queue.enqueue_async(queue_workflow)
+        return {
+            "resource": resource,
+            "loop": id(asyncio.get_event_loop()),
+            "queue_loop": await handle.get_result(),
+        }
+
+    @DBOS.workflow()
+    async def queue_workflow():
+        return id(asyncio.get_event_loop())
 
     uvicorn_config = uvicorn.Config(
         app=app, host="127.0.0.1", port=port, log_level="error"
@@ -172,6 +183,9 @@ async def test_custom_lifespan(
     async with httpx.AsyncClient() as client:
         r = await client.get(f"http://127.0.0.1:{port}")
         assert r.json()["resource"] == 1
+        # Verify that both the FastAPI and enqueued workflows run in the main event loop
+        assert r.json()["loop"] == id(asyncio.get_event_loop())
+        assert r.json()["queue_loop"] == id(asyncio.get_event_loop())
 
     server.should_exit = True
     await server_task
