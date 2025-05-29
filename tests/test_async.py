@@ -574,7 +574,7 @@ async def test_max_parallel_workflows(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_main_loop(dbos: DBOS, config: DBOSConfig):
+async def test_main_loop(dbos: DBOS, config: DBOSConfig) -> None:
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
     DBOS.launch()

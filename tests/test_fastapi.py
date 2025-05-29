@@ -168,7 +168,7 @@ async def test_custom_lifespan(
         }
 
     @DBOS.workflow()
-    async def queue_workflow():
+    async def queue_workflow() -> int:
         return id(asyncio.get_event_loop())
 
     uvicorn_config = uvicorn.Config(

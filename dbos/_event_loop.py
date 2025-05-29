@@ -63,7 +63,7 @@ class BackgroundEventLoop:
         await asyncio.gather(*tasks, return_exceptions=True)
         self._loop.stop()
 
-    def set_main_loop(self):
+    def set_main_loop(self) -> None:
         """
         Set the main loop to the currently running event loop.
         Should be called from the main thread.
