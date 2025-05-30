@@ -7,7 +7,14 @@ import pytest
 import sqlalchemy as sa
 
 # Public API
-from dbos import DBOS, Queue, SetWorkflowID, SetWorkflowTimeout, WorkflowHandleAsync
+from dbos import (
+    DBOS,
+    DBOSConfig,
+    Queue,
+    SetWorkflowID,
+    SetWorkflowTimeout,
+    WorkflowHandleAsync,
+)
 from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandle
 from dbos._dbos_config import ConfigFile
@@ -564,3 +571,21 @@ async def test_max_parallel_workflows(dbos: DBOS) -> None:
     assert (
         end_time - begin_time < 10
     ), "All enqueued tasks should complete in less than 10 seconds"
+
+
+@pytest.mark.asyncio
+async def test_main_loop(dbos: DBOS, config: DBOSConfig) -> None:
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    queue = Queue("queue")
+
+    @DBOS.workflow()
+    async def test_workflow() -> int:
+        await DBOS.sleep_async(0.1)
+        return id(asyncio.get_running_loop())
+
+    # Verify the enqueued task is submitted into the main event loop
+    handle = await queue.enqueue_async(test_workflow)
+    assert await handle.get_result() == id(asyncio.get_running_loop())
