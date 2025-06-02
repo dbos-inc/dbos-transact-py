@@ -9,6 +9,7 @@ import sqlalchemy as sa
 from dbos import DBOS, Queue, SetWorkflowID
 from dbos._dbos import DBOSConfiguredInstance
 from dbos._error import DBOSWorkflowCancelledError
+from dbos._schemas.application_database import ApplicationSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import garbage_collect
 from tests.conftest import queue_entries_are_cleaned_up
@@ -648,6 +649,7 @@ def test_garbage_collection(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def blocked_workflow() -> str:
+        txn(0)
         event.wait()
         return DBOS.workflow_id
 
@@ -665,6 +667,14 @@ def test_garbage_collection(dbos: DBOS) -> None:
     workflows = DBOS.list_workflows()
     assert len(workflows) == 2
     assert workflows[0].workflow_id == handle.workflow_id
+    # Verify txn outputs are preserved only for the remaining workflows
+    with dbos._app_db.engine.begin() as c:
+        rows = c.execute(
+            sa.select(
+                ApplicationSchema.transaction_outputs.c.workflow_uuid,
+            )
+        ).all()
+        assert len(rows) == 2
 
     event.set()
     assert handle.get_result() is not None
