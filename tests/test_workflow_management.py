@@ -3,12 +3,14 @@ import uuid
 from typing import Callable
 
 import pytest
+import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, Queue, SetWorkflowID
 from dbos._dbos import DBOSConfiguredInstance
-from dbos._error import DBOSException, DBOSWorkflowCancelledError
+from dbos._error import DBOSWorkflowCancelledError
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
+from dbos._workflow_commands import garbage_collect
 from tests.conftest import queue_entries_are_cleaned_up
 
 
@@ -624,3 +626,45 @@ def test_fork_version(
     GlobalParams.app_version = new_version
     assert handle.get_result() == output
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_garbage_collection(dbos: DBOS) -> None:
+    event = threading.Event()
+
+    @DBOS.step()
+    def step(x: int) -> int:
+        return x
+
+    @DBOS.transaction()
+    def txn(x: int) -> int:
+        DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        return x
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        step(x)
+        txn(x)
+        return x
+
+    @DBOS.workflow()
+    def blocked_workflow() -> str:
+        event.wait()
+        return DBOS.workflow_id
+
+    num_workflows = 100
+
+    handle = DBOS.start_workflow(blocked_workflow)
+    for i in range(num_workflows):
+        assert workflow(i) == i
+
+    # Garbage collect all but one workflow
+    garbage_collect(
+        dbos._sys_db, dbos._app_db, time_threshold_ms=None, rows_threshold=1
+    )
+    # Verify two workflows remain: the newest and the blocked workflow
+    workflows = DBOS.list_workflows()
+    assert len(workflows) == 2
+    assert workflows[0].workflow_id == handle.workflow_id
+
+    event.set()
+    assert handle.get_result() is not None
