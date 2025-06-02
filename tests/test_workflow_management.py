@@ -1,4 +1,5 @@
 import threading
+import time
 import uuid
 from typing import Callable
 
@@ -11,7 +12,7 @@ from dbos._dbos import DBOSConfiguredInstance
 from dbos._error import DBOSWorkflowCancelledError
 from dbos._schemas.application_database import ApplicationSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
-from dbos._workflow_commands import garbage_collect
+from dbos._workflow_commands import garbage_collect, global_timeout
 from tests.conftest import queue_entries_are_cleaned_up
 
 
@@ -678,3 +679,28 @@ def test_garbage_collection(dbos: DBOS) -> None:
 
     event.set()
     assert handle.get_result() is not None
+
+
+def test_global_timeout(dbos: DBOS) -> None:
+    event = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow() -> str:
+        while not event.wait(0):
+            DBOS.sleep(0.1)
+        return DBOS.workflow_id
+
+    num_workflows = 10
+    handles = [DBOS.start_workflow(blocked_workflow) for _ in range(num_workflows)]
+
+    # Wait one second, start one final workflow, then timeout all workflows started more than one second ago
+    time.sleep(1)
+    final_handle = DBOS.start_workflow(blocked_workflow)
+    global_timeout(dbos, 1000)
+
+    # Verify all workflows started before the global timeout are cancelled
+    for handle in handles:
+        with pytest.raises(DBOSWorkflowCancelledError):
+            handle.get_result()
+    event.set()
+    final_handle.get_result() is not None
