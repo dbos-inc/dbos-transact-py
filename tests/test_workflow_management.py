@@ -677,6 +677,23 @@ def test_garbage_collection(dbos: DBOS) -> None:
         ).all()
         assert len(rows) == 2
 
+        # Garbage collect all previous workflows
+        garbage_collect(
+            dbos._sys_db, dbos._app_db, time_threshold_ms=0, rows_threshold=None
+        )
+    # Verify only the blocked workflow remains
+    workflows = DBOS.list_workflows()
+    assert len(workflows) == 1
+    assert workflows[0].workflow_id == handle.workflow_id
+    # Verify txn outputs are preserved only for the remaining workflow
+    with dbos._app_db.engine.begin() as c:
+        rows = c.execute(
+            sa.select(
+                ApplicationSchema.transaction_outputs.c.workflow_uuid,
+            )
+        ).all()
+        assert len(rows) == 1
+
     event.set()
     assert handle.get_result() is not None
 
