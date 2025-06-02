@@ -473,3 +473,23 @@ def test_admin_garbage_collect(dbos: DBOS) -> None:
     response.raise_for_status()
 
     assert len(DBOS.list_workflows()) == 0
+
+
+def test_admin_global_timeout(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow():
+        while True:
+            DBOS.sleep(0.1)
+
+    handle = DBOS.start_workflow(workflow)
+    time.sleep(1)
+
+    response = requests.post(
+        f"http://localhost:3001/dbos-global-timeout",
+        json={"timeout_ms": 1000},
+        timeout=5,
+    )
+    response.raise_for_status()
+    with pytest.raises(DBOSWorkflowCancelledError):
+        handle.get_result()
