@@ -704,6 +704,11 @@ def test_garbage_collection(dbos: DBOS) -> None:
     workflows = DBOS.list_workflows()
     assert len(workflows) == 0
 
+    # Verify GC runs without error on a blank table
+    garbage_collect(
+        dbos._sys_db, dbos._app_db, time_threshold_ms=None, rows_threshold=1
+    )
+
 
 def test_global_timeout(dbos: DBOS) -> None:
     event = threading.Event()

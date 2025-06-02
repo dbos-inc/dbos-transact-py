@@ -133,10 +133,12 @@ def garbage_collect(
 ) -> None:
     if time_threshold_ms is None and rows_threshold is None:
         return
-    cutoff_epoch_timestamp_ms, pending_workflow_ids = sys_db.garbage_collect(
+    result = sys_db.garbage_collect(
         time_threshold_ms=time_threshold_ms, rows_threshold=rows_threshold
     )
-    app_db.garbage_collect(cutoff_epoch_timestamp_ms, pending_workflow_ids)
+    if result is not None:
+        cutoff_epoch_timestamp_ms, pending_workflow_ids = result
+        app_db.garbage_collect(cutoff_epoch_timestamp_ms, pending_workflow_ids)
 
 
 def global_timeout(dbos: "DBOS", timeout_ms: int) -> None:
