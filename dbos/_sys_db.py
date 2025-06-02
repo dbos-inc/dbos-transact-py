@@ -1852,6 +1852,66 @@ class SystemDatabase:
             dbos_logger.error(f"Error connecting to the DBOS system database: {e}")
             raise
 
+    def garbage_collect(
+        self, time_threshold_ms: Optional[int], rows_threshold: Optional[int]
+    ) -> Optional[tuple[int, list[str]]]:
+        cutoff_epoch_timestamp_ms = None
+        if time_threshold_ms is not None:
+            cutoff_epoch_timestamp_ms = int(time.time() * 1000) - time_threshold_ms
+        if rows_threshold is not None:
+            with self.engine.begin() as c:
+                # Get the created_at timestamp of the rows_threshold newest row
+                result = c.execute(
+                    sa.select(SystemSchema.workflow_status.c.created_at)
+                    .order_by(SystemSchema.workflow_status.c.created_at.desc())
+                    .limit(1)
+                    .offset(rows_threshold - 1)
+                ).fetchone()
+
+                if result is not None:
+                    rows_based_cutoff = result[0]
+                    # Use the more restrictive cutoff (higher timestamp = more recent = more deletion)
+                    if (
+                        cutoff_epoch_timestamp_ms is None
+                        or rows_based_cutoff > cutoff_epoch_timestamp_ms
+                    ):
+                        cutoff_epoch_timestamp_ms = rows_based_cutoff
+
+        # If no cutoff was determined, return empty list
+        if cutoff_epoch_timestamp_ms is None:
+            return None
+
+        with self.engine.begin() as c:
+            # Delete all workflows older than cutoff that are NOT PENDING or ENQUEUED
+            c.execute(
+                sa.delete(SystemSchema.workflow_status)
+                .where(
+                    SystemSchema.workflow_status.c.created_at
+                    < cutoff_epoch_timestamp_ms
+                )
+                .where(
+                    ~SystemSchema.workflow_status.c.status.in_(
+                        [
+                            WorkflowStatusString.PENDING.value,
+                            WorkflowStatusString.ENQUEUED.value,
+                        ]
+                    )
+                )
+            )
+
+            # Then, get the IDs of all remaining old workflows
+            pending_enqueued_result = c.execute(
+                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                    SystemSchema.workflow_status.c.created_at
+                    < cutoff_epoch_timestamp_ms
+                )
+            ).fetchall()
+
+            # Return the final cutoff and workflow IDs
+            return cutoff_epoch_timestamp_ms, [
+                row[0] for row in pending_enqueued_result
+            ]
+
 
 def reset_system_database(postgres_db_url: sa.URL, sysdb_name: str) -> None:
     try:
