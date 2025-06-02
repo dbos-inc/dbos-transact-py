@@ -126,19 +126,18 @@ def fork_workflow(
 
 
 def garbage_collect(
-    sys_db: SystemDatabase,
-    app_db: ApplicationDatabase,
+    dbos: "DBOS",
     time_threshold_ms: Optional[int],
     rows_threshold: Optional[int],
 ) -> None:
     if time_threshold_ms is None and rows_threshold is None:
         return
-    result = sys_db.garbage_collect(
+    result = dbos._sys_db.garbage_collect(
         time_threshold_ms=time_threshold_ms, rows_threshold=rows_threshold
     )
     if result is not None:
         cutoff_epoch_timestamp_ms, pending_workflow_ids = result
-        app_db.garbage_collect(cutoff_epoch_timestamp_ms, pending_workflow_ids)
+        dbos._app_db.garbage_collect(cutoff_epoch_timestamp_ms, pending_workflow_ids)
 
 
 def global_timeout(dbos: "DBOS", timeout_ms: int) -> None:

@@ -7,6 +7,8 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any, List, Optional, TypedDict
 
+from dbos._workflow_commands import garbage_collect
+
 from ._context import SetWorkflowID
 from ._error import DBOSException
 from ._logger import dbos_logger
@@ -20,6 +22,7 @@ _health_check_path = "/dbos-healthz"
 _workflow_recovery_path = "/dbos-workflow-recovery"
 _deactivate_path = "/deactivate"
 _workflow_queues_metadata_path = "/dbos-workflow-queues-metadata"
+_garbage_collect_path = "/dbos-garbage-collect"
 # /workflows/:workflow_id/cancel
 # /workflows/:workflow_id/resume
 # /workflows/:workflow_id/restart
@@ -122,6 +125,17 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self._end_headers()
             self.wfile.write(json.dumps(workflow_ids).encode("utf-8"))
+        elif self.path == _garbage_collect_path:
+            inputs = json.loads(post_data.decode("utf-8"))
+            time_threshold_ms = inputs.get("time_threshold_ms", None)
+            rows_threshold = inputs.get("rows_threshold", None)
+            garbage_collect(
+                self.dbos,
+                time_threshold_ms=time_threshold_ms,
+                rows_threshold=rows_threshold,
+            )
+            self.send_response(204)
+            self._end_headers()
         else:
 
             restart_match = re.match(

@@ -453,3 +453,23 @@ def test_admin_workflow_fork(dbos: DBOS, sys_db: SystemDatabase) -> None:
     ), f"Expected application version to be {new_version}, but got {handle.get_status().app_version}"
 
     assert worked, "Workflow did not finish successfully"
+
+
+def test_admin_garbage_collect(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        return DBOS.workflow_id
+
+    workflow()
+
+    assert len(DBOS.list_workflows()) == 1
+
+    response = requests.post(
+        f"http://localhost:3001/dbos-garbage-collect",
+        json={"time_threshold_ms": 0},
+        timeout=5,
+    )
+    response.raise_for_status()
+
+    assert len(DBOS.list_workflows()) == 0
