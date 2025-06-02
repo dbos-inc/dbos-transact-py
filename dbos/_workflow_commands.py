@@ -118,3 +118,17 @@ def fork_workflow(
         application_version=application_version,
     )
     return forked_workflow_id
+
+
+def garbage_collect(
+    sys_db: SystemDatabase,
+    app_db: ApplicationDatabase,
+    time_threshold_ms: Optional[int],
+    rows_threshold: Optional[int],
+) -> None:
+    if time_threshold_ms is None and rows_threshold is None:
+        return
+    cutoff_epoch_timestamp_ms, pending_workflow_ids = sys_db.garbage_collect(
+        time_threshold_ms=time_threshold_ms, rows_threshold=rows_threshold
+    )
+    app_db.garbage_collect(cutoff_epoch_timestamp_ms, pending_workflow_ids)

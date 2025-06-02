@@ -1854,7 +1854,7 @@ class SystemDatabase:
 
     def garbage_collect(
         self, time_threshold_ms: Optional[int], rows_threshold: Optional[int]
-    ) -> Optional[tuple[int, list[str]]]:
+    ) -> tuple[int, list[str]]:
         cutoff_epoch_timestamp_ms = None
         if time_threshold_ms is not None:
             cutoff_epoch_timestamp_ms = int(time.time() * 1000) - time_threshold_ms
@@ -1877,9 +1877,7 @@ class SystemDatabase:
                     ):
                         cutoff_epoch_timestamp_ms = rows_based_cutoff
 
-        # If no cutoff was determined, return empty list
-        if cutoff_epoch_timestamp_ms is None:
-            return None
+        assert cutoff_epoch_timestamp_ms is not None
 
         with self.engine.begin() as c:
             # Delete all workflows older than cutoff that are NOT PENDING or ENQUEUED
