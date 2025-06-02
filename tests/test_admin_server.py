@@ -478,7 +478,7 @@ def test_admin_garbage_collect(dbos: DBOS) -> None:
 def test_admin_global_timeout(dbos: DBOS) -> None:
 
     @DBOS.workflow()
-    def workflow():
+    def workflow() -> None:
         while True:
             DBOS.sleep(0.1)
 
