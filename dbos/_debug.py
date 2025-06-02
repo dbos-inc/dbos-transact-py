@@ -15,11 +15,11 @@ class PythonModule:
 
 
 def debug_workflow(workflow_id: str, entrypoint: Union[str, PythonModule]) -> None:
-    # include the current directory (represented by empty string) in the search path
-    # if it not already included
-    if "" not in sys.path:
-        sys.path.insert(0, "")
     if isinstance(entrypoint, str):
+        # ensure the entrypoint parent directory is in sys.path
+        parent = str(Path(entrypoint).parent)
+        if parent not in sys.path:
+            sys.path.insert(0, parent)
         runpy.run_path(entrypoint)
     elif isinstance(entrypoint, PythonModule):
         runpy.run_module(entrypoint.module_name)
