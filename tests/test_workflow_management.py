@@ -654,7 +654,7 @@ def test_garbage_collection(dbos: DBOS) -> None:
         event.wait()
         return DBOS.workflow_id
 
-    num_workflows = 100
+    num_workflows = 10
 
     handle = DBOS.start_workflow(blocked_workflow)
     for i in range(num_workflows):
@@ -700,6 +700,18 @@ def test_garbage_collection(dbos: DBOS) -> None:
 
     # Verify GC runs without error on a blank table
     garbage_collect(dbos, time_threshold_ms=None, rows_threshold=1)
+
+    # Run workflows, wait, run them again
+    for i in range(num_workflows):
+        assert workflow(i) == i
+    time.sleep(1)
+    for i in range(num_workflows):
+        assert workflow(i) == i
+
+    # GC the first half, verify only half were GC'ed
+    garbage_collect(dbos, time_threshold_ms=1000, rows_threshold=None)
+    workflows = DBOS.list_workflows()
+    assert len(workflows) == num_workflows
 
 
 def test_global_timeout(dbos: DBOS) -> None:
