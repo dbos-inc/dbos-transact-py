@@ -1,8 +1,9 @@
+import time
 import uuid
-from typing import List, Optional
+from datetime import datetime
+from typing import TYPE_CHECKING, List, Optional
 
 from dbos._context import get_local_dbos_context
-from dbos._error import DBOSException
 
 from ._app_db import ApplicationDatabase
 from ._sys_db import (
@@ -11,7 +12,11 @@ from ._sys_db import (
     StepInfo,
     SystemDatabase,
     WorkflowStatus,
+    WorkflowStatusString,
 )
+
+if TYPE_CHECKING:
+    from ._dbos import DBOS
 
 
 def list_workflows(
@@ -118,3 +123,32 @@ def fork_workflow(
         application_version=application_version,
     )
     return forked_workflow_id
+
+
+def garbage_collect(
+    dbos: "DBOS",
+    cutoff_epoch_timestamp_ms: Optional[int],
+    rows_threshold: Optional[int],
+) -> None:
+    if cutoff_epoch_timestamp_ms is None and rows_threshold is None:
+        return
+    result = dbos._sys_db.garbage_collect(
+        cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
+        rows_threshold=rows_threshold,
+    )
+    if result is not None:
+        cutoff_epoch_timestamp_ms, pending_workflow_ids = result
+        dbos._app_db.garbage_collect(cutoff_epoch_timestamp_ms, pending_workflow_ids)
+
+
+def global_timeout(dbos: "DBOS", timeout_ms: int) -> None:
+    cutoff_epoch_timestamp_ms = int(time.time() * 1000) - timeout_ms
+    cutoff_iso = datetime.fromtimestamp(cutoff_epoch_timestamp_ms / 1000).isoformat()
+    for workflow in dbos.list_workflows(
+        status=WorkflowStatusString.PENDING.value, end_time=cutoff_iso
+    ):
+        dbos.cancel_workflow(workflow.workflow_id)
+    for workflow in dbos.list_workflows(
+        status=WorkflowStatusString.ENQUEUED.value, end_time=cutoff_iso
+    ):
+        dbos.cancel_workflow(workflow.workflow_id)

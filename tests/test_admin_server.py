@@ -566,3 +566,42 @@ def test_get_workflow_by_id(dbos: DBOS) -> None:
     assert (
         response.status_code == 404
     ), f"Expected status code 404, but got {response.status_code}"
+
+def test_admin_garbage_collect(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        return DBOS.workflow_id
+
+    workflow()
+
+    assert len(DBOS.list_workflows()) == 1
+
+    response = requests.post(
+        f"http://localhost:3001/dbos-garbage-collect",
+        json={"cutoff_epoch_timestamp_ms": int(time.time() * 1000)},
+        timeout=5,
+    )
+    response.raise_for_status()
+
+    assert len(DBOS.list_workflows()) == 0
+
+
+def test_admin_global_timeout(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow() -> None:
+        while True:
+            DBOS.sleep(0.1)
+
+    handle = DBOS.start_workflow(workflow)
+    time.sleep(1)
+
+    response = requests.post(
+        f"http://localhost:3001/dbos-global-timeout",
+        json={"timeout_ms": 1000},
+        timeout=5,
+    )
+    response.raise_for_status()
+    with pytest.raises(DBOSWorkflowCancelledError):
+        handle.get_result()

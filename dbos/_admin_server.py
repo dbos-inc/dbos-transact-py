@@ -7,6 +7,8 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any, List, Optional, TypedDict
 
+from dbos._workflow_commands import garbage_collect, global_timeout
+
 from ._context import SetWorkflowID
 from ._error import DBOSException
 from ._logger import dbos_logger
@@ -21,6 +23,8 @@ _health_check_path = "/dbos-healthz"
 _workflow_recovery_path = "/dbos-workflow-recovery"
 _deactivate_path = "/deactivate"
 _workflow_queues_metadata_path = "/dbos-workflow-queues-metadata"
+_garbage_collect_path = "/dbos-garbage-collect"
+_global_timeout_path = "/dbos-global-timeout"
 # /workflows/:workflow_id/cancel
 # /workflows/:workflow_id/resume
 # /workflows/:workflow_id/restart
@@ -152,6 +156,23 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                         "utf-8"
                     )
                 )
+        elif self.path == _garbage_collect_path:
+            inputs = json.loads(post_data.decode("utf-8"))
+            cutoff_epoch_timestamp_ms = inputs.get("cutoff_epoch_timestamp_ms", None)
+            rows_threshold = inputs.get("rows_threshold", None)
+            garbage_collect(
+                self.dbos,
+                cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
+                rows_threshold=rows_threshold,
+            )
+            self.send_response(204)
+            self._end_headers()
+        elif self.path == _global_timeout_path:
+            inputs = json.loads(post_data.decode("utf-8"))
+            timeout_ms = inputs.get("timeout_ms", None)
+            global_timeout(self.dbos, timeout_ms)
+            self.send_response(204)
+            self._end_headers()
         else:
             restart_match = re.match(
                 r"^/workflows/(?P<workflow_id>[^/]+)/restart$", self.path
