@@ -484,10 +484,10 @@ def test_admin_global_timeout(dbos: DBOS) -> None:
 
     handle = DBOS.start_workflow(workflow)
     time.sleep(1)
-
+    cutoff_epoch_timestamp_ms = int(time.time() * 1000) - 1000
     response = requests.post(
         f"http://localhost:3001/dbos-global-timeout",
-        json={"timeout_ms": 1000},
+        json={"cutoff_epoch_timestamp_ms": cutoff_epoch_timestamp_ms},
         timeout=5,
     )
     response.raise_for_status()
