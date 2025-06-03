@@ -5,7 +5,7 @@ import re
 import threading
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import TYPE_CHECKING, Any, List, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, List, Optional, TypedDict, Dict
 
 from dbos._workflow_commands import garbage_collect, global_timeout
 
@@ -312,7 +312,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         self._end_headers()
         self.wfile.write(json_steps)
 
-    def _handle_workflows(self, filters: dict) -> None:
+    def _handle_workflows(self, filters: Dict[str, Any]) -> None:
         input = GetWorkflowsInput()
         input.workflow_ids = filters.get("workflow_ids")
         input.name = filters.get("name")
