@@ -1,14 +1,18 @@
 import threading
+import time
 import uuid
 from typing import Callable
 
 import pytest
+import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, Queue, SetWorkflowID
 from dbos._dbos import DBOSConfiguredInstance
-from dbos._error import DBOSException, DBOSWorkflowCancelledError
+from dbos._error import DBOSWorkflowCancelledError
+from dbos._schemas.application_database import ApplicationSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
+from dbos._workflow_commands import garbage_collect, global_timeout
 from tests.conftest import queue_entries_are_cleaned_up
 
 
@@ -624,3 +628,120 @@ def test_fork_version(
     GlobalParams.app_version = new_version
     assert handle.get_result() == output
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_garbage_collection(dbos: DBOS) -> None:
+    event = threading.Event()
+
+    @DBOS.step()
+    def step(x: int) -> int:
+        return x
+
+    @DBOS.transaction()
+    def txn(x: int) -> int:
+        DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        return x
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        step(x)
+        txn(x)
+        return x
+
+    @DBOS.workflow()
+    def blocked_workflow() -> str:
+        txn(0)
+        event.wait()
+        return DBOS.workflow_id
+
+    num_workflows = 10
+
+    handle = DBOS.start_workflow(blocked_workflow)
+    for i in range(num_workflows):
+        assert workflow(i) == i
+
+    # Garbage collect all but one workflow
+    garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
+    # Verify two workflows remain: the newest and the blocked workflow
+    workflows = DBOS.list_workflows()
+    assert len(workflows) == 2
+    assert workflows[0].workflow_id == handle.workflow_id
+    # Verify txn outputs are preserved only for the remaining workflows
+    with dbos._app_db.engine.begin() as c:
+        rows = c.execute(
+            sa.select(
+                ApplicationSchema.transaction_outputs.c.workflow_uuid,
+            )
+        ).all()
+        assert len(rows) == 2
+
+    # Garbage collect all previous workflows
+    garbage_collect(
+        dbos, cutoff_epoch_timestamp_ms=int(time.time() * 1000), rows_threshold=None
+    )
+    # Verify only the blocked workflow remains
+    workflows = DBOS.list_workflows()
+    assert len(workflows) == 1
+    assert workflows[0].workflow_id == handle.workflow_id
+    # Verify txn outputs are preserved only for the remaining workflow
+    with dbos._app_db.engine.begin() as c:
+        rows = c.execute(
+            sa.select(
+                ApplicationSchema.transaction_outputs.c.workflow_uuid,
+            )
+        ).all()
+        assert len(rows) == 1
+
+    # Finish the blocked workflow, garbage collect everything
+    event.set()
+    assert handle.get_result() is not None
+    garbage_collect(
+        dbos, cutoff_epoch_timestamp_ms=int(time.time() * 1000), rows_threshold=None
+    )
+    # Verify only the blocked workflow remains
+    workflows = DBOS.list_workflows()
+    assert len(workflows) == 0
+
+    # Verify GC runs without error on a blank table
+    garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
+
+    # Run workflows, wait, run them again
+    for i in range(num_workflows):
+        assert workflow(i) == i
+    time.sleep(1)
+    for i in range(num_workflows):
+        assert workflow(i) == i
+
+    # GC the first half, verify only half were GC'ed
+    garbage_collect(
+        dbos,
+        cutoff_epoch_timestamp_ms=int(time.time() * 1000) - 1000,
+        rows_threshold=None,
+    )
+    workflows = DBOS.list_workflows()
+    assert len(workflows) == num_workflows
+
+
+def test_global_timeout(dbos: DBOS) -> None:
+    event = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow() -> str:
+        while not event.wait(0):
+            DBOS.sleep(0.1)
+        return DBOS.workflow_id
+
+    num_workflows = 10
+    handles = [DBOS.start_workflow(blocked_workflow) for _ in range(num_workflows)]
+
+    # Wait one second, start one final workflow, then timeout all workflows started more than one second ago
+    time.sleep(1)
+    final_handle = DBOS.start_workflow(blocked_workflow)
+    global_timeout(dbos, 1000)
+
+    # Verify all workflows started before the global timeout are cancelled
+    for handle in handles:
+        with pytest.raises(DBOSWorkflowCancelledError):
+            handle.get_result()
+    event.set()
+    final_handle.get_result() is not None

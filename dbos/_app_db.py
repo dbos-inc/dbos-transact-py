@@ -256,3 +256,21 @@ class ApplicationDatabase:
             )
 
             conn.execute(insert_stmt)
+
+    def garbage_collect(
+        self, cutoff_epoch_timestamp_ms: int, pending_workflow_ids: list[str]
+    ) -> None:
+        with self.engine.begin() as c:
+            delete_query = sa.delete(ApplicationSchema.transaction_outputs).where(
+                ApplicationSchema.transaction_outputs.c.created_at
+                < cutoff_epoch_timestamp_ms
+            )
+
+            if len(pending_workflow_ids) > 0:
+                delete_query = delete_query.where(
+                    ~ApplicationSchema.transaction_outputs.c.workflow_uuid.in_(
+                        pending_workflow_ids
+                    )
+                )
+
+            c.execute(delete_query)

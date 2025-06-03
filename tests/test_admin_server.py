@@ -453,3 +453,43 @@ def test_admin_workflow_fork(dbos: DBOS, sys_db: SystemDatabase) -> None:
     ), f"Expected application version to be {new_version}, but got {handle.get_status().app_version}"
 
     assert worked, "Workflow did not finish successfully"
+
+
+def test_admin_garbage_collect(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        return DBOS.workflow_id
+
+    workflow()
+
+    assert len(DBOS.list_workflows()) == 1
+
+    response = requests.post(
+        f"http://localhost:3001/dbos-garbage-collect",
+        json={"cutoff_epoch_timestamp_ms": int(time.time() * 1000)},
+        timeout=5,
+    )
+    response.raise_for_status()
+
+    assert len(DBOS.list_workflows()) == 0
+
+
+def test_admin_global_timeout(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow() -> None:
+        while True:
+            DBOS.sleep(0.1)
+
+    handle = DBOS.start_workflow(workflow)
+    time.sleep(1)
+
+    response = requests.post(
+        f"http://localhost:3001/dbos-global-timeout",
+        json={"timeout_ms": 1000},
+        timeout=5,
+    )
+    response.raise_for_status()
+    with pytest.raises(DBOSWorkflowCancelledError):
+        handle.get_result()
