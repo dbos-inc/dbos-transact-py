@@ -127,13 +127,14 @@ def fork_workflow(
 
 def garbage_collect(
     dbos: "DBOS",
-    time_threshold_ms: Optional[int],
+    cutoff_epoch_timestamp_ms: Optional[int],
     rows_threshold: Optional[int],
 ) -> None:
-    if time_threshold_ms is None and rows_threshold is None:
+    if cutoff_epoch_timestamp_ms is None and rows_threshold is None:
         return
     result = dbos._sys_db.garbage_collect(
-        time_threshold_ms=time_threshold_ms, rows_threshold=rows_threshold
+        cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
+        rows_threshold=rows_threshold,
     )
     if result is not None:
         cutoff_epoch_timestamp_ms, pending_workflow_ids = result

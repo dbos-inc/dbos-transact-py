@@ -1853,11 +1853,8 @@ class SystemDatabase:
             raise
 
     def garbage_collect(
-        self, time_threshold_ms: Optional[int], rows_threshold: Optional[int]
+        self, cutoff_epoch_timestamp_ms: Optional[int], rows_threshold: Optional[int]
     ) -> Optional[tuple[int, list[str]]]:
-        cutoff_epoch_timestamp_ms = None
-        if time_threshold_ms is not None:
-            cutoff_epoch_timestamp_ms = int(time.time() * 1000) - time_threshold_ms
         if rows_threshold is not None:
             with self.engine.begin() as c:
                 # Get the created_at timestamp of the rows_threshold newest row

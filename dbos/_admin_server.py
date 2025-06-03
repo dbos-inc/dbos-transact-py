@@ -128,11 +128,11 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(workflow_ids).encode("utf-8"))
         elif self.path == _garbage_collect_path:
             inputs = json.loads(post_data.decode("utf-8"))
-            time_threshold_ms = inputs.get("time_threshold_ms", None)
+            cutoff_epoch_timestamp_ms = inputs.get("cutoff_epoch_timestamp_ms", None)
             rows_threshold = inputs.get("rows_threshold", None)
             garbage_collect(
                 self.dbos,
-                time_threshold_ms=time_threshold_ms,
+                cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
                 rows_threshold=rows_threshold,
             )
             self.send_response(204)

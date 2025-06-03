@@ -467,7 +467,7 @@ def test_admin_garbage_collect(dbos: DBOS) -> None:
 
     response = requests.post(
         f"http://localhost:3001/dbos-garbage-collect",
-        json={"time_threshold_ms": 0},
+        json={"cutoff_epoch_timestamp_ms": int(time.time() * 1000)},
         timeout=5,
     )
     response.raise_for_status()

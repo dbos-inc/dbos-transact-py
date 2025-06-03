@@ -661,7 +661,7 @@ def test_garbage_collection(dbos: DBOS) -> None:
         assert workflow(i) == i
 
     # Garbage collect all but one workflow
-    garbage_collect(dbos, time_threshold_ms=None, rows_threshold=1)
+    garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
     # Verify two workflows remain: the newest and the blocked workflow
     workflows = DBOS.list_workflows()
     assert len(workflows) == 2
@@ -676,7 +676,9 @@ def test_garbage_collection(dbos: DBOS) -> None:
         assert len(rows) == 2
 
     # Garbage collect all previous workflows
-    garbage_collect(dbos, time_threshold_ms=0, rows_threshold=None)
+    garbage_collect(
+        dbos, cutoff_epoch_timestamp_ms=int(time.time() * 1000), rows_threshold=None
+    )
     # Verify only the blocked workflow remains
     workflows = DBOS.list_workflows()
     assert len(workflows) == 1
@@ -693,13 +695,15 @@ def test_garbage_collection(dbos: DBOS) -> None:
     # Finish the blocked workflow, garbage collect everything
     event.set()
     assert handle.get_result() is not None
-    garbage_collect(dbos, time_threshold_ms=0, rows_threshold=None)
+    garbage_collect(
+        dbos, cutoff_epoch_timestamp_ms=int(time.time() * 1000), rows_threshold=None
+    )
     # Verify only the blocked workflow remains
     workflows = DBOS.list_workflows()
     assert len(workflows) == 0
 
     # Verify GC runs without error on a blank table
-    garbage_collect(dbos, time_threshold_ms=None, rows_threshold=1)
+    garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
 
     # Run workflows, wait, run them again
     for i in range(num_workflows):
@@ -709,7 +713,11 @@ def test_garbage_collection(dbos: DBOS) -> None:
         assert workflow(i) == i
 
     # GC the first half, verify only half were GC'ed
-    garbage_collect(dbos, time_threshold_ms=1000, rows_threshold=None)
+    garbage_collect(
+        dbos,
+        cutoff_epoch_timestamp_ms=int(time.time() * 1000) - 1000,
+        rows_threshold=None,
+    )
     workflows = DBOS.list_workflows()
     assert len(workflows) == num_workflows
 
