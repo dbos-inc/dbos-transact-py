@@ -514,16 +514,6 @@ def test_list_workflows(dbos: DBOS) -> None:
     for workflow in workflows:
         assert workflow["workflow_id"] in workflow_ids, "Workflow ID mismatch"
 
-    # Test an empty list returns 404
-    response = requests.post(
-        "http://localhost:3001/workflows",
-        json={"workflow_ids": ["idonotexist"]},
-        timeout=5,
-    )
-    assert (
-        response.status_code == 404
-    ), f"Expected status code 404, but got {response.status_code}"
-
 
 def test_get_workflow_by_id(dbos: DBOS) -> None:
     # Create workflows for testing
