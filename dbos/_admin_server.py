@@ -25,6 +25,7 @@ _workflow_queues_metadata_path = "/dbos-workflow-queues-metadata"
 _garbage_collect_path = "/dbos-garbage-collect"
 _global_timeout_path = "/dbos-global-timeout"
 _queued_workflows_path = "/queues"
+_workflows_path = "/workflows"
 # /workflows/:workflow_id/cancel
 # /workflows/:workflow_id/resume
 # /workflows/:workflow_id/restart
@@ -141,7 +142,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self._end_headers()
             self.wfile.write(json.dumps(workflow_ids).encode("utf-8"))
-        elif self.path == "/workflows":
+        elif self.path == _workflows_path:
             try:
                 filters = json.loads(post_data.decode("utf-8")) if post_data else {}
                 self._handle_workflows(filters)
