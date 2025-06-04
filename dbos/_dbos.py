@@ -521,8 +521,8 @@ class DBOS:
                 handler.flush()
             add_otlp_to_all_loggers()
             add_transformer_to_all_loggers()
-        except Exception:
-            dbos_logger.error(f"DBOS failed to launch: {traceback.format_exc()}")
+        except Exception as e:
+            dbos_logger.error(f"DBOS failed to launch:", exc_info=e)
             raise
 
     @classmethod
