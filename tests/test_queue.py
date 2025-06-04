@@ -7,7 +7,7 @@ import subprocess
 import threading
 import time
 import uuid
-from typing import List
+from typing import Any, List
 from urllib.parse import quote
 
 import pytest
@@ -1486,7 +1486,28 @@ def test_complex_type(dbos: DBOS) -> None:
 
     handle = queue.enqueue(workflow, outer)
     result = handle.get_result()
-    assert isinstance(result, OuterType)
-    assert isinstance(result.inner, InnerType)
-    assert result.inner.one == outer.inner.one
-    assert result.inner.two == outer.inner.two
+
+    def check(result: Any) -> None:
+        assert isinstance(result, OuterType)
+        assert isinstance(result.inner, InnerType)
+        assert result.inner.one == outer.inner.one
+        assert result.inner.two == outer.inner.two
+
+    check(result)
+
+    start_event = threading.Event()
+    event = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow(input: OuterType) -> OuterType:
+        start_event.set()
+        event.wait()
+        return input
+
+    handle = queue.enqueue(blocked_workflow, outer)
+
+    start_event.wait()
+    recovery_handle = DBOS._recover_pending_workflows()[0]
+    event.set()
+    check(handle.get_result())
+    check(recovery_handle.get_result())
