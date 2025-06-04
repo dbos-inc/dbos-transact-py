@@ -1465,6 +1465,8 @@ def test_queue_executor_id(dbos: DBOS) -> None:
     assert handle.get_status().executor_id == original_executor_id
 
 
+# Non-basic types must be declared in an importable scope (so not inside a function)
+# to be serializable and deserializable
 class InnerType(BaseModel):
     one: str
     two: int
@@ -1481,6 +1483,7 @@ def test_complex_type(dbos: DBOS) -> None:
     def workflow(input: OuterType) -> OuterType:
         return input
 
+    # Verify a workflow with non-basic inputs and outputs can be enqueued
     inner = InnerType(one="one", two=2)
     outer = OuterType(inner=inner)
 
@@ -1495,6 +1498,7 @@ def test_complex_type(dbos: DBOS) -> None:
 
     check(result)
 
+    # Verify a workflow with non-basic inputs and outputs can be recovered
     start_event = threading.Event()
     event = threading.Event()
 
