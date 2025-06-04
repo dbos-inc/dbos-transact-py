@@ -3,7 +3,7 @@ import socket
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 import requests
@@ -455,6 +455,108 @@ def test_admin_workflow_fork(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert worked, "Workflow did not finish successfully"
 
 
+def test_list_workflows(dbos: DBOS) -> None:
+    # Create workflows for testing
+    @DBOS.workflow()
+    def test_workflow_1() -> None:
+        pass
+
+    @DBOS.workflow()
+    def test_workflow_2() -> None:
+        pass
+
+    # Start workflows
+    handle_1 = DBOS.start_workflow(test_workflow_1)
+    time.sleep(2)  # Sleep for 2 seconds between workflows
+    handle_2 = DBOS.start_workflow(test_workflow_2)
+
+    # Wait for workflows to complete
+    handle_1.get_result()
+    handle_2.get_result()
+
+    # List workflows and dynamically set the filter "name"
+    workflows_list = DBOS.list_workflows()
+    assert (
+        len(workflows_list) >= 2
+    ), f"Expected at least 2 workflows, but got {len(workflows_list)}"
+
+    workflow_ids = [w.workflow_id for w in workflows_list]
+
+    # Convert created_at to ISO 8601 format
+    created_at_second_workflow = workflows_list[1].created_at
+    assert (
+        created_at_second_workflow is not None
+    ), "created_at for the second workflow is None"
+    start_time_filter = datetime.fromtimestamp(
+        created_at_second_workflow / 1000, tz=timezone.utc
+    ).isoformat()
+
+    # Test POST /workflows with filters
+    filters = {
+        "workflow_ids": workflow_ids,
+        "start_time": start_time_filter,
+    }
+    response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
+    assert response.status_code == 200
+
+    workflows = response.json()
+    assert len(workflows) == 1, f"Expected 1 workflows, but got {len(workflows)}"
+    assert workflows[0]["workflow_id"] == handle_2.workflow_id, "Workflow ID mismatch"
+
+    # Test POST /workflows without filters
+    response = requests.post("http://localhost:3001/workflows", json={}, timeout=5)
+    assert response.status_code == 200
+
+    workflows = response.json()
+    assert len(workflows) == len(
+        workflows_list
+    ), f"Expected {len(workflows_list)} workflows, but got {len(workflows)}"
+    for workflow in workflows:
+        assert workflow["workflow_id"] in workflow_ids, "Workflow ID mismatch"
+
+
+def test_get_workflow_by_id(dbos: DBOS) -> None:
+    # Create workflows for testing
+    @DBOS.workflow()
+    def test_workflow_1() -> None:
+        pass
+
+    @DBOS.workflow()
+    def test_workflow_2() -> None:
+        pass
+
+    # Start workflows
+    handle_1 = DBOS.start_workflow(test_workflow_1)
+    handle_2 = DBOS.start_workflow(test_workflow_2)
+
+    # Wait for workflows to complete
+    handle_1.get_result()
+    handle_2.get_result()
+
+    # Get the workflow ID of the second workflow
+    workflow_id = handle_2.workflow_id
+
+    # Test GET /workflows/:workflow_id for an existing workflow
+    response = requests.get(f"http://localhost:3001/workflows/{workflow_id}", timeout=5)
+    assert (
+        response.status_code == 200
+    ), f"Expected status code 200, but got {response.status_code}"
+
+    workflow_data = response.json()
+    assert workflow_data["workflow_id"] == workflow_id, "Workflow ID mismatch"
+    assert (
+        workflow_data["status"] == "SUCCESS"
+    ), "Expected workflow status to be SUCCESS"
+
+    # Test GET /workflows/:workflow_id for a non-existing workflow
+    non_existing_workflow_id = "non-existing-id"
+    response = requests.get(
+        f"http://localhost:3001/workflows/{non_existing_workflow_id}", timeout=5
+    )
+    assert (
+        response.status_code == 404
+    ), f"Expected status code 404, but got {response.status_code}"
+
 def test_admin_garbage_collect(dbos: DBOS) -> None:
 
     @DBOS.workflow()
@@ -493,3 +595,48 @@ def test_admin_global_timeout(dbos: DBOS) -> None:
     response.raise_for_status()
     with pytest.raises(DBOSWorkflowCancelledError):
         handle.get_result()
+
+
+def test_queued_workflows_endpoint(dbos: DBOS) -> None:
+    """Test the /queues endpoint with various filters and scenarios."""
+
+    # Set up a queue for testing
+    test_queue1 = Queue("test-queue-1", concurrency=1)
+    test_queue2 = Queue("test-queue-2", concurrency=1)
+
+    @DBOS.workflow()
+    def blocking_workflow() -> str:
+        while True:
+            time.sleep(0.1)
+
+    # Enqueue some workflows to create queued entries
+    handles = []
+    handles.append(test_queue1.enqueue(blocking_workflow))
+    handles.append(test_queue1.enqueue(blocking_workflow))
+    handles.append(test_queue2.enqueue(blocking_workflow))
+
+    # Test basic queued workflows endpoint
+    response = requests.post("http://localhost:3001/queues", json={}, timeout=5)
+    assert response.status_code == 200, f"Expected status 200, got {response.status_code}"
+
+    queued_workflows = response.json()
+    assert isinstance(queued_workflows, list), "Response should be a list"
+    assert len(queued_workflows) == 3, f"Expected 3 queued workflows, got {len(queued_workflows)}"
+
+    # Test with filters
+    filters = {"queue_name": "test-queue-1", "limit": 1}
+    response = requests.post("http://localhost:3001/queues", json=filters, timeout=5)
+    assert response.status_code == 200
+
+    filtered_workflows = response.json()
+    assert isinstance(filtered_workflows, list), "Response should be a list"
+    assert len(filtered_workflows) == 1, f"Expected 1 workflow, got {len(filtered_workflows)}"
+
+    # Test with non-existent queue name
+    filters = {"queue_name": "non-existent-queue"}
+    response = requests.post("http://localhost:3001/queues", json=filters, timeout=5)
+    assert response.status_code == 200
+
+    empty_result = response.json()
+    assert isinstance(empty_result, list), "Response should be a list even for non-existent queue"
+    assert len(empty_result) == 0, "Expected no workflows for non-existent queue"
