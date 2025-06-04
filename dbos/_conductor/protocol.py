@@ -18,6 +18,7 @@ class MessageType(str, Enum):
     EXIST_PENDING_WORKFLOWS = "exist_pending_workflows"
     LIST_STEPS = "list_steps"
     FORK_WORKFLOW = "fork_workflow"
+    RETENTION = "retention"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -279,4 +280,21 @@ class ForkWorkflowRequest(BaseMessage):
 @dataclass
 class ForkWorkflowResponse(BaseMessage):
     new_workflow_id: Optional[str]
+    error_message: Optional[str] = None
+
+
+class RetentionBody(TypedDict):
+    gc_cutoff_epoch_ms: Optional[int]
+    gc_rows_threshold: Optional[int]
+    timeout_cutoff_epoch_ms: Optional[int]
+
+
+@dataclass
+class RetentionRequest(BaseMessage):
+    body: RetentionBody
+
+
+@dataclass
+class RetentionResponse(BaseMessage):
+    success: bool
     error_message: Optional[str] = None
