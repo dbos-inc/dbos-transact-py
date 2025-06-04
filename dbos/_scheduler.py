@@ -1,5 +1,4 @@
 import threading
-import traceback
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable
 
@@ -34,9 +33,9 @@ def scheduler_loop(
         with SetWorkflowID(f"sched-{func.__qualname__}-{nextExecTime.isoformat()}"):
             try:
                 scheduler_queue.enqueue(func, nextExecTime, datetime.now(timezone.utc))
-            except Exception:
+            except Exception as e:
                 dbos_logger.warning(
-                    f"Exception encountered in scheduler thread: {traceback.format_exc()})"
+                    f"Exception encountered in scheduler thread:", exc_info=e
                 )
 
 
