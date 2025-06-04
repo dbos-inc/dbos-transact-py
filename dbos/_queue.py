@@ -1,5 +1,4 @@
 import threading
-import traceback
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, TypedDict
 
 from psycopg import errors
