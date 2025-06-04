@@ -737,7 +737,8 @@ def test_global_timeout(dbos: DBOS) -> None:
     # Wait one second, start one final workflow, then timeout all workflows started more than one second ago
     time.sleep(1)
     final_handle = DBOS.start_workflow(blocked_workflow)
-    global_timeout(dbos, 1000)
+    cutoff_epoch_timestamp_ms = int(time.time() * 1000) - 1000
+    global_timeout(dbos, cutoff_epoch_timestamp_ms)
 
     # Verify all workflows started before the global timeout are cancelled
     for handle in handles:

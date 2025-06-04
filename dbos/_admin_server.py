@@ -181,8 +181,8 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self._end_headers()
         elif self.path == _global_timeout_path:
             inputs = json.loads(post_data.decode("utf-8"))
-            timeout_ms = inputs.get("timeout_ms", None)
-            global_timeout(self.dbos, timeout_ms)
+            cutoff_epoch_timestamp_ms = inputs.get("cutoff_epoch_timestamp_ms", None)
+            global_timeout(self.dbos, cutoff_epoch_timestamp_ms)
             self.send_response(204)
             self._end_headers()
         else:

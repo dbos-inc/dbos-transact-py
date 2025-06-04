@@ -13,7 +13,9 @@ from websockets.sync.connection import Connection
 from dbos._context import SetWorkflowID
 from dbos._utils import GlobalParams
 from dbos._workflow_commands import (
+    garbage_collect,
     get_workflow,
+    global_timeout,
     list_queued_workflows,
     list_workflow_steps,
     list_workflows,
@@ -356,6 +358,41 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(list_steps_response.to_json())
+                        elif msg_type == p.MessageType.RETENTION:
+                            retention_message = p.RetentionRequest.from_json(message)
+                            success = True
+                            try:
+                                garbage_collect(
+                                    self.dbos,
+                                    cutoff_epoch_timestamp_ms=retention_message.body[
+                                        "gc_cutoff_epoch_ms"
+                                    ],
+                                    rows_threshold=retention_message.body[
+                                        "gc_rows_threshold"
+                                    ],
+                                )
+                                if (
+                                    retention_message.body["timeout_cutoff_epoch_ms"]
+                                    is not None
+                                ):
+                                    global_timeout(
+                                        self.dbos,
+                                        retention_message.body[
+                                            "timeout_cutoff_epoch_ms"
+                                        ],
+                                    )
+                            except Exception as e:
+                                error_message = f"Exception encountered during enforcing retention policy: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                                success = False
+
+                            retention_response = p.RetentionResponse(
+                                type=p.MessageType.RETENTION,
+                                request_id=base_message.request_id,
+                                success=success,
+                                error_message=error_message,
+                            )
+                            websocket.send(retention_response.to_json())
                         else:
                             self.dbos.logger.warning(
                                 f"Unexpected message type: {msg_type}"

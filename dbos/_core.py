@@ -404,9 +404,9 @@ def _execute_workflow_wthread(
                     return dbos._background_event_loop.submit_coroutine(
                         cast(Pending[R], result)()
                     )
-            except Exception:
+            except Exception as e:
                 dbos.logger.error(
-                    f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
+                    f"Exception encountered in asynchronous workflow:", exc_info=e
                 )
                 raise
 
@@ -430,9 +430,9 @@ async def _execute_workflow_async(
                     _get_wf_invoke_func(dbos, status)
                 )
                 return await result()
-            except Exception:
+            except Exception as e:
                 dbos.logger.error(
-                    f"Exception encountered in asynchronous workflow: {traceback.format_exc()}"
+                    f"Exception encountered in asynchronous workflow:", exc_info=e
                 )
                 raise
 

@@ -1,7 +1,5 @@
-import os
 import threading
 import time
-import traceback
 from typing import TYPE_CHECKING, Any, List
 
 from dbos._utils import GlobalParams
@@ -39,9 +37,9 @@ def startup_recovery_thread(
             time.sleep(1)
         except Exception as e:
             dbos.logger.error(
-                f"Exception encountered when recovering workflows: {traceback.format_exc()}"
+                f"Exception encountered when recovering workflows:", exc_info=e
             )
-            raise e
+            raise
 
 
 def recover_pending_workflows(
@@ -59,9 +57,9 @@ def recover_pending_workflows(
                 workflow_handles.append(handle)
             except Exception as e:
                 dbos.logger.error(
-                    f"Exception encountered when recovering workflows: {traceback.format_exc()}"
+                    f"Exception encountered when recovering workflows:", exc_info=e
                 )
-                raise e
+                raise
         dbos.logger.info(
             f"Recovering {len(pending_workflows)} workflows for executor {executor_id} from version {GlobalParams.app_version}"
         )
