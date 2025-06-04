@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 import pytest
 import sqlalchemy as sa
+from pydantic import BaseModel
 
 from dbos import (
     DBOS,
@@ -1462,3 +1463,30 @@ def test_queue_executor_id(dbos: DBOS) -> None:
         handle = queue.enqueue(example_workflow)
         assert handle.get_result() == wfid
     assert handle.get_status().executor_id == original_executor_id
+
+
+class InnerType(BaseModel):
+    one: str
+    two: int
+
+
+class OuterType(BaseModel):
+    inner: InnerType
+
+
+def test_complex_type(dbos: DBOS) -> None:
+    queue = Queue("test_queue")
+
+    @DBOS.workflow()
+    def workflow(input: OuterType) -> OuterType:
+        return input
+
+    inner = InnerType(one="one", two=2)
+    outer = OuterType(inner=inner)
+
+    handle = queue.enqueue(workflow, outer)
+    result = handle.get_result()
+    assert isinstance(result, OuterType)
+    assert isinstance(result.inner, InnerType)
+    assert result.inner.one == outer.inner.one
+    assert result.inner.two == outer.inner.two
