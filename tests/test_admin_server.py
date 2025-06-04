@@ -595,3 +595,48 @@ def test_admin_global_timeout(dbos: DBOS) -> None:
     response.raise_for_status()
     with pytest.raises(DBOSWorkflowCancelledError):
         handle.get_result()
+
+
+def test_queued_workflows_endpoint(dbos: DBOS) -> None:
+    """Test the /queues endpoint with various filters and scenarios."""
+
+    # Set up a queue for testing
+    test_queue1 = Queue("test-queue-1", concurrency=1)
+    test_queue2 = Queue("test-queue-2", concurrency=1)
+
+    @DBOS.workflow()
+    def blocking_workflow() -> str:
+        while True:
+            time.sleep(0.1)
+
+    # Enqueue some workflows to create queued entries
+    handles = []
+    handles.append(test_queue1.enqueue(blocking_workflow))
+    handles.append(test_queue1.enqueue(blocking_workflow))
+    handles.append(test_queue2.enqueue(blocking_workflow))
+
+    # Test basic queued workflows endpoint
+    response = requests.post("http://localhost:3001/queues", json={}, timeout=5)
+    assert response.status_code == 200, f"Expected status 200, got {response.status_code}"
+
+    queued_workflows = response.json()
+    assert isinstance(queued_workflows, list), "Response should be a list"
+    assert len(queued_workflows) == 3, f"Expected 3 queued workflows, got {len(queued_workflows)}"
+
+    # Test with filters
+    filters = {"queue_name": "test-queue-1", "limit": 1}
+    response = requests.post("http://localhost:3001/queues", json=filters, timeout=5)
+    assert response.status_code == 200
+
+    filtered_workflows = response.json()
+    assert isinstance(filtered_workflows, list), "Response should be a list"
+    assert len(filtered_workflows) == 1, f"Expected 1 workflow, got {len(filtered_workflows)}"
+
+    # Test with non-existent queue name
+    filters = {"queue_name": "non-existent-queue"}
+    response = requests.post("http://localhost:3001/queues", json=filters, timeout=5)
+    assert response.status_code == 200
+
+    empty_result = response.json()
+    assert isinstance(empty_result, list), "Response should be a list even for non-existent queue"
+    assert len(empty_result) == 0, "Expected no workflows for non-existent queue"

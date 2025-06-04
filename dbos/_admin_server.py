@@ -13,7 +13,6 @@ from ._context import SetWorkflowID
 from ._error import DBOSException
 from ._logger import dbos_logger
 from ._recovery import recover_pending_workflows
-from ._sys_db import GetWorkflowsInput
 from ._utils import GlobalParams
 
 if TYPE_CHECKING:
@@ -25,6 +24,7 @@ _deactivate_path = "/deactivate"
 _workflow_queues_metadata_path = "/dbos-workflow-queues-metadata"
 _garbage_collect_path = "/dbos-garbage-collect"
 _global_timeout_path = "/dbos-global-timeout"
+_queued_workflows_path = "/queues"
 # /workflows/:workflow_id/cancel
 # /workflows/:workflow_id/resume
 # /workflows/:workflow_id/restart
@@ -112,9 +112,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 self._handle_steps(workflow_id)
             elif workflow_match:
                 workflow_id = workflow_match.group("workflow_id")
-                input = GetWorkflowsInput()
-                input.workflow_ids = [workflow_id]
-                workflows = self.dbos._sys_db.get_workflows(input)
+                workflows = self.dbos.list_workflows(workflow_ids=[workflow_id])
                 if not workflows:
                     self.send_response(404)
                     self._end_headers()
@@ -147,6 +145,19 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             try:
                 filters = json.loads(post_data.decode("utf-8")) if post_data else {}
                 self._handle_workflows(filters)
+            except (json.JSONDecodeError, AttributeError) as e:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps({"error": f"Invalid JSON input: {str(e)}"}).encode(
+                        "utf-8"
+                    )
+                )
+        elif self.path == _queued_workflows_path:
+            try:
+                filters = json.loads(post_data.decode("utf-8")) if post_data else {}
+                self._handle_queued_workflows(filters)
             except (json.JSONDecodeError, AttributeError) as e:
                 self.send_response(400)
                 self.send_header("Content-Type", "application/json")
@@ -313,20 +324,40 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(json_steps)
 
     def _handle_workflows(self, filters: Dict[str, Any]) -> None:
-        input = GetWorkflowsInput()
-        input.workflow_ids = filters.get("workflow_ids")
-        input.name = filters.get("name")
-        input.authenticated_user = filters.get("authenticated_user")
-        input.start_time = filters.get("start_time")
-        input.end_time = filters.get("end_time")
-        input.status = filters.get("status")
-        input.application_version = filters.get("application_version")
-        input.limit = filters.get("limit")
-        input.offset = filters.get("offset")
-        input.sort_desc = filters.get("sort_desc", False)
-        input.workflow_id_prefix = filters.get("workflow_id_prefix")
+        workflows = self.dbos.list_workflows(
+            workflow_ids=filters.get("workflow_ids"),
+            name=filters.get("name"),
+            start_time=filters.get("start_time"),
+            end_time=filters.get("end_time"),
+            status=filters.get("status"),
+            app_version=filters.get("application_version"),
+            limit=filters.get("limit"),
+            offset=filters.get("offset"),
+            sort_desc=filters.get("sort_desc", False),
+            workflow_id_prefix=filters.get("workflow_id_prefix"),
+        )
 
-        workflows = self.dbos._sys_db.get_workflows(input)
+        response_body = json.dumps(
+            [workflow.__dict__ for workflow in workflows]
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response_body)))
+        self._end_headers()
+        self.wfile.write(response_body)
+
+    def _handle_queued_workflows(self, filters: Dict[str, Any]) -> None:
+        workflows = self.dbos.list_queued_workflows(
+            queue_name=filters.get("queue_name"),
+            name=filters.get("name"),
+            start_time=filters.get("start_time"),
+            end_time=filters.get("end_time"),
+            status=filters.get("status"),
+            limit=filters.get("limit"),
+            offset=filters.get("offset"),
+            sort_desc=filters.get("sort_desc", False),
+        )
+
         response_body = json.dumps(
             [workflow.__dict__ for workflow in workflows]
         ).encode("utf-8")
