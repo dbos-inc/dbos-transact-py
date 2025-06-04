@@ -141,8 +141,7 @@ def garbage_collect(
         dbos._app_db.garbage_collect(cutoff_epoch_timestamp_ms, pending_workflow_ids)
 
 
-def global_timeout(dbos: "DBOS", timeout_ms: int) -> None:
-    cutoff_epoch_timestamp_ms = int(time.time() * 1000) - timeout_ms
+def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
     cutoff_iso = datetime.fromtimestamp(cutoff_epoch_timestamp_ms / 1000).isoformat()
     for workflow in dbos.list_workflows(
         status=WorkflowStatusString.PENDING.value, end_time=cutoff_iso
