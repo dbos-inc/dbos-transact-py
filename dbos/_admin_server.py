@@ -5,7 +5,7 @@ import re
 import threading
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import TYPE_CHECKING, Any, List, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, List, Optional, TypedDict, Dict
 
 from dbos._workflow_commands import garbage_collect, global_timeout
 
@@ -24,6 +24,8 @@ _deactivate_path = "/deactivate"
 _workflow_queues_metadata_path = "/dbos-workflow-queues-metadata"
 _garbage_collect_path = "/dbos-garbage-collect"
 _global_timeout_path = "/dbos-global-timeout"
+_queued_workflows_path = "/queues"
+_workflows_path = "/workflows"
 # /workflows/:workflow_id/cancel
 # /workflows/:workflow_id/resume
 # /workflows/:workflow_id/restart
@@ -104,10 +106,24 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             steps_match = re.match(
                 r"^/workflows/(?P<workflow_id>[^/]+)/steps$", self.path
             )
+            workflow_match = re.match(r"^/workflows/(?P<workflow_id>[^/]+)$", self.path)
 
             if steps_match:
                 workflow_id = steps_match.group("workflow_id")
                 self._handle_steps(workflow_id)
+            elif workflow_match:
+                workflow_id = workflow_match.group("workflow_id")
+                workflows = self.dbos.list_workflows(workflow_ids=[workflow_id])
+                if not workflows:
+                    self.send_response(404)
+                    self._end_headers()
+                    return
+                response_body = json.dumps(workflows[0].__dict__).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response_body)))
+                self._end_headers()
+                self.wfile.write(response_body)
             else:
                 self.send_response(404)
                 self._end_headers()
@@ -126,6 +142,32 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self._end_headers()
             self.wfile.write(json.dumps(workflow_ids).encode("utf-8"))
+        elif self.path == _workflows_path:
+            try:
+                filters = json.loads(post_data.decode("utf-8")) if post_data else {}
+                self._handle_workflows(filters)
+            except (json.JSONDecodeError, AttributeError) as e:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps({"error": f"Invalid JSON input: {str(e)}"}).encode(
+                        "utf-8"
+                    )
+                )
+        elif self.path == _queued_workflows_path:
+            try:
+                filters = json.loads(post_data.decode("utf-8")) if post_data else {}
+                self._handle_queued_workflows(filters)
+            except (json.JSONDecodeError, AttributeError) as e:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps({"error": f"Invalid JSON input: {str(e)}"}).encode(
+                        "utf-8"
+                    )
+                )
         elif self.path == _garbage_collect_path:
             inputs = json.loads(post_data.decode("utf-8"))
             cutoff_epoch_timestamp_ms = inputs.get("cutoff_epoch_timestamp_ms", None)
@@ -139,12 +181,11 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self._end_headers()
         elif self.path == _global_timeout_path:
             inputs = json.loads(post_data.decode("utf-8"))
-            timeout_ms = inputs.get("timeout_ms", None)
-            global_timeout(self.dbos, timeout_ms)
+            cutoff_epoch_timestamp_ms = inputs.get("cutoff_epoch_timestamp_ms", None)
+            global_timeout(self.dbos, cutoff_epoch_timestamp_ms)
             self.send_response(204)
             self._end_headers()
         else:
-
             restart_match = re.match(
                 r"^/workflows/(?P<workflow_id>[^/]+)/restart$", self.path
             )
@@ -282,6 +323,50 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self._end_headers()
         self.wfile.write(json_steps)
+
+    def _handle_workflows(self, filters: Dict[str, Any]) -> None:
+        workflows = self.dbos.list_workflows(
+            workflow_ids=filters.get("workflow_ids"),
+            name=filters.get("name"),
+            start_time=filters.get("start_time"),
+            end_time=filters.get("end_time"),
+            status=filters.get("status"),
+            app_version=filters.get("application_version"),
+            limit=filters.get("limit"),
+            offset=filters.get("offset"),
+            sort_desc=filters.get("sort_desc", False),
+            workflow_id_prefix=filters.get("workflow_id_prefix"),
+        )
+
+        response_body = json.dumps(
+            [workflow.__dict__ for workflow in workflows]
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response_body)))
+        self._end_headers()
+        self.wfile.write(response_body)
+
+    def _handle_queued_workflows(self, filters: Dict[str, Any]) -> None:
+        workflows = self.dbos.list_queued_workflows(
+            queue_name=filters.get("queue_name"),
+            name=filters.get("name"),
+            start_time=filters.get("start_time"),
+            end_time=filters.get("end_time"),
+            status=filters.get("status"),
+            limit=filters.get("limit"),
+            offset=filters.get("offset"),
+            sort_desc=filters.get("sort_desc", False),
+        )
+
+        response_body = json.dumps(
+            [workflow.__dict__ for workflow in workflows]
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response_body)))
+        self._end_headers()
+        self.wfile.write(response_body)
 
 
 # Be consistent with DBOS-TS response.
