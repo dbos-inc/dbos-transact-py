@@ -7,11 +7,12 @@ import subprocess
 import threading
 import time
 import uuid
-from typing import List
+from typing import Any, List
 from urllib.parse import quote
 
 import pytest
 import sqlalchemy as sa
+from pydantic import BaseModel
 
 from dbos import (
     DBOS,
@@ -1462,3 +1463,55 @@ def test_queue_executor_id(dbos: DBOS) -> None:
         handle = queue.enqueue(example_workflow)
         assert handle.get_result() == wfid
     assert handle.get_status().executor_id == original_executor_id
+
+
+# Non-basic types must be declared in an importable scope (so not inside a function)
+# to be serializable and deserializable
+class InnerType(BaseModel):
+    one: str
+    two: int
+
+
+class OuterType(BaseModel):
+    inner: InnerType
+
+
+def test_complex_type(dbos: DBOS) -> None:
+    queue = Queue("test_queue")
+
+    @DBOS.workflow()
+    def workflow(input: OuterType) -> OuterType:
+        return input
+
+    # Verify a workflow with non-basic inputs and outputs can be enqueued
+    inner = InnerType(one="one", two=2)
+    outer = OuterType(inner=inner)
+
+    handle = queue.enqueue(workflow, outer)
+    result = handle.get_result()
+
+    def check(result: Any) -> None:
+        assert isinstance(result, OuterType)
+        assert isinstance(result.inner, InnerType)
+        assert result.inner.one == outer.inner.one
+        assert result.inner.two == outer.inner.two
+
+    check(result)
+
+    # Verify a workflow with non-basic inputs and outputs can be recovered
+    start_event = threading.Event()
+    event = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow(input: OuterType) -> OuterType:
+        start_event.set()
+        event.wait()
+        return input
+
+    handle = queue.enqueue(blocked_workflow, outer)
+
+    start_event.wait()
+    recovery_handle = DBOS._recover_pending_workflows()[0]
+    event.set()
+    check(handle.get_result())
+    check(recovery_handle.get_result())
