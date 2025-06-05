@@ -5,7 +5,7 @@ import re
 import threading
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import TYPE_CHECKING, Any, List, Optional, TypedDict, Dict
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict
 
 from dbos._workflow_commands import garbage_collect, global_timeout
 
