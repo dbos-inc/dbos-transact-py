@@ -37,7 +37,7 @@ class Outcome(Protocol[T]):
         self,
         attempts: int,
         on_exception: Callable[[int, BaseException], float],
-        exceeded_retries: Callable[[int], BaseException],
+        exceeded_retries: Callable[[int, list[BaseException]], BaseException],
     ) -> "Outcome[T]": ...
 
     def intercept(
@@ -96,23 +96,25 @@ class Immediate(Outcome[T]):
         func: Callable[[], T],
         attempts: int,
         on_exception: Callable[[int, BaseException], float],
-        exceeded_retries: Callable[[int], BaseException],
+        exceeded_retries: Callable[[int, list[BaseException]], BaseException],
     ) -> T:
+        errors: list[BaseException] = []
         for i in range(attempts):
             try:
                 with EnterDBOSStepRetry(i, attempts):
                     return func()
             except Exception as exp:
+                errors.append(exp)
                 wait_time = on_exception(i, exp)
                 time.sleep(wait_time)
 
-        raise exceeded_retries(attempts)
+        raise exceeded_retries(attempts, errors)
 
     def retry(
         self,
         attempts: int,
         on_exception: Callable[[int, BaseException], float],
-        exceeded_retries: Callable[[int], BaseException],
+        exceeded_retries: Callable[[int, list[BaseException]], BaseException],
     ) -> "Immediate[T]":
         assert attempts > 0
         return Immediate[T](
@@ -183,23 +185,25 @@ class Pending(Outcome[T]):
         func: Callable[[], Coroutine[Any, Any, T]],
         attempts: int,
         on_exception: Callable[[int, BaseException], float],
-        exceeded_retries: Callable[[int], BaseException],
+        exceeded_retries: Callable[[int, list[BaseException]], BaseException],
     ) -> T:
+        errors: list[BaseException] = []
         for i in range(attempts):
             try:
                 with EnterDBOSStepRetry(i, attempts):
                     return await func()
             except Exception as exp:
+                errors.append(exp)
                 wait_time = on_exception(i, exp)
                 await asyncio.sleep(wait_time)
 
-        raise exceeded_retries(attempts)
+        raise exceeded_retries(attempts, errors)
 
     def retry(
         self,
         attempts: int,
         on_exception: Callable[[int, BaseException], float],
-        exceeded_retries: Callable[[int], BaseException],
+        exceeded_retries: Callable[[int, list[BaseException]], BaseException],
     ) -> "Pending[T]":
         assert attempts > 0
         return Pending[T](

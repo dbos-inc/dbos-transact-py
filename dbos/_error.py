@@ -150,9 +150,12 @@ class DBOSNotAuthorizedError(DBOSException):
 class DBOSMaxStepRetriesExceeded(DBOSException):
     """Exception raised when a step was retried the maximimum number of times without success."""
 
-    def __init__(self, step_name: str, max_retries: int) -> None:
+    def __init__(
+        self, step_name: str, max_retries: int, errors: list[BaseException]
+    ) -> None:
         self.step_name = step_name
         self.max_retries = max_retries
+        self.errors = errors
         super().__init__(
             f"Step {step_name} has exceeded its maximum of {max_retries} retries",
             dbos_error_code=DBOSErrorCode.MaxStepRetriesExceeded.value,
@@ -160,7 +163,7 @@ class DBOSMaxStepRetriesExceeded(DBOSException):
 
     def __reduce__(self) -> Any:
         # Tell jsonpickle how to reconstruct this object
-        return (self.__class__, (self.step_name, self.max_retries))
+        return (self.__class__, (self.step_name, self.max_retries, self.errors))
 
 
 class DBOSConflictingRegistrationError(DBOSException):

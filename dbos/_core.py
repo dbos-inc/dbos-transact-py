@@ -1123,7 +1123,7 @@ def decorate_step(
                 stepOutcome = stepOutcome.retry(
                     max_attempts,
                     on_exception,
-                    lambda i: DBOSMaxStepRetriesExceeded(func.__name__, i),
+                    lambda i, e: DBOSMaxStepRetriesExceeded(func.__name__, i, e),
                 )
 
             outcome = (

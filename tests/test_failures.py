@@ -448,10 +448,11 @@ def test_error_serialization() -> None:
     # Verify that each exception that can be thrown in a workflow
     # is serializable and deserializable
     # DBOSMaxStepRetriesExceeded
-    e: Exception = DBOSMaxStepRetriesExceeded("step", 1)
+    e: Exception = DBOSMaxStepRetriesExceeded("step", 1, [Exception()])
     d = deserialize_exception(serialize_exception(e))
     assert isinstance(d, DBOSMaxStepRetriesExceeded)
     assert str(d) == str(e)
+    assert isinstance(d.errors[0], Exception)
     # DBOSNotAuthorizedError
     e = DBOSNotAuthorizedError("no")
     d = deserialize_exception(serialize_exception(e))

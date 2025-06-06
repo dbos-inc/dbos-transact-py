@@ -56,7 +56,7 @@ def test_immediate_retry() -> None:
         raise Exception("Error")
 
     o1 = Outcome[int].make(raiser)
-    o2 = o1.retry(3, lambda i, e: 0.1, lambda i: ExceededRetries())
+    o2 = o1.retry(3, lambda i, e: 0.1, lambda i, e: ExceededRetries())
 
     assert isinstance(o2, Immediate)
     with pytest.raises(ExceededRetries):
@@ -105,7 +105,7 @@ async def test_pending_retry() -> None:
         raise Exception("Error")
 
     o1 = Outcome[int].make(raiser)
-    o2 = o1.retry(3, lambda i, e: 0.1, lambda i: ExceededRetries())
+    o2 = o1.retry(3, lambda i, e: 0.1, lambda i, e: ExceededRetries())
 
     assert isinstance(o2, Pending)
     with pytest.raises(ExceededRetries):
