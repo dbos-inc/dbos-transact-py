@@ -332,6 +332,11 @@ def test_step_retries(dbos: DBOS) -> None:
         failing_step()
     assert error_message in str(excinfo.value)
     assert step_counter == max_attempts
+    assert len(excinfo.value.errors) == max_attempts
+    for error in excinfo.value.errors:
+        assert isinstance(error, Exception)
+        assert error
+        assert "fail" in str(error)
 
     # Test calling the workflow
     step_counter = 0
@@ -448,10 +453,11 @@ def test_error_serialization() -> None:
     # Verify that each exception that can be thrown in a workflow
     # is serializable and deserializable
     # DBOSMaxStepRetriesExceeded
-    e: Exception = DBOSMaxStepRetriesExceeded("step", 1)
+    e: Exception = DBOSMaxStepRetriesExceeded("step", 1, [Exception()])
     d = deserialize_exception(serialize_exception(e))
     assert isinstance(d, DBOSMaxStepRetriesExceeded)
     assert str(d) == str(e)
+    assert isinstance(d.errors[0], Exception)
     # DBOSNotAuthorizedError
     e = DBOSNotAuthorizedError("no")
     d = deserialize_exception(serialize_exception(e))
