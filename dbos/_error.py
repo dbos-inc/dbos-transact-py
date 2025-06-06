@@ -151,7 +151,7 @@ class DBOSMaxStepRetriesExceeded(DBOSException):
     """Exception raised when a step was retried the maximimum number of times without success."""
 
     def __init__(
-        self, step_name: str, max_retries: int, errors: list[BaseException]
+        self, step_name: str, max_retries: int, errors: list[Exception]
     ) -> None:
         self.step_name = step_name
         self.max_retries = max_retries

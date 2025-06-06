@@ -37,7 +37,7 @@ class Outcome(Protocol[T]):
         self,
         attempts: int,
         on_exception: Callable[[int, BaseException], float],
-        exceeded_retries: Callable[[int, list[BaseException]], BaseException],
+        exceeded_retries: Callable[[int, list[Exception]], Exception],
     ) -> "Outcome[T]": ...
 
     def intercept(
@@ -96,9 +96,9 @@ class Immediate(Outcome[T]):
         func: Callable[[], T],
         attempts: int,
         on_exception: Callable[[int, BaseException], float],
-        exceeded_retries: Callable[[int, list[BaseException]], BaseException],
+        exceeded_retries: Callable[[int, list[Exception]], Exception],
     ) -> T:
-        errors: list[BaseException] = []
+        errors: list[Exception] = []
         for i in range(attempts):
             try:
                 with EnterDBOSStepRetry(i, attempts):
@@ -114,7 +114,7 @@ class Immediate(Outcome[T]):
         self,
         attempts: int,
         on_exception: Callable[[int, BaseException], float],
-        exceeded_retries: Callable[[int, list[BaseException]], BaseException],
+        exceeded_retries: Callable[[int, list[Exception]], Exception],
     ) -> "Immediate[T]":
         assert attempts > 0
         return Immediate[T](
@@ -185,9 +185,9 @@ class Pending(Outcome[T]):
         func: Callable[[], Coroutine[Any, Any, T]],
         attempts: int,
         on_exception: Callable[[int, BaseException], float],
-        exceeded_retries: Callable[[int, list[BaseException]], BaseException],
+        exceeded_retries: Callable[[int, list[Exception]], Exception],
     ) -> T:
-        errors: list[BaseException] = []
+        errors: list[Exception] = []
         for i in range(attempts):
             try:
                 with EnterDBOSStepRetry(i, attempts):
@@ -203,7 +203,7 @@ class Pending(Outcome[T]):
         self,
         attempts: int,
         on_exception: Callable[[int, BaseException], float],
-        exceeded_retries: Callable[[int, list[BaseException]], BaseException],
+        exceeded_retries: Callable[[int, list[Exception]], Exception],
     ) -> "Pending[T]":
         assert attempts > 0
         return Pending[T](

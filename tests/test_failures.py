@@ -332,6 +332,11 @@ def test_step_retries(dbos: DBOS) -> None:
         failing_step()
     assert error_message in str(excinfo.value)
     assert step_counter == max_attempts
+    assert len(excinfo.value.errors) == max_attempts
+    for error in excinfo.value.errors:
+        assert isinstance(error, Exception)
+        assert error
+        assert "fail" in str(error)
 
     # Test calling the workflow
     step_counter = 0
