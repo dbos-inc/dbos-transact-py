@@ -10,7 +10,7 @@ from sqlalchemy import event
 from sqlalchemy.exc import OperationalError
 
 # Public API
-from dbos import DBOS
+from dbos import DBOS, DBOSClient
 from dbos._dbos_config import (
     ConfigFile,
     DBOSConfig,
@@ -598,15 +598,6 @@ def test_process_config_with_wrong_db_url():
         process_config(data=config)
     assert "Username must be specified in the connection URL" in str(exc_info.value)
 
-    # Missing password
-    config: ConfigFile = {
-        "name": "some-app",
-        "database_url": "postgres://user:@h:1234/dbname",
-    }
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        process_config(data=config)
-    assert "Password must be specified in the connection URL" in str(exc_info.value)
-
     # Missing host
     config: ConfigFile = {
         "name": "some-app",
@@ -626,6 +617,26 @@ def test_process_config_with_wrong_db_url():
     assert "Database name must be specified in the connection URL" in str(
         exc_info.value
     )
+
+
+def test_database_url_no_password():
+    """Test that the database URL can be provided without a password."""
+    expected_url = "postgresql://postgres@localhost:5432/dbostestpy?sslmode=disable"
+    config: DBOSConfig = {
+        "name": "some-app",
+        "database_url": expected_url,
+    }
+    processed_config = translate_dbos_config_to_config_file(config)
+    assert processed_config["name"] == "some-app"
+    assert processed_config["database_url"] == expected_url
+
+    # Make sure we can use it to construct a DBOS Client and connect to the database without a password
+    client = DBOSClient(expected_url)
+    try:
+        res = client.list_queued_workflows()
+        assert res is not None
+    finally:
+        client.destroy()
 
 
 ####################
