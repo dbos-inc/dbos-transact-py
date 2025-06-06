@@ -557,6 +557,7 @@ def test_get_workflow_by_id(dbos: DBOS) -> None:
         response.status_code == 404
     ), f"Expected status code 404, but got {response.status_code}"
 
+
 def test_admin_garbage_collect(dbos: DBOS) -> None:
 
     @DBOS.workflow()
@@ -617,11 +618,15 @@ def test_queued_workflows_endpoint(dbos: DBOS) -> None:
 
     # Test basic queued workflows endpoint
     response = requests.post("http://localhost:3001/queues", json={}, timeout=5)
-    assert response.status_code == 200, f"Expected status 200, got {response.status_code}"
+    assert (
+        response.status_code == 200
+    ), f"Expected status 200, got {response.status_code}"
 
     queued_workflows = response.json()
     assert isinstance(queued_workflows, list), "Response should be a list"
-    assert len(queued_workflows) == 3, f"Expected 3 queued workflows, got {len(queued_workflows)}"
+    assert (
+        len(queued_workflows) == 3
+    ), f"Expected 3 queued workflows, got {len(queued_workflows)}"
 
     # Test with filters
     filters = {"queue_name": "test-queue-1", "limit": 1}
@@ -630,7 +635,9 @@ def test_queued_workflows_endpoint(dbos: DBOS) -> None:
 
     filtered_workflows = response.json()
     assert isinstance(filtered_workflows, list), "Response should be a list"
-    assert len(filtered_workflows) == 1, f"Expected 1 workflow, got {len(filtered_workflows)}"
+    assert (
+        len(filtered_workflows) == 1
+    ), f"Expected 1 workflow, got {len(filtered_workflows)}"
 
     # Test with non-existent queue name
     filters = {"queue_name": "non-existent-queue"}
@@ -638,5 +645,7 @@ def test_queued_workflows_endpoint(dbos: DBOS) -> None:
     assert response.status_code == 200
 
     empty_result = response.json()
-    assert isinstance(empty_result, list), "Response should be a list even for non-existent queue"
+    assert isinstance(
+        empty_result, list
+    ), "Response should be a list even for non-existent queue"
     assert len(empty_result) == 0, "Expected no workflows for non-existent queue"
