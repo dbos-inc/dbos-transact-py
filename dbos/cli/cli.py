@@ -18,7 +18,12 @@ from dbos._debug import debug_workflow, parse_start_command
 
 from .._app_db import ApplicationDatabase
 from .._client import DBOSClient
-from .._dbos_config import _is_valid_app_name, is_valid_database_url, load_config
+from .._dbos_config import (
+    _app_name_to_db_name,
+    _is_valid_app_name,
+    is_valid_database_url,
+    load_config,
+)
 from .._docker_pg_helper import start_docker_pg, stop_docker_pg
 from .._schemas.system_database import SystemSchema
 from .._sys_db import SystemDatabase, reset_system_database
@@ -28,12 +33,36 @@ from ._template_init import copy_template, get_project_name, get_templates_direc
 
 
 def _get_db_url(db_url: Optional[str]) -> str:
+    """
+    Get the database URL to use for the DBOS application.
+    Order of precedence:
+    - If the `db_url` argument is provided, use it.
+    - If the `dbos-config.yaml` file is present, use the `database_url` from it.
+    - If the `DBOS_DATABASE_URL` environment variable is set, use it.
+
+    Otherwise fallback to the same default Postgres URL than the DBOS library.
+    Note that for the latter to be possible, a configuration file must have been found, with an application name set.
+    """
     database_url = db_url
+    _app_db_name = None
+    if database_url is None:
+        # Load from config file if present
+        try:
+            config = load_config(run_process_config=False, silent=True)
+            database_url = config.get("database_url")
+            _app_db_name = _app_name_to_db_name(config["name"])
+        except (FileNotFoundError, OSError):
+            # Config file doesn't exist, continue with other fallbacks
+            pass
     if database_url is None:
         database_url = os.getenv("DBOS_DATABASE_URL")
+    if database_url is None and _app_db_name is not None:
+        # Fallback on the same defaults than the DBOS library
+        _password = os.environ.get("PGPASSWORD", "dbos")
+        database_url = f"postgres://postgres:{_password}@localhost:5432/{_app_db_name}?connect_timeout=10&sslmode=prefer"
     if database_url is None:
         raise ValueError(
-            "Missing database URL: please set it using the --db-url flag or the DBOS_DATABASE_URL environment variable."
+            "Missing database URL: please set it using the --db-url flag, the DBOS_DATABASE_URL environment variable, or in your dbos-config.yaml file."
         )
     assert is_valid_database_url(database_url)
     return database_url
