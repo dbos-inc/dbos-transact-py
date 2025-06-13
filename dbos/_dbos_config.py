@@ -31,6 +31,7 @@ class DBOSConfig(TypedDict, total=False):
         otlp_logs_endpoints: List[str]: OTLP logs endpoints
         admin_port (int): Admin port
         run_admin_server (bool): Whether to run the DBOS admin server
+        trace_attributes (dict[str, str]): A set of custom attributes to apply to every trace
     """
 
     name: str

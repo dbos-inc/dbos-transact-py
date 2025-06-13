@@ -7,12 +7,16 @@ from opentelemetry.sdk import trace as tracesdk
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from dbos import DBOS
+from dbos import DBOS, DBOSConfig
 from dbos._tracer import dbos_tracer
 from dbos._utils import GlobalParams
 
 
-def test_spans(dbos: DBOS) -> None:
+def test_spans(config: DBOSConfig) -> None:
+    DBOS.destroy(destroy_registry=True)
+    config["trace_attributes"] = {"foo": "bar"}
+    DBOS(config=config)
+    DBOS.launch()
 
     @DBOS.workflow()
     def test_workflow() -> None:
@@ -44,6 +48,7 @@ def test_spans(dbos: DBOS) -> None:
         assert span.attributes["applicationVersion"] == GlobalParams.app_version
         assert span.attributes["executorID"] == GlobalParams.executor_id
         assert span.context is not None
+        assert span.attributes["foo"] == "bar"
 
     assert spans[0].name == test_step.__name__
     assert spans[1].name == "a new span"
