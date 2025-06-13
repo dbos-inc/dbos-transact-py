@@ -20,14 +20,17 @@ _otlp_handler, _dbos_log_transformer = None, None
 
 
 class DBOSLogTransformer(logging.Filter):
-    def __init__(self) -> None:
+    def __init__(self, config: "ConfigFile") -> None:
         super().__init__()
         self.app_id = os.environ.get("DBOS__APPID", "")
+        self.otlp_attributes: dict[str, str] = config.get("telemetry", {}).get("otlp_attributes", {})  # type: ignore
 
     def filter(self, record: Any) -> bool:
         record.applicationID = self.app_id
         record.applicationVersion = GlobalParams.app_version
         record.executorID = GlobalParams.executor_id
+        for k, v in self.otlp_attributes.items():
+            setattr(record, k, v)
 
         # If available, decorate the log entry with Workflow ID and Trace ID
         from dbos._context import get_local_dbos_context
@@ -98,7 +101,7 @@ def config_logger(config: "ConfigFile") -> None:
 
     # Attach DBOS-specific attributes to all log entries.
     global _dbos_log_transformer
-    _dbos_log_transformer = DBOSLogTransformer()
+    _dbos_log_transformer = DBOSLogTransformer(config)
     dbos_logger.addFilter(_dbos_log_transformer)
 
 
