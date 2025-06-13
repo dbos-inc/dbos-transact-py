@@ -31,7 +31,7 @@ class DBOSConfig(TypedDict, total=False):
         otlp_logs_endpoints: List[str]: OTLP logs endpoints
         admin_port (int): Admin port
         run_admin_server (bool): Whether to run the DBOS admin server
-        trace_attributes (dict[str, str]): A set of custom attributes to apply to every trace
+        otlp_attributes (dict[str, str]): A set of custom attributes to apply OTLP-exported logs and traces
     """
 
     name: str
@@ -44,7 +44,7 @@ class DBOSConfig(TypedDict, total=False):
     otlp_logs_endpoints: Optional[List[str]]
     admin_port: Optional[int]
     run_admin_server: Optional[bool]
-    trace_attributes: Optional[dict[str, str]]
+    otlp_attributes: Optional[dict[str, str]]
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -86,7 +86,7 @@ class LoggerConfig(TypedDict, total=False):
 class TelemetryConfig(TypedDict, total=False):
     logs: Optional[LoggerConfig]
     OTLPExporter: Optional[OTLPExporterConfig]
-    trace_attributes: Optional[dict[str, str]]
+    otlp_attributes: Optional[dict[str, str]]
 
 
 class ConfigFile(TypedDict, total=False):
@@ -149,7 +149,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     # Telemetry config
     telemetry: TelemetryConfig = {
         "OTLPExporter": {"tracesEndpoint": [], "logsEndpoint": []},
-        "trace_attributes": config.get("trace_attributes", {}),
+        "otlp_attributes": config.get("otlp_attributes", {}),
     }
     # For mypy
     assert telemetry["OTLPExporter"] is not None

@@ -14,7 +14,7 @@ from dbos._utils import GlobalParams
 
 def test_spans(config: DBOSConfig) -> None:
     DBOS.destroy(destroy_registry=True)
-    config["trace_attributes"] = {"foo": "bar"}
+    config["otlp_attributes"] = {"foo": "bar"}
     DBOS(config=config)
     DBOS.launch()
 
