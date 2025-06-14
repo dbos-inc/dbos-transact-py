@@ -19,11 +19,14 @@ if TYPE_CHECKING:
 
 class DBOSTracer:
 
+    otlp_attributes: dict[str, str] = {}
+
     def __init__(self) -> None:
         self.app_id = os.environ.get("DBOS__APPID", None)
         self.provider: Optional[TracerProvider] = None
 
     def config(self, config: ConfigFile) -> None:
+        self.otlp_attributes = config.get("telemetry", {}).get("otlp_attributes", {})  # type: ignore
         if not isinstance(trace.get_tracer_provider(), TracerProvider):
             resource = Resource(
                 attributes={
@@ -63,6 +66,8 @@ class DBOSTracer:
         for k, v in attributes.items():
             if k != "name" and v is not None and isinstance(v, (str, bool, int, float)):
                 span.set_attribute(k, v)
+        for k, v in self.otlp_attributes.items():
+            span.set_attribute(k, v)
         return span
 
     def end_span(self, span: Span) -> None:
