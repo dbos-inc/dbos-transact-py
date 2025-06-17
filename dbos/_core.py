@@ -445,7 +445,8 @@ def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[An
     wf_func = dbos._registry.workflow_info_map.get(status["name"], None)
     if not wf_func:
         raise DBOSWorkflowFunctionNotFoundError(
-            workflow_id, "Workflow function not found"
+            workflow_id,
+            f"Cannot execute workflow because {status['name']} is not a registered workflow function",
         )
     with DBOSContextEnsure():
         # If this function belongs to a configured class, add that class instance as its first argument
