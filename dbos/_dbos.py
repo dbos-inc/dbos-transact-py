@@ -24,6 +24,7 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
+    Union,
 )
 
 from opentelemetry.trace import Span
@@ -998,7 +999,7 @@ class DBOS:
         cls,
         *,
         workflow_ids: Optional[List[str]] = None,
-        status: Optional[str | List[str]] = None,
+        status: Optional[Union[str, List[str]]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         name: Optional[str] = None,
@@ -1034,7 +1035,7 @@ class DBOS:
         cls,
         *,
         queue_name: Optional[str] = None,
-        status: Optional[str | list[str]] = None,
+        status: Optional[Union[str, List[str]]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         name: Optional[str] = None,

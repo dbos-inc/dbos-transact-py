@@ -1,7 +1,7 @@
 import time
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, List, Optional, Union
 
 from dbos._context import get_local_dbos_context
 
@@ -23,7 +23,7 @@ def list_workflows(
     sys_db: SystemDatabase,
     *,
     workflow_ids: Optional[List[str]] = None,
-    status: Optional[str | list[str]] = None,
+    status: Optional[Union[str, List[str]]] = None,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     name: Optional[str] = None,
