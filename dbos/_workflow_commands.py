@@ -56,7 +56,7 @@ def list_queued_workflows(
     sys_db: SystemDatabase,
     *,
     queue_name: Optional[str] = None,
-    status: Optional[str | list[str]] = None,
+    status: Optional[Union[str, List[str]]] = None,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     name: Optional[str] = None,
