@@ -49,6 +49,8 @@ def test_list_workflow(dbos: DBOS) -> None:
     assert len(outputs) == 0
     outputs = DBOS.list_workflows(status="SUCCESS")
     assert len(outputs) == 1
+    outputs = DBOS.list_workflows(status=["SUCCESS", "PENDING"])
+    assert len(outputs) == 1
 
     # Test searching by workflow name
     outputs = DBOS.list_workflows(name="no")
@@ -258,6 +260,8 @@ def test_queued_workflows(dbos: DBOS) -> None:
     assert len(workflows) == queued_steps
     workflows = DBOS.list_queued_workflows(status=WorkflowStatusString.ENQUEUED.value)
     assert len(workflows) == 0
+    workflows = DBOS.list_queued_workflows(status=["ENQUEUED", "PENDING"])
+    assert len(workflows) == queued_steps
     workflows = DBOS.list_queued_workflows(queue_name=queue.name)
     assert len(workflows) == queued_steps
     workflows = DBOS.list_queued_workflows(queue_name="no")
