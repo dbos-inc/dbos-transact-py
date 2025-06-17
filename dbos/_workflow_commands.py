@@ -23,7 +23,7 @@ def list_workflows(
     sys_db: SystemDatabase,
     *,
     workflow_ids: Optional[List[str]] = None,
-    status: Optional[str] = None,
+    status: Optional[str | list[str]] = None,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     name: Optional[str] = None,
@@ -39,7 +39,7 @@ def list_workflows(
     input.authenticated_user = user
     input.start_time = start_time
     input.end_time = end_time
-    input.status = status
+    input.status = status if status is None or isinstance(status, list) else [status]
     input.application_version = app_version
     input.limit = limit
     input.name = name
@@ -56,7 +56,7 @@ def list_queued_workflows(
     sys_db: SystemDatabase,
     *,
     queue_name: Optional[str] = None,
-    status: Optional[str] = None,
+    status: Optional[str | list[str]] = None,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     name: Optional[str] = None,
@@ -68,7 +68,7 @@ def list_queued_workflows(
         "queue_name": queue_name,
         "start_time": start_time,
         "end_time": end_time,
-        "status": status,
+        "status": status if status is None or isinstance(status, list) else [status],
         "limit": limit,
         "name": name,
         "offset": offset,
