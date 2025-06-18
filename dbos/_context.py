@@ -93,6 +93,8 @@ class DBOSContext:
         self.assumed_role: Optional[str] = None
         self.step_status: Optional[StepStatus] = None
 
+        self.app_version: Optional[str] = None
+
         # A user-specified workflow timeout. Takes priority over a propagated deadline.
         self.workflow_timeout_ms: Optional[int] = None
         # A propagated workflow deadline.
@@ -435,7 +437,11 @@ class SetEnqueueOptions:
     """
 
     def __init__(
-        self, *, deduplication_id: Optional[str] = None, priority: Optional[int] = None
+        self,
+        *,
+        deduplication_id: Optional[str] = None,
+        priority: Optional[int] = None,
+        app_version: Optional[str] = None,
     ) -> None:
         self.created_ctx = False
         self.deduplication_id: Optional[str] = deduplication_id
@@ -446,6 +452,8 @@ class SetEnqueueOptions:
             )
         self.priority: Optional[int] = priority
         self.saved_priority: Optional[int] = None
+        self.app_version: Optional[str] = app_version
+        self.saved_app_version: Optional[str] = None
 
     def __enter__(self) -> SetEnqueueOptions:
         # Code to create a basic context
@@ -458,6 +466,8 @@ class SetEnqueueOptions:
         ctx.deduplication_id = self.deduplication_id
         self.saved_priority = ctx.priority
         ctx.priority = self.priority
+        self.saved_app_version = ctx.app_version
+        ctx.app_version = self.app_version
         return self
 
     def __exit__(
@@ -469,6 +479,7 @@ class SetEnqueueOptions:
         curr_ctx = assert_current_dbos_context()
         curr_ctx.deduplication_id = self.saved_deduplication_id
         curr_ctx.priority = self.saved_priority
+        curr_ctx.app_version = self.saved_app_version
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()

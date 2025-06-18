@@ -149,6 +149,8 @@ class EnqueueOptionsInternal(TypedDict):
     deduplication_id: Optional[str]
     # Priority of the workflow on the queue, starting from 1 ~ 2,147,483,647. Default 0 (highest priority).
     priority: Optional[int]
+    # On what version the workflow is enqueued. Current version if not specified.
+    app_version: Optional[str]
 
 
 class RecordedResult(TypedDict):

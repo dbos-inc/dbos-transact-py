@@ -1515,3 +1515,44 @@ def test_complex_type(dbos: DBOS) -> None:
     event.set()
     check(handle.get_result())
     check(recovery_handle.get_result())
+
+
+def test_enqueue_version(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    queue = Queue("queue")
+    input = 5
+
+    # Enqueue the app on a different version, verify it has that version
+    future_version = str(uuid.uuid4())
+    with SetEnqueueOptions(app_version=future_version):
+        handle = queue.enqueue(workflow, input)
+    assert handle.get_status().app_version == future_version
+
+    # Change the global version, verify it works
+    GlobalParams.app_version = future_version
+    assert handle.get_result() == input
+
+
+@pytest.mark.asyncio
+async def test_enqueue_version_async(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    async def workflow(x: int) -> int:
+        return x
+
+    queue = Queue("queue")
+    input = 5
+
+    # Enqueue the app on a different version, verify it has that version
+    future_version = str(uuid.uuid4())
+    with SetEnqueueOptions(app_version=future_version):
+        handle = await queue.enqueue_async(workflow, input)
+    assert (await handle.get_status()).app_version == future_version
+
+    # Change the global version, verify it works
+    GlobalParams.app_version = future_version
+    assert await handle.get_result() == input

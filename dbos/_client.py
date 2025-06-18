@@ -128,7 +128,6 @@ class DBOSClient:
         workflow_name = options["workflow_name"]
         queue_name = options["queue_name"]
 
-        app_version = options.get("app_version")
         max_recovery_attempts = options.get("max_recovery_attempts")
         if max_recovery_attempts is None:
             max_recovery_attempts = DEFAULT_MAX_RECOVERY_ATTEMPTS
@@ -139,6 +138,7 @@ class DBOSClient:
         enqueue_options_internal: EnqueueOptionsInternal = {
             "deduplication_id": options.get("deduplication_id"),
             "priority": options.get("priority"),
+            "app_version": options.get("app_version"),
         }
 
         inputs: WorkflowInputs = {
@@ -152,7 +152,7 @@ class DBOSClient:
             "name": workflow_name,
             "class_name": None,
             "queue_name": queue_name,
-            "app_version": app_version,
+            "app_version": enqueue_options_internal["app_version"],
             "config_name": None,
             "authenticated_user": None,
             "assumed_role": None,
