@@ -1,7 +1,7 @@
 import asyncio
 import sys
 import uuid
-from typing import Any, Generic, List, Optional, TypedDict, TypeVar
+from typing import Any, Generic, List, Optional, TypedDict, TypeVar, Union
 
 from dbos._app_db import ApplicationDatabase
 from dbos._context import MaxPriority, MinPriority
@@ -284,7 +284,7 @@ class DBOSClient:
         self,
         *,
         workflow_ids: Optional[List[str]] = None,
-        status: Optional[str] = None,
+        status: Optional[Union[str, List[str]]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         name: Optional[str] = None,
@@ -314,7 +314,7 @@ class DBOSClient:
         self,
         *,
         workflow_ids: Optional[List[str]] = None,
-        status: Optional[str] = None,
+        status: Optional[Union[str, List[str]]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         name: Optional[str] = None,
@@ -344,7 +344,7 @@ class DBOSClient:
         self,
         *,
         queue_name: Optional[str] = None,
-        status: Optional[str] = None,
+        status: Optional[Union[str, List[str]]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         name: Optional[str] = None,
@@ -368,7 +368,7 @@ class DBOSClient:
         self,
         *,
         queue_name: Optional[str] = None,
-        status: Optional[str] = None,
+        status: Optional[Union[str, List[str]]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         name: Optional[str] = None,
