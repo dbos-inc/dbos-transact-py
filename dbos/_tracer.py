@@ -59,7 +59,8 @@ class DBOSTracer:
             else trace.get_tracer("dbos-tracer")
         )
         context = trace.set_span_in_context(parent) if parent else None
-        span: Span = tracer.start_span(name=attributes["name"], context=context)
+        tracer.start_as_current_span(name=attributes["name"], context=context)
+        span: Span = trace.get_current_span()
         attributes["applicationID"] = self.app_id
         attributes["applicationVersion"] = GlobalParams.app_version
         attributes["executorID"] = GlobalParams.executor_id
