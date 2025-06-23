@@ -7,6 +7,7 @@ from sqlalchemy.engine import Engine
 
 # Public API
 from dbos import DBOS
+from dbos._error import DBOSWorkflowFunctionNotFoundError
 
 
 def simulate_db_restart(engine: Engine, downtime: float) -> None:
@@ -240,5 +241,5 @@ def my_function():
     pass
 """
     # Use exec to run the code and catch the expected exception
-    with pytest.raises(ValueError, match="Invalid crontab"):
+    with pytest.raises(DBOSWorkflowFunctionNotFoundError) as excinfo:
         exec(code)
