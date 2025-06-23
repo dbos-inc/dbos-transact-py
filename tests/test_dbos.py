@@ -1594,3 +1594,17 @@ def test_custom_names(dbos: DBOS) -> None:
     handle = queue.enqueue(txn)
     assert handle.get_status().name == f"<temp>.{txn_name}"
     assert handle.get_result() == handle.workflow_id
+
+    # Verify we can declare another workflow with the same function name
+    # but a different custom name
+
+    another_workflow = "another_workflow"
+
+    @DBOS.workflow(name=another_workflow)
+    def workflow(x: int) -> int:
+        return x
+
+    value = 5
+    handle = DBOS.start_workflow(workflow, value)  # type: ignore
+    assert handle.get_status().name == another_workflow
+    assert handle.get_result() == value  # type: ignore
