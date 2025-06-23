@@ -533,7 +533,7 @@ def start_workflow(
     if fi is None:
         raise DBOSWorkflowFunctionNotFoundError(
             "<NONE>",
-            f"start_workflow: function {get_dbos_func_name(func)} is not registered",
+            f"start_workflow: function {func.__name__} is not registered",
         )
 
     func = cast("Workflow[P, R]", func.__orig_func)  # type: ignore
@@ -629,7 +629,7 @@ async def start_workflow_async(
     if fi is None:
         raise DBOSWorkflowFunctionNotFoundError(
             "<NONE>",
-            f"start_workflow: function {get_dbos_func_name(func)} is not registered",
+            f"start_workflow: function {func.__name__} is not registered",
         )
 
     func = cast("Workflow[P, R]", func.__orig_func)  # type: ignore
@@ -843,9 +843,10 @@ def decorate_workflow(
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     def _workflow_decorator(func: Callable[P, R]) -> Callable[P, R]:
         wrapped_func = workflow_wrapper(reg, func, max_recovery_attempts)
-        reg.register_wf_function(
-            name if name is not None else func.__qualname__, wrapped_func, "workflow"
-        )
+        func_name = name if name is not None else func.__qualname__
+        set_dbos_func_name(func, func_name)
+        set_dbos_func_name(wrapped_func, func_name)
+        reg.register_wf_function(func_name, wrapped_func, "workflow")
         return wrapped_func
 
     return _workflow_decorator
@@ -1023,6 +1024,7 @@ def decorate_transaction(
 
         wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + transaction_name)
+        set_dbos_func_name(wrapped_wf, "<temp>." + transaction_name)
         set_temp_workflow_type(temp_wf, "transaction")
         dbosreg.register_wf_function(
             get_dbos_func_name(temp_wf), wrapped_wf, "transaction"
@@ -1186,6 +1188,7 @@ def decorate_step(
         temp_wf = temp_wf_async if inspect.iscoroutinefunction(func) else temp_wf_sync
         wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + step_name)
+        set_dbos_func_name(wrapped_wf, "<temp>." + step_name)
         set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf, "step")
         wrapper.__orig_func = temp_wf  # type: ignore

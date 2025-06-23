@@ -171,7 +171,6 @@ class DBOSRegistry:
                 dbos_logger.warning(
                     f"Duplicate registration of function '{truncated_name}'. A function named '{truncated_name}' has already been registered with DBOS. All functions registered with DBOS must have unique names."
                 )
-        set_dbos_func_name(wrapped_func, name)
         self.function_type_map[name] = functype
         self.workflow_info_map[name] = wrapped_func
 
