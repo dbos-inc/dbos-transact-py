@@ -517,6 +517,15 @@ class DBOS:
 
             dbos_logger.info("DBOS launched!")
 
+            if self.conductor_key is None and os.environ.get("DBOS__CLOUD") != "true":
+                # Hint the user to open the URL to register and set up Conductor
+                conductor_registration_url = (
+                    f"https://console.dbos.dev/self-host?appname={self._config["name"]}"
+                )
+                dbos_logger.info(
+                    f"To view and manage workflows, connect to DBOS Conductor at: \033[1;34m{conductor_registration_url}\033[0m"
+                )
+
             # Flush handlers and add OTLP to all loggers if enabled
             # to enable their export in DBOS Cloud
             for handler in dbos_logger.handlers:
