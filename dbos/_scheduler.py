@@ -32,15 +32,15 @@ def scheduler_loop(
         sleepTime = nextExecTime - datetime.now(timezone.utc)
         if stop_event.wait(timeout=sleepTime.total_seconds()):
             return
-        with SetWorkflowID(
-            f"sched-{get_dbos_func_name(func)}-{nextExecTime.isoformat()}"
-        ):
-            try:
+        try:
+            with SetWorkflowID(
+                f"sched-{get_dbos_func_name(func)}-{nextExecTime.isoformat()}"
+            ):
                 scheduler_queue.enqueue(func, nextExecTime, datetime.now(timezone.utc))
-            except Exception:
-                dbos_logger.warning(
-                    f"Exception encountered in scheduler thread: {traceback.format_exc()})"
-                )
+        except Exception:
+            dbos_logger.warning(
+                f"Exception encountered in scheduler thread: {traceback.format_exc()})"
+            )
 
 
 def scheduled(

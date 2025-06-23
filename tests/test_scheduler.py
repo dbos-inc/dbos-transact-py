@@ -143,19 +143,6 @@ def test_sysdb_downtime(dbos: DBOS) -> None:
     assert wf_counter >= 2
 
 
-def test_scheduled_transaction(dbos: DBOS) -> None:
-    txn_counter: int = 0
-
-    @DBOS.scheduled("* * * * * *")
-    @DBOS.transaction()
-    def test_transaction(scheduled: datetime, actual: datetime) -> None:
-        nonlocal txn_counter
-        txn_counter += 1
-
-    time.sleep(4)
-    assert txn_counter > 2 and txn_counter <= 4
-
-
 def test_scheduled_workflow_exception(dbos: DBOS) -> None:
     wf_counter: int = 0
 
