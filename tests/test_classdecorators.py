@@ -15,6 +15,7 @@ from tests.conftest import queue_entries_are_cleaned_up
 
 def test_required_roles(dbos: DBOS) -> None:
     @DBOS.required_roles(["user"])
+    @DBOS.workflow(name="tfunc")
     def tfunc(var: str) -> str:
         assert assert_current_dbos_context().assumed_role == "user"
         return var
