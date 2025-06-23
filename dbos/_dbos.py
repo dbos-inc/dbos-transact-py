@@ -360,6 +360,7 @@ class DBOS:
 
         temp_send_wf = workflow_wrapper(self._registry, send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
+        set_dbos_func_name(temp_send_wf, TEMP_SEND_WF_NAME)
         set_temp_workflow_type(send_temp_workflow, "send")
         self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf, "send")
 
@@ -589,14 +590,22 @@ class DBOS:
     # Decorators for DBOS functionality
     @classmethod
     def workflow(
-        cls, *, max_recovery_attempts: Optional[int] = DEFAULT_MAX_RECOVERY_ATTEMPTS
+        cls,
+        *,
+        name: Optional[str] = None,
+        max_recovery_attempts: Optional[int] = DEFAULT_MAX_RECOVERY_ATTEMPTS,
     ) -> Callable[[Callable[P, R]], Callable[P, R]]:
         """Decorate a function for use as a DBOS workflow."""
-        return decorate_workflow(_get_or_create_dbos_registry(), max_recovery_attempts)
+        return decorate_workflow(
+            _get_or_create_dbos_registry(), name, max_recovery_attempts
+        )
 
     @classmethod
     def transaction(
-        cls, isolation_level: IsolationLevel = "SERIALIZABLE"
+        cls,
+        isolation_level: IsolationLevel = "SERIALIZABLE",
+        *,
+        name: Optional[str] = None,
     ) -> Callable[[F], F]:
         """
         Decorate a function for use as a DBOS transaction.
@@ -605,12 +614,15 @@ class DBOS:
             isolation_level(IsolationLevel): Transaction isolation level
 
         """
-        return decorate_transaction(_get_or_create_dbos_registry(), isolation_level)
+        return decorate_transaction(
+            _get_or_create_dbos_registry(), name, isolation_level
+        )
 
     @classmethod
     def step(
         cls,
         *,
+        name: Optional[str] = None,
         retries_allowed: bool = False,
         interval_seconds: float = 1.0,
         max_attempts: int = 3,
@@ -629,6 +641,7 @@ class DBOS:
 
         return decorate_step(
             _get_or_create_dbos_registry(),
+            name=name,
             retries_allowed=retries_allowed,
             interval_seconds=interval_seconds,
             max_attempts=max_attempts,

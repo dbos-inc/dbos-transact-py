@@ -392,7 +392,7 @@ def _execute_workflow_wthread(
     **kwargs: Any,
 ) -> R:
     attributes: TracedAttributes = {
-        "name": func.__name__,
+        "name": get_dbos_func_name(func),
         "operationType": OperationType.WORKFLOW.value,
     }
     with DBOSContextSwap(ctx):
@@ -425,7 +425,7 @@ async def _execute_workflow_async(
     **kwargs: Any,
 ) -> R:
     attributes: TracedAttributes = {
-        "name": func.__name__,
+        "name": get_dbos_func_name(func),
         "operationType": OperationType.WORKFLOW.value,
     }
     with DBOSContextSwap(ctx):
@@ -532,7 +532,8 @@ def start_workflow(
     fi = get_func_info(func)
     if fi is None:
         raise DBOSWorkflowFunctionNotFoundError(
-            "<NONE>", f"start_workflow: function {func.__name__} is not registered"
+            "<NONE>",
+            f"start_workflow: function {func.__name__} is not registered",
         )
 
     func = cast("Workflow[P, R]", func.__orig_func)  # type: ignore
@@ -627,7 +628,8 @@ async def start_workflow_async(
     fi = get_func_info(func)
     if fi is None:
         raise DBOSWorkflowFunctionNotFoundError(
-            "<NONE>", f"start_workflow: function {func.__name__} is not registered"
+            "<NONE>",
+            f"start_workflow: function {func.__name__} is not registered",
         )
 
     func = cast("Workflow[P, R]", func.__orig_func)  # type: ignore
@@ -731,13 +733,13 @@ def workflow_wrapper(
         assert fi is not None
         if dbosreg.dbos is None:
             raise DBOSException(
-                f"Function {func.__name__} invoked before DBOS initialized"
+                f"Function {get_dbos_func_name(func)} invoked before DBOS initialized"
             )
         dbos = dbosreg.dbos
 
         rr: Optional[str] = check_required_roles(func, fi)
         attributes: TracedAttributes = {
-            "name": func.__name__,
+            "name": get_dbos_func_name(func),
             "operationType": OperationType.WORKFLOW.value,
         }
         inputs: WorkflowInputs = {
@@ -837,27 +839,30 @@ def workflow_wrapper(
 
 
 def decorate_workflow(
-    reg: "DBOSRegistry", max_recovery_attempts: Optional[int]
+    reg: "DBOSRegistry", name: Optional[str], max_recovery_attempts: Optional[int]
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     def _workflow_decorator(func: Callable[P, R]) -> Callable[P, R]:
         wrapped_func = workflow_wrapper(reg, func, max_recovery_attempts)
-        reg.register_wf_function(func.__qualname__, wrapped_func, "workflow")
+        func_name = name if name is not None else func.__qualname__
+        set_dbos_func_name(func, func_name)
+        set_dbos_func_name(wrapped_func, func_name)
+        reg.register_wf_function(func_name, wrapped_func, "workflow")
         return wrapped_func
 
     return _workflow_decorator
 
 
 def decorate_transaction(
-    dbosreg: "DBOSRegistry", isolation_level: "IsolationLevel" = "SERIALIZABLE"
+    dbosreg: "DBOSRegistry", name: Optional[str], isolation_level: "IsolationLevel"
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
 
-        transaction_name = func.__qualname__
+        transaction_name = name if name is not None else func.__qualname__
 
         def invoke_tx(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:
                 raise DBOSException(
-                    f"Function {func.__name__} invoked before DBOS initialized"
+                    f"Function {transaction_name} invoked before DBOS initialized"
                 )
 
             dbos = dbosreg.dbos
@@ -865,12 +870,12 @@ def decorate_transaction(
             status = dbos._sys_db.get_workflow_status(ctx.workflow_id)
             if status and status["status"] == WorkflowStatusString.CANCELLED.value:
                 raise DBOSWorkflowCancelledError(
-                    f"Workflow {ctx.workflow_id} is cancelled. Aborting transaction {func.__name__}."
+                    f"Workflow {ctx.workflow_id} is cancelled. Aborting transaction {transaction_name}."
                 )
 
             with dbos._app_db.sessionmaker() as session:
                 attributes: TracedAttributes = {
-                    "name": func.__name__,
+                    "name": transaction_name,
                     "operationType": OperationType.TRANSACTION.value,
                 }
                 with EnterDBOSTransaction(session, attributes=attributes):
@@ -971,7 +976,7 @@ def decorate_transaction(
                             raise
                         except InvalidRequestError as invalid_request_error:
                             dbos.logger.error(
-                                f"InvalidRequestError in transaction {func.__qualname__} \033[1m Hint: Do not call commit() or rollback() within a DBOS transaction.\033[0m"
+                                f"InvalidRequestError in transaction {transaction_name} \033[1m Hint: Do not call commit() or rollback() within a DBOS transaction.\033[0m"
                             )
                             txn_error = invalid_request_error
                             raise
@@ -991,7 +996,7 @@ def decorate_transaction(
 
         if inspect.iscoroutinefunction(func):
             raise DBOSException(
-                f"Function {func.__name__} is a coroutine function, but DBOS.transaction does not support coroutine functions"
+                f"Function {transaction_name} is a coroutine function, but DBOS.transaction does not support coroutine functions"
             )
 
         fi = get_or_create_func_info(func)
@@ -1010,15 +1015,19 @@ def decorate_transaction(
                 with DBOSAssumeRole(rr):
                     return invoke_tx(*args, **kwargs)
             else:
-                tempwf = dbosreg.workflow_info_map.get("<temp>." + func.__qualname__)
+                tempwf = dbosreg.workflow_info_map.get("<temp>." + transaction_name)
                 assert tempwf
                 return tempwf(*args, **kwargs)
+
+        set_dbos_func_name(func, transaction_name)
+        set_dbos_func_name(wrapper, transaction_name)
 
         def temp_wf(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
 
         wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
-        set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
+        set_dbos_func_name(temp_wf, "<temp>." + transaction_name)
+        set_dbos_func_name(wrapped_wf, "<temp>." + transaction_name)
         set_temp_workflow_type(temp_wf, "transaction")
         dbosreg.register_wf_function(
             get_dbos_func_name(temp_wf), wrapped_wf, "transaction"
@@ -1035,24 +1044,25 @@ def decorate_transaction(
 def decorate_step(
     dbosreg: "DBOSRegistry",
     *,
-    retries_allowed: bool = False,
-    interval_seconds: float = 1.0,
-    max_attempts: int = 3,
-    backoff_rate: float = 2.0,
+    name: Optional[str],
+    retries_allowed: bool,
+    interval_seconds: float,
+    max_attempts: int,
+    backoff_rate: float,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
 
-        step_name = func.__qualname__
+        step_name = name if name is not None else func.__qualname__
 
         def invoke_step(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:
                 raise DBOSException(
-                    f"Function {func.__name__} invoked before DBOS initialized"
+                    f"Function {step_name} invoked before DBOS initialized"
                 )
             dbos = dbosreg.dbos
 
             attributes: TracedAttributes = {
-                "name": func.__name__,
+                "name": step_name,
                 "operationType": OperationType.STEP.value,
             }
 
@@ -1131,7 +1141,7 @@ def decorate_step(
                 stepOutcome = stepOutcome.retry(
                     max_attempts,
                     on_exception,
-                    lambda i, e: DBOSMaxStepRetriesExceeded(func.__name__, i, e),
+                    lambda i, e: DBOSMaxStepRetriesExceeded(step_name, i, e),
                 )
 
             outcome = (
@@ -1160,13 +1170,16 @@ def decorate_step(
                 with DBOSAssumeRole(rr):
                     return invoke_step(*args, **kwargs)
             else:
-                tempwf = dbosreg.workflow_info_map.get("<temp>." + func.__qualname__)
+                tempwf = dbosreg.workflow_info_map.get("<temp>." + step_name)
                 assert tempwf
                 return tempwf(*args, **kwargs)
 
         wrapper = (
             _mark_coroutine(wrapper) if inspect.iscoroutinefunction(func) else wrapper  # type: ignore
         )
+
+        set_dbos_func_name(func, step_name)
+        set_dbos_func_name(wrapper, step_name)
 
         def temp_wf_sync(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
@@ -1181,7 +1194,8 @@ def decorate_step(
 
         temp_wf = temp_wf_async if inspect.iscoroutinefunction(func) else temp_wf_sync
         wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
-        set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
+        set_dbos_func_name(temp_wf, "<temp>." + step_name)
+        set_dbos_func_name(wrapped_wf, "<temp>." + step_name)
         set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf, "step")
         wrapper.__orig_func = temp_wf  # type: ignore

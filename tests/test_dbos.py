@@ -15,6 +15,7 @@ import sqlalchemy as sa
 from dbos import (
     DBOS,
     DBOSConfig,
+    Queue,
     SetWorkflowID,
     SetWorkflowTimeout,
     WorkflowHandle,
@@ -1190,10 +1191,13 @@ def test_debug_logging(
         result1 = test_workflow()
 
     assert result1 == "Step: Hello, Transaction: World"
-    assert "Running step" in caplog.text and "name: step_function" in caplog.text
+    assert (
+        "Running step" in caplog.text
+        and f"name: {step_function.__qualname__}" in caplog.text
+    )
     assert (
         "Running transaction" in caplog.text
-        and "name: transaction_function" in caplog.text
+        and f"name: {transaction_function.__qualname__}" in caplog.text
     )
     assert "Running sleep" in caplog.text
     assert "Running set_event" in caplog.text
@@ -1233,10 +1237,13 @@ def test_debug_logging(
         result3 = test_workflow()
 
     assert result3 == result1
-    assert "Replaying step" in caplog.text and "name: step_function" in caplog.text
+    assert (
+        "Replaying step" in caplog.text
+        and f"name: {step_function.__qualname__}" in caplog.text
+    )
     assert (
         "Replaying transaction" in caplog.text
-        and "name: transaction_function" in caplog.text
+        and f"name: {transaction_function.__qualname__}" in caplog.text in caplog.text
     )
     assert "Replaying sleep" in caplog.text
     assert "Replaying set_event" in caplog.text
@@ -1556,3 +1563,48 @@ def test_workflow_timeout(dbos: DBOS) -> None:
             assert assert_current_dbos_context().workflow_timeout_ms is None
         assert assert_current_dbos_context().workflow_timeout_ms == 1000
     assert get_local_dbos_context() is None
+
+
+def test_custom_names(dbos: DBOS) -> None:
+    workflow_name = "workflow_name"
+    step_name = "step_name"
+    txn_name = "txn_name"
+    queue = Queue("test-queue")
+
+    @DBOS.workflow(name=workflow_name)
+    def workflow() -> str:
+        return DBOS.workflow_id
+
+    handle = queue.enqueue(workflow)
+    assert handle.get_status().name == workflow_name
+    assert handle.get_result() == handle.workflow_id
+
+    @DBOS.step(name=step_name)
+    def step() -> str:
+        return DBOS.workflow_id
+
+    handle = queue.enqueue(step)
+    assert handle.get_status().name == f"<temp>.{step_name}"
+    assert handle.get_result() == handle.workflow_id
+
+    @DBOS.transaction(name=txn_name)
+    def txn() -> str:
+        return DBOS.workflow_id
+
+    handle = queue.enqueue(txn)
+    assert handle.get_status().name == f"<temp>.{txn_name}"
+    assert handle.get_result() == handle.workflow_id
+
+    # Verify we can declare another workflow with the same function name
+    # but a different custom name
+
+    another_workflow = "another_workflow"
+
+    @DBOS.workflow(name=another_workflow)
+    def workflow(x: int) -> int:
+        return x
+
+    value = 5
+    handle = DBOS.start_workflow(workflow, value)  # type: ignore
+    assert handle.get_status().name == another_workflow
+    assert handle.get_result() == value  # type: ignore

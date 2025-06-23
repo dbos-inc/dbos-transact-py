@@ -7,6 +7,7 @@ from sqlalchemy.engine import Engine
 
 # Public API
 from dbos import DBOS
+from dbos._error import DBOSWorkflowFunctionNotFoundError
 
 
 def simulate_db_restart(engine: Engine, downtime: float) -> None:
@@ -155,6 +156,19 @@ def test_scheduled_transaction(dbos: DBOS) -> None:
     assert txn_counter > 2 and txn_counter <= 4
 
 
+def test_scheduled_step(dbos: DBOS) -> None:
+    step_counter: int = 0
+
+    @DBOS.scheduled("* * * * * *")
+    @DBOS.step()
+    def test_step(scheduled: datetime, actual: datetime) -> None:
+        nonlocal step_counter
+        step_counter += 1
+
+    time.sleep(4)
+    assert step_counter > 2 and step_counter <= 4
+
+
 def test_scheduled_workflow_exception(dbos: DBOS) -> None:
     wf_counter: int = 0
 
@@ -240,5 +254,5 @@ def my_function():
     pass
 """
     # Use exec to run the code and catch the expected exception
-    with pytest.raises(ValueError, match="Invalid crontab"):
+    with pytest.raises(DBOSWorkflowFunctionNotFoundError) as excinfo:
         exec(code)
