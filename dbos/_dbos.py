@@ -519,8 +519,9 @@ class DBOS:
 
             if self.conductor_key is None and os.environ.get("DBOS__CLOUD") != "true":
                 # Hint the user to open the URL to register and set up Conductor
+                app_name = self._config["name"]
                 conductor_registration_url = (
-                    f"https://console.dbos.dev/self-host?appname={self._config["name"]}"
+                    f"https://console.dbos.dev/self-host?appname={app_name}"
                 )
                 print(
                     f"[bold]To view and manage workflows, connect to DBOS Conductor at:[/bold] [bold blue]{conductor_registration_url}[/bold blue]"
