@@ -360,6 +360,7 @@ class DBOS:
 
         temp_send_wf = workflow_wrapper(self._registry, send_temp_workflow)
         set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
+        set_dbos_func_name(temp_send_wf, TEMP_SEND_WF_NAME)
         set_temp_workflow_type(send_temp_workflow, "send")
         self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf, "send")
 
