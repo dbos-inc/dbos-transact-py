@@ -4,15 +4,17 @@ from enum import Enum
 from types import FunctionType
 from typing import Any, Callable, List, Literal, Optional, Tuple, Type, cast
 
+from dbos._error import DBOSWorkflowFunctionNotFoundError
+
 DEFAULT_MAX_RECOVERY_ATTEMPTS = 100
 
 
 def get_dbos_func_name(f: Any) -> str:
     if hasattr(f, "dbos_function_name"):
         return str(getattr(f, "dbos_function_name"))
-    if hasattr(f, "__qualname__"):
-        return str(getattr(f, "__qualname__"))
-    return "<unknown>"
+    raise DBOSWorkflowFunctionNotFoundError(
+        "<NONE>", f"function {f.__name__} is not registered"
+    )
 
 
 def set_dbos_func_name(f: Any, name: str) -> None:
