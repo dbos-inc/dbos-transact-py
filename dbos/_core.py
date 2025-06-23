@@ -270,7 +270,12 @@ def _init_workflow(
         "output": None,
         "error": None,
         "app_id": ctx.app_id,
-        "app_version": GlobalParams.app_version,
+        "app_version": (
+            enqueue_options["app_version"]
+            if enqueue_options is not None
+            and enqueue_options["app_version"] is not None
+            else GlobalParams.app_version
+        ),
         "executor_id": ctx.executor_id,
         "recovery_attempts": None,
         "authenticated_user": ctx.authenticated_user,
@@ -547,6 +552,7 @@ def start_workflow(
     enqueue_options = EnqueueOptionsInternal(
         deduplication_id=local_ctx.deduplication_id if local_ctx is not None else None,
         priority=local_ctx.priority if local_ctx is not None else None,
+        app_version=local_ctx.app_version if local_ctx is not None else None,
     )
     new_wf_id, new_wf_ctx = _get_new_wf()
 
@@ -638,6 +644,7 @@ async def start_workflow_async(
     enqueue_options = EnqueueOptionsInternal(
         deduplication_id=local_ctx.deduplication_id if local_ctx is not None else None,
         priority=local_ctx.priority if local_ctx is not None else None,
+        app_version=local_ctx.app_version if local_ctx is not None else None,
     )
     new_wf_id, new_wf_ctx = _get_new_wf()
 
