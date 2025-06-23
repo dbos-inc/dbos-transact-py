@@ -1019,6 +1019,9 @@ def decorate_transaction(
                 assert tempwf
                 return tempwf(*args, **kwargs)
 
+        set_dbos_func_name(func, transaction_name)
+        set_dbos_func_name(wrapper, transaction_name)
+
         def temp_wf(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
 
@@ -1174,6 +1177,9 @@ def decorate_step(
         wrapper = (
             _mark_coroutine(wrapper) if inspect.iscoroutinefunction(func) else wrapper  # type: ignore
         )
+
+        set_dbos_func_name(func, step_name)
+        set_dbos_func_name(wrapper, step_name)
 
         def temp_wf_sync(*args: Any, **kwargs: Any) -> Any:
             return wrapper(*args, **kwargs)
