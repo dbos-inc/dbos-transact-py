@@ -617,6 +617,7 @@ class DBOS:
     def step(
         cls,
         *,
+        name: Optional[str] = None,
         retries_allowed: bool = False,
         interval_seconds: float = 1.0,
         max_attempts: int = 3,
@@ -635,6 +636,7 @@ class DBOS:
 
         return decorate_step(
             _get_or_create_dbos_registry(),
+            name=name,
             retries_allowed=retries_allowed,
             interval_seconds=interval_seconds,
             max_attempts=max_attempts,

@@ -1567,13 +1567,22 @@ def test_workflow_timeout(dbos: DBOS) -> None:
 
 def test_custom_names(dbos: DBOS) -> None:
     workflow_name = "workflow_name"
+    step_name = "step_name"
+    txn_name = "txn_name"
+    queue = Queue("test-queue")
 
     @DBOS.workflow(name=workflow_name)
     def workflow() -> str:
         return DBOS.workflow_id
 
-    queue = Queue("test-queue")
-
     handle = queue.enqueue(workflow)
     assert handle.get_status().name == workflow_name
+    assert handle.get_result() == handle.workflow_id
+
+    @DBOS.step(name=step_name)
+    def step() -> str:
+        return DBOS.workflow_id
+
+    handle = queue.enqueue(step)
+    assert handle.get_status().name == f"<temp>.{step_name}"
     assert handle.get_result() == handle.workflow_id

@@ -1041,14 +1041,15 @@ def decorate_transaction(
 def decorate_step(
     dbosreg: "DBOSRegistry",
     *,
-    retries_allowed: bool = False,
-    interval_seconds: float = 1.0,
-    max_attempts: int = 3,
-    backoff_rate: float = 2.0,
+    name: Optional[str],
+    retries_allowed: bool,
+    interval_seconds: float,
+    max_attempts: int,
+    backoff_rate: float,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
 
-        step_name = func.__qualname__
+        step_name = name if name is not None else func.__qualname__
 
         def invoke_step(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:
