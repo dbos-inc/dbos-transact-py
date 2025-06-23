@@ -41,7 +41,7 @@ def test_spans(config: DBOSConfig) -> None:
 
     spans = exporter.get_finished_spans()
 
-    assert len(spans) == 4
+    assert len(spans) == 5
 
     for span in spans:
         assert span.attributes is not None
@@ -50,15 +50,17 @@ def test_spans(config: DBOSConfig) -> None:
         assert span.context is not None
         assert span.attributes["foo"] == "bar"
 
-    assert spans[0].name == test_step.__name__
+    assert spans[0].name == test_step.__qualname__
     assert spans[1].name == "a new span"
-    assert spans[2].name == test_workflow.__name__
-    assert spans[3].name == test_step.__name__
+    assert spans[2].name == test_workflow.__qualname__
+    assert spans[3].name == test_step.__qualname__
+    assert spans[4].name == f"<temp>.{test_step.__qualname__}"
 
     assert spans[0].parent.span_id == spans[2].context.span_id  # type: ignore
     assert spans[1].parent.span_id == spans[2].context.span_id  # type: ignore
     assert spans[2].parent == None
-    assert spans[3].parent == None
+    assert spans[3].parent.span_id == spans[4].context.span_id  # type: ignore
+    assert spans[4].parent == None
 
 
 @pytest.mark.asyncio
@@ -87,7 +89,7 @@ async def test_spans_async(dbos: DBOS) -> None:
 
     spans = exporter.get_finished_spans()
 
-    assert len(spans) == 4
+    assert len(spans) == 5
 
     for span in spans:
         assert span.attributes is not None
@@ -95,15 +97,17 @@ async def test_spans_async(dbos: DBOS) -> None:
         assert span.attributes["executorID"] == GlobalParams.executor_id
         assert span.context is not None
 
-    assert spans[0].name == test_step.__name__
+    assert spans[0].name == test_step.__qualname__
     assert spans[1].name == "a new span"
-    assert spans[2].name == test_workflow.__name__
-    assert spans[3].name == test_step.__name__
+    assert spans[2].name == test_workflow.__qualname__
+    assert spans[3].name == test_step.__qualname__
+    assert spans[4].name == f"<temp>.{test_step.__qualname__}"
 
     assert spans[0].parent.span_id == spans[2].context.span_id  # type: ignore
     assert spans[1].parent.span_id == spans[2].context.span_id  # type: ignore
     assert spans[2].parent == None
-    assert spans[3].parent == None
+    assert spans[3].parent.span_id == spans[4].context.span_id  # type: ignore
+    assert spans[4].parent == None
 
 
 def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
@@ -127,15 +131,17 @@ def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     spans = exporter.get_finished_spans()
 
-    assert len(spans) == 2
+    assert len(spans) == 3
 
     for span in spans:
         assert span.attributes is not None
         assert span.attributes["applicationVersion"] == GlobalParams.app_version
         assert span.context is not None
 
-    assert spans[0].name == test_step_endpoint.__name__
-    assert spans[1].name == "/step"
+    assert spans[0].name == test_step_endpoint.__qualname__
+    assert spans[1].name == f"<temp>.{test_step_endpoint.__qualname__}"
+    assert spans[2].name == "/step"
 
-    assert spans[0].parent.span_id == spans[1].context.span_id  # type:ignore
-    assert spans[1].parent == None
+    assert spans[0].parent.span_id == spans[1].context.span_id  # type: ignore
+    assert spans[1].parent.span_id == spans[2].context.span_id  # type: ignore
+    assert spans[2].parent == None
