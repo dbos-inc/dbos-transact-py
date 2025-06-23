@@ -325,7 +325,7 @@ def test_step_retries(dbos: DBOS) -> None:
     def enqueue_failing_step() -> None:
         queue.enqueue(failing_step).get_result()
 
-    error_message = f"Step {failing_step.__name__} has exceeded its maximum of {max_attempts} retries"
+    error_message = f"Step {failing_step.__qualname__} has exceeded its maximum of {max_attempts} retries"
 
     # Test calling the step directly
     with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:

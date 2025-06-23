@@ -1190,10 +1190,13 @@ def test_debug_logging(
         result1 = test_workflow()
 
     assert result1 == "Step: Hello, Transaction: World"
-    assert "Running step" in caplog.text and "name: step_function" in caplog.text
+    assert (
+        "Running step" in caplog.text
+        and f"name: {step_function.__qualname__}" in caplog.text
+    )
     assert (
         "Running transaction" in caplog.text
-        and "name: transaction_function" in caplog.text
+        and f"name: {transaction_function.__qualname__}" in caplog.text
     )
     assert "Running sleep" in caplog.text
     assert "Running set_event" in caplog.text
@@ -1233,10 +1236,13 @@ def test_debug_logging(
         result3 = test_workflow()
 
     assert result3 == result1
-    assert "Replaying step" in caplog.text and "name: step_function" in caplog.text
+    assert (
+        "Replaying step" in caplog.text
+        and f"name: {step_function.__qualname__}" in caplog.text
+    )
     assert (
         "Replaying transaction" in caplog.text
-        and "name: transaction_function" in caplog.text
+        and f"name: {transaction_function.__qualname__}" in caplog.text in caplog.text
     )
     assert "Replaying sleep" in caplog.text
     assert "Replaying set_event" in caplog.text

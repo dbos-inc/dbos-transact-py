@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 from ._context import SetWorkflowID
 from ._croniter import croniter  # type: ignore
+from ._registrations import get_dbos_func_name
 
 ScheduledWorkflow = Callable[[datetime, datetime], None]
 
@@ -24,14 +25,16 @@ def scheduler_loop(
         iter = croniter(cron, datetime.now(timezone.utc), second_at_beginning=True)
     except Exception as e:
         dbos_logger.error(
-            f'Cannot run scheduled function {func.__name__}. Invalid crontab "{cron}"'
+            f'Cannot run scheduled function {get_dbos_func_name(func)}. Invalid crontab "{cron}"'
         )
     while not stop_event.is_set():
         nextExecTime = iter.get_next(datetime)
         sleepTime = nextExecTime - datetime.now(timezone.utc)
         if stop_event.wait(timeout=sleepTime.total_seconds()):
             return
-        with SetWorkflowID(f"sched-{func.__qualname__}-{nextExecTime.isoformat()}"):
+        with SetWorkflowID(
+            f"sched-{get_dbos_func_name(func)}-{nextExecTime.isoformat()}"
+        ):
             try:
                 scheduler_queue.enqueue(func, nextExecTime, datetime.now(timezone.utc))
             except Exception:
@@ -48,7 +51,7 @@ def scheduled(
             croniter(cron, datetime.now(timezone.utc), second_at_beginning=True)
         except Exception as e:
             raise ValueError(
-                f'Invalid crontab "{cron}" for scheduled function function {func.__name__}.'
+                f'Invalid crontab "{cron}" for scheduled function function {get_dbos_func_name(func)}.'
             )
 
         global scheduler_queue

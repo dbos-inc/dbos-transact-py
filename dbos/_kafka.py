@@ -13,6 +13,7 @@ from ._context import SetWorkflowID
 from ._error import DBOSInitializationError
 from ._kafka_message import KafkaMessage
 from ._logger import dbos_logger
+from ._registrations import get_dbos_func_name
 
 _KafkaConsumerWorkflow = Callable[[KafkaMessage], None]
 
@@ -44,7 +45,7 @@ def _kafka_consumer_loop(
         config["auto.offset.reset"] = "earliest"
 
     if config.get("group.id") is None:
-        config["group.id"] = safe_group_name(func.__qualname__, topics)
+        config["group.id"] = safe_group_name(get_dbos_func_name(func), topics)
         dbos_logger.warning(
             f"Consumer group ID not found. Using generated group.id {config['group.id']}"
         )

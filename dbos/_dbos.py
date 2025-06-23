@@ -171,6 +171,7 @@ class DBOSRegistry:
                 dbos_logger.warning(
                     f"Duplicate registration of function '{truncated_name}'. A function named '{truncated_name}' has already been registered with DBOS. All functions registered with DBOS must have unique names."
                 )
+        set_dbos_func_name(wrapped_func, name)
         self.function_type_map[name] = functype
         self.workflow_info_map[name] = wrapped_func
 
@@ -589,10 +590,15 @@ class DBOS:
     # Decorators for DBOS functionality
     @classmethod
     def workflow(
-        cls, *, max_recovery_attempts: Optional[int] = DEFAULT_MAX_RECOVERY_ATTEMPTS
+        cls,
+        *,
+        name: Optional[str] = None,
+        max_recovery_attempts: Optional[int] = DEFAULT_MAX_RECOVERY_ATTEMPTS,
     ) -> Callable[[Callable[P, R]], Callable[P, R]]:
         """Decorate a function for use as a DBOS workflow."""
-        return decorate_workflow(_get_or_create_dbos_registry(), max_recovery_attempts)
+        return decorate_workflow(
+            _get_or_create_dbos_registry(), name, max_recovery_attempts
+        )
 
     @classmethod
     def transaction(
