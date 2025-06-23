@@ -7,7 +7,6 @@ import inspect
 import os
 import sys
 import threading
-import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from logging import Logger
@@ -28,6 +27,7 @@ from typing import (
 )
 
 from opentelemetry.trace import Span
+from rich import print
 
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._sys_db import WorkflowStatus
@@ -522,8 +522,8 @@ class DBOS:
                 conductor_registration_url = (
                     f"https://console.dbos.dev/self-host?appname={self._config["name"]}"
                 )
-                dbos_logger.info(
-                    f"To view and manage workflows, connect to DBOS Conductor at: \033[1;34m{conductor_registration_url}\033[0m"
+                print(
+                    f"[bold]To view and manage workflows, connect to DBOS Conductor at:[/bold] [bold blue]{conductor_registration_url}[/bold blue]"
                 )
 
             # Flush handlers and add OTLP to all loggers if enabled
