@@ -123,7 +123,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert span.attributes is not None
 
     span = spans[0]
-    assert span.name == "test_user_endpoint"
+    assert span.name == test_user_endpoint.__qualname__
     assert span.parent is not None
     assert span.parent.span_id == spans[1].context.span_id
     assert span.attributes is not None
@@ -171,7 +171,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert response.status_code == 403
     assert (
         response.text
-        == '{"message":"Function test_admin_endpoint has required roles, but user is not authenticated for any of them","dbos_error_code":"8","dbos_error":"DBOSNotAuthorizedError"}'
+        == '{"message":"Function test_simple_endpoint.<locals>.test_admin_endpoint has required roles, but user is not authenticated for any of them","dbos_error_code":"8","dbos_error":"DBOSNotAuthorizedError"}'
     )
 
 
@@ -293,7 +293,7 @@ def test_jwt_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert response.status_code == 403
     assert (
         response.text
-        == '{"message":"Function test_admin_endpoint has required roles, but user is not authenticated for any of them","dbos_error_code":"8","dbos_error":"DBOSNotAuthorizedError"}'
+        == '{"message":"Function test_jwt_endpoint.<locals>.test_admin_endpoint has required roles, but user is not authenticated for any of them","dbos_error_code":"8","dbos_error":"DBOSNotAuthorizedError"}'
     )
 
 
