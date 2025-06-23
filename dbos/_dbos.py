@@ -603,8 +603,9 @@ class DBOS:
     @classmethod
     def transaction(
         cls,
-        name: Optional[str] = None,
         isolation_level: IsolationLevel = "SERIALIZABLE",
+        *,
+        name: Optional[str] = None,
     ) -> Callable[[F], F]:
         """
         Decorate a function for use as a DBOS transaction.
