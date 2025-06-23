@@ -853,11 +853,11 @@ def decorate_workflow(
 
 
 def decorate_transaction(
-    dbosreg: "DBOSRegistry", isolation_level: "IsolationLevel" = "SERIALIZABLE"
+    dbosreg: "DBOSRegistry", name: Optional[str], isolation_level: "IsolationLevel"
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
 
-        transaction_name = func.__qualname__
+        transaction_name = name if name is not None else func.__qualname__
 
         def invoke_tx(*args: Any, **kwargs: Any) -> Any:
             if dbosreg.dbos is None:

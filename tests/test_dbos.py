@@ -1586,3 +1586,11 @@ def test_custom_names(dbos: DBOS) -> None:
     handle = queue.enqueue(step)
     assert handle.get_status().name == f"<temp>.{step_name}"
     assert handle.get_result() == handle.workflow_id
+
+    @DBOS.transaction(name=txn_name)
+    def txn() -> str:
+        return DBOS.workflow_id
+
+    handle = queue.enqueue(txn)
+    assert handle.get_status().name == f"<temp>.{txn_name}"
+    assert handle.get_result() == handle.workflow_id

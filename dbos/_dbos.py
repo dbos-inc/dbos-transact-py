@@ -602,7 +602,9 @@ class DBOS:
 
     @classmethod
     def transaction(
-        cls, isolation_level: IsolationLevel = "SERIALIZABLE"
+        cls,
+        name: Optional[str] = None,
+        isolation_level: IsolationLevel = "SERIALIZABLE",
     ) -> Callable[[F], F]:
         """
         Decorate a function for use as a DBOS transaction.
@@ -611,7 +613,9 @@ class DBOS:
             isolation_level(IsolationLevel): Transaction isolation level
 
         """
-        return decorate_transaction(_get_or_create_dbos_registry(), isolation_level)
+        return decorate_transaction(
+            _get_or_create_dbos_registry(), name, isolation_level
+        )
 
     @classmethod
     def step(
