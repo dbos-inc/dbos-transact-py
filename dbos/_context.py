@@ -140,23 +140,18 @@ class DBOSContext:
         self,
         wfid: Optional[str],
         attributes: TracedAttributes,
-        is_temp_workflow: bool = False,
     ) -> None:
         if wfid is None or len(wfid) == 0:
             wfid = self.assign_workflow_id()
             self.id_assigned_for_next_workflow = ""
         self.workflow_id = wfid
         self.function_id = 0
-        if not is_temp_workflow:
-            self._start_span(attributes)
+        self._start_span(attributes)
 
-    def end_workflow(
-        self, exc_value: Optional[BaseException], is_temp_workflow: bool = False
-    ) -> None:
+    def end_workflow(self, exc_value: Optional[BaseException]) -> None:
         self.workflow_id = ""
         self.function_id = -1
-        if not is_temp_workflow:
-            self._end_span(exc_value)
+        self._end_span(exc_value)
 
     def is_within_workflow(self) -> bool:
         return len(self.workflow_id) > 0
@@ -490,7 +485,6 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
     def __init__(self, attributes: TracedAttributes) -> None:
         self.created_ctx = False
         self.attributes = attributes
-        self.is_temp_workflow = attributes["name"] == "temp_wf"
         self.saved_workflow_timeout: Optional[int] = None
         self.saved_deduplication_id: Optional[str] = None
         self.saved_priority: Optional[int] = None
@@ -514,7 +508,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         self.saved_priority = ctx.priority
         ctx.priority = None
         ctx.start_workflow(
-            None, self.attributes, self.is_temp_workflow
+            None, self.attributes
         )  # Will get from the context's next workflow ID
         return ctx
 
@@ -526,7 +520,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
     ) -> Literal[False]:
         ctx = assert_current_dbos_context()
         assert ctx.is_within_workflow()
-        ctx.end_workflow(exc_value, self.is_temp_workflow)
+        ctx.end_workflow(exc_value)
         # Restore the saved workflow timeout
         ctx.workflow_timeout_ms = self.saved_workflow_timeout
         # Clear any propagating timeout
