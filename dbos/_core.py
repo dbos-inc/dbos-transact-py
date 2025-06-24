@@ -1187,11 +1187,6 @@ def decorate_step(
         async def temp_wf_async(*args: Any, **kwargs: Any) -> Any:
             return await wrapper(*args, **kwargs)
 
-        # Other code in transact-py depends on the name of temporary workflow functions to be "temp_wf"
-        # so set the name of both sync and async temporary workflow functions explicitly
-        temp_wf_sync.__name__ = "temp_wf"
-        temp_wf_async.__name__ = "temp_wf"
-
         temp_wf = temp_wf_async if inspect.iscoroutinefunction(func) else temp_wf_sync
         wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + step_name)
