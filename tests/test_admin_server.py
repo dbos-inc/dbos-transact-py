@@ -462,13 +462,13 @@ def test_list_workflows(dbos: DBOS) -> None:
         pass
 
     @DBOS.workflow()
-    def test_workflow_2() -> None:
-        return DBOS.workflow_id
+    def test_workflow_2(my_time: datetime) -> None:
+        return DBOS.workflow_id + " completed at " + my_time.isoformat()
 
     # Start workflows
     handle_1 = DBOS.start_workflow(test_workflow_1)
     time.sleep(2)  # Sleep for 2 seconds between workflows
-    handle_2 = DBOS.start_workflow(test_workflow_2)
+    handle_2 = DBOS.start_workflow(test_workflow_2, datetime.now())
 
     # Wait for workflows to complete
     handle_1.get_result()
@@ -622,7 +622,6 @@ def test_list_workflows(dbos: DBOS) -> None:
             :10
         ],  # First 10 characters of the workflow name
     }
-    print(filters)
     response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
     assert response.status_code == 200
     workflows = response.json()
