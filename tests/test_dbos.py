@@ -1608,3 +1608,29 @@ def test_custom_names(dbos: DBOS) -> None:
     handle = DBOS.start_workflow(workflow, value)  # type: ignore
     assert handle.get_status().name == another_workflow
     assert handle.get_result() == value  # type: ignore
+
+
+@pytest.mark.asyncio
+async def test_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
+    DBOS.destroy(destroy_registry=True)
+
+    @DBOS.step()
+    def step(x: int) -> int:
+        return x
+
+    @DBOS.step()
+    async def async_step(x: int) -> int:
+        return x
+
+    assert step(5) == 5
+    assert await async_step(5) == 5
+
+    DBOS(config=config)
+
+    assert step(5) == 5
+    assert await async_step(5) == 5
+
+    DBOS.launch()
+
+    assert step(5) == 5
+    assert await async_step(5) == 5
