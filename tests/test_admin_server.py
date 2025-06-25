@@ -3,7 +3,7 @@ import socket
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import requests
@@ -463,7 +463,7 @@ def test_list_workflows(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def test_workflow_2() -> None:
-        pass
+        return DBOS.workflow_id
 
     # Start workflows
     handle_1 = DBOS.start_workflow(test_workflow_1)
@@ -501,7 +501,22 @@ def test_list_workflows(dbos: DBOS) -> None:
 
     workflows = response.json()
     assert len(workflows) == 1, f"Expected 1 workflows, but got {len(workflows)}"
+
+    # Make sure it contains all the expected fields
     assert workflows[0]["WorkflowUUID"] == handle_2.workflow_id, "Workflow ID mismatch"
+    assert workflows[0]["Status"] == "SUCCESS"
+    assert workflows[0]["WorkflowClassName"] is None
+    assert workflows[0]["WorkflowConfigName"] is None
+    assert workflows[0]["AuthenticatedUser"] is None
+    assert workflows[0]["AssumedRole"] is None
+    assert workflows[0]["AuthenticatedRoles"] is None
+    assert workflows[0]["Input"] is not None and len(workflows[0]["Input"]) > 0
+    assert workflows[0]["Output"] is not None and len(workflows[0]["Output"]) > 0
+    assert workflows[0]["Error"] is None
+    assert workflows[0]["CreatedAt"] is not None and len(workflows[0]["CreatedAt"]) > 0
+    assert workflows[0]["UpdatedAt"] is not None and len(workflows[0]["UpdatedAt"]) > 0
+    assert workflows[0]["QueueName"] is None
+    assert workflows[0]["ApplicationVersion"] == GlobalParams.app_version
 
     # Test POST /workflows without filters
     response = requests.post("http://localhost:3001/workflows", json={}, timeout=5)
@@ -513,6 +528,106 @@ def test_list_workflows(dbos: DBOS) -> None:
     ), f"Expected {len(workflows_list)} workflows, but got {len(workflows)}"
     for workflow in workflows:
         assert workflow["WorkflowUUID"] in workflow_ids, "Workflow ID mismatch"
+
+    # Verify sort_desc inverts the order
+    filters = {
+        "sort_desc": True,
+    }
+    response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
+    assert response.status_code == 200
+    workflows = response.json()
+    assert len(workflows) == len(workflows_list)
+    assert (
+        workflows[0]["WorkflowUUID"] == handle_2.workflow_id
+    ), "First workflow should be the last one started"
+
+    # Test all filters
+    filters = {
+        "workflow_uuids": ["not-a-valid-uuid"],
+    }
+    response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
+    assert response.status_code == 200
+    workflows = response.json()
+    assert len(workflows) == 0, "Expected no workflows for invalid UUID"
+
+    filters = {
+        "workflow_uuids": [handle_1.workflow_id, handle_2.workflow_id],
+    }
+    response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
+    assert response.status_code == 200
+    workflows = response.json()
+    assert len(workflows) == 2
+
+    filters = {
+        "authenticated_user": "no-user",
+    }
+    response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
+    assert response.status_code == 200
+    workflows = response.json()
+    assert len(workflows) == 0
+
+    filters = {
+        "workflow_name": test_workflow_1.__qualname__,
+    }
+    response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
+    assert response.status_code == 200
+    workflows = response.json()
+    assert len(workflows) == 1
+    assert workflows[0]["WorkflowUUID"] == handle_1.workflow_id
+
+    filters = {
+        "end_time": (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    }
+    response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
+    assert response.status_code == 200
+    workflows = response.json()
+    assert len(workflows) == 0
+
+    filters = {
+        "start_time": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+    }
+    response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
+    assert response.status_code == 200
+    workflows = response.json()
+    assert len(workflows) == 0
+
+    filters = {
+        "status": ["SUCCESS", "CANCELLED"],
+    }
+    response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
+    assert response.status_code == 200
+    workflows = response.json()
+    assert len(workflows) == 2
+
+    filters = {
+        "application_version": GlobalParams.app_version,
+    }
+    response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
+    assert response.status_code == 200
+    workflows = response.json()
+    assert len(workflows) == 2
+
+    filters = {
+        "limit": 1,
+        "offset": 1,
+    }
+    response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
+    assert response.status_code == 200
+    workflows = response.json()
+    assert len(workflows) == 1
+    assert workflows[0]["WorkflowUUID"] == handle_2.workflow_id
+
+    filters = {
+        "workflow_id_prefix": handle_1.workflow_id[
+            :10
+        ],  # First 10 characters of the workflow name
+    }
+    print(filters)
+    response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
+    assert response.status_code == 200
+    workflows = response.json()
+    assert len(workflows) == 1
+    assert workflows[0]["WorkflowUUID"] == handle_1.workflow_id
 
 
 def test_get_workflow_by_id(dbos: DBOS) -> None:
