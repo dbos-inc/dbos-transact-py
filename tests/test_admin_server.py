@@ -493,7 +493,7 @@ def test_list_workflows(dbos: DBOS) -> None:
 
     # Test POST /workflows with filters
     filters = {
-        "workflow_ids": workflow_ids,
+        "workflow_uuids": workflow_ids,
         "start_time": start_time_filter,
     }
     response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
@@ -501,7 +501,7 @@ def test_list_workflows(dbos: DBOS) -> None:
 
     workflows = response.json()
     assert len(workflows) == 1, f"Expected 1 workflows, but got {len(workflows)}"
-    assert workflows[0]["workflow_id"] == handle_2.workflow_id, "Workflow ID mismatch"
+    assert workflows[0]["WorkflowUUID"] == handle_2.workflow_id, "Workflow ID mismatch"
 
     # Test POST /workflows without filters
     response = requests.post("http://localhost:3001/workflows", json={}, timeout=5)
@@ -512,7 +512,7 @@ def test_list_workflows(dbos: DBOS) -> None:
         workflows_list
     ), f"Expected {len(workflows_list)} workflows, but got {len(workflows)}"
     for workflow in workflows:
-        assert workflow["workflow_id"] in workflow_ids, "Workflow ID mismatch"
+        assert workflow["WorkflowUUID"] in workflow_ids, "Workflow ID mismatch"
 
 
 def test_get_workflow_by_id(dbos: DBOS) -> None:
