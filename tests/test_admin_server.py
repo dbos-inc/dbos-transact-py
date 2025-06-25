@@ -505,6 +505,7 @@ def test_list_workflows(dbos: DBOS) -> None:
 
     # Make sure it contains all the expected fields
     assert workflows[0]["WorkflowUUID"] == handle_2.workflow_id, "Workflow ID mismatch"
+    assert workflows[0]["WorkflowName"] == test_workflow_2.__qualname__
     assert workflows[0]["Status"] == "SUCCESS"
     assert workflows[0]["WorkflowClassName"] is None
     assert workflows[0]["WorkflowConfigName"] is None
@@ -745,6 +746,7 @@ def test_queued_workflows_endpoint(dbos: DBOS) -> None:
     ), f"Expected 3 queued workflows, got {len(queued_workflows)}"
 
     # Make sure it contains all the expected fields
+    assert queued_workflows[0]["WorkflowName"] == blocking_workflow.__qualname__
     assert (
         queued_workflows[0]["WorkflowUUID"] == handles[0].workflow_id
     ), "Workflow ID mismatch"
