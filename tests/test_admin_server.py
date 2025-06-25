@@ -517,6 +517,7 @@ def test_list_workflows(dbos: DBOS) -> None:
     assert workflows[0]["UpdatedAt"] is not None and len(workflows[0]["UpdatedAt"]) > 0
     assert workflows[0]["QueueName"] is None
     assert workflows[0]["ApplicationVersion"] == GlobalParams.app_version
+    assert workflows[0]["ExecutorID"] == GlobalParams.executor_id
 
     # Test POST /workflows without filters
     response = requests.post("http://localhost:3001/workflows", json={}, timeout=5)
@@ -720,15 +721,15 @@ def test_queued_workflows_endpoint(dbos: DBOS) -> None:
     test_queue2 = Queue("test-queue-2", concurrency=1)
 
     @DBOS.workflow()
-    def blocking_workflow() -> str:
+    def blocking_workflow(i: int) -> str:
         while True:
             time.sleep(0.1)
 
     # Enqueue some workflows to create queued entries
-    handles = []
-    handles.append(test_queue1.enqueue(blocking_workflow))
-    handles.append(test_queue1.enqueue(blocking_workflow))
-    handles.append(test_queue2.enqueue(blocking_workflow))
+    handles: list[WorkflowHandle] = []
+    handles.append(test_queue1.enqueue(blocking_workflow, 1))
+    handles.append(test_queue1.enqueue(blocking_workflow, 2))
+    handles.append(test_queue2.enqueue(blocking_workflow, 3))
 
     # Test basic queued workflows endpoint
     response = requests.post("http://localhost:3001/queues", json={}, timeout=5)
@@ -742,16 +743,100 @@ def test_queued_workflows_endpoint(dbos: DBOS) -> None:
         len(queued_workflows) == 3
     ), f"Expected 3 queued workflows, got {len(queued_workflows)}"
 
-    # Test with filters
-    filters = {"queue_name": "test-queue-1", "limit": 1}
+    # Make sure it contains all the expected fields
+    assert (
+        queued_workflows[0]["WorkflowUUID"] == handles[0].workflow_id
+    ), "Workflow ID mismatch"
+    assert (
+        queued_workflows[0]["Status"] == "ENQUEUED"
+        or queued_workflows[0]["Status"] == "PENDING"
+    )
+    assert queued_workflows[0]["WorkflowClassName"] is None
+    assert queued_workflows[0]["WorkflowConfigName"] is None
+    assert queued_workflows[0]["AuthenticatedUser"] is None
+    assert queued_workflows[0]["AssumedRole"] is None
+    assert queued_workflows[0]["AuthenticatedRoles"] is None
+    assert (
+        queued_workflows[0]["Input"] is not None
+        and len(queued_workflows[0]["Input"]) > 0
+    )
+    assert "1" in queued_workflows[0]["Input"]
+    assert queued_workflows[0]["Output"] is None
+    assert queued_workflows[0]["Error"] is None
+    assert (
+        queued_workflows[0]["CreatedAt"] is not None
+        and len(queued_workflows[0]["CreatedAt"]) > 0
+    )
+    assert (
+        queued_workflows[0]["UpdatedAt"] is not None
+        and len(queued_workflows[0]["UpdatedAt"]) > 0
+    )
+    assert queued_workflows[0]["QueueName"] == test_queue1.name
+    assert queued_workflows[0]["ApplicationVersion"] == GlobalParams.app_version
+    assert queued_workflows[0]["ExecutorID"] == GlobalParams.executor_id
+
+    # Verify sort_desc inverts the order
+    filters = {
+        "sort_desc": True,
+    }
     response = requests.post("http://localhost:3001/queues", json=filters, timeout=5)
     assert response.status_code == 200
+    filtered_workflows = response.json()
+    assert len(filtered_workflows) == len(handles)
+    assert (
+        filtered_workflows[0]["WorkflowUUID"] == handles[2].workflow_id
+    ), "First workflow should be the last one enqueued"
 
+    # Test all filters
+    filters = {
+        "workflow_name": blocking_workflow.__qualname__,
+    }
+    response = requests.post("http://localhost:3001/queues", json=filters, timeout=5)
+    assert response.status_code == 200
+    filtered_workflows = response.json()
+    assert len(filtered_workflows) == len(handles)
+
+    filters = {
+        "end_time": (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat(),
+    }
+    response = requests.post("http://localhost:3001/queues", json=filters, timeout=5)
+    assert response.status_code == 200
+    filtered_workflows = response.json()
+    assert len(filtered_workflows) == 0
+
+    filters = {
+        "start_time": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+    }
+    response = requests.post("http://localhost:3001/queues", json=filters, timeout=5)
+    assert response.status_code == 200
+    filtered_workflows = response.json()
+    assert len(filtered_workflows) == 0
+
+    filters = {
+        "status": ["PENDING", "ENQUEUED"],
+    }
+    response = requests.post("http://localhost:3001/queues", json=filters, timeout=5)
+    assert response.status_code == 200
+    filtered_workflows = response.json()
+    assert len(filtered_workflows) == len(handles)
+
+    filters = {
+        "queue_name": test_queue1.name,
+    }
+    response = requests.post("http://localhost:3001/queues", json=filters, timeout=5)
+    assert response.status_code == 200
+    filtered_workflows = response.json()
+    assert len(filtered_workflows) == 2
+
+    filters = {"queue_name": test_queue1.name, "limit": 1, "offset": 1}
+    response = requests.post("http://localhost:3001/queues", json=filters, timeout=5)
+    assert response.status_code == 200
     filtered_workflows = response.json()
     assert isinstance(filtered_workflows, list), "Response should be a list"
     assert (
         len(filtered_workflows) == 1
     ), f"Expected 1 workflow, got {len(filtered_workflows)}"
+    assert filtered_workflows[0]["WorkflowUUID"] == handles[1].workflow_id
 
     # Test with non-existent queue name
     filters = {"queue_name": "non-existent-queue"}

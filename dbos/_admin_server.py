@@ -344,7 +344,6 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             conductor_protocol.WorkflowsOutput.from_workflow_information(i)
             for i in workflows
         ]
-
         response_body = json.dumps(
             [workflow.__dict__ for workflow in workflows_output]
         ).encode("utf-8")
@@ -356,18 +355,21 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_queued_workflows(self, filters: Dict[str, Any]) -> None:
         workflows = self.dbos.list_queued_workflows(
-            queue_name=filters.get("queue_name"),
-            name=filters.get("name"),
             start_time=filters.get("start_time"),
             end_time=filters.get("end_time"),
             status=filters.get("status"),
+            name=filters.get("workflow_name"),
             limit=filters.get("limit"),
             offset=filters.get("offset"),
+            queue_name=filters.get("queue_name"),
             sort_desc=filters.get("sort_desc", False),
         )
-
+        workflows_output = [
+            conductor_protocol.WorkflowsOutput.from_workflow_information(i)
+            for i in workflows
+        ]
         response_body = json.dumps(
-            [workflow.__dict__ for workflow in workflows]
+            [workflow.__dict__ for workflow in workflows_output]
         ).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
