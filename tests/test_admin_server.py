@@ -4,6 +4,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any, Dict
 
 import pytest
 import requests
@@ -462,7 +463,7 @@ def test_list_workflows(dbos: DBOS) -> None:
         pass
 
     @DBOS.workflow()
-    def test_workflow_2(my_time: datetime) -> None:
+    def test_workflow_2(my_time: datetime) -> str:
         return DBOS.workflow_id + " completed at " + my_time.isoformat()
 
     # Start workflows
@@ -492,7 +493,7 @@ def test_list_workflows(dbos: DBOS) -> None:
     ).isoformat()
 
     # Test POST /workflows with filters
-    filters = {
+    filters: Dict[str, Any] = {
         "workflow_uuids": workflow_ids,
         "start_time": start_time_filter,
     }
@@ -726,7 +727,7 @@ def test_queued_workflows_endpoint(dbos: DBOS) -> None:
             time.sleep(0.1)
 
     # Enqueue some workflows to create queued entries
-    handles: list[WorkflowHandle] = []
+    handles: list[WorkflowHandle[str]] = []
     handles.append(test_queue1.enqueue(blocking_workflow, 1))
     handles.append(test_queue1.enqueue(blocking_workflow, 2))
     handles.append(test_queue2.enqueue(blocking_workflow, 3))
@@ -776,7 +777,7 @@ def test_queued_workflows_endpoint(dbos: DBOS) -> None:
     assert queued_workflows[0]["ExecutorID"] == GlobalParams.executor_id
 
     # Verify sort_desc inverts the order
-    filters = {
+    filters: Dict[str, Any] = {
         "sort_desc": True,
     }
     response = requests.post("http://localhost:3001/queues", json=filters, timeout=5)
