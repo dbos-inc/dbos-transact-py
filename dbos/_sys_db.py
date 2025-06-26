@@ -1711,7 +1711,7 @@ class SystemDatabase:
                         SystemSchema.workflow_status.c.application_version.is_(None),
                     )
                 )
-                .with_for_update(nowait=True)  # Error out early
+                .with_for_update(skip_locked=True)  # Only select what you can lock
             )
             if queue.priority_enabled:
                 query = query.order_by(
