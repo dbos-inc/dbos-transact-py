@@ -95,8 +95,8 @@ class Queue:
 
 
 def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
-    default_polling_interval = 1
-    max_polling_interval = 30
+    default_polling_interval = 1.0
+    max_polling_interval = 30.0
     while not stop_event.is_set():
         if stop_event.wait(timeout=default_polling_interval):
             return
