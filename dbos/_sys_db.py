@@ -1650,7 +1650,7 @@ class SystemDatabase:
                     return []
 
             # Compute max_tasks, the number of workflows that can be dequeued given local and global concurrency limits,
-            max_tasks = 50  # To minimize contention with large queues, never dequeue more than 50 tasks
+            max_tasks = 100  # To minimize contention with large queues, never dequeue more than 100 tasks
             if queue.worker_concurrency is not None or queue.concurrency is not None:
                 # Count how many workflows on this queue are currently PENDING both locally and globally.
                 pending_tasks_query = (
