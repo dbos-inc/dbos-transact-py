@@ -95,10 +95,10 @@ class Queue:
 
 
 def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
-    default_polling_interval = 1.0
+    polling_interval = 1.0
     max_polling_interval = 60.0
     while not stop_event.is_set():
-        if stop_event.wait(timeout=default_polling_interval):
+        if stop_event.wait(timeout=polling_interval):
             return
         queues = dict(dbos._registry.queue_info_map)
         for _, queue in queues.items():
@@ -113,12 +113,12 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                     e.orig, (errors.SerializationFailure, errors.LockNotAvailable)
                 ):
                     # If a serialization error is encountered, increase the timeout with jitter
-                    default_polling_interval = min(
+                    polling_interval = min(
                         max_polling_interval,
-                        default_polling_interval * random.uniform(1, 2),
+                        polling_interval * random.uniform(1, 2),
                     )
                     dbos.logger.warning(
-                        f"Contention detected in queue thread for {queue.name}. Increasing polling interval to {default_polling_interval:.2f}."
+                        f"Contention detected in queue thread for {queue.name}. Increasing polling interval to {polling_interval:.2f}."
                     )
                 else:
                     dbos.logger.warning(f"Exception encountered in queue thread: {e}")
