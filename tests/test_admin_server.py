@@ -639,16 +639,16 @@ def test_get_workflow_by_id(dbos: DBOS) -> None:
         pass
 
     @DBOS.workflow()
-    def test_workflow_2() -> None:
-        pass
+    def test_workflow_2(my_time: datetime) -> str:
+        return DBOS.workflow_id + " completed at " + my_time.isoformat()
 
     # Start workflows
     handle_1 = DBOS.start_workflow(test_workflow_1)
-    handle_2 = DBOS.start_workflow(test_workflow_2)
+    handle_2 = DBOS.start_workflow(test_workflow_2, datetime.now())
 
     # Wait for workflows to complete
     handle_1.get_result()
-    handle_2.get_result()
+    assert handle_2.get_result() is not None
 
     # Get the workflow ID of the second workflow
     workflow_id = handle_2.workflow_id
@@ -660,10 +660,28 @@ def test_get_workflow_by_id(dbos: DBOS) -> None:
     ), f"Expected status code 200, but got {response.status_code}"
 
     workflow_data = response.json()
-    assert workflow_data["workflow_id"] == workflow_id, "Workflow ID mismatch"
+    assert workflow_data["WorkflowUUID"] == workflow_id, "Workflow ID mismatch"
     assert (
-        workflow_data["status"] == "SUCCESS"
+        workflow_data["Status"] == "SUCCESS"
     ), "Expected workflow status to be SUCCESS"
+    assert workflow_data["WorkflowName"] == test_workflow_2.__qualname__
+    assert workflow_data["WorkflowClassName"] is None
+    assert workflow_data["WorkflowConfigName"] is None
+    assert workflow_data["AuthenticatedUser"] is None
+    assert workflow_data["AssumedRole"] is None
+    assert workflow_data["AuthenticatedRoles"] is None
+    assert workflow_data["Input"] is not None and len(workflow_data["Input"]) > 0
+    assert workflow_data["Output"] is not None and len(workflow_data["Output"]) > 0
+    assert workflow_data["Error"] is None
+    assert (
+        workflow_data["CreatedAt"] is not None and len(workflow_data["CreatedAt"]) > 0
+    )
+    assert (
+        workflow_data["UpdatedAt"] is not None and len(workflow_data["UpdatedAt"]) > 0
+    )
+    assert workflow_data["QueueName"] is None
+    assert workflow_data["ApplicationVersion"] == GlobalParams.app_version
+    assert workflow_data["ExecutorID"] == GlobalParams.executor_id
 
     # Test GET /workflows/:workflow_id for a non-existing workflow
     non_existing_workflow_id = "non-existing-id"
