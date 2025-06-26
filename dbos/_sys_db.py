@@ -1650,7 +1650,7 @@ class SystemDatabase:
                     return []
 
             # Compute max_tasks, the number of workflows that can be dequeued given local and global concurrency limits,
-            max_tasks = float("inf")
+            max_tasks = 100  # To minimize contention with large queues, never dequeue more than 100 tasks
             if queue.worker_concurrency is not None or queue.concurrency is not None:
                 # Count how many workflows on this queue are currently PENDING both locally and globally.
                 pending_tasks_query = (
@@ -1694,6 +1694,7 @@ class SystemDatabase:
 
             # Retrieve the first max_tasks workflows in the queue.
             # Only retrieve workflows of the local version (or without version set)
+            skip_locks = queue.concurrency is None
             query = (
                 sa.select(
                     SystemSchema.workflow_status.c.workflow_uuid,
@@ -1711,7 +1712,10 @@ class SystemDatabase:
                         SystemSchema.workflow_status.c.application_version.is_(None),
                     )
                 )
-                .with_for_update(nowait=True)  # Error out early
+                # Unless global concurrency is set, use skip_locked to only select
+                # rows that can be locked. If global concurrency is set, use no_wait
+                # to ensure all processes have a consistent view of the table.
+                .with_for_update(skip_locked=skip_locks, nowait=(not skip_locks))
             )
             if queue.priority_enabled:
                 query = query.order_by(
@@ -1720,9 +1724,7 @@ class SystemDatabase:
                 )
             else:
                 query = query.order_by(SystemSchema.workflow_status.c.created_at.asc())
-            # Apply limit only if max_tasks is finite
-            if max_tasks != float("inf"):
-                query = query.limit(int(max_tasks))
+            query = query.limit(int(max_tasks))
 
             rows = c.execute(query).fetchall()
 

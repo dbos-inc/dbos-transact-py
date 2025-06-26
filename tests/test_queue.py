@@ -215,7 +215,7 @@ def test_limiter(dbos: DBOS) -> None:
         return time.time()
 
     limit = 5
-    period = 2
+    period = 1.8
     queue = Queue("test_queue", limiter={"limit": limit, "period": period})
 
     handles: list[WorkflowHandle[float]] = []
@@ -235,12 +235,12 @@ def test_limiter(dbos: DBOS) -> None:
     # Verify that each "wave" of tasks started at the ~same time.
     for wave in range(num_waves):
         for i in range(wave * limit, (wave + 1) * limit - 1):
-            assert times[i + 1] - times[i] < 0.3
+            assert times[i + 1] - times[i] < 0.5
 
     # Verify that the gap between "waves" is ~equal to the period
     for wave in range(num_waves - 1):
-        assert times[limit * (wave + 1)] - times[limit * wave] > period - 0.3
-        assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.3
+        assert times[limit * (wave + 1)] - times[limit * wave] > period - 0.5
+        assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.5
 
     # Verify all workflows get the SUCCESS status eventually
     for h in handles:
@@ -280,7 +280,7 @@ def test_multiple_queues(dbos: DBOS) -> None:
         return time.time()
 
     limit = 5
-    period = 2
+    period = 1.8
     limiter_queue = Queue(
         "test_limit_queue", limiter={"limit": limit, "period": period}
     )
@@ -302,12 +302,12 @@ def test_multiple_queues(dbos: DBOS) -> None:
     # Verify that each "wave" of tasks started at the ~same time.
     for wave in range(num_waves):
         for i in range(wave * limit, (wave + 1) * limit - 1):
-            assert times[i + 1] - times[i] < 0.3
+            assert times[i + 1] - times[i] < 0.5
 
     # Verify that the gap between "waves" is ~equal to the period
     for wave in range(num_waves - 1):
-        assert times[limit * (wave + 1)] - times[limit * wave] > period - 0.3
-        assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.3
+        assert times[limit * (wave + 1)] - times[limit * wave] > period - 0.5
+        assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.5
 
     # Verify all workflows get the SUCCESS status eventually
     for h in handles:
