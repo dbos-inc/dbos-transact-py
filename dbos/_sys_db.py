@@ -1694,6 +1694,7 @@ class SystemDatabase:
 
             # Retrieve the first max_tasks workflows in the queue.
             # Only retrieve workflows of the local version (or without version set)
+            skip_locks = queue.concurrency is None
             query = (
                 sa.select(
                     SystemSchema.workflow_status.c.workflow_uuid,
@@ -1711,7 +1712,10 @@ class SystemDatabase:
                         SystemSchema.workflow_status.c.application_version.is_(None),
                     )
                 )
-                .with_for_update(skip_locked=True)  # Only select what you can lock
+                # Unless global concurrency is set, use skip_locked to only select
+                # rows that can be locked. If global concurrency is set, use no_wait
+                # to ensure all processes have a consistent view of the table.
+                .with_for_update(skip_locked=skip_locks, nowait=(not skip_locks))
             )
             if queue.priority_enabled:
                 query = query.order_by(
