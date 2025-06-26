@@ -99,8 +99,8 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     min_polling_interval = 1.0
     max_polling_interval = 120.0
     while not stop_event.is_set():
-        # Wait for the polling interval
-        if stop_event.wait(timeout=polling_interval):
+        # Wait for the polling interval with jitter
+        if stop_event.wait(timeout=polling_interval * random.uniform(0.95, 1.05)):
             return
         queues = dict(dbos._registry.queue_info_map)
         for _, queue in queues.items():
