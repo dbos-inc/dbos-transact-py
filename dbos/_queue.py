@@ -1,3 +1,4 @@
+import random
 import threading
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, TypedDict
 
@@ -94,8 +95,10 @@ class Queue:
 
 
 def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
+    default_polling_interval = 1
+    max_polling_interval = 30
     while not stop_event.is_set():
-        if stop_event.wait(timeout=1):
+        if stop_event.wait(timeout=default_polling_interval):
             return
         queues = dict(dbos._registry.queue_info_map)
         for _, queue in queues.items():
@@ -106,10 +109,18 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                 for id in wf_ids:
                     execute_workflow_by_id(dbos, id)
             except OperationalError as e:
-                # Ignore serialization error
-                if not isinstance(
+                if isinstance(
                     e.orig, (errors.SerializationFailure, errors.LockNotAvailable)
                 ):
+                    # If a serialization error is encountered, increase the timeout with jitter
+                    default_polling_interval = min(
+                        max_polling_interval,
+                        default_polling_interval * random.uniform(1, 2),
+                    )
+                    dbos.logger.warning(
+                        f"Contention detected in queue thread for {queue.name}. Increasing polling interval to {default_polling_interval}."
+                    )
+                else:
                     dbos.logger.warning(f"Exception encountered in queue thread: {e}")
             except Exception as e:
                 if not stop_event.is_set():
