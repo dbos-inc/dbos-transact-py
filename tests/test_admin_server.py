@@ -512,14 +512,30 @@ def test_list_workflows(dbos: DBOS) -> None:
     assert workflows[0]["AuthenticatedUser"] is None
     assert workflows[0]["AssumedRole"] is None
     assert workflows[0]["AuthenticatedRoles"] is None
-    assert workflows[0]["Input"] is not None and len(workflows[0]["Input"]) > 0
-    assert workflows[0]["Output"] is not None and len(workflows[0]["Output"]) > 0
+    # By default, input and output are not loaded
+    assert workflows[0]["Input"] is None
+    assert workflows[0]["Output"] is None
     assert workflows[0]["Error"] is None
     assert workflows[0]["CreatedAt"] is not None and len(workflows[0]["CreatedAt"]) > 0
     assert workflows[0]["UpdatedAt"] is not None and len(workflows[0]["UpdatedAt"]) > 0
     assert workflows[0]["QueueName"] is None
     assert workflows[0]["ApplicationVersion"] == GlobalParams.app_version
     assert workflows[0]["ExecutorID"] == GlobalParams.executor_id
+
+    # Only load input and output as requested
+    filters = {
+        "workflow_uuids": workflow_ids,
+        "start_time": start_time_filter,
+        "load_input": True,
+        "load_output": True,
+    }
+    response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
+    assert response.status_code == 200
+
+    workflows = response.json()
+    assert len(workflows) == 1
+    assert workflows[0]["Output"] is not None and len(workflows[0]["Output"]) > 0
+    assert workflows[0]["Input"] is not None and len(workflows[0]["Input"]) > 0
 
     # Test POST /workflows without filters
     response = requests.post("http://localhost:3001/workflows", json={}, timeout=5)

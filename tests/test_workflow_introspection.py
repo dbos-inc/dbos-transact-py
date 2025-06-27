@@ -43,6 +43,15 @@ def test_list_workflow(dbos: DBOS) -> None:
     assert output.recovery_attempts == 1
     assert output.workflow_timeout_ms is None
     assert output.workflow_deadline_epoch_ms is None
+    assert output.input is not None
+    assert output.output is not None
+
+    # Test ignoring input and output
+    outputs = DBOS.list_workflows(load_input=False, load_output=False)
+    assert len(outputs) == 1
+    output = outputs[0]
+    assert output.input is None
+    assert output.output is None
 
     # Test searching by status
     outputs = DBOS.list_workflows(status="PENDING")
