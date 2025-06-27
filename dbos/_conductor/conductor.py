@@ -235,6 +235,8 @@ class ConductorWebsocket(threading.Thread):
                                     limit=body["limit"],
                                     offset=body["offset"],
                                     sort_desc=body["sort_desc"],
+                                    load_input=body.get("load_input", False),
+                                    load_output=body.get("load_output", False),
                                 )
                             except Exception as e:
                                 error_message = f"Exception encountered when listing workflows: {traceback.format_exc()}"

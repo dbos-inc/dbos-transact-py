@@ -111,6 +111,8 @@ class RestartResponse(BaseMessage):
 
 
 class ListWorkflowsBody(TypedDict):
+    load_input: Optional[bool]
+    load_output: Optional[bool]
     workflow_uuids: List[str]
     workflow_name: Optional[str]
     authenticated_user: Optional[str]
