@@ -263,7 +263,7 @@ class ConductorWebsocket(threading.Thread):
                             q_body = list_queued_workflows_message.body
                             infos = []
                             try:
-                                load_input = body.get("load_input", False)
+                                load_input = q_body.get("load_input", False)
                                 load_input = load_input if load_input else False
                                 infos = list_queued_workflows(
                                     self.dbos._sys_db,
