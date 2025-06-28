@@ -212,6 +212,7 @@ class ListWorkflowsResponse(BaseMessage):
 
 
 class ListQueuedWorkflowsBody(TypedDict):
+    load_input: Optional[bool]
     workflow_name: Optional[str]
     start_time: Optional[str]
     end_time: Optional[str]
