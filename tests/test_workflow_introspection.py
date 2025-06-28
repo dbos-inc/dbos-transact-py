@@ -238,6 +238,12 @@ def test_queued_workflows(dbos: DBOS) -> None:
         assert workflow.workflow_timeout_ms is None
         assert workflow.workflow_deadline_epoch_ms is None
 
+    # Test ignoring input
+    workflows = DBOS.list_queued_workflows(load_input=False)
+    assert len(workflows) == queued_steps
+    for workflow in workflows:
+        assert workflow.input is None
+
     # Test sort_desc inverts the order
     workflows = DBOS.list_queued_workflows(sort_desc=True)
     assert len(workflows) == queued_steps

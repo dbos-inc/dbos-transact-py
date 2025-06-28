@@ -369,6 +369,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             offset=filters.get("offset"),
             queue_name=filters.get("queue_name"),
             sort_desc=filters.get("sort_desc", False),
+            load_input=filters.get("load_input", False),
         )
         workflows_output = [
             conductor_protocol.WorkflowsOutput.from_workflow_information(i)

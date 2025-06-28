@@ -910,12 +910,15 @@ class SystemDatabase:
         return infos
 
     def get_queued_workflows(
-        self, input: GetQueuedWorkflowsInput
+        self,
+        input: GetQueuedWorkflowsInput,
+        *,
+        load_input: bool = True,
     ) -> List[WorkflowStatus]:
         """
         Retrieve a list of queued workflows result and inputs based on the input criteria. The result is a list of external-facing workflow status objects.
         """
-        query = sa.select(
+        load_columns = [
             SystemSchema.workflow_status.c.workflow_uuid,
             SystemSchema.workflow_status.c.status,
             SystemSchema.workflow_status.c.name,
@@ -931,12 +934,13 @@ class SystemDatabase:
             SystemSchema.workflow_status.c.updated_at,
             SystemSchema.workflow_status.c.application_version,
             SystemSchema.workflow_status.c.application_id,
-            SystemSchema.workflow_status.c.inputs,
-            SystemSchema.workflow_status.c.output,
-            SystemSchema.workflow_status.c.error,
             SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
             SystemSchema.workflow_status.c.workflow_timeout_ms,
-        ).where(
+        ]
+        if load_input:
+            load_columns.append(SystemSchema.workflow_status.c.inputs)
+
+        query = sa.select(*load_columns).where(
             sa.and_(
                 SystemSchema.workflow_status.c.queue_name.isnot(None),
                 SystemSchema.workflow_status.c.status.in_(["ENQUEUED", "PENDING"]),
@@ -997,18 +1001,21 @@ class SystemDatabase:
             info.updated_at = row[12]
             info.app_version = row[13]
             info.app_id = row[14]
+            info.workflow_deadline_epoch_ms = row[15]
+            info.workflow_timeout_ms = row[16]
 
+            raw_input = row[17] if load_input else None
+
+            # Error and Output are not loaded because they should always be None for queued workflows.
             inputs, output, exception = _serialization.safe_deserialize(
                 info.workflow_id,
-                serialized_input=row[15],
-                serialized_output=row[16],
-                serialized_exception=row[17],
+                serialized_input=raw_input,
+                serialized_output=None,
+                serialized_exception=None,
             )
             info.input = inputs
             info.output = output
             info.error = exception
-            info.workflow_deadline_epoch_ms = row[18]
-            info.workflow_timeout_ms = row[19]
 
             infos.append(info)
 

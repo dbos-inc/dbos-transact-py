@@ -67,6 +67,7 @@ def list_queued_workflows(
     limit: Optional[int] = None,
     offset: Optional[int] = None,
     sort_desc: bool = False,
+    load_input: bool = True,
 ) -> List[WorkflowStatus]:
     input: GetQueuedWorkflowsInput = {
         "queue_name": queue_name,
@@ -79,7 +80,9 @@ def list_queued_workflows(
         "sort_desc": sort_desc,
     }
 
-    infos: List[WorkflowStatus] = sys_db.get_queued_workflows(input)
+    infos: List[WorkflowStatus] = sys_db.get_queued_workflows(
+        input, load_input=load_input
+    )
     return infos
 
 
