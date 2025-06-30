@@ -94,7 +94,7 @@ def test_deactivate(dbos: DBOS, config: DBOSConfig) -> None:
         return 5
 
     # Let the scheduled workflow run
-    time.sleep(2)
+    time.sleep(5)
     val = wf_counter
     assert val > 0
     # Deactivate--scheduled workflow should stop
@@ -103,7 +103,7 @@ def test_deactivate(dbos: DBOS, config: DBOSConfig) -> None:
     for event in dbos.poller_stop_events:
         assert event.is_set()
     # Verify the scheduled workflow does not run anymore
-    time.sleep(3)
+    time.sleep(5)
     assert wf_counter <= val + 1
     # Enqueue a workflow, verify it still runs
     assert queue.enqueue(regular_workflow).get_result() == 5
@@ -512,14 +512,30 @@ def test_list_workflows(dbos: DBOS) -> None:
     assert workflows[0]["AuthenticatedUser"] is None
     assert workflows[0]["AssumedRole"] is None
     assert workflows[0]["AuthenticatedRoles"] is None
-    assert workflows[0]["Input"] is not None and len(workflows[0]["Input"]) > 0
-    assert workflows[0]["Output"] is not None and len(workflows[0]["Output"]) > 0
+    # By default, input and output are not loaded
+    assert workflows[0]["Input"] is None
+    assert workflows[0]["Output"] is None
     assert workflows[0]["Error"] is None
     assert workflows[0]["CreatedAt"] is not None and len(workflows[0]["CreatedAt"]) > 0
     assert workflows[0]["UpdatedAt"] is not None and len(workflows[0]["UpdatedAt"]) > 0
     assert workflows[0]["QueueName"] is None
     assert workflows[0]["ApplicationVersion"] == GlobalParams.app_version
     assert workflows[0]["ExecutorID"] == GlobalParams.executor_id
+
+    # Only load input and output as requested
+    filters = {
+        "workflow_uuids": workflow_ids,
+        "start_time": start_time_filter,
+        "load_input": True,
+        "load_output": True,
+    }
+    response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
+    assert response.status_code == 200
+
+    workflows = response.json()
+    assert len(workflows) == 1
+    assert workflows[0]["Output"] is not None and len(workflows[0]["Output"]) > 0
+    assert workflows[0]["Input"] is not None and len(workflows[0]["Input"]) > 0
 
     # Test POST /workflows without filters
     response = requests.post("http://localhost:3001/workflows", json={}, timeout=5)
@@ -777,11 +793,7 @@ def test_queued_workflows_endpoint(dbos: DBOS) -> None:
     assert queued_workflows[0]["AuthenticatedUser"] is None
     assert queued_workflows[0]["AssumedRole"] is None
     assert queued_workflows[0]["AuthenticatedRoles"] is None
-    assert (
-        queued_workflows[0]["Input"] is not None
-        and len(queued_workflows[0]["Input"]) > 0
-    )
-    assert "1" in queued_workflows[0]["Input"]
+    assert queued_workflows[0]["Input"] is None
     assert queued_workflows[0]["Output"] is None
     assert queued_workflows[0]["Error"] is None
     assert (
@@ -807,6 +819,17 @@ def test_queued_workflows_endpoint(dbos: DBOS) -> None:
     assert (
         filtered_workflows[0]["WorkflowUUID"] == handles[2].workflow_id
     ), "First workflow should be the last one enqueued"
+
+    # Only load input as requested
+    filters = {
+        "load_input": True,
+    }
+    response = requests.post("http://localhost:3001/queues", json=filters, timeout=5)
+    assert response.status_code == 200
+    filtered_workflows = response.json()
+    assert len(filtered_workflows) == len(handles)
+    assert filtered_workflows[0]["Input"] is not None
+    assert "1" in filtered_workflows[0]["Input"]
 
     # Test all filters
     filters = {

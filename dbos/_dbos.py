@@ -1032,6 +1032,8 @@ class DBOS:
         offset: Optional[int] = None,
         sort_desc: bool = False,
         workflow_id_prefix: Optional[str] = None,
+        load_input: bool = True,
+        load_output: bool = True,
     ) -> List[WorkflowStatus]:
         def fn() -> List[WorkflowStatus]:
             return list_workflows(
@@ -1047,6 +1049,8 @@ class DBOS:
                 offset=offset,
                 sort_desc=sort_desc,
                 workflow_id_prefix=workflow_id_prefix,
+                load_input=load_input,
+                load_output=load_output,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -1065,6 +1069,7 @@ class DBOS:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
+        load_input: bool = True,
     ) -> List[WorkflowStatus]:
         def fn() -> List[WorkflowStatus]:
             return list_queued_workflows(
@@ -1077,6 +1082,7 @@ class DBOS:
                 limit=limit,
                 offset=offset,
                 sort_desc=sort_desc,
+                load_input=load_input,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(

@@ -66,6 +66,16 @@ def test_client_enqueue_and_get_result(dbos: DBOS, client: DBOSClient) -> None:
     assert len(list_results) == 1
     assert list_results[0].workflow_id == wfid
     assert list_results[0].status == "SUCCESS"
+    assert list_results[0].output == result
+    assert list_results[0].input is not None
+
+    # Skip loading input and output
+    list_results = client.list_workflows(load_input=False, load_output=False)
+    assert len(list_results) == 1
+    assert list_results[0].workflow_id == wfid
+    assert list_results[0].status == "SUCCESS"
+    assert list_results[0].output is None
+    assert list_results[0].input is None
 
 
 def test_enqueue_with_timeout(dbos: DBOS, client: DBOSClient) -> None:
@@ -529,6 +539,16 @@ def test_enqueue_with_deduplication(dbos: DBOS, client: DBOSClient) -> None:
     assert len(list_results) == 1
     assert list_results[0].workflow_id == wfid
     assert list_results[0].status in ["PENDING", "ENQUEUED"]
+    assert list_results[0].input is not None
+    assert list_results[0].output is None
+
+    # Skip loading input
+    list_results = client.list_queued_workflows(load_input=False)
+    assert len(list_results) == 1
+    assert list_results[0].workflow_id == wfid
+    assert list_results[0].status in ["PENDING", "ENQUEUED"]
+    assert list_results[0].input is None
+    assert list_results[0].output is None
 
     assert handle.get_result() == "abc"
     assert handle2.get_result() == "abc"

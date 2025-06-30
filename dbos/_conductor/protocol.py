@@ -110,7 +110,7 @@ class RestartResponse(BaseMessage):
     error_message: Optional[str] = None
 
 
-class ListWorkflowsBody(TypedDict):
+class ListWorkflowsBody(TypedDict, total=False):
     workflow_uuids: List[str]
     workflow_name: Optional[str]
     authenticated_user: Optional[str]
@@ -121,6 +121,8 @@ class ListWorkflowsBody(TypedDict):
     limit: Optional[int]
     offset: Optional[int]
     sort_desc: bool
+    load_input: bool
+    load_output: bool
 
 
 @dataclass
@@ -209,7 +211,7 @@ class ListWorkflowsResponse(BaseMessage):
     error_message: Optional[str] = None
 
 
-class ListQueuedWorkflowsBody(TypedDict):
+class ListQueuedWorkflowsBody(TypedDict, total=False):
     workflow_name: Optional[str]
     start_time: Optional[str]
     end_time: Optional[str]
@@ -218,6 +220,7 @@ class ListQueuedWorkflowsBody(TypedDict):
     limit: Optional[int]
     offset: Optional[int]
     sort_desc: bool
+    load_input: bool
 
 
 @dataclass
