@@ -816,12 +816,12 @@ class SystemDatabase:
             SystemSchema.workflow_status.c.application_id,
             SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
             SystemSchema.workflow_status.c.workflow_timeout_ms,
-            SystemSchema.workflow_status.c.error,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
         if load_output:
             load_columns.append(SystemSchema.workflow_status.c.output)
+            load_columns.append(SystemSchema.workflow_status.c.error)
 
         query = sa.select(*load_columns)
         if input.sort_desc:
@@ -893,9 +893,9 @@ class SystemDatabase:
             info.workflow_deadline_epoch_ms = row[15]
             info.workflow_timeout_ms = row[16]
 
-            raw_error = row[17]
-            raw_input = row[18] if load_input else None
-            raw_output = row[19] if load_output else None
+            raw_input = row[17] if load_input else None
+            raw_output = row[18] if load_output else None
+            raw_error = row[19] if load_output else None
             inputs, output, exception = _serialization.safe_deserialize(
                 info.workflow_id,
                 serialized_input=raw_input,

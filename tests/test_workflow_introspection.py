@@ -80,6 +80,61 @@ def test_list_workflow(dbos: DBOS) -> None:
     assert len(outputs) == 1
 
 
+def test_list_workflow_error(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def simple_workflow(x: int) -> int:
+        raise Exception(f"Test error: {x}")
+
+    # Run a simple workflow
+    wfid = str(uuid.uuid4)
+    with SetWorkflowID(wfid):
+        with pytest.raises(Exception) as exc_info:
+            simple_workflow(1)
+        assert str(exc_info.value) == "Test error: 1"
+
+    # List the workflow, then test every output
+    outputs = DBOS.list_workflows()
+    assert len(outputs) == 1
+    output = outputs[0]
+    assert output.workflow_id == wfid
+    assert output.status == "ERROR"
+    assert output.name == simple_workflow.__qualname__
+    assert output.class_name == None
+    assert output.config_name == None
+    assert output.authenticated_user == None
+    assert output.assumed_role == None
+    assert output.authenticated_roles == None
+    assert output.created_at is not None and output.created_at > 0
+    assert output.updated_at is not None and output.updated_at > 0
+    assert output.queue_name == None
+    assert output.executor_id == GlobalParams.executor_id
+    assert output.app_version == GlobalParams.app_version
+    assert output.app_id == ""
+    assert output.recovery_attempts == 1
+    assert output.workflow_timeout_ms is None
+    assert output.workflow_deadline_epoch_ms is None
+    assert output.input is not None
+    assert output.output is None
+    assert output.error is not None
+    assert isinstance(output.error, Exception)
+
+    # Test ignoring input and output
+    outputs = DBOS.list_workflows(load_input=False, load_output=False)
+    assert len(outputs) == 1
+    output = outputs[0]
+    assert output.input is None
+    assert output.output is None
+    assert output.error is None
+
+    # Test searching by status
+    outputs = DBOS.list_workflows(status="PENDING")
+    assert len(outputs) == 0
+    outputs = DBOS.list_workflows(status="ERROR")
+    assert len(outputs) == 1
+    outputs = DBOS.list_workflows(status=["ERROR", "PENDING"])
+    assert len(outputs) == 1
+
+
 def test_list_workflow_limit(dbos: DBOS) -> None:
     @DBOS.workflow()
     def simple_workflow() -> None:
