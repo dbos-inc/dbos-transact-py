@@ -1157,13 +1157,16 @@ def decorate_step(
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             rr: Optional[str] = check_required_roles(func, fi)
             # Entering step is allowed:
+            #  No DBOS, just call the original function directly
             #  In a step already, just call the original function directly.
             #  In a workflow (that is not in a step already)
             #  Not in a workflow (we will start the single op workflow)
+            if not dbosreg.dbos or not dbosreg.dbos._launched:
+                # Call the original function directly
+                return func(*args, **kwargs)
             ctx = get_local_dbos_context()
             if ctx and ctx.is_step():
                 # Call the original function directly
-
                 return func(*args, **kwargs)
             if ctx and ctx.is_within_workflow():
                 assert ctx.is_workflow(), "Steps must be called from within workflows"
