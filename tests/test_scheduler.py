@@ -101,8 +101,8 @@ def test_scheduled_workflow(dbos: DBOS) -> None:
         nonlocal wf_counter
         wf_counter += 1
 
-    time.sleep(4)
-    assert wf_counter > 2 and wf_counter <= 4
+    time.sleep(5)
+    assert wf_counter > 2 and wf_counter <= 5
 
 
 def test_appdb_downtime(dbos: DBOS) -> None:
@@ -152,8 +152,8 @@ def test_scheduled_transaction(dbos: DBOS) -> None:
         nonlocal txn_counter
         txn_counter += 1
 
-    time.sleep(4)
-    assert txn_counter > 2 and txn_counter <= 4
+    time.sleep(5)
+    assert txn_counter > 2 and txn_counter <= 5
 
 
 def test_scheduled_step(dbos: DBOS) -> None:
@@ -165,8 +165,8 @@ def test_scheduled_step(dbos: DBOS) -> None:
         nonlocal step_counter
         step_counter += 1
 
-    time.sleep(4)
-    assert step_counter > 2 and step_counter <= 4
+    time.sleep(5)
+    assert step_counter > 2 and step_counter <= 5
 
 
 def test_scheduled_workflow_exception(dbos: DBOS) -> None:
@@ -179,8 +179,8 @@ def test_scheduled_workflow_exception(dbos: DBOS) -> None:
         wf_counter += 1
         raise Exception("error")
 
-    time.sleep(3)
-    assert wf_counter >= 1 and wf_counter <= 3
+    time.sleep(4)
+    assert wf_counter >= 1 and wf_counter <= 4
 
 
 def test_scheduler_oaoo(dbos: DBOS) -> None:

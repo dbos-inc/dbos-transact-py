@@ -1,3 +1,4 @@
+import random
 import threading
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, TypedDict
 
@@ -94,8 +95,12 @@ class Queue:
 
 
 def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
+    polling_interval = 1.0
+    min_polling_interval = 1.0
+    max_polling_interval = 120.0
     while not stop_event.is_set():
-        if stop_event.wait(timeout=1):
+        # Wait for the polling interval with jitter
+        if stop_event.wait(timeout=polling_interval * random.uniform(0.95, 1.05)):
             return
         queues = dict(dbos._registry.queue_info_map)
         for _, queue in queues.items():
@@ -106,12 +111,22 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                 for id in wf_ids:
                     execute_workflow_by_id(dbos, id)
             except OperationalError as e:
-                # Ignore serialization error
-                if not isinstance(
+                if isinstance(
                     e.orig, (errors.SerializationFailure, errors.LockNotAvailable)
                 ):
+                    # If a serialization error is encountered, increase the polling interval
+                    polling_interval = min(
+                        max_polling_interval,
+                        polling_interval * 2.0,
+                    )
+                    dbos.logger.warning(
+                        f"Contention detected in queue thread for {queue.name}. Increasing polling interval to {polling_interval:.2f}."
+                    )
+                else:
                     dbos.logger.warning(f"Exception encountered in queue thread: {e}")
             except Exception as e:
                 if not stop_event.is_set():
                     # Only print the error if the thread is not stopping
                     dbos.logger.warning(f"Exception encountered in queue thread: {e}")
+        # Attempt to scale back the polling interval on each iteration
+        polling_interval = max(min_polling_interval, polling_interval * 0.9)

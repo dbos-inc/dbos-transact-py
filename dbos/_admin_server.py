@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import threading
-from dataclasses import asdict
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict
@@ -120,7 +119,12 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                     self.send_response(404)
                     self._end_headers()
                     return
-                response_body = json.dumps(workflows[0].__dict__).encode("utf-8")
+                workflow_output = (
+                    conductor_protocol.WorkflowsOutput.from_workflow_information(
+                        workflows[0]
+                    )
+                )
+                response_body = json.dumps(workflow_output.__dict__).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(response_body)))
