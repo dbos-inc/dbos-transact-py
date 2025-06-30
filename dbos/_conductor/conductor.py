@@ -224,9 +224,7 @@ class ConductorWebsocket(threading.Thread):
                             infos = []
                             try:
                                 load_input = body.get("load_input", False)
-                                load_input = load_input if load_input else False
                                 load_output = body.get("load_output", False)
-                                load_output = load_output if load_output else False
                                 infos = list_workflows(
                                     self.dbos._sys_db,
                                     workflow_ids=body["workflow_uuids"],
@@ -264,7 +262,6 @@ class ConductorWebsocket(threading.Thread):
                             infos = []
                             try:
                                 q_load_input = q_body.get("load_input", False)
-                                q_load_input = q_load_input if q_load_input else False
                                 infos = list_queued_workflows(
                                     self.dbos._sys_db,
                                     start_time=q_body["start_time"],
