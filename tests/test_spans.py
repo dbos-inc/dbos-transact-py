@@ -43,7 +43,7 @@ def test_spans(config: DBOSConfig) -> None:
     dbos_tracer.set_provider(provider)
 
     # Set up in-memory log exporter
-    log_exporter = InMemoryLogExporter()
+    log_exporter = InMemoryLogExporter()  # type: ignore
     log_processor = BatchLogRecordProcessor(log_exporter)
     log_provider = LoggerProvider()
     log_provider.add_log_record_processor(log_processor)
@@ -64,8 +64,8 @@ def test_spans(config: DBOSConfig) -> None:
         assert log.log_record.attributes["executorID"] == GlobalParams.executor_id
         assert log.log_record.attributes["foo"] == "bar"
         # Make sure the log record has a span_id and trace_id
-        assert log.log_record.span_id > 0
-        assert log.log_record.trace_id > 0
+        assert log.log_record.span_id is not None and log.log_record.span_id > 0
+        assert log.log_record.trace_id is not None and log.log_record.trace_id > 0
         assert (
             log.log_record.body == "This is a test_step"
             or log.log_record.body == "This is a test_workflow"
@@ -121,7 +121,7 @@ async def test_spans_async(dbos: DBOS) -> None:
     dbos_tracer.set_provider(provider)
 
     # Set up in-memory log exporter
-    log_exporter = InMemoryLogExporter()
+    log_exporter = InMemoryLogExporter()  # type: ignore
     log_processor = BatchLogRecordProcessor(log_exporter)
     log_provider = LoggerProvider()
     log_provider.add_log_record_processor(log_processor)
@@ -141,8 +141,8 @@ async def test_spans_async(dbos: DBOS) -> None:
         )
         assert log.log_record.attributes["executorID"] == GlobalParams.executor_id
         # Make sure the log record has a span_id and trace_id
-        assert log.log_record.span_id > 0
-        assert log.log_record.trace_id > 0
+        assert log.log_record.span_id is not None and log.log_record.span_id > 0
+        assert log.log_record.trace_id is not None and log.log_record.trace_id > 0
         assert (
             log.log_record.body == "This is a test_step"
             or log.log_record.body == "This is a test_workflow"
@@ -189,7 +189,7 @@ def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     dbos_tracer.set_provider(provider)
 
     # Set up in-memory log exporter
-    log_exporter = InMemoryLogExporter()
+    log_exporter = InMemoryLogExporter()  # type: ignore
     log_processor = BatchLogRecordProcessor(log_exporter)
     log_provider = LoggerProvider()
     log_provider.add_log_record_processor(log_processor)
@@ -208,8 +208,8 @@ def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert (
         logs[0].log_record.attributes["applicationVersion"] == GlobalParams.app_version
     )
-    assert logs[0].log_record.span_id > 0
-    assert logs[0].log_record.trace_id > 0
+    assert logs[0].log_record.span_id is not None and logs[0].log_record.span_id > 0
+    assert logs[0].log_record.trace_id is not None and logs[0].log_record.trace_id > 0
     assert logs[0].log_record.body == "This is a test_step_endpoint"
 
     spans = exporter.get_finished_spans()
