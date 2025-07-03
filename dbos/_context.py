@@ -10,7 +10,7 @@ from enum import Enum
 from types import TracebackType
 from typing import List, Literal, Optional, Type, TypedDict
 
-from opentelemetry.trace import Span, Status, StatusCode
+from opentelemetry.trace import Span, Status, StatusCode, use_span
 from sqlalchemy.orm import Session
 
 from dbos._utils import GlobalParams
@@ -68,6 +68,20 @@ class StepStatus:
     max_attempts: Optional[int]
 
 
+@dataclass
+class ContextSpan:
+    """
+    A span that is used to track the context of a workflow or step execution.
+
+    Attributes:
+        span: The OpenTelemetry span object.
+        context_manager: The context manager that is used to manage the span's lifecycle.
+    """
+
+    span: Span
+    context_manager: AbstractContextManager[Span]
+
+
 class DBOSContext:
     def __init__(self) -> None:
         self.executor_id = GlobalParams.executor_id
@@ -86,7 +100,7 @@ class DBOSContext:
         self.curr_step_function_id: int = -1
         self.curr_tx_function_id: int = -1
         self.sql_session: Optional[Session] = None
-        self.spans: list[Span] = []
+        self.context_spans: list[ContextSpan] = []
 
         self.authenticated_user: Optional[str] = None
         self.authenticated_roles: Optional[List[str]] = None
@@ -202,8 +216,8 @@ class DBOSContext:
         self._end_span(exc_value)
 
     def get_current_span(self) -> Optional[Span]:
-        if len(self.spans):
-            return self.spans[-1]
+        if len(self.context_spans) > 0:
+            return self.context_spans[-1].span
         return None
 
     def _start_span(self, attributes: TracedAttributes) -> None:
@@ -218,27 +232,38 @@ class DBOSContext:
         )
         attributes["authenticatedUserAssumedRole"] = self.assumed_role
         span = dbos_tracer.start_span(
-            attributes, parent=self.spans[-1] if len(self.spans) > 0 else None
+            attributes,
+            parent=self.context_spans[-1].span if len(self.context_spans) > 0 else None,
         )
-        self.spans.append(span)
+        # Activate the current span
+        cm = use_span(
+            span,
+            end_on_exit=False,
+            record_exception=False,
+            set_status_on_exception=False,
+        )
+        self.context_spans.append(ContextSpan(span, cm))
+        cm.__enter__()
 
     def _end_span(self, exc_value: Optional[BaseException]) -> None:
+        context_span = self.context_spans.pop()
         if exc_value is None:
-            self.spans[-1].set_status(Status(StatusCode.OK))
+            context_span.span.set_status(Status(StatusCode.OK))
         else:
-            self.spans[-1].set_status(
+            context_span.span.set_status(
                 Status(StatusCode.ERROR, description=str(exc_value))
             )
-        dbos_tracer.end_span(self.spans.pop())
+        dbos_tracer.end_span(context_span.span)
+        context_span.context_manager.__exit__(None, None, None)
 
     def set_authentication(
         self, user: Optional[str], roles: Optional[List[str]]
     ) -> None:
         self.authenticated_user = user
         self.authenticated_roles = roles
-        if user is not None and len(self.spans) > 0:
-            self.spans[-1].set_attribute("authenticatedUser", user)
-            self.spans[-1].set_attribute(
+        if user is not None and len(self.context_spans) > 0:
+            self.context_spans[-1].span.set_attribute("authenticatedUser", user)
+            self.context_spans[-1].span.set_attribute(
                 "authenticatedUserRoles", json.dumps(roles) if roles is not None else ""
             )
 
