@@ -102,6 +102,10 @@ def test_spans(config: DBOSConfig) -> None:
     assert spans[4].parent == None
 
     # Span ID and trace ID should match the log record
+    # For pyright
+    assert spans[0].context is not None
+    assert spans[2].context is not None
+    assert spans[3].context is not None
     assert logs[0].log_record.span_id == spans[0].context.span_id
     assert logs[0].log_record.trace_id == spans[0].context.trace_id
     assert logs[1].log_record.span_id == spans[2].context.span_id
@@ -190,6 +194,9 @@ async def test_spans_async(dbos: DBOS) -> None:
     assert spans[4].parent == None
 
     # Span ID and trace ID should match the log record
+    assert spans[0].context is not None
+    assert spans[2].context is not None
+    assert spans[3].context is not None
     assert logs[0].log_record.span_id == spans[0].context.span_id
     assert logs[0].log_record.trace_id == spans[0].context.trace_id
     assert logs[1].log_record.span_id == spans[2].context.span_id
@@ -260,5 +267,6 @@ def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert spans[2].parent == None
 
     # Span ID and trace ID should match the log record
+    assert spans[0].context is not None
     assert logs[0].log_record.span_id == spans[0].context.span_id
     assert logs[0].log_record.trace_id == spans[0].context.trace_id

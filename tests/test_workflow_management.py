@@ -745,4 +745,4 @@ def test_global_timeout(dbos: DBOS) -> None:
         with pytest.raises(DBOSWorkflowCancelledError):
             handle.get_result()
     event.set()
-    final_handle.get_result() is not None
+    assert final_handle.get_result() is not None
