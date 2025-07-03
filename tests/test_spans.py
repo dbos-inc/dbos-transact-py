@@ -9,6 +9,7 @@ from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, InMemoryLogExporter
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace.span import format_trace_id
 
 from dbos import DBOS, DBOSConfig
 from dbos._logger import dbos_logger
@@ -27,9 +28,10 @@ def test_spans(config: DBOSConfig) -> None:
         test_step()
         current_span = DBOS.span
         subspan = DBOS.tracer.start_span({"name": "a new span"}, parent=current_span)
+        # Note: DBOS.tracer.start_span() does not set the new span as the current span. So this log is still attached to the workflow span.
+        DBOS.logger.info("This is a test_workflow")
         subspan.add_event("greeting_event", {"name": "a new event"})
         DBOS.tracer.end_span(subspan)
-        DBOS.logger.info("This is a test_workflow")
 
     @DBOS.step()
     def test_step() -> None:
@@ -70,6 +72,9 @@ def test_spans(config: DBOSConfig) -> None:
             log.log_record.body == "This is a test_step"
             or log.log_record.body == "This is a test_workflow"
         )
+        assert log.log_record.attributes["traceId"] == format_trace_id(
+            log.log_record.trace_id
+        )
 
     spans = exporter.get_finished_spans()
 
@@ -96,6 +101,14 @@ def test_spans(config: DBOSConfig) -> None:
     assert spans[3].parent.span_id == spans[4].context.span_id  # type: ignore
     assert spans[4].parent == None
 
+    # Span ID and trace ID should match the log record
+    assert logs[0].log_record.span_id == spans[0].context.span_id
+    assert logs[0].log_record.trace_id == spans[0].context.trace_id
+    assert logs[1].log_record.span_id == spans[2].context.span_id
+    assert logs[1].log_record.trace_id == spans[2].context.trace_id
+    assert logs[2].log_record.span_id == spans[3].context.span_id
+    assert logs[2].log_record.trace_id == spans[3].context.trace_id
+
 
 @pytest.mark.asyncio
 async def test_spans_async(dbos: DBOS) -> None:
@@ -105,9 +118,10 @@ async def test_spans_async(dbos: DBOS) -> None:
         await test_step()
         current_span = DBOS.span
         subspan = DBOS.tracer.start_span({"name": "a new span"}, parent=current_span)
+        # Note: DBOS.tracer.start_span() does not set the new span as the current span. So this log is still attached to the workflow span.
+        DBOS.logger.info("This is a test_workflow")
         subspan.add_event("greeting_event", {"name": "a new event"})
         DBOS.tracer.end_span(subspan)
-        DBOS.logger.info("This is a test_workflow")
 
     @DBOS.step()
     async def test_step() -> None:
@@ -147,6 +161,9 @@ async def test_spans_async(dbos: DBOS) -> None:
             log.log_record.body == "This is a test_step"
             or log.log_record.body == "This is a test_workflow"
         )
+        assert log.log_record.attributes["traceId"] == format_trace_id(
+            log.log_record.trace_id
+        )
 
     spans = exporter.get_finished_spans()
 
@@ -171,6 +188,14 @@ async def test_spans_async(dbos: DBOS) -> None:
     assert spans[2].parent == None
     assert spans[3].parent.span_id == spans[4].context.span_id  # type: ignore
     assert spans[4].parent == None
+
+    # Span ID and trace ID should match the log record
+    assert logs[0].log_record.span_id == spans[0].context.span_id
+    assert logs[0].log_record.trace_id == spans[0].context.trace_id
+    assert logs[1].log_record.span_id == spans[2].context.span_id
+    assert logs[1].log_record.trace_id == spans[2].context.trace_id
+    assert logs[2].log_record.span_id == spans[3].context.span_id
+    assert logs[2].log_record.trace_id == spans[3].context.trace_id
 
 
 def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
@@ -211,6 +236,9 @@ def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert logs[0].log_record.span_id is not None and logs[0].log_record.span_id > 0
     assert logs[0].log_record.trace_id is not None and logs[0].log_record.trace_id > 0
     assert logs[0].log_record.body == "This is a test_step_endpoint"
+    assert logs[0].log_record.attributes["traceId"] == format_trace_id(
+        logs[0].log_record.trace_id
+    )
 
     spans = exporter.get_finished_spans()
 
@@ -230,3 +258,7 @@ def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert spans[0].parent.span_id == spans[1].context.span_id  # type: ignore
     assert spans[1].parent.span_id == spans[2].context.span_id  # type: ignore
     assert spans[2].parent == None
+
+    # Span ID and trace ID should match the log record
+    assert logs[0].log_record.span_id == spans[0].context.span_id
+    assert logs[0].log_record.trace_id == spans[0].context.trace_id
