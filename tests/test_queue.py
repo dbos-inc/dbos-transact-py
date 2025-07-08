@@ -1020,7 +1020,8 @@ def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
     for _ in range(max_recovery_attempts):
         with SetWorkflowID(blocked_handle.workflow_id):
             queue.enqueue(blocked_workflow)
-    assert blocked_handle.get_status().recovery_attempts <= 1
+    recovery_attempts = blocked_handle.get_status().recovery_attempts
+    assert recovery_attempts is not None and recovery_attempts <= 1
 
     # Verify that the blocked workflow starts and is PENDING while the regular workflow remains ENQUEUED.
     start_event.wait()
