@@ -126,7 +126,7 @@ class DBOSDeadLetterQueueError(DBOSException):
 
     def __init__(self, wf_id: str, max_retries: int):
         super().__init__(
-            f"Workflow {wf_id} has been moved to the dead-letter queue after exceeding the maximum of ${max_retries} retries",
+            f"Workflow {wf_id} has been moved to the dead-letter queue after exceeding the maximum of {max_retries} retries",
             dbos_error_code=DBOSErrorCode.DeadLetterQueueError.value,
         )
 
