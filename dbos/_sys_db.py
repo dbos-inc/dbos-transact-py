@@ -437,7 +437,14 @@ class SystemDatabase:
 
         # Values to update when a row already exists for this workflow
         update_values: dict[str, Any] = {
-            "recovery_attempts": SystemSchema.workflow_status.c.recovery_attempts + 1,
+            "recovery_attempts": sa.case(
+                (
+                    SystemSchema.workflow_status.c.status
+                    != WorkflowStatusString.ENQUEUED.value,
+                    SystemSchema.workflow_status.c.recovery_attempts + 1,
+                ),
+                else_=SystemSchema.workflow_status.c.recovery_attempts,
+            ),
             "updated_at": func.extract("epoch", func.now()) * 1000,
         }
         # Don't update an existing executor ID when enqueueing a workflow.
