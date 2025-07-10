@@ -967,6 +967,12 @@ class DBOS:
         )
 
     @classmethod
+    async def cancel_workflow_async(cls, workflow_id: str) -> None:
+        """Cancel a workflow by ID."""
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(cls.cancel_workflow, workflow_id)
+
+    @classmethod
     async def _configure_asyncio_thread_pool(cls) -> None:
         """
         Configure the thread pool for asyncio.to_thread.
@@ -988,9 +994,21 @@ class DBOS:
         return cls.retrieve_workflow(workflow_id)
 
     @classmethod
+    async def resume_workflow_async(cls, workflow_id: str) -> WorkflowHandleAsync[Any]:
+        """Resume a workflow by ID."""
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(cls.resume_workflow, workflow_id)
+        return await cls.retrieve_workflow_async(workflow_id)
+
+    @classmethod
     def restart_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID"""
         return cls.fork_workflow(workflow_id, 1)
+
+    @classmethod
+    async def restart_workflow_async(cls, workflow_id: str) -> WorkflowHandleAsync[Any]:
+        """Restart a workflow with a new workflow ID"""
+        return await cls.fork_workflow_async(workflow_id, 1)
 
     @classmethod
     def fork_workflow(
@@ -1016,6 +1034,23 @@ class DBOS:
             fn, "DBOS.forkWorkflow"
         )
         return cls.retrieve_workflow(new_id)
+
+    @classmethod
+    async def fork_workflow_async(
+        cls,
+        workflow_id: str,
+        start_step: int,
+        *,
+        application_version: Optional[str] = None,
+    ) -> WorkflowHandleAsync[Any]:
+        """Restart a workflow with a new workflow ID from a specific step"""
+        await cls._configure_asyncio_thread_pool()
+        new_id = await asyncio.to_thread(
+            lambda: cls.fork_workflow(
+                workflow_id, start_step, application_version=application_version
+            ).get_workflow_id()
+        )
+        return await cls.retrieve_workflow_async(new_id)
 
     @classmethod
     def list_workflows(
@@ -1058,6 +1093,42 @@ class DBOS:
         )
 
     @classmethod
+    async def list_workflows_async(
+        cls,
+        *,
+        workflow_ids: Optional[List[str]] = None,
+        status: Optional[Union[str, List[str]]] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        name: Optional[str] = None,
+        app_version: Optional[str] = None,
+        user: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        sort_desc: bool = False,
+        workflow_id_prefix: Optional[str] = None,
+        load_input: bool = True,
+        load_output: bool = True,
+    ) -> List[WorkflowStatus]:
+        await cls._configure_asyncio_thread_pool()
+        return await asyncio.to_thread(
+            cls.list_workflows,
+            workflow_ids=workflow_ids,
+            status=status,
+            start_time=start_time,
+            end_time=end_time,
+            name=name,
+            app_version=app_version,
+            user=user,
+            limit=limit,
+            offset=offset,
+            sort_desc=sort_desc,
+            workflow_id_prefix=workflow_id_prefix,
+            load_input=load_input,
+            load_output=load_output,
+        )
+
+    @classmethod
     def list_queued_workflows(
         cls,
         *,
@@ -1090,6 +1161,34 @@ class DBOS:
         )
 
     @classmethod
+    async def list_queued_workflows_async(
+        cls,
+        *,
+        queue_name: Optional[str] = None,
+        status: Optional[Union[str, List[str]]] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        name: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        sort_desc: bool = False,
+        load_input: bool = True,
+    ) -> List[WorkflowStatus]:
+        await cls._configure_asyncio_thread_pool()
+        return await asyncio.to_thread(
+            cls.list_queued_workflows,
+            queue_name=queue_name,
+            status=status,
+            start_time=start_time,
+            end_time=end_time,
+            name=name,
+            limit=limit,
+            offset=offset,
+            sort_desc=sort_desc,
+            load_input=load_input,
+        )
+
+    @classmethod
     def list_workflow_steps(cls, workflow_id: str) -> List[StepInfo]:
         def fn() -> List[StepInfo]:
             return list_workflow_steps(
@@ -1099,6 +1198,11 @@ class DBOS:
         return _get_dbos_instance()._sys_db.call_function_as_step(
             fn, "DBOS.listWorkflowSteps"
         )
+
+    @classmethod
+    async def list_workflow_steps_async(cls, workflow_id: str) -> List[StepInfo]:
+        await cls._configure_asyncio_thread_pool()
+        return await asyncio.to_thread(cls.list_workflow_steps, workflow_id)
 
     @classproperty
     def logger(cls) -> Logger:
