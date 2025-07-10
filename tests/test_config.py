@@ -1135,6 +1135,22 @@ def test_configured_pool_default():
     dbos.destroy()
 
 
+def test_configured_pool_custom_url():
+    DBOS.destroy()
+    config: DBOSConfig = {
+        "name": "test-app",
+        "database_url": f"postgres://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'))}@localhost:5432/postgres",
+        "system_database_url": f"postgres://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'))}@localhost:5432/dbostesturl",
+    }
+
+    dbos = DBOS(config=config)
+    dbos.launch()
+    assert "postgres" in dbos._app_db.engine.url
+    assert "dbostesturl" in dbos._sys_db.engine.url
+
+    dbos.destroy()
+
+
 def test_configured_pool_user_provided():
     DBOS.destroy()
     config: DBOSConfig = {
