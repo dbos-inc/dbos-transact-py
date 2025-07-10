@@ -91,6 +91,7 @@ from ._context import (
 from ._dbos_config import (
     ConfigFile,
     DBOSConfig,
+    get_system_database_url,
     overwrite_config,
     process_config,
     translate_dbos_config_to_config_file,
@@ -424,9 +425,8 @@ class DBOS:
             assert self._config["database_url"] is not None
             assert self._config["database"]["sys_db_engine_kwargs"] is not None
             self._sys_db_field = SystemDatabase(
-                database_url=self._config["database_url"],
+                system_database_url=get_system_database_url(self._config),
                 engine_kwargs=self._config["database"]["sys_db_engine_kwargs"],
-                sys_db_name=self._config["database"]["sys_db_name"],
                 debug_mode=debug_mode,
             )
             assert self._config["database"]["db_engine_kwargs"] is not None

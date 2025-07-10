@@ -23,7 +23,8 @@ class DBOSConfig(TypedDict, total=False):
     Attributes:
         name (str): Application name
         database_url (str): Database connection string
-        sys_db_name (str): System database name
+        system_database_url (str): Connection string for the system database (if different from the application database)
+        sys_db_name (str): System database name (deprecated)
         sys_db_pool_size (int): System database pool size
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs (See https://docs.sqlalchemy.org/en/20/core/engines.html#sqlalchemy.create_engine)
         log_level (str): Log level
@@ -36,6 +37,7 @@ class DBOSConfig(TypedDict, total=False):
 
     name: str
     database_url: Optional[str]
+    system_database_url: Optional[str]
     sys_db_name: Optional[str]
     sys_db_pool_size: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
@@ -111,6 +113,7 @@ class ConfigFile(TypedDict, total=False):
     runtimeConfig: RuntimeConfig
     database: DatabaseConfig
     database_url: Optional[str]
+    system_database_url: Optional[str]
     telemetry: Optional[TelemetryConfig]
     env: Dict[str, str]
 
@@ -136,6 +139,8 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
 
     if "database_url" in config:
         translated_config["database_url"] = config.get("database_url")
+    if "system_database_url" in config:
+        translated_config["system_database_url"] = config.get("system_database_url")
 
     # Runtime config
     translated_config["runtimeConfig"] = {"run_admin_server": True}
@@ -488,6 +493,8 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
             "DBOS_DATABASE_URL environment variable is not set. This is required to connect to the database."
         )
     provided_config["database_url"] = db_url
+    if "system_database_url" in provided_config:
+        del provided_config["system_database_url"]
 
     # Telemetry config
     if "telemetry" not in provided_config or provided_config["telemetry"] is None:
@@ -537,3 +544,19 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
         del provided_config["env"]
 
     return provided_config
+
+
+def get_system_database_url(config: ConfigFile) -> str:
+    if "system_database_url" in config and config["system_database_url"] is not None:
+        return config["system_database_url"]
+    else:
+        assert config["database_url"] is not None
+        app_db_url = make_url(config["database_url"])
+        if config["database"].get("sys_db_name") is not None:
+            sys_db_name = config["database"]["sys_db_name"]
+        else:
+            assert app_db_url.database is not None
+            sys_db_name = app_db_url.database + SystemSchema.sysdb_suffix
+        return app_db_url.set(database=sys_db_name).render_as_string(
+            hide_password=False
+        )
