@@ -331,22 +331,15 @@ class SystemDatabase:
     def __init__(
         self,
         *,
-        database_url: str,
+        system_database_url: str,
         engine_kwargs: Dict[str, Any],
-        sys_db_name: Optional[str] = None,
         debug_mode: bool = False,
     ):
         # Set driver
-        system_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
-        # Resolve system database name
-        sysdb_name = sys_db_name
-        if not sysdb_name:
-            assert system_db_url.database is not None
-            sysdb_name = system_db_url.database + SystemSchema.sysdb_suffix
-        system_db_url = system_db_url.set(database=sysdb_name)
+        url = sa.make_url(system_database_url).set(drivername="postgresql+psycopg")
 
         self.engine = sa.create_engine(
-            system_db_url,
+            url,
             **engine_kwargs,
         )
         self._engine_kwargs = engine_kwargs

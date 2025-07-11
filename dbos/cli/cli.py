@@ -21,6 +21,7 @@ from .._client import DBOSClient
 from .._dbos_config import (
     _app_name_to_db_name,
     _is_valid_app_name,
+    get_system_database_url,
     is_valid_database_url,
     load_config,
 )
@@ -294,13 +295,12 @@ def migrate(
     sys_db = None
     try:
         sys_db = SystemDatabase(
-            database_url=connection_string,
+            system_database_url=get_system_database_url(config),
             engine_kwargs={
                 "pool_timeout": 30,
                 "max_overflow": 0,
                 "pool_size": 2,
             },
-            sys_db_name=sys_db_name,
         )
         app_db = ApplicationDatabase(
             database_url=connection_string,
