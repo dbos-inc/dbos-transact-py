@@ -126,7 +126,7 @@ class MaxRecoveryAttemptsExceededError(DBOSException):
 
     def __init__(self, wf_id: str, max_retries: int):
         super().__init__(
-            f"Workflow {wf_id} has been executed more than its maximum of {max_retries} attempts. Further attempts to execute it will fail. See documentation for details: https://docs.dbos.dev/python/reference/decorators",
+            f"Workflow {wf_id} has exceeded its maximum of {max_retries} execution attempts. Further attempts to execute it will fail. See documentation for details: https://docs.dbos.dev/python/reference/decorators",
             dbos_error_code=DBOSErrorCode.DeadLetterQueueError.value,
         )
 
