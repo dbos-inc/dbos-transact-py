@@ -180,7 +180,10 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     with pytest.raises(Exception) as exc_info:
         DBOS._recover_pending_workflows()
     assert exc_info.errisinstance(DBOSDeadLetterQueueError)
-    assert handle.get_status().status == WorkflowStatusString.RETRIES_EXCEEDED.value
+    assert (
+        handle.get_status().status
+        == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
+    )
     with pytest.raises(Exception) as exc_info:
         with SetWorkflowID(wfid):
             dead_letter_workflow()
