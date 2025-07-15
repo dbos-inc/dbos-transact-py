@@ -37,12 +37,12 @@ from ._context import get_local_dbos_context
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSConflictingWorkflowError,
-    DBOSDeadLetterQueueError,
     DBOSNonExistentWorkflowError,
     DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
+    MaxRecoveryAttemptsExceededError,
 )
 from ._logger import dbos_logger
 from ._schemas.system_database import SystemSchema
@@ -546,7 +546,7 @@ class SystemDatabase:
                 conn.execute(dlq_cmd)
                 # Need to commit here because we're throwing an exception
                 conn.commit()
-                raise DBOSDeadLetterQueueError(
+                raise MaxRecoveryAttemptsExceededError(
                     status["workflow_uuid"], max_recovery_attempts
                 )
 

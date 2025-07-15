@@ -121,12 +121,12 @@ class DBOSNonExistentWorkflowError(DBOSException):
         )
 
 
-class DBOSDeadLetterQueueError(DBOSException):
-    """Exception raised when a workflow database record does not exist for a given ID."""
+class MaxRecoveryAttemptsExceededError(DBOSException):
+    """Exception raised when a workflow exceeds its max recovery attempts."""
 
     def __init__(self, wf_id: str, max_retries: int):
         super().__init__(
-            f"Workflow {wf_id} has been moved to the dead-letter queue after exceeding the maximum of {max_retries} retries",
+            f"Workflow {wf_id} has exceeded its maximum of {max_retries} attempts. Further attempts to execute it will fail. See documentation for details: https://docs.dbos.dev/python/reference/decorators",
             dbos_error_code=DBOSErrorCode.DeadLetterQueueError.value,
         )
 
