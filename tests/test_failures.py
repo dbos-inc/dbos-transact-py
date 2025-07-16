@@ -10,11 +10,11 @@ from sqlalchemy.exc import InvalidRequestError, OperationalError
 from dbos import DBOS, Queue, SetWorkflowID
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
-    DBOSDeadLetterQueueError,
     DBOSMaxStepRetriesExceeded,
     DBOSNotAuthorizedError,
     DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
+    MaxRecoveryAttemptsExceededError,
 )
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._serialization import (
@@ -179,12 +179,15 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     # and puts the workflow in the DLQ status.
     with pytest.raises(Exception) as exc_info:
         DBOS._recover_pending_workflows()
-    assert exc_info.errisinstance(DBOSDeadLetterQueueError)
-    assert handle.get_status().status == WorkflowStatusString.RETRIES_EXCEEDED.value
+    assert exc_info.errisinstance(MaxRecoveryAttemptsExceededError)
+    assert (
+        handle.get_status().status
+        == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
+    )
     with pytest.raises(Exception) as exc_info:
         with SetWorkflowID(wfid):
             dead_letter_workflow()
-    assert exc_info.errisinstance(DBOSDeadLetterQueueError)
+    assert exc_info.errisinstance(MaxRecoveryAttemptsExceededError)
 
     # Resume the workflow. Verify it can recover again without error.
     resumed_handle = dbos.resume_workflow(wfid)

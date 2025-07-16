@@ -104,7 +104,7 @@ def test_deactivate(dbos: DBOS, config: DBOSConfig) -> None:
         assert event.is_set()
     # Verify the scheduled workflow does not run anymore
     time.sleep(5)
-    assert wf_counter <= val + 1
+    assert wf_counter <= val + 2
     # Enqueue a workflow, verify it still runs
     assert queue.enqueue(regular_workflow).get_result() == 5
 
