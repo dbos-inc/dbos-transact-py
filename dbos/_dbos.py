@@ -1376,31 +1376,3 @@ class DBOSConfiguredInstance:
     def __init__(self, config_name: str) -> None:
         self.config_name = config_name
         DBOS.register_instance(self)
-
-
-# Apps that import DBOS probably don't exit.  If they do, let's see if
-#   it looks like startup was abandoned or a call was forgotten...
-def _dbos_exit_hook() -> None:
-    if _dbos_global_registry is None:
-        # Probably used as or for a support module
-        return
-    if _dbos_global_instance is None:
-        print("DBOS exiting; functions were registered but DBOS() was not called")
-        dbos_logger.warning(
-            "DBOS exiting; functions were registered but DBOS() was not called"
-        )
-        return
-    if not _dbos_global_instance._launched:
-        if _dbos_global_instance.fastapi is not None:
-            # FastAPI lifespan middleware will call launch/destroy, so we can ignore this.
-            # This is likely to happen during fastapi dev runs, where the reloader loads the module multiple times.
-            return
-        print("DBOS exiting; DBOS exists but launch() was not called")
-        dbos_logger.warning("DBOS exiting; DBOS exists but launch() was not called")
-        return
-    # If we get here, we're exiting normally
-    _dbos_global_instance.destroy()
-
-
-# Register the exit hook
-atexit.register(_dbos_exit_hook)
