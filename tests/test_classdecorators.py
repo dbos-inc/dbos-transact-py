@@ -10,6 +10,7 @@ from dbos import DBOS, DBOSConfiguredInstance, Queue, SetWorkflowID
 
 # Private API used because this is a test
 from dbos._context import DBOSContextEnsure, assert_current_dbos_context
+from dbos._dbos_config import DBOSConfig
 from tests.conftest import queue_entries_are_cleaned_up
 
 
@@ -884,3 +885,29 @@ def test_mixed_methods(dbos: DBOS) -> None:
     status = handle.get_status()
     assert status.class_name == None
     assert status.config_name == None
+
+
+def test_class_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
+    DBOS.destroy(destroy_registry=True)
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):
+        def __init__(self, x: int) -> None:
+            self.x = x
+            super().__init__("test")
+
+        @DBOS.step()
+        def step(self, x: int) -> int:
+            return self.x + x
+
+    input = 5
+    inst = TestClass(input)
+    assert inst.step(input) == input + input
+
+    DBOS(config=config)
+
+    assert inst.step(input) == input + input
+
+    DBOS.launch()
+
+    assert inst.step(input) == input + input
