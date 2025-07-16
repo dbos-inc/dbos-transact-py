@@ -892,7 +892,7 @@ def test_class_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
 
     @DBOS.dbos_class()
     class TestClass(DBOSConfiguredInstance):
-        def __init__(self, x) -> None:
+        def __init__(self, x: int) -> None:
             self.x = x
             super().__init__("test")
 
