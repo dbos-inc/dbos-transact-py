@@ -1041,7 +1041,7 @@ def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
     time.sleep(2)
     assert (
         blocked_handle.get_status().status
-        == WorkflowStatusString.RETRIES_EXCEEDED.value
+        == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
     )
     with dbos._sys_db.engine.begin() as c:
         query = sa.select(SystemSchema.workflow_status.c.recovery_attempts).where(

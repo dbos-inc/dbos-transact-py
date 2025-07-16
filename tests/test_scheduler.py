@@ -219,6 +219,9 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
     for evt in dbos.poller_stop_events:
         evt.set()
 
+    # Wait for workflows to finish
+    time.sleep(2)
+
     dbos._sys_db.update_workflow_outcome(workflow_id, "PENDING")
 
     workflow_handles = DBOS._recover_pending_workflows()

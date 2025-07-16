@@ -37,12 +37,12 @@ from ._context import get_local_dbos_context
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSConflictingWorkflowError,
-    DBOSDeadLetterQueueError,
     DBOSNonExistentWorkflowError,
     DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
+    MaxRecoveryAttemptsExceededError,
 )
 from ._logger import dbos_logger
 from ._schemas.system_database import SystemSchema
@@ -57,20 +57,25 @@ class WorkflowStatusString(Enum):
     PENDING = "PENDING"
     SUCCESS = "SUCCESS"
     ERROR = "ERROR"
-    RETRIES_EXCEEDED = "RETRIES_EXCEEDED"
+    MAX_RECOVERY_ATTEMPTS_EXCEEDED = "MAX_RECOVERY_ATTEMPTS_EXCEEDED"
     CANCELLED = "CANCELLED"
     ENQUEUED = "ENQUEUED"
 
 
 WorkflowStatuses = Literal[
-    "PENDING", "SUCCESS", "ERROR", "RETRIES_EXCEEDED", "CANCELLED", "ENQUEUED"
+    "PENDING",
+    "SUCCESS",
+    "ERROR",
+    "MAX_RECOVERY_ATTEMPTS_EXCEEDED",
+    "CANCELLED",
+    "ENQUEUED",
 ]
 
 
 class WorkflowStatus:
     # The workflow ID
     workflow_id: str
-    # The workflow status. Must be one of ENQUEUED, PENDING, SUCCESS, ERROR, CANCELLED, or RETRIES_EXCEEDED
+    # The workflow status. Must be one of ENQUEUED, PENDING, SUCCESS, ERROR, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED
     status: str
     # The name of the workflow function
     name: str
@@ -515,7 +520,7 @@ class SystemDatabase:
                 raise DBOSConflictingWorkflowError(status["workflow_uuid"], err_msg)
 
             # Every time we start executing a workflow (and thus attempt to insert its status), we increment `recovery_attempts` by 1.
-            # When this number becomes equal to `maxRetries + 1`, we mark the workflow as `RETRIES_EXCEEDED`.
+            # When this number becomes equal to `maxRetries + 1`, we mark the workflow as `MAX_RECOVERY_ATTEMPTS_EXCEEDED`.
             if (
                 (wf_status != "SUCCESS" and wf_status != "ERROR")
                 and max_recovery_attempts is not None
@@ -532,7 +537,7 @@ class SystemDatabase:
                         == WorkflowStatusString.PENDING.value
                     )
                     .values(
-                        status=WorkflowStatusString.RETRIES_EXCEEDED.value,
+                        status=WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value,
                         deduplication_id=None,
                         started_at_epoch_ms=None,
                         queue_name=None,
@@ -541,7 +546,7 @@ class SystemDatabase:
                 conn.execute(dlq_cmd)
                 # Need to commit here because we're throwing an exception
                 conn.commit()
-                raise DBOSDeadLetterQueueError(
+                raise MaxRecoveryAttemptsExceededError(
                     status["workflow_uuid"], max_recovery_attempts
                 )
 
