@@ -32,12 +32,12 @@ async def test_async_workflow(dbos: DBOS) -> None:
         nonlocal wf_counter
         wf_counter += 1
         res1 = test_transaction(var1)
-        res2 = test_step(var2)
+        res2 = await test_step(var2)
         DBOS.logger.info("I'm test_workflow")
         return res1 + res2
 
     @DBOS.step()
-    def test_step(var: str) -> str:
+    async def test_step(var: str) -> str:
         nonlocal step_counter
         step_counter += 1
         DBOS.logger.info("I'm test_step")
@@ -72,6 +72,10 @@ async def test_async_workflow(dbos: DBOS) -> None:
     # but needed for backwards compatibility.
     sync_handle = DBOS.start_workflow(test_workflow, "alice", "bob")
     assert sync_handle.get_result() == "alicetxn31bobstep3"  # type: ignore
+
+    # Test DBOS.start_workflow_async on steps
+    handle = await DBOS.start_workflow_async(test_step, "alice")
+    assert (await handle.get_result()) == "alicestep4"
 
 
 @pytest.mark.asyncio
