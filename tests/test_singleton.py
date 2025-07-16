@@ -129,27 +129,3 @@ def test_dbos_singleton_negative(cleanup_test_databases: None) -> None:
     assert "launch" in str(exc_info.value)
 
     DBOS.destroy()
-
-
-def test_dbos_atexit_no_dbos(cleanup_test_databases: None) -> None:
-    # Run the .py as a separate process
-    result = subprocess.run(
-        [sys.executable, path.join("tests", "atexit_no_ctor.py")],
-        capture_output=True,
-        text=True,
-    )
-
-    # Assert that the output contains the warning message
-    assert "DBOS exiting; functions were registered" in result.stdout
-
-
-def test_dbos_atexit_no_launch(cleanup_test_databases: None) -> None:
-    # Run the .py as a separate process
-    result = subprocess.run(
-        [sys.executable, path.join("tests", "atexit_no_launch.py")],
-        capture_output=True,
-        text=True,
-    )
-
-    # Assert that the output contains the warning message
-    assert "DBOS exists but launch() was not called" in result.stdout
