@@ -1219,29 +1219,27 @@ class DBOS:
         return rv
 
     @classproperty
-    def workflow_id(cls) -> str:
-        """Return the workflow ID for the current context, which must be executing a workflow function."""
-        ctx = assert_current_dbos_context()
-        assert (
-            ctx.is_within_workflow()
-        ), "workflow_id is only available within a DBOS operation."
+    def workflow_id(cls) -> Optional[str]:
+        """Return the ID of the currently executing workflow. If a workflow is not executing, return None."""
+        ctx = get_local_dbos_context()
+        if ctx is None or not ctx.is_within_workflow():
+            return None
         return ctx.workflow_id
 
     @classproperty
-    def step_id(cls) -> int:
-        """Return the step ID for the currently executing step. This is a unique identifier of the current step within the workflow."""
-        ctx = assert_current_dbos_context()
-        assert (
-            ctx.is_step() or ctx.is_transaction()
-        ), "step_id is only available within a DBOS step."
+    def step_id(cls) -> Optional[int]:
+        """Return the step ID for the currently executing step. This is a unique identifier of the current step within the workflow. If a step is not currently executing, return None."""
+        ctx = get_local_dbos_context()
+        if ctx is None or not (ctx.is_step() or ctx.is_transaction()):
+            return None
         return ctx.function_id
 
     @classproperty
-    def step_status(cls) -> StepStatus:
-        """Return the status of the currently executing step."""
-        ctx = assert_current_dbos_context()
-        assert ctx.is_step(), "step_status is only available within a DBOS step."
-        assert ctx.step_status is not None
+    def step_status(cls) -> Optional[StepStatus]:
+        """Return the status of the currently executing step. If a step is not currently executing, return None."""
+        ctx = get_local_dbos_context()
+        if ctx is None or not ctx.is_step():
+            return None
         return ctx.step_status
 
     @classproperty
