@@ -1221,25 +1221,28 @@ class DBOS:
     def workflow_id(cls) -> Optional[str]:
         """Return the ID of the currently executing workflow. If a workflow is not executing, return None."""
         ctx = get_local_dbos_context()
-        if ctx is None or not ctx.is_within_workflow():
+        if ctx and ctx.is_within_workflow():
+            return ctx.workflow_id
+        else:
             return None
-        return ctx.workflow_id
 
     @classproperty
     def step_id(cls) -> Optional[int]:
         """Return the step ID for the currently executing step. This is a unique identifier of the current step within the workflow. If a step is not currently executing, return None."""
         ctx = get_local_dbos_context()
-        if ctx is None or not (ctx.is_step() or ctx.is_transaction()):
+        if ctx and (ctx.is_step() or ctx.is_transaction()):
+            return ctx.function_id
+        else:
             return None
-        return ctx.function_id
 
     @classproperty
     def step_status(cls) -> Optional[StepStatus]:
         """Return the status of the currently executing step. If a step is not currently executing, return None."""
         ctx = get_local_dbos_context()
-        if ctx is None or not ctx.is_step():
+        if ctx and ctx.is_step():
+            return ctx.step_status
+        else:
             return None
-        return ctx.step_status
 
     @classproperty
     def parent_workflow_id(cls) -> str:
