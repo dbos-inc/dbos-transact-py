@@ -1624,12 +1624,22 @@ def test_custom_names(dbos: DBOS) -> None:
 async def test_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
     DBOS.destroy(destroy_registry=True)
 
+    is_dbos_active = False
+
     @DBOS.step()
     def step(x: int) -> int:
+        if is_dbos_active:
+            assert DBOS.workflow_id is not None
+        else:
+            assert DBOS.workflow_id is None
         return x
 
     @DBOS.step()
     async def async_step(x: int) -> int:
+        if is_dbos_active:
+            assert DBOS.workflow_id is not None
+        else:
+            assert DBOS.workflow_id is None
         return x
 
     assert step(5) == 5
@@ -1641,6 +1651,7 @@ async def test_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
     assert await async_step(5) == 5
 
     DBOS.launch()
+    is_dbos_active = True
 
     assert step(5) == 5
     assert await async_step(5) == 5
