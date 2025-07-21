@@ -61,9 +61,11 @@ def test_simple_workflow(dbos: DBOS) -> None:
     @DBOS.step()
     def test_step(var: str) -> str:
         assert DBOS.step_id == 2
-        assert DBOS.step_status.step_id == 2
-        assert DBOS.step_status.current_attempt is None
-        assert DBOS.step_status.max_attempts is None
+        step_status = DBOS.step_status
+        assert step_status is not None
+        assert step_status.step_id == 2
+        assert step_status.current_attempt is None
+        assert step_status.max_attempts is None
         nonlocal step_counter
         step_counter += 1
         DBOS.logger.info("I'm test_step " + var)
@@ -647,7 +649,9 @@ def test_retrieve_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_sleep_workflow(secs: float) -> str:
         dbos.sleep(secs)
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     @DBOS.workflow()
     def test_sleep_workthrow(secs: float) -> str:
@@ -728,7 +732,9 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_sleep_workflow(secs: float) -> str:
         dbos.sleep(secs)
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     @DBOS.workflow()
     def test_workflow_status_a() -> str:
@@ -789,7 +795,9 @@ def test_sleep(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_sleep_workflow(secs: float) -> str:
         dbos.sleep(secs)
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     start_time = time.time()
     sleep_uuid = test_sleep_workflow(1.5)
@@ -1569,7 +1577,9 @@ def test_custom_names(dbos: DBOS) -> None:
 
     @DBOS.workflow(name=workflow_name)
     def workflow() -> str:
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     handle = queue.enqueue(workflow)
     assert handle.get_status().name == workflow_name
@@ -1577,7 +1587,9 @@ def test_custom_names(dbos: DBOS) -> None:
 
     @DBOS.step(name=step_name)
     def step() -> str:
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     handle = queue.enqueue(step)
     assert handle.get_status().name == f"<temp>.{step_name}"
@@ -1585,7 +1597,9 @@ def test_custom_names(dbos: DBOS) -> None:
 
     @DBOS.transaction(name=txn_name)
     def txn() -> str:
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     handle = queue.enqueue(txn)
     assert handle.get_status().name == f"<temp>.{txn_name}"

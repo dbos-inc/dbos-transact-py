@@ -14,7 +14,9 @@ def test_concurrent_workflows(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_workflow() -> str:
         time.sleep(1)
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     def test_thread(id: str) -> str:
         with SetWorkflowID(id):
@@ -48,7 +50,9 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
             condition.notify()
         condition.release()
 
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     @DBOS.workflow()
     def test_workflow() -> str:
@@ -74,7 +78,9 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
             condition.notify()
         condition.release()
 
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     def test_txn_thread(id: str) -> str:
         with SetWorkflowID(id):

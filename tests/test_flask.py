@@ -72,7 +72,9 @@ def test_endpoint_recovery(dbos_flask: Tuple[DBOS, Flask]) -> None:
 
     @DBOS.workflow()
     def test_workflow(var1: str) -> tuple[str, str]:
-        return var1, DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return var1, workflow_id
 
     @app.route("/<var1>/<var2>")
     def test_endpoint(var1: str, var2: str) -> dict[str, str]:
