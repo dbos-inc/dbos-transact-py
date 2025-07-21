@@ -1245,20 +1245,6 @@ class DBOS:
         return ctx.step_status
 
     @classproperty
-    def parent_workflow_id(cls) -> str:
-        """
-        Return the workflow ID for the parent workflow.
-
-        `parent_workflow_id` must be accessed from within a workflow function.
-        """
-
-        ctx = assert_current_dbos_context()
-        assert (
-            ctx.is_within_workflow()
-        ), "parent_workflow_id is only available within a workflow."
-        return ctx.parent_workflow_id
-
-    @classproperty
     def span(cls) -> Span:
         """Return the tracing `Span` associated with the current context."""
         ctx = assert_current_dbos_context()
