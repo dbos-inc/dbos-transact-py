@@ -302,7 +302,9 @@ async def test_sleep(dbos: DBOS) -> None:
     @DBOS.workflow()
     async def test_sleep_workflow(secs: float) -> str:
         await dbos.sleep_async(secs)
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     start_time = time.time()
     sleep_uuid = await test_sleep_workflow(1.5)

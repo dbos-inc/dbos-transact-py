@@ -1343,7 +1343,9 @@ def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient) -> N
 
     @DBOS.workflow()
     def test_workflow() -> str:
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     # First enqueue a workflow on the other version, then on the current version
     other_version = "other_version"
@@ -1417,7 +1419,9 @@ def test_unsetting_timeout(dbos: DBOS) -> None:
     def child() -> str:
         for _ in range(5):
             DBOS.sleep(1)
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     @DBOS.workflow()
     def parent(child_one: str, child_two: str) -> None:
@@ -1448,7 +1452,9 @@ def test_queue_executor_id(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def example_workflow() -> str:
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     # Set an executor ID
     original_executor_id = str(uuid.uuid4())

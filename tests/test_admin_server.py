@@ -142,7 +142,6 @@ def test_admin_recovery(config: DBOSConfig) -> None:
 
     @DBOS.workflow()
     def test_workflow(var: str, var2: str) -> str:
-        DBOS.logger.info("WFID: " + DBOS.workflow_id)
         nonlocal wf_counter
         wf_counter += 1
         res = test_step(var2)
@@ -464,7 +463,9 @@ def test_list_workflows(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def test_workflow_2(my_time: datetime) -> str:
-        return DBOS.workflow_id + " completed at " + my_time.isoformat()
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id + " completed at " + my_time.isoformat()
 
     # Start workflows
     handle_1 = DBOS.start_workflow(test_workflow_1)
@@ -656,7 +657,9 @@ def test_get_workflow_by_id(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def test_workflow_2(my_time: datetime) -> str:
-        return DBOS.workflow_id + " completed at " + my_time.isoformat()
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id + " completed at " + my_time.isoformat()
 
     # Start workflows
     handle_1 = DBOS.start_workflow(test_workflow_1)
@@ -713,7 +716,9 @@ def test_admin_garbage_collect(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def workflow() -> str:
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     workflow()
 

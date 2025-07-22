@@ -456,7 +456,9 @@ def test_set_get_event(dbos: DBOS) -> None:
         DBOS.set_event("key", value)
         stepOne()
         DBOS.get_event("fake_id", "fake_value", 0)
-        return DBOS.get_event(DBOS.workflow_id, "key", 1)
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return DBOS.get_event(workflow_id, "key", 1)
 
     @DBOS.step()
     def stepOne() -> None:
@@ -500,7 +502,9 @@ def test_callchild_first_sync(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def child_workflow() -> str:
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
@@ -540,7 +544,9 @@ async def test_callchild_direct_asyncio(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def child_workflow() -> str:
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
@@ -773,7 +779,9 @@ def test_callchild_middle_async_thread(dbos: DBOS) -> None:
 
     @DBOS.step()
     def stepOne() -> str:
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     @DBOS.step()
     def stepTwo() -> None:
@@ -781,7 +789,9 @@ def test_callchild_middle_async_thread(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def child_workflow() -> str:
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
@@ -821,7 +831,9 @@ async def test_callchild_first_asyncio(dbos: DBOS) -> None:
 
     @DBOS.step()
     def stepOne() -> str:
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     @DBOS.step()
     def stepTwo() -> None:
@@ -829,7 +841,9 @@ async def test_callchild_first_asyncio(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def child_workflow() -> str:
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
@@ -1045,11 +1059,15 @@ def test_call_as_step_within_step(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def getStatusWorkflow() -> str:
-        return getStatus(DBOS.workflow_id)
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return getStatus(workflow_id)
 
     @DBOS.transaction()
     def transactionStatus() -> None:
-        DBOS.get_workflow_status(DBOS.workflow_id)
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        DBOS.get_workflow_status(workflow_id)
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):

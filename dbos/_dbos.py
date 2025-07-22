@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import atexit
 import hashlib
 import inspect
 import os
@@ -1219,39 +1218,40 @@ class DBOS:
         return rv
 
     @classproperty
-    def workflow_id(cls) -> str:
-        """Return the workflow ID for the current context, which must be executing a workflow function."""
-        ctx = assert_current_dbos_context()
-        assert (
-            ctx.is_within_workflow()
-        ), "workflow_id is only available within a DBOS operation."
-        return ctx.workflow_id
+    def workflow_id(cls) -> Optional[str]:
+        """Return the ID of the currently executing workflow. If a workflow is not executing, return None."""
+        ctx = get_local_dbos_context()
+        if ctx and ctx.is_within_workflow():
+            return ctx.workflow_id
+        else:
+            return None
 
     @classproperty
-    def step_id(cls) -> int:
-        """Return the step ID for the currently executing step. This is a unique identifier of the current step within the workflow."""
-        ctx = assert_current_dbos_context()
-        assert (
-            ctx.is_step() or ctx.is_transaction()
-        ), "step_id is only available within a DBOS step."
-        return ctx.function_id
+    def step_id(cls) -> Optional[int]:
+        """Return the step ID for the currently executing step. This is a unique identifier of the current step within the workflow. If a step is not currently executing, return None."""
+        ctx = get_local_dbos_context()
+        if ctx and (ctx.is_step() or ctx.is_transaction()):
+            return ctx.function_id
+        else:
+            return None
 
     @classproperty
-    def step_status(cls) -> StepStatus:
-        """Return the status of the currently executing step."""
-        ctx = assert_current_dbos_context()
-        assert ctx.is_step(), "step_status is only available within a DBOS step."
-        assert ctx.step_status is not None
-        return ctx.step_status
+    def step_status(cls) -> Optional[StepStatus]:
+        """Return the status of the currently executing step. If a step is not currently executing, return None."""
+        ctx = get_local_dbos_context()
+        if ctx and ctx.is_step():
+            return ctx.step_status
+        else:
+            return None
 
     @classproperty
     def parent_workflow_id(cls) -> str:
         """
-        Return the workflow ID for the parent workflow.
-
-        `parent_workflow_id` must be accessed from within a workflow function.
+        This method is deprecated and should not be used.
         """
-
+        dbos_logger.warning(
+            "DBOS.parent_workflow_id is deprecated and should not be used"
+        )
         ctx = assert_current_dbos_context()
         assert (
             ctx.is_within_workflow()

@@ -652,7 +652,9 @@ def test_garbage_collection(dbos: DBOS) -> None:
     def blocked_workflow() -> str:
         txn(0)
         event.wait()
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     num_workflows = 10
 
@@ -729,7 +731,9 @@ def test_global_timeout(dbos: DBOS) -> None:
     def blocked_workflow() -> str:
         while not event.wait(0):
             DBOS.sleep(0.1)
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     num_workflows = 10
     handles = [DBOS.start_workflow(blocked_workflow) for _ in range(num_workflows)]

@@ -382,9 +382,11 @@ def test_step_status(dbos: DBOS) -> None:
     @DBOS.step(retries_allowed=True, interval_seconds=0, max_attempts=max_attempts)
     def failing_step() -> None:
         nonlocal step_counter
-        assert DBOS.step_status.step_id == 1
-        assert DBOS.step_status.current_attempt == step_counter
-        assert DBOS.step_status.max_attempts == max_attempts
+        step_status = DBOS.step_status
+        assert step_status is not None
+        assert step_status.step_id == 1
+        assert step_status.current_attempt == step_counter
+        assert step_status.max_attempts == max_attempts
         step_counter += 1
         if step_counter < max_attempts:
             raise Exception("fail")
@@ -442,7 +444,9 @@ def test_keyboardinterrupt_during_retries(dbos: DBOS) -> None:
     @DBOS.workflow()
     def failing_workflow() -> str:
         failing_step()
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     with pytest.raises(KeyboardInterrupt):
         failing_workflow()

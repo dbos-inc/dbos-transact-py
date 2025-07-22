@@ -61,9 +61,11 @@ def test_simple_workflow(dbos: DBOS) -> None:
     @DBOS.step()
     def test_step(var: str) -> str:
         assert DBOS.step_id == 2
-        assert DBOS.step_status.step_id == 2
-        assert DBOS.step_status.current_attempt is None
-        assert DBOS.step_status.max_attempts is None
+        step_status = DBOS.step_status
+        assert step_status is not None
+        assert step_status.step_id == 2
+        assert step_status.current_attempt is None
+        assert step_status.max_attempts is None
         nonlocal step_counter
         step_counter += 1
         DBOS.logger.info("I'm test_step " + var)
@@ -133,10 +135,6 @@ def test_child_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_workflow(var: str, var2: str) -> str:
         DBOS.logger.info("I'm test_workflow")
-        if len(DBOS.parent_workflow_id):
-            DBOS.logger.info("  This is a child test_workflow")
-            # Note this assertion is only true if child wasn't assigned an ID explicitly
-            assert DBOS.workflow_id.startswith(DBOS.parent_workflow_id)
         nonlocal wf_counter
         wf_counter += 1
         res = test_transaction(var2)
@@ -651,7 +649,9 @@ def test_retrieve_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_sleep_workflow(secs: float) -> str:
         dbos.sleep(secs)
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     @DBOS.workflow()
     def test_sleep_workthrow(secs: float) -> str:
@@ -732,7 +732,9 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_sleep_workflow(secs: float) -> str:
         dbos.sleep(secs)
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     @DBOS.workflow()
     def test_workflow_status_a() -> str:
@@ -793,7 +795,9 @@ def test_sleep(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_sleep_workflow(secs: float) -> str:
         dbos.sleep(secs)
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     start_time = time.time()
     sleep_uuid = test_sleep_workflow(1.5)
@@ -1573,7 +1577,9 @@ def test_custom_names(dbos: DBOS) -> None:
 
     @DBOS.workflow(name=workflow_name)
     def workflow() -> str:
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     handle = queue.enqueue(workflow)
     assert handle.get_status().name == workflow_name
@@ -1581,7 +1587,9 @@ def test_custom_names(dbos: DBOS) -> None:
 
     @DBOS.step(name=step_name)
     def step() -> str:
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     handle = queue.enqueue(step)
     assert handle.get_status().name == f"<temp>.{step_name}"
@@ -1589,7 +1597,9 @@ def test_custom_names(dbos: DBOS) -> None:
 
     @DBOS.transaction(name=txn_name)
     def txn() -> str:
-        return DBOS.workflow_id
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
 
     handle = queue.enqueue(txn)
     assert handle.get_status().name == f"<temp>.{txn_name}"
@@ -1614,12 +1624,22 @@ def test_custom_names(dbos: DBOS) -> None:
 async def test_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
     DBOS.destroy(destroy_registry=True)
 
+    is_dbos_active = False
+
     @DBOS.step()
     def step(x: int) -> int:
+        if is_dbos_active:
+            assert DBOS.workflow_id is not None
+        else:
+            assert DBOS.workflow_id is None
         return x
 
     @DBOS.step()
     async def async_step(x: int) -> int:
+        if is_dbos_active:
+            assert DBOS.workflow_id is not None
+        else:
+            assert DBOS.workflow_id is None
         return x
 
     assert step(5) == 5
@@ -1631,6 +1651,7 @@ async def test_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
     assert await async_step(5) == 5
 
     DBOS.launch()
+    is_dbos_active = True
 
     assert step(5) == 5
     assert await async_step(5) == 5

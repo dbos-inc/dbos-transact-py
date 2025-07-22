@@ -195,7 +195,9 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
         nonlocal wf_counter
         wf_counter += 1
         nonlocal workflow_id
-        workflow_id = DBOS.workflow_id
+        wf_id = DBOS.workflow_id
+        assert wf_id is not None
+        workflow_id = wf_id
 
     @DBOS.transaction()
     def test_transaction() -> None:
