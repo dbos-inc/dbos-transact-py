@@ -497,7 +497,6 @@ def list(
         app_version=appversion,
         name=name,
     )
-
     print(jsonpickle.encode(workflows, unpicklable=False))
 
 
