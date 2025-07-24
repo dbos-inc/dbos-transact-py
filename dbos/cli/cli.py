@@ -1,4 +1,3 @@
-import json
 import os
 import platform
 import signal
@@ -498,7 +497,7 @@ def list(
         app_version=appversion,
         name=name,
     )
-    print(json.dumps(workflows, default=str))
+    print(jsonpickle.encode(workflows, unpicklable=False))
 
 
 @workflow.command(help="Retrieve the status of a workflow")
@@ -518,7 +517,7 @@ def get(
         .retrieve_workflow(workflow_id=workflow_id)
         .get_status()
     )
-    print(json.dumps(status, default=str))
+    print(jsonpickle.encode(status, unpicklable=False))
 
 
 @workflow.command(help="List the steps of a workflow")
@@ -534,9 +533,9 @@ def steps(
     ] = None,
 ) -> None:
     print(
-        json.dumps(
+        jsonpickle.encode(
             start_client(db_url=db_url).list_workflow_steps(workflow_id=workflow_id),
-            default=str,
+            unpicklable=False,
         )
     )
 
@@ -590,7 +589,7 @@ def restart(
         .fork_workflow(workflow_id=workflow_id, start_step=1)
         .get_status()
     )
-    print(json.dumps(status, default=str))
+    print(jsonpickle.encode(status, unpicklable=False))
 
 
 @workflow.command(
@@ -620,7 +619,7 @@ def fork(
         .fork_workflow(workflow_id=workflow_id, start_step=step)
         .get_status()
     )
-    print(json.dumps(status, default=str))
+    print(jsonpickle.encode(status, unpicklable=False))
 
 
 @queue.command(name="list", help="List enqueued functions for your application")
@@ -704,7 +703,7 @@ def list_queue(
         status=status,
         name=name,
     )
-    print(json.dumps(workflows, default=str))
+    print(jsonpickle.encode(workflows, unpicklable=False))
 
 
 if __name__ == "__main__":
