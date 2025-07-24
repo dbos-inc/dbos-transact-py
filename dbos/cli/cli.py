@@ -1,3 +1,4 @@
+import json
 import os
 import platform
 import signal
@@ -10,7 +11,7 @@ from typing import Any, Optional
 import jsonpickle  # type: ignore
 import sqlalchemy as sa
 import typer
-from rich import print
+from rich import print as richprint
 from rich.prompt import IntPrompt
 from typing_extensions import Annotated, List
 
@@ -196,7 +197,7 @@ def init(
                 path.join(templates_dir, template), project_name, config_mode=config
             )
     except Exception as e:
-        print(f"[red]{e}[/red]")
+        richprint(f"[red]{e}[/red]")
 
 
 def _resolve_project_name_and_template(
@@ -217,9 +218,9 @@ def _resolve_project_name_and_template(
         if template not in templates:
             raise Exception(f"Template {template} not found in {templates_dir}")
     else:
-        print("\n[bold]Available templates:[/bold]")
+        richprint("\n[bold]Available templates:[/bold]")
         for idx, template_name in enumerate(templates, 1):
-            print(f"  {idx}. {template_name}")
+            richprint(f"  {idx}. {template_name}")
         while True:
             try:
                 choice = IntPrompt.ask(
@@ -231,13 +232,13 @@ def _resolve_project_name_and_template(
                     template = templates[choice - 1]
                     break
                 else:
-                    print(
+                    richprint(
                         "[red]Invalid selection. Please choose a number from the list.[/red]"
                     )
             except (KeyboardInterrupt, EOFError):
                 raise typer.Abort()
             except ValueError:
-                print("[red]Please enter a valid number.[/red]")
+                richprint("[red]Please enter a valid number.[/red]")
 
     if template in git_templates:
         if project_name is None:
@@ -497,6 +498,7 @@ def list(
         app_version=appversion,
         name=name,
     )
+
     print(jsonpickle.encode(workflows, unpicklable=False))
 
 
