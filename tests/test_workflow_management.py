@@ -9,7 +9,7 @@ import sqlalchemy as sa
 # Public API
 from dbos import DBOS, Queue, SetWorkflowID
 from dbos._dbos import DBOSConfiguredInstance
-from dbos._error import DBOSWorkflowCancelledError
+from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.application_database import ApplicationSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import garbage_collect, global_timeout
@@ -52,7 +52,7 @@ def test_cancel_resume(dbos: DBOS) -> None:
     main_thread_event.wait()
     DBOS.cancel_workflow(wfid)
     workflow_event.set()
-    with pytest.raises(DBOSWorkflowCancelledError):
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
     assert steps_completed == 1
 
@@ -103,7 +103,7 @@ def test_cancel_resume_txn(dbos: DBOS) -> None:
     main_thread_event.wait()
     DBOS.cancel_workflow(wfid)
     workflow_event.set()
-    with pytest.raises(DBOSWorkflowCancelledError):
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
     assert txn_completed == 1
 
@@ -746,7 +746,7 @@ def test_global_timeout(dbos: DBOS) -> None:
 
     # Verify all workflows started before the global timeout are cancelled
     for handle in handles:
-        with pytest.raises(DBOSWorkflowCancelledError):
+        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
             handle.get_result()
     event.set()
     assert final_handle.get_result() is not None

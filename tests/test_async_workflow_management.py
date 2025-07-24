@@ -7,7 +7,7 @@ from typing import List
 import pytest
 
 from dbos import DBOS, Queue, SetWorkflowID
-from dbos._error import DBOSWorkflowCancelledError
+from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._sys_db import StepInfo, WorkflowStatus
 from tests.conftest import queue_entries_are_cleaned_up
 
@@ -46,7 +46,7 @@ async def test_cancel_workflow_async(dbos: DBOS) -> None:
     await DBOS.cancel_workflow_async(wfid)
     workflow_event.set()
 
-    with pytest.raises(DBOSWorkflowCancelledError):
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
     assert steps_completed == 1
 
@@ -85,7 +85,7 @@ async def test_resume_workflow_async(dbos: DBOS) -> None:
     DBOS.cancel_workflow(wfid)
     workflow_event.set()
 
-    with pytest.raises(DBOSWorkflowCancelledError):
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
     assert steps_completed == 1
 
