@@ -911,3 +911,30 @@ def test_class_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
     DBOS.launch()
 
     assert inst.step(input) == input + input
+
+
+def test_class_with_only_steps(dbos: DBOS) -> None:
+
+    class StepClass:
+        def __init__(self, x: int) -> None:
+            self.x = x
+
+        @DBOS.step()
+        def step(self, x: int, expr: Callable[[int, int], int]) -> int:
+            return expr(self.x, x)
+
+    input = 5
+    inst = StepClass(5)
+
+    l = lambda x, y: x + y
+
+    @DBOS.workflow()
+    def test_workflow() -> int:
+        return inst.step(input, l) + inst.step(input, l)
+
+    handle = DBOS.start_workflow(test_workflow)
+    assert handle.get_result() == input * 4
+
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 2
+    assert steps[1]["output"] == steps[1]["output"] == input * 2
