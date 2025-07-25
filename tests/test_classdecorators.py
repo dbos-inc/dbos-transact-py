@@ -913,21 +913,23 @@ def test_class_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
     assert inst.step(input) == input + input
 
 
-def test_class_with_only_steps(dbos: DBOS):
+def test_class_with_only_steps(dbos: DBOS) -> None:
 
     class StepClass:
         def __init__(self, x: int) -> None:
             self.x = x
 
         @DBOS.step()
-        def step(self, x: int) -> int:
-            return self.x + x
+        def step(self, x: int, expr: Callable[[int, int], int]) -> int:
+            return expr(self.x, x)
 
     input = 5
     inst = StepClass(5)
 
+    l = lambda x, y: x + y
+
     @DBOS.workflow()
-    def test_workflow():
-        return inst.step(input) + inst.step(input)
+    def test_workflow() -> int:
+        return inst.step(input, l) + inst.step(input, l)
 
     assert test_workflow() == input * 4
