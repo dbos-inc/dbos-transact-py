@@ -49,6 +49,7 @@ from ._context import (
     get_local_dbos_context,
 )
 from ._error import (
+    DBOSAwaitedWorkflowCancelledError,
     DBOSException,
     DBOSMaxStepRetriesExceeded,
     DBOSNonExistentWorkflowError,
@@ -370,7 +371,7 @@ def _get_wf_invoke_func(
             r: R = dbos._sys_db.await_workflow_result(status["workflow_uuid"])
             return r
         except DBOSWorkflowCancelledError as error:
-            raise
+            raise DBOSAwaitedWorkflowCancelledError(status["workflow_uuid"])
         except Exception as error:
             if not dbos.debug_mode:
                 dbos._sys_db.update_workflow_outcome(

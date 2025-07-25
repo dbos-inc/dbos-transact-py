@@ -20,7 +20,7 @@ from dbos import (
     WorkflowHandle,
     _workflow_commands,
 )
-from dbos._error import DBOSWorkflowCancelledError
+from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase, WorkflowStatusString
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
@@ -306,7 +306,7 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
     )
     assert response.status_code == 204
     event.set()
-    with pytest.raises(DBOSWorkflowCancelledError):
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
     info = _workflow_commands.get_workflow(sys_db, wfid)
     assert info is not None
@@ -750,7 +750,7 @@ def test_admin_global_timeout(dbos: DBOS) -> None:
         timeout=5,
     )
     response.raise_for_status()
-    with pytest.raises(DBOSWorkflowCancelledError):
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
 
 
