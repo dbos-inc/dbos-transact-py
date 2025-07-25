@@ -932,4 +932,9 @@ def test_class_with_only_steps(dbos: DBOS) -> None:
     def test_workflow() -> int:
         return inst.step(input, l) + inst.step(input, l)
 
-    assert test_workflow() == input * 4
+    handle = DBOS.start_workflow(test_workflow)
+    assert handle.get_result() == input * 4
+
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 2
+    assert steps[1]["output"] == steps[1]["output"] == input * 2
