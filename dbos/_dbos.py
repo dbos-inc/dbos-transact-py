@@ -324,7 +324,8 @@ class DBOS:
         self.conductor_websocket: Optional[ConductorWebsocket] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
 
-        # Use supplied version and executor ID, but not in DBOS Cloud.
+        # Globally set the application version and executor ID.
+        # In DBOS Cloud, instead use the values supplied through environment variables.
         if not os.environ.get("DBOS__CLOUD") == "true":
             if (
                 "application_version" in config
