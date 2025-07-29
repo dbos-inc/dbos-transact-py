@@ -1412,6 +1412,23 @@ def test_app_version(config: DBOSConfig) -> None:
 
     del os.environ["DBOS__APPVERSION"]
 
+    # Verify that version can be overriden with a config parameter
+    app_version = "6789"
+
+    DBOS.destroy(destroy_registry=True)
+    config["application_version"] = app_version
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def test_workflow() -> str:
+        return DBOS.workflow_id
+
+    DBOS.launch()
+    assert GlobalParams.app_version == app_version
+    wfid = test_workflow()
+    handle = DBOS.retrieve_workflow(wfid)
+    assert handle.get_status().app_version == app_version
+
 
 def test_recovery_appversion(config: DBOSConfig) -> None:
     input = 5
