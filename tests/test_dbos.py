@@ -1397,7 +1397,7 @@ def test_app_version(config: DBOSConfig) -> None:
     assert GlobalParams.app_version != app_version
 
     # Verify that version can be overriden with an environment variable
-    app_version = "12345"
+    app_version = str(uuid.uuid4())
     os.environ["DBOS__APPVERSION"] = app_version
 
     DBOS.destroy(destroy_registry=True)
@@ -1412,12 +1412,14 @@ def test_app_version(config: DBOSConfig) -> None:
 
     del os.environ["DBOS__APPVERSION"]
 
-    # Verify that version can be overriden with a config parameter
-    app_version = "6789"
+    # Verify that version and executor ID can be overriden with a config parameter
+    app_version = str(uuid.uuid4())
+    executor_id = str(uuid.uuid4())
 
     DBOS.destroy(destroy_registry=True)
     config["application_version"] = app_version
-    dbos = DBOS(config=config)
+    config["executor_id"] = executor_id
+    DBOS(config=config)
 
     @DBOS.workflow()
     def test_workflow() -> str:
@@ -1426,9 +1428,11 @@ def test_app_version(config: DBOSConfig) -> None:
 
     DBOS.launch()
     assert GlobalParams.app_version == app_version
+    assert GlobalParams.executor_id == executor_id
     wfid = test_workflow()
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     assert handle.get_status().app_version == app_version
+    assert handle.get_status().executor_id == executor_id
 
 
 def test_recovery_appversion(config: DBOSConfig) -> None:
