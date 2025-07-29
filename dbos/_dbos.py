@@ -324,6 +324,11 @@ class DBOS:
         self.conductor_websocket: Optional[ConductorWebsocket] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
 
+        if config["application_version"] is not None:
+            GlobalParams.app_version = config["application_version"]
+        if config["executor_id"] is not None:
+            GlobalParams.executor_id = config["executor_id"]
+
         init_logger()
 
         # Translate user provided config to an internal format
