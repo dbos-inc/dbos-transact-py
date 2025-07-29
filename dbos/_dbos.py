@@ -324,9 +324,12 @@ class DBOS:
         self.conductor_websocket: Optional[ConductorWebsocket] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
 
-        if config.get("application_version", None) is not None:
+        if (
+            "application_version" in config
+            and config["application_version"] is not None
+        ):
             GlobalParams.app_version = config["application_version"]
-        if config.get("executor_id", None) is not None:
+        if "executor_id" in config and config["executor_id"] is not None:
             GlobalParams.executor_id = config["executor_id"]
 
         init_logger()

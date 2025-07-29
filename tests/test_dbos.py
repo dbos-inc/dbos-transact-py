@@ -1421,12 +1421,13 @@ def test_app_version(config: DBOSConfig) -> None:
 
     @DBOS.workflow()
     def test_workflow() -> str:
+        assert DBOS.workflow_id
         return DBOS.workflow_id
 
     DBOS.launch()
     assert GlobalParams.app_version == app_version
     wfid = test_workflow()
-    handle = DBOS.retrieve_workflow(wfid)
+    handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     assert handle.get_status().app_version == app_version
 
 
