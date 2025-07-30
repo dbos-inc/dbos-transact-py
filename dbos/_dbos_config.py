@@ -47,6 +47,8 @@ class DBOSConfig(TypedDict, total=False):
     admin_port: Optional[int]
     run_admin_server: Optional[bool]
     otlp_attributes: Optional[dict[str, str]]
+    application_version: Optional[str]
+    executor_id: Optional[str]
 
 
 class RuntimeConfig(TypedDict, total=False):
