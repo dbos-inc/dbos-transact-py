@@ -260,11 +260,9 @@ def _resolve_project_name_and_template(
     return project_name, template
 
 
-@app.command(
-    help="Run your database schema migrations using the migration commands in 'dbos-config.yaml'"
-)
+@app.command(help="Create DBOS system tables.")
 def migrate(
-    db_url: Annotated[
+    app_database_url: Annotated[
         typing.Optional[str],
         typer.Option(
             "--db-url",
@@ -272,30 +270,34 @@ def migrate(
             help="Your DBOS application database URL",
         ),
     ] = None,
-    sys_db_name: Annotated[
+    system_database_url: Annotated[
         typing.Optional[str],
         typer.Option(
-            "--sys-db-name",
+            "--sys-db-url",
             "-s",
-            help="Specify the name of the system database to reset",
+            help="Your DBOS system database URL",
         ),
     ] = None,
 ) -> None:
-    config = load_config(run_process_config=False, silent=True)
-    connection_string = _get_db_url(db_url)
-    app_db_name = sa.make_url(connection_string).database
-    assert app_db_name is not None, "Database name is required in URL"
-    if sys_db_name is None:
-        sys_db_name = app_db_name + SystemSchema.sysdb_suffix
+    app_database_url = _get_db_url(app_database_url)
+    system_database_url = get_system_database_url(
+        {
+            "system_database_url": system_database_url,
+            "database_url": app_database_url,
+            "database": {},
+        }
+    )
 
-    typer.echo(f"Starting schema migration for database {app_db_name}")
+    typer.echo(f"Starting DBOS migrations")
+    typer.echo(f"Application database: {sa.make_url(app_database_url)}")
+    typer.echo(f"System database: {sa.make_url(system_database_url)}")
 
     # First, run DBOS migrations on the system database and the application database
     app_db = None
     sys_db = None
     try:
         sys_db = SystemDatabase(
-            system_database_url=get_system_database_url(config),
+            system_database_url=system_database_url,
             engine_kwargs={
                 "pool_timeout": 30,
                 "max_overflow": 0,
@@ -303,7 +305,7 @@ def migrate(
             },
         )
         app_db = ApplicationDatabase(
-            database_url=connection_string,
+            database_url=app_database_url,
             engine_kwargs={
                 "pool_timeout": 30,
                 "max_overflow": 0,
@@ -313,17 +315,19 @@ def migrate(
         sys_db.run_migrations()
         app_db.run_migrations()
     except Exception as e:
-        typer.echo(f"DBOS system schema migration failed: {e}")
+        typer.echo(f"DBOS migrations failed: {e}")
+        raise typer.Exit(code=1)
     finally:
         if sys_db:
             sys_db.destroy()
         if app_db:
             app_db.destroy()
 
+    typer.echo(f"DBOS migrations successful")
+
     # Next, run any custom migration commands specified in the configuration
-    typer.echo("Executing migration commands from 'dbos-config.yaml'")
-    try:
-        # handle the case where the user has not specified migrations commands
+    if os.path.exists("dbos-config.yaml"):
+        config = load_config(run_process_config=False, silent=True)
         if "database" not in config:
             config["database"] = {}
         migrate_commands = (
@@ -331,20 +335,21 @@ def migrate(
             if "migrate" in config["database"] and config["database"]["migrate"]
             else []
         )
-        for command in migrate_commands:
-            typer.echo(f"Executing migration command: {command}")
-            result = subprocess.run(command, shell=True, text=True)
-            if result.returncode != 0:
-                typer.echo(f"Migration command failed: {command}")
-                typer.echo(result.stderr)
-                raise typer.Exit(1)
-            if result.stdout:
-                typer.echo(result.stdout.rstrip())
-    except Exception as e:
-        typer.echo(f"An error occurred during schema migration: {e}")
-        raise typer.Exit(code=1)
-
-    typer.echo(f"Completed schema migration for database {app_db_name}")
+        if migrate_commands:
+            typer.echo("Executing migration commands from 'dbos-config.yaml'")
+            try:
+                for command in migrate_commands:
+                    typer.echo(f"Executing migration command: {command}")
+                    result = subprocess.run(command, shell=True, text=True)
+                    if result.returncode != 0:
+                        typer.echo(f"Migration command failed: {command}")
+                        typer.echo(result.stderr)
+                        raise typer.Exit(1)
+                    if result.stdout:
+                        typer.echo(result.stdout.rstrip())
+            except Exception as e:
+                typer.echo(f"An error occurred during schema migration: {e}")
+                raise typer.Exit(code=1)
 
 
 @app.command(help="Reset the DBOS system database")
