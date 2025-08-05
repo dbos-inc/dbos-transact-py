@@ -69,6 +69,7 @@ from ._sys_db import (
     StepInfo,
     SystemDatabase,
     WorkflowStatus,
+    WorkflowStatusString,
     _dbos_stream_closed_sentinel,
     reset_system_database,
 )
@@ -1362,7 +1363,7 @@ class DBOS:
         Read values from a stream as a generator.
 
         This function reads values from a stream identified by the workflow_id and key,
-        yielding each value in order until the stream is closed.
+        yielding each value in order until the stream is closed or the workflow terminates.
 
         Args:
             workflow_id(str): The workflow instance ID that owns the stream
@@ -1383,7 +1384,13 @@ class DBOS:
                 yield value
                 offset += 1
             except ValueError:
-                # Poll the offset until a value arrives
+                # Poll the offset until a value arrives or the workflow terminates
+                status = cls.retrieve_workflow(workflow_id).get_status().status
+                if (
+                    status == WorkflowStatusString.SUCCESS.value
+                    or status == WorkflowStatusString.ERROR.value
+                ):
+                    break
                 time.sleep(1.0)
                 continue
 
@@ -1420,7 +1427,7 @@ class DBOS:
         Read values from a stream as an async generator.
 
         This function reads values from a stream identified by the workflow_id and key,
-        yielding each value in order until the stream is closed.
+        yielding each value in order until the stream is closed or the workflow terminates.
 
         Args:
             workflow_id(str): The workflow instance ID that owns the stream
@@ -1444,7 +1451,15 @@ class DBOS:
                 yield value
                 offset += 1
             except ValueError:
-                # Poll the offset until a value arrives
+                # Poll the offset until a value arrives or the workflow terminates
+                status = (
+                    await (await cls.retrieve_workflow_async(workflow_id)).get_status()
+                ).status
+                if (
+                    status == WorkflowStatusString.SUCCESS.value
+                    or status == WorkflowStatusString.ERROR.value
+                ):
+                    break
                 await asyncio.sleep(1.0)
                 continue
 

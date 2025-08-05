@@ -32,6 +32,44 @@ def test_basic_stream_write_read(dbos: DBOS) -> None:
     assert read_values == test_values
 
 
+def test_unclosed_stream(dbos: DBOS) -> None:
+    """Test that reading from a stream stops when the workflow terminates."""
+    test_values = ["hello", 42, {"key": "value"}, [1, 2, 3], None]
+    stream_key = "test_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for value in test_values:
+            DBOS.write_stream(stream_key, value)
+
+    @DBOS.workflow()
+    def writer_workflow_error() -> None:
+        for value in test_values:
+            DBOS.write_stream(stream_key, value)
+        raise Exception()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+
+    read_values = []
+    for value in DBOS.read_stream(wfid, stream_key):
+        read_values.append(value)
+
+    assert read_values == test_values
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        with pytest.raises(Exception):
+            writer_workflow_error()
+
+    read_values = []
+    for value in DBOS.read_stream(wfid, stream_key):
+        read_values.append(value)
+
+    assert read_values == test_values
+
+
 def test_stream_concurrent_write_read(dbos: DBOS) -> None:
     """Test reading from a stream while it's being written to."""
     stream_key = "concurrent_stream"
@@ -442,3 +480,42 @@ def test_async_stream_empty_stream(dbos: DBOS) -> None:
 
     # Run the async test
     asyncio.run(async_empty_test())
+
+
+@pytest.mark.asyncio
+async def test_unclosed_stream_async(dbos: DBOS) -> None:
+    """Test that reading from a stream stops when the workflow terminates."""
+    test_values = ["hello", 42, {"key": "value"}, [1, 2, 3], None]
+    stream_key = "test_stream"
+
+    @DBOS.workflow()
+    async def writer_workflow() -> None:
+        for value in test_values:
+            await DBOS.write_stream_async(stream_key, value)
+
+    @DBOS.workflow()
+    async def writer_workflow_error() -> None:
+        for value in test_values:
+            await DBOS.write_stream_async(stream_key, value)
+        raise Exception()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await writer_workflow()
+
+    read_values = []
+    async for value in DBOS.read_stream_async(wfid, stream_key):
+        read_values.append(value)
+
+    assert read_values == test_values
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        with pytest.raises(Exception):
+            await writer_workflow_error()
+
+    read_values = []
+    async for value in DBOS.read_stream_async(wfid, stream_key):
+        read_values.append(value)
+
+    assert read_values == test_values
