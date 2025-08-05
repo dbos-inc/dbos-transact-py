@@ -1323,7 +1323,7 @@ class DBOS:
 
         """
         cur_ctx = get_local_dbos_context()
-        if cur_ctx is None or not cur_ctx.is_workflow():
+        if cur_ctx is None or not cur_ctx.is_within_workflow():
             raise DBOSException("write_stream() must be called from within a workflow")
 
         def fn() -> None:

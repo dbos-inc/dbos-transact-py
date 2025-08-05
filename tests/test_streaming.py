@@ -282,3 +282,60 @@ def test_stream_interleaved_operations(dbos: DBOS) -> None:
     assert stream1_values == ["1a", "1b", "1c"]
     assert stream2_values == ["2a", "2b"]
     assert stream3_values == ["3a"]
+
+
+def test_stream_write_from_step(dbos: DBOS) -> None:
+    """Test writing to a stream from inside a step function that retries and throws exceptions."""
+
+    call_count = 0
+
+    @DBOS.step(retries_allowed=True, max_attempts=4, interval_seconds=0)
+    def step_that_writes_and_fails(stream_key: str, value: Any) -> int:
+        nonlocal call_count
+        call_count += 1
+
+        # Always write to stream first
+        DBOS.write_stream(stream_key, f"{value}_attempt_{call_count}")
+
+        # Throw exception to trigger retry (will succeed after 3 attempts)
+        if call_count < 4:
+            raise RuntimeError(f"Step failed on attempt {call_count}")
+
+        return DBOS.step_id
+
+    @DBOS.workflow()
+    def workflow_with_failing_step() -> None:
+        # This step will fail 3 times, then succeed on the 4th attempt
+        # But each failure should still write to the stream
+        result = step_that_writes_and_fails("retry_stream", "test_value")
+        assert result == 1
+
+        # Also write directly from workflow
+        DBOS.write_stream("retry_stream", "from_workflow")
+
+        # Close the stream
+        DBOS.close_stream("retry_stream")
+
+    # Start the workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        workflow_with_failing_step()
+
+    # Read the stream and verify all values are present
+    # Should have 4 writes from the step (one per attempt) plus 1 from workflow
+    stream_values = list(DBOS.read_stream(wfid, "retry_stream"))
+
+    # Verify we have the expected number of values
+    assert len(stream_values) == 5
+
+    # Verify the step writes (one per retry attempt)
+    assert stream_values[0] == "test_value_attempt_1"
+    assert stream_values[1] == "test_value_attempt_2"
+    assert stream_values[2] == "test_value_attempt_3"
+    assert stream_values[3] == "test_value_attempt_4"
+
+    # Verify the workflow write
+    assert stream_values[4] == "from_workflow"
+
+    # Verify the step was called exactly 4 times (3 failures + 1 success)
+    assert call_count == 4
