@@ -1317,10 +1317,6 @@ class DBOS:
         """
         Write a value to a stream.
 
-        This function writes a value to a stream identified by the key within the current workflow.
-        The value is appended to the first unused offset in the stream.
-        This function can only be called from within a workflow and runs as a workflow step.
-
         Args:
             key(str): The stream key / name within the workflow
             value(Any): A serializable value to write to the stream
@@ -1341,11 +1337,7 @@ class DBOS:
     @classmethod
     def close_stream(cls, key: str) -> None:
         """
-        Close a stream by writing a sentinel value.
-
-        This function closes a stream identified by the key within the current workflow
-        by writing a special sentinel value at the first unused offset.
-        This function can only be called from within a workflow and runs as a workflow step.
+        Close a stream.
 
         Args:
             key(str): The stream key / name within the workflow
@@ -1369,8 +1361,7 @@ class DBOS:
         Read values from a stream as a generator.
 
         This function reads values from a stream identified by the workflow_id and key,
-        yielding each value in order until the stream is closed (sentinel value encountered).
-        This function can be called from anywhere and does not run as a workflow step.
+        yielding each value in order until the stream is closed.
 
         Args:
             workflow_id(str): The workflow instance ID that owns the stream
