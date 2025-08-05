@@ -1900,7 +1900,9 @@ class SystemDatabase:
 
             # Next offset is max + 1, or 0 if no records exist
             next_offset = (
-                (max_offset_result[0] + 1) if max_offset_result is not None else 0
+                (max_offset_result[0] + 1)
+                if max_offset_result is not None and max_offset_result[0] is not None
+                else 0
             )
 
             # Serialize the value before storing

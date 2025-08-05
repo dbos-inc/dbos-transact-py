@@ -32,10 +32,7 @@ def upgrade() -> None:
             onupdate="CASCADE",
             ondelete="CASCADE",
         ),
-        sa.PrimaryKeyConstraint("workflow_uuid"),
-        sa.UniqueConstraint(
-            "workflow_uuid", "key", "offset", name="uq_streams_workflow_key_offset"
-        ),
+        sa.PrimaryKeyConstraint("workflow_uuid", "key", "offset"),
         schema="dbos",
     )
 

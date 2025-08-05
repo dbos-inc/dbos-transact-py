@@ -6,6 +6,7 @@ import inspect
 import os
 import sys
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from logging import Logger
@@ -14,6 +15,7 @@ from typing import (
     Any,
     Callable,
     Coroutine,
+    Generator,
     Generic,
     List,
     Literal,
@@ -62,7 +64,13 @@ from ._registrations import (
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
-from ._sys_db import StepInfo, SystemDatabase, WorkflowStatus, reset_system_database
+from ._sys_db import (
+    StepInfo,
+    SystemDatabase,
+    WorkflowStatus,
+    _dbos_stream_closed_sentinel,
+    reset_system_database,
+)
 from ._tracer import DBOSTracer, dbos_tracer
 
 if TYPE_CHECKING:
@@ -1303,6 +1311,89 @@ class DBOS:
         ctx = assert_current_dbos_context()
         ctx.authenticated_user = authenticated_user
         ctx.authenticated_roles = authenticated_roles
+
+    @classmethod
+    def write_stream(cls, key: str, value: Any) -> None:
+        """
+        Write a value to a stream.
+
+        This function writes a value to a stream identified by the key within the current workflow.
+        The value is appended to the first unused offset in the stream.
+        This function can only be called from within a workflow and runs as a workflow step.
+
+        Args:
+            key(str): The stream key / name within the workflow
+            value(Any): A serializable value to write to the stream
+
+        """
+        cur_ctx = get_local_dbos_context()
+        if cur_ctx is None or not cur_ctx.is_workflow():
+            raise DBOSException("write_stream() must be called from within a workflow")
+
+        def fn() -> None:
+            ctx = assert_current_dbos_context()
+            _get_dbos_instance()._sys_db.write_stream(ctx.workflow_id, key, value)
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.writeStream"
+        )
+
+    @classmethod
+    def close_stream(cls, key: str) -> None:
+        """
+        Close a stream by writing a sentinel value.
+
+        This function closes a stream identified by the key within the current workflow
+        by writing a special sentinel value at the first unused offset.
+        This function can only be called from within a workflow and runs as a workflow step.
+
+        Args:
+            key(str): The stream key / name within the workflow
+
+        """
+        cur_ctx = get_local_dbos_context()
+        if cur_ctx is None or not cur_ctx.is_workflow():
+            raise DBOSException("close_stream() must be called from within a workflow")
+
+        def fn() -> None:
+            ctx = assert_current_dbos_context()
+            _get_dbos_instance()._sys_db.close_stream(ctx.workflow_id, key)
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.closeStream"
+        )
+
+    @classmethod
+    def read_stream(cls, workflow_id: str, key: str) -> Generator[Any, Any, None]:
+        """
+        Read values from a stream as a generator.
+
+        This function reads values from a stream identified by the workflow_id and key,
+        yielding each value in order until the stream is closed (sentinel value encountered).
+        This function can be called from anywhere and does not run as a workflow step.
+
+        Args:
+            workflow_id(str): The workflow instance ID that owns the stream
+            key(str): The stream key / name within the workflow
+
+        Yields:
+            Any: Each value in the stream until the stream is closed
+
+        """
+        offset = 0
+        sys_db = _get_dbos_instance()._sys_db
+
+        while True:
+            try:
+                value = sys_db.read_stream(workflow_id, key, offset)
+                if value == _dbos_stream_closed_sentinel:
+                    break
+                yield value
+                offset += 1
+            except ValueError:
+                # Poll the offset until a value arrives
+                time.sleep(1.0)
+                continue
 
     @classproperty
     def tracer(self) -> DBOSTracer:
