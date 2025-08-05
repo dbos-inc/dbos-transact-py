@@ -132,3 +132,23 @@ class SystemSchema:
         Column("value", Text, nullable=False),
         PrimaryKeyConstraint("workflow_uuid", "key"),
     )
+
+    streams = Table(
+        "streams",
+        metadata_obj,
+        Column(
+            "workflow_uuid",
+            Text,
+            ForeignKey(
+                "workflow_status.workflow_uuid", onupdate="CASCADE", ondelete="CASCADE"
+            ),
+            nullable=False,
+            primary_key=True,
+        ),
+        Column("key", Text, nullable=False),
+        Column("value", Text, nullable=False),
+        Column("offset", Integer, nullable=False),
+        UniqueConstraint(
+            "workflow_uuid", "key", "offset", name="uq_streams_workflow_key_offset"
+        ),
+    )
