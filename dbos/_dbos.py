@@ -13,6 +13,7 @@ from logging import Logger
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     Callable,
     Coroutine,
     Generator,
@@ -1384,6 +1385,67 @@ class DBOS:
             except ValueError:
                 # Poll the offset until a value arrives
                 time.sleep(1.0)
+                continue
+
+    @classmethod
+    async def write_stream_async(cls, key: str, value: Any) -> None:
+        """
+        Write a value to a stream asynchronously.
+
+        Args:
+            key(str): The stream key / name within the workflow
+            value(Any): A serializable value to write to the stream
+
+        """
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(lambda: DBOS.write_stream(key, value))
+
+    @classmethod
+    async def close_stream_async(cls, key: str) -> None:
+        """
+        Close a stream asynchronously.
+
+        Args:
+            key(str): The stream key / name within the workflow
+
+        """
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(lambda: DBOS.close_stream(key))
+
+    @classmethod
+    async def read_stream_async(
+        cls, workflow_id: str, key: str
+    ) -> AsyncGenerator[Any, None]:
+        """
+        Read values from a stream as an async generator.
+
+        This function reads values from a stream identified by the workflow_id and key,
+        yielding each value in order until the stream is closed.
+
+        Args:
+            workflow_id(str): The workflow instance ID that owns the stream
+            key(str): The stream key / name within the workflow
+
+        Yields:
+            Any: Each value in the stream until the stream is closed
+
+        """
+        await cls._configure_asyncio_thread_pool()
+        offset = 0
+        sys_db = _get_dbos_instance()._sys_db
+
+        while True:
+            try:
+                value = await asyncio.to_thread(
+                    sys_db.read_stream, workflow_id, key, offset
+                )
+                if value == _dbos_stream_closed_sentinel:
+                    break
+                yield value
+                offset += 1
+            except ValueError:
+                # Poll the offset until a value arrives
+                await asyncio.sleep(1.0)
                 continue
 
     @classproperty
