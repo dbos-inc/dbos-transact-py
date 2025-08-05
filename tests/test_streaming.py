@@ -381,105 +381,92 @@ def test_stream_write_from_step(dbos: DBOS) -> None:
     assert call_count == 4
 
 
-def test_async_stream_basic_write_read(dbos: DBOS) -> None:
+@pytest.mark.asyncio
+async def test_async_stream_basic_write_read(dbos: DBOS) -> None:
     """Test basic async stream write and read functionality."""
-    import asyncio
+    test_values = [
+        "async_hello",
+        123,
+        {"async_key": "async_value"},
+        [10, 20, 30],
+        None,
+    ]
+    stream_key = "async_test_stream"
 
-    async def async_stream_test() -> None:
-        test_values = [
-            "async_hello",
-            123,
-            {"async_key": "async_value"},
-            [10, 20, 30],
-            None,
-        ]
-        stream_key = "async_test_stream"
+    @DBOS.workflow()
+    async def async_writer_workflow() -> None:
+        for value in test_values:
+            await DBOS.write_stream_async(stream_key, value)
+        await DBOS.close_stream_async(stream_key)
 
-        @DBOS.workflow()
-        async def async_writer_workflow() -> None:
-            for value in test_values:
-                await DBOS.write_stream_async(stream_key, value)
-            await DBOS.close_stream_async(stream_key)
+    # Start the writer workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await async_writer_workflow()
 
-        # Start the writer workflow
-        wfid = str(uuid.uuid4())
-        with SetWorkflowID(wfid):
-            await async_writer_workflow()
+    # Read the stream
+    read_values = []
+    async for value in DBOS.read_stream_async(wfid, stream_key):
+        read_values.append(value)
 
-        # Read the stream
-        read_values = []
-        async for value in DBOS.read_stream_async(wfid, stream_key):
-            read_values.append(value)
-
-        assert read_values == test_values
-
-    # Run the async test
-    asyncio.run(async_stream_test())
+    assert read_values == test_values
 
 
-def test_async_stream_concurrent_write_read(dbos: DBOS) -> None:
+@pytest.mark.asyncio
+async def test_async_stream_concurrent_write_read(dbos: DBOS) -> None:
     """Test async reading from a stream while it's being written to."""
-    import asyncio
 
-    async def async_concurrent_test() -> None:
-        stream_key = "async_concurrent_stream"
-        num_values = 5
+    stream_key = "async_concurrent_stream"
+    num_values = 5
 
-        @DBOS.workflow()
-        async def async_writer_workflow() -> None:
-            for i in range(num_values):
-                await DBOS.write_stream_async(stream_key, f"async_value_{i}")
-                # Small delay to simulate real work
-                await DBOS.sleep_async(0.1)
-            await DBOS.close_stream_async(stream_key)
+    @DBOS.workflow()
+    async def async_writer_workflow() -> None:
+        for i in range(num_values):
+            await DBOS.write_stream_async(stream_key, f"async_value_{i}")
+            # Small delay to simulate real work
+            await DBOS.sleep_async(0.1)
+        await DBOS.close_stream_async(stream_key)
 
-        # Start the writer workflow
-        wfid = str(uuid.uuid4())
-        with SetWorkflowID(wfid):
-            writer_handle = await DBOS.start_workflow_async(async_writer_workflow)
+    # Start the writer workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_handle = await DBOS.start_workflow_async(async_writer_workflow)
 
-        # Start reading immediately (while writing)
-        read_values = []
-        start_time = time.time()
+    # Start reading immediately (while writing)
+    read_values = []
+    start_time = time.time()
 
-        async for value in DBOS.read_stream_async(wfid, stream_key):
-            read_values.append(value)
-            # Ensure we're not waiting too long for each value
-            assert time.time() - start_time < 30  # Safety timeout
+    async for value in DBOS.read_stream_async(wfid, stream_key):
+        read_values.append(value)
+        # Ensure we're not waiting too long for each value
+        assert time.time() - start_time < 30  # Safety timeout
 
-        # Wait for writer to complete
-        await writer_handle.get_result()
+    # Wait for writer to complete
+    await writer_handle.get_result()
 
-        # Verify all values were read
-        expected_values = [f"async_value_{i}" for i in range(num_values)]
-        assert read_values == expected_values
-
-    # Run the async test
-    asyncio.run(async_concurrent_test())
+    # Verify all values were read
+    expected_values = [f"async_value_{i}" for i in range(num_values)]
+    assert read_values == expected_values
 
 
-def test_async_stream_empty_stream(dbos: DBOS) -> None:
+@pytest.mark.asyncio
+async def test_async_stream_empty_stream(dbos: DBOS) -> None:
     """Test async reading from an empty stream (only close marker)."""
-    import asyncio
 
-    async def async_empty_test() -> None:
-        @DBOS.workflow()
-        async def async_empty_stream_workflow() -> None:
-            await DBOS.close_stream_async("async_empty_stream")
+    @DBOS.workflow()
+    async def async_empty_stream_workflow() -> None:
+        await DBOS.close_stream_async("async_empty_stream")
 
-        # Start the workflow
-        wfid = str(uuid.uuid4())
-        with SetWorkflowID(wfid):
-            await async_empty_stream_workflow()
+    # Start the workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await async_empty_stream_workflow()
 
-        # Read the empty stream
-        values = []
-        async for value in DBOS.read_stream_async(wfid, "async_empty_stream"):
-            values.append(value)
-        assert values == []
-
-    # Run the async test
-    asyncio.run(async_empty_test())
+    # Read the empty stream
+    values = []
+    async for value in DBOS.read_stream_async(wfid, "async_empty_stream"):
+        values.append(value)
+    assert values == []
 
 
 @pytest.mark.asyncio
