@@ -1885,38 +1885,58 @@ class SystemDatabase:
 
     @db_retry()
     def write_stream(self, workflow_uuid: str, key: str, value: Any) -> None:
-        """Write a key-value pair to the stream at the first unused offset."""
+        """
+        Write a key-value pair to the stream at the first unused offset.
+        Uses SERIALIZABLE isolation level and automatically retries on serialization errors.
+        """
         if self._debug_mode:
             raise Exception("called write_stream in debug mode")
 
-        with self.engine.begin() as c:
-            # Find the maximum offset for this workflow_uuid and key combination
-            max_offset_result = c.execute(
-                sa.select(sa.func.max(SystemSchema.streams.c.offset)).where(
-                    SystemSchema.streams.c.workflow_uuid == workflow_uuid,
-                    SystemSchema.streams.c.key == key,
-                )
-            ).fetchone()
+        while True:
+            try:
+                # Use SERIALIZABLE isolation level for consistency
+                with self.engine.begin() as c:
+                    c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"))
 
-            # Next offset is max + 1, or 0 if no records exist
-            next_offset = (
-                (max_offset_result[0] + 1)
-                if max_offset_result is not None and max_offset_result[0] is not None
-                else 0
-            )
+                    # Find the maximum offset for this workflow_uuid and key combination
+                    max_offset_result = c.execute(
+                        sa.select(sa.func.max(SystemSchema.streams.c.offset)).where(
+                            SystemSchema.streams.c.workflow_uuid == workflow_uuid,
+                            SystemSchema.streams.c.key == key,
+                        )
+                    ).fetchone()
 
-            # Serialize the value before storing
-            serialized_value = _serialization.serialize(value)
+                    # Next offset is max + 1, or 0 if no records exist
+                    next_offset = (
+                        (max_offset_result[0] + 1)
+                        if max_offset_result is not None
+                        and max_offset_result[0] is not None
+                        else 0
+                    )
 
-            # Insert the new stream entry
-            c.execute(
-                sa.insert(SystemSchema.streams).values(
-                    workflow_uuid=workflow_uuid,
-                    key=key,
-                    value=serialized_value,
-                    offset=next_offset,
-                )
-            )
+                    # Serialize the value before storing
+                    serialized_value = _serialization.serialize(value)
+
+                    # Insert the new stream entry
+                    c.execute(
+                        sa.insert(SystemSchema.streams).values(
+                            workflow_uuid=workflow_uuid,
+                            key=key,
+                            value=serialized_value,
+                            offset=next_offset,
+                        )
+                    )
+                # Success - exit retry loop
+                return
+
+            except DBAPIError as e:
+                # Check if this is a serialization failure (SQLSTATE 40001)
+                if hasattr(e.orig, "sqlstate") and e.orig.sqlstate == "40001":  # type: ignore
+                    # Retry immediately on serialization errors
+                    continue
+                else:
+                    # Not a serialization error, re-raise immediately
+                    raise
 
     def close_stream(self, workflow_uuid: str, key: str) -> None:
         """Write a sentinel value to the stream at the first unused offset to mark it as closed."""

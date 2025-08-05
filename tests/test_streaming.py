@@ -301,7 +301,9 @@ def test_stream_write_from_step(dbos: DBOS) -> None:
         if call_count < 4:
             raise RuntimeError(f"Step failed on attempt {call_count}")
 
-        return DBOS.step_id
+        step_id = DBOS.step_id
+        assert step_id is not None
+        return step_id
 
     @DBOS.workflow()
     def workflow_with_failing_step() -> None:
