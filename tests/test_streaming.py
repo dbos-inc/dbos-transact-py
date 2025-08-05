@@ -6,6 +6,7 @@ import pytest
 
 # Public API
 from dbos import DBOS, SetWorkflowID
+from dbos._client import DBOSClient
 
 
 def test_basic_stream_write_read(dbos: DBOS) -> None:
@@ -25,6 +26,13 @@ def test_basic_stream_write_read(dbos: DBOS) -> None:
         writer_workflow()
 
     # Read the stream
+    read_values = []
+    for value in DBOS.read_stream(wfid, stream_key):
+        read_values.append(value)
+
+    assert read_values == test_values
+
+    # Read the stream again, verify no changes
     read_values = []
     for value in DBOS.read_stream(wfid, stream_key):
         read_values.append(value)
@@ -506,3 +514,129 @@ async def test_unclosed_stream_async(dbos: DBOS) -> None:
         read_values.append(value)
 
     assert read_values == test_values
+
+
+def test_client_read_stream(dbos: DBOS, client: DBOSClient) -> None:
+    """Test reading streams from a DBOS client."""
+    test_values = [
+        "client_hello",
+        99,
+        {"client_key": "client_value"},
+        [100, 200, 300],
+        None,
+    ]
+    stream_key = "client_test_stream"
+
+    @DBOS.workflow()
+    def client_writer_workflow() -> None:
+        for value in test_values:
+            DBOS.write_stream(stream_key, value)
+        DBOS.close_stream(stream_key)
+
+    # Start the writer workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        client_writer_workflow()
+
+    # Create a client and read the stream
+    try:
+        read_values = []
+        for value in client.read_stream(wfid, stream_key):
+            read_values.append(value)
+
+        assert read_values == test_values
+    finally:
+        client.destroy()
+
+
+@pytest.mark.asyncio
+async def test_client_read_stream_async(dbos: DBOS, client: DBOSClient) -> None:
+    """Test async reading streams from a DBOS client."""
+    test_values = [
+        "async_client_hello",
+        88,
+        {"async_client_key": "async_client_value"},
+        [11, 22, 33],
+        None,
+    ]
+    stream_key = "async_client_test_stream"
+
+    @DBOS.workflow()
+    async def async_client_writer_workflow() -> None:
+        for value in test_values:
+            await DBOS.write_stream_async(stream_key, value)
+        await DBOS.close_stream_async(stream_key)
+
+    # Start the writer workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await async_client_writer_workflow()
+
+    # Create a client and read the stream asynchronously
+    try:
+        read_values = []
+        async for value in client.read_stream_async(wfid, stream_key):
+            read_values.append(value)
+
+        assert read_values == test_values
+    finally:
+        client.destroy()
+
+
+def test_client_read_stream_workflow_termination(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    """Test that client read_stream stops when workflow terminates without closing stream."""
+    test_values = ["terminated_1", "terminated_2", "terminated_3"]
+    stream_key = "termination_test_stream"
+
+    @DBOS.workflow()
+    def terminating_workflow() -> None:
+        for value in test_values:
+            DBOS.write_stream(stream_key, value)
+        # Intentionally don't close the stream
+
+    # Start the workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        terminating_workflow()
+
+    # Create a client and read the stream - should stop when workflow terminates
+    try:
+        read_values = []
+        for value in client.read_stream(wfid, stream_key):
+            read_values.append(value)
+
+        assert read_values == test_values
+    finally:
+        client.destroy()
+
+
+@pytest.mark.asyncio
+async def test_client_read_stream_async_workflow_termination(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    """Test that client read_stream_async stops when workflow terminates without closing stream."""
+    test_values = ["async_terminated_1", "async_terminated_2", "async_terminated_3"]
+    stream_key = "async_termination_test_stream"
+
+    @DBOS.workflow()
+    async def async_terminating_workflow() -> None:
+        for value in test_values:
+            await DBOS.write_stream_async(stream_key, value)
+        # Intentionally don't close the stream
+
+    # Start the workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await async_terminating_workflow()
+
+    # Create a client and read the stream asynchronously - should stop when workflow terminates
+    try:
+        read_values = []
+        async for value in client.read_stream_async(wfid, stream_key):
+            read_values.append(value)
+
+        assert read_values == test_values
+    finally:
+        client.destroy()
