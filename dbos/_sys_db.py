@@ -243,6 +243,7 @@ class StepInfo(TypedDict):
 
 
 _dbos_null_topic = "__null__topic__"
+_dbos_stream_closed_sentinel = "__DBOS_STREAM_CLOSED__"
 
 
 class ConditionCount(TypedDict):
@@ -1881,6 +1882,64 @@ class SystemDatabase:
         except Exception as e:
             dbos_logger.error(f"Error connecting to the DBOS system database: {e}")
             raise
+
+    @db_retry()
+    def write_stream(self, workflow_uuid: str, key: str, value: Any) -> None:
+        """Write a key-value pair to the stream at the first unused offset."""
+        if self._debug_mode:
+            raise Exception("called write_stream in debug mode")
+
+        with self.engine.begin() as c:
+            # Find the maximum offset for this workflow_uuid and key combination
+            max_offset_result = c.execute(
+                sa.select(sa.func.max(SystemSchema.streams.c.offset)).where(
+                    SystemSchema.streams.c.workflow_uuid == workflow_uuid,
+                    SystemSchema.streams.c.key == key,
+                )
+            ).fetchone()
+
+            # Next offset is max + 1, or 0 if no records exist
+            next_offset = (
+                (max_offset_result[0] + 1) if max_offset_result is not None else 0
+            )
+
+            # Serialize the value before storing
+            serialized_value = _serialization.serialize(value)
+
+            # Insert the new stream entry
+            c.execute(
+                sa.insert(SystemSchema.streams).values(
+                    workflow_uuid=workflow_uuid,
+                    key=key,
+                    value=serialized_value,
+                    offset=next_offset,
+                )
+            )
+
+    def close_stream(self, workflow_uuid: str, key: str) -> None:
+        """Write a sentinel value to the stream at the first unused offset to mark it as closed."""
+        self.write_stream(workflow_uuid, key, _dbos_stream_closed_sentinel)
+
+    @db_retry()
+    def read_stream(self, workflow_uuid: str, key: str, offset: int) -> Any:
+        """Read the value at the specified offset for the given workflow_uuid and key."""
+
+        with self.engine.begin() as c:
+            result = c.execute(
+                sa.select(SystemSchema.streams.c.value).where(
+                    SystemSchema.streams.c.workflow_uuid == workflow_uuid,
+                    SystemSchema.streams.c.key == key,
+                    SystemSchema.streams.c.offset == offset,
+                )
+            ).fetchone()
+
+            if result is None:
+                raise ValueError(
+                    f"No value found for workflow_uuid={workflow_uuid}, key={key}, offset={offset}"
+                )
+
+            # Deserialize the value before returning
+            return _serialization.deserialize(result[0])
 
     def garbage_collect(
         self, cutoff_epoch_timestamp_ms: Optional[int], rows_threshold: Optional[int]
