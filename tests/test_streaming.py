@@ -1,0 +1,284 @@
+import time
+import uuid
+from typing import Any
+
+import pytest
+
+# Public API
+from dbos import DBOS, SetWorkflowID
+
+
+def test_basic_stream_write_read(dbos: DBOS) -> None:
+    """Test basic stream write and read functionality."""
+    test_values = ["hello", 42, {"key": "value"}, [1, 2, 3], None]
+    stream_key = "test_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for value in test_values:
+            DBOS.write_stream(stream_key, value)
+        DBOS.close_stream(stream_key)
+
+    # Start the writer workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+
+    # Read the stream
+    read_values = []
+    for value in DBOS.read_stream(wfid, stream_key):
+        read_values.append(value)
+
+    assert read_values == test_values
+
+
+def test_stream_concurrent_write_read(dbos: DBOS) -> None:
+    """Test reading from a stream while it's being written to."""
+    stream_key = "concurrent_stream"
+    num_values = 10
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i in range(num_values):
+            DBOS.write_stream(stream_key, f"value_{i}")
+            # Small delay to simulate real work
+            DBOS.sleep(0.1)
+        DBOS.close_stream(stream_key)
+
+    # Start the writer workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(writer_workflow)
+
+    # Start reading immediately (while writing)
+    read_values = []
+    start_time = time.time()
+
+    for value in DBOS.read_stream(wfid, stream_key):
+        read_values.append(value)
+        # Ensure we're not waiting too long for each value
+        assert time.time() - start_time < 30  # Safety timeout
+
+    # Wait for writer to complete
+    handle.get_result()
+
+    # Verify all values were read
+    expected_values = [f"value_{i}" for i in range(num_values)]
+    assert read_values == expected_values
+
+
+def test_stream_multiple_keys(dbos: DBOS) -> None:
+    """Test multiple streams with different keys in the same workflow."""
+
+    @DBOS.workflow()
+    def multi_stream_workflow() -> None:
+        # Write to stream A
+        DBOS.write_stream("stream_a", "a1")
+        DBOS.write_stream("stream_a", "a2")
+
+        # Write to stream B
+        DBOS.write_stream("stream_b", "b1")
+        DBOS.write_stream("stream_b", "b2")
+        DBOS.write_stream("stream_b", "b3")
+
+        # Close both streams
+        DBOS.close_stream("stream_a")
+        DBOS.close_stream("stream_b")
+
+    # Start the workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        multi_stream_workflow()
+
+    # Read stream A
+    stream_a_values = list(DBOS.read_stream(wfid, "stream_a"))
+    assert stream_a_values == ["a1", "a2"]
+
+    # Read stream B
+    stream_b_values = list(DBOS.read_stream(wfid, "stream_b"))
+    assert stream_b_values == ["b1", "b2", "b3"]
+
+
+def test_stream_empty_stream(dbos: DBOS) -> None:
+    """Test reading from an empty stream (only close marker)."""
+
+    @DBOS.workflow()
+    def empty_stream_workflow() -> None:
+        DBOS.close_stream("empty_stream")
+
+    # Start the workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        empty_stream_workflow()
+
+    # Read the empty stream
+    values = list(DBOS.read_stream(wfid, "empty_stream"))
+    assert values == []
+
+
+class CustomClass:
+    def __init__(self, value: str):
+        self.value = value
+
+    def __eq__(self, other: Any) -> bool:
+        return isinstance(other, CustomClass) and self.value == other.value
+
+
+def test_stream_serialization_types(dbos: DBOS) -> None:
+    """Test that various data types are properly serialized/deserialized."""
+
+    test_values = [
+        "string",
+        42,
+        3.14,
+        True,
+        False,
+        None,
+        [1, 2, 3],
+        {"nested": {"dict": "value"}},
+        CustomClass("test"),
+        (1, 2, 3),  # Tuple
+        {1, 2, 3},  # Set
+    ]
+
+    @DBOS.workflow()
+    def serialization_test_workflow() -> None:
+        for value in test_values:
+            DBOS.write_stream("serialize_test", value)
+        DBOS.close_stream("serialize_test")
+
+    # Start the workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        serialization_test_workflow()
+
+    # Read and verify
+    read_values = list(DBOS.read_stream(wfid, "serialize_test"))
+
+    # Note: Sets and tuples might be deserialized differently due to JSON serialization
+    # So we'll check the values more carefully
+    assert len(read_values) == len(test_values)
+
+    for i, (original, read) in enumerate(zip(test_values, read_values)):
+        if isinstance(original, CustomClass):
+            assert isinstance(read, CustomClass)
+            assert read.value == original.value
+        elif isinstance(original, (set, tuple)):
+            # These might be deserialized as lists
+            assert list(original) == read or original == read
+        else:
+            assert read == original
+
+
+def test_stream_error_cases(dbos: DBOS) -> None:
+    """Test error cases and edge conditions."""
+
+    # Test writing to stream outside of workflow
+    with pytest.raises(Exception, match="must be called from within a workflow"):
+        DBOS.write_stream("test", "value")
+
+    # Test closing stream outside of workflow
+    with pytest.raises(Exception, match="must be called from within a workflow"):
+        DBOS.close_stream("test")
+
+
+def test_stream_workflow_recovery(dbos: DBOS) -> None:
+    """Test that stream operations are properly recovered during workflow replay."""
+
+    call_count = 0
+
+    @DBOS.step()
+    def counting_step() -> int:
+        nonlocal call_count
+        call_count += 1
+        return call_count
+
+    @DBOS.workflow()
+    def recovery_test_workflow() -> None:
+        count1 = counting_step()
+        DBOS.write_stream("recovery_stream", f"step_{count1}")
+
+        count2 = counting_step()
+        DBOS.write_stream("recovery_stream", f"step_{count2}")
+
+        DBOS.close_stream("recovery_stream")
+
+    # Start the workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        recovery_test_workflow()
+
+    # Reset call count and run the same workflow ID again (should replay)
+    call_count = 0
+    with SetWorkflowID(wfid):
+        recovery_test_workflow()
+
+    # The counting step should not have been called again (replayed from recorded results)
+    assert call_count == 0
+
+    # Stream should still be readable and contain the same values
+    values = list(DBOS.read_stream(wfid, "recovery_stream"))
+    assert values == ["step_1", "step_2"]
+
+    steps = DBOS.list_workflow_steps(wfid)
+    assert len(steps) == 5
+    assert steps[1]["function_name"] == "DBOS.writeStream"
+    assert steps[3]["function_name"] == "DBOS.writeStream"
+    assert steps[4]["function_name"] == "DBOS.closeStream"
+
+
+def test_stream_large_data(dbos: DBOS) -> None:
+    """Test streaming with larger amounts of data."""
+
+    @DBOS.workflow()
+    def large_data_workflow() -> None:
+        # Write 100 items
+        for i in range(100):
+            data = {"id": i, "data": f"item_{i}", "large_field": "x" * 1000}
+            DBOS.write_stream("large_stream", data)
+        DBOS.close_stream("large_stream")
+
+    # Start the workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        large_data_workflow()
+
+    # Read all values
+    values = list(DBOS.read_stream(wfid, "large_stream"))
+
+    assert len(values) == 100
+    for i, value in enumerate(values):
+        assert value["id"] == i
+        assert value["data"] == f"item_{i}"
+        assert value["large_field"] == "x" * 1000
+
+
+def test_stream_interleaved_operations(dbos: DBOS) -> None:
+    """Test interleaved write operations across multiple streams."""
+
+    @DBOS.workflow()
+    def interleaved_workflow() -> None:
+        DBOS.write_stream("stream1", "1a")
+        DBOS.write_stream("stream2", "2a")
+        DBOS.write_stream("stream1", "1b")
+        DBOS.write_stream("stream3", "3a")
+        DBOS.write_stream("stream2", "2b")
+        DBOS.write_stream("stream1", "1c")
+
+        DBOS.close_stream("stream1")
+        DBOS.close_stream("stream2")
+        DBOS.close_stream("stream3")
+
+    # Start the workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        interleaved_workflow()
+
+    # Verify each stream has the correct values in order
+    stream1_values = list(DBOS.read_stream(wfid, "stream1"))
+    stream2_values = list(DBOS.read_stream(wfid, "stream2"))
+    stream3_values = list(DBOS.read_stream(wfid, "stream3"))
+
+    assert stream1_values == ["1a", "1b", "1c"]
+    assert stream2_values == ["2a", "2b"]
+    assert stream3_values == ["3a"]
