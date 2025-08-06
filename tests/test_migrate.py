@@ -15,22 +15,19 @@ def test_migrate(postgres_db_engine: sa.Engine) -> None:
         hide_password=False
     )
 
+    # Drop the DBOS database if it exists. Create a test role with no permissions.
     with postgres_db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
-
         connection.execute(
             sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
         )
-
-        # Drop role if it exists
         connection.execute(sa.text(f"DROP ROLE IF EXISTS {role_name}"))
-
-        # Create the role
         connection.execute(
             sa.text(f"CREATE ROLE {role_name} WITH LOGIN PASSWORD '{role_password}'")
         )
 
-    # Create a system database and verify it exists
+    # Using the admin role, create the DBOS database and verify it exists.
+    # Set permissions for the test role.
     subprocess.check_call(
         ["dbos", "migrate", "-D", db_url, "-s", db_url, "-r", role_name]
     )
@@ -43,6 +40,7 @@ def test_migrate(postgres_db_engine: sa.Engine) -> None:
         ).scalar()
         assert result == 1
 
+    # Initialize DBOS with the test role. Verify various operations work.
     test_db_url = (
         postgres_db_engine.url.set(database=database_name)
         .set(username=role_name)
@@ -56,12 +54,26 @@ def test_migrate(postgres_db_engine: sa.Engine) -> None:
     }
     DBOS(config=config)
 
+    @DBOS.transaction()
+    def test_transaction() -> str:
+        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        return str(rows[0][0])
+
     @DBOS.workflow()
     def test_workflow() -> str:
+        assert test_transaction() == "1"
         id = DBOS.workflow_id
         assert id
+        DBOS.set_event(id, id)
         return id
 
     DBOS.launch()
 
-    assert test_workflow()
+    workflow_id = test_workflow()
+    assert workflow_id
+    assert DBOS.get_event(workflow_id, workflow_id) == workflow_id
+
+    steps = DBOS.list_workflow_steps(workflow_id)
+    assert len(steps) == 2
+    assert steps[0]["function_name"] == test_transaction.__qualname__
+    assert steps[1]["function_name"] == "DBOS.setEvent"
