@@ -74,10 +74,19 @@ class ApplicationDatabase:
 
         # Create the dbos schema and transaction_outputs table in the application database
         with self.engine.begin() as conn:
-            schema_creation_query = sa.text(
-                f"CREATE SCHEMA IF NOT EXISTS {ApplicationSchema.schema}"
-            )
-            conn.execute(schema_creation_query)
+            # Check if schema exists first
+            schema_exists = conn.execute(
+                sa.text(
+                    "SELECT 1 FROM information_schema.schemata WHERE schema_name = :schema_name"
+                ),
+                parameters={"schema_name": ApplicationSchema.schema},
+            ).scalar()
+
+            if not schema_exists:
+                schema_creation_query = sa.text(
+                    f"CREATE SCHEMA {ApplicationSchema.schema}"
+                )
+                conn.execute(schema_creation_query)
 
         inspector = inspect(self.engine)
         if not inspector.has_table(

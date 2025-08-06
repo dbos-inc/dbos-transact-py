@@ -15,6 +15,7 @@ from rich.prompt import IntPrompt
 from typing_extensions import Annotated, List
 
 from dbos._debug import debug_workflow, parse_start_command
+from dbos.cli.migration import grant_dbos_schema_permissions, migrate_dbos_databases
 
 from .._app_db import ApplicationDatabase
 from .._client import DBOSClient
@@ -278,6 +279,14 @@ def migrate(
             help="Your DBOS system database URL",
         ),
     ] = None,
+    application_role: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--app-role",
+            "-r",
+            help="The role with which you will run your DBOS application",
+        ),
+    ] = None,
 ) -> None:
     app_database_url = _get_db_url(app_database_url)
     system_database_url = get_system_database_url(
@@ -293,37 +302,18 @@ def migrate(
     typer.echo(f"System database: {sa.make_url(system_database_url)}")
 
     # First, run DBOS migrations on the system database and the application database
-    app_db = None
-    sys_db = None
-    try:
-        sys_db = SystemDatabase(
-            system_database_url=system_database_url,
-            engine_kwargs={
-                "pool_timeout": 30,
-                "max_overflow": 0,
-                "pool_size": 2,
-            },
-        )
-        app_db = ApplicationDatabase(
-            database_url=app_database_url,
-            engine_kwargs={
-                "pool_timeout": 30,
-                "max_overflow": 0,
-                "pool_size": 2,
-            },
-        )
-        sys_db.run_migrations()
-        app_db.run_migrations()
-    except Exception as e:
-        typer.echo(f"DBOS migrations failed: {e}")
-        raise typer.Exit(code=1)
-    finally:
-        if sys_db:
-            sys_db.destroy()
-        if app_db:
-            app_db.destroy()
+    migrate_dbos_databases(
+        app_database_url=app_database_url, system_database_url=system_database_url
+    )
 
-    typer.echo(f"DBOS migrations successful")
+    # Next, assign permissions on the DBOS schema to the application role, if any
+    if application_role:
+        grant_dbos_schema_permissions(
+            database_url=app_database_url, role_name=application_role
+        )
+        grant_dbos_schema_permissions(
+            database_url=system_database_url, role_name=application_role
+        )
 
     # Next, run any custom migration commands specified in the configuration
     if os.path.exists("dbos-config.yaml"):
