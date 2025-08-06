@@ -11,11 +11,10 @@ def test_migrate(postgres_db_engine: sa.Engine) -> None:
     role_name = "migrate-test-role"
     role_password = "migrate_test_password"
 
-    db_url = (
-        postgres_db_engine.url.set(database=database_name)
-        .set(drivername="postgresql")
-        .render_as_string(hide_password=False)
+    db_url = postgres_db_engine.url.set(database=database_name).set(
+        drivername="postgresql"
     )
+    db_url_string = db_url.render_as_string(hide_password=False)
 
     # Drop the DBOS database if it exists. Create a test role with no permissions.
     with postgres_db_engine.connect() as connection:
@@ -33,7 +32,7 @@ def test_migrate(postgres_db_engine: sa.Engine) -> None:
     # Using the admin role, create the DBOS database and verify it exists.
     # Set permissions for the test role.
     subprocess.check_call(
-        ["dbos", "migrate", "-D", db_url, "-s", db_url, "-r", role_name]
+        ["dbos", "migrate", "-D", db_url_string, "-s", db_url_string, "-r", role_name]
     )
     with postgres_db_engine.connect() as c:
         c.execution_options(isolation_level="AUTOCOMMIT")
@@ -46,9 +45,7 @@ def test_migrate(postgres_db_engine: sa.Engine) -> None:
 
     # Initialize DBOS with the test role. Verify various operations work.
     test_db_url = (
-        postgres_db_engine.url.set(database=database_name)
-        .set(username=role_name)
-        .set(password=role_password)
+        db_url.set(username=role_name).set(password=role_password)
     ).render_as_string(hide_password=False)
     DBOS.destroy(destroy_registry=True)
     config: DBOSConfig = {
