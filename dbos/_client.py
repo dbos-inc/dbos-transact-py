@@ -1,7 +1,18 @@
 import asyncio
 import sys
+import time
 import uuid
-from typing import Any, Generic, List, Optional, TypedDict, TypeVar, Union
+from typing import (
+    Any,
+    AsyncGenerator,
+    Generator,
+    Generic,
+    List,
+    Optional,
+    TypedDict,
+    TypeVar,
+    Union,
+)
 
 from dbos._app_db import ApplicationDatabase
 from dbos._context import MaxPriority, MinPriority
@@ -24,6 +35,8 @@ from dbos._sys_db import (
     WorkflowStatus,
     WorkflowStatusInternal,
     WorkflowStatusString,
+    _dbos_stream_closed_sentinel,
+    workflow_is_active,
 )
 from dbos._workflow_commands import (
     fork_workflow,
@@ -449,3 +462,71 @@ class DBOSClient:
             application_version=application_version,
         )
         return WorkflowHandleClientAsyncPolling[Any](forked_workflow_id, self._sys_db)
+
+    def read_stream(self, workflow_id: str, key: str) -> Generator[Any, Any, None]:
+        """
+        Read values from a stream as a generator.
+        This function reads values from a stream identified by the workflow_id and key,
+        yielding each value in order until the stream is closed or the workflow terminates.
+
+        Args:
+            workflow_id: The ID of the workflow that wrote to the stream
+            key: The stream key to read from
+
+        Yields:
+            The values written to the stream in order
+        """
+        offset = 0
+        while True:
+            try:
+                value = self._sys_db.read_stream(workflow_id, key, offset)
+                if value == _dbos_stream_closed_sentinel:
+                    break
+                yield value
+                offset += 1
+            except ValueError:
+                # Poll the offset until a value arrives or the workflow terminates
+                status = get_workflow(self._sys_db, workflow_id)
+                if status is None:
+                    break
+                if not workflow_is_active(status.status):
+                    break
+                time.sleep(1.0)
+                continue
+
+    async def read_stream_async(
+        self, workflow_id: str, key: str
+    ) -> AsyncGenerator[Any, None]:
+        """
+        Read values from a stream as an async generator.
+        This function reads values from a stream identified by the workflow_id and key,
+        yielding each value in order until the stream is closed or the workflow terminates.
+
+        Args:
+            workflow_id: The ID of the workflow that wrote to the stream
+            key: The stream key to read from
+
+        Yields:
+            The values written to the stream in order
+        """
+        offset = 0
+        while True:
+            try:
+                value = await asyncio.to_thread(
+                    self._sys_db.read_stream, workflow_id, key, offset
+                )
+                if value == _dbos_stream_closed_sentinel:
+                    break
+                yield value
+                offset += 1
+            except ValueError:
+                # Poll the offset until a value arrives or the workflow terminates
+                status = await asyncio.to_thread(
+                    get_workflow, self._sys_db, workflow_id
+                )
+                if status is None:
+                    break
+                if not workflow_is_active(status.status):
+                    break
+                await asyncio.sleep(1.0)
+                continue
