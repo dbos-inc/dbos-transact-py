@@ -46,7 +46,9 @@ def grant_dbos_schema_permissions(database_url: str, role_name: str) -> None:
     )
     engine = None
     try:
-        engine = sa.create_engine(database_url)
+        engine = sa.create_engine(
+            sa.make_url(database_url).set(drivername="postgresql+psycopg")
+        )
         with engine.connect() as connection:
             connection.execution_options(isolation_level="AUTOCOMMIT")
 

@@ -11,8 +11,10 @@ def test_migrate(postgres_db_engine: sa.Engine) -> None:
     role_name = "migrate-test-role"
     role_password = "migrate_test_password"
 
-    db_url = postgres_db_engine.url.set(database=database_name).render_as_string(
-        hide_password=False
+    db_url = (
+        postgres_db_engine.url.set(database=database_name)
+        .set(drivername="postgresql")
+        .render_as_string(hide_password=False)
     )
 
     # Drop the DBOS database if it exists. Create a test role with no permissions.
