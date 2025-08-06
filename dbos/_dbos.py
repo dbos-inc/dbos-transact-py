@@ -6,14 +6,17 @@ import inspect
 import os
 import sys
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from logging import Logger
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     Callable,
     Coroutine,
+    Generator,
     Generic,
     List,
     Literal,
@@ -62,7 +65,14 @@ from ._registrations import (
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
-from ._sys_db import StepInfo, SystemDatabase, WorkflowStatus, reset_system_database
+from ._sys_db import (
+    StepInfo,
+    SystemDatabase,
+    WorkflowStatus,
+    _dbos_stream_closed_sentinel,
+    reset_system_database,
+    workflow_is_active,
+)
 from ._tracer import DBOSTracer, dbos_tracer
 
 if TYPE_CHECKING:
@@ -1303,6 +1313,171 @@ class DBOS:
         ctx = assert_current_dbos_context()
         ctx.authenticated_user = authenticated_user
         ctx.authenticated_roles = authenticated_roles
+
+    @classmethod
+    def write_stream(cls, key: str, value: Any) -> None:
+        """
+        Write a value to a stream.
+
+        Args:
+            key(str): The stream key / name within the workflow
+            value(Any): A serializable value to write to the stream
+
+        """
+        ctx = get_local_dbos_context()
+        if ctx is not None:
+            # Must call it within a workflow
+            if ctx.is_workflow():
+                attributes: TracedAttributes = {
+                    "name": "write_stream",
+                }
+                with EnterDBOSStep(attributes):
+                    ctx = assert_current_dbos_context()
+                    _get_dbos_instance()._sys_db.write_stream_from_workflow(
+                        ctx.workflow_id, ctx.function_id, key, value
+                    )
+            elif ctx.is_step():
+                _get_dbos_instance()._sys_db.write_stream_from_step(
+                    ctx.workflow_id, key, value
+                )
+            else:
+                raise DBOSException(
+                    "write_stream() must be called from within a workflow or step"
+                )
+        else:
+            # Cannot call it from outside of a workflow
+            raise DBOSException(
+                "write_stream() must be called from within a workflow or step"
+            )
+
+    @classmethod
+    def close_stream(cls, key: str) -> None:
+        """
+        Close a stream.
+
+        Args:
+            key(str): The stream key / name within the workflow
+
+        """
+        ctx = get_local_dbos_context()
+        if ctx is not None:
+            # Must call it within a workflow
+            if ctx.is_workflow():
+                attributes: TracedAttributes = {
+                    "name": "close_stream",
+                }
+                with EnterDBOSStep(attributes):
+                    ctx = assert_current_dbos_context()
+                    _get_dbos_instance()._sys_db.close_stream(
+                        ctx.workflow_id, ctx.function_id, key
+                    )
+            else:
+                raise DBOSException(
+                    "close_stream() must be called from within a workflow"
+                )
+        else:
+            # Cannot call it from outside of a workflow
+            raise DBOSException("close_stream() must be called from within a workflow")
+
+    @classmethod
+    def read_stream(cls, workflow_id: str, key: str) -> Generator[Any, Any, None]:
+        """
+        Read values from a stream as a generator.
+
+        This function reads values from a stream identified by the workflow_id and key,
+        yielding each value in order until the stream is closed or the workflow terminates.
+
+        Args:
+            workflow_id(str): The workflow instance ID that owns the stream
+            key(str): The stream key / name within the workflow
+
+        Yields:
+            Any: Each value in the stream until the stream is closed
+
+        """
+        offset = 0
+        sys_db = _get_dbos_instance()._sys_db
+
+        while True:
+            try:
+                value = sys_db.read_stream(workflow_id, key, offset)
+                if value == _dbos_stream_closed_sentinel:
+                    break
+                yield value
+                offset += 1
+            except ValueError:
+                # Poll the offset until a value arrives or the workflow terminates
+                status = cls.retrieve_workflow(workflow_id).get_status().status
+                if not workflow_is_active(status):
+                    break
+                time.sleep(1.0)
+                continue
+
+    @classmethod
+    async def write_stream_async(cls, key: str, value: Any) -> None:
+        """
+        Write a value to a stream asynchronously.
+
+        Args:
+            key(str): The stream key / name within the workflow
+            value(Any): A serializable value to write to the stream
+
+        """
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(lambda: DBOS.write_stream(key, value))
+
+    @classmethod
+    async def close_stream_async(cls, key: str) -> None:
+        """
+        Close a stream asynchronously.
+
+        Args:
+            key(str): The stream key / name within the workflow
+
+        """
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(lambda: DBOS.close_stream(key))
+
+    @classmethod
+    async def read_stream_async(
+        cls, workflow_id: str, key: str
+    ) -> AsyncGenerator[Any, None]:
+        """
+        Read values from a stream as an async generator.
+
+        This function reads values from a stream identified by the workflow_id and key,
+        yielding each value in order until the stream is closed or the workflow terminates.
+
+        Args:
+            workflow_id(str): The workflow instance ID that owns the stream
+            key(str): The stream key / name within the workflow
+
+        Yields:
+            Any: Each value in the stream until the stream is closed
+
+        """
+        await cls._configure_asyncio_thread_pool()
+        offset = 0
+        sys_db = _get_dbos_instance()._sys_db
+
+        while True:
+            try:
+                value = await asyncio.to_thread(
+                    sys_db.read_stream, workflow_id, key, offset
+                )
+                if value == _dbos_stream_closed_sentinel:
+                    break
+                yield value
+                offset += 1
+            except ValueError:
+                # Poll the offset until a value arrives or the workflow terminates
+                status = (
+                    await (await cls.retrieve_workflow_async(workflow_id)).get_status()
+                ).status
+                if not workflow_is_active(status):
+                    break
+                await asyncio.sleep(1.0)
+                continue
 
     @classproperty
     def tracer(self) -> DBOSTracer:
