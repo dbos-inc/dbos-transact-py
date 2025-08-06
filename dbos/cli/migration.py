@@ -39,11 +39,7 @@ def migrate_dbos_databases(app_database_url: str, system_database_url: str) -> N
 
 def grant_dbos_schema_permissions(database_url: str, role_name: str) -> None:
     """
-    Grant all permissions on all tables in the dbos schema to the specified role.
-
-    Args:
-        database_url: The database connection URL
-        role_name: The name of the role to grant permissions to
+    Grant all permissions on all entities in the dbos schema to the specified role.
     """
     engine = None
     try:
