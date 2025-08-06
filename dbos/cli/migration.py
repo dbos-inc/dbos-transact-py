@@ -41,6 +41,9 @@ def grant_dbos_schema_permissions(database_url: str, role_name: str) -> None:
     """
     Grant all permissions on all entities in the dbos schema to the specified role.
     """
+    typer.echo(
+        f"Granting permissions for DBOS schema to {role_name} in database {sa.make_url(database_url)}"
+    )
     engine = None
     try:
         engine = sa.create_engine(database_url)
@@ -48,43 +51,37 @@ def grant_dbos_schema_permissions(database_url: str, role_name: str) -> None:
             connection.execution_options(isolation_level="AUTOCOMMIT")
 
             # Grant usage on the dbos schema
-            connection.execute(sa.text(f"GRANT USAGE ON SCHEMA dbos TO {role_name}"))
+            sql = f"GRANT USAGE ON SCHEMA dbos TO {role_name}"
+            typer.echo(sql)
+            connection.execute(sa.text(sql))
 
             # Grant all privileges on all existing tables in dbos schema (includes views)
-            connection.execute(
-                sa.text(
-                    f"GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA dbos TO {role_name}"
-                )
-            )
+            sql = f"GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA dbos TO {role_name}"
+            typer.echo(sql)
+            connection.execute(sa.text(sql))
 
             # Grant all privileges on all sequences in dbos schema
-            connection.execute(
-                sa.text(
-                    f"GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA dbos TO {role_name}"
-                )
-            )
+            sql = f"GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA dbos TO {role_name}"
+            typer.echo(sql)
+            connection.execute(sa.text(sql))
 
             # Grant execute on all functions and procedures in dbos schema
-            connection.execute(
-                sa.text(f"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA dbos TO {role_name}")
-            )
+            sql = f"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA dbos TO {role_name}"
+            typer.echo(sql)
+            connection.execute(sa.text(sql))
 
             # Grant default privileges for future objects in dbos schema
-            connection.execute(
-                sa.text(
-                    f"ALTER DEFAULT PRIVILEGES IN SCHEMA dbos GRANT ALL ON TABLES TO {role_name}"
-                )
-            )
-            connection.execute(
-                sa.text(
-                    f"ALTER DEFAULT PRIVILEGES IN SCHEMA dbos GRANT ALL ON SEQUENCES TO {role_name}"
-                )
-            )
-            connection.execute(
-                sa.text(
-                    f"ALTER DEFAULT PRIVILEGES IN SCHEMA dbos GRANT EXECUTE ON FUNCTIONS TO {role_name}"
-                )
-            )
+            sql = f"ALTER DEFAULT PRIVILEGES IN SCHEMA dbos GRANT ALL ON TABLES TO {role_name}"
+            typer.echo(sql)
+            connection.execute(sa.text(sql))
+
+            sql = f"ALTER DEFAULT PRIVILEGES IN SCHEMA dbos GRANT ALL ON SEQUENCES TO {role_name}"
+            typer.echo(sql)
+            connection.execute(sa.text(sql))
+
+            sql = f"ALTER DEFAULT PRIVILEGES IN SCHEMA dbos GRANT EXECUTE ON FUNCTIONS TO {role_name}"
+            typer.echo(sql)
+            connection.execute(sa.text(sql))
 
     except Exception as e:
         typer.echo(f"Failed to grant permissions to role {role_name}: {e}")
