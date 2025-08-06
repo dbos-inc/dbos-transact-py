@@ -51,35 +51,37 @@ def grant_dbos_schema_permissions(database_url: str, role_name: str) -> None:
             connection.execution_options(isolation_level="AUTOCOMMIT")
 
             # Grant usage on the dbos schema
-            sql = f"GRANT USAGE ON SCHEMA dbos TO {role_name}"
+            sql = f'GRANT USAGE ON SCHEMA dbos TO "{role_name}"'
             typer.echo(sql)
             connection.execute(sa.text(sql))
 
             # Grant all privileges on all existing tables in dbos schema (includes views)
-            sql = f"GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA dbos TO {role_name}"
+            sql = f'GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA dbos TO "{role_name}"'
             typer.echo(sql)
             connection.execute(sa.text(sql))
 
             # Grant all privileges on all sequences in dbos schema
-            sql = f"GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA dbos TO {role_name}"
+            sql = (
+                f'GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA dbos TO "{role_name}"'
+            )
             typer.echo(sql)
             connection.execute(sa.text(sql))
 
             # Grant execute on all functions and procedures in dbos schema
-            sql = f"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA dbos TO {role_name}"
+            sql = f'GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA dbos TO "{role_name}"'
             typer.echo(sql)
             connection.execute(sa.text(sql))
 
             # Grant default privileges for future objects in dbos schema
-            sql = f"ALTER DEFAULT PRIVILEGES IN SCHEMA dbos GRANT ALL ON TABLES TO {role_name}"
+            sql = f'ALTER DEFAULT PRIVILEGES IN SCHEMA dbos GRANT ALL ON TABLES TO "{role_name}"'
             typer.echo(sql)
             connection.execute(sa.text(sql))
 
-            sql = f"ALTER DEFAULT PRIVILEGES IN SCHEMA dbos GRANT ALL ON SEQUENCES TO {role_name}"
+            sql = f'ALTER DEFAULT PRIVILEGES IN SCHEMA dbos GRANT ALL ON SEQUENCES TO "{role_name}"'
             typer.echo(sql)
             connection.execute(sa.text(sql))
 
-            sql = f"ALTER DEFAULT PRIVILEGES IN SCHEMA dbos GRANT EXECUTE ON FUNCTIONS TO {role_name}"
+            sql = f'ALTER DEFAULT PRIVILEGES IN SCHEMA dbos GRANT EXECUTE ON FUNCTIONS TO "{role_name}"'
             typer.echo(sql)
             connection.execute(sa.text(sql))
 
