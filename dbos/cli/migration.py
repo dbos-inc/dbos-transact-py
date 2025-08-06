@@ -5,7 +5,7 @@ from dbos._app_db import ApplicationDatabase
 from dbos._sys_db import SystemDatabase
 
 
-def migrate_dbos_databases(app_database_url: str, system_database_url: str):
+def migrate_dbos_databases(app_database_url: str, system_database_url: str) -> None:
     app_db = None
     sys_db = None
     try:
@@ -37,7 +37,7 @@ def migrate_dbos_databases(app_database_url: str, system_database_url: str):
             app_db.destroy()
 
 
-def grant_dbos_schema_permissions(database_url: str, role_name: str):
+def grant_dbos_schema_permissions(database_url: str, role_name: str) -> None:
     """
     Grant all permissions on all tables in the dbos schema to the specified role.
 

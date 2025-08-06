@@ -47,7 +47,7 @@ def test_migrate(postgres_db_engine: sa.Engine) -> None:
         postgres_db_engine.url.set(database=database_name)
         .set(username=role_name)
         .set(password=role_password)
-    )
+    ).render_as_string(hide_password=False)
     DBOS.destroy(destroy_registry=True)
     config: DBOSConfig = {
         "name": "test_migrate",
