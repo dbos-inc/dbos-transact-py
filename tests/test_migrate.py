@@ -6,6 +6,7 @@ from dbos import DBOS, DBOSConfig
 
 
 def test_migrate(postgres_db_engine: sa.Engine) -> None:
+    """Test that you can migrate with a privileged role and run DBOS with a less-privileged role"""
     database_name = "migrate_test"
     role_name = "migrate_test_role"
     role_password = "migrate_test_password"
@@ -17,16 +18,16 @@ def test_migrate(postgres_db_engine: sa.Engine) -> None:
     with postgres_db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
 
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
+
         # Drop role if it exists
         connection.execute(sa.text(f"DROP ROLE IF EXISTS {role_name}"))
 
         # Create the role
         connection.execute(
             sa.text(f"CREATE ROLE {role_name} WITH LOGIN PASSWORD '{role_password}'")
-        )
-
-        connection.execute(
-            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
         )
 
     # Create a system database and verify it exists
