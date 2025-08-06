@@ -15,7 +15,7 @@ from rich.prompt import IntPrompt
 from typing_extensions import Annotated, List
 
 from dbos._debug import debug_workflow, parse_start_command
-from dbos.cli.migration import migrate_dbos_databases
+from dbos.cli.migration import grant_dbos_schema_permissions, migrate_dbos_databases
 
 from .._app_db import ApplicationDatabase
 from .._client import DBOSClient
@@ -279,6 +279,14 @@ def migrate(
             help="Your DBOS system database URL",
         ),
     ] = None,
+    application_role: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--app-role",
+            "-r",
+            help="The role with which you will run your DBOS application",
+        ),
+    ] = None,
 ) -> None:
     app_database_url = _get_db_url(app_database_url)
     system_database_url = get_system_database_url(
@@ -297,6 +305,15 @@ def migrate(
     migrate_dbos_databases(
         app_database_url=app_database_url, system_database_url=system_database_url
     )
+
+    # Next, assign permissions on the DBOS schema to the application role, if any
+    if application_role:
+        grant_dbos_schema_permissions(
+            database_url=app_database_url, role_name=application_role
+        )
+        grant_dbos_schema_permissions(
+            database_url=system_database_url, role_name=application_role
+        )
 
     # Next, run any custom migration commands specified in the configuration
     if os.path.exists("dbos-config.yaml"):

@@ -30,7 +30,9 @@ def test_migrate(postgres_db_engine: sa.Engine) -> None:
         )
 
     # Create a system database and verify it exists
-    subprocess.check_call(["dbos", "migrate", "-D", db_url, "-s", db_url])
+    subprocess.check_call(
+        ["dbos", "migrate", "-D", db_url, "-s", db_url, "-r", role_name]
+    )
     with postgres_db_engine.connect() as c:
         c.execution_options(isolation_level="AUTOCOMMIT")
         result = c.execute(
