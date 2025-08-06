@@ -15,6 +15,7 @@ from rich.prompt import IntPrompt
 from typing_extensions import Annotated, List
 
 from dbos._debug import debug_workflow, parse_start_command
+from dbos.cli.migration import migrate_dbos_databases
 
 from .._app_db import ApplicationDatabase
 from .._client import DBOSClient
@@ -293,37 +294,9 @@ def migrate(
     typer.echo(f"System database: {sa.make_url(system_database_url)}")
 
     # First, run DBOS migrations on the system database and the application database
-    app_db = None
-    sys_db = None
-    try:
-        sys_db = SystemDatabase(
-            system_database_url=system_database_url,
-            engine_kwargs={
-                "pool_timeout": 30,
-                "max_overflow": 0,
-                "pool_size": 2,
-            },
-        )
-        app_db = ApplicationDatabase(
-            database_url=app_database_url,
-            engine_kwargs={
-                "pool_timeout": 30,
-                "max_overflow": 0,
-                "pool_size": 2,
-            },
-        )
-        sys_db.run_migrations()
-        app_db.run_migrations()
-    except Exception as e:
-        typer.echo(f"DBOS migrations failed: {e}")
-        raise typer.Exit(code=1)
-    finally:
-        if sys_db:
-            sys_db.destroy()
-        if app_db:
-            app_db.destroy()
-
-    typer.echo(f"DBOS migrations successful")
+    migrate_dbos_databases(
+        app_database_url=app_database_url, system_database_url=system_database_url
+    )
 
     # Next, run any custom migration commands specified in the configuration
     if os.path.exists("dbos-config.yaml"):
