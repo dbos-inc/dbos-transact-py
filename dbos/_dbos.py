@@ -69,9 +69,9 @@ from ._sys_db import (
     StepInfo,
     SystemDatabase,
     WorkflowStatus,
-    WorkflowStatusString,
     _dbos_stream_closed_sentinel,
     reset_system_database,
+    workflow_is_active,
 )
 from ._tracer import DBOSTracer, dbos_tracer
 
@@ -1408,10 +1408,7 @@ class DBOS:
             except ValueError:
                 # Poll the offset until a value arrives or the workflow terminates
                 status = cls.retrieve_workflow(workflow_id).get_status().status
-                if (
-                    status == WorkflowStatusString.SUCCESS.value
-                    or status == WorkflowStatusString.ERROR.value
-                ):
+                if not workflow_is_active(status):
                     break
                 time.sleep(1.0)
                 continue
@@ -1477,10 +1474,7 @@ class DBOS:
                 status = (
                     await (await cls.retrieve_workflow_async(workflow_id)).get_status()
                 ).status
-                if (
-                    status == WorkflowStatusString.SUCCESS.value
-                    or status == WorkflowStatusString.ERROR.value
-                ):
+                if not workflow_is_active(status):
                     break
                 await asyncio.sleep(1.0)
                 continue

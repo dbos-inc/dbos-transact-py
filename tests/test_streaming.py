@@ -88,7 +88,7 @@ def test_stream_concurrent_write_read(dbos: DBOS) -> None:
         for i in range(num_values):
             DBOS.write_stream(stream_key, f"value_{i}")
             # Small delay to simulate real work
-            DBOS.sleep(0.1)
+            DBOS.sleep(0.5)
         DBOS.close_stream(stream_key)
 
     # Start the writer workflow
@@ -432,7 +432,7 @@ async def test_async_stream_concurrent_write_read(dbos: DBOS) -> None:
         for i in range(num_values):
             await DBOS.write_stream_async(stream_key, f"async_value_{i}")
             # Small delay to simulate real work
-            await DBOS.sleep_async(0.1)
+            await DBOS.sleep_async(0.5)
         await DBOS.close_stream_async(stream_key)
 
     # Start the writer workflow

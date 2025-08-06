@@ -36,6 +36,7 @@ from dbos._sys_db import (
     WorkflowStatusInternal,
     WorkflowStatusString,
     _dbos_stream_closed_sentinel,
+    workflow_is_active,
 )
 from dbos._workflow_commands import (
     fork_workflow,
@@ -488,10 +489,7 @@ class DBOSClient:
                 status = get_workflow(self._sys_db, workflow_id)
                 if status is None:
                     break
-                if (
-                    status.status == WorkflowStatusString.SUCCESS.value
-                    or status.status == WorkflowStatusString.ERROR.value
-                ):
+                if not workflow_is_active(status.status):
                     break
                 time.sleep(1.0)
                 continue
@@ -528,10 +526,7 @@ class DBOSClient:
                 )
                 if status is None:
                     break
-                if (
-                    status.status == WorkflowStatusString.SUCCESS.value
-                    or status.status == WorkflowStatusString.ERROR.value
-                ):
+                if not workflow_is_active(status.status):
                     break
                 await asyncio.sleep(1.0)
                 continue

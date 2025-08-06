@@ -62,6 +62,13 @@ class WorkflowStatusString(Enum):
     ENQUEUED = "ENQUEUED"
 
 
+def workflow_is_active(status: str) -> bool:
+    return (
+        status == WorkflowStatusString.ENQUEUED.value
+        or status == WorkflowStatusString.PENDING.value
+    )
+
+
 WorkflowStatuses = Literal[
     "PENDING",
     "SUCCESS",
