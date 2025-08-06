@@ -11,6 +11,7 @@ def test_migrate(postgres_db_engine: sa.Engine) -> None:
     role_name = "migrate-test-role"
     role_password = "migrate_test_password"
 
+    # Verify migration is agnostic to driver name (under the hood it uses postgresql+psycopg)
     db_url = postgres_db_engine.url.set(database=database_name).set(
         drivername="postgresql"
     )
