@@ -604,9 +604,8 @@ async def test_workflow_with_task_cancellation(dbos: DBOS) -> None:
         await DBOS.sleep_async(duration)
         return "completed"
 
-    wfid = str(uuid.uuid4())
-
     # Run the workflow in an asyncio task
+    wfid = str(uuid.uuid4())
     event = asyncio.Event()
 
     async def run_workflow_task() -> str:
@@ -627,5 +626,6 @@ async def test_workflow_with_task_cancellation(dbos: DBOS) -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
 
+    # Verify the workflow completes despite the task cancellation
     handle: WorkflowHandleAsync[str] = await DBOS.retrieve_workflow_async(wfid)
     assert await handle.get_result() == "completed"
