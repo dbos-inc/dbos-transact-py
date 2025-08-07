@@ -157,7 +157,7 @@ class WorkflowHandlePolling(Generic[R]):
 
 class WorkflowHandleAsyncTask(Generic[R]):
 
-    def __init__(self, workflow_id: str, task: asyncio.Task[R], dbos: "DBOS"):
+    def __init__(self, workflow_id: str, task: asyncio.Future[R], dbos: "DBOS"):
         self.workflow_id = workflow_id
         self.task = task
         self.dbos = dbos

@@ -609,7 +609,7 @@ async def test_workflow_with_task_cancellation(dbos: DBOS) -> None:
     # Run the workflow in an asyncio task
     event = asyncio.Event()
 
-    async def run_workflow_task():
+    async def run_workflow_task() -> str:
         with SetWorkflowID(wfid):
             handle = await DBOS.start_workflow_async(test_workflow, 1.0)
         event.set()
@@ -627,5 +627,5 @@ async def test_workflow_with_task_cancellation(dbos: DBOS) -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    handle = await DBOS.retrieve_workflow_async(wfid)
+    handle: WorkflowHandleAsync[str] = await DBOS.retrieve_workflow_async(wfid)
     assert await handle.get_result() == "completed"
