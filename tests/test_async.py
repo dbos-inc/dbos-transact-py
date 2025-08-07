@@ -606,17 +606,19 @@ async def test_workflow_with_task_cancellation(dbos: DBOS) -> None:
 
     wfid = str(uuid.uuid4())
 
-    # Create a task to wait for the result
-    async def wait_for_result():
+    # Run the workflow in an asyncio task
+    event = asyncio.Event()
+
+    async def run_workflow_task():
         with SetWorkflowID(wfid):
-            handle = await DBOS.start_workflow_async(test_workflow, 2.0)
-        return await asyncio.shield(handle.get_result())
+            handle = await DBOS.start_workflow_async(test_workflow, 1.0)
+        event.set()
+        return await handle.get_result()
 
-    # Create the task
-    task = asyncio.create_task(wait_for_result())
+    task = asyncio.create_task(run_workflow_task())
 
-    # Wait a bit to let the workflow start
-    await asyncio.sleep(0.1)
+    # Wait for the workflow to start
+    await event.wait()
 
     # Cancel the task
     task.cancel()

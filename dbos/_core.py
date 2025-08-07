@@ -698,7 +698,8 @@ async def start_workflow_async(
         return WorkflowHandleAsyncPolling(new_wf_id, dbos)
 
     coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, *args, **kwargs)
-    task = asyncio.create_task(coro)
+    # Shield the workflow task from cancellation
+    task = asyncio.shield(asyncio.create_task(coro))
     return WorkflowHandleAsyncTask(new_wf_id, task, dbos)
 
 
