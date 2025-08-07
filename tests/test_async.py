@@ -595,3 +595,35 @@ async def test_main_loop(dbos: DBOS, config: DBOSConfig) -> None:
     # Verify the enqueued task is submitted into the main event loop
     handle = await queue.enqueue_async(test_workflow)
     assert await handle.get_result() == id(asyncio.get_running_loop())
+
+
+@pytest.mark.asyncio
+async def test_workflow_with_task_cancellation(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def test_workflow(duration: float) -> str:
+        await DBOS.sleep_async(duration)
+        return "completed"
+
+    wfid = str(uuid.uuid4())
+
+    # Create a task to wait for the result
+    async def wait_for_result():
+        with SetWorkflowID(wfid):
+            handle = await DBOS.start_workflow_async(test_workflow, 2.0)
+        return await asyncio.shield(handle.get_result())
+
+    # Create the task
+    task = asyncio.create_task(wait_for_result())
+
+    # Wait a bit to let the workflow start
+    await asyncio.sleep(0.1)
+
+    # Cancel the task
+    task.cancel()
+
+    # Verify the task was cancelled
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    handle = await DBOS.retrieve_workflow_async(wfid)
+    assert await handle.get_result() == "completed"
