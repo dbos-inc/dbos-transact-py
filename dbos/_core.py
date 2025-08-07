@@ -1073,7 +1073,7 @@ def decorate_step(
 
             def on_exception(attempt: int, error: BaseException) -> float:
                 dbos.logger.warning(
-                    f"Step being automatically retried. (attempt {attempt + 1} of {attempts}).",
+                    f"Step being automatically retried. (attempt {attempt + 1} of {attempts})",
                     exc_info=error,
                 )
                 ctx = assert_current_dbos_context()
