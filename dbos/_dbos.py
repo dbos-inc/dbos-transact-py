@@ -211,6 +211,10 @@ class DBOSRegistry:
     def register_instance(self, inst: object) -> None:
         config_name = getattr(inst, "config_name")
         class_name = _class_fqn(inst.__class__)
+        if self.dbos and self.dbos._launched:
+            dbos_logger.warning(
+                f"Configured instance {config_name} of class {class_name} was registered after DBOS was launched. This may cause errors during workflow recovery. All configured instances should be instantiated before DBOS is launched."
+            )
         fn = f"{class_name}/{config_name}"
         if fn in self.instance_info_map:
             if self.instance_info_map[fn] is not inst:
