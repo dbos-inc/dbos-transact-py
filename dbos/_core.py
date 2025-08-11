@@ -5,7 +5,6 @@ import json
 import sys
 import threading
 import time
-import traceback
 from concurrent.futures import Future
 from functools import wraps
 from typing import (
@@ -66,7 +65,6 @@ from ._registrations import (
     get_dbos_func_name,
     get_func_info,
     get_or_create_func_info,
-    get_temp_workflow_type,
     set_dbos_func_name,
     set_func_info,
     set_temp_workflow_type,
@@ -452,7 +450,7 @@ def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[An
     if not wf_func:
         raise DBOSWorkflowFunctionNotFoundError(
             workflow_id,
-            f"Cannot execute workflow because {status['name']} is not a registered workflow function",
+            f"{status['name']} is not a registered workflow function",
         )
     with DBOSContextEnsure():
         # If this function belongs to a configured class, add that class instance as its first argument
@@ -463,7 +461,7 @@ def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[An
             if iname not in dbos._registry.instance_info_map:
                 raise DBOSWorkflowFunctionNotFoundError(
                     workflow_id,
-                    f"Cannot execute workflow because instance '{iname}' is not registered",
+                    f"configured class instance '{iname}' is not registered",
                 )
             class_instance = dbos._registry.instance_info_map[iname]
             inputs["args"] = (class_instance,) + inputs["args"]
@@ -473,7 +471,7 @@ def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[An
             if class_name not in dbos._registry.class_info_map:
                 raise DBOSWorkflowFunctionNotFoundError(
                     workflow_id,
-                    f"Cannot execute workflow because class '{class_name}' is not registered",
+                    f"class '{class_name}' is not registered",
                 )
             class_object = dbos._registry.class_info_map[class_name]
             inputs["args"] = (class_object,) + inputs["args"]
@@ -534,7 +532,7 @@ def start_workflow(
     if fi is None:
         raise DBOSWorkflowFunctionNotFoundError(
             "<NONE>",
-            f"start_workflow: function {func.__name__} is not registered",
+            f"{func.__name__} is not a registered workflow function",
         )
 
     func = cast("Workflow[P, R]", func.__orig_func)  # type: ignore
@@ -630,7 +628,7 @@ async def start_workflow_async(
     if fi is None:
         raise DBOSWorkflowFunctionNotFoundError(
             "<NONE>",
-            f"start_workflow: function {func.__name__} is not registered",
+            f"{func.__name__} is not a registered workflow function",
         )
 
     func = cast("Workflow[P, R]", func.__orig_func)  # type: ignore
