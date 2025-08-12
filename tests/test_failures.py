@@ -8,12 +8,14 @@ from psycopg.errors import SerializationFailure
 from sqlalchemy.exc import InvalidRequestError, OperationalError
 
 from dbos import DBOS, Queue, SetWorkflowID
+from dbos._dbos_config import DBOSConfig
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSMaxStepRetriesExceeded,
     DBOSNotAuthorizedError,
     DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
+    DBOSWorkflowFunctionNotFoundError,
     MaxRecoveryAttemptsExceededError,
 )
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
@@ -499,3 +501,24 @@ def test_error_serialization() -> None:
     assert output is None
     assert isinstance(exception, str)
     assert "Message: 1, 2" in exception
+
+
+def test_unregistered_workflow(dbos: DBOS, config: DBOSConfig) -> None:
+
+    @DBOS.workflow()
+    def workflow() -> None:
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        workflow()
+
+    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+
+    DBOS.destroy(destroy_registry=True)
+    config["executor_id"] = str(uuid.uuid4())
+    DBOS(config=config)
+    DBOS.launch()
+
+    with pytest.raises(DBOSWorkflowFunctionNotFoundError):
+        DBOS._recover_pending_workflows()

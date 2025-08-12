@@ -753,3 +753,34 @@ class DBOSAssumeRole:
             assert ctx.assumed_role == self.assume_role
         ctx.assumed_role = self.prior_role
         return False  # Did not handle
+
+
+class UseLogAttributes:
+    """Temporarily set context attributes for logging"""
+
+    def __init__(self, *, workflow_id: str = "") -> None:
+        self.workflow_id = workflow_id
+        self.created_ctx = False
+
+    def __enter__(self) -> UseLogAttributes:
+        ctx = get_local_dbos_context()
+        if ctx is None:
+            self.created_ctx = True
+            _set_local_dbos_context(DBOSContext())
+        ctx = assert_current_dbos_context()
+        self.saved_workflow_id = ctx.workflow_id
+        ctx.workflow_id = self.workflow_id
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        ctx = assert_current_dbos_context()
+        ctx.workflow_id = self.saved_workflow_id
+        # Clean up the basic context if we created it
+        if self.created_ctx:
+            _clear_local_dbos_context()
+        return False  # Did not handle

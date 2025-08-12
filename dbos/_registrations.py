@@ -13,7 +13,7 @@ def get_dbos_func_name(f: Any) -> str:
     if hasattr(f, "dbos_function_name"):
         return str(getattr(f, "dbos_function_name"))
     raise DBOSWorkflowFunctionNotFoundError(
-        "<NONE>", f"function {f.__name__} is not registered"
+        "<NONE>", f"{f.__name__} is not a registered workflow function"
     )
 
 

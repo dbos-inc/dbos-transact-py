@@ -106,7 +106,7 @@ class DBOSWorkflowFunctionNotFoundError(DBOSException):
 
     def __init__(self, workflow_id: str, message: Optional[str] = None):
         super().__init__(
-            f"Workflow function not found for workflow ID {workflow_id}: {message}",
+            f"Could not execute workflow {workflow_id}: {message}",
             dbos_error_code=DBOSErrorCode.WorkflowFunctionNotFound.value,
         )
 
