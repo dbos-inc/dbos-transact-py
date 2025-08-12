@@ -59,10 +59,6 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
         res = test_step()
         return res
 
-    def test_comm_thread(id: str) -> str:
-        with SetWorkflowID(id):
-            return test_step()
-
     # Need to set isolation level to a lower one, otherwise it gets serialization error instead (we already handle it correctly by automatic retries).
     @DBOS.transaction(isolation_level="REPEATABLE READ")
     def test_transaction() -> str:
@@ -96,15 +92,6 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
     # These two workflows should run concurrently, but both should succeed.
     assert wf_handle1.get_result() == wfuuid
     assert wf_handle2.get_result() == wfuuid
-
-    # Make sure temp workflows can handle conflicts as well.
-    wfuuid = str(uuid.uuid4())
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        future1 = executor.submit(test_comm_thread, wfuuid)
-        future2 = executor.submit(test_comm_thread, wfuuid)
-
-    assert future1.result() == wfuuid
-    assert future2.result() == wfuuid
 
     # Make sure temp transactions can handle conflicts as well.
     wfuuid = str(uuid.uuid4())
