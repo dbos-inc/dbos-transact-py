@@ -1660,3 +1660,27 @@ async def test_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
 
     assert step(5) == 5
     assert await async_step(5) == 5
+
+    assert len(DBOS.list_workflows()) == 0
+
+
+def test_nested_steps(dbos: DBOS) -> None:
+
+    @DBOS.step()
+    def outer_step() -> str:
+        return inner_step()
+
+    @DBOS.step()
+    def inner_step() -> str:
+        id = DBOS.workflow_id
+        assert id is not None
+        return id
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        return outer_step()
+
+    id = workflow()
+    steps = DBOS.list_workflow_steps(id)
+    assert len(steps) == 1
+    assert steps[0]["function_name"] == outer_step.__qualname__
