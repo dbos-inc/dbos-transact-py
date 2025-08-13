@@ -1145,12 +1145,11 @@ def decorate_step(
                     lambda i, e: DBOSMaxStepRetriesExceeded(step_name, i, e),
                 )
 
-            outcome = (
-                stepOutcome.then(record_step_result)
-                .intercept(check_existing_result)
-                .also(EnterDBOSStep(attributes))
-            )
-            return outcome()
+            with EnterDBOSStep(attributes):
+                outcome = stepOutcome.then(record_step_result).intercept(
+                    check_existing_result
+                )
+                return outcome()
 
         fi = get_or_create_func_info(func)
 
