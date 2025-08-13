@@ -53,11 +53,10 @@ def test_spans(config: DBOSConfig) -> None:
     dbos_logger.addHandler(LoggingHandler(logger_provider=log_provider))
 
     test_workflow()
-    test_step()
 
     log_processor.force_flush(timeout_millis=5000)
     logs = log_exporter.get_finished_logs()
-    assert len(logs) == 3
+    assert len(logs) == 2
     for log in logs:
         assert log.log_record.attributes is not None
         assert (
@@ -78,7 +77,7 @@ def test_spans(config: DBOSConfig) -> None:
 
     spans = exporter.get_finished_spans()
 
-    assert len(spans) == 5
+    assert len(spans) == 3
 
     for span in spans:
         assert span.attributes is not None
@@ -92,26 +91,19 @@ def test_spans(config: DBOSConfig) -> None:
     assert spans[0].name == test_step.__qualname__
     assert spans[1].name == "a new span"
     assert spans[2].name == test_workflow.__qualname__
-    assert spans[3].name == test_step.__qualname__
-    assert spans[4].name == f"<temp>.{test_step.__qualname__}"
 
     assert spans[0].parent.span_id == spans[2].context.span_id  # type: ignore
     assert spans[1].parent.span_id == spans[2].context.span_id  # type: ignore
     assert spans[2].parent == None
-    assert spans[3].parent.span_id == spans[4].context.span_id  # type: ignore
-    assert spans[4].parent == None
 
     # Span ID and trace ID should match the log record
     # For pyright
     assert spans[0].context is not None
     assert spans[2].context is not None
-    assert spans[3].context is not None
     assert logs[0].log_record.span_id == spans[0].context.span_id
     assert logs[0].log_record.trace_id == spans[0].context.trace_id
     assert logs[1].log_record.span_id == spans[2].context.span_id
     assert logs[1].log_record.trace_id == spans[2].context.trace_id
-    assert logs[2].log_record.span_id == spans[3].context.span_id
-    assert logs[2].log_record.trace_id == spans[3].context.trace_id
 
 
 @pytest.mark.asyncio
@@ -147,11 +139,10 @@ async def test_spans_async(dbos: DBOS) -> None:
     dbos_logger.addHandler(LoggingHandler(logger_provider=log_provider))
 
     await test_workflow()
-    await test_step()
 
     log_processor.force_flush(timeout_millis=5000)
     logs = log_exporter.get_finished_logs()
-    assert len(logs) == 3
+    assert len(logs) == 2
     for log in logs:
         assert log.log_record.attributes is not None
         assert (
@@ -171,7 +162,7 @@ async def test_spans_async(dbos: DBOS) -> None:
 
     spans = exporter.get_finished_spans()
 
-    assert len(spans) == 5
+    assert len(spans) == 3
 
     for span in spans:
         assert span.attributes is not None
@@ -184,34 +175,27 @@ async def test_spans_async(dbos: DBOS) -> None:
     assert spans[0].name == test_step.__qualname__
     assert spans[1].name == "a new span"
     assert spans[2].name == test_workflow.__qualname__
-    assert spans[3].name == test_step.__qualname__
-    assert spans[4].name == f"<temp>.{test_step.__qualname__}"
 
     assert spans[0].parent.span_id == spans[2].context.span_id  # type: ignore
     assert spans[1].parent.span_id == spans[2].context.span_id  # type: ignore
     assert spans[2].parent == None
-    assert spans[3].parent.span_id == spans[4].context.span_id  # type: ignore
-    assert spans[4].parent == None
 
     # Span ID and trace ID should match the log record
     assert spans[0].context is not None
     assert spans[2].context is not None
-    assert spans[3].context is not None
     assert logs[0].log_record.span_id == spans[0].context.span_id
     assert logs[0].log_record.trace_id == spans[0].context.trace_id
     assert logs[1].log_record.span_id == spans[2].context.span_id
     assert logs[1].log_record.trace_id == spans[2].context.trace_id
-    assert logs[2].log_record.span_id == spans[3].context.span_id
-    assert logs[2].log_record.trace_id == spans[3].context.trace_id
 
 
-def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
+def test_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     dbos, app = dbos_fastapi
 
-    @app.get("/step")
-    @DBOS.step()
-    def test_step_endpoint() -> str:
-        dbos.logger.info("This is a test_step_endpoint")
+    @app.get("/wf")
+    @DBOS.workflow()
+    def test_workflow_endpoint() -> str:
+        dbos.logger.info("This is a test_workflow_endpoint")
         return "test"
 
     exporter = InMemorySpanExporter()
@@ -229,7 +213,7 @@ def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     dbos_logger.addHandler(LoggingHandler(logger_provider=log_provider))
 
     client = TestClient(app)
-    response = client.get("/step")
+    response = client.get("/wf")
     assert response.status_code == 200
     assert response.text == '"test"'
 
@@ -242,14 +226,14 @@ def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     )
     assert logs[0].log_record.span_id is not None and logs[0].log_record.span_id > 0
     assert logs[0].log_record.trace_id is not None and logs[0].log_record.trace_id > 0
-    assert logs[0].log_record.body == "This is a test_step_endpoint"
+    assert logs[0].log_record.body == "This is a test_workflow_endpoint"
     assert logs[0].log_record.attributes["traceId"] == format_trace_id(
         logs[0].log_record.trace_id
     )
 
     spans = exporter.get_finished_spans()
 
-    assert len(spans) == 3
+    assert len(spans) == 2
 
     for span in spans:
         assert span.attributes is not None
@@ -258,13 +242,11 @@ def test_temp_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         assert span.context.span_id > 0
         assert span.context.trace_id > 0
 
-    assert spans[0].name == test_step_endpoint.__qualname__
-    assert spans[1].name == f"<temp>.{test_step_endpoint.__qualname__}"
-    assert spans[2].name == "/step"
+    assert spans[0].name == test_workflow_endpoint.__qualname__
+    assert spans[1].name == "/wf"
 
     assert spans[0].parent.span_id == spans[1].context.span_id  # type: ignore
-    assert spans[1].parent.span_id == spans[2].context.span_id  # type: ignore
-    assert spans[2].parent == None
+    assert spans[1].parent == None
 
     # Span ID and trace ID should match the log record
     assert spans[0].context is not None

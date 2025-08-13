@@ -181,7 +181,8 @@ def test_queue_step(dbos: DBOS) -> None:
         handle = queue.enqueue(test_step, "abc")
     assert handle.get_result() == "abc1"
     with SetWorkflowID(wfid):
-        assert test_step("abc") == "abc1"
+        handle = queue.enqueue(test_step, "abc")
+    assert handle.get_result() == "abc1"
     assert step_counter == 1
 
 

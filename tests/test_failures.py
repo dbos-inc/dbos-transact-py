@@ -333,15 +333,8 @@ def test_step_retries(dbos: DBOS) -> None:
     error_message = f"Step {failing_step.__qualname__} has exceeded its maximum of {max_attempts} retries"
 
     # Test calling the step directly
-    with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:
+    with pytest.raises(Exception) as excinfo:
         failing_step()
-    assert error_message in str(excinfo.value)
-    assert step_counter == max_attempts
-    assert len(excinfo.value.errors) == max_attempts
-    for error in excinfo.value.errors:
-        assert isinstance(error, Exception)
-        assert error
-        assert "fail" in str(error)
 
     # Test calling the workflow
     step_counter = 0
@@ -349,6 +342,11 @@ def test_step_retries(dbos: DBOS) -> None:
         failing_workflow()
     assert error_message in str(excinfo.value)
     assert step_counter == max_attempts
+    assert len(excinfo.value.errors) == max_attempts
+    for error in excinfo.value.errors:
+        assert isinstance(error, Exception)
+        assert error
+        assert "fail" in str(error)
 
     # Test enqueueing the step
     step_counter = 0
@@ -399,7 +397,6 @@ def test_step_status(dbos: DBOS) -> None:
 
     assert failing_workflow() == None
     step_counter = 0
-    assert failing_step() == None
 
 
 def test_recovery_during_retries(dbos: DBOS) -> None:

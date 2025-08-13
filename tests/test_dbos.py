@@ -307,15 +307,11 @@ def test_temp_workflow(dbos: DBOS) -> None:
     assert res == "var"
 
     wfs = dbos._sys_db.get_workflows(gwi)
-    assert len(wfs) == 2
+    assert len(wfs) == 1
 
     wfi1 = dbos._sys_db.get_workflow_status(wfs[0].workflow_id)
     assert wfi1
     assert wfi1["name"].startswith("<temp>")
-
-    wfi2 = dbos._sys_db.get_workflow_status(wfs[1].workflow_id)
-    assert wfi2
-    assert wfi2["name"].startswith("<temp>")
 
     assert txn_counter == 1
     assert step_counter == 1
@@ -350,7 +346,7 @@ def test_temp_workflow_errors(dbos: DBOS) -> None:
     def test_retried_step(var: str) -> str:
         nonlocal retried_step_counter
         retried_step_counter += 1
-        raise Exception(var)
+        raise ValueError(var)
 
     with pytest.raises(Exception) as exc_info:
         test_transaction("tval")
@@ -360,12 +356,12 @@ def test_temp_workflow_errors(dbos: DBOS) -> None:
         test_step("cval")
     assert "cval" == str(exc_info.value)
 
-    with pytest.raises(DBOSMaxStepRetriesExceeded) as exc_info:
+    with pytest.raises(ValueError) as exc_info:
         test_retried_step("rval")
 
     assert txn_counter == 1
     assert step_counter == 1
-    assert retried_step_counter == 3
+    assert retried_step_counter == 1
 
 
 def test_recovery_workflow(dbos: DBOS) -> None:
@@ -1103,9 +1099,6 @@ def test_nonserializable_values(dbos: DBOS) -> None:
         test_ns_transaction("h")
     assert "data item should not be a function" in str(exc_info.value)
     with pytest.raises(Exception) as exc_info:
-        test_ns_step("f")
-    assert "data item should not be a function" in str(exc_info.value)
-    with pytest.raises(Exception) as exc_info:
         test_ns_wf("g")
     assert "data item should not be a function" in str(exc_info.value)
 
@@ -1645,22 +1638,14 @@ def test_custom_names(dbos: DBOS) -> None:
 async def test_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
     DBOS.destroy(destroy_registry=True)
 
-    is_dbos_active = False
-
     @DBOS.step()
     def step(x: int) -> int:
-        if is_dbos_active:
-            assert DBOS.workflow_id is not None
-        else:
-            assert DBOS.workflow_id is None
+        assert DBOS.workflow_id is None
         return x
 
     @DBOS.step()
     async def async_step(x: int) -> int:
-        if is_dbos_active:
-            assert DBOS.workflow_id is not None
-        else:
-            assert DBOS.workflow_id is None
+        assert DBOS.workflow_id is None
         return x
 
     assert step(5) == 5
@@ -1672,7 +1657,30 @@ async def test_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
     assert await async_step(5) == 5
 
     DBOS.launch()
-    is_dbos_active = True
 
     assert step(5) == 5
     assert await async_step(5) == 5
+
+    assert len(DBOS.list_workflows()) == 0
+
+
+def test_nested_steps(dbos: DBOS) -> None:
+
+    @DBOS.step()
+    def outer_step() -> str:
+        return inner_step()
+
+    @DBOS.step()
+    def inner_step() -> str:
+        id = DBOS.workflow_id
+        assert id is not None
+        return id
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        return outer_step()
+
+    id = workflow()
+    steps = DBOS.list_workflow_steps(id)
+    assert len(steps) == 1
+    assert steps[0]["function_name"] == outer_step.__qualname__

@@ -574,7 +574,7 @@ def test_step_recovery(dbos: DBOS) -> None:
     def call_step() -> None:
         with SetWorkflowID(wfid):
             nonlocal return_value
-            return_value = inst.step(input)
+            return_value = DBOS.start_workflow(inst.step, input).get_result()
 
     thread = threading.Thread(target=call_step)
     thread.start()
