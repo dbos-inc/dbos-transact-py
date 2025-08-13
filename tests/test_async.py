@@ -605,3 +605,25 @@ async def test_workflow_with_task_cancellation(dbos: DBOS) -> None:
     # Verify the workflow completes despite the task cancellation
     handle: WorkflowHandleAsync[str] = await DBOS.retrieve_workflow_async(wfid)
     assert await handle.get_result() == "completed"
+
+
+@pytest.mark.asyncio
+async def test_gather(dbos: DBOS):
+
+    @DBOS.step()
+    async def step_one():
+        return 1
+
+    @DBOS.step()
+    async def step_two():
+        return 2
+
+    @DBOS.step()
+    async def step_three():
+        return 3
+
+    @DBOS.workflow()
+    async def workflow():
+        return await asyncio.gather(step_one(), step_two(), step_three())
+
+    assert await workflow() == [1, 2, 3]
