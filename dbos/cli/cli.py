@@ -14,6 +14,7 @@ from rich import print as richprint
 from rich.prompt import IntPrompt
 from typing_extensions import Annotated, List
 
+from dbos._context import SetWorkflowID
 from dbos._debug import debug_workflow, parse_start_command
 from dbos.cli.migration import grant_dbos_schema_permissions, migrate_dbos_databases
 
@@ -567,7 +568,9 @@ def resume(
     start_client(db_url=db_url).resume_workflow(workflow_id=workflow_id)
 
 
-@workflow.command(help="Restart a workflow from the beginning with a new id")
+@workflow.command(
+    help="[DEPRECATED - Use fork instead] Restart a workflow from the beginning with a new id"
+)
 def restart(
     workflow_id: Annotated[str, typer.Argument()],
     db_url: Annotated[
@@ -600,6 +603,22 @@ def fork(
             help="Restart from this step",
         ),
     ] = 1,
+    forked_workflow_id: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--forked-workflow-id",
+            "-f",
+            help="Custom ID for the forked workflow",
+        ),
+    ] = None,
+    application_version: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--application-version",
+            "-v",
+            help="Custom application version for the forked workflow",
+        ),
+    ] = None,
     db_url: Annotated[
         typing.Optional[str],
         typer.Option(
@@ -609,11 +628,21 @@ def fork(
         ),
     ] = None,
 ) -> None:
-    status = (
-        start_client(db_url=db_url)
-        .fork_workflow(workflow_id=workflow_id, start_step=step)
-        .get_status()
-    )
+    client = start_client(db_url=db_url)
+
+    if forked_workflow_id is not None:
+        with SetWorkflowID(forked_workflow_id):
+            status = client.fork_workflow(
+                workflow_id=workflow_id,
+                start_step=step,
+                application_version=application_version,
+            ).get_status()
+    else:
+        status = client.fork_workflow(
+            workflow_id=workflow_id,
+            start_step=step,
+            application_version=application_version,
+        ).get_status()
     print(jsonpickle.encode(status, unpicklable=False))
 
 
