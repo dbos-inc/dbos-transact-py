@@ -83,5 +83,6 @@ def setup_fastapi_middleware(app: FastAPI, dbos: DBOS) -> None:
                     response = await call_next(request)
             else:
                 response = await call_next(request)
-            DBOS.span.set_attribute("responseCode", response.status_code)
+            if hasattr(response, "status_code"):
+                DBOS.span.set_attribute("responseCode", response.status_code)
         return response
