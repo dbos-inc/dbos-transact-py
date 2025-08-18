@@ -244,6 +244,7 @@ def test_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     assert spans[0].name == test_workflow_endpoint.__qualname__
     assert spans[1].name == "/wf"
+    assert spans[1].attributes is not None
     assert spans[1].attributes["responseCode"] == 200
 
     assert spans[0].parent.span_id == spans[1].context.span_id  # type: ignore
