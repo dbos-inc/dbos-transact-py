@@ -275,3 +275,103 @@ def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
         assert isinstance(fork_wf_data, dict)
         assert fork_wf_data["workflow_id"] != wf_id
         assert fork_wf_data["status"] == "ENQUEUED"
+
+        # fork the workflow with custom forked workflow ID
+        custom_fork_id = "custom-fork-id-12345"
+        output = subprocess.check_output(
+            [
+                "dbos",
+                "workflow",
+                "fork",
+                wf_id,
+                "--step",
+                "3",
+                "--forked-workflow-id",
+                custom_fork_id,
+            ],
+            cwd=temp_path,
+            env=env,
+        )
+        custom_fork_data = json.loads(output)
+        assert isinstance(custom_fork_data, dict)
+        assert custom_fork_data["workflow_id"] == custom_fork_id
+        assert custom_fork_data["status"] == "ENQUEUED"
+
+        # verify the forked workflow data with get command
+        output = subprocess.check_output(
+            ["dbos", "workflow", "get", custom_fork_id, "--db-url", db_url],
+            cwd=temp_path,
+        )
+        custom_fork_get_data = json.loads(output)
+        assert isinstance(custom_fork_get_data, dict)
+        assert custom_fork_get_data["workflow_id"] == custom_fork_id
+
+        # fork the workflow with custom application version
+        output = subprocess.check_output(
+            [
+                "dbos",
+                "workflow",
+                "fork",
+                wf_id,
+                "--step",
+                "2",
+                "--application-version",
+                "test-version",
+            ],
+            cwd=temp_path,
+            env=env,
+        )
+        version_fork_data = json.loads(output)
+        assert isinstance(version_fork_data, dict)
+        assert version_fork_data["workflow_id"] != wf_id
+        assert version_fork_data["status"] == "ENQUEUED"
+
+        # verify the forked workflow data with get command and check application version
+        output = subprocess.check_output(
+            [
+                "dbos",
+                "workflow",
+                "get",
+                version_fork_data["workflow_id"],
+                "--db-url",
+                db_url,
+            ],
+            cwd=temp_path,
+        )
+        version_fork_get_data = json.loads(output)
+        assert isinstance(version_fork_get_data, dict)
+        assert version_fork_get_data["workflow_id"] == version_fork_data["workflow_id"]
+        assert version_fork_get_data["app_version"] == "test-version"
+
+        # fork the workflow with both custom ID and application version
+        custom_fork_id2 = "custom-fork-with-version-67890"
+        output = subprocess.check_output(
+            [
+                "dbos",
+                "workflow",
+                "fork",
+                wf_id,
+                "--step",
+                "4",
+                "--forked-workflow-id",
+                custom_fork_id2,
+                "--application-version",
+                "v2.0.0",
+            ],
+            cwd=temp_path,
+            env=env,
+        )
+        combined_fork_data = json.loads(output)
+        assert isinstance(combined_fork_data, dict)
+        assert combined_fork_data["workflow_id"] == custom_fork_id2
+        assert combined_fork_data["status"] == "ENQUEUED"
+
+        # verify the forked workflow data with get command and check both ID and application version
+        output = subprocess.check_output(
+            ["dbos", "workflow", "get", custom_fork_id2, "--db-url", db_url],
+            cwd=temp_path,
+        )
+        combined_fork_get_data = json.loads(output)
+        assert isinstance(combined_fork_get_data, dict)
+        assert combined_fork_get_data["workflow_id"] == custom_fork_id2
+        assert combined_fork_get_data["app_version"] == "v2.0.0"
