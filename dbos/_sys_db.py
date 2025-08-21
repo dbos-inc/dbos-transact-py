@@ -388,7 +388,7 @@ class SystemDatabase:
 
         # Run a schema migration for the system database
         migration_dir = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), "_migrations"
+            os.path.dirname(os.path.realpath(__file__)), "_alembic_migrations"
         )
         alembic_cfg = Config()
         alembic_cfg.set_main_option("script_location", migration_dir)
