@@ -217,6 +217,16 @@ CREATE TABLE dbos.streams (
     FOREIGN KEY (workflow_uuid) REFERENCES dbos.workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
+
+CREATE TABLE dbos.event_dispatch_kv (
+    service_name TEXT NOT NULL,
+    workflow_fn_name TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT,
+    update_seq NUMERIC(38,0),
+    update_time NUMERIC(38,15),
+    PRIMARY KEY (service_name, workflow_fn_name, key)
+);
 """
 
 dbos_migrations = [dbos_migration_one]
