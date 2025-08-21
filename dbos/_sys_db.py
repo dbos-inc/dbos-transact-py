@@ -25,7 +25,11 @@ import sqlalchemy.dialects.postgresql as pg
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.sql import func
 
-from dbos._migration import run_alembic_migrations
+from dbos._migration import (
+    ensure_dbos_schema,
+    run_alembic_migrations,
+    run_dbos_migrations,
+)
 from dbos._utils import INTERNAL_QUEUE_NAME, retriable_postgres_exception
 
 from . import _serialization
@@ -382,7 +386,11 @@ class SystemDatabase:
                 conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
         engine.dispose()
 
-        run_alembic_migrations(self.engine)
+        using_dbos_migrations = ensure_dbos_schema(self.engine)
+        if not using_dbos_migrations:
+            # Complete the Alembic migrations, create the dbos_migrations table
+            run_alembic_migrations(self.engine)
+        run_dbos_migrations(self.engine)
 
     # Destroy the pool when finished
     def destroy(self) -> None:

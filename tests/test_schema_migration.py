@@ -32,17 +32,6 @@ def test_systemdb_migration(dbos: DBOS) -> None:
         result = connection.execute(sql)
         assert result.fetchall() == []
 
-    # Test migrating down
-    rollback_system_db(
-        sysdb_url=dbos._sys_db.engine.url.render_as_string(hide_password=False)
-    )
-
-    with dbos._sys_db.engine.connect() as connection:
-        with pytest.raises(sa.exc.ProgrammingError) as exc_info:
-            sql = SystemSchema.workflow_status.select()
-            result = connection.execute(sql)
-        assert "does not exist" in str(exc_info.value)
-
 
 def test_custom_sysdb_name_migration(
     config: DBOSConfig, postgres_db_engine: sa.Engine
@@ -66,34 +55,7 @@ def test_custom_sysdb_name_migration(
         result = connection.execute(sql)
         assert result.fetchall() == []
 
-    # Test migrating down
-    rollback_system_db(
-        sysdb_url=dbos._sys_db.engine.url.render_as_string(hide_password=False)
-    )
-
-    with dbos._sys_db.engine.connect() as connection:
-        with pytest.raises(sa.exc.ProgrammingError) as exc_info:
-            sql = SystemSchema.workflow_status.select()
-            result = connection.execute(sql)
-        assert "does not exist" in str(exc_info.value)
     DBOS.destroy()
-
-
-def rollback_system_db(sysdb_url: str) -> None:
-    migration_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
-        "dbos",
-        "_alembic_migrations",
-    )
-    alembic_cfg = Config()
-    alembic_cfg.set_main_option("script_location", migration_dir)
-    escaped_conn_string = re.sub(
-        r"%(?=[0-9A-Fa-f]{2})",
-        "%%",
-        sysdb_url,
-    )
-    alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
-    command.downgrade(alembic_cfg, "base")  # Rollback all migrations
 
 
 def test_reset(config: DBOSConfig, postgres_db_engine: sa.Engine) -> None:
