@@ -612,7 +612,7 @@ class DBOS:
                 active_workflows = len(self._active_workflows_set)
                 if active_workflows > 0:
                     dbos_logger.info(
-                        f"Attempting to shut down DBOS. {len(self._active_workflows_set)} workflows remain active."
+                        f"Attempting to shut down DBOS. {active_workflows} workflows remain active."
                     )
                 else:
                     break
