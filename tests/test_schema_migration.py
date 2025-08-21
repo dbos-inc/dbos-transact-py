@@ -1,13 +1,9 @@
-import os
-import re
-
 import pytest
 import sqlalchemy as sa
-from alembic import command
-from alembic.config import Config
 
 # Public API
 from dbos import DBOS, DBOSConfig
+from dbos._migration import dbos_migrations
 
 # Private API because this is a unit test
 from dbos._schemas.system_database import SystemSchema
@@ -31,6 +27,14 @@ def test_systemdb_migration(dbos: DBOS) -> None:
         sql = SystemSchema.notifications.select()
         result = connection.execute(sql)
         assert result.fetchall() == []
+
+        # Check dbos_migrations table exists, has one row, and has the right version
+        migrations_result = connection.execute(
+            sa.text("SELECT version FROM dbos.dbos_migrations")
+        )
+        migrations_rows = migrations_result.fetchall()
+        assert len(migrations_rows) == 1
+        assert migrations_rows[0][0] == len(dbos_migrations)
 
 
 def test_custom_sysdb_name_migration(
