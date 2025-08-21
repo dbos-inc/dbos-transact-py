@@ -312,6 +312,7 @@ class DBOS:
             _dbos_global_registry = None
         GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
         GlobalParams.executor_id = os.environ.get("DBOS__VMID", "local")
+        dbos_logger.info("DBOS successfully shut down")
 
     def __init__(
         self,
@@ -630,10 +631,8 @@ class DBOS:
             and self.conductor_websocket.websocket is not None
         ):
             self.conductor_websocket.websocket.close()
-        # CB - This needs work, some things ought to stop before DBs are tossed out,
-        #  on the other hand it hangs to move it
         if self._executor_field is not None:
-            self._executor_field.shutdown(cancel_futures=True)
+            self._executor_field.shutdown(wait=False, cancel_futures=True)
             self._executor_field = None
         for bg_thread in self._background_threads:
             bg_thread.join()
