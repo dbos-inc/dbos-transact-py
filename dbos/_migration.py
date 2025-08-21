@@ -112,7 +112,6 @@ dbos_migration_one = """
 -- Enable uuid extension for generating UUIDs
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- Create workflow_status table
 CREATE TABLE dbos.workflow_status (
     workflow_uuid TEXT PRIMARY KEY,
     status TEXT,
@@ -208,6 +207,16 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER dbos_workflow_events_trigger
 AFTER INSERT ON dbos.workflow_events
 FOR EACH ROW EXECUTE FUNCTION dbos.workflow_events_function();
+
+CREATE TABLE dbos.streams (
+    workflow_uuid TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    "offset" INTEGER NOT NULL,
+    PRIMARY KEY (workflow_uuid, key, "offset"),
+    FOREIGN KEY (workflow_uuid) REFERENCES dbos.workflow_status(workflow_uuid) 
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
 """
 
 dbos_migrations = [dbos_migration_one]

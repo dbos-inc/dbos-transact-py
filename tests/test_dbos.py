@@ -27,7 +27,6 @@ from dbos._context import assert_current_dbos_context, get_local_dbos_context
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSConflictingRegistrationError,
-    DBOSMaxStepRetriesExceeded,
 )
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import GetWorkflowsInput
