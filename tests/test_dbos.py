@@ -27,6 +27,7 @@ from dbos._context import assert_current_dbos_context, get_local_dbos_context
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSConflictingRegistrationError,
+    DBOSException,
     DBOSMaxStepRetriesExceeded,
 )
 from dbos._schemas.system_database import SystemSchema
@@ -1684,3 +1685,36 @@ def test_nested_steps(dbos: DBOS) -> None:
     steps = DBOS.list_workflow_steps(id)
     assert len(steps) == 1
     assert steps[0]["function_name"] == outer_step.__qualname__
+
+
+def test_destroy(dbos: DBOS, config: DBOSConfig) -> None:
+
+    @DBOS.workflow()
+    def unblocked_workflow() -> None:
+        return
+
+    blocking_event = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow() -> None:
+        blocking_event.wait()
+
+    unblocked_workflow()
+
+    # Destroy DBOS with no active workflows, verify it is destroyed immediately
+    start = time.time()
+    DBOS.destroy(workflow_completion_timeout_sec=60)
+    assert time.time() - start < 5
+
+    DBOS(config=config)
+    DBOS.launch()
+
+    handle = DBOS.start_workflow(blocked_workflow)
+
+    # Destroy DBOS with an active workflow, verify it waits out the timeout
+    start = time.time()
+    DBOS.destroy(workflow_completion_timeout_sec=3)
+    assert time.time() - start > 3
+    blocking_event.set()
+    with pytest.raises(DBOSException):
+        handle.get_result()
