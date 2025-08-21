@@ -297,14 +297,12 @@ class DBOS:
         cls,
         *,
         destroy_registry: bool = False,
-        await_workflows: bool = False,
-        workflow_timeout_sec: int = 60,
+        workflow_completion_timeout_sec: int = 0,
     ) -> None:
         global _dbos_global_instance
         if _dbos_global_instance is not None:
             _dbos_global_instance._destroy(
-                await_workflows=await_workflows,
-                workflow_timeout_sec=workflow_timeout_sec,
+                workflow_completion_timeout_sec=workflow_completion_timeout_sec,
             )
         _dbos_global_instance = None
         if destroy_registry:
@@ -599,20 +597,20 @@ class DBOS:
 
         reset_system_database(pg_db_url, sysdb_name)
 
-    def _destroy(self, *, await_workflows: bool, workflow_timeout_sec: int) -> None:
+    def _destroy(self, *, workflow_completion_timeout_sec: int) -> None:
         self._initialized = False
         for event in self.poller_stop_events:
             event.set()
         for event in self.background_thread_stop_events:
             event.set()
-        if await_workflows:
-            deadline = time.time() + workflow_timeout_sec
+        if workflow_completion_timeout_sec > 0:
+            deadline = time.time() + workflow_completion_timeout_sec
             while time.time() < deadline:
                 time.sleep(1)
                 active_workflows = len(self._active_workflows_set)
                 if active_workflows > 0:
                     dbos_logger.info(
-                        f"Attempting to shut down DBOS. {active_workflows} workflows remain active."
+                        f"Attempting to shut down DBOS. {active_workflows} workflows remain active. IDs: {self._active_workflows_set}"
                     )
                 else:
                     break

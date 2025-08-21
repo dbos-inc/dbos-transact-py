@@ -1703,7 +1703,7 @@ def test_destroy(dbos: DBOS, config: DBOSConfig) -> None:
 
     # Destroy DBOS with no active workflows, verify it is destroyed immediately
     start = time.time()
-    DBOS.destroy(await_workflows=True, workflow_timeout_sec=60)
+    DBOS.destroy(workflow_completion_timeout_sec=60)
     assert time.time() - start < 5
 
     DBOS(config=config)
@@ -1713,7 +1713,7 @@ def test_destroy(dbos: DBOS, config: DBOSConfig) -> None:
 
     # Destroy DBOS with an active workflow, verify it waits out the timeout
     start = time.time()
-    DBOS.destroy(await_workflows=True, workflow_timeout_sec=3)
+    DBOS.destroy(workflow_completion_timeout_sec=3)
     assert time.time() - start > 3
     blocking_event.set()
     with pytest.raises(DBOSException):
