@@ -89,7 +89,7 @@ def run_dbos_migrations(engine: sa.Engine) -> None:
                 continue
 
             # Execute the migration
-            dbos_logger.info(f"Applying migration {i}")
+            dbos_logger.info(f"Applying DBOS system database schema migration {i}")
             conn.execute(sa.text(migration_sql))
 
             # Update the single row with the new version
