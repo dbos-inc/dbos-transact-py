@@ -356,6 +356,7 @@ def _get_wf_invoke_func(
             )
             return recorded_result
         try:
+            dbos._active_workflows_set.add(status["workflow_uuid"])
             output = func()
             if not dbos.debug_mode:
                 dbos._sys_db.update_workflow_outcome(
@@ -378,6 +379,8 @@ def _get_wf_invoke_func(
                     error=_serialization.serialize_exception(error),
                 )
             raise
+        finally:
+            dbos._active_workflows_set.discard(status["workflow_uuid"])
 
     return persist
 
