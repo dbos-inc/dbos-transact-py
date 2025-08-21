@@ -1,10 +1,7 @@
 import datetime
 import functools
 import json
-import logging
-import os
 import random
-import re
 import threading
 import time
 from enum import Enum
@@ -25,11 +22,10 @@ from typing import (
 import psycopg
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as pg
-from alembic import command
-from alembic.config import Config
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.sql import func
 
+from dbos._migration import run_alembic_migrations
 from dbos._utils import INTERNAL_QUEUE_NAME, retriable_postgres_exception
 
 from . import _serialization
@@ -386,41 +382,7 @@ class SystemDatabase:
                 conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
         engine.dispose()
 
-        # Run a schema migration for the system database
-        migration_dir = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), "_alembic_migrations"
-        )
-        alembic_cfg = Config()
-        alembic_cfg.set_main_option("script_location", migration_dir)
-        logging.getLogger("alembic").setLevel(logging.WARNING)
-        # Alembic requires the % in URL-escaped parameters to itself be escaped to %%.
-        escaped_conn_string = re.sub(
-            r"%(?=[0-9A-Fa-f]{2})",
-            "%%",
-            self.engine.url.render_as_string(hide_password=False),
-        )
-        alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
-        try:
-            command.upgrade(alembic_cfg, "head")
-        except Exception as e:
-            dbos_logger.warning(
-                f"Exception during system database construction. This is most likely because the system database was configured using a later version of DBOS: {e}"
-            )
-            alembic_cfg = Config()
-            alembic_cfg.set_main_option("script_location", migration_dir)
-            # Alembic requires the % in URL-escaped parameters to itself be escaped to %%.
-            escaped_conn_string = re.sub(
-                r"%(?=[0-9A-Fa-f]{2})",
-                "%%",
-                self.engine.url.render_as_string(hide_password=False),
-            )
-            alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
-            try:
-                command.upgrade(alembic_cfg, "head")
-            except Exception as e:
-                dbos_logger.warning(
-                    f"Exception during system database construction. This is most likely because the system database was configured using a later version of DBOS: {e}"
-                )
+        run_alembic_migrations(self.engine)
 
     # Destroy the pool when finished
     def destroy(self) -> None:
