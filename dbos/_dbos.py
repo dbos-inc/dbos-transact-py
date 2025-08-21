@@ -293,10 +293,19 @@ class DBOS:
         return _dbos_global_instance
 
     @classmethod
-    def destroy(cls, *, destroy_registry: bool = False) -> None:
+    def destroy(
+        cls,
+        *,
+        destroy_registry: bool = False,
+        await_workflows: bool = False,
+        workflow_timeout_sec: int = 60,
+    ) -> None:
         global _dbos_global_instance
         if _dbos_global_instance is not None:
-            _dbos_global_instance._destroy()
+            _dbos_global_instance._destroy(
+                await_workflows=await_workflows,
+                workflow_timeout_sec=workflow_timeout_sec,
+            )
         _dbos_global_instance = None
         if destroy_registry:
             global _dbos_global_registry
@@ -589,12 +598,23 @@ class DBOS:
 
         reset_system_database(pg_db_url, sysdb_name)
 
-    def _destroy(self) -> None:
+    def _destroy(self, *, await_workflows: bool, workflow_timeout_sec: int) -> None:
         self._initialized = False
         for event in self.poller_stop_events:
             event.set()
         for event in self.background_thread_stop_events:
             event.set()
+        if await_workflows:
+            deadline = time.time() + workflow_timeout_sec
+            while time.time() < deadline:
+                time.sleep(1)
+                active_workflows = len(self._active_workflows_set)
+                if active_workflows > 0:
+                    dbos_logger.info(
+                        f"Shutting down DBOS. {len(self._active_workflows_set)} workflows remain active."
+                    )
+                else:
+                    break
         self._background_event_loop.stop()
         if self._sys_db_field is not None:
             self._sys_db_field.destroy()

@@ -1684,3 +1684,23 @@ def test_nested_steps(dbos: DBOS) -> None:
     steps = DBOS.list_workflow_steps(id)
     assert len(steps) == 1
     assert steps[0]["function_name"] == outer_step.__qualname__
+
+
+def test_destroy(dbos: DBOS, config: DBOSConfig) -> None:
+
+    @DBOS.workflow()
+    def unblocked_workflow() -> None:
+        return
+
+    blocking_event = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow() -> None:
+        blocking_event.wait()
+
+    unblocked_workflow()
+
+    # Destroy DBOS with no active workflows, verify it is destroyed immediately
+    start = time.time()
+    DBOS.destroy(await_workflows=True, workflow_timeout_sec=60)
+    assert time.time() - start < 5
