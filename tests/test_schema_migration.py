@@ -53,8 +53,8 @@ def test_alembic_migrations_compatibility(
     sys_db = SystemDatabase(system_database_url=system_database_url, engine_kwargs={})
     # Run the deprecated Alembic migrations
     run_alembic_migrations(sys_db.engine)
-    # Then, run the new migrations
-    # Now launch DBOS, make sure it actually works
+    # Then, run the new migrations to verify they work from a system database
+    # that started in Alembic.
     dbos = DBOS(config=config)
     DBOS.launch()
     # Make sure all tables exist
@@ -82,6 +82,7 @@ def test_alembic_migrations_compatibility(
         migrations_rows = migrations_result.fetchall()
         assert len(migrations_rows) == 1
         assert migrations_rows[0][0] == len(dbos_migrations)
+
     assert DBOS.list_workflows() == []
 
 
