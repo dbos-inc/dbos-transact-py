@@ -48,7 +48,7 @@ def ensure_dbos_schema(engine: sa.Engine) -> bool:
             return True
 
 
-def run_alembic_migrations(engine: sa.Engine):
+def run_alembic_migrations(engine: sa.Engine) -> None:
     """Run system database schema migrations with Alembic.
     This is DEPRECATED in favor of DBOS-managed migrations.
     It is retained only for backwards compatibility and
