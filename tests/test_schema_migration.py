@@ -82,7 +82,7 @@ def test_alembic_migrations_compatibility(
         migrations_rows = migrations_result.fetchall()
         assert len(migrations_rows) == 1
         assert migrations_rows[0][0] == len(dbos_migrations)
-    assert DBOS.list_workflows() == 0
+    assert DBOS.list_workflows() == []
 
 
 def test_custom_sysdb_name_migration(
