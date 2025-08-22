@@ -33,6 +33,9 @@ class DBOSConfig(TypedDict, total=False):
         admin_port (int): Admin port
         run_admin_server (bool): Whether to run the DBOS admin server
         otlp_attributes (dict[str, str]): A set of custom attributes to apply OTLP-exported logs and traces
+        application_version (str): Application version
+        executor_id (str): Executor ID, used to identify the application instance in distributed environments
+        disable_otlp (bool): If True, disables OTLP tracing and logging. Defaults to False.
     """
 
     name: str
@@ -49,6 +52,7 @@ class DBOSConfig(TypedDict, total=False):
     otlp_attributes: Optional[dict[str, str]]
     application_version: Optional[str]
     executor_id: Optional[str]
+    disable_otlp: Optional[bool]
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -91,6 +95,7 @@ class TelemetryConfig(TypedDict, total=False):
     logs: Optional[LoggerConfig]
     OTLPExporter: Optional[OTLPExporterConfig]
     otlp_attributes: Optional[dict[str, str]]
+    disable_otlp: Optional[bool]
 
 
 class ConfigFile(TypedDict, total=False):
@@ -157,6 +162,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     telemetry: TelemetryConfig = {
         "OTLPExporter": {"tracesEndpoint": [], "logsEndpoint": []},
         "otlp_attributes": config.get("otlp_attributes", {}),
+        "disable_otlp": config.get("disable_otlp", False),
     }
     # For mypy
     assert telemetry["OTLPExporter"] is not None
