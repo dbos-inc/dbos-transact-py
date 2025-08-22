@@ -28,7 +28,7 @@ class DBOSTracer:
 
     def config(self, config: ConfigFile) -> None:
         self.otlp_attributes = config.get("telemetry", {}).get("otlp_attributes", {})  # type: ignore
-        self.disable_otlp = config.get("telemetry", {}).get("disable_otlp", False)
+        self.disable_otlp = config.get("telemetry", {}).get("disable_otlp", False)  # type: ignore
         if not self.disable_otlp and not isinstance(
             trace.get_tracer_provider(), TracerProvider
         ):
