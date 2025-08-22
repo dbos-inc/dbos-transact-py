@@ -24,10 +24,14 @@ class DBOSTracer:
     def __init__(self) -> None:
         self.app_id = os.environ.get("DBOS__APPID", None)
         self.provider: Optional[TracerProvider] = None
+        self.disable_otlp: bool = False
 
     def config(self, config: ConfigFile) -> None:
         self.otlp_attributes = config.get("telemetry", {}).get("otlp_attributes", {})  # type: ignore
-        if not isinstance(trace.get_tracer_provider(), TracerProvider):
+        self.disable_otlp = config.get("telemetry", {}).get("disable_otlp", False)  # type: ignore
+        if not self.disable_otlp and not isinstance(
+            trace.get_tracer_provider(), TracerProvider
+        ):
             resource = Resource(
                 attributes={
                     ResourceAttributes.SERVICE_NAME: config["name"],

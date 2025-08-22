@@ -254,3 +254,61 @@ def test_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert spans[0].context is not None
     assert logs[0].log_record.span_id == spans[0].context.span_id
     assert logs[0].log_record.trace_id == spans[0].context.trace_id
+
+
+def test_disable_otlp_no_spans(config: DBOSConfig) -> None:
+    DBOS.destroy(destroy_registry=True)
+    config["otlp_attributes"] = {"foo": "bar"}
+    config["disable_otlp"] = True
+    DBOS(config=config)
+    DBOS.launch()
+
+    @DBOS.workflow()
+    def test_workflow() -> None:
+        test_step()
+        DBOS.logger.info("This is a test_workflow")
+
+    @DBOS.step()
+    def test_step() -> None:
+        DBOS.logger.info("This is a test_step")
+        return
+
+    exporter = InMemorySpanExporter()
+    span_processor = SimpleSpanProcessor(exporter)
+    provider = tracesdk.TracerProvider()
+    provider.add_span_processor(span_processor)
+    dbos_tracer.set_provider(provider)
+
+    # Set up in-memory log exporter
+    log_exporter = InMemoryLogExporter()  # type: ignore
+    log_processor = BatchLogRecordProcessor(log_exporter)
+    log_provider = LoggerProvider()
+    log_provider.add_log_record_processor(log_processor)
+    set_logger_provider(log_provider)
+    dbos_logger.addHandler(LoggingHandler(logger_provider=log_provider))
+
+    test_workflow()
+
+    log_processor.force_flush(timeout_millis=5000)
+    logs = log_exporter.get_finished_logs()
+    assert len(logs) == 2
+    for log in logs:
+        assert log.log_record.attributes is not None
+        assert (
+            log.log_record.attributes["applicationVersion"] == GlobalParams.app_version
+        )
+        assert log.log_record.attributes["executorID"] == GlobalParams.executor_id
+        assert log.log_record.attributes["foo"] == "bar"
+        # We disable OTLP, so no span_id or trace_id should be present
+        assert log.log_record.span_id is not None and log.log_record.span_id == 0
+        assert log.log_record.trace_id is not None and log.log_record.trace_id == 0
+        assert (
+            log.log_record.body == "This is a test_step"
+            or log.log_record.body == "This is a test_workflow"
+        )
+        assert log.log_record.attributes.get("traceId") is None
+
+    spans = exporter.get_finished_spans()
+
+    # No spans should be created since OTLP is disabled
+    assert len(spans) == 0
