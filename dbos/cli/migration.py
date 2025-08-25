@@ -17,7 +17,7 @@ def migrate_dbos_databases(app_database_url: str, system_database_url: str) -> N
                 "pool_size": 2,
             },
         )
-        app_db = ApplicationDatabase(
+        app_db = ApplicationDatabase.create(
             database_url=app_database_url,
             engine_kwargs={
                 "pool_timeout": 30,

@@ -135,7 +135,7 @@ class DBOSClient:
             },
         )
         self._sys_db.check_connection()
-        self._app_db = ApplicationDatabase(
+        self._app_db = ApplicationDatabase.create(
             database_url=database_url,
             engine_kwargs={
                 "pool_timeout": 30,

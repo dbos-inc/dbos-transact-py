@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, TypedDict
 
 import sqlalchemy as sa
@@ -28,7 +29,7 @@ class RecordedResult(TypedDict):
     error: Optional[str]  # JSON (jsonpickle)
 
 
-class ApplicationDatabase:
+class ApplicationDatabase(ABC):
 
     def __init__(
         self,
@@ -37,86 +38,28 @@ class ApplicationDatabase:
         engine_kwargs: Dict[str, Any],
         debug_mode: bool = False,
     ):
-        app_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
-
-        if engine_kwargs is None:
-            engine_kwargs = {}
-
-        self.engine = sa.create_engine(
-            app_db_url,
-            **engine_kwargs,
-        )
+        self.engine = self._create_engine(database_url, engine_kwargs)
         self._engine_kwargs = engine_kwargs
         self.sessionmaker = sessionmaker(bind=self.engine)
         self.debug_mode = debug_mode
 
+    @abstractmethod
+    def _create_engine(
+        self, database_url: str, engine_kwargs: Dict[str, Any]
+    ) -> sa.Engine:
+        """Create a database engine specific to the database type."""
+        pass
+
+    @abstractmethod
     def run_migrations(self) -> None:
-        if self.debug_mode:
-            dbos_logger.warning(
-                "Application database migrations are skipped in debug mode."
-            )
-            return
-        # Check if the database exists
-        app_db_url = self.engine.url
-        postgres_db_engine = sa.create_engine(
-            app_db_url.set(database="postgres"),
-            **self._engine_kwargs,
-        )
-        with postgres_db_engine.connect() as conn:
-            conn.execution_options(isolation_level="AUTOCOMMIT")
-            if not conn.execute(
-                sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
-                parameters={"db_name": app_db_url.database},
-            ).scalar():
-                conn.execute(sa.text(f"CREATE DATABASE {app_db_url.database}"))
-        postgres_db_engine.dispose()
-
-        # Create the dbos schema and transaction_outputs table in the application database
-        with self.engine.begin() as conn:
-            # Check if schema exists first
-            schema_exists = conn.execute(
-                sa.text(
-                    "SELECT 1 FROM information_schema.schemata WHERE schema_name = :schema_name"
-                ),
-                parameters={"schema_name": ApplicationSchema.schema},
-            ).scalar()
-
-            if not schema_exists:
-                schema_creation_query = sa.text(
-                    f"CREATE SCHEMA {ApplicationSchema.schema}"
-                )
-                conn.execute(schema_creation_query)
-
-        inspector = inspect(self.engine)
-        if not inspector.has_table(
-            "transaction_outputs", schema=ApplicationSchema.schema
-        ):
-            ApplicationSchema.metadata_obj.create_all(self.engine)
-        else:
-            columns = inspector.get_columns(
-                "transaction_outputs", schema=ApplicationSchema.schema
-            )
-            column_names = [col["name"] for col in columns]
-
-            if "function_name" not in column_names:
-                # Column missing, alter table to add it
-                with self.engine.connect() as conn:
-                    conn.execute(
-                        text(
-                            f"""
-                        ALTER TABLE {ApplicationSchema.schema}.transaction_outputs
-                        ADD COLUMN function_name TEXT NOT NULL DEFAULT '';
-                        """
-                        )
-                    )
-                    conn.commit()
+        """Run database migrations specific to the database type."""
+        pass
 
     def destroy(self) -> None:
         self.engine.dispose()
 
-    @staticmethod
     def record_transaction_output(
-        session: Session, output: TransactionResultInternal
+        self, session: Session, output: TransactionResultInternal
     ) -> None:
         try:
             session.execute(
@@ -134,7 +77,7 @@ class ApplicationDatabase:
                 )
             )
         except DBAPIError as dbapi_error:
-            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
+            if self._is_unique_constraint_violation(dbapi_error):
                 raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
             raise
 
@@ -158,7 +101,7 @@ class ApplicationDatabase:
                     )
                 )
         except DBAPIError as dbapi_error:
-            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
+            if self._is_unique_constraint_violation(dbapi_error):
                 raise DBOSWorkflowConflictIDError(output["workflow_uuid"])
             raise
 
@@ -280,3 +223,173 @@ class ApplicationDatabase:
                 )
 
             c.execute(delete_query)
+
+    @abstractmethod
+    def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
+        """Check if the error is a unique constraint violation."""
+        pass
+
+    @staticmethod
+    def create(
+        database_url: str,
+        engine_kwargs: Dict[str, Any],
+        debug_mode: bool = False,
+    ) -> "ApplicationDatabase":
+        """Factory method to create the appropriate ApplicationDatabase implementation based on URL."""
+        if database_url.startswith("sqlite"):
+            return SQLiteApplicationDatabase(
+                database_url=database_url,
+                engine_kwargs=engine_kwargs,
+                debug_mode=debug_mode,
+            )
+        else:
+            # Default to PostgreSQL for postgresql://, postgres://, or other URLs
+            return PostgresApplicationDatabase(
+                database_url=database_url,
+                engine_kwargs=engine_kwargs,
+                debug_mode=debug_mode,
+            )
+
+
+class PostgresApplicationDatabase(ApplicationDatabase):
+    """PostgreSQL-specific implementation of ApplicationDatabase."""
+
+    def _create_engine(
+        self, database_url: str, engine_kwargs: Dict[str, Any]
+    ) -> sa.Engine:
+        """Create a PostgreSQL engine."""
+        app_db_url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
+
+        if engine_kwargs is None:
+            engine_kwargs = {}
+
+        # TODO: Make the schema dynamic so this isn't needed
+        ApplicationSchema.transaction_outputs.schema = "dbos"
+
+        return sa.create_engine(
+            app_db_url,
+            **engine_kwargs,
+        )
+
+    def run_migrations(self) -> None:
+        if self.debug_mode:
+            dbos_logger.warning(
+                "Application database migrations are skipped in debug mode."
+            )
+            return
+        # Check if the database exists
+        app_db_url = self.engine.url
+        postgres_db_engine = sa.create_engine(
+            app_db_url.set(database="postgres"),
+            **self._engine_kwargs,
+        )
+        with postgres_db_engine.connect() as conn:
+            conn.execution_options(isolation_level="AUTOCOMMIT")
+            if not conn.execute(
+                sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
+                parameters={"db_name": app_db_url.database},
+            ).scalar():
+                conn.execute(sa.text(f"CREATE DATABASE {app_db_url.database}"))
+        postgres_db_engine.dispose()
+
+        # Create the dbos schema and transaction_outputs table in the application database
+        with self.engine.begin() as conn:
+            # Check if schema exists first
+            schema_exists = conn.execute(
+                sa.text(
+                    "SELECT 1 FROM information_schema.schemata WHERE schema_name = :schema_name"
+                ),
+                parameters={"schema_name": ApplicationSchema.schema},
+            ).scalar()
+
+            if not schema_exists:
+                schema_creation_query = sa.text(
+                    f"CREATE SCHEMA {ApplicationSchema.schema}"
+                )
+                conn.execute(schema_creation_query)
+
+        inspector = inspect(self.engine)
+        if not inspector.has_table(
+            "transaction_outputs", schema=ApplicationSchema.schema
+        ):
+            ApplicationSchema.metadata_obj.create_all(self.engine)
+        else:
+            columns = inspector.get_columns(
+                "transaction_outputs", schema=ApplicationSchema.schema
+            )
+            column_names = [col["name"] for col in columns]
+
+            if "function_name" not in column_names:
+                # Column missing, alter table to add it
+                with self.engine.connect() as conn:
+                    conn.execute(
+                        text(
+                            f"""
+                        ALTER TABLE {ApplicationSchema.schema}.transaction_outputs
+                        ADD COLUMN function_name TEXT NOT NULL DEFAULT '';
+                        """
+                        )
+                    )
+                    conn.commit()
+
+    def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
+        """Check if the error is a unique constraint violation in PostgreSQL."""
+        return dbapi_error.orig.sqlstate == "23505"  # type: ignore
+
+
+class SQLiteApplicationDatabase(ApplicationDatabase):
+    """SQLite-specific implementation of ApplicationDatabase."""
+
+    def _create_engine(
+        self, database_url: str, engine_kwargs: Dict[str, Any]
+    ) -> sa.Engine:
+        """Create a SQLite engine."""
+        # TODO: Make the schema dynamic so this isn't needed
+        ApplicationSchema.transaction_outputs.schema = None
+        return sa.create_engine(database_url)
+
+    def run_migrations(self) -> None:
+        if self.debug_mode:
+            dbos_logger.warning(
+                "Application database migrations are skipped in debug mode."
+            )
+            return
+
+        with self.engine.begin() as conn:
+            # Check if table exists
+            result = conn.execute(
+                sa.text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='transaction_outputs'"
+                )
+            ).fetchone()
+
+            if result is None:
+                # Create the table with proper SQLite syntax
+                conn.execute(
+                    sa.text(
+                        """
+                        CREATE TABLE transaction_outputs (
+                            workflow_uuid TEXT NOT NULL,
+                            function_id INTEGER NOT NULL,
+                            output TEXT,
+                            error TEXT,
+                            txn_id TEXT,
+                            txn_snapshot TEXT NOT NULL,
+                            executor_id TEXT,
+                            function_name TEXT NOT NULL DEFAULT '',
+                            created_at BIGINT NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS BIGINT)),
+                            PRIMARY KEY (workflow_uuid, function_id)
+                        )
+                        """
+                    )
+                )
+                # Create the index
+                conn.execute(
+                    sa.text(
+                        "CREATE INDEX transaction_outputs_created_at_index ON transaction_outputs (created_at)"
+                    )
+                )
+
+    def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
+        """Check if the error is a unique constraint violation in SQLite."""
+        return "UNIQUE constraint failed" in str(dbapi_error.orig)

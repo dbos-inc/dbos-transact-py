@@ -48,7 +48,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
         DBOS.logger.info("I'm test_workflow " + var + var2)
         return res + res2
 
-    @DBOS.transaction(isolation_level="REPEATABLE READ")
+    @DBOS.transaction(isolation_level="SERIALIZABLE")
     def test_transaction(var2: str) -> str:
         assert DBOS.step_id == 1
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()

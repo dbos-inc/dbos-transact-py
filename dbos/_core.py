@@ -950,7 +950,7 @@ def decorate_transaction(
                                 assert (
                                     ctx.sql_session is not None
                                 ), "Cannot find a database connection"
-                                ApplicationDatabase.record_transaction_output(
+                                dbos._app_db.record_transaction_output(
                                     ctx.sql_session, txn_output
                                 )
                                 break

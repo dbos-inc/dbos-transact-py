@@ -463,7 +463,7 @@ class DBOS:
                 debug_mode=debug_mode,
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
-            self._app_db_field = ApplicationDatabase(
+            self._app_db_field = ApplicationDatabase.create(
                 database_url=self._config["database_url"],
                 engine_kwargs=self._config["database"]["db_engine_kwargs"],
                 debug_mode=debug_mode,
@@ -474,7 +474,7 @@ class DBOS:
 
             # Run migrations for the system and application databases
             self._sys_db.run_migrations()
-            # self._app_db.run_migrations() # TODO BACK
+            self._app_db.run_migrations()
 
             admin_port = self._config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:

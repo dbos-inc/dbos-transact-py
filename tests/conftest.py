@@ -61,7 +61,7 @@ def sys_db(config: DBOSConfig) -> Generator[SystemDatabase, Any, None]:
 @pytest.fixture()
 def app_db(config: DBOSConfig) -> Generator[ApplicationDatabase, Any, None]:
     assert config["database_url"] is not None
-    app_db = ApplicationDatabase(
+    app_db = ApplicationDatabase.create(
         database_url=config["database_url"],
         engine_kwargs={
             "pool_timeout": 30,
