@@ -1085,19 +1085,19 @@ class SystemDatabase(ABC):
         ctx.function_id += 1  # Record the get_result as a step
         # Because there's no corresponding check, we do nothing on conflict
         # and do not raise a DBOSWorkflowConflictIDError
-        with self.engine.begin() as c:
-            sql = (
-                self.dialect.insert(SystemSchema.operation_outputs)
-                .values(
-                    workflow_uuid=ctx.workflow_id,
-                    function_id=ctx.function_id,
-                    function_name="DBOS.getResult",
-                    output=output,
-                    error=error,
-                    child_workflow_id=result_workflow_id,
-                )
-                .on_conflict_do_nothing()
+        sql = (
+            self.dialect.insert(SystemSchema.operation_outputs)
+            .values(
+                workflow_uuid=ctx.workflow_id,
+                function_id=ctx.function_id,
+                function_name="DBOS.getResult",
+                output=output,
+                error=error,
+                child_workflow_id=result_workflow_id,
             )
+            .on_conflict_do_nothing()
+        )
+        with self.engine.begin() as c:
             c.execute(sql)
 
     @db_retry()
