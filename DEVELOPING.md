@@ -86,17 +86,6 @@ on the changes in the project since this was written):
 Success: no issues found in 64 source files
 ```
 
-We use alembic to manage system table schema migrations.
-To generate a new migration, run:
-
-```
-pdm run alembic revision -m "<new migration name>"
-```
-
-This command will add a new file under the `dbos/migrations/versions/` folder.
-For more information,
-read [alembic tutorial](https://alembic.sqlalchemy.org/en/latest/tutorial.html).
-
 ### Creating a Release
 
 To cut a new release, run:
