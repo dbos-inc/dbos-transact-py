@@ -30,13 +30,10 @@ from . import _serialization
 from ._context import get_local_dbos_context
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
-    DBOSConflictingWorkflowError,
     DBOSNonExistentWorkflowError,
-    DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
-    MaxRecoveryAttemptsExceededError,
 )
 from ._logger import dbos_logger
 from ._schemas.system_database import SystemSchema
