@@ -3,7 +3,7 @@ import os
 import subprocess
 import time
 from typing import Any, Generator, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import pytest
 import sqlalchemy as sa
@@ -96,7 +96,14 @@ def cleanup_test_databases(config: DBOSConfig, postgres_db_engine: sa.Engine) ->
     database_url = config["database_url"]
 
     if database_url.startswith("sqlite"):
-        pass
+        # For SQLite, delete the database files
+        # Extract file path from SQLite URL
+        parsed_url = urlparse(database_url)
+        app_db_path = parsed_url.path[1:]  # Remove leading '/'
+
+        # Remove the database files if they exist
+        if os.path.exists(app_db_path):
+            os.remove(app_db_path)
     else:
         # For PostgreSQL, drop the databases
         app_db_name = sa.make_url(database_url).database
