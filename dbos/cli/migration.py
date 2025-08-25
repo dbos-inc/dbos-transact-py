@@ -2,14 +2,14 @@ import sqlalchemy as sa
 import typer
 
 from dbos._app_db import ApplicationDatabase
-from dbos._sys_db import SystemDatabase
+from dbos._sys_db_postgres import PostgresSystemDatabase
 
 
 def migrate_dbos_databases(app_database_url: str, system_database_url: str) -> None:
     app_db = None
     sys_db = None
     try:
-        sys_db = SystemDatabase(
+        sys_db = PostgresSystemDatabase(
             system_database_url=system_database_url,
             engine_kwargs={
                 "pool_timeout": 30,

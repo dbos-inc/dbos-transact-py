@@ -8,6 +8,7 @@ from dbos._migration import dbos_migrations, run_alembic_migrations
 # Private API because this is a unit test
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
+from dbos._sys_db_postgres import PostgresSystemDatabase
 
 
 def test_systemdb_migration(dbos: DBOS) -> None:
@@ -50,7 +51,9 @@ def test_alembic_migrations_compatibility(
         connection.execute(sa.text(f'DROP DATABASE IF EXISTS "{sysdb_name}"'))
         connection.execute(sa.text(f'CREATE DATABASE "{sysdb_name}"'))
 
-    sys_db = SystemDatabase(system_database_url=system_database_url, engine_kwargs={})
+    sys_db = PostgresSystemDatabase(
+        system_database_url=system_database_url, engine_kwargs={}
+    )
     # Run the deprecated Alembic migrations
     run_alembic_migrations(sys_db.engine)
     # Then, run the new migrations to verify they work from a system database

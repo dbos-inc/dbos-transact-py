@@ -15,6 +15,7 @@ from dbos._app_db import ApplicationDatabase
 from dbos._dbos_config import get_system_database_url
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
+from dbos._sys_db_postgres import PostgresSystemDatabase
 
 
 @pytest.fixture(scope="session")
@@ -40,7 +41,7 @@ def config() -> DBOSConfig:
 @pytest.fixture()
 def sys_db(config: DBOSConfig) -> Generator[SystemDatabase, Any, None]:
     assert config["database_url"] is not None
-    sys_db = SystemDatabase(
+    sys_db = PostgresSystemDatabase(
         system_database_url=f"{config['database_url']}_dbos_sys",
         engine_kwargs={
             "pool_timeout": 30,

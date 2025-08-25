@@ -33,6 +33,7 @@ from rich import print
 
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._sys_db import WorkflowStatus
+from dbos._sys_db_postgres import PostgresSystemDatabase
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import fork_workflow, list_queued_workflows, list_workflows
 
@@ -457,7 +458,7 @@ class DBOS:
             self._background_event_loop.start()
             assert self._config["database_url"] is not None
             assert self._config["database"]["sys_db_engine_kwargs"] is not None
-            self._sys_db_field = SystemDatabase(
+            self._sys_db_field = PostgresSystemDatabase(
                 system_database_url=get_system_database_url(self._config),
                 engine_kwargs=self._config["database"]["sys_db_engine_kwargs"],
                 debug_mode=debug_mode,
