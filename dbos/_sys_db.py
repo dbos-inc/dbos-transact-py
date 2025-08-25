@@ -1086,33 +1086,19 @@ class SystemDatabase(ABC):
         # Because there's no corresponding check, we do nothing on conflict
         # and do not raise a DBOSWorkflowConflictIDError
         with self.engine.begin() as c:
-            self._record_get_result_txn(
-                c, ctx.workflow_id, ctx.function_id, output, error, result_workflow_id
+            sql = (
+                self.dialect.insert(SystemSchema.operation_outputs)
+                .values(
+                    workflow_uuid=ctx.workflow_id,
+                    function_id=ctx.function_id,
+                    function_name="DBOS.getResult",
+                    output=output,
+                    error=error,
+                    child_workflow_id=result_workflow_id,
+                )
+                .on_conflict_do_nothing()
             )
-
-    def _record_get_result_txn(
-        self,
-        conn: sa.Connection,
-        workflow_uuid: str,
-        function_id: int,
-        output: Optional[str],
-        error: Optional[str],
-        child_workflow_id: str,
-    ) -> None:
-        """Record get result using PostgreSQL insert operations."""
-        sql = (
-            self.dialect.insert(SystemSchema.operation_outputs)
-            .values(
-                workflow_uuid=workflow_uuid,
-                function_id=function_id,
-                function_name="DBOS.getResult",
-                output=output,
-                error=error,
-                child_workflow_id=child_workflow_id,
-            )
-            .on_conflict_do_nothing()
-        )
-        conn.execute(sql)
+            c.execute(sql)
 
     @db_retry()
     def record_child_workflow(
@@ -1497,7 +1483,6 @@ class SystemDatabase(ABC):
                 return  # Already sent before
             else:
                 dbos_logger.debug(f"Running set_event, id: {function_id}, key: {key}")
-
             c.execute(
                 self.dialect.insert(SystemSchema.workflow_events)
                 .values(
