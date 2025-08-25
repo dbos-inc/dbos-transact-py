@@ -1,7 +1,6 @@
 from typing import Any, Dict, List, Optional, TypedDict
 
 import sqlalchemy as sa
-import sqlalchemy.dialects.postgresql as pg
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
@@ -121,7 +120,7 @@ class ApplicationDatabase:
     ) -> None:
         try:
             session.execute(
-                pg.insert(ApplicationSchema.transaction_outputs).values(
+                sa.insert(ApplicationSchema.transaction_outputs).values(
                     workflow_uuid=output["workflow_uuid"],
                     function_id=output["function_id"],
                     output=output["output"],
@@ -145,7 +144,7 @@ class ApplicationDatabase:
         try:
             with self.engine.begin() as conn:
                 conn.execute(
-                    pg.insert(ApplicationSchema.transaction_outputs).values(
+                    sa.insert(ApplicationSchema.transaction_outputs).values(
                         workflow_uuid=output["workflow_uuid"],
                         function_id=output["function_id"],
                         output=None,
