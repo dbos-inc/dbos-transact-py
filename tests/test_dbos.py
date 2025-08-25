@@ -28,7 +28,6 @@ from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSConflictingRegistrationError,
     DBOSException,
-    DBOSMaxStepRetriesExceeded,
 )
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import GetWorkflowsInput
