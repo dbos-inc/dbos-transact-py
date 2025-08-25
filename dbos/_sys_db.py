@@ -580,7 +580,8 @@ class SystemDatabase(ABC):
             raise Exception("called resume_workflow in debug mode")
         with self.engine.begin() as c:
             # Execute with snapshot isolation in case of concurrent calls on the same workflow
-            c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
+            if self.engine.dialect.name == "postgresql":
+                c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
             # Check the status of the workflow. If it is complete, do nothing.
             status_row = c.execute(
                 sa.select(
@@ -1606,7 +1607,8 @@ class SystemDatabase(ABC):
             limiter_period_ms = int(queue.limiter["period"] * 1000)
         with self.engine.begin() as c:
             # Execute with snapshot isolation to ensure multiple workers respect limits
-            # c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")) # TODO REVERT
+            if self.engine.dialect.name == "postgresql":
+                c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
 
             # If there is a limiter, compute how many functions have started in its period.
             if queue.limiter is not None:
