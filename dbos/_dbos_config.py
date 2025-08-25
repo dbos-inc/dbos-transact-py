@@ -350,7 +350,9 @@ def process_config(
 
         url = make_url(data["database_url"])
 
-        if not data["database"].get("sys_db_name"):
+        if data["database_url"].startswith("sqlite"):
+            data["system_database_url"] = data["database_url"]
+        elif not data["database"].get("sys_db_name"):
             assert url.database is not None
             data["database"]["sys_db_name"] = url.database + SystemSchema.sysdb_suffix
 
@@ -445,6 +447,8 @@ def configure_db_engine_parameters(
 
 
 def is_valid_database_url(database_url: str) -> bool:
+    if database_url.startswith("sqlite"):
+        return True
     url = make_url(database_url)
     required_fields = [
         ("username", "Username must be specified in the connection URL"),

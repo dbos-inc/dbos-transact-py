@@ -474,7 +474,7 @@ class DBOS:
 
             # Run migrations for the system and application databases
             self._sys_db.run_migrations()
-            self._app_db.run_migrations()
+            # self._app_db.run_migrations() # TODO BACK
 
             admin_port = self._config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:

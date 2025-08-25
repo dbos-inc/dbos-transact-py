@@ -1467,7 +1467,7 @@ class SystemDatabase(ABC):
             limiter_period_ms = int(queue.limiter["period"] * 1000)
         with self.engine.begin() as c:
             # Execute with snapshot isolation to ensure multiple workers respect limits
-            c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
+            # c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")) # TODO REVERT
 
             # If there is a limiter, compute how many functions have started in its period.
             if queue.limiter is not None:

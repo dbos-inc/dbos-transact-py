@@ -16,7 +16,8 @@ from sqlalchemy import (
 
 class SystemSchema:
     ### System table schema
-    metadata_obj = MetaData(schema="dbos")
+    # metadata_obj = MetaData(schema="dbos")
+    metadata_obj = MetaData()  # TODO REVERT
     sysdb_suffix = "_dbos_sys"
 
     workflow_status = Table(

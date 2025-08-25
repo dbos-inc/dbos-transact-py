@@ -28,7 +28,11 @@ def build_wheel() -> str:
 def default_config() -> DBOSConfig:
     return {
         "name": "test-app",
-        "database_url": f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy",
+        "database_url": (
+            "sqlite://"
+            if os.environ.get("DBOS_SQLITE", None)
+            else f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy"
+        ),
     }
 
 
@@ -89,17 +93,23 @@ def postgres_db_engine() -> sa.Engine:
 @pytest.fixture()
 def cleanup_test_databases(config: DBOSConfig, postgres_db_engine: sa.Engine) -> None:
     assert config["database_url"] is not None
-    app_db_name = sa.make_url(config["database_url"]).database
-    sys_db_name = f"{app_db_name}_dbos_sys"
+    database_url = config["database_url"]
 
-    with postgres_db_engine.connect() as connection:
-        connection.execution_options(isolation_level="AUTOCOMMIT")
-        connection.execute(
-            sa.text(f"DROP DATABASE IF EXISTS {app_db_name} WITH (FORCE)")
-        )
-        connection.execute(
-            sa.text(f"DROP DATABASE IF EXISTS {sys_db_name} WITH (FORCE)")
-        )
+    if database_url.startswith("sqlite"):
+        pass
+    else:
+        # For PostgreSQL, drop the databases
+        app_db_name = sa.make_url(database_url).database
+        sys_db_name = f"{app_db_name}_dbos_sys"
+
+        with postgres_db_engine.connect() as connection:
+            connection.execution_options(isolation_level="AUTOCOMMIT")
+            connection.execute(
+                sa.text(f"DROP DATABASE IF EXISTS {app_db_name} WITH (FORCE)")
+            )
+            connection.execute(
+                sa.text(f"DROP DATABASE IF EXISTS {sys_db_name} WITH (FORCE)")
+            )
 
     # Clean up environment variables
     os.environ.pop("DBOS__VMID") if "DBOS__VMID" in os.environ else None
