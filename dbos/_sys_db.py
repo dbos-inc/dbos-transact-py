@@ -1153,18 +1153,6 @@ class SystemDatabase(ABC):
         self, conn: sa.Connection, workflow_uuid: str, key: str, value: str
     ) -> None:
         """Set event using PostgreSQL upsert operations."""
-        conn.execute(
-            self.dialect.insert(SystemSchema.workflow_events)
-            .values(
-                workflow_uuid=workflow_uuid,
-                key=key,
-                value=value,
-            )
-            .on_conflict_do_update(
-                index_elements=["workflow_uuid", "key"],
-                set_={"value": value},
-            )
-        )
 
     def _check_operation_execution_txn(
         self,
@@ -1510,8 +1498,17 @@ class SystemDatabase(ABC):
             else:
                 dbos_logger.debug(f"Running set_event, id: {function_id}, key: {key}")
 
-            self._set_event_txn(
-                c, workflow_uuid, key, _serialization.serialize(message)
+            c.execute(
+                self.dialect.insert(SystemSchema.workflow_events)
+                .values(
+                    workflow_uuid=workflow_uuid,
+                    key=key,
+                    value=message,
+                )
+                .on_conflict_do_update(
+                    index_elements=["workflow_uuid", "key"],
+                    set_={"value": message},
+                )
             )
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
