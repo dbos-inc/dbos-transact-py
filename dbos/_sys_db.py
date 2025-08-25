@@ -895,12 +895,27 @@ class SystemDatabase(ABC):
                 for row in rows
             ]
 
-    @abstractmethod
     def _record_operation_result_txn(
         self, result: OperationResultInternal, conn: sa.Connection
     ) -> None:
-        """Record operation result using database-specific insert operations."""
-        pass
+        if self._debug_mode:
+            raise Exception("called record_operation_result in debug mode")
+        error = result["error"]
+        output = result["output"]
+        assert error is None or output is None, "Only one of error or output can be set"
+        sql = sa.insert(SystemSchema.operation_outputs).values(
+            workflow_uuid=result["workflow_uuid"],
+            function_id=result["function_id"],
+            function_name=result["function_name"],
+            output=output,
+            error=error,
+        )
+        try:
+            conn.execute(sql)
+        except DBAPIError as dbapi_error:
+            if self._is_unique_constraint_violation(dbapi_error):
+                raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+            raise
 
     @db_retry()
     def record_operation_result(self, result: OperationResultInternal) -> None:
@@ -957,7 +972,6 @@ class SystemDatabase(ABC):
                 raise DBOSWorkflowConflictIDError(parentUUID)
             raise
 
-    @abstractmethod
     def _record_child_workflow_txn(
         self,
         conn: sa.Connection,
@@ -966,8 +980,14 @@ class SystemDatabase(ABC):
         function_name: str,
         child_uuid: str,
     ) -> None:
-        """Record child workflow using database-specific insert operations."""
-        pass
+        """Record child workflow using database-agnostic insert operations."""
+        sql = sa.insert(SystemSchema.operation_outputs).values(
+            workflow_uuid=parent_uuid,
+            function_id=function_id,
+            function_name=function_name,
+            child_workflow_id=child_uuid,
+        )
+        conn.execute(sql)
 
     @abstractmethod
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
@@ -979,12 +999,17 @@ class SystemDatabase(ABC):
         """Check if the error is a foreign key violation."""
         pass
 
-    @abstractmethod
     def _send_notification_txn(
         self, conn: sa.Connection, destination_uuid: str, topic: str, message: str
     ) -> None:
-        """Send notification using database-specific operations."""
-        pass
+        """Send notification using database-agnostic operations."""
+        conn.execute(
+            sa.insert(SystemSchema.notifications).values(
+                destination_uuid=destination_uuid,
+                topic=topic,
+                message=message,
+            )
+        )
 
     @abstractmethod
     def _set_event_txn(
@@ -993,7 +1018,6 @@ class SystemDatabase(ABC):
         """Set event using database-specific upsert operations."""
         pass
 
-    @abstractmethod
     def _fork_workflow_txn(
         self,
         conn: sa.Connection,
@@ -1001,8 +1025,27 @@ class SystemDatabase(ABC):
         status: WorkflowStatusInternal,
         application_version: Optional[str],
     ) -> None:
-        """Create forked workflow entry using database-specific insert operations."""
-        pass
+        """Create forked workflow entry using database-agnostic insert operations."""
+        conn.execute(
+            sa.insert(SystemSchema.workflow_status).values(
+                workflow_uuid=forked_workflow_id,
+                status=WorkflowStatusString.ENQUEUED.value,
+                name=status["name"],
+                class_name=status["class_name"],
+                config_name=status["config_name"],
+                application_version=(
+                    application_version
+                    if application_version is not None
+                    else status["app_version"]
+                ),
+                application_id=status["app_id"],
+                authenticated_user=status["authenticated_user"],
+                authenticated_roles=status["authenticated_roles"],
+                assumed_role=status["assumed_role"],
+                queue_name=INTERNAL_QUEUE_NAME,
+                inputs=status["inputs"],
+            )
+        )
 
     def _check_operation_execution_txn(
         self,

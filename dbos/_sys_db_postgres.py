@@ -226,29 +226,6 @@ class PostgresSystemDatabase(SystemDatabase):
 
         return wf_status, workflow_deadline_epoch_ms
 
-    def _record_operation_result_txn(
-        self, result: OperationResultInternal, conn: sa.Connection
-    ) -> None:
-        """Record operation result using PostgreSQL insert operations."""
-        if self._debug_mode:
-            raise Exception("called record_operation_result in debug mode")
-        error = result["error"]
-        output = result["output"]
-        assert error is None or output is None, "Only one of error or output can be set"
-        sql = pg.insert(SystemSchema.operation_outputs).values(
-            workflow_uuid=result["workflow_uuid"],
-            function_id=result["function_id"],
-            function_name=result["function_name"],
-            output=output,
-            error=error,
-        )
-        try:
-            conn.execute(sql)
-        except DBAPIError as dbapi_error:
-            if dbapi_error.orig.sqlstate == "23505":  # type: ignore
-                raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
-            raise
-
     def _record_get_result_txn(
         self,
         conn: sa.Connection,
@@ -273,23 +250,6 @@ class PostgresSystemDatabase(SystemDatabase):
         )
         conn.execute(sql)
 
-    def _record_child_workflow_txn(
-        self,
-        conn: sa.Connection,
-        parent_uuid: str,
-        function_id: int,
-        function_name: str,
-        child_uuid: str,
-    ) -> None:
-        """Record child workflow using PostgreSQL insert operations."""
-        sql = pg.insert(SystemSchema.operation_outputs).values(
-            workflow_uuid=parent_uuid,
-            function_id=function_id,
-            function_name=function_name,
-            child_workflow_id=child_uuid,
-        )
-        conn.execute(sql)
-
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation in PostgreSQL."""
         return dbapi_error.orig.sqlstate == "23505"  # type: ignore
@@ -297,18 +257,6 @@ class PostgresSystemDatabase(SystemDatabase):
     def _is_foreign_key_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a foreign key violation in PostgreSQL."""
         return dbapi_error.orig.sqlstate == "23503"  # type: ignore
-
-    def _send_notification_txn(
-        self, conn: sa.Connection, destination_uuid: str, topic: str, message: str
-    ) -> None:
-        """Send notification using PostgreSQL operations."""
-        conn.execute(
-            pg.insert(SystemSchema.notifications).values(
-                destination_uuid=destination_uuid,
-                topic=topic,
-                message=message,
-            )
-        )
 
     def _set_event_txn(
         self, conn: sa.Connection, workflow_uuid: str, key: str, value: str
@@ -324,35 +272,6 @@ class PostgresSystemDatabase(SystemDatabase):
             .on_conflict_do_update(
                 index_elements=["workflow_uuid", "key"],
                 set_={"value": value},
-            )
-        )
-
-    def _fork_workflow_txn(
-        self,
-        conn: sa.Connection,
-        forked_workflow_id: str,
-        status: WorkflowStatusInternal,
-        application_version: Optional[str],
-    ) -> None:
-        """Create forked workflow entry using PostgreSQL insert operations."""
-        conn.execute(
-            pg.insert(SystemSchema.workflow_status).values(
-                workflow_uuid=forked_workflow_id,
-                status=WorkflowStatusString.ENQUEUED.value,
-                name=status["name"],
-                class_name=status["class_name"],
-                config_name=status["config_name"],
-                application_version=(
-                    application_version
-                    if application_version is not None
-                    else status["app_version"]
-                ),
-                application_id=status["app_id"],
-                authenticated_user=status["authenticated_user"],
-                authenticated_roles=status["authenticated_roles"],
-                assumed_role=status["assumed_role"],
-                queue_name=INTERNAL_QUEUE_NAME,
-                inputs=status["inputs"],
             )
         )
 
