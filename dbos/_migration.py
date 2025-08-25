@@ -119,6 +119,7 @@ CREATE TABLE dbos.workflow_status (
     authenticated_user TEXT,
     assumed_role TEXT,
     authenticated_roles TEXT,
+    request TEXT,
     output TEXT,
     error TEXT,
     executor_id TEXT,
@@ -132,9 +133,9 @@ CREATE TABLE dbos.workflow_status (
     queue_name TEXT,
     workflow_timeout_ms BIGINT,
     workflow_deadline_epoch_ms BIGINT,
+    inputs TEXT,
     started_at_epoch_ms BIGINT,
     deduplication_id TEXT,
-    inputs TEXT,
     priority INTEGER NOT NULL DEFAULT 0
 );
 
