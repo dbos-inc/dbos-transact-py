@@ -165,7 +165,7 @@ def test_sqlite_systemdb_migration() -> None:
         sqlite_url = f"sqlite:///{temp_db_path}"
 
         # Create and run migrations
-        sys_db = SQLiteSystemDatabase(
+        sys_db = SystemDatabase.create(
             system_database_url=sqlite_url, engine_kwargs={}, debug_mode=False
         )
 
@@ -212,7 +212,7 @@ def test_sqlite_systemdb_migration() -> None:
             # Verify foreign keys are enabled
             fk_result = connection.execute(sa.text("PRAGMA foreign_keys"))
             fk_enabled = fk_result.fetchone()
-            assert fk_enabled[0] == 1  # 1 means enabled
+            assert fk_enabled and fk_enabled[0] == 1  # 1 means enabled
 
         # Clean up
         sys_db.destroy()

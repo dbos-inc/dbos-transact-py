@@ -1265,6 +1265,31 @@ class SystemDatabase(ABC):
         """Listen for database notifications using database-specific mechanisms."""
         pass
 
+    @staticmethod
+    def create(
+        system_database_url: str,
+        engine_kwargs: Dict[str, Any],
+        debug_mode: bool = False,
+    ) -> "SystemDatabase":
+        """Factory method to create the appropriate SystemDatabase implementation based on URL."""
+        if system_database_url.startswith("sqlite"):
+            from ._sys_db_sqlite import SQLiteSystemDatabase
+
+            return SQLiteSystemDatabase(
+                system_database_url=system_database_url,
+                engine_kwargs=engine_kwargs,
+                debug_mode=debug_mode,
+            )
+        else:
+            # Default to PostgreSQL for postgresql://, postgres://, or other URLs
+            from ._sys_db_postgres import PostgresSystemDatabase
+
+            return PostgresSystemDatabase(
+                system_database_url=system_database_url,
+                engine_kwargs=engine_kwargs,
+                debug_mode=debug_mode,
+            )
+
     @db_retry()
     def sleep(
         self,
