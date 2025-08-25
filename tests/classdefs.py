@@ -92,3 +92,40 @@ class DBOSSendRecv:
         msg3 = DBOS.recv(timeout_seconds=10)
         DBOSSendRecv.recv_counter += 1
         return "-".join([str(msg1), str(msg2), str(msg3)])
+
+
+class DBOSTestWrapperMethods:
+    # Test that we can register methods from within the __init__ function of a non-DBOS class
+    # This allows us to give dynamic names to the methods if needed
+
+    def __init__(self, name: str) -> None:
+        self.wf_counter: int = 0
+        self.step_counter: int = 0
+        self.txn_counter: int = 0
+
+        self.name = name
+        assert self.name is not None
+
+        @DBOS.step(name=f"{self.name}_test_step")
+        def wrapped_test_step(var: str) -> str:
+            self.step_counter += 1
+            return var
+
+        self.test_step = wrapped_test_step
+
+        @DBOS.transaction(name=f"{self.name}_test_transaction")
+        def wrapped_test_transaction(var2: str) -> str:
+            rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+            self.txn_counter += 1
+            return var2 + str(rows[0][0])
+
+        self.test_transaction = wrapped_test_transaction
+
+        @DBOS.workflow(name=f"{self.name}_test_workflow")
+        def wrapped_test_workflow(var: str, var2: str) -> str:
+            self.wf_counter += 1
+            res = self.test_transaction(var2)
+            res2 = self.test_step(var)
+            return res + res2
+
+        self.test_workflow = wrapped_test_workflow
