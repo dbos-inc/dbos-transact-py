@@ -1,14 +1,18 @@
+import os
+import tempfile
+
 import pytest
 import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, DBOSConfig
-from dbos._migration import dbos_migrations, run_alembic_migrations
+from dbos._migration import dbos_migrations, run_alembic_migrations, sqlite_migrations
 
 # Private API because this is a unit test
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._sys_db_postgres import PostgresSystemDatabase
+from dbos._sys_db_sqlite import SQLiteSystemDatabase
 
 
 def test_systemdb_migration(dbos: DBOS) -> None:
@@ -148,3 +152,72 @@ def test_reset(config: DBOSConfig, postgres_db_engine: sa.Engine) -> None:
     # Verify that resetting after launch throws
     with pytest.raises(AssertionError):
         DBOS.reset_system_database()
+
+
+def test_sqlite_systemdb_migration() -> None:
+    """Test SQLite system database migration."""
+    # Create a temporary SQLite database file
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as temp_db:
+        temp_db_path = temp_db.name
+
+    try:
+        # Create SQLite system database URL
+        sqlite_url = f"sqlite:///{temp_db_path}"
+
+        # Create and run migrations
+        sys_db = SQLiteSystemDatabase(
+            system_database_url=sqlite_url, engine_kwargs={}, debug_mode=False
+        )
+
+        # Run migrations
+        sys_db.run_migrations()
+
+        # Verify all tables exist and are empty
+        with sys_db.engine.connect() as connection:
+            # Note: SQLite schema doesn't use "dbos." prefix
+
+            # Test workflow_status table
+            sql = sa.text("SELECT * FROM workflow_status")
+            result = connection.execute(sql)
+            assert result.fetchall() == []
+
+            # Test operation_outputs table
+            sql = sa.text("SELECT * FROM operation_outputs")
+            result = connection.execute(sql)
+            assert result.fetchall() == []
+
+            # Test workflow_events table
+            sql = sa.text("SELECT * FROM workflow_events")
+            result = connection.execute(sql)
+            assert result.fetchall() == []
+
+            # Test notifications table
+            sql = sa.text("SELECT * FROM notifications")
+            result = connection.execute(sql)
+            assert result.fetchall() == []
+
+            # Test streams table
+            sql = sa.text("SELECT * FROM streams")
+            result = connection.execute(sql)
+            assert result.fetchall() == []
+
+            # Check dbos_migrations table exists, has one row, and has the right version
+            migrations_result = connection.execute(
+                sa.text("SELECT version FROM dbos_migrations")
+            )
+            migrations_rows = migrations_result.fetchall()
+            assert len(migrations_rows) == 1
+            assert migrations_rows[0][0] == len(sqlite_migrations)
+
+            # Verify foreign keys are enabled
+            fk_result = connection.execute(sa.text("PRAGMA foreign_keys"))
+            fk_enabled = fk_result.fetchone()
+            assert fk_enabled[0] == 1  # 1 means enabled
+
+        # Clean up
+        sys_db.destroy()
+
+    finally:
+        # Remove temporary database file
+        if os.path.exists(temp_db_path):
+            os.unlink(temp_db_path)
