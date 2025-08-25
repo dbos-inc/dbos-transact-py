@@ -125,7 +125,7 @@ class ApplicationDatabase:
                     function_id=output["function_id"],
                     output=output["output"],
                     error=None,
-                    txn_id=sa.text("(select pg_current_xact_id_if_assigned()::text)"),
+                    txn_id="",
                     txn_snapshot=output["txn_snapshot"],
                     executor_id=(
                         output["executor_id"] if output["executor_id"] else None
@@ -149,9 +149,7 @@ class ApplicationDatabase:
                         function_id=output["function_id"],
                         output=None,
                         error=output["error"],
-                        txn_id=sa.text(
-                            "(select pg_current_xact_id_if_assigned()::text)"
-                        ),
+                        txn_id="",
                         txn_snapshot=output["txn_snapshot"],
                         executor_id=(
                             output["executor_id"] if output["executor_id"] else None
