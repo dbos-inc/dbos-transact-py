@@ -70,7 +70,7 @@ def test_dbos_singleton(cleanup_test_databases: None) -> None:
     assert stati.config_name is None
     assert stati.class_name is None
     assert stati.name == "dynamicconfig_test_workflow"
-    wfhr: WorkflowHandle[str] = DBOS.retrieve_workflow(wh.get_workflow_id())
+    wfhr = DBOS.retrieve_workflow(wh.get_workflow_id())
     assert wfhr.workflow_id == wh.get_workflow_id()
 
     stepi = DBOS.list_workflow_steps(wh.get_workflow_id())
