@@ -492,7 +492,26 @@ class SystemDatabase(ABC):
         with self.engine.begin() as c:
             # Create an entry for the forked workflow with the same
             # initial values as the original.
-            self._fork_workflow_txn(c, forked_workflow_id, status, application_version)
+            c.execute(
+                sa.insert(SystemSchema.workflow_status).values(
+                    workflow_uuid=forked_workflow_id,
+                    status=WorkflowStatusString.ENQUEUED.value,
+                    name=status["name"],
+                    class_name=status["class_name"],
+                    config_name=status["config_name"],
+                    application_version=(
+                        application_version
+                        if application_version is not None
+                        else status["app_version"]
+                    ),
+                    application_id=status["app_id"],
+                    authenticated_user=status["authenticated_user"],
+                    authenticated_roles=status["authenticated_roles"],
+                    assumed_role=status["assumed_role"],
+                    queue_name=INTERNAL_QUEUE_NAME,
+                    inputs=status["inputs"],
+                )
+            )
 
             if start_step > 1:
 
@@ -962,32 +981,19 @@ class SystemDatabase(ABC):
         if self._debug_mode:
             raise Exception("called record_child_workflow in debug mode")
 
+        sql = sa.insert(SystemSchema.operation_outputs).values(
+            workflow_uuid=parentUUID,
+            function_id=functionID,
+            function_name=functionName,
+            child_workflow_id=childUUID,
+        )
         try:
             with self.engine.begin() as c:
-                self._record_child_workflow_txn(
-                    c, parentUUID, functionID, functionName, childUUID
-                )
+                c.execute(sql)
         except DBAPIError as dbapi_error:
             if self._is_unique_constraint_violation(dbapi_error):
                 raise DBOSWorkflowConflictIDError(parentUUID)
             raise
-
-    def _record_child_workflow_txn(
-        self,
-        conn: sa.Connection,
-        parent_uuid: str,
-        function_id: int,
-        function_name: str,
-        child_uuid: str,
-    ) -> None:
-        """Record child workflow using database-agnostic insert operations."""
-        sql = sa.insert(SystemSchema.operation_outputs).values(
-            workflow_uuid=parent_uuid,
-            function_id=function_id,
-            function_name=function_name,
-            child_workflow_id=child_uuid,
-        )
-        conn.execute(sql)
 
     @abstractmethod
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
@@ -1017,35 +1023,6 @@ class SystemDatabase(ABC):
     ) -> None:
         """Set event using database-specific upsert operations."""
         pass
-
-    def _fork_workflow_txn(
-        self,
-        conn: sa.Connection,
-        forked_workflow_id: str,
-        status: WorkflowStatusInternal,
-        application_version: Optional[str],
-    ) -> None:
-        """Create forked workflow entry using database-agnostic insert operations."""
-        conn.execute(
-            sa.insert(SystemSchema.workflow_status).values(
-                workflow_uuid=forked_workflow_id,
-                status=WorkflowStatusString.ENQUEUED.value,
-                name=status["name"],
-                class_name=status["class_name"],
-                config_name=status["config_name"],
-                application_version=(
-                    application_version
-                    if application_version is not None
-                    else status["app_version"]
-                ),
-                application_id=status["app_id"],
-                authenticated_user=status["authenticated_user"],
-                authenticated_roles=status["authenticated_roles"],
-                assumed_role=status["assumed_role"],
-                queue_name=INTERNAL_QUEUE_NAME,
-                inputs=status["inputs"],
-            )
-        )
 
     def _check_operation_execution_txn(
         self,
