@@ -1005,18 +1005,6 @@ class SystemDatabase(ABC):
         """Check if the error is a foreign key violation."""
         pass
 
-    def _send_notification_txn(
-        self, conn: sa.Connection, destination_uuid: str, topic: str, message: str
-    ) -> None:
-        """Send notification using database-agnostic operations."""
-        conn.execute(
-            sa.insert(SystemSchema.notifications).values(
-                destination_uuid=destination_uuid,
-                topic=topic,
-                message=message,
-            )
-        )
-
     @abstractmethod
     def _set_event_txn(
         self, conn: sa.Connection, workflow_uuid: str, key: str, value: str
@@ -1148,8 +1136,12 @@ class SystemDatabase(ABC):
                 )
 
             try:
-                self._send_notification_txn(
-                    c, destination_uuid, topic, _serialization.serialize(message)
+                c.execute(
+                    sa.insert(SystemSchema.notifications).values(
+                        destination_uuid=destination_uuid,
+                        topic=topic,
+                        message=_serialization.serialize(message),
+                    )
                 )
             except DBAPIError as dbapi_error:
                 if self._is_foreign_key_violation(dbapi_error):
