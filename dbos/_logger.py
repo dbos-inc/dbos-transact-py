@@ -77,7 +77,9 @@ def config_logger(config: "ConfigFile") -> None:
     otlp_logs_endpoints = (
         config.get("telemetry", {}).get("OTLPExporter", {}).get("logsEndpoint")  # type: ignore
     )
-    if otlp_logs_endpoints:
+    disable_otlp = config.get("telemetry", {}).get("disable_otlp", False)  # type: ignore
+
+    if not disable_otlp and otlp_logs_endpoints:
         log_provider = PatchedOTLPLoggerProvider(
             Resource.create(
                 attributes={

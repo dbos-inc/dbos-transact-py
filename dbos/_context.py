@@ -221,6 +221,8 @@ class DBOSContext:
         return None
 
     def _start_span(self, attributes: TracedAttributes) -> None:
+        if dbos_tracer.disable_otlp:
+            return
         attributes["operationUUID"] = (
             self.workflow_id if len(self.workflow_id) > 0 else None
         )
@@ -246,6 +248,8 @@ class DBOSContext:
         cm.__enter__()
 
     def _end_span(self, exc_value: Optional[BaseException]) -> None:
+        if dbos_tracer.disable_otlp:
+            return
         context_span = self.context_spans.pop()
         if exc_value is None:
             context_span.span.set_status(Status(StatusCode.OK))
