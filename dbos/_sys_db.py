@@ -24,7 +24,11 @@ import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.sql import func
 
-from dbos._utils import INTERNAL_QUEUE_NAME, retriable_postgres_exception
+from dbos._utils import (
+    INTERNAL_QUEUE_NAME,
+    retriable_postgres_exception,
+    retriable_sqlite_exception,
+)
 
 from . import _serialization
 from ._context import get_local_dbos_context
@@ -313,7 +317,9 @@ def db_retry(
                 except DBAPIError as e:
 
                     # Determine if this is a retriable exception
-                    if not retriable_postgres_exception(e):
+                    if not retriable_postgres_exception(
+                        e
+                    ) and not retriable_sqlite_exception(e):
                         raise
 
                     retries += 1

@@ -48,3 +48,13 @@ def retriable_postgres_exception(e: DBAPIError) -> bool:
             return False
     else:
         return False
+
+
+def retriable_sqlite_exception(e: DBAPIError) -> bool:
+    if isinstance(e.orig, psycopg.OperationalError):
+        driver_error: psycopg.OperationalError = e.orig
+        if "database is locked" in str(driver_error):
+            return True
+        return False
+    else:
+        return False
