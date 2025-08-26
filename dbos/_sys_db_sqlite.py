@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
@@ -108,7 +108,7 @@ class SQLiteSystemDatabase(SystemDatabase):
     def _notification_listener(self) -> None:
         """Poll for notifications and workflow events in SQLite."""
 
-        def split_payload(payload: str) -> tuple[str, str | None]:
+        def split_payload(payload: str) -> Tuple[str, Optional[str]]:
             """Split payload into components (first::second format)."""
             if "::" in payload:
                 parts = payload.split("::", 1)
