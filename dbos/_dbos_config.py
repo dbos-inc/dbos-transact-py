@@ -296,19 +296,12 @@ def process_config(
     """
     If a database_url is provided, pass it as is in the config.
 
-    Else, build a database_url from defaults.
+    Else, default to SQLite.
 
     Also build SQL Alchemy "kwargs" base on user input + defaults.
     Specifically, db_engine_kwargs takes precedence over app_db_pool_size
 
     In debug mode, apply overrides from DBOS_DBHOST, DBOS_DBPORT, DBOS_DBUSER, and DBOS_DBPASSWORD.
-
-    Default configuration:
-        - Hostname: localhost
-        - Port: 5432
-        - Username: postgres
-        - Password: $PGPASSWORD
-        - Database name: transformed application name.
     """
 
     if "name" not in data:
@@ -385,13 +378,8 @@ def process_config(
             ).render_as_string(hide_password=False)
     else:
         _app_db_name = _app_name_to_db_name(data["name"])
-        _password = os.environ.get("PGPASSWORD", "dbos")
-        data["database_url"] = (
-            f"postgres://postgres:{_password}@localhost:5432/{_app_db_name}?connect_timeout=10&sslmode=prefer"
-        )
-        if not data["database"].get("sys_db_name"):
-            data["database"]["sys_db_name"] = _app_db_name + SystemSchema.sysdb_suffix
-        assert data["database_url"] is not None
+        data["database_url"] = f"sqlite:///{_app_db_name}.db"
+        data["system_database_url"] = data["database_url"]
 
     configure_db_engine_parameters(data["database"], connect_timeout=connect_timeout)
 
