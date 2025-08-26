@@ -44,13 +44,13 @@ def test_systemdb_migration(dbos: DBOS) -> None:
 
 
 def test_alembic_migrations_compatibility(
-    config: DBOSConfig, postgres_db_engine: sa.Engine
+    config: DBOSConfig, db_engine: sa.Engine
 ) -> None:
     system_database_url = f"{config['database_url']}_dbos_sys"
     sysdb_name = sa.make_url(system_database_url).database
 
     # Drop and recreate the system database
-    with postgres_db_engine.connect() as connection:
+    with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(sa.text(f'DROP DATABASE IF EXISTS "{sysdb_name}"'))
         connection.execute(sa.text(f'CREATE DATABASE "{sysdb_name}"'))
@@ -93,14 +93,12 @@ def test_alembic_migrations_compatibility(
     assert DBOS.list_workflows() == []
 
 
-def test_custom_sysdb_name_migration(
-    config: DBOSConfig, postgres_db_engine: sa.Engine
-) -> None:
+def test_custom_sysdb_name_migration(config: DBOSConfig, db_engine: sa.Engine) -> None:
     sysdb_name = "custom_sysdb_name"
     config["sys_db_name"] = sysdb_name
 
     # Clean up from previous runs
-    with postgres_db_engine.connect() as connection:
+    with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sysdb_name}"))
 
@@ -118,7 +116,7 @@ def test_custom_sysdb_name_migration(
     DBOS.destroy()
 
 
-def test_reset(config: DBOSConfig, postgres_db_engine: sa.Engine) -> None:
+def test_reset(config: DBOSConfig, db_engine: sa.Engine) -> None:
     DBOS.destroy()
     dbos = DBOS(config=config)
     DBOS.launch()
@@ -134,7 +132,7 @@ def test_reset(config: DBOSConfig, postgres_db_engine: sa.Engine) -> None:
     dbos = DBOS(config=config)
     DBOS.reset_system_database()
 
-    with postgres_db_engine.connect() as c:
+    with db_engine.connect() as c:
         c.execution_options(isolation_level="AUTOCOMMIT")
         count: int = c.execute(
             sa.text(f"SELECT COUNT(*) FROM pg_database WHERE datname = '{sysdb_name}'")

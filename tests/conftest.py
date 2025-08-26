@@ -25,12 +25,16 @@ def build_wheel() -> str:
     return wheel_files[0]
 
 
+def testing_sqlite() -> bool:
+    return os.environ.get("DBOS_SQLITE", None) == "true"
+
+
 def default_config() -> DBOSConfig:
     return {
         "name": "test-app",
         "database_url": (
             "sqlite:///test.db"
-            if os.environ.get("DBOS_SQLITE", None)
+            if testing_sqlite()
             else f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy"
         ),
     }
@@ -76,26 +80,29 @@ def app_db(config: DBOSConfig) -> Generator[ApplicationDatabase, Any, None]:
 
 
 @pytest.fixture(scope="session")
-def postgres_db_engine() -> sa.Engine:
+def db_engine() -> sa.Engine:
     cfg = default_config()
     assert cfg["database_url"] is not None
-    return sa.create_engine(
-        sa.make_url(cfg["database_url"]).set(
-            drivername="postgresql+psycopg",
-            database="postgres",
-        ),
-        connect_args={
-            "connect_timeout": 30,
-        },
-    )
+    if testing_sqlite():
+        return sa.create_engine(cfg["database_url"])
+    else:
+        return sa.create_engine(
+            sa.make_url(cfg["database_url"]).set(
+                drivername="postgresql+psycopg",
+                database="postgres",
+            ),
+            connect_args={
+                "connect_timeout": 30,
+            },
+        )
 
 
 @pytest.fixture()
-def cleanup_test_databases(config: DBOSConfig, postgres_db_engine: sa.Engine) -> None:
+def cleanup_test_databases(config: DBOSConfig, db_engine: sa.Engine) -> None:
     assert config["database_url"] is not None
     database_url = config["database_url"]
 
-    if database_url.startswith("sqlite"):
+    if testing_sqlite():
         # For SQLite, delete the database files
         # Extract file path from SQLite URL
         parsed_url = urlparse(database_url)
@@ -109,7 +116,7 @@ def cleanup_test_databases(config: DBOSConfig, postgres_db_engine: sa.Engine) ->
         app_db_name = sa.make_url(database_url).database
         sys_db_name = f"{app_db_name}_dbos_sys"
 
-        with postgres_db_engine.connect() as connection:
+        with db_engine.connect() as connection:
             connection.execution_options(isolation_level="AUTOCOMMIT")
             connection.execute(
                 sa.text(f"DROP DATABASE IF EXISTS {app_db_name} WITH (FORCE)")
