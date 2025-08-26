@@ -328,7 +328,9 @@ def test_multiple_queues(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_queue_workflow_in_recovered_workflow(dbos: DBOS) -> None:
+def test_queue_workflow_in_recovered_workflow(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
     # We don't want to be taking queued jobs while subprocess runs
     DBOS.destroy()
 
@@ -432,7 +434,7 @@ def run_dbos_test_in_process(
 ) -> None:
     dbos_config: DBOSConfig = {
         "name": "test-app",
-        "database_url": f"postgres://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy",
+        "database_url": default_config()["database_url"],
         "admin_port": 8001 + i,
     }
     dbos = DBOS(config=dbos_config)
