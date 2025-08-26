@@ -13,7 +13,9 @@ import sqlalchemy as sa
 import yaml
 
 
-def test_package(build_wheel: str, db_engine: sa.Engine) -> None:
+def test_package(
+    build_wheel: str, db_engine: sa.Engine, skip_with_sqlite: None
+) -> None:
 
     # Clean up the database from previous runs
     for template_name in ["dbos-db-starter", "dbos-app-starter"]:
@@ -96,7 +98,7 @@ def test_package(build_wheel: str, db_engine: sa.Engine) -> None:
                 process.wait()
 
 
-def test_init_config() -> None:
+def test_init_config(skip_with_sqlite: None) -> None:
     app_name = "example-name"
     expected_yaml = {
         "name": app_name,
@@ -120,7 +122,7 @@ def test_init_config() -> None:
         assert actual_yaml == expected_yaml
 
 
-def test_reset(db_engine: sa.Engine) -> None:
+def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
     app_name = "reset-app"
     sysdb_name = "reset_app_dbos_sys"
     db_url = db_engine.url.set(database="reset_app").render_as_string(
