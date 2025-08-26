@@ -455,7 +455,7 @@ def test_admin_workflow_fork(dbos: DBOS) -> None:
     assert worked, "Workflow did not finish successfully"
 
 
-def test_list_workflows(dbos: DBOS) -> None:
+def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time) -> None:
     # Create workflows for testing
     @DBOS.workflow()
     def test_workflow_1() -> None:
@@ -754,7 +754,7 @@ def test_admin_global_timeout(dbos: DBOS) -> None:
         handle.get_result()
 
 
-def test_queued_workflows_endpoint(dbos: DBOS) -> None:
+def test_queued_workflows_endpoint(dbos: DBOS, skip_with_sqlite_imprecise_time) -> None:
     """Test the /queues endpoint with various filters and scenarios."""
 
     # Set up a queue for testing
