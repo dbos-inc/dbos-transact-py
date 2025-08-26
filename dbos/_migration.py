@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import sys
 
 import sqlalchemy as sa
 from alembic import command
@@ -230,7 +231,16 @@ CREATE TABLE dbos.event_dispatch_kv (
 );
 """
 
-sqlite_migration_one = """
+
+def _get_sqlite_timestamp_expr() -> str:
+    """Get SQLite timestamp expression with millisecond precision for Python >= 3.12."""
+    if sys.version_info >= (3, 12):
+        return "(unixepoch('subsec') * 1000)"
+    else:
+        return "(strftime('%s','now') * 1000)"
+
+
+sqlite_migration_one = f"""
 CREATE TABLE workflow_status (
     workflow_uuid TEXT PRIMARY KEY,
     status TEXT,
@@ -242,8 +252,8 @@ CREATE TABLE workflow_status (
     output TEXT,
     error TEXT,
     executor_id TEXT,
-    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+    created_at INTEGER NOT NULL DEFAULT {_get_sqlite_timestamp_expr()},
+    updated_at INTEGER NOT NULL DEFAULT {_get_sqlite_timestamp_expr()},
     application_version TEXT,
     application_id TEXT,
     class_name TEXT DEFAULT NULL,
@@ -281,7 +291,7 @@ CREATE TABLE notifications (
     destination_uuid TEXT NOT NULL,
     topic TEXT,
     message TEXT NOT NULL,
-    created_at_epoch_ms INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+    created_at_epoch_ms INTEGER NOT NULL DEFAULT {_get_sqlite_timestamp_expr()},
     message_uuid TEXT NOT NULL DEFAULT (hex(randomblob(16))),
     FOREIGN KEY (destination_uuid) REFERENCES workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
