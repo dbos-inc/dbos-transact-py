@@ -227,7 +227,7 @@ def test_list_workflow_end_times_positive(dbos: DBOS) -> None:
     assert len(output) == 2, f"Expected list length to be 2, but got {len(output)}"
 
 
-def test_get_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_get_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
     def simple_workflow() -> None:
         print("Executed Simple workflow")
@@ -241,7 +241,7 @@ def test_get_workflow(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     wfUuid = output[0].workflow_id
 
-    info = _workflow_commands.get_workflow(sys_db, wfUuid)
+    info = _workflow_commands.get_workflow(dbos._sys_db, wfUuid)
     assert info is not None, "Expected output to be not None"
 
     if info is not None:
