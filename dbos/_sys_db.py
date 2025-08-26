@@ -1343,29 +1343,25 @@ class SystemDatabase(ABC):
 
         # Transactionally consume and return the message if it's in the database, otherwise return null.
         with self.engine.begin() as c:
-            oldest_entry_cte = (
-                sa.select(
-                    SystemSchema.notifications.c.destination_uuid,
-                    SystemSchema.notifications.c.topic,
-                    SystemSchema.notifications.c.message,
-                    SystemSchema.notifications.c.created_at_epoch_ms,
-                )
-                .where(
-                    SystemSchema.notifications.c.destination_uuid == workflow_uuid,
-                    SystemSchema.notifications.c.topic == topic,
-                )
-                .order_by(SystemSchema.notifications.c.created_at_epoch_ms.asc())
-                .limit(1)
-                .cte("oldest_entry")
-            )
             delete_stmt = (
                 sa.delete(SystemSchema.notifications)
                 .where(
-                    SystemSchema.notifications.c.destination_uuid
-                    == oldest_entry_cte.c.destination_uuid,
-                    SystemSchema.notifications.c.topic == oldest_entry_cte.c.topic,
+                    SystemSchema.notifications.c.destination_uuid == workflow_uuid,
+                    SystemSchema.notifications.c.topic == topic,
                     SystemSchema.notifications.c.created_at_epoch_ms
-                    == oldest_entry_cte.c.created_at_epoch_ms,
+                    == (
+                        sa.select(
+                            sa.func.min(
+                                SystemSchema.notifications.c.created_at_epoch_ms
+                            )
+                        )
+                        .where(
+                            SystemSchema.notifications.c.destination_uuid
+                            == workflow_uuid,
+                            SystemSchema.notifications.c.topic == topic,
+                        )
+                        .scalar_subquery()
+                    ),
                 )
                 .returning(SystemSchema.notifications.c.message)
             )
