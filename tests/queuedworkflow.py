@@ -1,9 +1,8 @@
 # Public API
 import os
 
-from conftest import default_config
-
 from dbos import DBOS, Queue, SetWorkflowID
+from tests.conftest import default_config
 
 q = Queue("testq", concurrency=1, limiter={"limit": 1, "period": 1})
 
