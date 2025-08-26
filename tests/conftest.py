@@ -68,23 +68,6 @@ def sys_db(config: DBOSConfig) -> Generator[SystemDatabase, Any, None]:
     sys_db.destroy()
 
 
-@pytest.fixture()
-def app_db(config: DBOSConfig) -> Generator[ApplicationDatabase, Any, None]:
-    assert config["database_url"] is not None
-    app_db = ApplicationDatabase.create(
-        database_url=config["database_url"],
-        engine_kwargs={
-            "pool_timeout": 30,
-            "max_overflow": 0,
-            "pool_size": 2,
-            "connect_args": {"connect_timeout": 30},
-        },
-    )
-    app_db.run_migrations()
-    yield app_db
-    app_db.destroy()
-
-
 @pytest.fixture(scope="session")
 def db_engine() -> sa.Engine:
     cfg = default_config()

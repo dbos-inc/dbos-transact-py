@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from dbos import DBOS, DBOSConfig
 
 
-def test_migrate(db_engine: sa.Engine, skip_with_sqlite) -> None:
+def test_migrate(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
     """Test that you can migrate with a privileged role and run DBOS with a less-privileged role"""
     database_name = "migrate_test"
     role_name = "migrate-test-role"

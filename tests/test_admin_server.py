@@ -22,7 +22,7 @@ from dbos import (
 )
 from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.system_database import SystemSchema
-from dbos._sys_db import SystemDatabase, WorkflowStatusString
+from dbos._sys_db import WorkflowStatusString
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
 
@@ -280,7 +280,7 @@ def test_busy_admin_server_port_does_not_throw(config: DBOSConfig) -> None:
                 print("Warning: Server thread did not terminate gracefully.")
 
 
-def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_admin_workflow_resume(dbos: DBOS) -> None:
     event = threading.Event()
 
     @DBOS.workflow()
@@ -296,7 +296,7 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert len(output) == 1
     assert output[0] != None
     wfid = output[0].workflow_id
-    info = _workflow_commands.get_workflow(sys_db, wfid)
+    info = _workflow_commands.get_workflow(dbos._sys_db, wfid)
     assert info is not None
     assert info.status == "PENDING"
 
@@ -308,7 +308,7 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
     event.set()
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
-    info = _workflow_commands.get_workflow(sys_db, wfid)
+    info = _workflow_commands.get_workflow(dbos._sys_db, wfid)
     assert info is not None
     assert info.status == "CANCELLED"
 
@@ -330,13 +330,13 @@ def test_admin_workflow_resume(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert response.status_code == 204
     # Wait for the workflow to finish
     DBOS.retrieve_workflow(wfid).get_result()
-    info = _workflow_commands.get_workflow(sys_db, wfid)
+    info = _workflow_commands.get_workflow(dbos._sys_db, wfid)
     assert info is not None
     assert info.status == "SUCCESS"
     assert info.executor_id == GlobalParams.executor_id
 
 
-def test_admin_workflow_restart(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_admin_workflow_restart(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def simple_workflow() -> None:
@@ -355,7 +355,7 @@ def test_admin_workflow_restart(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     wfUuid = output[0].workflow_id
 
-    info = _workflow_commands.get_workflow(sys_db, wfUuid)
+    info = _workflow_commands.get_workflow(dbos._sys_db, wfUuid)
     assert info is not None, "Expected output to be not None"
 
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
@@ -373,7 +373,7 @@ def test_admin_workflow_restart(dbos: DBOS, sys_db: SystemDatabase) -> None:
     count = 0
     while count < 5:
         # Check if the workflow is in the database
-        info = _workflow_commands.get_workflow(sys_db, new_workflow_id)
+        info = _workflow_commands.get_workflow(dbos._sys_db, new_workflow_id)
         assert info is not None, "Expected output to be not None"
         if info.status == "SUCCESS":
             worked = True
@@ -384,7 +384,7 @@ def test_admin_workflow_restart(dbos: DBOS, sys_db: SystemDatabase) -> None:
     assert worked, "Workflow did not finish successfully"
 
 
-def test_admin_workflow_fork(dbos: DBOS, sys_db: SystemDatabase) -> None:
+def test_admin_workflow_fork(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def simple_workflow() -> None:
@@ -402,7 +402,7 @@ def test_admin_workflow_fork(dbos: DBOS, sys_db: SystemDatabase) -> None:
 
     wfUuid = output[0].workflow_id
 
-    info = _workflow_commands.get_workflow(sys_db, wfUuid)
+    info = _workflow_commands.get_workflow(dbos._sys_db, wfUuid)
     assert info is not None, "Expected output to be not None"
 
     assert info.status == "SUCCESS", f"Expected status to be SUCCESS"
@@ -424,7 +424,7 @@ def test_admin_workflow_fork(dbos: DBOS, sys_db: SystemDatabase) -> None:
     count = 0
     while count < 5:
         # Check if the workflow is in the database
-        info = _workflow_commands.get_workflow(sys_db, new_workflow_id)
+        info = _workflow_commands.get_workflow(dbos._sys_db, new_workflow_id)
         assert info is not None, "Expected output to be not None"
         if info.status == "SUCCESS":
             worked = True
