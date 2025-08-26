@@ -1,3 +1,4 @@
+import os
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -104,6 +105,52 @@ class SQLiteSystemDatabase(SystemDatabase):
         """Check if the error is a foreign key violation in SQLite."""
         # SQLite FOREIGN KEY constraint error
         return "FOREIGN KEY constraint failed" in str(dbapi_error.orig)
+
+    @staticmethod
+    def _reset_system_database(database_url: str) -> None:
+        """Reset the SQLite system database by deleting the database file."""
+        from urllib.parse import unquote, urlparse
+
+        # Parse the SQLite database URL to get the file path
+        parsed_url = urlparse(database_url)
+
+        # Handle different SQLite URL formats
+        if parsed_url.scheme == "sqlite":
+            if parsed_url.path.startswith("///"):
+                # Absolute path: sqlite:///path/to/db.sqlite
+                db_path = parsed_url.path[3:]  # Remove the leading ///
+            elif parsed_url.path.startswith("//"):
+                # UNC path or Windows absolute path: sqlite://path or sqlite:///C:/path
+                db_path = parsed_url.path[2:]  # Remove the leading //
+            else:
+                # Relative path: sqlite:path/to/db.sqlite
+                db_path = (
+                    parsed_url.path[1:]
+                    if parsed_url.path.startswith("/")
+                    else parsed_url.path
+                )
+        else:
+            raise ValueError(f"Unsupported database URL scheme: {parsed_url.scheme}")
+
+        # URL decode the path to handle spaces and special characters
+        db_path = unquote(db_path)
+
+        # Handle special case for in-memory database
+        if db_path in ("", ":memory:"):
+            dbos_logger.warning("Cannot reset in-memory SQLite database")
+            return
+
+        try:
+            if os.path.exists(db_path):
+                os.remove(db_path)
+                dbos_logger.info(f"Deleted SQLite database file: {db_path}")
+            else:
+                dbos_logger.info(f"SQLite database file does not exist: {db_path}")
+        except OSError as e:
+            dbos_logger.error(
+                f"Error deleting SQLite database file {db_path}: {str(e)}"
+            )
+            raise e
 
     def _notification_listener(self) -> None:
         """Poll for notifications and workflow events in SQLite."""

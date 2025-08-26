@@ -85,6 +85,35 @@ class PostgresSystemDatabase(SystemDatabase):
         """Check if the error is a foreign key violation in PostgreSQL."""
         return dbapi_error.orig.sqlstate == "23503"  # type: ignore
 
+    @staticmethod
+    def _reset_system_database(database_url: str) -> None:
+        """Reset the PostgreSQL system database by dropping it."""
+        system_db_url = sa.make_url(database_url)
+        sysdb_name = system_db_url.database
+
+        if sysdb_name is None:
+            raise ValueError("Database name is required in the database URL")
+
+        try:
+            # Connect to postgres default database
+            engine = sa.create_engine(
+                system_db_url.set(database="postgres", drivername="postgresql+psycopg"),
+                connect_args={"connect_timeout": 10},
+            )
+
+            with engine.connect() as conn:
+                # Set autocommit required for database dropping
+                conn.execution_options(isolation_level="AUTOCOMMIT")
+
+                # Drop the database
+                conn.execute(
+                    sa.text(f"DROP DATABASE IF EXISTS {sysdb_name} WITH (FORCE)")
+                )
+            engine.dispose()
+        except Exception as e:
+            dbos_logger.error(f"Error resetting PostgreSQL system database: {str(e)}")
+            raise e
+
     def _notification_listener(self) -> None:
         """Listen for PostgreSQL notifications using psycopg."""
         while self._run_background_processes:

@@ -1389,6 +1389,18 @@ class SystemDatabase(ABC):
         pass
 
     @staticmethod
+    def reset_system_database(database_url: str) -> None:
+        """Reset the system database by calling the appropriate implementation."""
+        if database_url.startswith("sqlite"):
+            from ._sys_db_sqlite import SQLiteSystemDatabase
+
+            SQLiteSystemDatabase._reset_system_database(database_url)
+        else:
+            from ._sys_db_postgres import PostgresSystemDatabase
+
+            PostgresSystemDatabase._reset_system_database(database_url)
+
+    @staticmethod
     def create(
         system_database_url: str,
         engine_kwargs: Dict[str, Any],
@@ -2004,36 +2016,3 @@ class SystemDatabase(ABC):
             return cutoff_epoch_timestamp_ms, [
                 row[0] for row in pending_enqueued_result
             ]
-
-
-def reset_system_database(postgres_db_url: sa.URL, sysdb_name: str) -> None:
-    try:
-        # Connect to postgres default database
-        engine = sa.create_engine(
-            postgres_db_url.set(drivername="postgresql+psycopg"),
-            connect_args={"connect_timeout": 10},
-        )
-
-        with engine.connect() as conn:
-            # Set autocommit required for database dropping
-            conn.execution_options(isolation_level="AUTOCOMMIT")
-
-            # Terminate existing connections
-            conn.execute(
-                sa.text(
-                    """
-                SELECT pg_terminate_backend(pg_stat_activity.pid)
-                FROM pg_stat_activity
-                WHERE pg_stat_activity.datname = :db_name
-                AND pid <> pg_backend_pid()
-            """
-                ),
-                {"db_name": sysdb_name},
-            )
-
-            # Drop the database
-            conn.execute(sa.text(f"DROP DATABASE IF EXISTS {sysdb_name}"))
-
-    except sa.exc.SQLAlchemyError as e:
-        dbos_logger.error(f"Error resetting system database: {str(e)}")
-        raise e
