@@ -1,3 +1,4 @@
+import time
 from typing import Any, Dict
 
 import sqlalchemy as sa
@@ -105,7 +106,77 @@ class SQLiteSystemDatabase(SystemDatabase):
         return "FOREIGN KEY constraint failed" in str(dbapi_error.orig)
 
     def _notification_listener(self) -> None:
-        """SQLite doesn't support real-time notifications."""
-        # SQLite doesn't have LISTEN/NOTIFY, so this is a no-op
-        # Real-time features would need to be implemented differently (polling, etc.)
-        pass
+        """Poll for notifications and workflow events in SQLite."""
+        while self._run_background_processes:
+            try:
+                # Poll every second
+                time.sleep(1)
+
+                # Check all payloads in the notifications_map
+                for payload in list(self.notifications_map._dict.keys()):
+                    # Check if this notification exists in the database
+                    with self.engine.begin() as conn:
+                        result = conn.execute(
+                            sa.text(
+                                "SELECT 1 FROM notifications "
+                                "WHERE destination_uuid = :dest_uuid AND topic = :topic "
+                                "LIMIT 1"
+                            ),
+                            {
+                                "dest_uuid": (
+                                    payload.split("::")[0]
+                                    if "::" in payload
+                                    else payload
+                                ),
+                                "topic": (
+                                    payload.split("::")[1] if "::" in payload else None
+                                ),
+                            },
+                        )
+                        if result.fetchone():
+                            # Signal the condition variable
+                            condition = self.notifications_map.get(payload)
+                            if condition:
+                                condition.acquire()
+                                condition.notify_all()
+                                condition.release()
+                                dbos_logger.debug(
+                                    f"Signaled notifications condition for {payload}"
+                                )
+
+                # Check all payloads in the workflow_events_map
+                for payload in list(self.workflow_events_map._dict.keys()):
+                    # Check if this workflow event exists in the database
+                    with self.engine.begin() as conn:
+                        result = conn.execute(
+                            sa.text(
+                                "SELECT 1 FROM workflow_events "
+                                "WHERE workflow_uuid = :workflow_uuid AND key = :key "
+                                "LIMIT 1"
+                            ),
+                            {
+                                "workflow_uuid": (
+                                    payload.split("::")[0]
+                                    if "::" in payload
+                                    else payload
+                                ),
+                                "key": (
+                                    payload.split("::")[1] if "::" in payload else None
+                                ),
+                            },
+                        )
+                        if result.fetchone():
+                            # Signal the condition variable
+                            condition = self.workflow_events_map.get(payload)
+                            if condition:
+                                condition.acquire()
+                                condition.notify_all()
+                                condition.release()
+                                dbos_logger.debug(
+                                    f"Signaled workflow_events condition for {payload}"
+                                )
+
+            except Exception as e:
+                if self._run_background_processes:
+                    dbos_logger.warning(f"SQLite notification poller error: {e}")
+                    time.sleep(1)
