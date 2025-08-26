@@ -314,7 +314,7 @@ def db_retry(
             while True:
                 try:
                     return func(*args, **kwargs)
-                except DBAPIError as e:
+                except Exception as e:
 
                     # Determine if this is a retriable exception
                     if not retriable_postgres_exception(

@@ -20,7 +20,9 @@ class GlobalParams:
         dbos_version = "unknown"
 
 
-def retriable_postgres_exception(e: DBAPIError) -> bool:
+def retriable_postgres_exception(e: Exception) -> bool:
+    if not isinstance(e, DBAPIError):
+        return False
     if e.connection_invalidated:
         return True
     if isinstance(e.orig, psycopg.OperationalError):
@@ -50,11 +52,8 @@ def retriable_postgres_exception(e: DBAPIError) -> bool:
         return False
 
 
-def retriable_sqlite_exception(e: DBAPIError) -> bool:
-    if isinstance(e.orig, psycopg.OperationalError):
-        driver_error: psycopg.OperationalError = e.orig
-        if "database is locked" in str(driver_error):
-            return True
-        return False
+def retriable_sqlite_exception(e: Exception) -> bool:
+    if "database is locked" in str(e):
+        return True
     else:
         return False
