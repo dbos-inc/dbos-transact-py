@@ -243,7 +243,7 @@ def test_exception_workflow(dbos: DBOS) -> None:
         try:
             bad_transaction()
         except Exception as e:
-            assert str(e.orig.sqlstate) == "42601"  # type: ignore
+            assert "syntax error" in str(e)
         raise err1
 
     with pytest.raises(Exception) as exc_info:

@@ -955,13 +955,9 @@ def decorate_transaction(
                                 )
                                 break
                         except DBAPIError as dbapi_error:
-                            driver_error = cast(
-                                Optional[psycopg.OperationalError], dbapi_error.orig
-                            )
-                            if retriable_postgres_exception(dbapi_error) or (
-                                driver_error is not None
-                                and driver_error.sqlstate == "40001"
-                            ):
+                            if retriable_postgres_exception(
+                                dbapi_error
+                            ) or dbos._app_db._is_serialization_error(dbapi_error):
                                 # Retry on serialization failure
                                 span = ctx.get_current_span()
                                 if span:

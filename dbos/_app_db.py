@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, TypedDict
 
+import psycopg
 import sqlalchemy as sa
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import DBAPIError
@@ -229,6 +230,11 @@ class ApplicationDatabase(ABC):
         """Check if the error is a unique constraint violation."""
         pass
 
+    @abstractmethod
+    def _is_serialization_error(self, dbapi_error: DBAPIError) -> bool:
+        """Check if the error is a serialization/concurrency error."""
+        pass
+
     @staticmethod
     def create(
         database_url: str,
@@ -336,6 +342,17 @@ class PostgresApplicationDatabase(ApplicationDatabase):
         """Check if the error is a unique constraint violation in PostgreSQL."""
         return dbapi_error.orig.sqlstate == "23505"  # type: ignore
 
+    def _is_serialization_error(self, dbapi_error: DBAPIError) -> bool:
+        """Check if the error is a serialization/concurrency error in PostgreSQL."""
+        # 40001: serialization_failure (MVCC conflict)
+        # 40P01: deadlock_detected
+        driver_error = dbapi_error.orig
+        return (
+            driver_error is not None
+            and isinstance(driver_error, psycopg.OperationalError)
+            and driver_error.sqlstate in ("40001", "40P01")
+        )
+
 
 class SQLiteApplicationDatabase(ApplicationDatabase):
     """SQLite-specific implementation of ApplicationDatabase."""
@@ -393,3 +410,11 @@ class SQLiteApplicationDatabase(ApplicationDatabase):
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation in SQLite."""
         return "UNIQUE constraint failed" in str(dbapi_error.orig)
+
+    def _is_serialization_error(self, dbapi_error: DBAPIError) -> bool:
+        """Check if the error is a serialization/concurrency error in SQLite."""
+        # SQLite database is locked or busy errors
+        error_msg = str(dbapi_error.orig).lower()
+        return (
+            "database is locked" in error_msg or "database table is locked" in error_msg
+        )
