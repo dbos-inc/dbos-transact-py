@@ -92,7 +92,7 @@ class PostgresSystemDatabase(SystemDatabase):
         sysdb_name = system_db_url.database
 
         if sysdb_name is None:
-            raise ValueError("Database name is required in the database URL")
+            raise ValueError(f"System database name not found in URL {system_db_url}")
 
         try:
             # Connect to postgres default database

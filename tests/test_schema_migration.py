@@ -161,7 +161,6 @@ def test_sqlite_systemdb_migration() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as temp_db:
         temp_db_path = temp_db.name
 
-    try:
         # Create SQLite system database URL
         sqlite_url = f"sqlite:///{temp_db_path}"
 
@@ -218,7 +217,9 @@ def test_sqlite_systemdb_migration() -> None:
         # Clean up
         sys_db.destroy()
 
-    finally:
-        # Remove temporary database file
-        if os.path.exists(temp_db_path):
-            os.unlink(temp_db_path)
+    # Test resetting the system database
+    assert os.path.exists(temp_db_path)
+    DBOS(config={"name": "sqlite_test", "database_url": sqlite_url})
+    DBOS.reset_system_database()
+    assert not os.path.exists(temp_db_path)
+    DBOS.destroy()

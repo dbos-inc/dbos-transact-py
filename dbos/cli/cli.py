@@ -376,7 +376,7 @@ def reset(
             {"database_url": database_url, "database": {"sys_db_name": sys_db_name}}
         )
         SystemDatabase.reset_system_database(system_database_url)
-    except sa.exc.SQLAlchemyError as e:
+    except Exception as e:
         typer.echo(f"Error resetting system database: {str(e)}")
         return
 

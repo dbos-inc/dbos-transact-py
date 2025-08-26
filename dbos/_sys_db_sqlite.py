@@ -109,36 +109,13 @@ class SQLiteSystemDatabase(SystemDatabase):
     @staticmethod
     def _reset_system_database(database_url: str) -> None:
         """Reset the SQLite system database by deleting the database file."""
-        from urllib.parse import unquote, urlparse
 
         # Parse the SQLite database URL to get the file path
-        parsed_url = urlparse(database_url)
+        url = sa.make_url(database_url)
+        db_path = url.database
 
-        # Handle different SQLite URL formats
-        if parsed_url.scheme == "sqlite":
-            if parsed_url.path.startswith("///"):
-                # Absolute path: sqlite:///path/to/db.sqlite
-                db_path = parsed_url.path[3:]  # Remove the leading ///
-            elif parsed_url.path.startswith("//"):
-                # UNC path or Windows absolute path: sqlite://path or sqlite:///C:/path
-                db_path = parsed_url.path[2:]  # Remove the leading //
-            else:
-                # Relative path: sqlite:path/to/db.sqlite
-                db_path = (
-                    parsed_url.path[1:]
-                    if parsed_url.path.startswith("/")
-                    else parsed_url.path
-                )
-        else:
-            raise ValueError(f"Unsupported database URL scheme: {parsed_url.scheme}")
-
-        # URL decode the path to handle spaces and special characters
-        db_path = unquote(db_path)
-
-        # Handle special case for in-memory database
-        if db_path in ("", ":memory:"):
-            dbos_logger.warning("Cannot reset in-memory SQLite database")
-            return
+        if db_path is None:
+            raise ValueError(f"System database path not found in URL {url}")
 
         try:
             if os.path.exists(db_path):
