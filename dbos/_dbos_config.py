@@ -350,9 +350,9 @@ def process_config(
 
         url = make_url(data["database_url"])
 
-        if data["database_url"].startswith("sqlite"):
-            data["system_database_url"] = data["database_url"]
-        elif not data["database"].get("sys_db_name"):
+        if not data["database"].get("sys_db_name") and not data[
+            "database_url"
+        ].startswith("sqlite"):
             assert url.database is not None
             data["database"]["sys_db_name"] = url.database + SystemSchema.sysdb_suffix
 
@@ -563,6 +563,8 @@ def get_system_database_url(config: ConfigFile) -> str:
         return config["system_database_url"]
     else:
         assert config["database_url"] is not None
+        if config["database_url"].startswith("sqlite"):
+            return config["database_url"]
         app_db_url = make_url(config["database_url"])
         if config["database"].get("sys_db_name") is not None:
             sys_db_name = config["database"]["sys_db_name"]
