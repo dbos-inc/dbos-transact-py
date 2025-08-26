@@ -455,7 +455,7 @@ def test_admin_workflow_fork(dbos: DBOS) -> None:
     assert worked, "Workflow did not finish successfully"
 
 
-def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_timeL: None) -> None:
+def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
     # Create workflows for testing
     @DBOS.workflow()
     def test_workflow_1() -> None:
