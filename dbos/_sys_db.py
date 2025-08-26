@@ -1348,18 +1348,18 @@ class SystemDatabase(ABC):
                 .where(
                     SystemSchema.notifications.c.destination_uuid == workflow_uuid,
                     SystemSchema.notifications.c.topic == topic,
-                    SystemSchema.notifications.c.created_at_epoch_ms
+                    SystemSchema.notifications.c.message_uuid
                     == (
-                        sa.select(
-                            sa.func.min(
-                                SystemSchema.notifications.c.created_at_epoch_ms
-                            )
-                        )
+                        sa.select(SystemSchema.notifications.c.message_uuid)
                         .where(
                             SystemSchema.notifications.c.destination_uuid
                             == workflow_uuid,
                             SystemSchema.notifications.c.topic == topic,
                         )
+                        .order_by(
+                            SystemSchema.notifications.c.created_at_epoch_ms.asc()
+                        )
+                        .limit(1)
                         .scalar_subquery()
                     ),
                 )
