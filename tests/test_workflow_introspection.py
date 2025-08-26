@@ -1,4 +1,5 @@
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -199,7 +200,9 @@ def test_list_workflow_start_end_times(dbos: DBOS) -> None:
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
 
-def test_list_workflow_end_times_positive(dbos: DBOS) -> None:
+def test_list_workflow_end_times_positive(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
     @DBOS.workflow()
     def simple_workflow() -> None:
         print("Executed Simple workflow")
@@ -248,7 +251,7 @@ def test_get_workflow(dbos: DBOS) -> None:
         assert info.workflow_id == wfUuid, f"Expected workflow_uuid to be {wfUuid}"
 
 
-def test_queued_workflows(dbos: DBOS) -> None:
+def test_queued_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
     queued_steps = 5
     step_events = [threading.Event() for _ in range(queued_steps)]
     event = threading.Event()

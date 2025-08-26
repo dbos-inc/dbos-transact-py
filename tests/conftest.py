@@ -1,6 +1,7 @@
 import glob
 import os
 import subprocess
+import sys
 import time
 from typing import Any, Generator, Tuple
 from urllib.parse import quote, urlparse
@@ -33,6 +34,14 @@ def using_sqlite() -> bool:
 def skip_with_sqlite() -> None:
     if using_sqlite():
         pytest.skip("Skipping test when testing SQLite")
+
+
+@pytest.fixture()
+def skip_with_sqlite_imprecise_time() -> None:
+    if using_sqlite() and sys.version_info < (3, 12):
+        pytest.skip(
+            "Skipping test when testing SQLite on Python version <3.12 as SQLite lacks ms-precision timestamps"
+        )
 
 
 def default_config() -> DBOSConfig:
