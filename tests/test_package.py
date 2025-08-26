@@ -12,6 +12,9 @@ import requests
 import sqlalchemy as sa
 import yaml
 
+from dbos._dbos_config import DBOSConfig
+from tests.conftest import using_sqlite
+
 
 def test_package(
     build_wheel: str, db_engine: sa.Engine, skip_with_sqlite: None
@@ -162,23 +165,24 @@ def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
             assert result == 0
 
 
-def test_workflow_commands(db_engine: sa.Engine) -> None:
-    app_name = "reset-app"
-    db_url = db_engine.url.set(database="dbos_toolbox").render_as_string(
-        hide_password=False
-    )
+def test_workflow_commands(config: DBOSConfig) -> None:
+    if using_sqlite():
+        db_url = config["database_url"]
+    else:
+        db_url = (
+            sa.make_url(config["database_url"])
+            .set(database="dbos_toolbox")
+            .render_as_string(hide_password=False)
+        )
     with tempfile.TemporaryDirectory() as temp_path:
         env = os.environ.copy()
         env["DBOS_DATABASE_URL"] = db_url
         subprocess.check_call(
-            ["dbos", "init", app_name, "--template", "dbos-toolbox"],
+            ["dbos", "init", "--template", "dbos-toolbox"],
             cwd=temp_path,
             env=env,
         )
         subprocess.check_call(["dbos", "reset", "-y", "-D", db_url], cwd=temp_path)
-        subprocess.check_call(
-            ["dbos", "migrate"], cwd=temp_path, env=env
-        )  # For the alembic migration
 
         # Get some workflows enqueued on the toolbox, then kill the toolbox
         process = subprocess.Popen(["dbos", "start"], cwd=temp_path, env=env)
