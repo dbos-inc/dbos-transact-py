@@ -219,6 +219,7 @@ def test_sqlite_systemdb_migration() -> None:
 
     # Test resetting the system database
     assert os.path.exists(temp_db_path)
+    DBOS.destroy()
     DBOS(config={"name": "sqlite_test", "database_url": sqlite_url})
     DBOS.reset_system_database()
     assert not os.path.exists(temp_db_path)
