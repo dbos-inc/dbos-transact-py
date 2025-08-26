@@ -21,7 +21,12 @@ def test_dbos_singleton(cleanup_test_databases: None) -> None:
 
     # Simulate an app that does some imports of its own code, then defines DBOS,
     #    then imports more
-    from tests.classdefs import DBOSSendRecv, DBOSTestClass, DBOSTestRoles
+    from tests.classdefs import (
+        DBOSSendRecv,
+        DBOSTestClass,
+        DBOSTestRoles,
+        DBOSTestWrapperMethods,
+    )
 
     dbos: DBOS = DBOS(config=default_config())
 
@@ -52,6 +57,26 @@ def test_dbos_singleton(cleanup_test_databases: None) -> None:
     assert stati.class_name and "DBOSTestClass" in stati.class_name
     wfhr: WorkflowHandle[str] = DBOS.retrieve_workflow(wh.get_workflow_id())
     assert wfhr.workflow_id == wh.get_workflow_id()
+
+    # Test wrapper class methods
+    wrapper_inst = DBOSTestWrapperMethods("dynamicconfig")
+    res = wrapper_inst.test_workflow("x", "y")
+    assert res == "y1x"
+
+    wh = DBOS.start_workflow(wrapper_inst.test_workflow, "x", "y")
+    assert wh.get_result() == "y1x"
+    stati = DBOS.get_workflow_status(wh.get_workflow_id())
+    assert stati
+    assert stati.config_name is None
+    assert stati.class_name is None
+    assert stati.name == "dynamicconfig_test_workflow"
+    wfhr = DBOS.retrieve_workflow(wh.get_workflow_id())
+    assert wfhr.workflow_id == wh.get_workflow_id()
+
+    stepi = DBOS.list_workflow_steps(wh.get_workflow_id())
+    assert len(stepi) == 2
+    assert stepi[0]["function_name"] == "dynamicconfig_test_transaction"
+    assert stepi[1]["function_name"] == "dynamicconfig_test_step"
 
     # Roles
 
