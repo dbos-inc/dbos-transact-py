@@ -31,7 +31,7 @@ from dbos._sys_db_postgres import PostgresSystemDatabase
 from .conftest import queue_entries_are_cleaned_up
 
 
-def test_transaction_errors(dbos: DBOS) -> None:
+def test_transaction_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
     retry_counter: int = 0
 
     @DBOS.transaction()
@@ -117,7 +117,7 @@ def test_invalid_transaction_error(dbos: DBOS) -> None:
     assert rollback_txn_counter == 1
 
 
-def test_notification_errors(dbos: DBOS) -> None:
+def test_notification_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
     @DBOS.workflow()
     def test_send_workflow(dest_uuid: str, topic: str) -> str:
         DBOS.send(dest_uuid, "test1")
