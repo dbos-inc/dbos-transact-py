@@ -350,11 +350,14 @@ def process_config(
 
         url = make_url(data["database_url"])
 
-        if not data["database"].get("sys_db_name") and not data[
-            "database_url"
-        ].startswith("sqlite"):
+        if data["database_url"].startswith("sqlite"):
+            data["system_database_url"] = data["database_url"]
+        else:
             assert url.database is not None
-            data["database"]["sys_db_name"] = url.database + SystemSchema.sysdb_suffix
+            if not data["database"].get("sys_db_name"):
+                data["database"]["sys_db_name"] = (
+                    url.database + SystemSchema.sysdb_suffix
+                )
 
         # Gather connect_timeout from the URL if provided. It should be used in engine kwargs if not provided there (instead of our default)
         connect_timeout_str = url.query.get("connect_timeout")
