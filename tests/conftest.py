@@ -86,12 +86,13 @@ def cleanup_test_databases(config: DBOSConfig, db_engine: sa.Engine) -> None:
     if using_sqlite():
         # For SQLite, delete the database files
         # Extract file path from SQLite URL
-        parsed_url = urlparse(database_url)
-        app_db_path = parsed_url.path[1:]  # Remove leading '/'
+        parsed_url = sa.make_url(database_url)
+        db_path = parsed_url.database
+        assert db_path is not None
 
         # Remove the database files if they exist
-        if os.path.exists(app_db_path):
-            os.remove(app_db_path)
+        if os.path.exists(db_path):
+            os.remove(db_path)
     else:
         # For PostgreSQL, drop the databases
         app_db_name = sa.make_url(database_url).database
