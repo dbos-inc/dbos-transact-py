@@ -32,7 +32,9 @@ def run_client_collateral() -> None:
     runpy.run_path(filename)
 
 
-def test_client_no_migrate(dbos: DBOS, config: DBOSConfig) -> None:
+def test_client_no_migrate(
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None
+) -> None:
     # Drop the system database
     DBOS.destroy()
     DBOS(config=config)
@@ -258,7 +260,9 @@ def run_send_worker(wfid: str, topic: Optional[str], app_ver: str) -> None:
     DBOS.logger.info(result.stdout)
 
 
-def test_client_send_idempotent(dbos: DBOS, client: DBOSClient) -> None:
+def test_client_send_idempotent(
+    dbos: DBOS, client: DBOSClient, skip_with_sqlite: None
+) -> None:
     run_client_collateral()
 
     now = math.floor(time.time())
@@ -299,7 +303,9 @@ def test_client_send_idempotent(dbos: DBOS, client: DBOSClient) -> None:
     assert result2 == message
 
 
-def test_client_send_failure(dbos: DBOS, client: DBOSClient) -> None:
+def test_client_send_failure(
+    dbos: DBOS, client: DBOSClient, skip_with_sqlite: None
+) -> None:
     run_client_collateral()
 
     now = math.floor(time.time())
