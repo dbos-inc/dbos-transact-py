@@ -111,21 +111,17 @@ class DBOSTestWrapperMethods:
             self.step_counter += 1
             return var
 
-        self.test_step = wrapped_test_step
-
         @DBOS.transaction(name=f"{self.name}_test_transaction")
         def wrapped_test_transaction(var2: str) -> str:
             rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
             self.txn_counter += 1
             return var2 + str(rows[0][0])
 
-        self.test_transaction = wrapped_test_transaction
-
         @DBOS.workflow(name=f"{self.name}_test_workflow")
         def wrapped_test_workflow(var: str, var2: str) -> str:
             self.wf_counter += 1
-            res = self.test_transaction(var2)
-            res2 = self.test_step(var)
+            res = wrapped_test_transaction(var2)
+            res2 = wrapped_test_step(var)
             return res + res2
 
         self.test_workflow = wrapped_test_workflow
