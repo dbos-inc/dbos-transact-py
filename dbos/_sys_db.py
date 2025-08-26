@@ -847,7 +847,7 @@ class SystemDatabase(ABC):
             query = query.offset(input.offset)
 
         with self.engine.begin() as c:
-            rows = c.execute(query)
+            rows = c.execute(query).fetchall()
 
         infos: List[WorkflowStatus] = []
         for row in rows:
@@ -958,7 +958,7 @@ class SystemDatabase(ABC):
             query = query.offset(input["offset"])
 
         with self.engine.begin() as c:
-            rows = c.execute(query)
+            rows = c.execute(query).fetchall()
 
         infos: List[WorkflowStatus] = []
         for row in rows:
