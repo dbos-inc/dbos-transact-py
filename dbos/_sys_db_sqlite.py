@@ -107,6 +107,23 @@ class SQLiteSystemDatabase(SystemDatabase):
 
     def _notification_listener(self) -> None:
         """Poll for notifications and workflow events in SQLite."""
+
+        def split_payload(payload: str) -> tuple[str, str | None]:
+            """Split payload into components (first::second format)."""
+            if "::" in payload:
+                parts = payload.split("::", 1)
+                return parts[0], parts[1]
+            return payload, None
+
+        def signal_condition(condition_map: Any, payload: str) -> None:
+            """Signal a condition variable if it exists."""
+            condition = condition_map.get(payload)
+            if condition:
+                condition.acquire()
+                condition.notify_all()
+                condition.release()
+                dbos_logger.debug(f"Signaled condition for {payload}")
+
         while self._run_background_processes:
             try:
                 # Poll every second
@@ -114,67 +131,29 @@ class SQLiteSystemDatabase(SystemDatabase):
 
                 # Check all payloads in the notifications_map
                 for payload in list(self.notifications_map._dict.keys()):
-                    # Check if this notification exists in the database
+                    dest_uuid, topic = split_payload(payload)
                     with self.engine.begin() as conn:
                         result = conn.execute(
                             sa.text(
-                                "SELECT 1 FROM notifications "
-                                "WHERE destination_uuid = :dest_uuid AND topic = :topic "
-                                "LIMIT 1"
+                                "SELECT 1 FROM notifications WHERE destination_uuid = :dest_uuid AND topic = :topic LIMIT 1"
                             ),
-                            {
-                                "dest_uuid": (
-                                    payload.split("::")[0]
-                                    if "::" in payload
-                                    else payload
-                                ),
-                                "topic": (
-                                    payload.split("::")[1] if "::" in payload else None
-                                ),
-                            },
+                            {"dest_uuid": dest_uuid, "topic": topic},
                         )
                         if result.fetchone():
-                            # Signal the condition variable
-                            condition = self.notifications_map.get(payload)
-                            if condition:
-                                condition.acquire()
-                                condition.notify_all()
-                                condition.release()
-                                dbos_logger.debug(
-                                    f"Signaled notifications condition for {payload}"
-                                )
+                            signal_condition(self.notifications_map, payload)
 
                 # Check all payloads in the workflow_events_map
                 for payload in list(self.workflow_events_map._dict.keys()):
-                    # Check if this workflow event exists in the database
+                    workflow_uuid, key = split_payload(payload)
                     with self.engine.begin() as conn:
                         result = conn.execute(
                             sa.text(
-                                "SELECT 1 FROM workflow_events "
-                                "WHERE workflow_uuid = :workflow_uuid AND key = :key "
-                                "LIMIT 1"
+                                "SELECT 1 FROM workflow_events WHERE workflow_uuid = :workflow_uuid AND key = :key LIMIT 1"
                             ),
-                            {
-                                "workflow_uuid": (
-                                    payload.split("::")[0]
-                                    if "::" in payload
-                                    else payload
-                                ),
-                                "key": (
-                                    payload.split("::")[1] if "::" in payload else None
-                                ),
-                            },
+                            {"workflow_uuid": workflow_uuid, "key": key},
                         )
                         if result.fetchone():
-                            # Signal the condition variable
-                            condition = self.workflow_events_map.get(payload)
-                            if condition:
-                                condition.acquire()
-                                condition.notify_all()
-                                condition.release()
-                                dbos_logger.debug(
-                                    f"Signaled workflow_events condition for {payload}"
-                                )
+                            signal_condition(self.workflow_events_map, payload)
 
             except Exception as e:
                 if self._run_background_processes:
