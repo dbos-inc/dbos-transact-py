@@ -92,7 +92,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
 def test_simple_workflow_attempts_counter(dbos: DBOS) -> None:
     @DBOS.workflow()
     def noop() -> None:
-        pass
+        time.sleep(2)
 
     wfuuid = str(uuid.uuid4())
     with dbos._sys_db.engine.connect() as c:
@@ -282,7 +282,7 @@ def test_temp_workflow(dbos: DBOS) -> None:
     gwi: GetWorkflowsInput = GetWorkflowsInput()
     gwi.start_time = cur_time
 
-    @DBOS.transaction(isolation_level="READ COMMITTED")
+    @DBOS.transaction()
     def test_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
@@ -1048,7 +1048,7 @@ def test_nonserializable_values(dbos: DBOS) -> None:
     def invalid_return() -> str:
         return "literal"
 
-    @DBOS.transaction(isolation_level="READ COMMITTED")
+    @DBOS.transaction()
     def test_ns_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         return invalid_return  #  type: ignore
@@ -1061,7 +1061,7 @@ def test_nonserializable_values(dbos: DBOS) -> None:
     def test_ns_wf(var: str) -> str:
         return invalid_return  #  type: ignore
 
-    @DBOS.transaction(isolation_level="READ COMMITTED")
+    @DBOS.transaction()
     def test_reg_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         return var2
