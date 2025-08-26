@@ -589,10 +589,13 @@ class DBOS:
             not self._launched
         ), "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
 
+        assert self._config["database_url"] is not None
+        if self._config["database_url"].startswith("sqlite"):
+            raise Exception("Resetting a SQLite system database is not supported")
+
         sysdb_name = self._config["database"]["sys_db_name"]
         assert sysdb_name is not None
 
-        assert self._config["database_url"] is not None
         pg_db_url = make_url(self._config["database_url"]).set(database="postgres")
 
         reset_system_database(pg_db_url, sysdb_name)

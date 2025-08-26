@@ -12,10 +12,9 @@ from dbos._migration import dbos_migrations, run_alembic_migrations, sqlite_migr
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._sys_db_postgres import PostgresSystemDatabase
-from dbos._sys_db_sqlite import SQLiteSystemDatabase
 
 
-def test_systemdb_migration(dbos: DBOS) -> None:
+def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
     # Make sure all tables exist
     with dbos._sys_db.engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
@@ -44,7 +43,7 @@ def test_systemdb_migration(dbos: DBOS) -> None:
 
 
 def test_alembic_migrations_compatibility(
-    config: DBOSConfig, db_engine: sa.Engine
+    config: DBOSConfig, db_engine: sa.Engine, skip_with_sqlite: None
 ) -> None:
     system_database_url = f"{config['database_url']}_dbos_sys"
     sysdb_name = sa.make_url(system_database_url).database
@@ -93,7 +92,9 @@ def test_alembic_migrations_compatibility(
     assert DBOS.list_workflows() == []
 
 
-def test_custom_sysdb_name_migration(config: DBOSConfig, db_engine: sa.Engine) -> None:
+def test_custom_sysdb_name_migration(
+    config: DBOSConfig, db_engine: sa.Engine, skip_with_sqlite: None
+) -> None:
     sysdb_name = "custom_sysdb_name"
     config["sys_db_name"] = sysdb_name
 
@@ -116,7 +117,9 @@ def test_custom_sysdb_name_migration(config: DBOSConfig, db_engine: sa.Engine) -
     DBOS.destroy()
 
 
-def test_reset(config: DBOSConfig, db_engine: sa.Engine) -> None:
+def test_reset(
+    config: DBOSConfig, db_engine: sa.Engine, skip_with_sqlite: None
+) -> None:
     DBOS.destroy()
     dbos = DBOS(config=config)
     DBOS.launch()
