@@ -598,7 +598,7 @@ def test_process_config_with_wrong_db_url():
     )
 
 
-def test_database_url_no_password():
+def test_database_url_no_password(skip_with_sqlite: None):
     """Test that the database URL can be provided without a password."""
     expected_url = "postgresql://postgres@localhost:5432/dbostestpy?sslmode=disable"
     config: DBOSConfig = {

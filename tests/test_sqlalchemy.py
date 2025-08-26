@@ -23,7 +23,9 @@ class Hello(Base):
         return f"Hello(greet_count={self.greet_count!r}, name={self.name!r})"
 
 
-def test_simple_transaction(dbos: DBOS, db_engine: sa.Engine) -> None:
+def test_simple_transaction(
+    dbos: DBOS, db_engine: sa.Engine, skip_with_sqlite: None
+) -> None:
     txn_counter: int = 0
     assert dbos._app_db_field is not None
     Base.metadata.drop_all(dbos._app_db_field.engine)
@@ -70,7 +72,9 @@ def test_simple_transaction(dbos: DBOS, db_engine: sa.Engine) -> None:
         assert len(result) == 0
 
 
-def test_error_transaction(dbos: DBOS, db_engine: sa.Engine) -> None:
+def test_error_transaction(
+    dbos: DBOS, db_engine: sa.Engine, skip_with_sqlite: None
+) -> None:
     txn_counter: int = 0
     assert dbos._app_db_field is not None
     # Drop the database but don't re-create. Should fail.
