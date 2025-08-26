@@ -1489,11 +1489,11 @@ class SystemDatabase(ABC):
                 .values(
                     workflow_uuid=workflow_uuid,
                     key=key,
-                    value=message,
+                    value=_serialization.serialize(message),
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key"],
-                    set_={"value": message},
+                    set_={"value": _serialization.serialize(message)},
                 )
             )
             output: OperationResultInternal = {
