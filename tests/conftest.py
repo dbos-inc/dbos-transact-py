@@ -25,13 +25,13 @@ def build_wheel() -> str:
     return wheel_files[0]
 
 
-def testing_sqlite() -> bool:
+def using_sqlite() -> bool:
     return os.environ.get("DBOS_SQLITE", None) == "true"
 
 
 @pytest.fixture()
 def skip_with_sqlite() -> None:
-    if testing_sqlite():
+    if using_sqlite():
         pytest.skip("Skipping test when testing SQLite")
 
 
@@ -40,7 +40,7 @@ def default_config() -> DBOSConfig:
         "name": "test-app",
         "database_url": (
             "sqlite:///test.db"
-            if testing_sqlite()
+            if using_sqlite()
             else f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy"
         ),
     }
@@ -55,7 +55,7 @@ def config() -> DBOSConfig:
 def db_engine() -> sa.Engine:
     cfg = default_config()
     assert cfg["database_url"] is not None
-    if testing_sqlite():
+    if using_sqlite():
         return sa.create_engine(cfg["database_url"])
     else:
         return sa.create_engine(
@@ -74,7 +74,7 @@ def cleanup_test_databases(config: DBOSConfig, db_engine: sa.Engine) -> None:
     assert config["database_url"] is not None
     database_url = config["database_url"]
 
-    if testing_sqlite():
+    if using_sqlite():
         # For SQLite, delete the database files
         # Extract file path from SQLite URL
         parsed_url = urlparse(database_url)

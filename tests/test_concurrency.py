@@ -8,6 +8,7 @@ from sqlalchemy import text
 
 # Public API
 from dbos import DBOS, SetWorkflowID
+from tests.conftest import using_sqlite
 
 
 def test_concurrent_workflows(dbos: DBOS) -> None:
@@ -60,7 +61,9 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
         return res
 
     # Need to set isolation level to a lower one, otherwise it gets serialization error instead (we already handle it correctly by automatic retries).
-    @DBOS.transaction(isolation_level="REPEATABLE READ")
+    @DBOS.transaction(
+        isolation_level=("SERIALIZABLE" if using_sqlite() else "REPEATABLE READ")
+    )
     def test_transaction() -> str:
         DBOS.sql_session.execute(text("SELECT 1")).fetchall()
         nonlocal txn_count
