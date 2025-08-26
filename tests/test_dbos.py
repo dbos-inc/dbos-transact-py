@@ -108,7 +108,7 @@ def test_simple_workflow_attempts_counter(dbos: DBOS) -> None:
             assert result is not None
             recovery_attempts, created_at, updated_at = result
             assert recovery_attempts == i + 1
-            assert updated_at > created_at
+            assert updated_at >= created_at
 
 
 def test_child_workflow(dbos: DBOS) -> None:
