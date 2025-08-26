@@ -29,6 +29,12 @@ def testing_sqlite() -> bool:
     return os.environ.get("DBOS_SQLITE", None) == "true"
 
 
+@pytest.fixture()
+def skip_with_sqlite() -> None:
+    if testing_sqlite():
+        pytest.skip("Skipping test when testing SQLite")
+
+
 def default_config() -> DBOSConfig:
     return {
         "name": "test-app",
