@@ -630,7 +630,7 @@ def test_fork_version(
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_garbage_collection(dbos: DBOS) -> None:
+def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
     event = threading.Event()
 
     @DBOS.step()
