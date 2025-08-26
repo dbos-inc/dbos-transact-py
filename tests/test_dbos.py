@@ -278,10 +278,6 @@ def test_temp_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
     step_counter: int = 0
 
-    cur_time: str = datetime.datetime.now().isoformat()
-    gwi: GetWorkflowsInput = GetWorkflowsInput()
-    gwi.start_time = cur_time
-
     @DBOS.transaction()
     def test_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
@@ -306,7 +302,7 @@ def test_temp_workflow(dbos: DBOS) -> None:
     res = test_step("var")
     assert res == "var"
 
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = DBOS.list_workflows()
     assert len(wfs) == 1
 
     wfi1 = dbos._sys_db.get_workflow_status(wfs[0].workflow_id)
@@ -514,16 +510,12 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
         txn_counter += 1
         return var2 + str(rows[0][0])
 
-    cur_time: str = datetime.datetime.now().isoformat()
-    gwi: GetWorkflowsInput = GetWorkflowsInput()
-    gwi.start_time = cur_time
-
     wfuuid = str(uuid.uuid4())
     with SetWorkflowID(wfuuid):
         res = test_transaction("bob")
         assert res == "bob1"
 
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = DBOS.list_workflows()
     assert len(wfs) == 1
     assert wfs[0].workflow_id == wfuuid
 
@@ -544,7 +536,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == "bob1"
 
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = DBOS.list_workflows()
     assert len(wfs) == 1
     assert wfs[0].workflow_id == wfuuid
 
@@ -906,9 +898,7 @@ def test_send_recv(dbos: DBOS) -> None:
 
 def test_send_recv_temp_wf(dbos: DBOS) -> None:
     recv_counter: int = 0
-    cur_time: str = datetime.datetime.now().isoformat()
     gwi: GetWorkflowsInput = GetWorkflowsInput()
-    gwi.start_time = cur_time
 
     @DBOS.workflow()
     def test_send_recv_workflow(topic: str) -> str:
@@ -948,7 +938,6 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     wfs = dbos._sys_db.get_workflows(gwi)
     assert dest_uuid in [w.workflow_id for w in wfs]
 
-    gwi.start_time = cur_time
     gwi.workflow_id_prefix = dest_uuid[0:10]
     wfs = dbos._sys_db.get_workflows(gwi)
     assert dest_uuid in [w.workflow_id for w in wfs]
