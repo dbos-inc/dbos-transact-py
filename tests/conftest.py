@@ -51,23 +51,6 @@ def config() -> DBOSConfig:
     return default_config()
 
 
-@pytest.fixture()
-def sys_db(config: DBOSConfig) -> Generator[SystemDatabase, Any, None]:
-    assert config["database_url"] is not None
-    sys_db = SystemDatabase.create(
-        system_database_url=f"{config['database_url']}_dbos_sys",
-        engine_kwargs={
-            "pool_timeout": 30,
-            "max_overflow": 0,
-            "pool_size": 2,
-            "connect_args": {"connect_timeout": 30},
-        },
-    )
-    sys_db.run_migrations()
-    yield sys_db
-    sys_db.destroy()
-
-
 @pytest.fixture(scope="session")
 def db_engine() -> sa.Engine:
     cfg = default_config()

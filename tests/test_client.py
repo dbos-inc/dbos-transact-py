@@ -176,9 +176,7 @@ def test_client_enqueue_wrong_appver(dbos: DBOS, client: DBOSClient) -> None:
     assert wf_status.app_version == options["app_version"]
 
 
-def test_client_enqueue_idempotent(
-    config: DBOSConfig, client: DBOSClient, sys_db: SystemDatabase
-) -> None:
+def test_client_enqueue_idempotent(config: DBOSConfig, client: DBOSClient) -> None:
     DBOS.destroy(destroy_registry=True)
 
     johnDoe: Person = {"first": "John", "last": "Doe", "age": 30}
@@ -193,19 +191,19 @@ def test_client_enqueue_idempotent(
     client.enqueue(options, 42, "test", johnDoe)
     client.enqueue(options, 42, "test", johnDoe)
 
-    wf_status = sys_db.get_workflow_status(wfid)
-    assert wf_status is not None
-    assert wf_status["status"] == "ENQUEUED"
-    assert wf_status["name"] == "enqueue_test"
-    assert wf_status["app_version"] == None
-
-    dbos = DBOS(config=config)
+    DBOS(config=config)
     DBOS.launch()
     run_client_collateral()
 
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     result = handle.get_result()
     assert result == '42-test-{"first": "John", "last": "Doe", "age": 30}'
+
+    wf_status = DBOS.retrieve_workflow(handle.get_workflow_id()).get_status()
+    assert wf_status is not None
+    assert wf_status.status == "SUCCESS"
+    assert wf_status.name == "enqueue_test"
+    assert wf_status.app_version == GlobalParams.app_version
 
     DBOS.destroy(destroy_registry=True)
 
