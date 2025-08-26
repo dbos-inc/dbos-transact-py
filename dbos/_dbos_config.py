@@ -384,12 +384,14 @@ def process_config(
     configure_db_engine_parameters(data["database"], connect_timeout=connect_timeout)
 
     # Pretty-print where we've loaded database connection information from, respecting the log level
+    assert data["database_url"] is not None
     if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
         log_url = make_url(data["database_url"]).render_as_string(hide_password=True)
         print(f"[bold blue]Using database connection string: {log_url}[/bold blue]")
-        print(
-            f"[bold blue]Database engine parameters: {data['database']['db_engine_kwargs']}[/bold blue]"
-        )
+        if not data["database_url"].startswith("sqlite"):
+            print(
+                f"[bold blue]Database engine parameters: {data['database']['db_engine_kwargs']}[/bold blue]"
+            )
 
     # Return data as ConfigFile type
     return data

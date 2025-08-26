@@ -26,7 +26,7 @@ def build_wheel() -> str:
 
 
 def using_sqlite() -> bool:
-    return os.environ.get("DBOS_SQLITE", None) == "true"
+    return os.environ.get("DBOS_DATABASE", None) == "SQLITE"
 
 
 @pytest.fixture()
