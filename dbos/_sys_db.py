@@ -1136,11 +1136,6 @@ class SystemDatabase(ABC):
         """Check if the error is a foreign key violation."""
         pass
 
-    def _set_event_txn(
-        self, conn: sa.Connection, workflow_uuid: str, key: str, value: str
-    ) -> None:
-        """Set event using PostgreSQL upsert operations."""
-
     def _check_operation_execution_txn(
         self,
         workflow_id: str,
