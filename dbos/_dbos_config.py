@@ -437,14 +437,16 @@ def process_config(
 
     configure_db_engine_parameters(data["database"], connect_timeout=connect_timeout)
 
-    # Pretty-print where we've loaded database connection information from, respecting the log level
     assert data["database_url"] is not None
     assert data["system_database_url"] is not None
+    # Pretty-print connection information, respecting log level
     if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
-        log_url = make_url(data["system_database_url"]).render_as_string(
+        printable_sys_db_url = make_url(data["system_database_url"]).render_as_string(
             hide_password=True
         )
-        print(f"[bold blue]DBOS system database URL: {log_url}[/bold blue]")
+        print(
+            f"[bold blue]DBOS system database URL: {printable_sys_db_url}[/bold blue]"
+        )
         if data["database_url"].startswith("sqlite"):
             print(
                 f"[bold blue]Using SQLite as a system database. The SQLite system database is for development and testing. PostgreSQL is recommended for production use.[/bold blue]"

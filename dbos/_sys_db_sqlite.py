@@ -92,7 +92,6 @@ class SQLiteSystemDatabase(SystemDatabase):
                 last_applied = i
 
     def _cleanup_connections(self) -> None:
-        """Clean up SQLite-specific connections."""
         # SQLite doesn't require special connection cleanup
         pass
 
