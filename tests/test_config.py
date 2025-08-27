@@ -284,6 +284,18 @@ def test_process_config_system_database():
     }
 
 
+def test_process_config_only_system_database():
+    config: ConfigFile = {
+        "name": "some-app",
+        "system_database_url": "postgres://user:password@localhost:7778/dbn_sys?connect_timeout=1&sslmode=require&sslrootcert=ca.pem",
+    }
+
+    configFile = process_config(data=config)
+    assert configFile["name"] == "some-app"
+    assert configFile["system_database_url"] == config["system_database_url"]
+    assert configFile["database_url"] == config["system_database_url"]
+
+
 def test_process_config_sqlite():
     config: ConfigFile = {
         "name": "some-app",

@@ -407,6 +407,8 @@ def process_config(
                 port=port,
             ).render_as_string(hide_password=False)
 
+    # If an application database URL is provided but not the system database URL,
+    # construct the system database URL.
     if data.get("database_url") and not data.get("system_database_url"):
         assert data["database_url"]
         if data["database_url"].startswith("sqlite"):
@@ -420,18 +422,28 @@ def process_config(
                 url = url.set(database=f"{url.database}{SystemSchema.sysdb_suffix}")
             data["system_database_url"] = url.render_as_string(hide_password=False)
 
+    # If a system database URL is provided but not an application database URL, set the
+    # application database URL to the system database URL.
+    if data.get("system_database_url") and not data.get("database_url"):
+        assert data["system_database_url"]
+        data["database_url"] = data["system_database_url"]
+
+    # If neither URL is provided, use a default SQLite database URL.
     if not data.get("database_url") and not data.get("system_database_url"):
         _app_db_name = _app_name_to_db_name(data["name"])
-        data["database_url"] = f"sqlite:///{_app_db_name}.sqlite"
-        data["system_database_url"] = data["database_url"]
+        data["system_database_url"] = data["database_url"] = (
+            f"sqlite:///{_app_db_name}.sqlite"
+        )
 
     configure_db_engine_parameters(data["database"], connect_timeout=connect_timeout)
 
     # Pretty-print where we've loaded database connection information from, respecting the log level
     assert data["database_url"] is not None
     if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
-        log_url = make_url(data["database_url"]).render_as_string(hide_password=True)
-        print(f"[bold blue]Using database connection string: {log_url}[/bold blue]")
+        log_url = make_url(data["system_database_url"]).render_as_string(
+            hide_password=True
+        )
+        print(f"[bold blue]DBOS system database URL: {log_url}[/bold blue]")
         if data["database_url"].startswith("sqlite"):
             print(
                 f"[bold blue]Using SQLite as a system database. The SQLite system database is for development and testing. PostgreSQL is recommended for production use.[/bold blue]"
