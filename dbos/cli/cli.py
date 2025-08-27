@@ -46,6 +46,10 @@ def _get_db_url(
     Otherwise fallback to the same SQLite Postgres URL than the DBOS library.
     Note that for the latter to be possible, a configuration file must have been found, with an application name set.
     """
+    if os.environ.get("DBOS__CLOUD") == "true":
+        return os.environ.get("DBOS_SYSTEM_DATABASE_URL"), os.environ.get(
+            "DBOS_DATABASE_URL"
+        )
     if system_database_url or application_database_url:
         cfg: ConfigFile = {
             "system_database_url": system_database_url,
