@@ -45,7 +45,8 @@ def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
 def test_alembic_migrations_compatibility(
     config: DBOSConfig, db_engine: sa.Engine, skip_with_sqlite: None
 ) -> None:
-    system_database_url = f"{config['database_url']}_dbos_sys"
+    system_database_url = config["system_database_url"]
+    assert system_database_url
     sysdb_name = sa.make_url(system_database_url).database
 
     # Drop and recreate the system database

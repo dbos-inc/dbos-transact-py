@@ -439,6 +439,7 @@ def process_config(
 
     # Pretty-print where we've loaded database connection information from, respecting the log level
     assert data["database_url"] is not None
+    assert data["system_database_url"] is not None
     if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
         log_url = make_url(data["system_database_url"]).render_as_string(
             hide_password=True

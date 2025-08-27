@@ -166,12 +166,13 @@ def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
 
 
 def test_workflow_commands(config: DBOSConfig) -> None:
-    assert config["database_url"] is not None
+    assert config["application_database_url"] is not None
+    assert config["system_database_url"] is not None
     if using_sqlite():
-        db_url = config["database_url"]
+        db_url = config["system_database_url"]
     else:
         db_url = (
-            sa.make_url(config["database_url"])
+            sa.make_url(config["application_database_url"])
             .set(database="dbos_toolbox")
             .render_as_string(hide_password=False)
         )
