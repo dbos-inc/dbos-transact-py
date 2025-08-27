@@ -22,9 +22,10 @@ class DBOSConfig(TypedDict, total=False):
 
     Attributes:
         name (str): Application name
-        database_url (str): Database connection string
-        system_database_url (str): Connection string for the system database (if different from the application database)
-        sys_db_name (str): System database name (deprecated)
+        system_database_url (str): Connection string for the DBOS system database. Defaults to sqlite:///{name} if not provided.
+        application_database_url (str): Connection string for the DBOS application database, in which DBOS @Transaction functions run. Optional.
+        database_url (str): (DEPRECATED) Database connection string
+        sys_db_name (str): (DEPRECATED) System database name
         sys_db_pool_size (int): System database pool size
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs (See https://docs.sqlalchemy.org/en/20/core/engines.html#sqlalchemy.create_engine)
         log_level (str): Log level
@@ -39,8 +40,9 @@ class DBOSConfig(TypedDict, total=False):
     """
 
     name: str
-    database_url: Optional[str]
     system_database_url: Optional[str]
+    application_database_url: Optional[str]
+    database_url: Optional[str]
     sys_db_name: Optional[str]
     sys_db_pool_size: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
@@ -144,8 +146,12 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     if db_config:
         translated_config["database"] = db_config
 
+    # Use application_database_url instead of the deprecated database_url if provided
     if "database_url" in config:
         translated_config["database_url"] = config.get("database_url")
+    elif "application_database_url" in config:
+        translated_config["database_url"] = config.get("application_database_url")
+
     if "system_database_url" in config:
         translated_config["system_database_url"] = config.get("system_database_url")
 
@@ -336,7 +342,7 @@ def process_config(
 
     # Database URL resolution
     connect_timeout = None
-    if data.get("database_url") is not None and data["database_url"] != "":
+    if data.get("database_url", None):
         # Parse the db string and check required fields
         assert data["database_url"] is not None
         assert is_valid_database_url(data["database_url"])

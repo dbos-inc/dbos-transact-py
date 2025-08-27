@@ -771,6 +771,18 @@ def test_translate_missing_name():
     )
 
 
+def test_translate_application_database_url():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "application_database_url": "postgres://user:password@localhost:5432/dbname?connect_timeout=11&sslmode=require&sslrootcert=ca.pem",
+        "system_database_url": "postgres://user:password@localhost:5432/dbname_sys?connect_timeout=11&sslmode=require&sslrootcert=ca.pem",
+    }
+    translated_config = translate_dbos_config_to_config_file(config)
+    assert translated_config["name"] == "test-app"
+    assert translated_config["database_url"] == config["application_database_url"]
+    assert translated_config["system_database_url"] == config["system_database_url"]
+
+
 ####################
 # CONFIG OVERWRITE
 ####################
