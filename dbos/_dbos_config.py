@@ -339,10 +339,10 @@ def process_config(
 
     # Ensure database dict exists
     data.setdefault("database", {})
-
-    # Database URL resolution
     connect_timeout = None
-    if data.get("database_url", None):
+
+    # Process the application database URL, if provided
+    if data.get("database_url"):
         # Parse the db string and check required fields
         assert data["database_url"] is not None
         assert is_valid_database_url(data["database_url"])
@@ -374,16 +374,50 @@ def process_config(
                 port=port,
             ).render_as_string(hide_password=False)
 
+    # Process the system database URL, if provided
+    if data.get("system_database_url"):
+        # Parse the db string and check required fields
+        assert data["system_database_url"]
+        assert is_valid_database_url(data["system_database_url"])
+
+        url = make_url(data["system_database_url"])
+
+        # Gather connect_timeout from the URL if provided. It should be used in engine kwargs if not provided there (instead of our default). This overrides a timeout from the application database, if any.
+        connect_timeout_str = url.query.get("connect_timeout")
+        if connect_timeout_str is not None:
+            assert isinstance(
+                connect_timeout_str, str
+            ), "connect_timeout must be a string and defined once in the URL"
+            if connect_timeout_str.isdigit():
+                connect_timeout = int(connect_timeout_str)
+
+        # In debug mode perform env vars overrides
+        if isDebugMode:
+            # Override the username, password, host, and port
+            port_str = os.getenv("DBOS_DBPORT")
+            port = (
+                int(port_str)
+                if port_str is not None and port_str.isdigit()
+                else url.port
+            )
+            data["system_database_url"] = url.set(
+                username=os.getenv("DBOS_DBUSER", url.username),
+                password=os.getenv("DBOS_DBPASSWORD", url.password),
+                host=os.getenv("DBOS_DBHOST", url.host),
+                port=port,
+            ).render_as_string(hide_password=False)
+
     if data.get("database_url") and not data.get("system_database_url"):
+        assert data["database_url"]
         if data["database_url"].startswith("sqlite"):
             data["system_database_url"] = data["database_url"]
         else:
             url = make_url(data["database_url"])
-            assert url.database is not None
+            assert url.database
             if data["database"].get("sys_db_name"):
                 url = url.set(database=data["database"]["sys_db_name"])
             else:
-                url = url.set(database=url.database + SystemSchema.sysdb_suffix)
+                url = url.set(database=f"{url.database}{SystemSchema.sysdb_suffix}")
             data["system_database_url"] = url.render_as_string(hide_password=False)
 
     if not data.get("database_url") and not data.get("system_database_url"):

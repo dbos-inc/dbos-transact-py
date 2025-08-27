@@ -249,6 +249,54 @@ def test_process_config_full():
     assert configFile["env"]["FOO"] == "BAR"
 
 
+def test_process_config_system_database():
+    config: ConfigFile = {
+        "name": "some-app",
+        "database_url": "postgres://user:password@localhost:7777/dbn?connect_timeout=1&sslmode=require&sslrootcert=ca.pem",
+        "system_database_url": "postgres://user:password@localhost:7778/dbn_sys?connect_timeout=1&sslmode=require&sslrootcert=ca.pem",
+        "database": {
+            "sys_db_name": "sys_db",
+            "sys_db_pool_size": 27,
+            "db_engine_kwargs": {"key": "value"},
+            "migrate": ["alembic upgrade head"],
+        },
+    }
+
+    configFile = process_config(data=config)
+    assert configFile["name"] == "some-app"
+    assert configFile["database_url"] == config["database_url"]
+    assert configFile["system_database_url"] == config["system_database_url"]
+    assert configFile["database"]["db_engine_kwargs"] == {
+        "key": "value",
+        "pool_timeout": 30,
+        "max_overflow": 0,
+        "pool_size": 20,
+        "pool_pre_ping": True,
+        "connect_args": {"connect_timeout": 1},
+    }
+    assert configFile["database"]["sys_db_engine_kwargs"] == {
+        "key": "value",
+        "pool_timeout": 30,
+        "max_overflow": 0,
+        "pool_size": 27,
+        "pool_pre_ping": True,
+        "connect_args": {"connect_timeout": 1},
+    }
+
+
+def test_process_config_sqlite():
+    config: ConfigFile = {
+        "name": "some-app",
+        "database_url": "sqlite:///test.sqlite",
+        "system_database_url": "sqlite:///test.sys.sqlite",
+    }
+
+    configFile = process_config(data=config)
+    assert configFile["name"] == "some-app"
+    assert configFile["database_url"] == config["database_url"]
+    assert configFile["system_database_url"] == config["system_database_url"]
+
+
 def test_debug_override_database_url(mocker: pytest_mock.MockFixture):
     mocker.patch.dict(
         os.environ,
@@ -595,6 +643,17 @@ def test_process_config_with_wrong_db_url():
     config: ConfigFile = {
         "name": "some-app",
         "database_url": "postgres://user:password@h:1234",
+    }
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        process_config(data=config)
+    assert "Database name must be specified in the connection URL" in str(
+        exc_info.value
+    )
+
+    # Missing dbname in system database
+    config: ConfigFile = {
+        "name": "some-app",
+        "system_database_url": "postgres://user:password@h:1234",
     }
     with pytest.raises(DBOSInitializationError) as exc_info:
         process_config(data=config)
