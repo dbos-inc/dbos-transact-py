@@ -232,7 +232,7 @@ CREATE TABLE dbos.event_dispatch_kv (
 """
 
 
-def _get_sqlite_timestamp_expr() -> str:
+def get_sqlite_timestamp_expr() -> str:
     """Get SQLite timestamp expression with millisecond precision for Python >= 3.12."""
     if sys.version_info >= (3, 12):
         return "(unixepoch('subsec') * 1000)"
@@ -252,8 +252,8 @@ CREATE TABLE workflow_status (
     output TEXT,
     error TEXT,
     executor_id TEXT,
-    created_at INTEGER NOT NULL DEFAULT {_get_sqlite_timestamp_expr()},
-    updated_at INTEGER NOT NULL DEFAULT {_get_sqlite_timestamp_expr()},
+    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
+    updated_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
     application_version TEXT,
     application_id TEXT,
     class_name TEXT DEFAULT NULL,
@@ -291,7 +291,7 @@ CREATE TABLE notifications (
     destination_uuid TEXT NOT NULL,
     topic TEXT,
     message TEXT NOT NULL,
-    created_at_epoch_ms INTEGER NOT NULL DEFAULT {_get_sqlite_timestamp_expr()},
+    created_at_epoch_ms INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
     message_uuid TEXT NOT NULL DEFAULT (hex(randomblob(16))),
     FOREIGN KEY (destination_uuid) REFERENCES workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE

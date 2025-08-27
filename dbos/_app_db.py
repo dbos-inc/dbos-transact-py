@@ -7,6 +7,8 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
+from dbos._migration import get_sqlite_timestamp_expr
+
 from . import _serialization
 from ._error import DBOSUnexpectedStepError, DBOSWorkflowConflictIDError
 from ._logger import dbos_logger
@@ -384,7 +386,7 @@ class SQLiteApplicationDatabase(ApplicationDatabase):
                 # Create the table with proper SQLite syntax
                 conn.execute(
                     sa.text(
-                        """
+                        f"""
                         CREATE TABLE transaction_outputs (
                             workflow_uuid TEXT NOT NULL,
                             function_id INTEGER NOT NULL,
@@ -394,7 +396,7 @@ class SQLiteApplicationDatabase(ApplicationDatabase):
                             txn_snapshot TEXT NOT NULL,
                             executor_id TEXT,
                             function_name TEXT NOT NULL DEFAULT '',
-                            created_at BIGINT NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS BIGINT)),
+                            created_at BIGINT NOT NULL DEFAULT{get_sqlite_timestamp_expr()},
                             PRIMARY KEY (workflow_uuid, function_id)
                         )
                         """
