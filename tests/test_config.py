@@ -214,6 +214,10 @@ def test_process_config_full():
         == "postgres://user:password@localhost:7777/dbn?connect_timeout=1&sslmode=require&sslrootcert=ca.pem"
     )
     assert configFile["database"]["sys_db_name"] == "sys_db"
+    assert (
+        configFile["system_database_url"]
+        == f"postgres://user:password@localhost:7777/{config['database']['sys_db_name']}?connect_timeout=1&sslmode=require&sslrootcert=ca.pem"
+    )
     assert configFile["database"]["migrate"] == ["alembic upgrade head"]
     assert configFile["database"]["db_engine_kwargs"] == {
         "key": "value",
@@ -266,7 +270,8 @@ def test_debug_override_database_url(mocker: pytest_mock.MockFixture):
     )
     assert processed_config["name"] == "some-app"
     assert (
-        processed_config["database"]["sys_db_name"] == "dbn" + SystemSchema.sysdb_suffix
+        processed_config["system_database_url"]
+        == f"postgres://fakeuser:fakepassword@fakehost:1234/dbn{SystemSchema.sysdb_suffix}?connect_timeout=1&sslmode=require&sslrootcert=ca.pem"
     )
     assert processed_config["database"]["db_engine_kwargs"] is not None
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None

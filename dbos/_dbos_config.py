@@ -349,15 +349,6 @@ def process_config(
 
         url = make_url(data["database_url"])
 
-        if data["database_url"].startswith("sqlite"):
-            data["system_database_url"] = data["database_url"]
-        else:
-            assert url.database is not None
-            if not data["database"].get("sys_db_name"):
-                data["database"]["sys_db_name"] = (
-                    url.database + SystemSchema.sysdb_suffix
-                )
-
         # Gather connect_timeout from the URL if provided. It should be used in engine kwargs if not provided there (instead of our default)
         connect_timeout_str = url.query.get("connect_timeout")
         if connect_timeout_str is not None:
@@ -382,7 +373,20 @@ def process_config(
                 host=os.getenv("DBOS_DBHOST", url.host),
                 port=port,
             ).render_as_string(hide_password=False)
-    else:
+
+    if data.get("database_url") and not data.get("system_database_url"):
+        if data["database_url"].startswith("sqlite"):
+            data["system_database_url"] = data["database_url"]
+        else:
+            url = make_url(data["database_url"])
+            assert url.database is not None
+            if data["database"].get("sys_db_name"):
+                url = url.set(database=data["database"]["sys_db_name"])
+            else:
+                url = url.set(database=url.database + SystemSchema.sysdb_suffix)
+            data["system_database_url"] = url.render_as_string(hide_password=False)
+
+    if not data.get("database_url") and not data.get("system_database_url"):
         _app_db_name = _app_name_to_db_name(data["name"])
         data["database_url"] = f"sqlite:///{_app_db_name}.sqlite"
         data["system_database_url"] = data["database_url"]
