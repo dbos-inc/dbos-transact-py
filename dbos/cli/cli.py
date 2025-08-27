@@ -5,7 +5,7 @@ import subprocess
 import time
 import typing
 from os import path
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 import jsonpickle  # type: ignore
 import sqlalchemy as sa
@@ -18,57 +18,58 @@ from dbos._context import SetWorkflowID
 from dbos._debug import debug_workflow, parse_start_command
 from dbos.cli.migration import grant_dbos_schema_permissions, migrate_dbos_databases
 
-from .._app_db import ApplicationDatabase
 from .._client import DBOSClient
 from .._dbos_config import (
+    ConfigFile,
     _app_name_to_db_name,
     _is_valid_app_name,
+    get_application_database_url,
     get_system_database_url,
-    is_valid_database_url,
     load_config,
 )
 from .._docker_pg_helper import start_docker_pg, stop_docker_pg
-from .._schemas.system_database import SystemSchema
 from .._sys_db import SystemDatabase
 from .._utils import GlobalParams
 from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
 
 
-def _get_db_url(db_url: Optional[str]) -> str:
+def _get_db_url(
+    *, system_database_url: Optional[str], application_database_url: Optional[str]
+) -> Tuple[str, str]:
     """
     Get the database URL to use for the DBOS application.
     Order of precedence:
-    - If the `db_url` argument is provided, use it.
-    - If the `dbos-config.yaml` file is present, use the `database_url` from it.
-    - If the `DBOS_DATABASE_URL` environment variable is set, use it.
+    - Use database URL arguments if provided.
+    - If the `dbos-config.yaml` file is present, use the database URLs from it.
 
-    Otherwise fallback to the same default Postgres URL than the DBOS library.
+    Otherwise fallback to the same SQLite Postgres URL than the DBOS library.
     Note that for the latter to be possible, a configuration file must have been found, with an application name set.
     """
-    database_url = db_url
-    _app_db_name = None
-    if database_url is None:
+    if system_database_url or application_database_url:
+        cfg: ConfigFile = {
+            "system_database_url": system_database_url,
+            "database_url": application_database_url,
+        }
+        return get_system_database_url(cfg), get_application_database_url(cfg)
+    else:
         # Load from config file if present
         try:
             config = load_config(run_process_config=False, silent=True)
-            database_url = config.get("database_url")
-            _app_db_name = _app_name_to_db_name(config["name"])
+            if config.get("database_url") or config.get("system_database_url"):
+                return get_system_database_url(config), get_application_database_url(
+                    config
+                )
+            else:
+                _app_db_name = _app_name_to_db_name(config["name"])
+                # Fallback on the same defaults than the DBOS library
+                default_url = f"sqlite:///{_app_db_name}.sqlite"
+                return default_url, default_url
         except (FileNotFoundError, OSError):
             # Config file doesn't exist, continue with other fallbacks
-            pass
-    if database_url is None:
-        database_url = os.getenv("DBOS_DATABASE_URL")
-    if database_url is None and _app_db_name is not None:
-        # Fallback on the same defaults than the DBOS library
-        _password = os.environ.get("PGPASSWORD", "dbos")
-        database_url = f"postgres://postgres:{_password}@localhost:5432/{_app_db_name}?connect_timeout=10&sslmode=prefer"
-    if database_url is None:
-        raise ValueError(
-            "Missing database URL: please set it using the --db-url flag, the DBOS_DATABASE_URL environment variable, or in your dbos-config.yaml file."
-        )
-    assert is_valid_database_url(database_url)
-    return database_url
+            raise ValueError(
+                "Missing database URL: please set it using CLI flags or your dbos-config.yaml file."
+            )
 
 
 def start_client(db_url: Optional[str] = None) -> DBOSClient:
@@ -264,7 +265,7 @@ def _resolve_project_name_and_template(
 
 @app.command(help="Create DBOS system tables.")
 def migrate(
-    app_database_url: Annotated[
+    application_database_url: Annotated[
         typing.Optional[str],
         typer.Option(
             "--db-url",
@@ -289,28 +290,25 @@ def migrate(
         ),
     ] = None,
 ) -> None:
-    app_database_url = _get_db_url(app_database_url)
-    system_database_url = get_system_database_url(
-        {
-            "system_database_url": system_database_url,
-            "database_url": app_database_url,
-            "database": {},
-        }
+    system_database_url, application_database_url = _get_db_url(
+        system_database_url=system_database_url,
+        application_database_url=application_database_url,
     )
 
     typer.echo(f"Starting DBOS migrations")
-    typer.echo(f"Application database: {sa.make_url(app_database_url)}")
+    typer.echo(f"Application database: {sa.make_url(application_database_url)}")
     typer.echo(f"System database: {sa.make_url(system_database_url)}")
 
     # First, run DBOS migrations on the system database and the application database
     migrate_dbos_databases(
-        app_database_url=app_database_url, system_database_url=system_database_url
+        app_database_url=application_database_url,
+        system_database_url=system_database_url,
     )
 
     # Next, assign permissions on the DBOS schema to the application role, if any
     if application_role:
         grant_dbos_schema_permissions(
-            database_url=app_database_url, role_name=application_role
+            database_url=application_database_url, role_name=application_role
         )
         grant_dbos_schema_permissions(
             database_url=system_database_url, role_name=application_role
@@ -346,14 +344,6 @@ def migrate(
 @app.command(help="Reset the DBOS system database")
 def reset(
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompt"),
-    sys_db_name: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--sys-db-name",
-            "-s",
-            help="Specify the name of the system database to reset",
-        ),
-    ] = None,
     db_url: Annotated[
         typing.Optional[str],
         typer.Option(
@@ -372,9 +362,7 @@ def reset(
             raise typer.Exit()
     try:
         database_url = _get_db_url(db_url)
-        system_database_url = get_system_database_url(
-            {"database_url": database_url, "database": {"sys_db_name": sys_db_name}}
-        )
+        system_database_url = get_system_database_url({"database_url": database_url})
         SystemDatabase.reset_system_database(system_database_url)
     except Exception as e:
         typer.echo(f"Error resetting system database: {str(e)}")

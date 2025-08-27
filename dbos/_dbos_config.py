@@ -620,7 +620,7 @@ def get_system_database_url(config: ConfigFile) -> str:
         if config["database_url"].startswith("sqlite"):
             return config["database_url"]
         app_db_url = make_url(config["database_url"])
-        if config["database"].get("sys_db_name") is not None:
+        if config.get("database") and config["database"].get("sys_db_name") is not None:
             sys_db_name = config["database"]["sys_db_name"]
         else:
             assert app_db_url.database is not None
