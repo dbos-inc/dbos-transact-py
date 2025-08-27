@@ -16,6 +16,7 @@ from typing import (
 
 from dbos._app_db import ApplicationDatabase
 from dbos._context import MaxPriority, MinPriority
+from dbos._sys_db import SystemDatabase
 
 if sys.version_info < (3, 11):
     from typing_extensions import NotRequired
@@ -119,7 +120,7 @@ class DBOSClient:
     ):
         assert is_valid_database_url(database_url)
         # We only create database connections but do not run migrations
-        self._sys_db = SystemDatabase(
+        self._sys_db = SystemDatabase.create(
             system_database_url=get_system_database_url(
                 {
                     "system_database_url": system_database_url,
@@ -134,7 +135,7 @@ class DBOSClient:
             },
         )
         self._sys_db.check_connection()
-        self._app_db = ApplicationDatabase(
+        self._app_db = ApplicationDatabase.create(
             database_url=database_url,
             engine_kwargs={
                 "pool_timeout": 30,

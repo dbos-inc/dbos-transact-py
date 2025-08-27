@@ -105,7 +105,7 @@ def test_scheduled_workflow(dbos: DBOS) -> None:
     assert wf_counter > 2 and wf_counter <= 5
 
 
-def test_appdb_downtime(dbos: DBOS) -> None:
+def test_appdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
     wf_counter: int = 0
 
     @DBOS.transaction()
@@ -126,7 +126,7 @@ def test_appdb_downtime(dbos: DBOS) -> None:
     assert wf_counter > 2
 
 
-def test_sysdb_downtime(dbos: DBOS) -> None:
+def test_sysdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
     wf_counter: int = 0
 
     @DBOS.scheduled("* * * * * *")

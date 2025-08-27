@@ -12,14 +12,19 @@ import requests
 import sqlalchemy as sa
 import yaml
 
+from dbos._dbos_config import DBOSConfig
+from tests.conftest import using_sqlite
 
-def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
+
+def test_package(
+    build_wheel: str, db_engine: sa.Engine, skip_with_sqlite: None
+) -> None:
 
     # Clean up the database from previous runs
     for template_name in ["dbos-db-starter", "dbos-app-starter"]:
         db_starter = template_name == "dbos-db-starter"
         app_db_name = template_name.replace("-", "_")
-        with postgres_db_engine.connect() as connection:
+        with db_engine.connect() as connection:
             connection.execution_options(isolation_level="AUTOCOMMIT")
             connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}"))
             connection.execute(
@@ -43,7 +48,7 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
             venv = os.environ.copy()
             venv["PATH"] = f"{os.path.join(venv_path, 'bin')}:{venv['PATH']}"
             venv["VIRTUAL_ENV"] = venv_path
-            venv["DBOS_DATABASE_URL"] = postgres_db_engine.url.set(
+            venv["DBOS_DATABASE_URL"] = db_engine.url.set(
                 database=app_db_name
             ).render_as_string(hide_password=False)
 
@@ -96,7 +101,7 @@ def test_package(build_wheel: str, postgres_db_engine: sa.Engine) -> None:
                 process.wait()
 
 
-def test_init_config() -> None:
+def test_init_config(skip_with_sqlite: None) -> None:
     app_name = "example-name"
     expected_yaml = {
         "name": app_name,
@@ -120,10 +125,10 @@ def test_init_config() -> None:
         assert actual_yaml == expected_yaml
 
 
-def test_reset(postgres_db_engine: sa.Engine) -> None:
+def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
     app_name = "reset-app"
     sysdb_name = "reset_app_dbos_sys"
-    db_url = postgres_db_engine.url.set(database="reset_app").render_as_string(
+    db_url = db_engine.url.set(database="reset_app").render_as_string(
         hide_password=False
     )
     with tempfile.TemporaryDirectory() as temp_path:
@@ -136,7 +141,7 @@ def test_reset(postgres_db_engine: sa.Engine) -> None:
 
         # Create a system database and verify it exists
         subprocess.check_call(["dbos", "migrate"], cwd=temp_path, env=env)
-        with postgres_db_engine.connect() as c:
+        with db_engine.connect() as c:
             c.execution_options(isolation_level="AUTOCOMMIT")
             result = c.execute(
                 sa.text(
@@ -150,7 +155,7 @@ def test_reset(postgres_db_engine: sa.Engine) -> None:
             ["dbos", "reset", "-y", "--db-url", db_url, "--sys-db-name", sysdb_name],
             cwd=temp_path,
         )
-        with postgres_db_engine.connect() as c:
+        with db_engine.connect() as c:
             c.execution_options(isolation_level="AUTOCOMMIT")
             result = c.execute(
                 sa.text(
@@ -160,23 +165,25 @@ def test_reset(postgres_db_engine: sa.Engine) -> None:
             assert result == 0
 
 
-def test_workflow_commands(postgres_db_engine: sa.Engine) -> None:
-    app_name = "reset-app"
-    db_url = postgres_db_engine.url.set(database="dbos_toolbox").render_as_string(
-        hide_password=False
-    )
+def test_workflow_commands(config: DBOSConfig) -> None:
+    assert config["database_url"] is not None
+    if using_sqlite():
+        db_url = config["database_url"]
+    else:
+        db_url = (
+            sa.make_url(config["database_url"])
+            .set(database="dbos_toolbox")
+            .render_as_string(hide_password=False)
+        )
     with tempfile.TemporaryDirectory() as temp_path:
         env = os.environ.copy()
         env["DBOS_DATABASE_URL"] = db_url
         subprocess.check_call(
-            ["dbos", "init", app_name, "--template", "dbos-toolbox"],
+            ["dbos", "init", "--template", "dbos-toolbox"],
             cwd=temp_path,
             env=env,
         )
         subprocess.check_call(["dbos", "reset", "-y", "-D", db_url], cwd=temp_path)
-        subprocess.check_call(
-            ["dbos", "migrate"], cwd=temp_path, env=env
-        )  # For the alembic migration
 
         # Get some workflows enqueued on the toolbox, then kill the toolbox
         process = subprocess.Popen(["dbos", "start"], cwd=temp_path, env=env)

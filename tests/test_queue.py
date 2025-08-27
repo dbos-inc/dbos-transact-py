@@ -432,7 +432,7 @@ def run_dbos_test_in_process(
 ) -> None:
     dbos_config: DBOSConfig = {
         "name": "test-app",
-        "database_url": f"postgres://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy",
+        "database_url": default_config()["database_url"],
         "admin_port": 8001 + i,
     }
     dbos = DBOS(config=dbos_config)
@@ -461,7 +461,9 @@ def run_dbos_test_in_process(
 # Test global concurrency and worker utilization by carefully filling the queue up to 1) the local limit 2) the global limit
 # For the global limit, we fill the queue in 2 steps, ensuring that the 2nd worker is able to cap its local utilization even
 # after having dequeued some tasks already
-def test_worker_concurrency_with_n_dbos_instances(dbos: DBOS) -> None:
+def test_worker_concurrency_with_n_dbos_instances(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
     # Ensure children processes do not share global variables (including DBOS instance) with the parent
     multiprocessing.set_start_method("spawn")
 

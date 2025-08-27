@@ -1,6 +1,7 @@
 import threading
 import time
 import uuid
+from typing import cast
 
 import pytest
 import sqlalchemy as sa
@@ -25,11 +26,12 @@ from dbos._serialization import (
     serialize_exception,
 )
 from dbos._sys_db import WorkflowStatusString
+from dbos._sys_db_postgres import PostgresSystemDatabase
 
 from .conftest import queue_entries_are_cleaned_up
 
 
-def test_transaction_errors(dbos: DBOS) -> None:
+def test_transaction_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
     retry_counter: int = 0
 
     @DBOS.transaction()
@@ -115,7 +117,7 @@ def test_invalid_transaction_error(dbos: DBOS) -> None:
     assert rollback_txn_counter == 1
 
 
-def test_notification_errors(dbos: DBOS) -> None:
+def test_notification_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
     @DBOS.workflow()
     def test_send_workflow(dest_uuid: str, topic: str) -> str:
         DBOS.send(dest_uuid, "test1")
@@ -131,13 +133,14 @@ def test_notification_errors(dbos: DBOS) -> None:
         return "-".join([str(msg1), str(msg2), str(msg3)])
 
     # Crash the notification connection and make sure send/recv works on time.
-    while dbos._sys_db.notification_conn is None:
+    system_database = cast(PostgresSystemDatabase, dbos._sys_db)
+    while system_database.notification_conn is None:
         time.sleep(1)
-    dbos._sys_db.notification_conn.close()
-    assert dbos._sys_db.notification_conn.closed == 1
+    system_database.notification_conn.close()
+    assert system_database.notification_conn.closed == 1
 
     # Wait for the connection to be re-established
-    while dbos._sys_db.notification_conn.closed != 0:
+    while system_database.notification_conn.closed != 0:
         time.sleep(1)
 
     dest_uuid = str("sruuid1")

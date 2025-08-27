@@ -32,7 +32,7 @@ from opentelemetry.trace import Span
 from rich import print
 
 from dbos._conductor.conductor import ConductorWebsocket
-from dbos._sys_db import WorkflowStatus
+from dbos._sys_db import SystemDatabase, WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import fork_workflow, list_queued_workflows, list_workflows
 
@@ -70,7 +70,6 @@ from ._sys_db import (
     SystemDatabase,
     WorkflowStatus,
     _dbos_stream_closed_sentinel,
-    reset_system_database,
     workflow_is_active,
 )
 from ._tracer import DBOSTracer, dbos_tracer
@@ -80,7 +79,6 @@ if TYPE_CHECKING:
     from ._kafka import _KafkaConsumerWorkflow
     from flask import Flask
 
-from sqlalchemy import make_url
 from sqlalchemy.orm import Session
 
 if sys.version_info < (3, 10):
@@ -457,13 +455,13 @@ class DBOS:
             self._background_event_loop.start()
             assert self._config["database_url"] is not None
             assert self._config["database"]["sys_db_engine_kwargs"] is not None
-            self._sys_db_field = SystemDatabase(
+            self._sys_db_field = SystemDatabase.create(
                 system_database_url=get_system_database_url(self._config),
                 engine_kwargs=self._config["database"]["sys_db_engine_kwargs"],
                 debug_mode=debug_mode,
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
-            self._app_db_field = ApplicationDatabase(
+            self._app_db_field = ApplicationDatabase.create(
                 database_url=self._config["database_url"],
                 engine_kwargs=self._config["database"]["db_engine_kwargs"],
                 debug_mode=debug_mode,
@@ -589,13 +587,7 @@ class DBOS:
             not self._launched
         ), "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
 
-        sysdb_name = self._config["database"]["sys_db_name"]
-        assert sysdb_name is not None
-
-        assert self._config["database_url"] is not None
-        pg_db_url = make_url(self._config["database_url"]).set(database="postgres")
-
-        reset_system_database(pg_db_url, sysdb_name)
+        SystemDatabase.reset_system_database(get_system_database_url(self._config))
 
     def _destroy(self, *, workflow_completion_timeout_sec: int) -> None:
         self._initialized = False

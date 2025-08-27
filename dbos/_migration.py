@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import sys
 
 import sqlalchemy as sa
 from alembic import command
@@ -230,4 +231,92 @@ CREATE TABLE dbos.event_dispatch_kv (
 );
 """
 
+
+def get_sqlite_timestamp_expr() -> str:
+    """Get SQLite timestamp expression with millisecond precision for Python >= 3.12."""
+    if sys.version_info >= (3, 12):
+        return "(unixepoch('subsec') * 1000)"
+    else:
+        return "(strftime('%s','now') * 1000)"
+
+
+sqlite_migration_one = f"""
+CREATE TABLE workflow_status (
+    workflow_uuid TEXT PRIMARY KEY,
+    status TEXT,
+    name TEXT,
+    authenticated_user TEXT,
+    assumed_role TEXT,
+    authenticated_roles TEXT,
+    request TEXT,
+    output TEXT,
+    error TEXT,
+    executor_id TEXT,
+    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
+    updated_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
+    application_version TEXT,
+    application_id TEXT,
+    class_name TEXT DEFAULT NULL,
+    config_name TEXT DEFAULT NULL,
+    recovery_attempts INTEGER DEFAULT 0,
+    queue_name TEXT,
+    workflow_timeout_ms INTEGER,
+    workflow_deadline_epoch_ms INTEGER,
+    inputs TEXT,
+    started_at_epoch_ms INTEGER,
+    deduplication_id TEXT,
+    priority INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX workflow_status_created_at_index ON workflow_status (created_at);
+CREATE INDEX workflow_status_executor_id_index ON workflow_status (executor_id);
+CREATE INDEX workflow_status_status_index ON workflow_status (status);
+
+CREATE UNIQUE INDEX uq_workflow_status_queue_name_dedup_id 
+ON workflow_status (queue_name, deduplication_id);
+
+CREATE TABLE operation_outputs (
+    workflow_uuid TEXT NOT NULL,
+    function_id INTEGER NOT NULL,
+    function_name TEXT NOT NULL DEFAULT '',
+    output TEXT,
+    error TEXT,
+    child_workflow_id TEXT,
+    PRIMARY KEY (workflow_uuid, function_id),
+    FOREIGN KEY (workflow_uuid) REFERENCES workflow_status(workflow_uuid) 
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE TABLE notifications (
+    destination_uuid TEXT NOT NULL,
+    topic TEXT,
+    message TEXT NOT NULL,
+    created_at_epoch_ms INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
+    message_uuid TEXT NOT NULL DEFAULT (hex(randomblob(16))),
+    FOREIGN KEY (destination_uuid) REFERENCES workflow_status(workflow_uuid) 
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+CREATE INDEX idx_workflow_topic ON notifications (destination_uuid, topic);
+
+CREATE TABLE workflow_events (
+    workflow_uuid TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (workflow_uuid, key),
+    FOREIGN KEY (workflow_uuid) REFERENCES workflow_status(workflow_uuid) 
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE TABLE streams (
+    workflow_uuid TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    "offset" INTEGER NOT NULL,
+    PRIMARY KEY (workflow_uuid, key, "offset"),
+    FOREIGN KEY (workflow_uuid) REFERENCES workflow_status(workflow_uuid) 
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+"""
+
 dbos_migrations = [dbos_migration_one]
+sqlite_migrations = [sqlite_migration_one]

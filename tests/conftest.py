@@ -1,9 +1,10 @@
 import glob
 import os
 import subprocess
+import sys
 import time
 from typing import Any, Generator, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import pytest
 import sqlalchemy as sa
@@ -25,10 +26,32 @@ def build_wheel() -> str:
     return wheel_files[0]
 
 
+def using_sqlite() -> bool:
+    return os.environ.get("DBOS_DATABASE", None) == "SQLITE"
+
+
+@pytest.fixture()
+def skip_with_sqlite() -> None:
+    if using_sqlite():
+        pytest.skip("Skipping test when testing SQLite")
+
+
+@pytest.fixture()
+def skip_with_sqlite_imprecise_time() -> None:
+    if using_sqlite() and sys.version_info < (3, 12):
+        pytest.skip(
+            "Skipping test when testing SQLite on Python version <3.12 as SQLite lacks ms-precision timestamps"
+        )
+
+
 def default_config() -> DBOSConfig:
     return {
         "name": "test-app",
-        "database_url": f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy",
+        "database_url": (
+            "sqlite:///test.sqlite"
+            if using_sqlite()
+            else f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy"
+        ),
     }
 
 
@@ -37,69 +60,55 @@ def config() -> DBOSConfig:
     return default_config()
 
 
-@pytest.fixture()
-def sys_db(config: DBOSConfig) -> Generator[SystemDatabase, Any, None]:
-    assert config["database_url"] is not None
-    sys_db = SystemDatabase(
-        system_database_url=f"{config['database_url']}_dbos_sys",
-        engine_kwargs={
-            "pool_timeout": 30,
-            "max_overflow": 0,
-            "pool_size": 2,
-            "connect_args": {"connect_timeout": 30},
-        },
-    )
-    sys_db.run_migrations()
-    yield sys_db
-    sys_db.destroy()
-
-
-@pytest.fixture()
-def app_db(config: DBOSConfig) -> Generator[ApplicationDatabase, Any, None]:
-    assert config["database_url"] is not None
-    app_db = ApplicationDatabase(
-        database_url=config["database_url"],
-        engine_kwargs={
-            "pool_timeout": 30,
-            "max_overflow": 0,
-            "pool_size": 2,
-            "connect_args": {"connect_timeout": 30},
-        },
-    )
-    app_db.run_migrations()
-    yield app_db
-    app_db.destroy()
-
-
 @pytest.fixture(scope="session")
-def postgres_db_engine() -> sa.Engine:
+def db_engine() -> Generator[sa.Engine, Any, None]:
     cfg = default_config()
     assert cfg["database_url"] is not None
-    return sa.create_engine(
-        sa.make_url(cfg["database_url"]).set(
-            drivername="postgresql+psycopg",
-            database="postgres",
-        ),
-        connect_args={
-            "connect_timeout": 30,
-        },
-    )
+    if using_sqlite():
+        engine = sa.create_engine(cfg["database_url"])
+        yield engine
+    else:
+        engine = sa.create_engine(
+            sa.make_url(cfg["database_url"]).set(
+                drivername="postgresql+psycopg",
+                database="postgres",
+            ),
+            connect_args={
+                "connect_timeout": 30,
+            },
+        )
+        yield engine
+    engine.dispose()
 
 
 @pytest.fixture()
-def cleanup_test_databases(config: DBOSConfig, postgres_db_engine: sa.Engine) -> None:
+def cleanup_test_databases(config: DBOSConfig, db_engine: sa.Engine) -> None:
     assert config["database_url"] is not None
-    app_db_name = sa.make_url(config["database_url"]).database
-    sys_db_name = f"{app_db_name}_dbos_sys"
+    database_url = config["database_url"]
 
-    with postgres_db_engine.connect() as connection:
-        connection.execution_options(isolation_level="AUTOCOMMIT")
-        connection.execute(
-            sa.text(f"DROP DATABASE IF EXISTS {app_db_name} WITH (FORCE)")
-        )
-        connection.execute(
-            sa.text(f"DROP DATABASE IF EXISTS {sys_db_name} WITH (FORCE)")
-        )
+    if using_sqlite():
+        # For SQLite, delete the database files
+        # Extract file path from SQLite URL
+        parsed_url = sa.make_url(database_url)
+        db_path = parsed_url.database
+        assert db_path is not None
+
+        # Remove the database files if they exist
+        if os.path.exists(db_path):
+            os.remove(db_path)
+    else:
+        # For PostgreSQL, drop the databases
+        app_db_name = sa.make_url(database_url).database
+        sys_db_name = f"{app_db_name}_dbos_sys"
+
+        with db_engine.connect() as connection:
+            connection.execution_options(isolation_level="AUTOCOMMIT")
+            connection.execute(
+                sa.text(f"DROP DATABASE IF EXISTS {app_db_name} WITH (FORCE)")
+            )
+            connection.execute(
+                sa.text(f"DROP DATABASE IF EXISTS {sys_db_name} WITH (FORCE)")
+            )
 
     # Clean up environment variables
     os.environ.pop("DBOS__VMID") if "DBOS__VMID" in os.environ else None

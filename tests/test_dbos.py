@@ -48,7 +48,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
         DBOS.logger.info("I'm test_workflow " + var + var2)
         return res + res2
 
-    @DBOS.transaction(isolation_level="REPEATABLE READ")
+    @DBOS.transaction(isolation_level="SERIALIZABLE")
     def test_transaction(var2: str) -> str:
         assert DBOS.step_id == 1
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
@@ -92,7 +92,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
 def test_simple_workflow_attempts_counter(dbos: DBOS) -> None:
     @DBOS.workflow()
     def noop() -> None:
-        pass
+        time.sleep(2)
 
     wfuuid = str(uuid.uuid4())
     with dbos._sys_db.engine.connect() as c:
@@ -108,7 +108,7 @@ def test_simple_workflow_attempts_counter(dbos: DBOS) -> None:
             assert result is not None
             recovery_attempts, created_at, updated_at = result
             assert recovery_attempts == i + 1
-            assert updated_at > created_at
+            assert updated_at >= created_at
 
 
 def test_child_workflow(dbos: DBOS) -> None:
@@ -243,7 +243,7 @@ def test_exception_workflow(dbos: DBOS) -> None:
         try:
             bad_transaction()
         except Exception as e:
-            assert str(e.orig.sqlstate) == "42601"  # type: ignore
+            assert "syntax error" in str(e)
         raise err1
 
     with pytest.raises(Exception) as exc_info:
@@ -278,11 +278,7 @@ def test_temp_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
     step_counter: int = 0
 
-    cur_time: str = datetime.datetime.now().isoformat()
-    gwi: GetWorkflowsInput = GetWorkflowsInput()
-    gwi.start_time = cur_time
-
-    @DBOS.transaction(isolation_level="READ COMMITTED")
+    @DBOS.transaction()
     def test_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         nonlocal txn_counter
@@ -306,7 +302,7 @@ def test_temp_workflow(dbos: DBOS) -> None:
     res = test_step("var")
     assert res == "var"
 
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = DBOS.list_workflows()
     assert len(wfs) == 1
 
     wfi1 = dbos._sys_db.get_workflow_status(wfs[0].workflow_id)
@@ -514,16 +510,12 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
         txn_counter += 1
         return var2 + str(rows[0][0])
 
-    cur_time: str = datetime.datetime.now().isoformat()
-    gwi: GetWorkflowsInput = GetWorkflowsInput()
-    gwi.start_time = cur_time
-
     wfuuid = str(uuid.uuid4())
     with SetWorkflowID(wfuuid):
         res = test_transaction("bob")
         assert res == "bob1"
 
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = DBOS.list_workflows()
     assert len(wfs) == 1
     assert wfs[0].workflow_id == wfuuid
 
@@ -544,7 +536,7 @@ def test_recovery_temp_workflow(dbos: DBOS) -> None:
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == "bob1"
 
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = DBOS.list_workflows()
     assert len(wfs) == 1
     assert wfs[0].workflow_id == wfuuid
 
@@ -906,9 +898,7 @@ def test_send_recv(dbos: DBOS) -> None:
 
 def test_send_recv_temp_wf(dbos: DBOS) -> None:
     recv_counter: int = 0
-    cur_time: str = datetime.datetime.now().isoformat()
     gwi: GetWorkflowsInput = GetWorkflowsInput()
-    gwi.start_time = cur_time
 
     @DBOS.workflow()
     def test_send_recv_workflow(topic: str) -> str:
@@ -948,7 +938,6 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     wfs = dbos._sys_db.get_workflows(gwi)
     assert dest_uuid in [w.workflow_id for w in wfs]
 
-    gwi.start_time = cur_time
     gwi.workflow_id_prefix = dest_uuid[0:10]
     wfs = dbos._sys_db.get_workflows(gwi)
     assert dest_uuid in [w.workflow_id for w in wfs]
@@ -1048,7 +1037,7 @@ def test_nonserializable_values(dbos: DBOS) -> None:
     def invalid_return() -> str:
         return "literal"
 
-    @DBOS.transaction(isolation_level="READ COMMITTED")
+    @DBOS.transaction()
     def test_ns_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         return invalid_return  #  type: ignore
@@ -1061,7 +1050,7 @@ def test_nonserializable_values(dbos: DBOS) -> None:
     def test_ns_wf(var: str) -> str:
         return invalid_return  #  type: ignore
 
-    @DBOS.transaction(isolation_level="READ COMMITTED")
+    @DBOS.transaction()
     def test_reg_transaction(var2: str) -> str:
         rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         return var2

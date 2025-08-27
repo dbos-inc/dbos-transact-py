@@ -43,7 +43,7 @@ async def test_async_workflow(dbos: DBOS) -> None:
         DBOS.logger.info("I'm test_step")
         return var + f"step{step_counter}"
 
-    @DBOS.transaction(isolation_level="REPEATABLE READ")
+    @DBOS.transaction(isolation_level="SERIALIZABLE")
     def test_transaction(var: str) -> str:
         rows = (DBOS.sql_session.execute(sa.text("SELECT 1"))).fetchall()
         nonlocal txn_counter
@@ -101,7 +101,7 @@ async def test_async_step(dbos: DBOS) -> None:
         DBOS.logger.info("I'm test_step")
         return var + f"step{step_counter}"
 
-    @DBOS.transaction(isolation_level="REPEATABLE READ")
+    @DBOS.transaction(isolation_level="SERIALIZABLE")
     def test_transaction(var: str) -> str:
         rows = (DBOS.sql_session.execute(sa.text("SELECT 1"))).fetchall()
         nonlocal txn_counter

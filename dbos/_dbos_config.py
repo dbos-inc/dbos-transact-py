@@ -296,19 +296,12 @@ def process_config(
     """
     If a database_url is provided, pass it as is in the config.
 
-    Else, build a database_url from defaults.
+    Else, default to SQLite.
 
     Also build SQL Alchemy "kwargs" base on user input + defaults.
     Specifically, db_engine_kwargs takes precedence over app_db_pool_size
 
     In debug mode, apply overrides from DBOS_DBHOST, DBOS_DBPORT, DBOS_DBUSER, and DBOS_DBPASSWORD.
-
-    Default configuration:
-        - Hostname: localhost
-        - Port: 5432
-        - Username: postgres
-        - Password: $PGPASSWORD
-        - Database name: transformed application name.
     """
 
     if "name" not in data:
@@ -350,9 +343,14 @@ def process_config(
 
         url = make_url(data["database_url"])
 
-        if not data["database"].get("sys_db_name"):
+        if data["database_url"].startswith("sqlite"):
+            data["system_database_url"] = data["database_url"]
+        else:
             assert url.database is not None
-            data["database"]["sys_db_name"] = url.database + SystemSchema.sysdb_suffix
+            if not data["database"].get("sys_db_name"):
+                data["database"]["sys_db_name"] = (
+                    url.database + SystemSchema.sysdb_suffix
+                )
 
         # Gather connect_timeout from the URL if provided. It should be used in engine kwargs if not provided there (instead of our default)
         connect_timeout_str = url.query.get("connect_timeout")
@@ -380,23 +378,24 @@ def process_config(
             ).render_as_string(hide_password=False)
     else:
         _app_db_name = _app_name_to_db_name(data["name"])
-        _password = os.environ.get("PGPASSWORD", "dbos")
-        data["database_url"] = (
-            f"postgres://postgres:{_password}@localhost:5432/{_app_db_name}?connect_timeout=10&sslmode=prefer"
-        )
-        if not data["database"].get("sys_db_name"):
-            data["database"]["sys_db_name"] = _app_db_name + SystemSchema.sysdb_suffix
-        assert data["database_url"] is not None
+        data["database_url"] = f"sqlite:///{_app_db_name}.sqlite"
+        data["system_database_url"] = data["database_url"]
 
     configure_db_engine_parameters(data["database"], connect_timeout=connect_timeout)
 
     # Pretty-print where we've loaded database connection information from, respecting the log level
+    assert data["database_url"] is not None
     if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
         log_url = make_url(data["database_url"]).render_as_string(hide_password=True)
         print(f"[bold blue]Using database connection string: {log_url}[/bold blue]")
-        print(
-            f"[bold blue]Database engine parameters: {data['database']['db_engine_kwargs']}[/bold blue]"
-        )
+        if data["database_url"].startswith("sqlite"):
+            print(
+                f"[bold blue]Using SQLite as a system database. The SQLite system database is for development and testing. PostgreSQL is recommended for production use.[/bold blue]"
+            )
+        else:
+            print(
+                f"[bold blue]Database engine parameters: {data['database']['db_engine_kwargs']}[/bold blue]"
+            )
 
     # Return data as ConfigFile type
     return data
@@ -445,6 +444,8 @@ def configure_db_engine_parameters(
 
 
 def is_valid_database_url(database_url: str) -> bool:
+    if database_url.startswith("sqlite"):
+        return True
     url = make_url(database_url)
     required_fields = [
         ("username", "Username must be specified in the connection URL"),
@@ -559,6 +560,8 @@ def get_system_database_url(config: ConfigFile) -> str:
         return config["system_database_url"]
     else:
         assert config["database_url"] is not None
+        if config["database_url"].startswith("sqlite"):
+            return config["database_url"]
         app_db_url = make_url(config["database_url"])
         if config["database"].get("sys_db_name") is not None:
             sys_db_name = config["database"]["sys_db_name"]

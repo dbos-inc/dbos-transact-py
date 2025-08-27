@@ -280,14 +280,8 @@ def test_process_config_load_defaults():
     }
     processed_config = process_config(data=config)
     assert processed_config["name"] == "some-app"
-    assert (
-        processed_config["database_url"]
-        == f"postgres://postgres:{os.environ.get('PGPASSWORD', 'dbos')}@localhost:5432/some_app?connect_timeout=10&sslmode=prefer"
-    )
-    assert (
-        processed_config["database"]["sys_db_name"]
-        == "some_app" + SystemSchema.sysdb_suffix
-    )
+    assert processed_config["database_url"] == f"sqlite:///some_app.sqlite"
+    assert processed_config["system_database_url"] == processed_config["database_url"]
     assert processed_config["database"]["db_engine_kwargs"] is not None
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
     assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
@@ -301,14 +295,8 @@ def test_process_config_load_default_with_None_database_url():
     }
     processed_config = process_config(data=config)
     assert processed_config["name"] == "some-app"
-    assert (
-        processed_config["database_url"]
-        == f"postgres://postgres:{os.environ.get('PGPASSWORD', 'dbos')}@localhost:5432/some_app?connect_timeout=10&sslmode=prefer"
-    )
-    assert (
-        processed_config["database"]["sys_db_name"]
-        == "some_app" + SystemSchema.sysdb_suffix
-    )
+    assert processed_config["database_url"] == f"sqlite:///some_app.sqlite"
+    assert processed_config["system_database_url"] == processed_config["database_url"]
     assert processed_config["database"]["db_engine_kwargs"] is not None
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
     assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
@@ -322,14 +310,8 @@ def test_process_config_load_default_with_empty_database_url():
     }
     processed_config = process_config(data=config)
     assert processed_config["name"] == "some-app"
-    assert (
-        processed_config["database_url"]
-        == f"postgres://postgres:{os.environ.get('PGPASSWORD', 'dbos')}@localhost:5432/some_app?connect_timeout=10&sslmode=prefer"
-    )
-    assert (
-        processed_config["database"]["sys_db_name"]
-        == "some_app" + SystemSchema.sysdb_suffix
-    )
+    assert processed_config["database_url"] == f"sqlite:///some_app.sqlite"
+    assert processed_config["system_database_url"] == processed_config["database_url"]
     assert processed_config["database"]["db_engine_kwargs"] is not None
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
     assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
@@ -363,11 +345,8 @@ def test_config_mixed_params():
 
     configFile = process_config(data=config)
     assert configFile["name"] == "some-app"
-    assert (
-        configFile["database_url"]
-        == f"postgres://postgres:{os.environ.get('PGPASSWORD', 'dbos')}@localhost:5432/some_app?connect_timeout=10&sslmode=prefer"
-    )
-    assert configFile["database"]["sys_db_name"] == "yoohoo"
+    assert configFile["database_url"] == f"sqlite:///some_app.sqlite"
+    assert configFile["system_database_url"] == configFile["database_url"]
     assert configFile["database"]["db_engine_kwargs"] is not None
     assert configFile["database"]["sys_db_engine_kwargs"] is not None
     assert configFile["telemetry"]["logs"]["logLevel"] == "INFO"
@@ -619,7 +598,7 @@ def test_process_config_with_wrong_db_url():
     )
 
 
-def test_database_url_no_password():
+def test_database_url_no_password(skip_with_sqlite: None):
     """Test that the database URL can be provided without a password."""
     expected_url = "postgresql://postgres@localhost:5432/dbostestpy?sslmode=disable"
     config: DBOSConfig = {

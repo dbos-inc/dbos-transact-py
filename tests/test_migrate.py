@@ -5,20 +5,18 @@ import sqlalchemy as sa
 from dbos import DBOS, DBOSConfig
 
 
-def test_migrate(postgres_db_engine: sa.Engine) -> None:
+def test_migrate(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
     """Test that you can migrate with a privileged role and run DBOS with a less-privileged role"""
     database_name = "migrate_test"
     role_name = "migrate-test-role"
     role_password = "migrate_test_password"
 
     # Verify migration is agnostic to driver name (under the hood it uses postgresql+psycopg)
-    db_url = postgres_db_engine.url.set(database=database_name).set(
-        drivername="postgresql"
-    )
+    db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
     db_url_string = db_url.render_as_string(hide_password=False)
 
     # Drop the DBOS database if it exists. Create a test role with no permissions.
-    with postgres_db_engine.connect() as connection:
+    with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(
             sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
@@ -35,7 +33,7 @@ def test_migrate(postgres_db_engine: sa.Engine) -> None:
     subprocess.check_call(
         ["dbos", "migrate", "-D", db_url_string, "-s", db_url_string, "-r", role_name]
     )
-    with postgres_db_engine.connect() as c:
+    with db_engine.connect() as c:
         c.execution_options(isolation_level="AUTOCOMMIT")
         result = c.execute(
             sa.text(

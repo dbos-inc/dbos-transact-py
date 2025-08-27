@@ -29,7 +29,7 @@ from .._dbos_config import (
 )
 from .._docker_pg_helper import start_docker_pg, stop_docker_pg
 from .._schemas.system_database import SystemSchema
-from .._sys_db import SystemDatabase, reset_system_database
+from .._sys_db import SystemDatabase
 from .._utils import GlobalParams
 from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
@@ -371,22 +371,12 @@ def reset(
             typer.echo("Operation cancelled.")
             raise typer.Exit()
     try:
-        # Make a SA url out of the user-provided URL and verify a database name is present
         database_url = _get_db_url(db_url)
-        pg_db_url = sa.make_url(database_url)
-        assert (
-            pg_db_url.database is not None
-        ), f"Database name is required in URL: {pg_db_url.render_as_string(hide_password=True)}"
-        # Resolve system database name
-        sysdb_name = (
-            sys_db_name
-            if sys_db_name
-            else (pg_db_url.database + SystemSchema.sysdb_suffix)
+        system_database_url = get_system_database_url(
+            {"database_url": database_url, "database": {"sys_db_name": sys_db_name}}
         )
-        reset_system_database(
-            postgres_db_url=pg_db_url.set(database="postgres"), sysdb_name=sysdb_name
-        )
-    except sa.exc.SQLAlchemyError as e:
+        SystemDatabase.reset_system_database(system_database_url)
+    except Exception as e:
         typer.echo(f"Error resetting system database: {str(e)}")
         return
 
