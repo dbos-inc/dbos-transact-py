@@ -42,8 +42,8 @@ def test_client_no_migrate(
 
     # The client should not be able to connect to the system database
     with pytest.raises(Exception) as exc_info:
-        assert config["database_url"] is not None
-        client = DBOSClient(config["database_url"])
+        assert config["application_database_url"]
+        client = DBOSClient(config["application_database_url"])
         client.list_workflows()
     assert f'database "dbostestpy_dbos_sys" does not exist' in str(exc_info.value)
 

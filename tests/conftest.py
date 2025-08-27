@@ -4,7 +4,7 @@ import subprocess
 import sys
 import time
 from typing import Any, Generator, Tuple
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 import pytest
 import sqlalchemy as sa
@@ -12,10 +12,7 @@ from fastapi import FastAPI
 from flask import Flask
 
 from dbos import DBOS, DBOSClient, DBOSConfig
-from dbos._app_db import ApplicationDatabase
-from dbos._dbos_config import get_system_database_url
 from dbos._schemas.system_database import SystemSchema
-from dbos._sys_db import SystemDatabase
 
 
 @pytest.fixture(scope="session")
@@ -141,8 +138,12 @@ def dbos(
 
 @pytest.fixture()
 def client(config: DBOSConfig, dbos: DBOS) -> Generator[DBOSClient, Any, None]:
-    assert config["database_url"] is not None
-    client = DBOSClient(config["database_url"])
+    assert config["application_database_url"] is not None
+    assert config["system_database_url"] is not None
+    client = DBOSClient(
+        application_database_url=config["application_database_url"],
+        system_database_url=config["system_database_url"],
+    )
     yield client
     client.destroy()
 

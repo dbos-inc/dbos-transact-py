@@ -628,3 +628,12 @@ def get_system_database_url(config: ConfigFile) -> str:
         return app_db_url.set(database=sys_db_name).render_as_string(
             hide_password=False
         )
+
+
+def get_application_database_url(config: ConfigFile) -> str:
+    if config.get("database_url"):
+        assert config["database_url"]
+        return config["database_url"]
+    else:
+        assert config["system_database_url"]
+        return config["system_database_url"]
