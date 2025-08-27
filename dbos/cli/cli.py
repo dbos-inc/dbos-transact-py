@@ -72,11 +72,6 @@ def _get_db_url(
             )
 
 
-def start_client(db_url: Optional[str] = None) -> DBOSClient:
-    database_url = _get_db_url(db_url)
-    return DBOSClient(database_url=database_url)
-
-
 app = typer.Typer()
 
 
@@ -344,12 +339,20 @@ def migrate(
 @app.command(help="Reset the DBOS system database")
 def reset(
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompt"),
-    db_url: Annotated[
+    application_database_url: Annotated[
         typing.Optional[str],
         typer.Option(
             "--db-url",
             "-D",
             help="Your DBOS application database URL",
+        ),
+    ] = None,
+    system_database_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--sys-db-url",
+            "-s",
+            help="Your DBOS system database URL",
         ),
     ] = None,
 ) -> None:
@@ -361,8 +364,10 @@ def reset(
             typer.echo("Operation cancelled.")
             raise typer.Exit()
     try:
-        database_url = _get_db_url(db_url)
-        system_database_url = get_system_database_url({"database_url": database_url})
+        system_database_url, application_database_url = _get_db_url(
+            system_database_url=system_database_url,
+            application_database_url=application_database_url,
+        )
         SystemDatabase.reset_system_database(system_database_url)
     except Exception as e:
         typer.echo(f"Error resetting system database: {str(e)}")
@@ -387,12 +392,20 @@ def debug(
 
 @workflow.command(help="List workflows for your application")
 def list(
-    db_url: Annotated[
+    application_database_url: Annotated[
         typing.Optional[str],
         typer.Option(
             "--db-url",
             "-D",
             help="Your DBOS application database URL",
+        ),
+    ] = None,
+    system_database_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--sys-db-url",
+            "-s",
+            help="Your DBOS system database URL",
         ),
     ] = None,
     limit: Annotated[
@@ -460,7 +473,15 @@ def list(
         ),
     ] = None,
 ) -> None:
-    workflows = start_client(db_url=db_url).list_workflows(
+    system_database_url, application_database_url = _get_db_url(
+        system_database_url=system_database_url,
+        application_database_url=application_database_url,
+    )
+    client = DBOSClient(
+        application_database_url=application_database_url,
+        system_database_url=system_database_url,
+    )
+    workflows = client.list_workflows(
         limit=limit,
         offset=offset,
         sort_desc=sort_desc,
@@ -477,7 +498,7 @@ def list(
 @workflow.command(help="Retrieve the status of a workflow")
 def get(
     workflow_id: Annotated[str, typer.Argument()],
-    db_url: Annotated[
+    application_database_url: Annotated[
         typing.Optional[str],
         typer.Option(
             "--db-url",
@@ -485,19 +506,31 @@ def get(
             help="Your DBOS application database URL",
         ),
     ] = None,
+    system_database_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--sys-db-url",
+            "-s",
+            help="Your DBOS system database URL",
+        ),
+    ] = None,
 ) -> None:
-    status = (
-        start_client(db_url=db_url)
-        .retrieve_workflow(workflow_id=workflow_id)
-        .get_status()
+    system_database_url, application_database_url = _get_db_url(
+        system_database_url=system_database_url,
+        application_database_url=application_database_url,
     )
+    client = DBOSClient(
+        application_database_url=application_database_url,
+        system_database_url=system_database_url,
+    )
+    status = client.retrieve_workflow(workflow_id=workflow_id).get_status()
     print(jsonpickle.encode(status, unpicklable=False))
 
 
 @workflow.command(help="List the steps of a workflow")
 def steps(
     workflow_id: Annotated[str, typer.Argument()],
-    db_url: Annotated[
+    application_database_url: Annotated[
         typing.Optional[str],
         typer.Option(
             "--db-url",
@@ -505,10 +538,26 @@ def steps(
             help="Your DBOS application database URL",
         ),
     ] = None,
+    system_database_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--sys-db-url",
+            "-s",
+            help="Your DBOS system database URL",
+        ),
+    ] = None,
 ) -> None:
+    system_database_url, application_database_url = _get_db_url(
+        system_database_url=system_database_url,
+        application_database_url=application_database_url,
+    )
+    client = DBOSClient(
+        application_database_url=application_database_url,
+        system_database_url=system_database_url,
+    )
     print(
         jsonpickle.encode(
-            start_client(db_url=db_url).list_workflow_steps(workflow_id=workflow_id),
+            client.list_workflow_steps(workflow_id=workflow_id),
             unpicklable=False,
         )
     )
@@ -519,7 +568,7 @@ def steps(
 )
 def cancel(
     workflow_id: Annotated[str, typer.Argument()],
-    db_url: Annotated[
+    application_database_url: Annotated[
         typing.Optional[str],
         typer.Option(
             "--db-url",
@@ -527,14 +576,30 @@ def cancel(
             help="Your DBOS application database URL",
         ),
     ] = None,
+    system_database_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--sys-db-url",
+            "-s",
+            help="Your DBOS system database URL",
+        ),
+    ] = None,
 ) -> None:
-    start_client(db_url=db_url).cancel_workflow(workflow_id=workflow_id)
+    system_database_url, application_database_url = _get_db_url(
+        system_database_url=system_database_url,
+        application_database_url=application_database_url,
+    )
+    client = DBOSClient(
+        application_database_url=application_database_url,
+        system_database_url=system_database_url,
+    )
+    client.cancel_workflow(workflow_id=workflow_id)
 
 
 @workflow.command(help="Resume a workflow that has been cancelled")
 def resume(
     workflow_id: Annotated[str, typer.Argument()],
-    db_url: Annotated[
+    application_database_url: Annotated[
         typing.Optional[str],
         typer.Option(
             "--db-url",
@@ -542,8 +607,24 @@ def resume(
             help="Your DBOS application database URL",
         ),
     ] = None,
+    system_database_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--sys-db-url",
+            "-s",
+            help="Your DBOS system database URL",
+        ),
+    ] = None,
 ) -> None:
-    start_client(db_url=db_url).resume_workflow(workflow_id=workflow_id)
+    system_database_url, application_database_url = _get_db_url(
+        system_database_url=system_database_url,
+        application_database_url=application_database_url,
+    )
+    client = DBOSClient(
+        application_database_url=application_database_url,
+        system_database_url=system_database_url,
+    )
+    client.resume_workflow(workflow_id=workflow_id)
 
 
 @workflow.command(
@@ -551,7 +632,7 @@ def resume(
 )
 def restart(
     workflow_id: Annotated[str, typer.Argument()],
-    db_url: Annotated[
+    application_database_url: Annotated[
         typing.Optional[str],
         typer.Option(
             "--db-url",
@@ -559,12 +640,24 @@ def restart(
             help="Your DBOS application database URL",
         ),
     ] = None,
+    system_database_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--sys-db-url",
+            "-s",
+            help="Your DBOS system database URL",
+        ),
+    ] = None,
 ) -> None:
-    status = (
-        start_client(db_url=db_url)
-        .fork_workflow(workflow_id=workflow_id, start_step=1)
-        .get_status()
+    system_database_url, application_database_url = _get_db_url(
+        system_database_url=system_database_url,
+        application_database_url=application_database_url,
     )
+    client = DBOSClient(
+        application_database_url=application_database_url,
+        system_database_url=system_database_url,
+    )
+    status = client.fork_workflow(workflow_id=workflow_id, start_step=1).get_status()
     print(jsonpickle.encode(status, unpicklable=False))
 
 
@@ -597,7 +690,7 @@ def fork(
             help="Custom application version for the forked workflow",
         ),
     ] = None,
-    db_url: Annotated[
+    application_database_url: Annotated[
         typing.Optional[str],
         typer.Option(
             "--db-url",
@@ -605,8 +698,23 @@ def fork(
             help="Your DBOS application database URL",
         ),
     ] = None,
+    system_database_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--sys-db-url",
+            "-s",
+            help="Your DBOS system database URL",
+        ),
+    ] = None,
 ) -> None:
-    client = start_client(db_url=db_url)
+    system_database_url, application_database_url = _get_db_url(
+        system_database_url=system_database_url,
+        application_database_url=application_database_url,
+    )
+    client = DBOSClient(
+        application_database_url=application_database_url,
+        system_database_url=system_database_url,
+    )
 
     if forked_workflow_id is not None:
         with SetWorkflowID(forked_workflow_id):
@@ -626,12 +734,20 @@ def fork(
 
 @queue.command(name="list", help="List enqueued functions for your application")
 def list_queue(
-    db_url: Annotated[
+    application_database_url: Annotated[
         typing.Optional[str],
         typer.Option(
             "--db-url",
             "-D",
             help="Your DBOS application database URL",
+        ),
+    ] = None,
+    system_database_url: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--sys-db-url",
+            "-s",
+            help="Your DBOS system database URL",
         ),
     ] = None,
     limit: Annotated[
@@ -695,7 +811,15 @@ def list_queue(
         ),
     ] = None,
 ) -> None:
-    workflows = start_client(db_url=db_url).list_queued_workflows(
+    system_database_url, application_database_url = _get_db_url(
+        system_database_url=system_database_url,
+        application_database_url=application_database_url,
+    )
+    client = DBOSClient(
+        application_database_url=application_database_url,
+        system_database_url=system_database_url,
+    )
+    workflows = client.list_queued_workflows(
         limit=limit,
         offset=offset,
         sort_desc=sort_desc,
