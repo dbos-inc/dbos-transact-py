@@ -158,7 +158,7 @@ def test_reset(
 def test_sqlite_systemdb_migration() -> None:
     """Test SQLite system database migration."""
     # Create a temporary SQLite database file
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as temp_db:
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as temp_db:
         temp_db_path = temp_db.name
 
         # Create SQLite system database URL

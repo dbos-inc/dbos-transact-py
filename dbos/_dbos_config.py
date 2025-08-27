@@ -378,7 +378,7 @@ def process_config(
             ).render_as_string(hide_password=False)
     else:
         _app_db_name = _app_name_to_db_name(data["name"])
-        data["database_url"] = f"sqlite:///{_app_db_name}.db"
+        data["database_url"] = f"sqlite:///{_app_db_name}.sqlite"
         data["system_database_url"] = data["database_url"]
 
     configure_db_engine_parameters(data["database"], connect_timeout=connect_timeout)

@@ -48,7 +48,7 @@ def default_config() -> DBOSConfig:
     return {
         "name": "test-app",
         "database_url": (
-            "sqlite:///test.db"
+            "sqlite:///test.sqlite"
             if using_sqlite()
             else f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy"
         ),

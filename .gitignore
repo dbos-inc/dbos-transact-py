@@ -171,4 +171,4 @@ cython_debug/
 .idea/
 
 # Sqlite
-*.db
+*.sqlite

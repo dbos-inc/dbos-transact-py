@@ -280,7 +280,7 @@ def test_process_config_load_defaults():
     }
     processed_config = process_config(data=config)
     assert processed_config["name"] == "some-app"
-    assert processed_config["database_url"] == f"sqlite:///some_app.db"
+    assert processed_config["database_url"] == f"sqlite:///some_app.sqlite"
     assert processed_config["system_database_url"] == processed_config["database_url"]
     assert processed_config["database"]["db_engine_kwargs"] is not None
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
@@ -295,7 +295,7 @@ def test_process_config_load_default_with_None_database_url():
     }
     processed_config = process_config(data=config)
     assert processed_config["name"] == "some-app"
-    assert processed_config["database_url"] == f"sqlite:///some_app.db"
+    assert processed_config["database_url"] == f"sqlite:///some_app.sqlite"
     assert processed_config["system_database_url"] == processed_config["database_url"]
     assert processed_config["database"]["db_engine_kwargs"] is not None
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
@@ -310,7 +310,7 @@ def test_process_config_load_default_with_empty_database_url():
     }
     processed_config = process_config(data=config)
     assert processed_config["name"] == "some-app"
-    assert processed_config["database_url"] == f"sqlite:///some_app.db"
+    assert processed_config["database_url"] == f"sqlite:///some_app.sqlite"
     assert processed_config["system_database_url"] == processed_config["database_url"]
     assert processed_config["database"]["db_engine_kwargs"] is not None
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
@@ -345,7 +345,7 @@ def test_config_mixed_params():
 
     configFile = process_config(data=config)
     assert configFile["name"] == "some-app"
-    assert configFile["database_url"] == f"sqlite:///some_app.db"
+    assert configFile["database_url"] == f"sqlite:///some_app.sqlite"
     assert configFile["system_database_url"] == configFile["database_url"]
     assert configFile["database"]["db_engine_kwargs"] is not None
     assert configFile["database"]["sys_db_engine_kwargs"] is not None
