@@ -53,7 +53,9 @@ def test_alembic_migrations_compatibility(
     # Drop and recreate the system database
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
-        connection.execute(sa.text(f'DROP DATABASE IF EXISTS "{sysdb_name}"'))
+        connection.execute(
+            sa.text(f'DROP DATABASE IF EXISTS "{sysdb_name}" WITH (FORCE)')
+        )
         connection.execute(sa.text(f'CREATE DATABASE "{sysdb_name}"'))
 
     sys_db = PostgresSystemDatabase(
