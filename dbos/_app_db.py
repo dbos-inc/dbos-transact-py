@@ -396,7 +396,7 @@ class SQLiteApplicationDatabase(ApplicationDatabase):
                             txn_snapshot TEXT NOT NULL,
                             executor_id TEXT,
                             function_name TEXT NOT NULL DEFAULT '',
-                            created_at BIGINT NOT NULL DEFAULT{get_sqlite_timestamp_expr()},
+                            created_at BIGINT NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
                             PRIMARY KEY (workflow_uuid, function_id)
                         )
                         """
