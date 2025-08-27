@@ -61,13 +61,14 @@ def config() -> DBOSConfig:
 
 
 @pytest.fixture(scope="session")
-def db_engine() -> sa.Engine:
+def db_engine() -> Generator[sa.Engine, Any, None]:
     cfg = default_config()
     assert cfg["database_url"] is not None
     if using_sqlite():
-        return sa.create_engine(cfg["database_url"])
+        engine = sa.create_engine(cfg["database_url"])
+        yield engine
     else:
-        return sa.create_engine(
+        engine = sa.create_engine(
             sa.make_url(cfg["database_url"]).set(
                 drivername="postgresql+psycopg",
                 database="postgres",
@@ -76,6 +77,8 @@ def db_engine() -> sa.Engine:
                 "connect_timeout": 30,
             },
         )
+        yield engine
+    engine.dispose()
 
 
 @pytest.fixture()
