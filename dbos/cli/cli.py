@@ -671,7 +671,7 @@ def fork(
         int,
         typer.Option(
             "--step",
-            "-s",
+            "-S",
             help="Restart from this step",
         ),
     ] = 1,
