@@ -530,7 +530,7 @@ def _app_name_to_db_name(app_name: str) -> str:
 
 def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Load the DBOS configuration file and force the use of:
-    # 1. The database url provided by DBOS_DATABASE_URL
+    # 1. The application and system database url provided by DBOS_DATABASE_URL and DBOS_SYSTEM_DATABASE_URL
     # 2. OTLP traces endpoints (add the config data to the provided config)
     # 3. Use the application name from the file. This is a defensive measure to ensure the application name is whatever it was registered with in the cloud
     # 4. Remove admin_port is provided in code
@@ -542,24 +542,22 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     if config_from_file is None:
         return provided_config
 
-    # Name
+    # Set the application name to the cloud app name
     provided_config["name"] = config_from_file["name"]
 
-    # Database config. Expects DBOS_DATABASE_URL to be set
-    if "database" not in provided_config:
-        provided_config["database"] = {}
-    provided_config["database"]["sys_db_name"] = config_from_file["database"][
-        "sys_db_name"
-    ]
-
+    # Use the DBOS Cloud application and system database URLs
     db_url = os.environ.get("DBOS_DATABASE_URL")
     if db_url is None:
         raise DBOSInitializationError(
             "DBOS_DATABASE_URL environment variable is not set. This is required to connect to the database."
         )
     provided_config["database_url"] = db_url
-    if "system_database_url" in provided_config:
-        del provided_config["system_database_url"]
+    system_db_url = os.environ.get("DBOS_SYSTEM_DATABASE_URL")
+    if system_db_url is None:
+        raise DBOSInitializationError(
+            "DBOS_SYSTEM_DATABASE_URL environment variable is not set. This is required to connect to the database."
+        )
+    provided_config["system_database_url"] = system_db_url
 
     # Telemetry config
     if "telemetry" not in provided_config or provided_config["telemetry"] is None:

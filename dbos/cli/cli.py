@@ -40,6 +40,7 @@ def _get_db_url(
     """
     Get the database URL to use for the DBOS application.
     Order of precedence:
+    - In DBOS Cloud, use the environment variables provided.
     - Use database URL arguments if provided.
     - If the `dbos-config.yaml` file is present, use the database URLs from it.
 
@@ -47,9 +48,10 @@ def _get_db_url(
     Note that for the latter to be possible, a configuration file must have been found, with an application name set.
     """
     if os.environ.get("DBOS__CLOUD") == "true":
-        return os.environ.get("DBOS_SYSTEM_DATABASE_URL"), os.environ.get(
-            "DBOS_DATABASE_URL"
-        )
+        system_database_url = os.environ.get("DBOS_SYSTEM_DATABASE_URL")
+        application_database_url = os.environ.get("DBOS_DATABASE_URL")
+        assert system_database_url and application_database_url
+        return system_database_url, application_database_url
     if system_database_url or application_database_url:
         cfg: ConfigFile = {
             "system_database_url": system_database_url,
