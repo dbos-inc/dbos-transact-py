@@ -23,7 +23,7 @@ class DBOSConfig(TypedDict, total=False):
     Attributes:
         name (str): Application name
         system_database_url (str): Connection string for the DBOS system database. Defaults to sqlite:///{name} if not provided.
-        application_database_url (str): Connection string for the DBOS application database, in which DBOS @Transaction functions run. Optional.
+        application_database_url (str): Connection string for the DBOS application database, in which DBOS @Transaction functions run. Optional. Should be the same type of database (SQLite or Postgres) as the system database.
         database_url (str): (DEPRECATED) Database connection string
         sys_db_name (str): (DEPRECATED) System database name
         sys_db_pool_size (int): System database pool size
@@ -109,12 +109,12 @@ class ConfigFile(TypedDict, total=False):
 
     Attributes:
         name (str): Application name
-        runtimeConfig (RuntimeConfig): Configuration for request serving
+        runtimeConfig (RuntimeConfig): Configuration for DBOS Cloud
         database (DatabaseConfig): Configure pool sizes, migrate commands
-        database_url (str): Database connection string
+        database_url (str): Application database URL
+        system_database_url (str): System database URL
         telemetry (TelemetryConfig): Configuration for tracing / logging
-        env (Dict[str,str]): Environment varialbes
-        application (Dict[str, Any]): Application-specific configuration section
+        env (Dict[str,str]): Environment variables
 
     """
 
@@ -630,9 +630,11 @@ def get_system_database_url(config: ConfigFile) -> str:
 
 
 def get_application_database_url(config: ConfigFile) -> str:
+    # For backwards compatibility, the application database URL is "database_url"
     if config.get("database_url"):
         assert config["database_url"]
         return config["database_url"]
     else:
+        # If the application database URL is not specified, set it to the system database URL
         assert config["system_database_url"]
         return config["system_database_url"]
