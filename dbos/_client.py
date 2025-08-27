@@ -117,11 +117,11 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
 class DBOSClient:
     def __init__(
         self,
-        database_url: Optional[str] = None,
+        database_url: Optional[str] = None,  # DEPRECATED
         *,
         system_database_url: Optional[str] = None,
-        system_database: Optional[str] = None,
         application_database_url: Optional[str] = None,
+        system_database: Optional[str] = None,  # DEPRECATED
     ):
         application_database_url = get_application_database_url(
             {
