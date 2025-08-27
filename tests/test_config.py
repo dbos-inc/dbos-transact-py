@@ -83,6 +83,7 @@ def test_load_valid_config_file(mocker):
                 - "python3 main.py"
             admin_port: 8001
         database_url: "postgres://user:dbos@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
+        system_database_url: "postgres://user:dbos@localhost:5432/dbname_dbos_sys?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
         telemetry:
             OTLPExporter:
                 logsEndpoint: 'fooLogs'
@@ -97,6 +98,10 @@ def test_load_valid_config_file(mocker):
     assert (
         configFile["database_url"]
         == f"postgres://user:dbos@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
+    )
+    assert (
+        configFile["system_database_url"]
+        == f"postgres://user:dbos@localhost:5432/dbname_dbos_sys?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
     )
 
     assert configFile["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["fooLogs"]

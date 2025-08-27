@@ -19,6 +19,10 @@
         "type": ["string", "null"],
         "description": "The URL of the application database"
       },
+      "system_database_url": {
+        "type": ["string", "null"],
+        "description": "The URL of the system database"
+      },
       "database": {
         "type": "object",
         "additionalProperties": false,
