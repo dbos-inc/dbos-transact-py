@@ -93,7 +93,7 @@ def test_load_valid_config_file(mocker):
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
     )
 
-    configFile = load_config(mock_filename, run_process_config=False)
+    configFile = load_config(mock_filename)
     assert configFile["name"] == "some-app"
     assert (
         configFile["database_url"]
@@ -118,7 +118,7 @@ def test_load_config_with_unset_database_url_env_var(mocker):
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
     )
 
-    configFile = load_config(mock_filename, run_process_config=False)
+    configFile = load_config(mock_filename)
     assert configFile["name"] == "some-app"
 
 
@@ -171,7 +171,7 @@ def test_load_config_file_custom_path():
     from unittest.mock import mock_open, patch
 
     with patch("builtins.open", mock_open(read_data=mock_config)) as mock_file:
-        result = load_config(custom_path, run_process_config=False)
+        result = load_config(custom_path)
         mock_file.assert_called_with(custom_path, "r")
         assert result["name"] == "test-app"
 

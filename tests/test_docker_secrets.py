@@ -125,7 +125,7 @@ database_url: postgresql://postgres:${DOCKER_SECRET:db_password}@localhost:5432/
             mock_yaml_load.return_value = mock_config_dict
 
             # Call the load_config function
-            config = load_config(run_process_config=False)
+            config = load_config()
 
             # Verify that the Docker secret was correctly substituted in the database URL
             self.assertEqual(
@@ -179,7 +179,7 @@ runtimeConfig:
             mock_yaml_load.return_value = mock_config_dict
 
             # Call the load_config function
-            config = load_config(run_process_config=False)
+            config = load_config()
 
             # Verify that the Docker secrets were correctly substituted in the list
             setup_commands = config["runtimeConfig"]["setup"]
@@ -242,7 +242,7 @@ database_url: postgresql://${DOCKER_SECRET:db_user}:${DOCKER_SECRET:db_password}
 
             with patch("builtins.open", mock_secret_open, create=True):
                 # Call the load_config function
-                config = load_config(run_process_config=False)
+                config = load_config()
 
                 # Verify that all Docker secrets were correctly substituted in the string
                 self.assertEqual(
@@ -284,7 +284,7 @@ database_url: postgresql://postgres:plain_password@localhost:5432/test_db
             mock_yaml_load.return_value = mock_config_dict
 
             # Call the load_config function
-            config = load_config(run_process_config=False)
+            config = load_config()
 
             # Verify that the configuration was loaded correctly without any substitutions
             assert config["database_url"] is not None
@@ -340,7 +340,7 @@ database_url: postgresql://${DB_USER}:${DOCKER_SECRET:db_password}@${DB_HOST}:${
             mock_yaml_load.return_value = mock_config_dict
 
             # Call the load_config function
-            config = load_config(run_process_config=False)
+            config = load_config()
 
             # Verify that both environment variables and Docker secrets were correctly substituted
             self.assertEqual(

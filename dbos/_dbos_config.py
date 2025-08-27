@@ -239,7 +239,6 @@ def _substitute_env_vars(content: str, silent: bool = False) -> str:
 def load_config(
     config_file_path: str = DBOS_CONFIG_PATH,
     *,
-    run_process_config: bool = True,
     silent: bool = False,
 ) -> ConfigFile:
     """
@@ -289,8 +288,6 @@ def load_config(
             ]
 
     data = cast(ConfigFile, data)
-    if run_process_config:
-        data = process_config(data=data, silent=silent)
     return data  # type: ignore
 
 
@@ -540,7 +537,7 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # 5. Remove env vars if provided in code
     # Optimistically assume that expected fields in config_from_file are present
 
-    config_from_file = load_config(run_process_config=False)
+    config_from_file = load_config()
     # Be defensive
     if config_from_file is None:
         return provided_config

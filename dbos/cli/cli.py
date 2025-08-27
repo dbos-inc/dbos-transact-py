@@ -55,7 +55,7 @@ def _get_db_url(
     else:
         # Load from config file if present
         try:
-            config = load_config(run_process_config=False, silent=True)
+            config = load_config(silent=True)
             if config.get("database_url") or config.get("system_database_url"):
                 return get_system_database_url(config), get_application_database_url(
                     config
@@ -112,7 +112,7 @@ def _on_windows() -> bool:
     help="Start your DBOS application using the start commands in 'dbos-config.yaml'"
 )
 def start() -> None:
-    config = load_config(run_process_config=False, silent=True)
+    config = load_config(silent=True)
     start_commands = config["runtimeConfig"]["start"]
     typer.echo("Executing start commands from 'dbos-config.yaml'")
     for command in start_commands:
@@ -312,7 +312,7 @@ def migrate(
 
     # Next, run any custom migration commands specified in the configuration
     if os.path.exists("dbos-config.yaml"):
-        config = load_config(run_process_config=False, silent=True)
+        config = load_config(silent=True)
         if "database" not in config:
             config["database"] = {}
         migrate_commands = (
