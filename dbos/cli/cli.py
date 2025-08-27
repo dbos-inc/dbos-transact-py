@@ -66,10 +66,11 @@ def _get_db_url(
                 default_url = f"sqlite:///{_app_db_name}.sqlite"
                 return default_url, default_url
         except (FileNotFoundError, OSError):
-            # Config file doesn't exist, continue with other fallbacks
-            raise ValueError(
-                "Missing database URL: please set it using CLI flags or your dbos-config.yaml file."
+            typer.echo(
+                f"Error: Missing database URL: please set it using CLI flags or your dbos-config.yaml file.",
+                err=True,
             )
+            raise typer.Exit(code=1)
 
 
 app = typer.Typer()
