@@ -214,5 +214,15 @@ def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
     return success
 
 
+# Force exit after test success or failure with appropriate error code
+_EXIT_CODE = None
+
+
+def pytest_sessionfinish(session: Any, exitstatus: int) -> None:
+    global _EXIT_CODE
+    _EXIT_CODE = 0 if exitstatus == 0 else 1
+
+
 def pytest_unconfigure(config: Any) -> None:
-    sys.exit(0)
+    code = _EXIT_CODE if _EXIT_CODE is not None else 1
+    sys.exit(code)
