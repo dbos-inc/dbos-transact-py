@@ -40,7 +40,7 @@ jobs:
         ports:
           # Maps tcp port 5432 on service container to the host
           - 5432:5432
-      # Kafka service container (Kraft mode)
+      # Kafka service container
       kafka:
         image: apache/kafka:latest
         ports:
