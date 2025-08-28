@@ -427,7 +427,7 @@ def list(
         typing.Optional[str],
         typer.Option(
             "--start-time",
-            "-s",
+            "-t",
             help="Retrieve workflows starting after this timestamp (ISO 8601 format)",
         ),
     ] = None,
@@ -765,7 +765,7 @@ def list_queue(
         typing.Optional[str],
         typer.Option(
             "--start-time",
-            "-s",
+            "-t",
             help="Retrieve functions starting after this timestamp (ISO 8601 format)",
         ),
     ] = None,
