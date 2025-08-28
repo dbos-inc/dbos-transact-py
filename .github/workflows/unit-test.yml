@@ -40,33 +40,23 @@ jobs:
         ports:
           # Maps tcp port 5432 on service container to the host
           - 5432:5432
-        # Zookeeper service container (required by Kafka)
-      zookeeper:
-        image: bitnami/zookeeper
-        ports:
-          - 2181:2181
-        env:
-          ALLOW_ANONYMOUS_LOGIN: yes
-        options: >-
-          --health-cmd "echo mntr | nc -w 2 -q 2 localhost 2181"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      # Kafka service container
+      # Kafka service container (Kraft mode)
       kafka:
-        image: bitnami/kafka:3.9.0
+        image: apache/kafka:latest
         ports:
           - 9092:9092
-        options: >-
-          --health-cmd "kafka-broker-api-versions.sh --version"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
         env:
-          KAFKA_CFG_ZOOKEEPER_CONNECT: zookeeper:2181
-          ALLOW_PLAINTEXT_LISTENER: yes
-          KAFKA_CFG_LISTENERS: PLAINTEXT://:9092
-          KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://127.0.0.1:9092
+          KAFKA_NODE_ID: 1
+          KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://127.0.0.1:9092
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+          CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
 
     steps:
     - uses: actions/checkout@v4
