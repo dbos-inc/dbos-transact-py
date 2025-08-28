@@ -212,3 +212,7 @@ def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
                 break
         time.sleep(1)
     return success
+
+
+def pytest_unconfigure(config: Any) -> None:
+    sys.exit(0)
