@@ -383,7 +383,6 @@ class SQLiteApplicationDatabase(ApplicationDatabase):
             ).fetchone()
 
             if result is None:
-                # Create the table with proper SQLite syntax
                 conn.execute(
                     sa.text(
                         f"""
@@ -402,7 +401,6 @@ class SQLiteApplicationDatabase(ApplicationDatabase):
                         """
                     )
                 )
-                # Create the index
                 conn.execute(
                     sa.text(
                         "CREATE INDEX transaction_outputs_created_at_index ON transaction_outputs (created_at)"

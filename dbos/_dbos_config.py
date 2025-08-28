@@ -22,9 +22,10 @@ class DBOSConfig(TypedDict, total=False):
 
     Attributes:
         name (str): Application name
-        database_url (str): Database connection string
-        system_database_url (str): Connection string for the system database (if different from the application database)
-        sys_db_name (str): System database name (deprecated)
+        system_database_url (str): Connection string for the DBOS system database. Defaults to sqlite:///{name} if not provided.
+        application_database_url (str): Connection string for the DBOS application database, in which DBOS @Transaction functions run. Optional. Should be the same type of database (SQLite or Postgres) as the system database.
+        database_url (str): (DEPRECATED) Database connection string
+        sys_db_name (str): (DEPRECATED) System database name
         sys_db_pool_size (int): System database pool size
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs (See https://docs.sqlalchemy.org/en/20/core/engines.html#sqlalchemy.create_engine)
         log_level (str): Log level
@@ -39,8 +40,9 @@ class DBOSConfig(TypedDict, total=False):
     """
 
     name: str
-    database_url: Optional[str]
     system_database_url: Optional[str]
+    application_database_url: Optional[str]
+    database_url: Optional[str]
     sys_db_name: Optional[str]
     sys_db_pool_size: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
@@ -107,12 +109,12 @@ class ConfigFile(TypedDict, total=False):
 
     Attributes:
         name (str): Application name
-        runtimeConfig (RuntimeConfig): Configuration for request serving
+        runtimeConfig (RuntimeConfig): Configuration for DBOS Cloud
         database (DatabaseConfig): Configure pool sizes, migrate commands
-        database_url (str): Database connection string
+        database_url (str): Application database URL
+        system_database_url (str): System database URL
         telemetry (TelemetryConfig): Configuration for tracing / logging
-        env (Dict[str,str]): Environment varialbes
-        application (Dict[str, Any]): Application-specific configuration section
+        env (Dict[str,str]): Environment variables
 
     """
 
@@ -144,8 +146,12 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     if db_config:
         translated_config["database"] = db_config
 
+    # Use application_database_url instead of the deprecated database_url if provided
     if "database_url" in config:
         translated_config["database_url"] = config.get("database_url")
+    elif "application_database_url" in config:
+        translated_config["database_url"] = config.get("application_database_url")
+
     if "system_database_url" in config:
         translated_config["system_database_url"] = config.get("system_database_url")
 
@@ -233,7 +239,6 @@ def _substitute_env_vars(content: str, silent: bool = False) -> str:
 def load_config(
     config_file_path: str = DBOS_CONFIG_PATH,
     *,
-    run_process_config: bool = True,
     silent: bool = False,
 ) -> ConfigFile:
     """
@@ -283,8 +288,6 @@ def load_config(
             ]
 
     data = cast(ConfigFile, data)
-    if run_process_config:
-        data = process_config(data=data, silent=silent)
     return data  # type: ignore
 
 
@@ -333,24 +336,15 @@ def process_config(
 
     # Ensure database dict exists
     data.setdefault("database", {})
-
-    # Database URL resolution
     connect_timeout = None
-    if data.get("database_url") is not None and data["database_url"] != "":
+
+    # Process the application database URL, if provided
+    if data.get("database_url"):
         # Parse the db string and check required fields
         assert data["database_url"] is not None
         assert is_valid_database_url(data["database_url"])
 
         url = make_url(data["database_url"])
-
-        if data["database_url"].startswith("sqlite"):
-            data["system_database_url"] = data["database_url"]
-        else:
-            assert url.database is not None
-            if not data["database"].get("sys_db_name"):
-                data["database"]["sys_db_name"] = (
-                    url.database + SystemSchema.sysdb_suffix
-                )
 
         # Gather connect_timeout from the URL if provided. It should be used in engine kwargs if not provided there (instead of our default)
         connect_timeout_str = url.query.get("connect_timeout")
@@ -376,18 +370,80 @@ def process_config(
                 host=os.getenv("DBOS_DBHOST", url.host),
                 port=port,
             ).render_as_string(hide_password=False)
-    else:
+
+    # Process the system database URL, if provided
+    if data.get("system_database_url"):
+        # Parse the db string and check required fields
+        assert data["system_database_url"]
+        assert is_valid_database_url(data["system_database_url"])
+
+        url = make_url(data["system_database_url"])
+
+        # Gather connect_timeout from the URL if provided. It should be used in engine kwargs if not provided there (instead of our default). This overrides a timeout from the application database, if any.
+        connect_timeout_str = url.query.get("connect_timeout")
+        if connect_timeout_str is not None:
+            assert isinstance(
+                connect_timeout_str, str
+            ), "connect_timeout must be a string and defined once in the URL"
+            if connect_timeout_str.isdigit():
+                connect_timeout = int(connect_timeout_str)
+
+        # In debug mode perform env vars overrides
+        if isDebugMode:
+            # Override the username, password, host, and port
+            port_str = os.getenv("DBOS_DBPORT")
+            port = (
+                int(port_str)
+                if port_str is not None and port_str.isdigit()
+                else url.port
+            )
+            data["system_database_url"] = url.set(
+                username=os.getenv("DBOS_DBUSER", url.username),
+                password=os.getenv("DBOS_DBPASSWORD", url.password),
+                host=os.getenv("DBOS_DBHOST", url.host),
+                port=port,
+            ).render_as_string(hide_password=False)
+
+    # If an application database URL is provided but not the system database URL,
+    # construct the system database URL.
+    if data.get("database_url") and not data.get("system_database_url"):
+        assert data["database_url"]
+        if data["database_url"].startswith("sqlite"):
+            data["system_database_url"] = data["database_url"]
+        else:
+            url = make_url(data["database_url"])
+            assert url.database
+            if data["database"].get("sys_db_name"):
+                url = url.set(database=data["database"]["sys_db_name"])
+            else:
+                url = url.set(database=f"{url.database}{SystemSchema.sysdb_suffix}")
+            data["system_database_url"] = url.render_as_string(hide_password=False)
+
+    # If a system database URL is provided but not an application database URL, set the
+    # application database URL to the system database URL.
+    if data.get("system_database_url") and not data.get("database_url"):
+        assert data["system_database_url"]
+        data["database_url"] = data["system_database_url"]
+
+    # If neither URL is provided, use a default SQLite database URL.
+    if not data.get("database_url") and not data.get("system_database_url"):
         _app_db_name = _app_name_to_db_name(data["name"])
-        data["database_url"] = f"sqlite:///{_app_db_name}.sqlite"
-        data["system_database_url"] = data["database_url"]
+        data["system_database_url"] = data["database_url"] = (
+            f"sqlite:///{_app_db_name}.sqlite"
+        )
 
     configure_db_engine_parameters(data["database"], connect_timeout=connect_timeout)
 
-    # Pretty-print where we've loaded database connection information from, respecting the log level
     assert data["database_url"] is not None
+    assert data["system_database_url"] is not None
+    # Pretty-print connection information, respecting log level
     if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
-        log_url = make_url(data["database_url"]).render_as_string(hide_password=True)
-        print(f"[bold blue]Using database connection string: {log_url}[/bold blue]")
+        printable_sys_db_url = make_url(data["system_database_url"]).render_as_string(
+            hide_password=True
+        )
+        print(
+            f"[bold blue]DBOS system database URL: {printable_sys_db_url}[/bold blue]"
+        )
         if data["database_url"].startswith("sqlite"):
             print(
                 f"[bold blue]Using SQLite as a system database. The SQLite system database is for development and testing. PostgreSQL is recommended for production use.[/bold blue]"
@@ -474,36 +530,34 @@ def _app_name_to_db_name(app_name: str) -> str:
 
 def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Load the DBOS configuration file and force the use of:
-    # 1. The database url provided by DBOS_DATABASE_URL
+    # 1. The application and system database url provided by DBOS_DATABASE_URL and DBOS_SYSTEM_DATABASE_URL
     # 2. OTLP traces endpoints (add the config data to the provided config)
     # 3. Use the application name from the file. This is a defensive measure to ensure the application name is whatever it was registered with in the cloud
     # 4. Remove admin_port is provided in code
     # 5. Remove env vars if provided in code
     # Optimistically assume that expected fields in config_from_file are present
 
-    config_from_file = load_config(run_process_config=False)
+    config_from_file = load_config()
     # Be defensive
     if config_from_file is None:
         return provided_config
 
-    # Name
+    # Set the application name to the cloud app name
     provided_config["name"] = config_from_file["name"]
 
-    # Database config. Expects DBOS_DATABASE_URL to be set
-    if "database" not in provided_config:
-        provided_config["database"] = {}
-    provided_config["database"]["sys_db_name"] = config_from_file["database"][
-        "sys_db_name"
-    ]
-
+    # Use the DBOS Cloud application and system database URLs
     db_url = os.environ.get("DBOS_DATABASE_URL")
     if db_url is None:
         raise DBOSInitializationError(
             "DBOS_DATABASE_URL environment variable is not set. This is required to connect to the database."
         )
     provided_config["database_url"] = db_url
-    if "system_database_url" in provided_config:
-        del provided_config["system_database_url"]
+    system_db_url = os.environ.get("DBOS_SYSTEM_DATABASE_URL")
+    if system_db_url is None:
+        raise DBOSInitializationError(
+            "DBOS_SYSTEM_DATABASE_URL environment variable is not set. This is required to connect to the database."
+        )
+    provided_config["system_database_url"] = system_db_url
 
     # Telemetry config
     if "telemetry" not in provided_config or provided_config["telemetry"] is None:
@@ -563,7 +617,7 @@ def get_system_database_url(config: ConfigFile) -> str:
         if config["database_url"].startswith("sqlite"):
             return config["database_url"]
         app_db_url = make_url(config["database_url"])
-        if config["database"].get("sys_db_name") is not None:
+        if config.get("database") and config["database"].get("sys_db_name") is not None:
             sys_db_name = config["database"]["sys_db_name"]
         else:
             assert app_db_url.database is not None
@@ -571,3 +625,14 @@ def get_system_database_url(config: ConfigFile) -> str:
         return app_db_url.set(database=sys_db_name).render_as_string(
             hide_password=False
         )
+
+
+def get_application_database_url(config: ConfigFile) -> str:
+    # For backwards compatibility, the application database URL is "database_url"
+    if config.get("database_url"):
+        assert config["database_url"]
+        return config["database_url"]
+    else:
+        # If the application database URL is not specified, set it to the system database URL
+        assert config["system_database_url"]
+        return config["system_database_url"]

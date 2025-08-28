@@ -4,7 +4,7 @@ import subprocess
 import sys
 import time
 from typing import Any, Generator, Tuple
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 import pytest
 import sqlalchemy as sa
@@ -12,10 +12,7 @@ from fastapi import FastAPI
 from flask import Flask
 
 from dbos import DBOS, DBOSClient, DBOSConfig
-from dbos._app_db import ApplicationDatabase
-from dbos._dbos_config import get_system_database_url
 from dbos._schemas.system_database import SystemSchema
-from dbos._sys_db import SystemDatabase
 
 
 @pytest.fixture(scope="session")
@@ -47,10 +44,15 @@ def skip_with_sqlite_imprecise_time() -> None:
 def default_config() -> DBOSConfig:
     return {
         "name": "test-app",
-        "database_url": (
+        "application_database_url": (
             "sqlite:///test.sqlite"
             if using_sqlite()
             else f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy"
+        ),
+        "system_database_url": (
+            "sqlite:///test.sqlite"
+            if using_sqlite()
+            else f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy_dbos_sys"
         ),
     }
 
@@ -63,13 +65,13 @@ def config() -> DBOSConfig:
 @pytest.fixture(scope="session")
 def db_engine() -> Generator[sa.Engine, Any, None]:
     cfg = default_config()
-    assert cfg["database_url"] is not None
+    assert cfg["system_database_url"] is not None
     if using_sqlite():
-        engine = sa.create_engine(cfg["database_url"])
+        engine = sa.create_engine(cfg["system_database_url"])
         yield engine
     else:
         engine = sa.create_engine(
-            sa.make_url(cfg["database_url"]).set(
+            sa.make_url(cfg["system_database_url"]).set(
                 drivername="postgresql+psycopg",
                 database="postgres",
             ),
@@ -83,13 +85,13 @@ def db_engine() -> Generator[sa.Engine, Any, None]:
 
 @pytest.fixture()
 def cleanup_test_databases(config: DBOSConfig, db_engine: sa.Engine) -> None:
-    assert config["database_url"] is not None
-    database_url = config["database_url"]
+    assert config["application_database_url"] is not None
+    assert config["system_database_url"] is not None
 
     if using_sqlite():
         # For SQLite, delete the database files
         # Extract file path from SQLite URL
-        parsed_url = sa.make_url(database_url)
+        parsed_url = sa.make_url(config["system_database_url"])
         db_path = parsed_url.database
         assert db_path is not None
 
@@ -98,8 +100,8 @@ def cleanup_test_databases(config: DBOSConfig, db_engine: sa.Engine) -> None:
             os.remove(db_path)
     else:
         # For PostgreSQL, drop the databases
-        app_db_name = sa.make_url(database_url).database
-        sys_db_name = f"{app_db_name}_dbos_sys"
+        app_db_name = sa.make_url(config["application_database_url"]).database
+        sys_db_name = sa.make_url(config["system_database_url"]).database
 
         with db_engine.connect() as connection:
             connection.execution_options(isolation_level="AUTOCOMMIT")
@@ -136,8 +138,12 @@ def dbos(
 
 @pytest.fixture()
 def client(config: DBOSConfig, dbos: DBOS) -> Generator[DBOSClient, Any, None]:
-    assert config["database_url"] is not None
-    client = DBOSClient(config["database_url"])
+    assert config["application_database_url"] is not None
+    assert config["system_database_url"] is not None
+    client = DBOSClient(
+        application_database_url=config["application_database_url"],
+        system_database_url=config["system_database_url"],
+    )
     yield client
     client.destroy()
 
@@ -206,3 +212,17 @@ def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
                 break
         time.sleep(1)
     return success
+
+
+# Force exit after test success or failure with appropriate error code
+_EXIT_CODE = None
+
+
+def pytest_sessionfinish(session: Any, exitstatus: int) -> None:
+    global _EXIT_CODE
+    _EXIT_CODE = 0 if exitstatus == 0 else 1
+
+
+def pytest_unconfigure(config: Any) -> None:
+    code = _EXIT_CODE if _EXIT_CODE is not None else 1
+    sys.exit(code)

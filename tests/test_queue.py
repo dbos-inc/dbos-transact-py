@@ -432,7 +432,8 @@ def run_dbos_test_in_process(
 ) -> None:
     dbos_config: DBOSConfig = {
         "name": "test-app",
-        "database_url": default_config()["database_url"],
+        "system_database_url": default_config()["system_database_url"],
+        "application_database_url": default_config()["application_database_url"],
         "admin_port": 8001 + i,
     }
     dbos = DBOS(config=dbos_config)

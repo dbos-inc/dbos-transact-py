@@ -1422,7 +1422,6 @@ class SystemDatabase(ABC):
                 debug_mode=debug_mode,
             )
         else:
-            # Default to PostgreSQL for postgresql://, postgres://, or other URLs
             from ._sys_db_postgres import PostgresSystemDatabase
 
             return PostgresSystemDatabase(

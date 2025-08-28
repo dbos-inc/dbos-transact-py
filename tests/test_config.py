@@ -83,6 +83,7 @@ def test_load_valid_config_file(mocker):
                 - "python3 main.py"
             admin_port: 8001
         database_url: "postgres://user:dbos@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
+        system_database_url: "postgres://user:dbos@localhost:5432/dbname_dbos_sys?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
         telemetry:
             OTLPExporter:
                 logsEndpoint: 'fooLogs'
@@ -92,11 +93,15 @@ def test_load_valid_config_file(mocker):
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
     )
 
-    configFile = load_config(mock_filename, run_process_config=False)
+    configFile = load_config(mock_filename)
     assert configFile["name"] == "some-app"
     assert (
         configFile["database_url"]
         == f"postgres://user:dbos@localhost:5432/dbname?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
+    )
+    assert (
+        configFile["system_database_url"]
+        == f"postgres://user:dbos@localhost:5432/dbname_dbos_sys?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
     )
 
     assert configFile["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["fooLogs"]
@@ -113,7 +118,7 @@ def test_load_config_with_unset_database_url_env_var(mocker):
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
     )
 
-    configFile = load_config(mock_filename, run_process_config=False)
+    configFile = load_config(mock_filename)
     assert configFile["name"] == "some-app"
 
 
@@ -166,7 +171,7 @@ def test_load_config_file_custom_path():
     from unittest.mock import mock_open, patch
 
     with patch("builtins.open", mock_open(read_data=mock_config)) as mock_file:
-        result = load_config(custom_path, run_process_config=False)
+        result = load_config(custom_path)
         mock_file.assert_called_with(custom_path, "r")
         assert result["name"] == "test-app"
 
@@ -214,6 +219,10 @@ def test_process_config_full():
         == "postgres://user:password@localhost:7777/dbn?connect_timeout=1&sslmode=require&sslrootcert=ca.pem"
     )
     assert configFile["database"]["sys_db_name"] == "sys_db"
+    assert (
+        configFile["system_database_url"]
+        == f"postgres://user:password@localhost:7777/{config['database']['sys_db_name']}?connect_timeout=1&sslmode=require&sslrootcert=ca.pem"
+    )
     assert configFile["database"]["migrate"] == ["alembic upgrade head"]
     assert configFile["database"]["db_engine_kwargs"] == {
         "key": "value",
@@ -245,6 +254,66 @@ def test_process_config_full():
     assert configFile["env"]["FOO"] == "BAR"
 
 
+def test_process_config_system_database():
+    config: ConfigFile = {
+        "name": "some-app",
+        "database_url": "postgres://user:password@localhost:7777/dbn?connect_timeout=1&sslmode=require&sslrootcert=ca.pem",
+        "system_database_url": "postgres://user:password@localhost:7778/dbn_sys?connect_timeout=1&sslmode=require&sslrootcert=ca.pem",
+        "database": {
+            "sys_db_name": "sys_db",
+            "sys_db_pool_size": 27,
+            "db_engine_kwargs": {"key": "value"},
+            "migrate": ["alembic upgrade head"],
+        },
+    }
+
+    configFile = process_config(data=config)
+    assert configFile["name"] == "some-app"
+    assert configFile["database_url"] == config["database_url"]
+    assert configFile["system_database_url"] == config["system_database_url"]
+    assert configFile["database"]["db_engine_kwargs"] == {
+        "key": "value",
+        "pool_timeout": 30,
+        "max_overflow": 0,
+        "pool_size": 20,
+        "pool_pre_ping": True,
+        "connect_args": {"connect_timeout": 1},
+    }
+    assert configFile["database"]["sys_db_engine_kwargs"] == {
+        "key": "value",
+        "pool_timeout": 30,
+        "max_overflow": 0,
+        "pool_size": 27,
+        "pool_pre_ping": True,
+        "connect_args": {"connect_timeout": 1},
+    }
+
+
+def test_process_config_only_system_database():
+    config: ConfigFile = {
+        "name": "some-app",
+        "system_database_url": "postgres://user:password@localhost:7778/dbn_sys?connect_timeout=1&sslmode=require&sslrootcert=ca.pem",
+    }
+
+    configFile = process_config(data=config)
+    assert configFile["name"] == "some-app"
+    assert configFile["system_database_url"] == config["system_database_url"]
+    assert configFile["database_url"] == config["system_database_url"]
+
+
+def test_process_config_sqlite():
+    config: ConfigFile = {
+        "name": "some-app",
+        "database_url": "sqlite:///test.sqlite",
+        "system_database_url": "sqlite:///test.sys.sqlite",
+    }
+
+    configFile = process_config(data=config)
+    assert configFile["name"] == "some-app"
+    assert configFile["database_url"] == config["database_url"]
+    assert configFile["system_database_url"] == config["system_database_url"]
+
+
 def test_debug_override_database_url(mocker: pytest_mock.MockFixture):
     mocker.patch.dict(
         os.environ,
@@ -266,7 +335,8 @@ def test_debug_override_database_url(mocker: pytest_mock.MockFixture):
     )
     assert processed_config["name"] == "some-app"
     assert (
-        processed_config["database"]["sys_db_name"] == "dbn" + SystemSchema.sysdb_suffix
+        processed_config["system_database_url"]
+        == f"postgres://fakeuser:fakepassword@fakehost:1234/dbn{SystemSchema.sysdb_suffix}?connect_timeout=1&sslmode=require&sslrootcert=ca.pem"
     )
     assert processed_config["database"]["db_engine_kwargs"] is not None
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
@@ -597,6 +667,17 @@ def test_process_config_with_wrong_db_url():
         exc_info.value
     )
 
+    # Missing dbname in system database
+    config: ConfigFile = {
+        "name": "some-app",
+        "system_database_url": "postgres://user:password@h:1234",
+    }
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        process_config(data=config)
+    assert "Database name must be specified in the connection URL" in str(
+        exc_info.value
+    )
+
 
 def test_database_url_no_password(skip_with_sqlite: None):
     """Test that the database URL can be provided without a password."""
@@ -771,6 +852,18 @@ def test_translate_missing_name():
     )
 
 
+def test_translate_application_database_url():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "application_database_url": "postgres://user:password@localhost:5432/dbname?connect_timeout=11&sslmode=require&sslrootcert=ca.pem",
+        "system_database_url": "postgres://user:password@localhost:5432/dbname_sys?connect_timeout=11&sslmode=require&sslrootcert=ca.pem",
+    }
+    translated_config = translate_dbos_config_to_config_file(config)
+    assert translated_config["name"] == "test-app"
+    assert translated_config["database_url"] == config["application_database_url"]
+    assert translated_config["system_database_url"] == config["system_database_url"]
+
+
 ####################
 # CONFIG OVERWRITE
 ####################
@@ -823,12 +916,14 @@ def test_overwrite_config(mocker):
     }
     exported_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
     os.environ["DBOS_DATABASE_URL"] = exported_db_url
+    exported_sys_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname_dbos_sys?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
+    os.environ["DBOS_SYSTEM_DATABASE_URL"] = exported_sys_db_url
 
     config = overwrite_config(provided_config)
 
     assert config["name"] == "stock-prices"
     assert config["database_url"] == exported_db_url
-    assert config["database"]["sys_db_name"] == "sysdbname"
+    assert config["system_database_url"] == exported_sys_db_url
     assert "sys_db_pool_size" not in config["database"]
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
@@ -874,12 +969,14 @@ def test_overwrite_config_minimal(mocker):
 
     exported_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
     os.environ["DBOS_DATABASE_URL"] = exported_db_url
+    exported_sys_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname_dbos_sys?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
+    os.environ["DBOS_SYSTEM_DATABASE_URL"] = exported_sys_db_url
 
     config = overwrite_config(provided_config)
 
     assert config["name"] == "stock-prices"
     assert config["database_url"] == exported_db_url
-    assert config["database"]["sys_db_name"] == "sysdbname"
+    assert config["system_database_url"] == exported_sys_db_url
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
         "thetracesendpoint"
     ]
@@ -919,12 +1016,14 @@ def test_overwrite_config_has_telemetry(mocker):
 
     exported_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
     os.environ["DBOS_DATABASE_URL"] = exported_db_url
+    exported_sys_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname_dbos_sys?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
+    os.environ["DBOS_SYSTEM_DATABASE_URL"] = exported_sys_db_url
 
     config = overwrite_config(provided_config)
 
     assert config["name"] == "stock-prices"
     assert config["database_url"] == exported_db_url
-    assert config["database"]["sys_db_name"] == "sysdbname"
+    assert config["system_database_url"] == exported_sys_db_url
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
         "thetracesendpoint"
     ]
@@ -955,11 +1054,13 @@ def test_overwrite_config_no_telemetry_in_file(mocker):
 
     exported_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
     os.environ["DBOS_DATABASE_URL"] = exported_db_url
+    exported_sys_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname_dbos_sys?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
+    os.environ["DBOS_SYSTEM_DATABASE_URL"] = exported_sys_db_url
 
     config = overwrite_config(provided_config)
     # Test that telemetry from provided_config is preserved
     assert config["database_url"] == exported_db_url
-    assert config["database"]["sys_db_name"] == "sysdbname"
+    assert config["system_database_url"] == exported_sys_db_url
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert config["telemetry"]["OTLPExporter"] == {
         "tracesEndpoint": [],
@@ -996,10 +1097,12 @@ def test_overwrite_config_no_otlp_in_file(mocker):
 
     exported_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
     os.environ["DBOS_DATABASE_URL"] = exported_db_url
+    exported_sys_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname_dbos_sys?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
+    os.environ["DBOS_SYSTEM_DATABASE_URL"] = exported_sys_db_url
 
     config = overwrite_config(provided_config)
     assert config["database_url"] == exported_db_url
-    assert config["database"]["sys_db_name"] == "sysdbname"
+    assert config["system_database_url"] == exported_sys_db_url
     # Test that OTLPExporter from provided_config is preserved
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == ["original-trace"]
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["original-log"]
@@ -1037,12 +1140,14 @@ def test_overwrite_config_with_provided_database_url(mocker):
 
     exported_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
     os.environ["DBOS_DATABASE_URL"] = exported_db_url
+    exported_sys_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname_dbos_sys?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
+    os.environ["DBOS_SYSTEM_DATABASE_URL"] = exported_sys_db_url
 
     config = overwrite_config(provided_config)
 
     assert config["name"] == "stock-prices"
     assert config["database_url"] == exported_db_url
-    assert config["database"]["sys_db_name"] == "sysdbname"
+    assert config["system_database_url"] == exported_sys_db_url
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
         "thetracesendpoint"
     ]

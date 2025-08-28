@@ -127,8 +127,11 @@ def test_init_config(skip_with_sqlite: None) -> None:
 
 def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
     app_name = "reset-app"
-    sysdb_name = "reset_app_dbos_sys"
     db_url = db_engine.url.set(database="reset_app").render_as_string(
+        hide_password=False
+    )
+    sys_db_name = "reset_app_dbos_sys"
+    sys_db_url = db_engine.url.set(database=sys_db_name).render_as_string(
         hide_password=False
     )
     with tempfile.TemporaryDirectory() as temp_path:
@@ -145,33 +148,34 @@ def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
             c.execution_options(isolation_level="AUTOCOMMIT")
             result = c.execute(
                 sa.text(
-                    f"SELECT COUNT(*) FROM pg_database WHERE datname = '{sysdb_name}'"
+                    f"SELECT COUNT(*) FROM pg_database WHERE datname = '{sys_db_name}'"
                 )
             ).scalar()
             assert result == 1
 
         # Call reset and verify it's destroyed
         subprocess.check_call(
-            ["dbos", "reset", "-y", "--db-url", db_url, "--sys-db-name", sysdb_name],
+            ["dbos", "reset", "-y", "--db-url", db_url, "--sys-db-url", sys_db_url],
             cwd=temp_path,
         )
         with db_engine.connect() as c:
             c.execution_options(isolation_level="AUTOCOMMIT")
             result = c.execute(
                 sa.text(
-                    f"SELECT COUNT(*) FROM pg_database WHERE datname = '{sysdb_name}'"
+                    f"SELECT COUNT(*) FROM pg_database WHERE datname = '{sys_db_name}'"
                 )
             ).scalar()
             assert result == 0
 
 
 def test_workflow_commands(config: DBOSConfig) -> None:
-    assert config["database_url"] is not None
+    assert config["application_database_url"] is not None
+    assert config["system_database_url"] is not None
     if using_sqlite():
-        db_url = config["database_url"]
+        db_url = config["system_database_url"]
     else:
         db_url = (
-            sa.make_url(config["database_url"])
+            sa.make_url(config["application_database_url"])
             .set(database="dbos_toolbox")
             .render_as_string(hide_password=False)
         )

@@ -92,18 +92,15 @@ class SQLiteSystemDatabase(SystemDatabase):
                 last_applied = i
 
     def _cleanup_connections(self) -> None:
-        """Clean up SQLite-specific connections."""
         # SQLite doesn't require special connection cleanup
         pass
 
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation in SQLite."""
-        # SQLite UNIQUE constraint error
         return "UNIQUE constraint failed" in str(dbapi_error.orig)
 
     def _is_foreign_key_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a foreign key violation in SQLite."""
-        # SQLite FOREIGN KEY constraint error
         return "FOREIGN KEY constraint failed" in str(dbapi_error.orig)
 
     @staticmethod
