@@ -1310,3 +1310,39 @@ def _get_timeout_deadline(
     # Otherwise, return the propagated deadline, if any
     else:
         return None, ctx.workflow_deadline_epoch_ms
+
+def decorate_mutex(
+    dbosreg: "DBOSRegistry",
+) -> Callable[[F], F]:
+    def decorator(func: F) -> F:
+
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            rr: Optional[str] = check_required_roles(func, fi)
+            # Entering transaction is allowed:
+            #  In a workflow (that is not in a step already)
+            #  Not in a workflow (we will start the single op workflow)
+            ctx = get_local_dbos_context()
+            if ctx and ctx.is_within_workflow():
+                assert (
+                    ctx.is_workflow()
+                ), "Transactions must be called from within workflows"
+                with DBOSAssumeRole(rr):
+                    return invoke_tx(*args, **kwargs)
+            else:
+                tempwf = dbosreg.workflow_info_map.get("<temp>." + func.__qualname__)
+                assert tempwf
+                return tempwf(*args, **kwargs)
+
+        def temp_wf(*args: Any, **kwargs: Any) -> Any:
+            return wrapper(*args, **kwargs)
+
+        wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
+        set_dbos_func_name(temp_wf, "<temp>." + func.__qualname__)
+        set_temp_workflow_type(temp_wf, "transaction")
+        dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
+        wrapper.__orig_func = temp_wf  # type: ignore
+
+        return cast(F, wrapper)
+
+    return decorator
