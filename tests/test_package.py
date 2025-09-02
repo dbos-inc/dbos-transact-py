@@ -175,22 +175,24 @@ def test_workflow_commands(config: DBOSConfig) -> None:
         db_url = config["system_database_url"]
     else:
         db_url = (
-            sa.make_url(config["application_database_url"])
+            sa.make_url(config["system_database_url"])
             .set(database="dbos_toolbox")
             .render_as_string(hide_password=False)
         )
     with tempfile.TemporaryDirectory() as temp_path:
         env = os.environ.copy()
-        env["DBOS_DATABASE_URL"] = db_url
+        env["DBOS_SYSTEM_DATABASE_URL"] = db_url
         subprocess.check_call(
             ["dbos", "init", "--template", "dbos-toolbox"],
             cwd=temp_path,
             env=env,
         )
-        subprocess.check_call(["dbos", "reset", "-y", "-D", db_url], cwd=temp_path)
+        subprocess.check_call(
+            ["dbos", "reset", "-y", "--sys-db-url", db_url], cwd=temp_path
+        )
 
         # Get some workflows enqueued on the toolbox, then kill the toolbox
-        process = subprocess.Popen(["dbos", "start"], cwd=temp_path, env=env)
+        process = subprocess.Popen(["python3", "main.py"], cwd=temp_path, env=env)
         try:
             session = requests.Session()
             for i in range(10):
@@ -209,25 +211,25 @@ def test_workflow_commands(config: DBOSConfig) -> None:
             time.sleep(1)  # So the queued workflows can start
         finally:
             # Because the toolbox steps sleep for 5 seconds, all the steps should be PENDING
-            os.kill(process.pid, signal.SIGINT)
+            os.kill(process.pid, signal.SIGKILL)
             process.wait()
 
         # Verify the output is valid JSON
         output = subprocess.check_output(
-            ["dbos", "workflow", "list", "--db-url", db_url], cwd=temp_path
+            ["dbos", "workflow", "list", "--sys-db-url", db_url], cwd=temp_path
         )
         data = json.loads(output)
         assert isinstance(data, list) and len(data) == 10
 
         # Verify the output is valid JSON
         output = subprocess.check_output(
-            ["dbos", "workflow", "queue", "list", "--db-url", db_url], cwd=temp_path
+            ["dbos", "workflow", "queue", "list", "--sys-db-url", db_url], cwd=temp_path
         )
         workflows = json.loads(output)
         assert isinstance(workflows, list) and len(workflows) == 10
         for wf in workflows:
             output = subprocess.check_output(
-                ["dbos", "workflow", "get", wf["workflow_id"], "--db-url", db_url],
+                ["dbos", "workflow", "get", wf["workflow_id"], "--sys-db-url", db_url],
                 cwd=temp_path,
             )
             get_wf_data = json.loads(output)
@@ -237,7 +239,7 @@ def test_workflow_commands(config: DBOSConfig) -> None:
         # workflow ID is a preffix to each step ID
         wf_id = "-".join(workflows[0]["workflow_id"].split("-")[:-1])
         get_steps_output = subprocess.check_output(
-            ["dbos", "workflow", "steps", wf_id, "--db-url", db_url], cwd=temp_path
+            ["dbos", "workflow", "steps", wf_id, "--sys-db-url", db_url], cwd=temp_path
         )
         get_steps_data = json.loads(get_steps_output)
         assert isinstance(get_steps_data, list)
@@ -310,8 +312,7 @@ def test_workflow_commands(config: DBOSConfig) -> None:
 
         # verify the forked workflow data with get command
         output = subprocess.check_output(
-            ["dbos", "workflow", "get", custom_fork_id, "--db-url", db_url],
-            cwd=temp_path,
+            ["dbos", "workflow", "get", custom_fork_id], cwd=temp_path, env=env
         )
         custom_fork_get_data = json.loads(output)
         assert isinstance(custom_fork_get_data, dict)
@@ -339,15 +340,9 @@ def test_workflow_commands(config: DBOSConfig) -> None:
 
         # verify the forked workflow data with get command and check application version
         output = subprocess.check_output(
-            [
-                "dbos",
-                "workflow",
-                "get",
-                version_fork_data["workflow_id"],
-                "--db-url",
-                db_url,
-            ],
+            ["dbos", "workflow", "get", version_fork_data["workflow_id"]],
             cwd=temp_path,
+            env=env,
         )
         version_fork_get_data = json.loads(output)
         assert isinstance(version_fork_get_data, dict)
@@ -379,8 +374,7 @@ def test_workflow_commands(config: DBOSConfig) -> None:
 
         # verify the forked workflow data with get command and check both ID and application version
         output = subprocess.check_output(
-            ["dbos", "workflow", "get", custom_fork_id2, "--db-url", db_url],
-            cwd=temp_path,
+            ["dbos", "workflow", "get", custom_fork_id2], cwd=temp_path, env=env
         )
         combined_fork_get_data = json.loads(output)
         assert isinstance(combined_fork_get_data, dict)
