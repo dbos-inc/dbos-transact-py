@@ -939,6 +939,7 @@ def test_overwrite_config(mocker):
     assert "env" not in config
 
     del os.environ["DBOS_DATABASE_URL"]
+    del os.environ["DBOS_SYSTEM_DATABASE_URL"]
 
 
 def test_overwrite_config_minimal(mocker):
@@ -985,6 +986,7 @@ def test_overwrite_config_minimal(mocker):
     assert "env" not in config
 
     del os.environ["DBOS_DATABASE_URL"]
+    del os.environ["DBOS_SYSTEM_DATABASE_URL"]
 
 
 def test_overwrite_config_has_telemetry(mocker):
@@ -1033,6 +1035,7 @@ def test_overwrite_config_has_telemetry(mocker):
     assert "env" not in config
 
     del os.environ["DBOS_DATABASE_URL"]
+    del os.environ["DBOS_SYSTEM_DATABASE_URL"]
 
 
 # Not expected in practice, but exercise the code path
@@ -1068,6 +1071,7 @@ def test_overwrite_config_no_telemetry_in_file(mocker):
     }
 
     del os.environ["DBOS_DATABASE_URL"]
+    del os.environ["DBOS_SYSTEM_DATABASE_URL"]
 
 
 # Not expected in practice, but exercise the code path
@@ -1109,6 +1113,7 @@ def test_overwrite_config_no_otlp_in_file(mocker):
     assert "logs" not in config["telemetry"]
 
     del os.environ["DBOS_DATABASE_URL"]
+    del os.environ["DBOS_SYSTEM_DATABASE_URL"]
 
 
 def test_overwrite_config_with_provided_database_url(mocker):
@@ -1156,6 +1161,7 @@ def test_overwrite_config_with_provided_database_url(mocker):
     assert "env" not in config
 
     del os.environ["DBOS_DATABASE_URL"]
+    del os.environ["DBOS_SYSTEM_DATABASE_URL"]
 
 
 def test_overwrite_config_missing_dbos_database_url(mocker):
