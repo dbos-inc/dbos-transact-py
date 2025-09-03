@@ -2,9 +2,24 @@ import asyncio
 import contextlib
 import inspect
 import time
-from typing import Any, Callable, Coroutine, Optional, Protocol, TypeVar, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Coroutine,
+    Optional,
+    Protocol,
+    TypeVar,
+    Union,
+    cast,
+)
 
 from dbos._context import EnterDBOSStepRetry
+from dbos._error import DBOSException
+from dbos._registrations import get_dbos_func_name
+
+if TYPE_CHECKING:
+    from ._dbos import DBOS
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -24,10 +39,15 @@ class NoResult:
 class Outcome(Protocol[T]):
 
     def wrap(
-        self, before: Callable[[], Callable[[Callable[[], T]], R]]
+        self,
+        before: Callable[[], Callable[[Callable[[], T]], R]],
+        *,
+        dbos: Optional["DBOS"] = None,
     ) -> "Outcome[R]": ...
 
-    def then(self, next: Callable[[Callable[[], T]], R]) -> "Outcome[R]": ...
+    def then(
+        self, next: Callable[[Callable[[], T]], R], *, dbos: Optional["DBOS"] = None
+    ) -> "Outcome[R]": ...
 
     def also(
         self, cm: contextlib.AbstractContextManager[Any, bool]
@@ -41,7 +61,10 @@ class Outcome(Protocol[T]):
     ) -> "Outcome[T]": ...
 
     def intercept(
-        self, interceptor: Callable[[], Union[NoResult, T]]
+        self,
+        interceptor: Callable[[], Union[NoResult, T]],
+        *,
+        dbos: Optional["DBOS"] = None,
     ) -> "Outcome[T]": ...
 
     def __call__(self) -> Union[T, Coroutine[Any, Any, T]]: ...
@@ -63,11 +86,17 @@ class Immediate(Outcome[T]):
     def __init__(self, func: Callable[[], T]):
         self._func = func
 
-    def then(self, next: Callable[[Callable[[], T]], R]) -> "Immediate[R]":
+    def then(
+        self,
+        next: Callable[[Callable[[], T]], R],
+        dbos: Optional["DBOS"] = None,
+    ) -> "Immediate[R]":
         return Immediate(lambda: next(self._func))
 
     def wrap(
-        self, before: Callable[[], Callable[[Callable[[], T]], R]]
+        self,
+        before: Callable[[], Callable[[Callable[[], T]], R]],
+        dbos: Optional["DBOS"] = None,
     ) -> "Immediate[R]":
         return Immediate(lambda: before()(self._func))
 
@@ -79,7 +108,10 @@ class Immediate(Outcome[T]):
         return intercepted if not isinstance(intercepted, NoResult) else func()
 
     def intercept(
-        self, interceptor: Callable[[], Union[NoResult, T]]
+        self,
+        interceptor: Callable[[], Union[NoResult, T]],
+        *,
+        dbos: Optional["DBOS"] = None,
     ) -> "Immediate[T]":
         return Immediate[T](lambda: Immediate._intercept(self._func, interceptor))
 
@@ -142,7 +174,12 @@ class Pending(Outcome[T]):
     async def _wrap(
         func: Callable[[], Coroutine[Any, Any, T]],
         before: Callable[[], Callable[[Callable[[], T]], R]],
+        *,
+        dbos: Optional["DBOS"] = None,
     ) -> R:
+        # Make sure the executor pool is configured correctly
+        if dbos is not None:
+            await dbos._configure_asyncio_thread_pool()
         after = await asyncio.to_thread(before)
         try:
             value = await func()
@@ -151,12 +188,17 @@ class Pending(Outcome[T]):
             return await asyncio.to_thread(after, lambda: Pending._raise(exp))
 
     def wrap(
-        self, before: Callable[[], Callable[[Callable[[], T]], R]]
+        self,
+        before: Callable[[], Callable[[Callable[[], T]], R]],
+        *,
+        dbos: Optional["DBOS"] = None,
     ) -> "Pending[R]":
-        return Pending[R](lambda: Pending._wrap(self._func, before))
+        return Pending[R](lambda: Pending._wrap(self._func, before, dbos=dbos))
 
-    def then(self, next: Callable[[Callable[[], T]], R]) -> "Pending[R]":
-        return Pending[R](lambda: Pending._wrap(self._func, lambda: next))
+    def then(
+        self, next: Callable[[Callable[[], T]], R], *, dbos: Optional["DBOS"] = None
+    ) -> "Pending[R]":
+        return Pending[R](lambda: Pending._wrap(self._func, lambda: next, dbos=dbos))
 
     @staticmethod
     async def _also(  # type: ignore
@@ -173,12 +215,24 @@ class Pending(Outcome[T]):
     async def _intercept(
         func: Callable[[], Coroutine[Any, Any, T]],
         interceptor: Callable[[], Union[NoResult, T]],
+        *,
+        dbos: Optional["DBOS"] = None,
     ) -> T:
+        # Make sure the executor pool is configured correctly
+        if dbos is not None:
+            await dbos._configure_asyncio_thread_pool()
         intercepted = await asyncio.to_thread(interceptor)
         return intercepted if not isinstance(intercepted, NoResult) else await func()
 
-    def intercept(self, interceptor: Callable[[], Union[NoResult, T]]) -> "Pending[T]":
-        return Pending[T](lambda: Pending._intercept(self._func, interceptor))
+    def intercept(
+        self,
+        interceptor: Callable[[], Union[NoResult, T]],
+        *,
+        dbos: Optional["DBOS"] = None,
+    ) -> "Pending[T]":
+        return Pending[T](
+            lambda: Pending._intercept(self._func, interceptor, dbos=dbos)
+        )
 
     @staticmethod
     async def _retry(

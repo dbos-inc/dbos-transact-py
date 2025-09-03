@@ -119,7 +119,9 @@ def cleanup_test_databases(config: DBOSConfig, db_engine: sa.Engine) -> None:
 
 
 @pytest.fixture()
-def dbos(config: DBOSConfig) -> Generator[DBOS, Any, None]:
+def dbos(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> Generator[DBOS, Any, None]:
     DBOS.destroy(destroy_registry=True)
 
     # This launches for test convenience.
