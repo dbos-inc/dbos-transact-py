@@ -1250,11 +1250,42 @@ def test_destroy_semantics(dbos: DBOS, config: DBOSConfig) -> None:
     var = "test"
     assert test_workflow(var) == var
 
+    # Start the workflow asynchornously
+    wf = dbos.start_workflow(test_workflow, var)
+    assert wf.get_result() == var
+
     DBOS.destroy()
     DBOS(config=config)
     DBOS.launch()
 
     assert test_workflow(var) == var
+
+    wf = dbos.start_workflow(test_workflow, var)
+    assert wf.get_result() == var
+
+
+@pytest.mark.asyncio
+async def test_destroy_semantics_async(dbos: DBOS, config: DBOSConfig) -> None:
+
+    @DBOS.workflow()
+    async def test_workflow(var: str) -> str:
+        return var
+
+    var = "test"
+    assert await test_workflow(var) == var
+
+    # Start the workflow asynchornously
+    wf = await dbos.start_workflow_async(test_workflow, var)
+    assert await wf.get_result() == var
+
+    DBOS.destroy()
+    DBOS(config=config)
+    DBOS.launch()
+
+    assert await test_workflow(var) == var
+
+    wf = await dbos.start_workflow_async(test_workflow, var)
+    assert await wf.get_result() == var
 
 
 def test_double_decoration(dbos: DBOS) -> None:
