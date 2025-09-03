@@ -19,8 +19,6 @@ from typing import (
     cast,
 )
 
-import psycopg
-
 from dbos._outcome import Immediate, NoResult, Outcome, Pending
 from dbos._utils import GlobalParams, retriable_postgres_exception
 
@@ -831,10 +829,10 @@ def workflow_wrapper(
             return r
 
         outcome = (
-            wfOutcome.wrap(init_wf)
+            wfOutcome.wrap(init_wf, dbos=dbos)
             .also(DBOSAssumeRole(rr))
             .also(enterWorkflowCtxMgr(attributes))
-            .then(record_get_result)
+            .then(record_get_result, dbos=dbos)
         )
         return outcome()  # type: ignore
 
@@ -1146,7 +1144,7 @@ def decorate_step(
 
             outcome = (
                 stepOutcome.then(record_step_result)
-                .intercept(check_existing_result)
+                .intercept(check_existing_result, dbos=dbos)
                 .also(EnterDBOSStep(attributes))
             )
             return outcome()
