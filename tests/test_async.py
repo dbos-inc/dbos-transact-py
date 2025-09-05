@@ -31,7 +31,7 @@ async def test_async_workflow(dbos: DBOS) -> None:
     async def test_workflow(var1: str, var2: str) -> str:
         nonlocal wf_counter
         wf_counter += 1
-        res1 = test_transaction(var1)
+        res1 = await asyncio.to_thread(test_transaction, var1)
         res2 = await test_step(var2)
         DBOS.logger.info("I'm test_workflow")
         return res1 + res2
@@ -88,7 +88,7 @@ async def test_async_step(dbos: DBOS) -> None:
     async def test_workflow(var1: str, var2: str) -> str:
         nonlocal wf_counter
         wf_counter += 1
-        res1 = test_transaction(var1)
+        res1 = await asyncio.to_thread(test_transaction, var1)
         res2 = await test_step(var2)
         DBOS.logger.info("I'm test_workflow")
         return res1 + res2
@@ -325,6 +325,7 @@ def test_async_tx_raises(config: ConfigFile) -> None:
         async def test_async_tx() -> None:
             pass
 
+    assert "is a coroutine function" in str(exc_info.value)
     # destroy call needed to avoid "functions were registered but DBOS() was not called" warning
     DBOS.destroy(destroy_registry=True)
 
