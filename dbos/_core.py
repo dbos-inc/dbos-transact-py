@@ -56,6 +56,7 @@ from ._error import (
     DBOSWorkflowConflictIDError,
     DBOSWorkflowFunctionNotFoundError,
 )
+from ._logger import dbos_logger
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     get_config_name,
@@ -837,8 +838,8 @@ def workflow_wrapper(
             return r
 
         if check_is_in_coroutine() and not inspect.iscoroutinefunction(func):
-            raise DBOSException(
-                f"Sync workflow ({get_dbos_func_name(func)}) shouldn't be invoked from within another async function. Define it as async or use async.to_thread instead."
+            dbos_logger.warning(
+                f"Sync workflow ({get_dbos_func_name(func)}) shouldn't be invoked from within another async function. Define it as async or use asyncio.to_thread instead."
             )
 
         outcome = (
@@ -1023,8 +1024,8 @@ def decorate_transaction(
                     ctx.is_workflow()
                 ), "Transactions must be called from within workflows"
                 if check_is_in_coroutine():
-                    raise DBOSException(
-                        f"Transaction function ({get_dbos_func_name(func)}) shouldn't be invoked from within another async function. Use async.to_thread instead."
+                    dbos_logger.warning(
+                        f"Transaction function ({get_dbos_func_name(func)}) shouldn't be invoked from within another async function. Use asyncio.to_thread instead."
                     )
                 with DBOSAssumeRole(rr):
                     return invoke_tx(*args, **kwargs)
@@ -1170,14 +1171,14 @@ def decorate_step(
 
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
+            if check_is_in_coroutine() and not inspect.iscoroutinefunction(func):
+                dbos_logger.warning(
+                    f"Sync step ({get_dbos_func_name(func)}) shouldn't be invoked from within another async function. Define it as async or use asyncio.to_thread instead."
+                )
             # If the step is called from a workflow, run it as a step.
             # Otherwise, run it as a normal function.
             ctx = get_local_dbos_context()
             if ctx and ctx.is_workflow():
-                if check_is_in_coroutine() and not inspect.iscoroutinefunction(func):
-                    raise DBOSException(
-                        f"Sync step ({get_dbos_func_name(func)}) shouldn't be invoked from within another async function. Define it as async or use async.to_thread instead."
-                    )
                 rr: Optional[str] = check_required_roles(func, fi)
                 with DBOSAssumeRole(rr):
                     return invoke_step(*args, **kwargs)
