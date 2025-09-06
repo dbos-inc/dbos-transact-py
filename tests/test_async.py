@@ -19,6 +19,7 @@ from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandle
 from dbos._dbos_config import ConfigFile
 from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException
+from dbos._registrations import get_dbos_func_name
 
 
 @pytest.mark.asyncio
@@ -344,12 +345,12 @@ async def test_start_workflow_async(dbos: DBOS) -> None:
         wf_el_id = id(asyncio.get_running_loop())
         nonlocal wf_counter
         wf_counter += 1
-        res2 = test_step(var2)
+        res2 = await test_step(var2)
         DBOS.logger.info("I'm test_workflow")
         return var1 + res2
 
     @DBOS.step()
-    def test_step(var: str) -> str:
+    async def test_step(var: str) -> str:
         nonlocal step_el_id
         step_el_id = id(asyncio.get_running_loop())
         nonlocal step_counter
@@ -606,3 +607,47 @@ async def test_workflow_with_task_cancellation(dbos: DBOS) -> None:
     # Verify the workflow completes despite the task cancellation
     handle: WorkflowHandleAsync[str] = await DBOS.retrieve_workflow_async(wfid)
     assert await handle.get_result() == "completed"
+
+
+@pytest.mark.asyncio
+async def test_check_async_violation(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def sync_workflow() -> str:
+        return "sync"
+
+    @DBOS.step()
+    def sync_step() -> str:
+        return "step"
+
+    @DBOS.workflow()
+    async def async_workflow_sync_step() -> str:
+        return sync_step()
+
+    @DBOS.transaction()
+    def sync_transaction() -> str:
+        return "txn"
+
+    @DBOS.workflow()
+    async def async_workflow_sync_txn() -> str:
+        return sync_transaction()
+
+    with pytest.raises(DBOSException) as exc_info:
+        sync_workflow()
+    assert (
+        f"Sync workflow ({get_dbos_func_name(sync_workflow)}) shouldn't be invoked from within another async function"
+        in str(exc_info.value)
+    )
+
+    with pytest.raises(DBOSException) as exc_info:
+        await async_workflow_sync_step()
+    assert (
+        f"Sync step ({get_dbos_func_name(sync_step)}) shouldn't be invoked from within another async function"
+        in str(exc_info.value)
+    )
+
+    with pytest.raises(DBOSException) as exc_info:
+        await async_workflow_sync_txn()
+    assert (
+        f"Transaction function ({get_dbos_func_name(sync_transaction)}) shouldn't be invoked from within another async function"
+        in str(exc_info.value)
+    )

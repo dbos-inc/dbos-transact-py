@@ -96,6 +96,14 @@ F = TypeVar("F", bound=Callable[..., Any])
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 
 
+def check_is_in_coroutine() -> bool:
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
+
+
 class WorkflowHandleFuture(Generic[R]):
 
     def __init__(self, workflow_id: str, future: Future[R], dbos: "DBOS"):
@@ -828,6 +836,11 @@ def workflow_wrapper(
             dbos._sys_db.record_get_result(workflow_id, serialized_r, None)
             return r
 
+        if check_is_in_coroutine() and not inspect.iscoroutinefunction(func):
+            raise DBOSException(
+                f"Sync workflow ({get_dbos_func_name(func)}) shouldn't be invoked from within another async function. Define it as async or use async.to_thread instead."
+            )
+
         outcome = (
             wfOutcome.wrap(init_wf, dbos=dbos)
             .also(DBOSAssumeRole(rr))
@@ -1009,6 +1022,10 @@ def decorate_transaction(
                 assert (
                     ctx.is_workflow()
                 ), "Transactions must be called from within workflows"
+                if check_is_in_coroutine():
+                    raise DBOSException(
+                        f"Transaction function ({get_dbos_func_name(func)}) shouldn't be invoked from within another async function. Use async.to_thread instead."
+                    )
                 with DBOSAssumeRole(rr):
                     return invoke_tx(*args, **kwargs)
             else:
@@ -1157,6 +1174,10 @@ def decorate_step(
             # Otherwise, run it as a normal function.
             ctx = get_local_dbos_context()
             if ctx and ctx.is_workflow():
+                if check_is_in_coroutine() and not inspect.iscoroutinefunction(func):
+                    raise DBOSException(
+                        f"Sync step ({get_dbos_func_name(func)}) shouldn't be invoked from within another async function. Define it as async or use async.to_thread instead."
+                    )
                 rr: Optional[str] = check_required_roles(func, fi)
                 with DBOSAssumeRole(rr):
                     return invoke_step(*args, **kwargs)
