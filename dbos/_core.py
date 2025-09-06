@@ -56,6 +56,7 @@ from ._error import (
     DBOSWorkflowConflictIDError,
     DBOSWorkflowFunctionNotFoundError,
 )
+from ._logger import dbos_logger
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     get_config_name,
@@ -94,6 +95,14 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 F = TypeVar("F", bound=Callable[..., Any])
 
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
+
+
+def check_is_in_coroutine() -> bool:
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
 
 
 class WorkflowHandleFuture(Generic[R]):
@@ -828,6 +837,11 @@ def workflow_wrapper(
             dbos._sys_db.record_get_result(workflow_id, serialized_r, None)
             return r
 
+        if check_is_in_coroutine() and not inspect.iscoroutinefunction(func):
+            dbos_logger.warning(
+                f"Sync workflow ({get_dbos_func_name(func)}) shouldn't be invoked from within another async function. Define it as async or use asyncio.to_thread instead."
+            )
+
         outcome = (
             wfOutcome.wrap(init_wf, dbos=dbos)
             .also(DBOSAssumeRole(rr))
@@ -1009,6 +1023,10 @@ def decorate_transaction(
                 assert (
                     ctx.is_workflow()
                 ), "Transactions must be called from within workflows"
+                if check_is_in_coroutine():
+                    dbos_logger.warning(
+                        f"Transaction function ({get_dbos_func_name(func)}) shouldn't be invoked from within another async function. Use asyncio.to_thread instead."
+                    )
                 with DBOSAssumeRole(rr):
                     return invoke_tx(*args, **kwargs)
             else:
@@ -1153,6 +1171,10 @@ def decorate_step(
 
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
+            if check_is_in_coroutine() and not inspect.iscoroutinefunction(func):
+                dbos_logger.warning(
+                    f"Sync step ({get_dbos_func_name(func)}) shouldn't be invoked from within another async function. Define it as async or use asyncio.to_thread instead."
+                )
             # If the step is called from a workflow, run it as a step.
             # Otherwise, run it as a normal function.
             ctx = get_local_dbos_context()
