@@ -1,5 +1,6 @@
 # mypy: disable-error-code="no-redef"
 
+import asyncio
 import datetime
 import logging
 import os
@@ -1668,17 +1669,17 @@ async def test_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
         assert DBOS.workflow_id is None
         return x
 
-    assert step(5) == 5
+    assert await asyncio.to_thread(step, 5) == 5
     assert await async_step(5) == 5
 
     DBOS(config=config)
 
-    assert step(5) == 5
+    assert await asyncio.to_thread(step, 5) == 5
     assert await async_step(5) == 5
 
     DBOS.launch()
 
-    assert step(5) == 5
+    assert await asyncio.to_thread(step, 5) == 5
     assert await async_step(5) == 5
 
     assert len(DBOS.list_workflows()) == 0
