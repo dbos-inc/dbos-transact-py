@@ -828,18 +828,18 @@ async def test_callchild_first_asyncio(dbos: DBOS) -> None:
     async def parentWorkflow() -> str:
         handle = await dbos.start_workflow_async(child_workflow)
         child_id = await handle.get_result()
-        stepOne()
-        stepTwo()
+        await stepOne()
+        await stepTwo()
         return child_id
 
     @DBOS.step()
-    def stepOne() -> str:
+    async def stepOne() -> str:
         workflow_id = DBOS.workflow_id
         assert workflow_id is not None
         return workflow_id
 
     @DBOS.step()
-    def stepTwo() -> None:
+    async def stepTwo() -> None:
         return
 
     @DBOS.workflow()

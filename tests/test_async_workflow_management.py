@@ -148,7 +148,7 @@ async def test_fork_workflow_async(dbos: DBOS) -> None:
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        assert simple_workflow(input_val) == output
+        assert await asyncio.to_thread(simple_workflow, input_val) == output
 
     assert step_one_count == 1
     assert step_two_count == 1
