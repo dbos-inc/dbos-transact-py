@@ -32,12 +32,14 @@ from opentelemetry.trace import Span
 from rich import print
 
 from dbos._conductor.conductor import ConductorWebsocket
+from dbos._debouncer import debouncer_workflow
 from dbos._sys_db import SystemDatabase, WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import fork_workflow, list_queued_workflows, list_workflows
 
 from ._classproperty import classproperty
 from ._core import (
+    DEBOUNCER_WORKFLOW_NAME,
     TEMP_SEND_WF_NAME,
     WorkflowHandleAsyncPolling,
     WorkflowHandlePolling,
@@ -395,6 +397,11 @@ class DBOS:
         set_dbos_func_name(temp_send_wf, TEMP_SEND_WF_NAME)
         set_temp_workflow_type(send_temp_workflow, "send")
         self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf, "send")
+
+        # Register the debouncer workflow
+        decorate_workflow(self._registry, DEBOUNCER_WORKFLOW_NAME, None)(
+            debouncer_workflow
+        )
 
         for handler in dbos_logger.handlers:
             handler.flush()
