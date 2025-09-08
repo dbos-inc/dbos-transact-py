@@ -23,10 +23,12 @@ def test_debouncer_workflow(dbos: DBOS) -> None:
 def test_debouncer(dbos: DBOS) -> None:
 
     DBOS.workflow()(workflow)
-    value = 5
+    first_value = 4
+    second_value = 5
 
-    debouncer = Debouncer("key", 0)
-    handle = debouncer.debounce(workflow, value)
-    assert handle.get_result() == value
-    handle = debouncer.debounce(workflow, value)
-    assert handle.get_result() == value
+    debouncer = Debouncer("key", 2)
+    first_handle = debouncer.debounce(workflow, first_value)
+    second_handle = debouncer.debounce(workflow, second_value)
+    assert first_handle.workflow_id == second_handle.workflow_id
+    assert first_handle.get_result() == second_value
+    assert second_handle.get_result() == second_value

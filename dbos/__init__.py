@@ -33,4 +33,5 @@ __all__ = [
     "WorkflowStatusString",
     "error",
     "Queue",
+    "Debouncer",
 ]
