@@ -12,7 +12,7 @@ class WorkflowInputs(TypedDict):
 
 
 def _validate_item(data: Any) -> None:
-    if isinstance(data, (types.FunctionType, types.MethodType)):
+    if isinstance(data, (types.MethodType)):
         raise TypeError("Serialized data item should not be a function")
 
 
