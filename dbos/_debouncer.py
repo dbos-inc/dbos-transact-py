@@ -43,17 +43,17 @@ class Debouncer:
         internal_queue = dbos._registry.get_internal_queue()
         while True:
             try:
-                generated_wfid = str(uuid.uuid4())
+                user_workflow_id = str(uuid.uuid4())
                 with SetEnqueueOptions(deduplication_id=self.debounce_key):
                     internal_queue.enqueue(
                         debouncer_workflow,
                         func,
-                        generated_wfid,
+                        user_workflow_id,
                         self.debounce_period_sec,
                         *args,
                         **kwargs,
                     )
-                return WorkflowHandlePolling(generated_wfid, dbos)
+                return WorkflowHandlePolling(user_workflow_id, dbos)
             except DBOSQueueDeduplicatedError:
                 dedup_wfid = dbos._sys_db.get_deduplicated_workflow(
                     queue_name=internal_queue.name, deduplication_id=self.debounce_key
@@ -65,7 +65,7 @@ class Debouncer:
                         DBOS.retrieve_workflow(dedup_wfid).get_status().input
                     )
                     assert dedup_workflow_input is not None
-                    user_workflow_id: str = dedup_workflow_input["args"][1]
+                    user_workflow_id = dedup_workflow_input["args"][1]
                     workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
                     DBOS.send(dedup_wfid, workflow_inputs, _DEBOUNCER_TOPIC)
                     return WorkflowHandlePolling(user_workflow_id, dbos)
