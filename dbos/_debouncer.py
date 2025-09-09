@@ -137,7 +137,14 @@ class Debouncer:
         # use that ID for the user workflow and not the debouncer.
         with DBOSContextEnsure():
             ctx = assert_current_dbos_context()
-            user_workflow_id = ctx.assign_workflow_id()
+
+            # Deterministically generate the user workflow ID and message ID
+            def assign_debounce_ids() -> tuple[str, str]:
+                return str(uuid.uuid4()), ctx.assign_workflow_id()
+
+            message_id, user_workflow_id = dbos._sys_db.call_function_as_step(
+                assign_debounce_ids, "DBOS.assign_debounce_ids"
+            )
             ctx.id_assigned_for_next_workflow = ""
             ctx.is_within_set_workflow_id_block = False
             ctxOptions: ContextOptions = {
@@ -151,7 +158,6 @@ class Debouncer:
                     else None
                 ),
             }
-        message_id = str(uuid.uuid4())
         while True:
             try:
                 # Attempt to enqueue a debouncer for this workflow.
@@ -168,8 +174,15 @@ class Debouncer:
                 return WorkflowHandlePolling(user_workflow_id, dbos)
             except DBOSQueueDeduplicatedError:
                 # If there is already a debouncer, send a message to it.
-                dedup_wfid = dbos._sys_db.get_deduplicated_workflow(
-                    queue_name=internal_queue.name, deduplication_id=self.debounce_key
+                # Deterministically retrieve the ID of the debouncer
+                def get_deduplicated_workflow() -> Optional[str]:
+                    return dbos._sys_db.get_deduplicated_workflow(
+                        queue_name=internal_queue.name,
+                        deduplication_id=self.debounce_key,
+                    )
+
+                dedup_wfid = dbos._sys_db.call_function_as_step(
+                    get_deduplicated_workflow, "DBOS.get_deduplicated_workflow"
                 )
                 if dedup_wfid is None:
                     continue

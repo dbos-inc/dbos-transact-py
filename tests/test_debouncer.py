@@ -21,6 +21,10 @@ def test_debouncer(dbos: DBOS) -> None:
     DBOS.workflow()(workflow)
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
 
+    @DBOS.step()
+    def generate_uuid() -> str:
+        return str(uuid.uuid4())
+
     def debouncer_test() -> None:
         debouncer = Debouncer(debounce_key="key", debounce_period_sec=2)
 
@@ -38,7 +42,7 @@ def test_debouncer(dbos: DBOS) -> None:
         assert fourth_handle.get_result() == fourth_value
 
         # Test SetWorkflowID works
-        wfid = str(uuid.uuid4())
+        wfid = generate_uuid()
         with SetWorkflowID(wfid):
             handle = debouncer.debounce(workflow, first_value)
         assert handle.workflow_id == wfid
@@ -54,9 +58,9 @@ def test_debouncer(dbos: DBOS) -> None:
         debouncer_test_workflow()
 
     # Rerun the workflow, verify it still works
-    # dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
-    # with SetWorkflowID(wfid):
-    #     debouncer_test_workflow()
+    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+    with SetWorkflowID(wfid):
+        debouncer_test_workflow()
 
 
 def test_debouncer_timeout(dbos: DBOS) -> None:

@@ -1182,7 +1182,7 @@ def test_queue_deduplication_recovery(dbos: DBOS) -> None:
         workflow_event.wait()
 
     @DBOS.workflow()
-    def test_workflow() -> None:
+    def test_workflow() -> str:
         with SetEnqueueOptions(deduplication_id=dedup_id):
             handle = queue.enqueue(child_workflow)
             with pytest.raises(DBOSQueueDeduplicatedError):
@@ -1192,7 +1192,7 @@ def test_queue_deduplication_recovery(dbos: DBOS) -> None:
     parent_id = str(uuid.uuid4())
     with SetWorkflowID(parent_id):
         child_id = test_workflow()
-    handle = DBOS.retrieve_workflow(child_id)
+    handle: WorkflowHandle[str] = DBOS.retrieve_workflow(child_id)
     workflow_event.set()
     handle.get_result()
 
