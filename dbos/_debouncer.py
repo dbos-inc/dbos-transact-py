@@ -2,7 +2,12 @@ import asyncio
 import uuid
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, Tuple
 
-from dbos._context import SetEnqueueOptions, SetWorkflowID
+from dbos._context import (
+    DBOSContextEnsure,
+    SetEnqueueOptions,
+    SetWorkflowID,
+    assert_current_dbos_context,
+)
 from dbos._core import WorkflowHandleAsyncPolling, WorkflowHandlePolling
 from dbos._error import DBOSQueueDeduplicatedError
 from dbos._serialization import WorkflowInputs
@@ -51,10 +56,14 @@ class Debouncer:
         dbos = _get_dbos_instance()
         internal_queue = dbos._registry.get_internal_queue()
 
+        with DBOSContextEnsure():
+            ctx = assert_current_dbos_context()
+            user_workflow_id = ctx.assign_workflow_id()
+            ctx.id_assigned_for_next_workflow = ""
+            ctx.is_within_set_workflow_id_block = False
         while True:
             try:
                 # Attempt to enqueue a debouncer for this workflow.
-                user_workflow_id = str(uuid.uuid4())
                 with SetEnqueueOptions(deduplication_id=self.debounce_key):
                     internal_queue.enqueue(
                         debouncer_workflow,

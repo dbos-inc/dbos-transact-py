@@ -1,6 +1,8 @@
+import uuid
+
 import pytest
 
-from dbos import DBOS, Debouncer
+from dbos import DBOS, Debouncer, SetWorkflowID
 
 
 def workflow(x: int) -> int:
@@ -30,6 +32,13 @@ def test_debouncer(dbos: DBOS) -> None:
     assert third_handle.workflow_id == fourth_handle.workflow_id
     assert third_handle.get_result() == fourth_value
     assert fourth_handle.get_result() == fourth_value
+
+    # Test SetWorkflowID works
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = debouncer.debounce(workflow, first_value)
+    assert handle.workflow_id == wfid
+    assert handle.get_result() == first_value
 
 
 @pytest.mark.asyncio
