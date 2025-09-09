@@ -1,4 +1,6 @@
 import asyncio
+import math
+import time
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -58,11 +60,17 @@ def debouncer_workflow(
     workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
     message = None
     # Every time the debounced workflow is called, a message is sent to this workflow.
-    # It waits until debounce_period_sec have passed since the last message.
-    while True:
-        message = DBOS.recv(
-            _DEBOUNCER_TOPIC, timeout_seconds=options["debounce_period_sec"]
-        )
+    # It waits until debounce_period_sec have passed since the last message or until
+    # the debounce timeout is elapsed.
+    debounce_deadline_epoch_sec = (
+        time.time() + options["debounce_timeout_sec"]
+        if options["debounce_timeout_sec"]
+        else math.inf
+    )
+    while time.time() < debounce_deadline_epoch_sec:
+        time_until_deadline = max(debounce_deadline_epoch_sec - time.time(), 0)
+        timeout = min(options["debounce_period_sec"], time_until_deadline)
+        message = DBOS.recv(_DEBOUNCER_TOPIC, timeout_seconds=timeout)
         if message is None:
             break
         else:
