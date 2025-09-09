@@ -3,6 +3,7 @@ import uuid
 import pytest
 
 from dbos import DBOS, Debouncer, SetWorkflowID
+from dbos._context import SetWorkflowTimeout
 from dbos._queue import Queue
 
 
@@ -57,13 +58,16 @@ def test_debouncer_queue(dbos: DBOS) -> None:
     assert second_handle.get_result() == second_value
     assert second_handle.get_status().queue_name == queue.name
 
-    third_handle = debouncer.debounce(workflow, third_value)
-    fourth_handle = debouncer.debounce(workflow, fourth_value)
+    with SetWorkflowTimeout(1.0):
+        third_handle = debouncer.debounce(workflow, third_value)
+        fourth_handle = debouncer.debounce(workflow, fourth_value)
     assert third_handle.workflow_id != first_handle.workflow_id
     assert third_handle.workflow_id == fourth_handle.workflow_id
     assert third_handle.get_result() == fourth_value
     assert fourth_handle.get_result() == fourth_value
     assert fourth_handle.get_status().queue_name == queue.name
+    assert fourth_handle.get_status().workflow_timeout_ms == 1000.0
+    assert fourth_handle.get_status().workflow_deadline_epoch_ms
 
     # Test SetWorkflowID works
     wfid = str(uuid.uuid4())
