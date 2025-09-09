@@ -1,23 +1,14 @@
-import uuid
+import pytest
 
-from dbos import DBOS, Debouncer, WorkflowHandle
-from dbos._core import DEBOUNCER_WORKFLOW_NAME
+from dbos import DBOS, Debouncer
 
 
 def workflow(x: int) -> int:
     return x
 
 
-def test_debouncer_workflow(dbos: DBOS) -> None:
-
-    DBOS.workflow()(workflow)
-    value = 5
-
-    wfid = str(uuid.uuid4())
-    debouncer_workflow = dbos._registry.workflow_info_map[DEBOUNCER_WORKFLOW_NAME]
-    debouncer_workflow(workflow, wfid, 0, value)
-    handle: WorkflowHandle[int] = DBOS.retrieve_workflow(wfid, existing_workflow=False)
-    assert handle.get_result() == value
+async def workflow_async(x: int) -> int:
+    return x
 
 
 def test_debouncer(dbos: DBOS) -> None:
@@ -32,3 +23,18 @@ def test_debouncer(dbos: DBOS) -> None:
     assert first_handle.workflow_id == second_handle.workflow_id
     assert first_handle.get_result() == second_value
     assert second_handle.get_result() == second_value
+
+
+@pytest.mark.asyncio
+async def test_debouncer_async(dbos: DBOS) -> None:
+
+    DBOS.workflow()(workflow_async)
+    first_value = 4
+    second_value = 5
+
+    debouncer = Debouncer("key", 2)
+    first_handle = await debouncer.debounce_async(workflow_async, first_value)
+    second_handle = await debouncer.debounce_async(workflow_async, second_value)
+    assert first_handle.workflow_id == second_handle.workflow_id
+    assert await first_handle.get_result() == second_value
+    assert await second_handle.get_result() == second_value

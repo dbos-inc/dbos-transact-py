@@ -1,9 +1,17 @@
+import asyncio
 import uuid
-from typing import Any, Callable, Dict, Tuple
+from typing import Any, Callable, Coroutine, Dict, Tuple
 
 from dbos._context import SetEnqueueOptions, SetWorkflowID
-from dbos._core import WorkflowHandlePolling
-from dbos._dbos import DBOS, P, R, WorkflowHandle, _get_dbos_instance
+from dbos._core import WorkflowHandleAsyncPolling, WorkflowHandlePolling
+from dbos._dbos import (
+    DBOS,
+    P,
+    R,
+    WorkflowHandle,
+    WorkflowHandleAsync,
+    _get_dbos_instance,
+)
 from dbos._error import DBOSQueueDeduplicatedError
 from dbos._serialization import WorkflowInputs
 
@@ -69,3 +77,13 @@ class Debouncer:
                     workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
                     DBOS.send(dedup_wfid, workflow_inputs, _DEBOUNCER_TOPIC)
                     return WorkflowHandlePolling(user_workflow_id, dbos)
+
+    async def debounce_async(
+        self,
+        func: Callable[P, Coroutine[Any, Any, R]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> WorkflowHandleAsync[R]:
+        handle = await asyncio.to_thread(self.debounce, func, *args, **kwargs)  # type: ignore
+        dbos = _get_dbos_instance()
+        return WorkflowHandleAsyncPolling(handle.workflow_id, dbos)
