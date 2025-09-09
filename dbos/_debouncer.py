@@ -1,6 +1,7 @@
 import asyncio
 import math
 import time
+import types
 import uuid
 from typing import (
     TYPE_CHECKING,
@@ -23,6 +24,7 @@ from dbos._context import (
 from dbos._core import WorkflowHandleAsyncPolling, WorkflowHandlePolling
 from dbos._error import DBOSQueueDeduplicatedError
 from dbos._queue import Queue
+from dbos._registrations import get_dbos_func_name
 from dbos._serialization import WorkflowInputs
 
 if TYPE_CHECKING:
@@ -55,7 +57,7 @@ class DebouncerMessage(TypedDict):
 
 
 def debouncer_workflow(
-    func: Callable[..., Any],
+    workflow_name: str,
     ctx: ContextOptions,
     options: DebouncerOptions,
     *args: Tuple[Any, ...],
@@ -88,6 +90,11 @@ def debouncer_workflow(
     # either directly or on a queue.
     with SetWorkflowID(ctx["workflow_id"]):
         with SetWorkflowTimeout(ctx["workflow_timeout_sec"]):
+            func = dbos._registry.workflow_info_map.get(workflow_name, None)
+            if not func:
+                raise Exception(
+                    f"Invalid workflow name provided to debouncer: {workflow_name}"
+                )
             if options["queue_name"]:
                 queue = dbos._registry.queue_info_map.get(options["queue_name"], None)
                 if not queue:
@@ -130,6 +137,9 @@ class Debouncer:
     ) -> "WorkflowHandle[R]":
         from dbos._dbos import DBOS, _get_dbos_instance
 
+        if isinstance(func, (types.MethodType)):
+            raise TypeError("Only functions may be debounced, not methods")
+
         dbos = _get_dbos_instance()
         internal_queue = dbos._registry.get_internal_queue()
 
@@ -165,7 +175,7 @@ class Debouncer:
                     with SetWorkflowTimeout(None):
                         internal_queue.enqueue(
                             debouncer_workflow,
-                            func,
+                            get_dbos_func_name(func),
                             ctxOptions,
                             self.options,
                             *args,
