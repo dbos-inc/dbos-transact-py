@@ -37,7 +37,7 @@ def debouncer_workflow(
 
 class Debouncer:
 
-    def __init__(self, debounce_key: str, debounce_period_sec: float):
+    def __init__(self, *, debounce_key: str, debounce_period_sec: float):
         self.debounce_key = debounce_key
         self.debounce_period_sec = debounce_period_sec
 
