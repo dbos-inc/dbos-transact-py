@@ -125,15 +125,16 @@ class Debouncer:
             try:
                 # Attempt to enqueue a debouncer for this workflow.
                 with SetEnqueueOptions(deduplication_id=self.debounce_key):
-                    internal_queue.enqueue(
-                        debouncer_workflow,
-                        func,
-                        ctxOptions,
-                        self.debounce_period_sec,
-                        self.queue_name,
-                        *args,
-                        **kwargs,
-                    )
+                    with SetWorkflowTimeout(None):
+                        internal_queue.enqueue(
+                            debouncer_workflow,
+                            func,
+                            ctxOptions,
+                            self.debounce_period_sec,
+                            self.queue_name,
+                            *args,
+                            **kwargs,
+                        )
                 return WorkflowHandlePolling(user_workflow_id, dbos)
             except DBOSQueueDeduplicatedError:
                 # If there is already a debouncer, send a message to it.
