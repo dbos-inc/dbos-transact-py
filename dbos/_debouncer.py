@@ -1,6 +1,7 @@
 import asyncio
 import math
 import time
+import uuid
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -46,6 +47,11 @@ class DebounceOptions(TypedDict):
     queue_name: Optional[str]
 
 
+class DebouncerMessage(TypedDict):
+    inputs: WorkflowInputs
+    message_id: str
+
+
 def debouncer_workflow(
     func: Callable[..., Any],
     ctx: ContextOptions,
@@ -58,10 +64,9 @@ def debouncer_workflow(
     dbos = _get_dbos_instance()
 
     workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
-    message = None
     # Every time the debounced workflow is called, a message is sent to this workflow.
     # It waits until debounce_period_sec have passed since the last message or until
-    # the debounce timeout is elapsed.
+    # debounce_timeout_sec has elapsed.
     debounce_deadline_epoch_sec = (
         time.time() + options["debounce_timeout_sec"]
         if options["debounce_timeout_sec"]
@@ -70,11 +75,13 @@ def debouncer_workflow(
     while time.time() < debounce_deadline_epoch_sec:
         time_until_deadline = max(debounce_deadline_epoch_sec - time.time(), 0)
         timeout = min(options["debounce_period_sec"], time_until_deadline)
-        message = DBOS.recv(_DEBOUNCER_TOPIC, timeout_seconds=timeout)
+        message: DebouncerMessage = DBOS.recv(_DEBOUNCER_TOPIC, timeout_seconds=timeout)
         if message is None:
             break
         else:
-            workflow_inputs = message
+            workflow_inputs = message["inputs"]
+            # Acknowledge receipt of the message
+            DBOS.set_event(message["message_id"], message["message_id"])
     with SetWorkflowID(ctx["workflow_id"]):
         with SetWorkflowTimeout(ctx["workflow_timeout_sec"]):
             if options["queue_name"]:
@@ -140,6 +147,7 @@ class Debouncer:
                     else None
                 ),
             }
+        message_id = str(uuid.uuid4())
         while True:
             try:
                 # Attempt to enqueue a debouncer for this workflow.
@@ -163,7 +171,16 @@ class Debouncer:
                     continue
                 else:
                     workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
-                    DBOS.send(dedup_wfid, workflow_inputs, _DEBOUNCER_TOPIC)
+                    message: DebouncerMessage = {
+                        "message_id": message_id,
+                        "inputs": workflow_inputs,
+                    }
+                    DBOS.send(dedup_wfid, message, _DEBOUNCER_TOPIC)
+                    # Wait for the debouncer to acknowledge receipt of the message.
+                    # If the message is not acknowledged, this likely means the debouncer started its workflow
+                    # and exited without processing this message, so try again.
+                    if not DBOS.get_event(dedup_wfid, message_id, timeout_seconds=1):
+                        continue
                     # Retrieve the user workflow ID from the input to the debouncer
                     # and return a handle to it
                     dedup_workflow_input = (
