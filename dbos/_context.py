@@ -517,6 +517,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         self.saved_workflow_timeout: Optional[int] = None
         self.saved_deduplication_id: Optional[str] = None
         self.saved_priority: Optional[int] = None
+        self.saved_is_within_set_workflow_id_block: bool = False
 
     def __enter__(self) -> DBOSContext:
         # Code to create a basic context
@@ -526,6 +527,9 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
             ctx = DBOSContext()
             _set_local_dbos_context(ctx)
         assert not ctx.is_within_workflow()
+        # Unset is_within_set_workflow_id_block as the workflow is not within a block
+        self.saved_is_within_set_workflow_id_block = ctx.is_within_set_workflow_id_block
+        ctx.is_within_set_workflow_id_block = False
         # Unset the workflow_timeout_ms context var so it is not applied to this
         # workflow's children (instead we propagate the deadline)
         self.saved_workflow_timeout = ctx.workflow_timeout_ms
@@ -550,6 +554,8 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         ctx = assert_current_dbos_context()
         assert ctx.is_within_workflow()
         ctx.end_workflow(exc_value)
+        # Restore is_within_set_workflow_id_block
+        ctx.is_within_set_workflow_id_block = self.saved_is_within_set_workflow_id_block
         # Restore the saved workflow timeout
         ctx.workflow_timeout_ms = self.saved_workflow_timeout
         # Clear any propagating timeout
