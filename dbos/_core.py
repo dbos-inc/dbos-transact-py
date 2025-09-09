@@ -95,7 +95,7 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 F = TypeVar("F", bound=Callable[..., Any])
 
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
-DEBOUNCER_WORKFLOW_NAME = "dbos_debouncer_workflow"
+DEBOUNCER_WORKFLOW_NAME = "_dbos_debouncer_workflow"
 
 
 def check_is_in_coroutine() -> bool:
