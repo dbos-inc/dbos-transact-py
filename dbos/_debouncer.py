@@ -41,12 +41,14 @@ class ContextOptions(TypedDict):
     workflow_timeout_sec: Optional[float]
 
 
-class DebounceOptions(TypedDict):
+# Parameters for the debouncer workflow
+class DebouncerOptions(TypedDict):
     debounce_period_sec: float
     debounce_timeout_sec: Optional[float]
     queue_name: Optional[str]
 
 
+# The message sent from a debounce to the debouncer workflow
 class DebouncerMessage(TypedDict):
     inputs: WorkflowInputs
     message_id: str
@@ -55,7 +57,7 @@ class DebouncerMessage(TypedDict):
 def debouncer_workflow(
     func: Callable[..., Any],
     ctx: ContextOptions,
-    options: DebounceOptions,
+    options: DebouncerOptions,
     *args: Tuple[Any, ...],
     **kwargs: Dict[str, Any],
 ) -> None:
@@ -114,7 +116,7 @@ class Debouncer:
         debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Queue] = None,
     ):
-        self.options: DebounceOptions = {
+        self.options: DebouncerOptions = {
             "debounce_period_sec": debounce_period_sec,
             "debounce_timeout_sec": debounce_timeout_sec,
             "queue_name": queue.name if queue else None,

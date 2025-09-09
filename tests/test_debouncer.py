@@ -49,6 +49,7 @@ def test_debouncer_timeout(dbos: DBOS) -> None:
     DBOS.workflow()(workflow)
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
 
+    # Set a huge period but small timeout, verify workflows start after the timeout
     debouncer = Debouncer(
         debounce_key="key", debounce_period_sec=10000000, debounce_timeout_sec=2
     )
@@ -82,6 +83,7 @@ def test_debouncer_queue(dbos: DBOS) -> None:
     assert second_handle.get_result() == second_value
     assert second_handle.get_status().queue_name == queue.name
 
+    # Test SetWorkflowTimeout works
     with SetWorkflowTimeout(1.0):
         third_handle = debouncer.debounce(workflow, third_value)
         fourth_handle = debouncer.debounce(workflow, fourth_value)
