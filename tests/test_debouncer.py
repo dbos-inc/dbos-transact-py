@@ -2,7 +2,16 @@ import uuid
 
 import pytest
 
-from dbos import DBOS, Debouncer, SetWorkflowID
+from dbos import (
+    DBOS,
+    DBOSClient,
+    Debouncer,
+    DebouncerClient,
+    SetWorkflowID,
+    WorkflowHandle,
+    WorkflowHandleAsync,
+)
+from dbos._client import EnqueueOptions
 from dbos._context import SetEnqueueOptions, SetWorkflowTimeout
 from dbos._queue import Queue
 from dbos._utils import GlobalParams
@@ -154,3 +163,36 @@ async def test_debouncer_async(dbos: DBOS) -> None:
     assert third_handle.workflow_id == fourth_handle.workflow_id
     assert await third_handle.get_result() == fourth_value
     assert await fourth_handle.get_result() == fourth_value
+
+
+def test_debouncer_client(dbos: DBOS, client: DBOSClient) -> None:
+
+    DBOS.workflow()(workflow)
+    first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
+    queue = Queue("test-queue")
+
+    debouncer = DebouncerClient(client, debounce_key="key", debounce_period_sec=2)
+
+    options: EnqueueOptions = {
+        "workflow_name": workflow.__name__,
+        "queue_name": queue.name,
+    }
+    first_handle: WorkflowHandle[int] = debouncer.debounce(options, first_value)
+    second_handle: WorkflowHandle[int] = debouncer.debounce(options, second_value)
+    assert first_handle.workflow_id == second_handle.workflow_id
+    assert first_handle.get_result() == second_value
+    assert second_handle.get_result() == second_value
+
+    third_handle: WorkflowHandle[int] = debouncer.debounce(options, third_value)
+    fourth_handle: WorkflowHandle[int] = debouncer.debounce(options, fourth_value)
+    assert third_handle.workflow_id != first_handle.workflow_id
+    assert third_handle.workflow_id == fourth_handle.workflow_id
+    assert third_handle.get_result() == fourth_value
+    assert fourth_handle.get_result() == fourth_value
+
+    # Test SetWorkflowID works
+    wfid = str(uuid.uuid4())
+    options["workflow_id"] = wfid
+    handle: WorkflowHandle[int] = debouncer.debounce(options, first_value)
+    assert handle.workflow_id == wfid
+    assert handle.get_result() == first_value

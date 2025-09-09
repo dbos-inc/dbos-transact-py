@@ -1,5 +1,6 @@
 import asyncio
 import math
+import sys
 import time
 import types
 import uuid
@@ -12,8 +13,20 @@ from typing import (
     Optional,
     Tuple,
     TypedDict,
+    TypeVar,
 )
 
+if sys.version_info < (3, 10):
+    from typing_extensions import ParamSpec
+else:
+    from typing import ParamSpec
+
+from dbos._client import (
+    DBOSClient,
+    EnqueueOptions,
+    WorkflowHandleClientAsyncPolling,
+    WorkflowHandleClientPolling,
+)
 from dbos._context import (
     DBOSContextEnsure,
     SetEnqueueOptions,
@@ -21,14 +34,22 @@ from dbos._context import (
     SetWorkflowTimeout,
     assert_current_dbos_context,
 )
-from dbos._core import WorkflowHandleAsyncPolling, WorkflowHandlePolling
+from dbos._core import (
+    DEBOUNCER_WORKFLOW_NAME,
+    WorkflowHandleAsyncPolling,
+    WorkflowHandlePolling,
+)
 from dbos._error import DBOSQueueDeduplicatedError
 from dbos._queue import Queue
 from dbos._registrations import get_dbos_func_name
 from dbos._serialization import WorkflowInputs
+from dbos._utils import INTERNAL_QUEUE_NAME
 
 if TYPE_CHECKING:
-    from dbos._dbos import P, R, WorkflowHandle, WorkflowHandleAsync
+    from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
+
+P = ParamSpec("P")  # A generic type for workflow parameters
+R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 
 _DEBOUNCER_TOPIC = "DEBOUNCER_TOPIC"
@@ -133,7 +154,7 @@ class Debouncer:
         self.debounce_key = debounce_key
 
     def debounce(
-        self, func: "Callable[P, R]", *args: "P.args", **kwargs: "P.kwargs"
+        self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs
     ) -> "WorkflowHandle[R]":
         from dbos._dbos import DBOS, _get_dbos_instance
 
@@ -219,12 +240,110 @@ class Debouncer:
 
     async def debounce_async(
         self,
-        func: "Callable[P, Coroutine[Any, Any, R]]",
-        *args: "P.args",
-        **kwargs: "P.kwargs",
+        func: Callable[P, Coroutine[Any, Any, R]],
+        *args: P.args,
+        **kwargs: P.kwargs,
     ) -> "WorkflowHandleAsync[R]":
         from dbos._dbos import _get_dbos_instance
 
         dbos = _get_dbos_instance()
         handle = await asyncio.to_thread(self.debounce, func, *args, **kwargs)  # type: ignore
         return WorkflowHandleAsyncPolling(handle.workflow_id, dbos)
+
+
+class DebouncerClient:
+
+    def __init__(
+        self,
+        client: DBOSClient,
+        *,
+        debounce_key: str,
+        debounce_period_sec: float,
+        debounce_timeout_sec: Optional[float] = None,
+        queue: Optional[Queue] = None,
+    ):
+        self.options: DebouncerOptions = {
+            "debounce_period_sec": debounce_period_sec,
+            "debounce_timeout_sec": debounce_timeout_sec,
+            "queue_name": queue.name if queue else None,
+        }
+        self.debounce_key = debounce_key
+        self.client = client
+
+    def debounce(
+        self, options: EnqueueOptions, *args: Any, **kwargs: Any
+    ) -> "WorkflowHandle[R]":
+
+        ctxOptions: ContextOptions = {
+            "workflow_id": (
+                options["workflow_id"]
+                if options.get("workflow_id")
+                else str(uuid.uuid4())
+            ),
+            "app_version": options.get("app_version"),
+            "deduplication_id": options.get("deduplication_id"),
+            "priority": options.get("priority"),
+            "workflow_timeout_sec": options.get("workflow_timeout"),
+        }
+        message_id = str(uuid.uuid4())
+        while True:
+            try:
+                # Attempt to enqueue a debouncer for this workflow.
+                debouncer_options: EnqueueOptions = {
+                    "workflow_name": DEBOUNCER_WORKFLOW_NAME,
+                    "queue_name": INTERNAL_QUEUE_NAME,
+                    "deduplication_id": self.debounce_key,
+                }
+                self.client.enqueue(
+                    debouncer_options,
+                    options["workflow_name"],
+                    ctxOptions,
+                    self.options,
+                    *args,
+                    **kwargs,
+                )
+                return WorkflowHandleClientPolling[R](
+                    ctxOptions["workflow_id"], self.client._sys_db
+                )
+            except DBOSQueueDeduplicatedError:
+                # If there is already a debouncer, send a message to it.
+                dedup_wfid = self.client._sys_db.get_deduplicated_workflow(
+                    queue_name=INTERNAL_QUEUE_NAME,
+                    deduplication_id=self.debounce_key,
+                )
+                if dedup_wfid is None:
+                    continue
+                else:
+                    workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
+                    message: DebouncerMessage = {
+                        "message_id": message_id,
+                        "inputs": workflow_inputs,
+                    }
+                    self.client.send(dedup_wfid, message, _DEBOUNCER_TOPIC)
+                    # Wait for the debouncer to acknowledge receipt of the message.
+                    # If the message is not acknowledged, this likely means the debouncer started its workflow
+                    # and exited without processing this message, so try again.
+                    if not self.client.get_event(
+                        dedup_wfid, message_id, timeout_seconds=1
+                    ):
+                        continue
+                    # Retrieve the user workflow ID from the input to the debouncer
+                    # and return a handle to it
+                    dedup_workflow_input = (
+                        self.client.retrieve_workflow(dedup_wfid).get_status().input
+                    )
+                    assert dedup_workflow_input is not None
+                    user_workflow_id = dedup_workflow_input["args"][1]["workflow_id"]
+                    return WorkflowHandleClientPolling[R](
+                        user_workflow_id, self.client._sys_db
+                    )
+
+    async def debounce_async(
+        self, options: EnqueueOptions, *args: Any, **kwargs: Any
+    ) -> "WorkflowHandleAsync[R]":
+        handle: "WorkflowHandle[R]" = await asyncio.to_thread(
+            self.debounce, options, *args, **kwargs
+        )
+        return WorkflowHandleClientAsyncPolling[R](
+            handle.workflow_id, self.client._sys_db
+        )
