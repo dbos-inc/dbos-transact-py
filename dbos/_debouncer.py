@@ -38,11 +38,16 @@ class ContextOptions(TypedDict):
     workflow_timeout_sec: Optional[float]
 
 
+class DebounceOptions(TypedDict):
+    debounce_period_sec: float
+    debounce_timeout_sec: Optional[float]
+    queue_name: Optional[str]
+
+
 def debouncer_workflow(
     func: Callable[..., Any],
     ctx: ContextOptions,
-    debounce_period_sec: float,
-    queue_name: Optional[str],
+    options: DebounceOptions,
     *args: Tuple[Any, ...],
     **kwargs: Dict[str, Any],
 ) -> None:
@@ -55,18 +60,20 @@ def debouncer_workflow(
     # Every time the debounced workflow is called, a message is sent to this workflow.
     # It waits until debounce_period_sec have passed since the last message.
     while True:
-        message = DBOS.recv(_DEBOUNCER_TOPIC, timeout_seconds=debounce_period_sec)
+        message = DBOS.recv(
+            _DEBOUNCER_TOPIC, timeout_seconds=options["debounce_period_sec"]
+        )
         if message is None:
             break
         else:
             workflow_inputs = message
     with SetWorkflowID(ctx["workflow_id"]):
         with SetWorkflowTimeout(ctx["workflow_timeout_sec"]):
-            if queue_name:
-                queue = dbos._registry.queue_info_map.get(queue_name, None)
+            if options["queue_name"]:
+                queue = dbos._registry.queue_info_map.get(options["queue_name"], None)
                 if not queue:
                     raise Exception(
-                        f"Invalid queue name provided to debouncer: {queue_name}"
+                        f"Invalid queue name provided to debouncer: {options['queue_name']}"
                     )
                 with SetEnqueueOptions(
                     deduplication_id=ctx["deduplication_id"],
@@ -89,11 +96,15 @@ class Debouncer:
         *,
         debounce_key: str,
         debounce_period_sec: float,
+        debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Queue] = None,
     ):
+        self.options: DebounceOptions = {
+            "debounce_period_sec": debounce_period_sec,
+            "debounce_timeout_sec": debounce_timeout_sec,
+            "queue_name": queue.name if queue else None,
+        }
         self.debounce_key = debounce_key
-        self.debounce_period_sec = debounce_period_sec
-        self.queue_name = queue.name if queue else None
 
     def debounce(
         self, func: "Callable[P, R]", *args: "P.args", **kwargs: "P.kwargs"
@@ -130,8 +141,7 @@ class Debouncer:
                             debouncer_workflow,
                             func,
                             ctxOptions,
-                            self.debounce_period_sec,
-                            self.queue_name,
+                            self.options,
                             *args,
                             **kwargs,
                         )
