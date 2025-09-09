@@ -294,13 +294,15 @@ class DebouncerClient:
     def __init__(
         self,
         client: DBOSClient,
+        workflow_options: EnqueueOptions,
         *,
         debounce_key: str,
         debounce_period_sec: float,
         debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Queue] = None,
     ):
-        self.options: DebouncerOptions = {
+        self.workflow_options = workflow_options
+        self.debouncer_options: DebouncerOptions = {
             "debounce_period_sec": debounce_period_sec,
             "debounce_timeout_sec": debounce_timeout_sec,
             "queue_name": queue.name if queue else None,
@@ -308,20 +310,18 @@ class DebouncerClient:
         self.debounce_key = debounce_key
         self.client = client
 
-    def debounce(
-        self, options: EnqueueOptions, *args: Any, **kwargs: Any
-    ) -> "WorkflowHandle[R]":
+    def debounce(self, *args: Any, **kwargs: Any) -> "WorkflowHandle[R]":
 
         ctxOptions: ContextOptions = {
             "workflow_id": (
-                options["workflow_id"]
-                if options.get("workflow_id")
+                self.workflow_options["workflow_id"]
+                if self.workflow_options.get("workflow_id")
                 else str(uuid.uuid4())
             ),
-            "app_version": options.get("app_version"),
-            "deduplication_id": options.get("deduplication_id"),
-            "priority": options.get("priority"),
-            "workflow_timeout_sec": options.get("workflow_timeout"),
+            "app_version": self.workflow_options.get("app_version"),
+            "deduplication_id": self.workflow_options.get("deduplication_id"),
+            "priority": self.workflow_options.get("priority"),
+            "workflow_timeout_sec": self.workflow_options.get("workflow_timeout"),
         }
         message_id = str(uuid.uuid4())
         while True:
@@ -334,9 +334,9 @@ class DebouncerClient:
                 }
                 self.client.enqueue(
                     debouncer_options,
-                    options["workflow_name"],
+                    self.workflow_options["workflow_name"],
                     ctxOptions,
-                    self.options,
+                    self.debouncer_options,
                     *args,
                     **kwargs,
                 )
@@ -377,10 +377,10 @@ class DebouncerClient:
                     )
 
     async def debounce_async(
-        self, options: EnqueueOptions, *args: Any, **kwargs: Any
+        self, *args: Any, **kwargs: Any
     ) -> "WorkflowHandleAsync[R]":
         handle: "WorkflowHandle[R]" = await asyncio.to_thread(
-            self.debounce, options, *args, **kwargs
+            self.debounce, *args, **kwargs
         )
         return WorkflowHandleClientAsyncPolling[R](
             handle.workflow_id, self.client._sys_db
