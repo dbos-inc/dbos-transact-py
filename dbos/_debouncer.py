@@ -1,10 +1,20 @@
 import asyncio
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, Optional, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Coroutine,
+    Dict,
+    Optional,
+    Tuple,
+    TypedDict,
+)
 
 from dbos._context import (
     DBOSContextEnsure,
     SetEnqueueOptions,
     SetWorkflowID,
+    SetWorkflowTimeout,
     assert_current_dbos_context,
 )
 from dbos._core import WorkflowHandleAsyncPolling, WorkflowHandlePolling
@@ -19,9 +29,18 @@ if TYPE_CHECKING:
 _DEBOUNCER_TOPIC = "DEBOUNCER_TOPIC"
 
 
+# Options saved from the local context to pass through to the debounced function
+class ContextOptions(TypedDict):
+    workflow_id: str
+    deduplication_id: Optional[str]
+    priority: Optional[int]
+    app_version: Optional[str]
+    workflow_timeout_sec: Optional[float]
+
+
 def debouncer_workflow(
     func: Callable[..., Any],
-    workflow_id: str,
+    ctx: ContextOptions,
     debounce_period_sec: float,
     queue_name: Optional[str],
     *args: Tuple[Any, ...],
@@ -41,18 +60,26 @@ def debouncer_workflow(
             break
         else:
             workflow_inputs = message
-    with SetWorkflowID(workflow_id):
-        if queue_name:
-            queue = dbos._registry.queue_info_map.get(queue_name, None)
-            if not queue:
-                raise Exception(
-                    f"Invalid queue name provided to debouncer: {queue_name}"
+    with SetWorkflowID(ctx["workflow_id"]):
+        with SetWorkflowTimeout(ctx["workflow_timeout_sec"]):
+            if queue_name:
+                queue = dbos._registry.queue_info_map.get(queue_name, None)
+                if not queue:
+                    raise Exception(
+                        f"Invalid queue name provided to debouncer: {queue_name}"
+                    )
+                with SetEnqueueOptions(
+                    deduplication_id=ctx["deduplication_id"],
+                    priority=ctx["priority"],
+                    app_version=ctx["app_version"],
+                ):
+                    queue.enqueue(
+                        func, *workflow_inputs["args"], **workflow_inputs["kwargs"]
+                    )
+            else:
+                DBOS.start_workflow(
+                    func, *workflow_inputs["args"], **workflow_inputs["kwargs"]
                 )
-            queue.enqueue(func, *workflow_inputs["args"], **workflow_inputs["kwargs"])
-        else:
-            DBOS.start_workflow(
-                func, *workflow_inputs["args"], **workflow_inputs["kwargs"]
-            )
 
 
 class Debouncer:
@@ -83,6 +110,17 @@ class Debouncer:
             user_workflow_id = ctx.assign_workflow_id()
             ctx.id_assigned_for_next_workflow = ""
             ctx.is_within_set_workflow_id_block = False
+            ctxOptions: ContextOptions = {
+                "workflow_id": user_workflow_id,
+                "app_version": ctx.app_version,
+                "deduplication_id": ctx.deduplication_id,
+                "priority": ctx.priority,
+                "workflow_timeout_sec": (
+                    ctx.workflow_timeout_ms / 1000.0
+                    if ctx.workflow_timeout_ms
+                    else None
+                ),
+            }
         while True:
             try:
                 # Attempt to enqueue a debouncer for this workflow.
@@ -90,7 +128,7 @@ class Debouncer:
                     internal_queue.enqueue(
                         debouncer_workflow,
                         func,
-                        user_workflow_id,
+                        ctxOptions,
                         self.debounce_period_sec,
                         self.queue_name,
                         *args,
@@ -113,7 +151,7 @@ class Debouncer:
                         DBOS.retrieve_workflow(dedup_wfid).get_status().input
                     )
                     assert dedup_workflow_input is not None
-                    user_workflow_id = dedup_workflow_input["args"][1]
+                    user_workflow_id = dedup_workflow_input["args"][1]["workflow_id"]
                     return WorkflowHandlePolling(user_workflow_id, dbos)
 
     async def debounce_async(
