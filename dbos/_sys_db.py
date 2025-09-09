@@ -1248,7 +1248,10 @@ class SystemDatabase(ABC):
     def check_child_workflow(
         self, workflow_uuid: str, function_id: int
     ) -> Optional[str]:
-        sql = sa.select(SystemSchema.operation_outputs.c.child_workflow_id).where(
+        sql = sa.select(
+            SystemSchema.operation_outputs.c.child_workflow_id,
+            SystemSchema.operation_outputs.c.error,
+        ).where(
             SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
             SystemSchema.operation_outputs.c.function_id == function_id,
         )
@@ -1260,7 +1263,10 @@ class SystemDatabase(ABC):
 
         if row is None:
             return None
-        return str(row[0])
+        elif row[1]:
+            raise _serialization.deserialize_exception(row[1])
+        else:
+            return str(row[0])
 
     @db_retry()
     def send(
