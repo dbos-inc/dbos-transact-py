@@ -3,8 +3,9 @@ import uuid
 import pytest
 
 from dbos import DBOS, Debouncer, SetWorkflowID
-from dbos._context import SetWorkflowTimeout
+from dbos._context import SetEnqueueOptions, SetWorkflowTimeout
 from dbos._queue import Queue
+from dbos._utils import GlobalParams
 
 
 def workflow(x: int) -> int:
@@ -76,6 +77,17 @@ def test_debouncer_queue(dbos: DBOS) -> None:
     assert handle.workflow_id == wfid
     assert handle.get_result() == first_value
     assert handle.get_status().queue_name == queue.name
+
+    # Test SetEnqueueOptions works
+    test_version = "test_version"
+    GlobalParams.app_version = test_version
+    with SetEnqueueOptions(
+        priority=1, deduplication_id="test", app_version=test_version
+    ):
+        handle = debouncer.debounce(workflow, first_value)
+    assert handle.get_result() == first_value
+    assert handle.get_status().queue_name == queue.name
+    assert handle.get_status().app_version == test_version
 
 
 @pytest.mark.asyncio
