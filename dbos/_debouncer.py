@@ -56,6 +56,8 @@ class Debouncer:
         dbos = _get_dbos_instance()
         internal_queue = dbos._registry.get_internal_queue()
 
+        # If a workflow ID is requested with SetWorkflowID,
+        # use that ID for the user workflow and not the debouncer.
         with DBOSContextEnsure():
             ctx = assert_current_dbos_context()
             user_workflow_id = ctx.assign_workflow_id()
