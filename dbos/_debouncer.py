@@ -84,6 +84,8 @@ def debouncer_workflow(
             workflow_inputs = message["inputs"]
             # Acknowledge receipt of the message
             DBOS.set_event(message["message_id"], message["message_id"])
+    # After the timeout or period has elapsed, start the user workflow with the requested context parameters,
+    # either directly or on a queue.
     with SetWorkflowID(ctx["workflow_id"]):
         with SetWorkflowTimeout(ctx["workflow_timeout_sec"]):
             if options["queue_name"]:
