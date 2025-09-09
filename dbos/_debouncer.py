@@ -25,6 +25,8 @@ def debouncer_workflow(
 
     workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
     message = None
+    # Every time the debounced workflow is called, a message is sent to this workflow.
+    # It waits until debounce_period_sec have passed since the last message.
     while True:
         message = DBOS.recv(_DEBOUNCER_TOPIC, timeout_seconds=debounce_period_sec)
         if message is None:
@@ -51,6 +53,7 @@ class Debouncer:
 
         while True:
             try:
+                # Attempt to enqueue a debouncer for this workflow.
                 user_workflow_id = str(uuid.uuid4())
                 with SetEnqueueOptions(deduplication_id=self.debounce_key):
                     internal_queue.enqueue(
@@ -63,19 +66,22 @@ class Debouncer:
                     )
                 return WorkflowHandlePolling(user_workflow_id, dbos)
             except DBOSQueueDeduplicatedError:
+                # If there is already a debouncer, send a message to it.
                 dedup_wfid = dbos._sys_db.get_deduplicated_workflow(
                     queue_name=internal_queue.name, deduplication_id=self.debounce_key
                 )
                 if dedup_wfid is None:
                     continue
                 else:
+                    workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
+                    DBOS.send(dedup_wfid, workflow_inputs, _DEBOUNCER_TOPIC)
+                    # Retrieve the user workflow ID from the input to the debouncer
+                    # and return a handle to it
                     dedup_workflow_input = (
                         DBOS.retrieve_workflow(dedup_wfid).get_status().input
                     )
                     assert dedup_workflow_input is not None
                     user_workflow_id = dedup_workflow_input["args"][1]
-                    workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
-                    DBOS.send(dedup_wfid, workflow_inputs, _DEBOUNCER_TOPIC)
                     return WorkflowHandlePolling(user_workflow_id, dbos)
 
     async def debounce_async(
