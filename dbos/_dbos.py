@@ -391,11 +391,7 @@ class DBOS:
         ) -> None:
             self.send(destination_id, message, topic)
 
-        temp_send_wf = workflow_wrapper(self._registry, send_temp_workflow)
-        set_dbos_func_name(send_temp_workflow, TEMP_SEND_WF_NAME)
-        set_dbos_func_name(temp_send_wf, TEMP_SEND_WF_NAME)
-        set_temp_workflow_type(send_temp_workflow, "send")
-        self._registry.register_wf_function(TEMP_SEND_WF_NAME, temp_send_wf, "send")
+        decorate_workflow(self._registry, TEMP_SEND_WF_NAME, None)(send_temp_workflow)
 
         # Register the debouncer workflow
         from dbos._debouncer import debouncer_workflow
