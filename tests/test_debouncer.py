@@ -21,7 +21,7 @@ def test_debouncer(dbos: DBOS) -> None:
     DBOS.workflow()(workflow)
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
 
-    def debouncer_test():
+    def debouncer_test() -> None:
         debouncer = Debouncer(debounce_key="key", debounce_period_sec=2)
 
         first_handle = debouncer.debounce(workflow, first_value)
