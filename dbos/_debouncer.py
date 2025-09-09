@@ -1,19 +1,15 @@
 import asyncio
 import uuid
-from typing import Any, Callable, Coroutine, Dict, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, Tuple
 
 from dbos._context import SetEnqueueOptions, SetWorkflowID
 from dbos._core import WorkflowHandleAsyncPolling, WorkflowHandlePolling
-from dbos._dbos import (
-    DBOS,
-    P,
-    R,
-    WorkflowHandle,
-    WorkflowHandleAsync,
-    _get_dbos_instance,
-)
 from dbos._error import DBOSQueueDeduplicatedError
 from dbos._serialization import WorkflowInputs
+
+if TYPE_CHECKING:
+    from dbos._dbos import P, R, WorkflowHandle, WorkflowHandleAsync
+
 
 _DEBOUNCER_TOPIC = "DEBOUNCER_TOPIC"
 
@@ -25,6 +21,7 @@ def debouncer_workflow(
     *args: Tuple[Any, ...],
     **kwargs: Dict[str, Any],
 ) -> None:
+    from dbos._dbos import DBOS
 
     workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
     message = None
@@ -45,10 +42,13 @@ class Debouncer:
         self.debounce_period_sec = debounce_period_sec
 
     def debounce(
-        self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs
-    ) -> WorkflowHandle[R]:
+        self, func: "Callable[P, R]", *args: "P.args", **kwargs: "P.kwargs"
+    ) -> "WorkflowHandle[R]":
+        from dbos._dbos import DBOS, _get_dbos_instance
+
         dbos = _get_dbos_instance()
         internal_queue = dbos._registry.get_internal_queue()
+
         while True:
             try:
                 user_workflow_id = str(uuid.uuid4())
@@ -80,10 +80,12 @@ class Debouncer:
 
     async def debounce_async(
         self,
-        func: Callable[P, Coroutine[Any, Any, R]],
-        *args: P.args,
-        **kwargs: P.kwargs,
-    ) -> WorkflowHandleAsync[R]:
-        handle = await asyncio.to_thread(self.debounce, func, *args, **kwargs)  # type: ignore
+        func: "Callable[P, Coroutine[Any, Any, R]]",
+        *args: "P.args",
+        **kwargs: "P.kwargs",
+    ) -> "WorkflowHandleAsync[R]":
+        from dbos._dbos import _get_dbos_instance
+
         dbos = _get_dbos_instance()
+        handle = await asyncio.to_thread(self.debounce, func, *args, **kwargs)  # type: ignore
         return WorkflowHandleAsyncPolling(handle.workflow_id, dbos)
