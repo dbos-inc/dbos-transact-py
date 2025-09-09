@@ -1,6 +1,5 @@
 import asyncio
-import uuid
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, Optional, Tuple
 
 from dbos._context import (
     DBOSContextEnsure,
@@ -10,6 +9,7 @@ from dbos._context import (
 )
 from dbos._core import WorkflowHandleAsyncPolling, WorkflowHandlePolling
 from dbos._error import DBOSQueueDeduplicatedError
+from dbos._queue import Queue
 from dbos._serialization import WorkflowInputs
 
 if TYPE_CHECKING:
@@ -23,10 +23,13 @@ def debouncer_workflow(
     func: Callable[..., Any],
     workflow_id: str,
     debounce_period_sec: float,
+    queue_name: Optional[str],
     *args: Tuple[Any, ...],
     **kwargs: Dict[str, Any],
 ) -> None:
-    from dbos._dbos import DBOS
+    from dbos._dbos import DBOS, _get_dbos_instance
+
+    dbos = _get_dbos_instance()
 
     workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
     message = None
@@ -39,14 +42,31 @@ def debouncer_workflow(
         else:
             workflow_inputs = message
     with SetWorkflowID(workflow_id):
-        DBOS.start_workflow(func, *workflow_inputs["args"], **workflow_inputs["kwargs"])
+        if queue_name:
+            queue = dbos._registry.queue_info_map.get(queue_name, None)
+            if not queue:
+                raise Exception(
+                    f"Invalid queue name provided to debouncer: {queue_name}"
+                )
+            queue.enqueue(func, *workflow_inputs["args"], **workflow_inputs["kwargs"])
+        else:
+            DBOS.start_workflow(
+                func, *workflow_inputs["args"], **workflow_inputs["kwargs"]
+            )
 
 
 class Debouncer:
 
-    def __init__(self, *, debounce_key: str, debounce_period_sec: float):
+    def __init__(
+        self,
+        *,
+        debounce_key: str,
+        debounce_period_sec: float,
+        queue: Optional[Queue] = None,
+    ):
         self.debounce_key = debounce_key
         self.debounce_period_sec = debounce_period_sec
+        self.queue_name = queue.name if queue else None
 
     def debounce(
         self, func: "Callable[P, R]", *args: "P.args", **kwargs: "P.kwargs"
@@ -72,6 +92,7 @@ class Debouncer:
                         func,
                         user_workflow_id,
                         self.debounce_period_sec,
+                        self.queue_name,
                         *args,
                         **kwargs,
                     )
