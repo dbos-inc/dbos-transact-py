@@ -10,10 +10,12 @@ from typing import (
     Callable,
     Coroutine,
     Dict,
+    Generic,
     Optional,
     Tuple,
     TypedDict,
     TypeVar,
+    Union,
 )
 
 if sys.version_info < (3, 10):
@@ -136,16 +138,18 @@ def debouncer_workflow(
                 )
 
 
-class Debouncer:
+class Debouncer(Generic[P, R]):
 
     def __init__(
         self,
+        func_name: str,
         *,
         debounce_key: str,
         debounce_period_sec: float,
         debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Queue] = None,
     ):
+        self.func_name = func_name
         self.options: DebouncerOptions = {
             "debounce_period_sec": debounce_period_sec,
             "debounce_timeout_sec": debounce_timeout_sec,
@@ -153,13 +157,48 @@ class Debouncer:
         }
         self.debounce_key = debounce_key
 
-    def debounce(
-        self, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs
-    ) -> "WorkflowHandle[R]":
-        from dbos._dbos import DBOS, _get_dbos_instance
+    @staticmethod
+    def create(
+        func: Callable[P, R],
+        *,
+        debounce_key: str,
+        debounce_period_sec: float,
+        debounce_timeout_sec: Optional[float] = None,
+        queue: Optional[Queue] = None,
+    ) -> "Debouncer[P, R]":
 
         if isinstance(func, (types.MethodType)):
             raise TypeError("Only functions may be debounced, not methods")
+        return Debouncer[P, R](
+            get_dbos_func_name(func),
+            debounce_key=debounce_key,
+            debounce_period_sec=debounce_period_sec,
+            debounce_timeout_sec=debounce_timeout_sec,
+            queue=queue,
+        )
+
+    @staticmethod
+    def create_async(
+        func: Callable[P, Coroutine[Any, Any, R]],
+        *,
+        debounce_key: str,
+        debounce_period_sec: float,
+        debounce_timeout_sec: Optional[float] = None,
+        queue: Optional[Queue] = None,
+    ) -> "Debouncer[P, R]":
+
+        if isinstance(func, (types.MethodType)):
+            raise TypeError("Only functions may be debounced, not methods")
+        return Debouncer[P, R](
+            get_dbos_func_name(func),
+            debounce_key=debounce_key,
+            debounce_period_sec=debounce_period_sec,
+            debounce_timeout_sec=debounce_timeout_sec,
+            queue=queue,
+        )
+
+    def debounce(self, *args: P.args, **kwargs: P.kwargs) -> "WorkflowHandle[R]":
+        from dbos._dbos import DBOS, _get_dbos_instance
 
         dbos = _get_dbos_instance()
         internal_queue = dbos._registry.get_internal_queue()
@@ -196,7 +235,7 @@ class Debouncer:
                     with SetWorkflowTimeout(None):
                         internal_queue.enqueue(
                             debouncer_workflow,
-                            get_dbos_func_name(func),
+                            self.func_name,
                             ctxOptions,
                             self.options,
                             *args,
@@ -240,14 +279,13 @@ class Debouncer:
 
     async def debounce_async(
         self,
-        func: Callable[P, Coroutine[Any, Any, R]],
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> "WorkflowHandleAsync[R]":
         from dbos._dbos import _get_dbos_instance
 
         dbos = _get_dbos_instance()
-        handle = await asyncio.to_thread(self.debounce, func, *args, **kwargs)  # type: ignore
+        handle = await asyncio.to_thread(self.debounce, *args, **kwargs)
         return WorkflowHandleAsyncPolling(handle.workflow_id, dbos)
 
 
