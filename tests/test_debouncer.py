@@ -190,9 +190,51 @@ def test_debouncer_client(dbos: DBOS, client: DBOSClient) -> None:
     assert third_handle.get_result() == fourth_value
     assert fourth_handle.get_result() == fourth_value
 
-    # Test SetWorkflowID works
     wfid = str(uuid.uuid4())
     options["workflow_id"] = wfid
     handle: WorkflowHandle[int] = debouncer.debounce(options, first_value)
     assert handle.workflow_id == wfid
     assert handle.get_result() == first_value
+
+
+@pytest.mark.asyncio
+async def test_debouncer_client_async(dbos: DBOS, client: DBOSClient) -> None:
+
+    DBOS.workflow()(workflow_async)
+    first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
+    queue = Queue("test-queue")
+
+    debouncer = DebouncerClient(client, debounce_key="key", debounce_period_sec=2)
+
+    options: EnqueueOptions = {
+        "workflow_name": workflow_async.__name__,
+        "queue_name": queue.name,
+    }
+    first_handle: WorkflowHandleAsync[int] = await debouncer.debounce_async(
+        options, first_value
+    )
+    second_handle: WorkflowHandleAsync[int] = await debouncer.debounce_async(
+        options, second_value
+    )
+    assert first_handle.workflow_id == second_handle.workflow_id
+    assert await first_handle.get_result() == second_value
+    assert await second_handle.get_result() == second_value
+
+    third_handle: WorkflowHandleAsync[int] = await debouncer.debounce_async(
+        options, third_value
+    )
+    fourth_handle: WorkflowHandleAsync[int] = await debouncer.debounce_async(
+        options, fourth_value
+    )
+    assert third_handle.workflow_id != first_handle.workflow_id
+    assert third_handle.workflow_id == fourth_handle.workflow_id
+    assert await third_handle.get_result() == fourth_value
+    assert await fourth_handle.get_result() == fourth_value
+
+    wfid = str(uuid.uuid4())
+    options["workflow_id"] = wfid
+    handle: WorkflowHandleAsync[int] = await debouncer.debounce_async(
+        options, first_value
+    )
+    assert handle.workflow_id == wfid
+    assert await handle.get_result() == first_value
