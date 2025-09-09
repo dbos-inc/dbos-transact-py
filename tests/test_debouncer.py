@@ -21,27 +21,42 @@ def test_debouncer(dbos: DBOS) -> None:
     DBOS.workflow()(workflow)
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
 
-    debouncer = Debouncer(debounce_key="key", debounce_period_sec=2)
+    def debouncer_test():
+        debouncer = Debouncer(debounce_key="key", debounce_period_sec=2)
 
-    first_handle = debouncer.debounce(workflow, first_value)
-    second_handle = debouncer.debounce(workflow, second_value)
-    assert first_handle.workflow_id == second_handle.workflow_id
-    assert first_handle.get_result() == second_value
-    assert second_handle.get_result() == second_value
+        first_handle = debouncer.debounce(workflow, first_value)
+        second_handle = debouncer.debounce(workflow, second_value)
+        assert first_handle.workflow_id == second_handle.workflow_id
+        assert first_handle.get_result() == second_value
+        assert second_handle.get_result() == second_value
 
-    third_handle = debouncer.debounce(workflow, third_value)
-    fourth_handle = debouncer.debounce(workflow, fourth_value)
-    assert third_handle.workflow_id != first_handle.workflow_id
-    assert third_handle.workflow_id == fourth_handle.workflow_id
-    assert third_handle.get_result() == fourth_value
-    assert fourth_handle.get_result() == fourth_value
+        third_handle = debouncer.debounce(workflow, third_value)
+        fourth_handle = debouncer.debounce(workflow, fourth_value)
+        assert third_handle.workflow_id != first_handle.workflow_id
+        assert third_handle.workflow_id == fourth_handle.workflow_id
+        assert third_handle.get_result() == fourth_value
+        assert fourth_handle.get_result() == fourth_value
 
-    # Test SetWorkflowID works
+        # Test SetWorkflowID works
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            handle = debouncer.debounce(workflow, first_value)
+        assert handle.workflow_id == wfid
+        assert handle.get_result() == first_value
+
+    # First, run the test operations directly
+    debouncer_test()
+
+    # Then, run the test operations inside a workflow and verify they work there
+    debouncer_test_workflow = DBOS.workflow()(debouncer_test)
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        handle = debouncer.debounce(workflow, first_value)
-    assert handle.workflow_id == wfid
-    assert handle.get_result() == first_value
+        debouncer_test_workflow()
+
+    # Rerun the workflow, verify it still works
+    # dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+    # with SetWorkflowID(wfid):
+    #     debouncer_test_workflow()
 
 
 def test_debouncer_timeout(dbos: DBOS) -> None:
