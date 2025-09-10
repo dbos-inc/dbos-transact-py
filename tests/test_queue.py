@@ -1572,3 +1572,18 @@ async def test_enqueue_version_async(dbos: DBOS) -> None:
     # Change the global version, verify it works
     GlobalParams.app_version = future_version
     assert await handle.get_result() == input
+
+def test_queue_partitions(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    queue = Queue("queue")
+    input = 5
+
+    partition_key = "abc"
+    with SetEnqueueOptions(queue_partition_key=partition_key):
+        handle = queue.enqueue(workflow, input)
+
+    assert handle.get_result() == input
