@@ -1660,7 +1660,7 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
     assert blocked_normal_handle.get_result()
 
     # Confirm client enqueue works with partitions
-    client_handle = client.enqueue(
+    client_handle: WorkflowHandle[None] = client.enqueue(
         {
             "queue_name": queue.name,
             "workflow_name": normal_workflow.__qualname__,
