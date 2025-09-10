@@ -107,10 +107,21 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
         queues = dict(dbos._registry.queue_info_map)
         for _, queue in queues.items():
             try:
-                wf_ids = dbos._sys_db.start_queued_workflows(
-                    queue, GlobalParams.executor_id, GlobalParams.app_version
-                )
-                for id in wf_ids:
+                if queue.partition_queue:
+                    dequeued_workflows = []
+                    queue_partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
+                    for key in queue_partition_keys:
+                        dequeued_workflows += dbos._sys_db.start_queued_workflows(
+                            queue,
+                            GlobalParams.executor_id,
+                            GlobalParams.app_version,
+                            key,
+                        )
+                else:
+                    dequeued_workflows = dbos._sys_db.start_queued_workflows(
+                        queue, GlobalParams.executor_id, GlobalParams.app_version, None
+                    )
+                for id in dequeued_workflows:
                     execute_workflow_by_id(dbos, id)
             except OperationalError as e:
                 if isinstance(

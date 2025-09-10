@@ -1580,7 +1580,7 @@ def test_queue_partitions(dbos: DBOS) -> None:
     def workflow(x: int) -> int:
         return x
 
-    queue = Queue("queue")
+    queue = Queue("queue", partition_queue=True)
     input = 5
 
     partition_key = "abc"

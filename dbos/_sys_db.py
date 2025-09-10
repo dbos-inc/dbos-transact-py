@@ -1642,7 +1642,11 @@ class SystemDatabase(ABC):
             return [row[0] for row in rows]
 
     def start_queued_workflows(
-        self, queue: "Queue", executor_id: str, app_version: str
+        self,
+        queue: "Queue",
+        executor_id: str,
+        app_version: str,
+        queue_partition_key: Optional[str],
     ) -> List[str]:
         if self._debug_mode:
             return []
@@ -1661,6 +1665,10 @@ class SystemDatabase(ABC):
                     sa.select(sa.func.count())
                     .select_from(SystemSchema.workflow_status)
                     .where(SystemSchema.workflow_status.c.queue_name == queue.name)
+                    .where(
+                        SystemSchema.workflow_status.c.queue_partition_key
+                        == queue_partition_key
+                    )
                     .where(
                         SystemSchema.workflow_status.c.status
                         != WorkflowStatusString.ENQUEUED.value
@@ -1685,6 +1693,10 @@ class SystemDatabase(ABC):
                     )
                     .select_from(SystemSchema.workflow_status)
                     .where(SystemSchema.workflow_status.c.queue_name == queue.name)
+                    .where(
+                        SystemSchema.workflow_status.c.queue_partition_key
+                        == queue_partition_key
+                    )
                     .where(
                         SystemSchema.workflow_status.c.status
                         == WorkflowStatusString.PENDING.value
@@ -1726,6 +1738,10 @@ class SystemDatabase(ABC):
                 )
                 .select_from(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_status.c.queue_name == queue.name)
+                .where(
+                    SystemSchema.workflow_status.c.queue_partition_key
+                    == queue_partition_key
+                )
                 .where(
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.ENQUEUED.value
