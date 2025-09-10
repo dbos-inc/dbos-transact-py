@@ -129,13 +129,13 @@ def test_spans(config: DBOSConfig) -> None:
         for span in spans
     }
     root_span = None
-    for span in basic_spans.values():
-        if span.parent_id is None:
-            root_span = span
+    for basic_span in basic_spans.values():
+        if basic_span.parent_id is None:
+            root_span = basic_span
         else:
-            parent_id = span.parent_id
+            parent_id = basic_span.parent_id
             parent_span = basic_spans[parent_id]
-            parent_span.children.append(span)
+            parent_span.children.append(basic_span)
 
     assert len(spans) == 4
     # Make sure the span tree structure is correct
@@ -253,13 +253,13 @@ async def test_spans_async(dbos: DBOS) -> None:
         for span in spans
     }
     root_span = None
-    for span in basic_spans.values():
-        if span.parent_id is None:
-            root_span = span
+    for basic_span in basic_spans.values():
+        if basic_span.parent_id is None:
+            root_span = basic_span
         else:
-            parent_id = span.parent_id
+            parent_id = basic_span.parent_id
             parent_span = basic_spans[parent_id]
-            parent_span.children.append(span)
+            parent_span.children.append(basic_span)
 
     assert len(spans) == 4
     # Make sure the span tree structure is correct
