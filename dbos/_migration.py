@@ -231,6 +231,10 @@ CREATE TABLE dbos.event_dispatch_kv (
 );
 """
 
+postgres_migration_two="""
+ALTER TABLE dbos.workflow_status ADD COLUMN queue_partition_key TEXT;
+"""
+
 
 def get_sqlite_timestamp_expr() -> str:
     """Get SQLite timestamp expression with millisecond precision for Python >= 3.12."""
@@ -318,5 +322,9 @@ CREATE TABLE streams (
 );
 """
 
-postgres_migrations = [postgres_migration_one]
-sqlite_migrations = [sqlite_migration_one]
+sqlite_migration_two="""
+ALTER TABLE workflow_status ADD COLUMN queue_partition_key TEXT;
+"""
+
+postgres_migrations = [postgres_migration_one, postgres_migration_two]
+sqlite_migrations = [sqlite_migration_one, sqlite_migration_two]
