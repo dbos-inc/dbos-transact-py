@@ -179,7 +179,7 @@ class DBOSClient:
             "deduplication_id": options.get("deduplication_id"),
             "priority": options.get("priority"),
             "app_version": options.get("app_version"),
-            "queue_partition_key": options.get("queue_partition_key")
+            "queue_partition_key": options.get("queue_partition_key"),
         }
 
         inputs: WorkflowInputs = {

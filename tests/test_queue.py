@@ -1573,6 +1573,7 @@ async def test_enqueue_version_async(dbos: DBOS) -> None:
     GlobalParams.app_version = future_version
     assert await handle.get_result() == input
 
+
 def test_queue_partitions(dbos: DBOS) -> None:
 
     @DBOS.workflow()

@@ -7,7 +7,11 @@ import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, DBOSConfig
-from dbos._migration import postgres_migrations, run_alembic_migrations, sqlite_migrations
+from dbos._migration import (
+    postgres_migrations,
+    run_alembic_migrations,
+    sqlite_migrations,
+)
 
 # Private API because this is a unit test
 from dbos._schemas.system_database import SystemSchema

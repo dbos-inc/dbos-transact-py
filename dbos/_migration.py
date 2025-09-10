@@ -231,7 +231,7 @@ CREATE TABLE dbos.event_dispatch_kv (
 );
 """
 
-postgres_migration_two="""
+postgres_migration_two = """
 ALTER TABLE dbos.workflow_status ADD COLUMN queue_partition_key TEXT;
 """
 
@@ -322,7 +322,7 @@ CREATE TABLE streams (
 );
 """
 
-sqlite_migration_two="""
+sqlite_migration_two = """
 ALTER TABLE workflow_status ADD COLUMN queue_partition_key TEXT;
 """
 

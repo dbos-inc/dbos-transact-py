@@ -167,7 +167,6 @@ class EnqueueOptionsInternal(TypedDict):
     queue_partition_key: Optional[str]
 
 
-
 class RecordedResult(TypedDict):
     output: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
@@ -744,7 +743,7 @@ class SystemDatabase(ABC):
                 "deduplication_id": row[16],
                 "priority": row[17],
                 "inputs": row[18],
-                "queue_partition_key": row[19]
+                "queue_partition_key": row[19],
             }
             return status
 
@@ -1611,6 +1610,36 @@ class SystemDatabase(ABC):
                 }
             )
         return value
+
+    @db_retry()
+    def get_queue_partitions(self, queue_name: str) -> List[str]:
+        """
+        Get all unique partition names associated with a queue for ENQUEUED or PENDING workflows.
+
+        Args:
+            queue_name: The name of the queue to get partitions for
+
+        Returns:
+            A list of unique partition names for the queue
+        """
+        with self.engine.begin() as c:
+            query = (
+                sa.select(SystemSchema.workflow_status.c.queue_partition_key)
+                .distinct()
+                .where(SystemSchema.workflow_status.c.queue_name == queue_name)
+                .where(
+                    SystemSchema.workflow_status.c.status.in_(
+                        [
+                            WorkflowStatusString.ENQUEUED.value,
+                            WorkflowStatusString.PENDING.value,
+                        ]
+                    )
+                )
+                .where(SystemSchema.workflow_status.c.queue_partition_key.isnot(None))
+            )
+
+            rows = c.execute(query).fetchall()
+            return [row[0] for row in rows]
 
     def start_queued_workflows(
         self, queue: "Queue", executor_id: str, app_version: str
