@@ -119,7 +119,7 @@ def debouncer_workflow(
             func = dbos._registry.workflow_info_map.get(options["workflow_name"], None)
             if not func:
                 raise Exception(
-                    f"Invalid workflow name provided to debouncer: {options["workflow_name"]}"
+                    f"Invalid workflow name provided to debouncer: {options['workflow_name']}"
                 )
             if options["queue_name"]:
                 queue = dbos._registry.queue_info_map.get(options["queue_name"], None)
