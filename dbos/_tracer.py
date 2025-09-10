@@ -77,5 +77,12 @@ class DBOSTracer:
     def end_span(self, span: Span) -> None:
         span.end()
 
+    def get_current_span(self) -> Optional[Span]:
+        # Return the current active span if any. It might not be a DBOS span.
+        span = trace.get_current_span()
+        if span.get_span_context().is_valid:
+            return span
+        return None
+
 
 dbos_tracer = DBOSTracer()
