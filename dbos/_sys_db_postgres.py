@@ -8,7 +8,7 @@ from sqlalchemy.exc import DBAPIError
 from dbos._migration import (
     ensure_dbos_schema,
     run_alembic_migrations,
-    run_dbos_migrations,
+    run_postgres_migrations,
 )
 from dbos._schemas.system_database import SystemSchema
 
@@ -70,7 +70,7 @@ class PostgresSystemDatabase(SystemDatabase):
         if not using_dbos_migrations:
             # Complete the Alembic migrations, create the dbos_migrations table
             run_alembic_migrations(self.engine)
-        run_dbos_migrations(self.engine)
+        run_postgres_migrations(self.engine)
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""

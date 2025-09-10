@@ -7,7 +7,7 @@ import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, DBOSConfig
-from dbos._migration import dbos_migrations, run_alembic_migrations, sqlite_migrations
+from dbos._migration import postgres_migrations, run_alembic_migrations, sqlite_migrations
 
 # Private API because this is a unit test
 from dbos._schemas.system_database import SystemSchema
@@ -40,7 +40,7 @@ def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
         )
         migrations_rows = migrations_result.fetchall()
         assert len(migrations_rows) == 1
-        assert migrations_rows[0][0] == len(dbos_migrations)
+        assert migrations_rows[0][0] == len(postgres_migrations)
 
 
 def test_alembic_migrations_compatibility(
@@ -91,7 +91,7 @@ def test_alembic_migrations_compatibility(
         )
         migrations_rows = migrations_result.fetchall()
         assert len(migrations_rows) == 1
-        assert migrations_rows[0][0] == len(dbos_migrations)
+        assert migrations_rows[0][0] == len(postgres_migrations)
 
     assert DBOS.list_workflows() == []
 

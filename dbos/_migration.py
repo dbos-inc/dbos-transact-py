@@ -76,7 +76,7 @@ def run_alembic_migrations(engine: sa.Engine) -> None:
         )
 
 
-def run_dbos_migrations(engine: sa.Engine) -> None:
+def run_postgres_migrations(engine: sa.Engine) -> None:
     """Run DBOS-managed migrations by executing each SQL command in dbos_migrations."""
     with engine.begin() as conn:
         # Get current migration version
@@ -85,7 +85,7 @@ def run_dbos_migrations(engine: sa.Engine) -> None:
         last_applied = current_version[0] if current_version else 0
 
         # Apply migrations starting from the next version
-        for i, migration_sql in enumerate(dbos_migrations, 1):
+        for i, migration_sql in enumerate(postgres_migrations, 1):
             if i <= last_applied:
                 continue
 
@@ -109,7 +109,7 @@ def run_dbos_migrations(engine: sa.Engine) -> None:
             last_applied = i
 
 
-dbos_migration_one = """
+postgres_migration_one = """
 -- Enable uuid extension for generating UUIDs
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
@@ -318,5 +318,5 @@ CREATE TABLE streams (
 );
 """
 
-dbos_migrations = [dbos_migration_one]
+postgres_migrations = [postgres_migration_one]
 sqlite_migrations = [sqlite_migration_one]
