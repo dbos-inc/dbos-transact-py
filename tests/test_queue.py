@@ -1621,3 +1621,7 @@ def test_queue_partitions(dbos: DBOS) -> None:
     blocking_event.set()
     assert blocked_blocked_handle.get_result()
     assert blocked_normal_handle.get_result()
+
+    # You can only enqueue on a partitioned queue with a partition key
+    with pytest.raises(Exception):
+        queue.enqueue(normal_workflow)

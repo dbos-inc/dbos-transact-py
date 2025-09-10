@@ -80,6 +80,14 @@ class Queue:
             dbos_logger.warning(
                 f"Priority is not enabled for queue {self.name}. Setting priority will not have any effect."
             )
+        if (
+            self.partition_queue is not None
+            and context is None
+            or context.queue_partition_key is None
+        ):
+            raise Exception(
+                f"A workflow cannot be enqueued on partitioned queue {self.name} without a partition key"
+            )
 
         dbos = _get_dbos_instance()
         return start_workflow(dbos, func, self.name, False, *args, **kwargs)
