@@ -62,6 +62,7 @@ class EnqueueOptions(TypedDict):
     workflow_timeout: NotRequired[float]
     deduplication_id: NotRequired[str]
     priority: NotRequired[int]
+    queue_partition_key: NotRequired[str]
 
 
 def validate_enqueue_options(options: EnqueueOptions) -> None:
@@ -178,6 +179,7 @@ class DBOSClient:
             "deduplication_id": options.get("deduplication_id"),
             "priority": options.get("priority"),
             "app_version": options.get("app_version"),
+            "queue_partition_key": options.get("queue_partition_key")
         }
 
         inputs: WorkflowInputs = {
@@ -214,6 +216,7 @@ class DBOSClient:
                 else 0
             ),
             "inputs": _serialization.serialize_args(inputs),
+            "queue_partition_key": enqueue_options_internal["queue_partition_key"],
         }
 
         self._sys_db.init_workflow(
@@ -277,6 +280,7 @@ class DBOSClient:
             "deduplication_id": None,
             "priority": 0,
             "inputs": _serialization.serialize_args({"args": (), "kwargs": {}}),
+            "queue_partition_key": None,
         }
         with self._sys_db.engine.begin() as conn:
             self._sys_db._insert_workflow_status(

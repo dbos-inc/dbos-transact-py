@@ -43,6 +43,7 @@ class Queue:
         *,  # Disable positional arguments from here on
         worker_concurrency: Optional[int] = None,
         priority_enabled: bool = False,
+        partition_queue: bool = False,
     ) -> None:
         if (
             worker_concurrency is not None
@@ -57,6 +58,7 @@ class Queue:
         self.worker_concurrency = worker_concurrency
         self.limiter = limiter
         self.priority_enabled = priority_enabled
+        self.partition_queue = partition_queue
         from ._dbos import _get_or_create_dbos_registry
 
         registry = _get_or_create_dbos_registry()

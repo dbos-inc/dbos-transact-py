@@ -152,6 +152,8 @@ class WorkflowStatusInternal(TypedDict):
     priority: int
     # Serialized workflow inputs
     inputs: str
+    # If this workflow is enqueued on a partitioned queue, its partition key
+    queue_partition_key: Optional[str]
 
 
 class EnqueueOptionsInternal(TypedDict):
@@ -161,6 +163,9 @@ class EnqueueOptionsInternal(TypedDict):
     priority: Optional[int]
     # On what version the workflow is enqueued. Current version if not specified.
     app_version: Optional[str]
+    # If the workflow is enqueued on a partitioned queue, its partition key
+    queue_partition_key: Optional[str]
+
 
 
 class RecordedResult(TypedDict):
@@ -439,6 +444,7 @@ class SystemDatabase(ABC):
                 deduplication_id=status["deduplication_id"],
                 priority=status["priority"],
                 inputs=status["inputs"],
+                queue_partition_key=status["queue_partition_key"],
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
@@ -710,6 +716,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.deduplication_id,
                     SystemSchema.workflow_status.c.priority,
                     SystemSchema.workflow_status.c.inputs,
+                    SystemSchema.workflow_status.c.queue_partition_key,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -737,6 +744,7 @@ class SystemDatabase(ABC):
                 "deduplication_id": row[16],
                 "priority": row[17],
                 "inputs": row[18],
+                "queue_partition_key": row[19]
             }
             return status
 
