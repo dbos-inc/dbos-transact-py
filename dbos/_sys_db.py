@@ -748,6 +748,33 @@ class SystemDatabase(ABC):
             return status
 
     @db_retry()
+    def get_deduplicated_workflow(
+        self, queue_name: str, deduplication_id: str
+    ) -> Optional[str]:
+        """
+        Get the workflow ID associated with a given queue name and deduplication ID.
+
+        Args:
+            queue_name: The name of the queue
+            deduplication_id: The deduplication ID
+
+        Returns:
+            The workflow UUID if found, None otherwise
+        """
+        with self.engine.begin() as c:
+            row = c.execute(
+                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                    SystemSchema.workflow_status.c.queue_name == queue_name,
+                    SystemSchema.workflow_status.c.deduplication_id == deduplication_id,
+                )
+            ).fetchone()
+
+            if row is None:
+                return None
+            workflow_id: str = row[0]
+            return workflow_id
+
+    @db_retry()
     def await_workflow_result(self, workflow_id: str) -> Any:
         while True:
             with self.engine.begin() as c:
@@ -1228,7 +1255,10 @@ class SystemDatabase(ABC):
     def check_child_workflow(
         self, workflow_uuid: str, function_id: int
     ) -> Optional[str]:
-        sql = sa.select(SystemSchema.operation_outputs.c.child_workflow_id).where(
+        sql = sa.select(
+            SystemSchema.operation_outputs.c.child_workflow_id,
+            SystemSchema.operation_outputs.c.error,
+        ).where(
             SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
             SystemSchema.operation_outputs.c.function_id == function_id,
         )
@@ -1240,7 +1270,10 @@ class SystemDatabase(ABC):
 
         if row is None:
             return None
-        return str(row[0])
+        elif row[1]:
+            raise _serialization.deserialize_exception(row[1])
+        else:
+            return str(row[0])
 
     @db_retry()
     def send(

@@ -1087,33 +1087,49 @@ def test_nonserializable_values(dbos: DBOS) -> None:
 
     with pytest.raises(Exception) as exc_info:
         test_ns_transaction("h")
-    assert "data item should not be a function" in str(exc_info.value)
+    assert "Serialized function should be defined at the top level of a module" in str(
+        exc_info.value
+    )
     with pytest.raises(Exception) as exc_info:
         test_ns_wf("g")
-    assert "data item should not be a function" in str(exc_info.value)
+    assert "Serialized function should be defined at the top level of a module" in str(
+        exc_info.value
+    )
 
     wfh = DBOS.start_workflow(test_reg_wf, "a")
     with pytest.raises(Exception) as exc_info:
         DBOS.send(wfh.workflow_id, invalid_return, "sss")
-    assert "data item should not be a function" in str(exc_info.value)
+    assert "Serialized function should be defined at the top level of a module" in str(
+        exc_info.value
+    )
     wfh.get_result()
 
     with pytest.raises(Exception) as exc_info:
         test_ns_event("e")
-    assert "data item should not be a function" in str(exc_info.value)
+    assert "Serialized function should be defined at the top level of a module" in str(
+        exc_info.value
+    )
 
     with pytest.raises(Exception) as exc_info:
         test_bad_wf1("a")
-    assert "data item should not be a function" in str(exc_info.value)
+    assert "Serialized function should be defined at the top level of a module" in str(
+        exc_info.value
+    )
     with pytest.raises(Exception) as exc_info:
         test_bad_wf2("b")
-    assert "data item should not be a function" in str(exc_info.value)
+    assert "Serialized function should be defined at the top level of a module" in str(
+        exc_info.value
+    )
     with pytest.raises(Exception) as exc_info:
         test_bad_wf3("c")
-    assert "data item should not be a function" in str(exc_info.value)
+    assert "Serialized function should be defined at the top level of a module" in str(
+        exc_info.value
+    )
     with pytest.raises(Exception) as exc_info:
         test_bad_wf4("d")
-    assert "data item should not be a function" in str(exc_info.value)
+    assert "Serialized function should be defined at the top level of a module" in str(
+        exc_info.value
+    )
 
 
 def test_multi_set_event(dbos: DBOS) -> None:

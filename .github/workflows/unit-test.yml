@@ -87,6 +87,7 @@ jobs:
     - name: Run Unit Tests
       run: pdm run pytest tests
       working-directory: ./
+      timeout-minutes: 30
       env:
         PGPASSWORD: a!b@c$d()e*_,/:;=?@ff[]22
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -12,8 +12,13 @@ class WorkflowInputs(TypedDict):
 
 
 def _validate_item(data: Any) -> None:
-    if isinstance(data, (types.FunctionType, types.MethodType)):
-        raise TypeError("Serialized data item should not be a function")
+    if isinstance(data, (types.MethodType)):
+        raise TypeError("Serialized data item should not be a class method")
+    if isinstance(data, (types.FunctionType)):
+        if jsonpickle.decode(jsonpickle.encode(data, unpicklable=True)) is None:
+            raise TypeError(
+                "Serialized function should be defined at the top level of a module"
+            )
 
 
 def serialize(data: Any) -> str:

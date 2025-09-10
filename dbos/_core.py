@@ -50,6 +50,7 @@ from ._error import (
     DBOSException,
     DBOSMaxStepRetriesExceeded,
     DBOSNonExistentWorkflowError,
+    DBOSQueueDeduplicatedError,
     DBOSRecoveryError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
@@ -95,6 +96,7 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 F = TypeVar("F", bound=Callable[..., Any])
 
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
+DEBOUNCER_WORKFLOW_NAME = "_dbos_debouncer_workflow"
 
 
 def check_is_in_coroutine() -> bool:
@@ -315,10 +317,22 @@ def _init_workflow(
     }
 
     # Synchronously record the status and inputs for workflows
-    wf_status, workflow_deadline_epoch_ms = dbos._sys_db.init_workflow(
-        status,
-        max_recovery_attempts=max_recovery_attempts,
-    )
+    try:
+        wf_status, workflow_deadline_epoch_ms = dbos._sys_db.init_workflow(
+            status,
+            max_recovery_attempts=max_recovery_attempts,
+        )
+    except DBOSQueueDeduplicatedError as e:
+        if ctx.has_parent():
+            result: OperationResultInternal = {
+                "workflow_uuid": ctx.parent_workflow_id,
+                "function_id": ctx.parent_workflow_fid,
+                "function_name": wf_name,
+                "output": None,
+                "error": _serialization.serialize_exception(e),
+            }
+            dbos._sys_db.record_operation_result(result)
+        raise
 
     if workflow_deadline_epoch_ms is not None:
         evt = threading.Event()
