@@ -1576,15 +1576,48 @@ async def test_enqueue_version_async(dbos: DBOS) -> None:
 
 def test_queue_partitions(dbos: DBOS) -> None:
 
+    blocking_event = threading.Event()
+    waiting_event = threading.Event()
+
     @DBOS.workflow()
-    def workflow(x: int) -> int:
-        return x
+    def blocked_workflow() -> str:
+        waiting_event.set()
+        blocking_event.wait()
+        assert DBOS.workflow_id
+        return DBOS.workflow_id
 
-    queue = Queue("queue", partition_queue=True)
-    input = 5
+    @DBOS.workflow()
+    def normal_workflow() -> str:
+        assert DBOS.workflow_id
+        return DBOS.workflow_id
 
-    partition_key = "abc"
-    with SetEnqueueOptions(queue_partition_key=partition_key):
-        handle = queue.enqueue(workflow, input)
+    queue = Queue("queue", partition_queue=True, worker_concurrency=1)
 
-    assert handle.get_result() == input
+    blocked_partition_key = "blocked"
+    normal_partition_key = "normal"
+
+    # Enqueue a blocked workflow and a normal workflow on
+    # the blocked partition. Verify the blocked workflow starts
+    # but the normal workflow is stuck behind it.
+    with SetEnqueueOptions(queue_partition_key=blocked_partition_key):
+        blocked_blocked_handle = queue.enqueue(blocked_workflow)
+        blocked_normal_handle = queue.enqueue(normal_workflow)
+
+    waiting_event.wait()
+    assert (
+        blocked_blocked_handle.get_status().status == WorkflowStatusString.PENDING.value
+    )
+    assert (
+        blocked_normal_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
+    )
+
+    # Enqueue a normal workflow on the other partition and verify it runs normally
+    with SetEnqueueOptions(queue_partition_key=normal_partition_key):
+        normal_handle = queue.enqueue(normal_workflow)
+
+    assert normal_handle.get_result()
+
+    # Unblock the blocked partition and verify its workflows complete
+    blocking_event.set()
+    assert blocked_blocked_handle.get_result()
+    assert blocked_normal_handle.get_result()
