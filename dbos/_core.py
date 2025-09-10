@@ -971,7 +971,7 @@ def decorate_transaction(
                                 dbapi_error
                             ) or dbos._app_db._is_serialization_error(dbapi_error):
                                 # Retry on serialization failure
-                                span = ctx.get_current_span()
+                                span = ctx.get_current_dbos_span()
                                 if span:
                                     span.add_event(
                                         "Transaction Failure",
@@ -1090,7 +1090,7 @@ def decorate_step(
                     exc_info=error,
                 )
                 ctx = assert_current_dbos_context()
-                span = ctx.get_current_span()
+                span = ctx.get_current_dbos_span()
                 if span:
                     span.add_event(
                         f"Step attempt {attempt} failed",

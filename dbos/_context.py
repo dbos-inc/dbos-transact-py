@@ -215,10 +215,17 @@ class DBOSContext:
     def end_handler(self, exc_value: Optional[BaseException]) -> None:
         self._end_span(exc_value)
 
-    def get_current_span(self) -> Optional[Span]:
+    """ Return the current DBOS span if any. It must be a span created by DBOS."""
+
+    def get_current_dbos_span(self) -> Optional[Span]:
         if len(self.context_spans) > 0:
             return self.context_spans[-1].span
         return None
+
+    """ Return the current active span if any. It might not be a DBOS span."""
+
+    def get_current_active_span(self) -> Optional[Span]:
+        return dbos_tracer.get_current_span()
 
     def _start_span(self, attributes: TracedAttributes) -> None:
         if dbos_tracer.disable_otlp:
@@ -235,7 +242,7 @@ class DBOSContext:
         attributes["authenticatedUserAssumedRole"] = self.assumed_role
         span = dbos_tracer.start_span(
             attributes,
-            parent=self.context_spans[-1].span if len(self.context_spans) > 0 else None,
+            parent=None,  # It'll use the current active span as the parent
         )
         # Activate the current span
         cm = use_span(
