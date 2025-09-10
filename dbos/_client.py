@@ -3,6 +3,7 @@ import sys
 import time
 import uuid
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncGenerator,
     Generator,
@@ -24,7 +25,10 @@ else:
     from typing import NotRequired
 
 from dbos import _serialization
-from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
+
+if TYPE_CHECKING:
+    from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
+
 from dbos._dbos_config import (
     get_application_database_url,
     get_system_database_url,
@@ -224,23 +228,25 @@ class DBOSClient:
 
     def enqueue(
         self, options: EnqueueOptions, *args: Any, **kwargs: Any
-    ) -> WorkflowHandle[R]:
+    ) -> "WorkflowHandle[R]":
         workflow_id = self._enqueue(options, *args, **kwargs)
         return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
 
     async def enqueue_async(
         self, options: EnqueueOptions, *args: Any, **kwargs: Any
-    ) -> WorkflowHandleAsync[R]:
+    ) -> "WorkflowHandleAsync[R]":
         workflow_id = await asyncio.to_thread(self._enqueue, options, *args, **kwargs)
         return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
 
-    def retrieve_workflow(self, workflow_id: str) -> WorkflowHandle[R]:
+    def retrieve_workflow(self, workflow_id: str) -> "WorkflowHandle[R]":
         status = get_workflow(self._sys_db, workflow_id)
         if status is None:
             raise DBOSNonExistentWorkflowError(workflow_id)
         return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
 
-    async def retrieve_workflow_async(self, workflow_id: str) -> WorkflowHandleAsync[R]:
+    async def retrieve_workflow_async(
+        self, workflow_id: str
+    ) -> "WorkflowHandleAsync[R]":
         status = await asyncio.to_thread(get_workflow, self._sys_db, workflow_id)
         if status is None:
             raise DBOSNonExistentWorkflowError(workflow_id)
@@ -311,11 +317,13 @@ class DBOSClient:
     async def cancel_workflow_async(self, workflow_id: str) -> None:
         await asyncio.to_thread(self.cancel_workflow, workflow_id)
 
-    def resume_workflow(self, workflow_id: str) -> WorkflowHandle[Any]:
+    def resume_workflow(self, workflow_id: str) -> "WorkflowHandle[Any]":
         self._sys_db.resume_workflow(workflow_id)
         return WorkflowHandleClientPolling[Any](workflow_id, self._sys_db)
 
-    async def resume_workflow_async(self, workflow_id: str) -> WorkflowHandleAsync[Any]:
+    async def resume_workflow_async(
+        self, workflow_id: str
+    ) -> "WorkflowHandleAsync[Any]":
         await asyncio.to_thread(self.resume_workflow, workflow_id)
         return WorkflowHandleClientAsyncPolling[Any](workflow_id, self._sys_db)
 
@@ -451,7 +459,7 @@ class DBOSClient:
         start_step: int,
         *,
         application_version: Optional[str] = None,
-    ) -> WorkflowHandle[Any]:
+    ) -> "WorkflowHandle[Any]":
         forked_workflow_id = fork_workflow(
             self._sys_db,
             self._app_db,
@@ -467,7 +475,7 @@ class DBOSClient:
         start_step: int,
         *,
         application_version: Optional[str] = None,
-    ) -> WorkflowHandleAsync[Any]:
+    ) -> "WorkflowHandleAsync[Any]":
         forked_workflow_id = await asyncio.to_thread(
             fork_workflow,
             self._sys_db,

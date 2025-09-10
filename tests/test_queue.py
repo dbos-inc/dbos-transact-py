@@ -26,7 +26,7 @@ from dbos import (
 )
 from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandleAsync
-from dbos._error import DBOSAwaitedWorkflowCancelledError
+from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSQueueDeduplicatedError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
@@ -1167,6 +1167,43 @@ def test_queue_deduplication(dbos: DBOS) -> None:
         with SetWorkflowID(wfid2):
             handle2 = queue.enqueue(test_workflow, "def")
     assert handle2.get_result() == "def-c-p"
+
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_queue_deduplication_recovery(dbos: DBOS) -> None:
+    queue_name = "test_dedup_queue"
+    queue = Queue(queue_name)
+    workflow_event = threading.Event()
+    dedup_id = "my_dedup_id"
+
+    @DBOS.workflow()
+    def child_workflow() -> None:
+        workflow_event.wait()
+
+    @DBOS.workflow()
+    def test_workflow() -> str:
+        with SetEnqueueOptions(deduplication_id=dedup_id):
+            handle = queue.enqueue(child_workflow)
+            with pytest.raises(DBOSQueueDeduplicatedError):
+                queue.enqueue(child_workflow)
+        return handle.workflow_id
+
+    parent_id = str(uuid.uuid4())
+    with SetWorkflowID(parent_id):
+        child_id = test_workflow()
+    handle: WorkflowHandle[str] = DBOS.retrieve_workflow(child_id)
+    workflow_event.set()
+    handle.get_result()
+
+    steps = DBOS.list_workflow_steps(parent_id)
+    assert len(steps) == 2
+    assert steps[0]["child_workflow_id"] == child_id
+    assert isinstance(steps[1]["error"], DBOSQueueDeduplicatedError)
+
+    dbos._sys_db.update_workflow_outcome(parent_id, "PENDING")
+    with SetWorkflowID(parent_id):
+        assert test_workflow() == child_id
 
     assert queue_entries_are_cleaned_up(dbos)
 
