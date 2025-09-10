@@ -68,7 +68,7 @@ class ContextOptions(TypedDict):
 
 # Parameters for the debouncer workflow
 class DebouncerOptions(TypedDict):
-    debounce_period_sec: float
+    workflow_name: str
     debounce_timeout_sec: Optional[float]
     queue_name: Optional[str]
 
@@ -77,10 +77,11 @@ class DebouncerOptions(TypedDict):
 class DebouncerMessage(TypedDict):
     inputs: WorkflowInputs
     message_id: str
+    debounce_period_sec: float
 
 
 def debouncer_workflow(
-    workflow_name: str,
+    initial_debounce_period_sec: float,
     ctx: ContextOptions,
     options: DebouncerOptions,
     *args: Tuple[Any, ...],
@@ -99,24 +100,26 @@ def debouncer_workflow(
         if options["debounce_timeout_sec"]
         else math.inf
     )
+    debounce_period_sec = initial_debounce_period_sec
     while time.time() < debounce_deadline_epoch_sec:
         time_until_deadline = max(debounce_deadline_epoch_sec - time.time(), 0)
-        timeout = min(options["debounce_period_sec"], time_until_deadline)
+        timeout = min(debounce_period_sec, time_until_deadline)
         message: DebouncerMessage = DBOS.recv(_DEBOUNCER_TOPIC, timeout_seconds=timeout)
         if message is None:
             break
         else:
             workflow_inputs = message["inputs"]
+            debounce_period_sec = message["debounce_period_sec"]
             # Acknowledge receipt of the message
             DBOS.set_event(message["message_id"], message["message_id"])
     # After the timeout or period has elapsed, start the user workflow with the requested context parameters,
     # either directly or on a queue.
     with SetWorkflowID(ctx["workflow_id"]):
         with SetWorkflowTimeout(ctx["workflow_timeout_sec"]):
-            func = dbos._registry.workflow_info_map.get(workflow_name, None)
+            func = dbos._registry.workflow_info_map.get(options["workflow_name"], None)
             if not func:
                 raise Exception(
-                    f"Invalid workflow name provided to debouncer: {workflow_name}"
+                    f"Invalid workflow name provided to debouncer: {options["workflow_name"]}"
                 )
             if options["queue_name"]:
                 queue = dbos._registry.queue_info_map.get(options["queue_name"], None)
@@ -142,62 +145,59 @@ class Debouncer(Generic[P, R]):
 
     def __init__(
         self,
-        func_name: str,
+        workflow_name: str,
         *,
         debounce_key: str,
-        debounce_period_sec: float,
         debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Queue] = None,
     ):
-        self.func_name = func_name
+        self.func_name = workflow_name
         self.options: DebouncerOptions = {
-            "debounce_period_sec": debounce_period_sec,
             "debounce_timeout_sec": debounce_timeout_sec,
             "queue_name": queue.name if queue else None,
+            "workflow_name": workflow_name,
         }
         self.debounce_key = debounce_key
 
     @staticmethod
     def create(
-        func: Callable[P, R],
+        workflow: Callable[P, R],
         *,
         debounce_key: str,
-        debounce_period_sec: float,
         debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Queue] = None,
     ) -> "Debouncer[P, R]":
 
-        if isinstance(func, (types.MethodType)):
-            raise TypeError("Only functions may be debounced, not methods")
+        if isinstance(workflow, (types.MethodType)):
+            raise TypeError("Only workflow functions may be debounced, not methods")
         return Debouncer[P, R](
-            get_dbos_func_name(func),
+            get_dbos_func_name(workflow),
             debounce_key=debounce_key,
-            debounce_period_sec=debounce_period_sec,
             debounce_timeout_sec=debounce_timeout_sec,
             queue=queue,
         )
 
     @staticmethod
     def create_async(
-        func: Callable[P, Coroutine[Any, Any, R]],
+        workflow: Callable[P, Coroutine[Any, Any, R]],
         *,
         debounce_key: str,
-        debounce_period_sec: float,
         debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Queue] = None,
     ) -> "Debouncer[P, R]":
 
-        if isinstance(func, (types.MethodType)):
-            raise TypeError("Only functions may be debounced, not methods")
+        if isinstance(workflow, (types.MethodType)):
+            raise TypeError("Only workflow functions may be debounced, not methods")
         return Debouncer[P, R](
-            get_dbos_func_name(func),
+            get_dbos_func_name(workflow),
             debounce_key=debounce_key,
-            debounce_period_sec=debounce_period_sec,
             debounce_timeout_sec=debounce_timeout_sec,
             queue=queue,
         )
 
-    def debounce(self, *args: P.args, **kwargs: P.kwargs) -> "WorkflowHandle[R]":
+    def debounce(
+        self, debounce_period_sec: float, *args: P.args, **kwargs: P.kwargs
+    ) -> "WorkflowHandle[R]":
         from dbos._dbos import DBOS, _get_dbos_instance
 
         dbos = _get_dbos_instance()
@@ -235,7 +235,7 @@ class Debouncer(Generic[P, R]):
                     with SetWorkflowTimeout(None):
                         internal_queue.enqueue(
                             debouncer_workflow,
-                            self.func_name,
+                            debounce_period_sec,
                             ctxOptions,
                             self.options,
                             *args,
@@ -261,6 +261,7 @@ class Debouncer(Generic[P, R]):
                     message: DebouncerMessage = {
                         "message_id": message_id,
                         "inputs": workflow_inputs,
+                        "debounce_period_sec": debounce_period_sec,
                     }
                     DBOS.send(dedup_wfid, message, _DEBOUNCER_TOPIC)
                     # Wait for the debouncer to acknowledge receipt of the message.
@@ -279,13 +280,16 @@ class Debouncer(Generic[P, R]):
 
     async def debounce_async(
         self,
+        debounce_period_sec: float,
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> "WorkflowHandleAsync[R]":
         from dbos._dbos import _get_dbos_instance
 
         dbos = _get_dbos_instance()
-        handle = await asyncio.to_thread(self.debounce, *args, **kwargs)
+        handle = await asyncio.to_thread(
+            self.debounce, debounce_period_sec, *args, **kwargs
+        )
         return WorkflowHandleAsyncPolling(handle.workflow_id, dbos)
 
 
@@ -297,20 +301,21 @@ class DebouncerClient:
         workflow_options: EnqueueOptions,
         *,
         debounce_key: str,
-        debounce_period_sec: float,
         debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Queue] = None,
     ):
         self.workflow_options = workflow_options
         self.debouncer_options: DebouncerOptions = {
-            "debounce_period_sec": debounce_period_sec,
             "debounce_timeout_sec": debounce_timeout_sec,
             "queue_name": queue.name if queue else None,
+            "workflow_name": workflow_options["workflow_name"],
         }
         self.debounce_key = debounce_key
         self.client = client
 
-    def debounce(self, *args: Any, **kwargs: Any) -> "WorkflowHandle[R]":
+    def debounce(
+        self, debounce_period_sec: float, *args: Any, **kwargs: Any
+    ) -> "WorkflowHandle[R]":
 
         ctxOptions: ContextOptions = {
             "workflow_id": (
@@ -334,7 +339,7 @@ class DebouncerClient:
                 }
                 self.client.enqueue(
                     debouncer_options,
-                    self.workflow_options["workflow_name"],
+                    debounce_period_sec,
                     ctxOptions,
                     self.debouncer_options,
                     *args,
@@ -356,6 +361,7 @@ class DebouncerClient:
                     message: DebouncerMessage = {
                         "message_id": message_id,
                         "inputs": workflow_inputs,
+                        "debounce_period_sec": debounce_period_sec,
                     }
                     self.client.send(dedup_wfid, message, _DEBOUNCER_TOPIC)
                     # Wait for the debouncer to acknowledge receipt of the message.
@@ -377,10 +383,10 @@ class DebouncerClient:
                     )
 
     async def debounce_async(
-        self, *args: Any, **kwargs: Any
+        self, debounce_period_sec: float, *args: Any, **kwargs: Any
     ) -> "WorkflowHandleAsync[R]":
         handle: "WorkflowHandle[R]" = await asyncio.to_thread(
-            self.debounce, *args, **kwargs
+            self.debounce, debounce_period_sec, *args, **kwargs
         )
         return WorkflowHandleClientAsyncPolling[R](
             handle.workflow_id, self.client._sys_db
