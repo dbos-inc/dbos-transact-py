@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Tuple
+from typing import Optional, Tuple
 
 import pytest
 from fastapi import FastAPI
@@ -23,7 +23,7 @@ from dbos._utils import GlobalParams
 class BasicSpan:
     content: str
     children: list["BasicSpan"] = field(default_factory=list)
-    parent_id: int | None = field(repr=False, compare=False, default=None)
+    parent_id: Optional[int] = field(repr=False, compare=False, default=None)
 
 
 def test_spans(config: DBOSConfig) -> None:
@@ -123,7 +123,7 @@ def test_spans(config: DBOSConfig) -> None:
 
     # Test the span tree structure
     basic_spans = {
-        span.context.span_id: BasicSpan(
+        span.context.span_id: BasicSpan(  # pyright: ignore[reportOptionalMemberAccess]
             content=span.name, parent_id=span.parent.span_id if span.parent else None
         )
         for span in spans
@@ -247,7 +247,7 @@ async def test_spans_async(dbos: DBOS) -> None:
 
     # Test the span tree structure
     basic_spans = {
-        span.context.span_id: BasicSpan(
+        span.context.span_id: BasicSpan(  # pyright: ignore[reportOptionalMemberAccess]
             content=span.name, parent_id=span.parent.span_id if span.parent else None
         )
         for span in spans
