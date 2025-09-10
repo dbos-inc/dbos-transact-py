@@ -1611,7 +1611,7 @@ async def test_enqueue_version_async(dbos: DBOS) -> None:
     assert await handle.get_result() == input
 
 
-def test_queue_partitions(dbos: DBOS) -> None:
+def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
 
     blocking_event = threading.Event()
     waiting_event = threading.Event()
@@ -1658,6 +1658,16 @@ def test_queue_partitions(dbos: DBOS) -> None:
     blocking_event.set()
     assert blocked_blocked_handle.get_result()
     assert blocked_normal_handle.get_result()
+
+    # Confirm client enqueue works with partitions
+    client_handle = client.enqueue(
+        {
+            "queue_name": queue.name,
+            "workflow_name": normal_workflow.__qualname__,
+            "queue_partition_key": blocked_partition_key,
+        }
+    )
+    assert client_handle.get_result()
 
     # You can only enqueue on a partitioned queue with a partition key
     with pytest.raises(Exception):
