@@ -1,8 +1,10 @@
+from dataclasses import dataclass, field
 from typing import Tuple
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from inline_snapshot import snapshot
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk import trace as tracesdk
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
@@ -17,32 +19,44 @@ from dbos._tracer import dbos_tracer
 from dbos._utils import GlobalParams
 
 
+@dataclass
+class BasicSpan:
+    content: str
+    children: list["BasicSpan"] = field(default_factory=list)
+    parent_id: int | None = field(repr=False, compare=False, default=None)
+
+
 def test_spans(config: DBOSConfig) -> None:
-    DBOS.destroy(destroy_registry=True)
-    config["otlp_attributes"] = {"foo": "bar"}
-    DBOS(config=config)
-    DBOS.launch()
-
-    @DBOS.workflow()
-    def test_workflow() -> None:
-        test_step()
-        current_span = DBOS.span
-        subspan = DBOS.tracer.start_span({"name": "a new span"}, parent=current_span)
-        # Note: DBOS.tracer.start_span() does not set the new span as the current span. So this log is still attached to the workflow span.
-        DBOS.logger.info("This is a test_workflow")
-        subspan.add_event("greeting_event", {"name": "a new event"})
-        DBOS.tracer.end_span(subspan)
-
-    @DBOS.step()
-    def test_step() -> None:
-        DBOS.logger.info("This is a test_step")
-        return
-
     exporter = InMemorySpanExporter()
     span_processor = SimpleSpanProcessor(exporter)
     provider = tracesdk.TracerProvider()
     provider.add_span_processor(span_processor)
     dbos_tracer.set_provider(provider)
+
+    DBOS.destroy(destroy_registry=True)
+    config["otlp_attributes"] = {"foo": "bar"}
+    DBOS(config=config)
+    DBOS.launch()
+
+    my_tracer = provider.get_tracer("dbos")
+
+    @DBOS.workflow()
+    def test_workflow() -> None:
+        with my_tracer.start_as_current_span("manual_span"):
+            test_step()
+            current_span = DBOS.span
+            subspan = DBOS.tracer.start_span(
+                {"name": "a new span"}, parent=current_span
+            )
+            # Note: DBOS.tracer.start_span() does not set the new span as the current span. So this log is still attached to the workflow span.
+            DBOS.logger.info("This is a test_workflow")
+            subspan.add_event("greeting_event", {"name": "a new event"})
+            DBOS.tracer.end_span(subspan)
+
+    @DBOS.step()
+    def test_step() -> None:
+        DBOS.logger.info("This is a test_step")
+        return
 
     # Set up in-memory log exporter
     log_exporter = InMemoryLogExporter()  # type: ignore
@@ -77,9 +91,10 @@ def test_spans(config: DBOSConfig) -> None:
 
     spans = exporter.get_finished_spans()
 
-    assert len(spans) == 3
-
     for span in spans:
+        if span.name == "manual_span":
+            # Skip the manual span because it was not created by DBOS.tracer
+            continue
         assert span.attributes is not None
         assert span.attributes["applicationVersion"] == GlobalParams.app_version
         assert span.attributes["executorID"] == GlobalParams.executor_id
@@ -90,11 +105,12 @@ def test_spans(config: DBOSConfig) -> None:
 
     assert spans[0].name == test_step.__qualname__
     assert spans[1].name == "a new span"
-    assert spans[2].name == test_workflow.__qualname__
+    assert spans[3].name == test_workflow.__qualname__
 
     assert spans[0].parent.span_id == spans[2].context.span_id  # type: ignore
     assert spans[1].parent.span_id == spans[2].context.span_id  # type: ignore
-    assert spans[2].parent == None
+    assert spans[2].parent.span_id == spans[3].context.span_id  # type: ignore
+    assert spans[3].parent == None
 
     # Span ID and trace ID should match the log record
     # For pyright
@@ -105,30 +121,67 @@ def test_spans(config: DBOSConfig) -> None:
     assert logs[1].log_record.span_id == spans[2].context.span_id
     assert logs[1].log_record.trace_id == spans[2].context.trace_id
 
+    # Test the span tree structure
+    basic_spans = {
+        span.context.span_id: BasicSpan(
+            content=span.name, parent_id=span.parent.span_id if span.parent else None
+        )
+        for span in spans
+    }
+    root_span = None
+    for span in basic_spans.values():
+        if span.parent_id is None:
+            root_span = span
+        else:
+            parent_id = span.parent_id
+            parent_span = basic_spans[parent_id]
+            parent_span.children.append(span)
+
+    assert len(spans) == 4
+    # Make sure the span tree structure is correct
+    assert root_span == snapshot(
+        BasicSpan(
+            content="test_spans.<locals>.test_workflow",
+            children=[
+                BasicSpan(
+                    content="manual_span",
+                    children=[
+                        BasicSpan(content="test_spans.<locals>.test_step"),
+                        BasicSpan(content="a new span"),
+                    ],
+                )
+            ],
+        )
+    )
+
 
 @pytest.mark.asyncio
 async def test_spans_async(dbos: DBOS) -> None:
-
-    @DBOS.workflow()
-    async def test_workflow() -> None:
-        await test_step()
-        current_span = DBOS.span
-        subspan = DBOS.tracer.start_span({"name": "a new span"}, parent=current_span)
-        # Note: DBOS.tracer.start_span() does not set the new span as the current span. So this log is still attached to the workflow span.
-        DBOS.logger.info("This is a test_workflow")
-        subspan.add_event("greeting_event", {"name": "a new event"})
-        DBOS.tracer.end_span(subspan)
-
-    @DBOS.step()
-    async def test_step() -> None:
-        DBOS.logger.info("This is a test_step")
-        return
-
     exporter = InMemorySpanExporter()
     span_processor = SimpleSpanProcessor(exporter)
     provider = tracesdk.TracerProvider()
     provider.add_span_processor(span_processor)
     dbos_tracer.set_provider(provider)
+
+    my_tracer = provider.get_tracer("dbos")
+
+    @DBOS.workflow()
+    async def test_workflow() -> None:
+        with my_tracer.start_as_current_span("manual_span"):
+            await test_step()
+            current_span = DBOS.span
+            subspan = DBOS.tracer.start_span(
+                {"name": "a new span"}, parent=current_span
+            )
+            # Note: DBOS.tracer.start_span() does not set the new span as the current span. So this log is still attached to the workflow span.
+            DBOS.logger.info("This is a test_workflow")
+            subspan.add_event("greeting_event", {"name": "a new event"})
+            DBOS.tracer.end_span(subspan)
+
+    @DBOS.step()
+    async def test_step() -> None:
+        DBOS.logger.info("This is a test_step")
+        return
 
     # Set up in-memory log exporter
     log_exporter = InMemoryLogExporter()  # type: ignore
@@ -162,9 +215,12 @@ async def test_spans_async(dbos: DBOS) -> None:
 
     spans = exporter.get_finished_spans()
 
-    assert len(spans) == 3
+    assert len(spans) == 4
 
     for span in spans:
+        if span.name == "manual_span":
+            # Skip the manual span because it was not created by DBOS.tracer
+            continue
         assert span.attributes is not None
         assert span.attributes["applicationVersion"] == GlobalParams.app_version
         assert span.attributes["executorID"] == GlobalParams.executor_id
@@ -174,11 +230,12 @@ async def test_spans_async(dbos: DBOS) -> None:
 
     assert spans[0].name == test_step.__qualname__
     assert spans[1].name == "a new span"
-    assert spans[2].name == test_workflow.__qualname__
+    assert spans[3].name == test_workflow.__qualname__
 
     assert spans[0].parent.span_id == spans[2].context.span_id  # type: ignore
     assert spans[1].parent.span_id == spans[2].context.span_id  # type: ignore
-    assert spans[2].parent == None
+    assert spans[2].parent.span_id == spans[3].context.span_id  # type: ignore
+    assert spans[3].parent == None
 
     # Span ID and trace ID should match the log record
     assert spans[0].context is not None
@@ -187,6 +244,39 @@ async def test_spans_async(dbos: DBOS) -> None:
     assert logs[0].log_record.trace_id == spans[0].context.trace_id
     assert logs[1].log_record.span_id == spans[2].context.span_id
     assert logs[1].log_record.trace_id == spans[2].context.trace_id
+
+    # Test the span tree structure
+    basic_spans = {
+        span.context.span_id: BasicSpan(
+            content=span.name, parent_id=span.parent.span_id if span.parent else None
+        )
+        for span in spans
+    }
+    root_span = None
+    for span in basic_spans.values():
+        if span.parent_id is None:
+            root_span = span
+        else:
+            parent_id = span.parent_id
+            parent_span = basic_spans[parent_id]
+            parent_span.children.append(span)
+
+    assert len(spans) == 4
+    # Make sure the span tree structure is correct
+    assert root_span == snapshot(
+        BasicSpan(
+            content="test_spans_async.<locals>.test_workflow",
+            children=[
+                BasicSpan(
+                    content="manual_span",
+                    children=[
+                        BasicSpan(content="test_spans_async.<locals>.test_step"),
+                        BasicSpan(content="a new span"),
+                    ],
+                )
+            ],
+        )
+    )
 
 
 def test_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:

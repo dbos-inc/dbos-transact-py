@@ -39,7 +39,7 @@ class DBOSLogTransformer(logging.Filter):
         if ctx:
             if ctx.is_within_workflow():
                 record.operationUUID = ctx.workflow_id
-            span = ctx.get_current_span()
+            span = ctx.get_current_active_span()
             if span:
                 trace_id = format_trace_id(span.get_span_context().trace_id)
                 record.traceId = trace_id
