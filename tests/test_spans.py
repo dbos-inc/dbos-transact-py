@@ -42,7 +42,9 @@ def test_spans(config: DBOSConfig) -> None:
 
     @DBOS.workflow()
     def test_workflow() -> None:
-        with my_tracer.start_as_current_span("manual_span"):
+        with my_tracer.start_as_current_span(
+            "manual_span"
+        ):  # pyright: ignore[reportAttributeAccessIssue]
             test_step()
             current_span = DBOS.span
             subspan = DBOS.tracer.start_span(
@@ -167,7 +169,9 @@ async def test_spans_async(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def test_workflow() -> None:
-        with my_tracer.start_as_current_span("manual_span"):
+        with my_tracer.start_as_current_span(
+            "manual_span"
+        ):  # pyright: ignore[reportAttributeAccessIssue]
             await test_step()
             current_span = DBOS.span
             subspan = DBOS.tracer.start_span(
