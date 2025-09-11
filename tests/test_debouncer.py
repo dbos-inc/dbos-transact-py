@@ -30,17 +30,20 @@ def test_debouncer(dbos: DBOS) -> None:
         return str(uuid.uuid4())
 
     def debouncer_test() -> None:
-        debouncer = Debouncer.create(workflow, debounce_key="key")
 
         debounce_period = 2
 
+        debouncer = Debouncer.create(workflow, debounce_key="key")
         first_handle = debouncer.debounce(debounce_period, first_value)
+        debouncer = Debouncer.create(workflow, debounce_key="key")
         second_handle = debouncer.debounce(debounce_period, second_value)
         assert first_handle.workflow_id == second_handle.workflow_id
         assert first_handle.get_result() == second_value
         assert second_handle.get_result() == second_value
 
+        debouncer = Debouncer.create(workflow, debounce_key="key")
         third_handle = debouncer.debounce(debounce_period, third_value)
+        debouncer = Debouncer.create(workflow, debounce_key="key")
         fourth_handle = debouncer.debounce(debounce_period, fourth_value)
         assert third_handle.workflow_id != first_handle.workflow_id
         assert third_handle.workflow_id == fourth_handle.workflow_id
@@ -111,6 +114,32 @@ def test_debouncer_timeout(dbos: DBOS) -> None:
     assert first_handle.workflow_id == second_handle.workflow_id
     assert first_handle.get_result() == second_value
     assert second_handle.get_result() == second_value
+
+
+def test_multiple_debouncers(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
+
+    # Set a huge period but small timeout, verify workflows start after the timeout
+    debouncer_one = Debouncer.create(workflow, debounce_key="key_one")
+    debouncer_two = Debouncer.create(workflow, debounce_key="key_two")
+    debounce_period = 2
+
+    first_handle = debouncer_one.debounce(debounce_period, first_value)
+    second_handle = debouncer_one.debounce(debounce_period, second_value)
+    third_handle = debouncer_two.debounce(debounce_period, third_value)
+    fourth_handle = debouncer_two.debounce(debounce_period, fourth_value)
+    assert first_handle.workflow_id == second_handle.workflow_id
+    assert first_handle.workflow_id != third_handle.workflow_id
+    assert third_handle.workflow_id == fourth_handle.workflow_id
+    assert first_handle.get_result() == second_value
+    assert second_handle.get_result() == second_value
+    assert third_handle.get_result() == fourth_value
+    assert fourth_handle.get_result() == fourth_value
 
 
 def test_debouncer_queue(dbos: DBOS) -> None:
