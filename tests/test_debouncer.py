@@ -17,17 +17,12 @@ from dbos._queue import Queue
 from dbos._utils import GlobalParams
 
 
-def workflow(x: int) -> int:
-    return x
-
-
-async def workflow_async(x: int) -> int:
-    return x
-
-
 def test_debouncer(dbos: DBOS) -> None:
 
-    DBOS.workflow()(workflow)
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
 
     @DBOS.step()
@@ -76,7 +71,10 @@ def test_debouncer(dbos: DBOS) -> None:
 
 def test_debouncer_timeout(dbos: DBOS) -> None:
 
-    DBOS.workflow()(workflow)
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
 
     # Set a huge period but small timeout, verify workflows start after the timeout
@@ -117,7 +115,10 @@ def test_debouncer_timeout(dbos: DBOS) -> None:
 
 def test_debouncer_queue(dbos: DBOS) -> None:
 
-    DBOS.workflow()(workflow)
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
     queue = Queue("test-queue")
 
@@ -166,7 +167,10 @@ def test_debouncer_queue(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_debouncer_async(dbos: DBOS) -> None:
 
-    DBOS.workflow()(workflow_async)
+    @DBOS.workflow()
+    async def workflow_async(x: int) -> int:
+        return x
+
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
 
     debouncer = Debouncer.create_async(workflow_async, debounce_key="key")
@@ -188,12 +192,15 @@ async def test_debouncer_async(dbos: DBOS) -> None:
 
 def test_debouncer_client(dbos: DBOS, client: DBOSClient) -> None:
 
-    DBOS.workflow()(workflow)
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
     queue = Queue("test-queue")
 
     options: EnqueueOptions = {
-        "workflow_name": workflow.__name__,
+        "workflow_name": workflow.__qualname__,
         "queue_name": queue.name,
     }
     debouncer = DebouncerClient(client, options, debounce_key="key")
@@ -230,12 +237,15 @@ def test_debouncer_client(dbos: DBOS, client: DBOSClient) -> None:
 @pytest.mark.asyncio
 async def test_debouncer_client_async(dbos: DBOS, client: DBOSClient) -> None:
 
-    DBOS.workflow()(workflow_async)
+    @DBOS.workflow()
+    async def workflow_async(x: int) -> int:
+        return x
+
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
     queue = Queue("test-queue")
 
     options: EnqueueOptions = {
-        "workflow_name": workflow_async.__name__,
+        "workflow_name": workflow_async.__qualname__,
         "queue_name": queue.name,
     }
     debouncer = DebouncerClient(client, options, debounce_key="key")
