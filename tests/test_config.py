@@ -731,6 +731,7 @@ def test_translate_dbosconfig_full_input():
         "notused",
     ]
     assert translated_config["telemetry"]["OTLPExporter"]["logsEndpoint"] == []
+    assert translated_config["telemetry"]["disable_otlp"] == True
     assert translated_config["runtimeConfig"]["admin_port"] == 8001
     assert translated_config["runtimeConfig"]["run_admin_server"] == False
     assert "start" not in translated_config["runtimeConfig"]
@@ -934,6 +935,7 @@ def test_overwrite_config(mocker):
         "b",
         "thelogsendpoint",
     ]
+    assert config["telemetry"]["disable_otlp"] == False
     assert "admin_port" not in config["runtimeConfig"]
     assert "run_admin_server" not in config["runtimeConfig"]
     assert "env" not in config
