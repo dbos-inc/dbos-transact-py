@@ -80,12 +80,9 @@ if TYPE_CHECKING:
     from ._kafka import _KafkaConsumerWorkflow
     from flask import Flask
 
-from sqlalchemy.orm import Session
+from typing import ParamSpec
 
-if sys.version_info < (3, 10):
-    from typing_extensions import ParamSpec
-else:
-    from typing import ParamSpec
+from sqlalchemy.orm import Session
 
 from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
