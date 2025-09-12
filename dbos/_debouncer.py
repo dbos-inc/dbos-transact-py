@@ -232,7 +232,10 @@ class Debouncer(Generic[P, R]):
         while True:
             try:
                 # Attempt to enqueue a debouncer for this workflow.
-                with SetEnqueueOptions(deduplication_id=self.debounce_key):
+                deduplication_id = (
+                    f"{self.options['workflow_name']}-{self.debounce_key}"
+                )
+                with SetEnqueueOptions(deduplication_id=deduplication_id):
                     with SetWorkflowTimeout(None):
                         internal_queue.enqueue(
                             debouncer_workflow,
@@ -249,7 +252,7 @@ class Debouncer(Generic[P, R]):
                 def get_deduplicated_workflow() -> Optional[str]:
                     return dbos._sys_db.get_deduplicated_workflow(
                         queue_name=internal_queue.name,
-                        deduplication_id=self.debounce_key,
+                        deduplication_id=deduplication_id,
                     )
 
                 dedup_wfid = dbos._sys_db.call_function_as_step(
@@ -333,10 +336,13 @@ class DebouncerClient:
         while True:
             try:
                 # Attempt to enqueue a debouncer for this workflow.
+                deduplication_id = (
+                    f"{self.debouncer_options['workflow_name']}-{self.debounce_key}"
+                )
                 debouncer_options: EnqueueOptions = {
                     "workflow_name": DEBOUNCER_WORKFLOW_NAME,
                     "queue_name": INTERNAL_QUEUE_NAME,
-                    "deduplication_id": self.debounce_key,
+                    "deduplication_id": deduplication_id,
                 }
                 self.client.enqueue(
                     debouncer_options,
@@ -353,7 +359,7 @@ class DebouncerClient:
                 # If there is already a debouncer, send a message to it.
                 dedup_wfid = self.client._sys_db.get_deduplicated_workflow(
                     queue_name=INTERNAL_QUEUE_NAME,
-                    deduplication_id=self.debounce_key,
+                    deduplication_id=deduplication_id,
                 )
                 if dedup_wfid is None:
                     continue
