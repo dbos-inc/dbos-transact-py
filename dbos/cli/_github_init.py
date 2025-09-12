@@ -1,8 +1,9 @@
+import json
 import os
 from base64 import b64decode
 from typing import List, TypedDict
-
-import requests
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 DEMO_REPO_API = "https://api.github.com/repos/dbos-inc/dbos-demo-apps"
 PY_DEMO_PATH = "python/"
@@ -34,43 +35,48 @@ class GitHubItem(TypedDict):
     size: int
 
 
-def _fetch_github(url: str) -> requests.Response:
+def _fetch_github(url: str) -> dict:
     headers = {}
     github_token = os.getenv("GITHUB_TOKEN")
     if github_token:
         headers["Authorization"] = f"Bearer {github_token}"
 
-    response = requests.get(url, headers=headers)
+    request = Request(url, headers=headers)
 
-    if not response.ok:
-        if response.headers.get("x-ratelimit-remaining") == "0":
+    try:
+        with urlopen(request) as response:
+            data = response.read()
+            return json.loads(data.decode("utf-8"))
+    except HTTPError as e:
+        # Read response headers
+        rate_limit_remaining = e.headers.get("x-ratelimit-remaining")
+
+        if rate_limit_remaining == "0":
             raise Exception(
                 "Error fetching from GitHub API: rate limit exceeded.\n"
                 "Please wait a few minutes and try again.\n"
                 "To increase the limit, you can create a personal access token and set it in the GITHUB_TOKEN environment variable.\n"
                 "Details: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"
             )
-        elif response.status_code == 401:
+        elif e.code == 401:
             raise Exception(
-                f"Error fetching content from GitHub {url}: {response.status_code} {response.reason}.\n"
+                f"Error fetching content from GitHub {url}: {e.code} {e.reason}.\n"
                 "Please ensure your GITHUB_TOKEN environment variable is set to a valid personal access token."
             )
         raise Exception(
-            f"Error fetching content from GitHub {url}: {response.status_code} {response.reason}"
+            f"Error fetching content from GitHub {url}: {e.code} {e.reason}"
         )
-
-    return response
 
 
 def _fetch_github_tree(tag: str) -> List[GitHubTreeItem]:
-    response = _fetch_github(f"{DEMO_REPO_API}/git/trees/{tag}?recursive=1")
-    tree_data: GitHubTree = response.json()
+    tree_data: GitHubTree = _fetch_github(
+        f"{DEMO_REPO_API}/git/trees/{tag}?recursive=1"
+    )
     return tree_data["tree"]
 
 
 def _fetch_github_item(url: str) -> str:
-    response = _fetch_github(url)
-    item: GitHubItem = response.json()
+    item: GitHubItem = _fetch_github(url)
     return b64decode(item["content"]).decode("utf-8")
 
 
