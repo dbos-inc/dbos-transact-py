@@ -5,7 +5,6 @@ from os import path
 from typing import Any
 
 import tomlkit
-from rich import print
 
 from dbos._dbos_config import _app_name_to_db_name
 
@@ -46,7 +45,7 @@ def _copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]) -> None:
 
             dst = path.join(dst_root, base if ext == ".dbos" else file)
             if path.exists(dst):
-                print(f"[yellow]File {dst} already exists, skipping[/yellow]")
+                print(f"File {dst} already exists, skipping")
                 continue
 
             if ext == ".dbos":

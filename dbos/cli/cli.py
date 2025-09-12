@@ -10,8 +10,6 @@ from typing import Any, Optional, Tuple
 import jsonpickle  # type: ignore
 import sqlalchemy as sa
 import typer
-from rich import print as richprint
-from rich.prompt import IntPrompt
 from typing_extensions import Annotated, List
 
 from dbos._context import SetWorkflowID
@@ -201,7 +199,7 @@ def init(
                 path.join(templates_dir, template), project_name, config_mode=config
             )
     except Exception as e:
-        richprint(f"[red]{e}[/red]")
+        print(e)
 
 
 def _resolve_project_name_and_template(
@@ -222,27 +220,21 @@ def _resolve_project_name_and_template(
         if template not in templates:
             raise Exception(f"Template {template} not found in {templates_dir}")
     else:
-        richprint("\n[bold]Available templates:[/bold]")
+        print("\nAvailable templates:")
         for idx, template_name in enumerate(templates, 1):
-            richprint(f"  {idx}. {template_name}")
+            print(f"  {idx}. {template_name}")
         while True:
             try:
-                choice = IntPrompt.ask(
-                    "\nSelect template number",
-                    show_choices=False,
-                    show_default=False,
-                )
+                choice = int(input("\nSelect template number: "))
                 if 1 <= choice <= len(templates):
                     template = templates[choice - 1]
                     break
                 else:
-                    richprint(
-                        "[red]Invalid selection. Please choose a number from the list.[/red]"
-                    )
+                    print("Invalid selection. Please choose a number from the list.")
             except (KeyboardInterrupt, EOFError):
                 raise typer.Abort()
             except ValueError:
-                richprint("[red]Please enter a valid number.[/red]")
+                print("Please enter a valid number.")
 
     if template in git_templates:
         if project_name is None:

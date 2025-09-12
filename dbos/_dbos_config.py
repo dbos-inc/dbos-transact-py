@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Optional, TypedDict, cast
 
 import yaml
 from jsonschema import ValidationError, validate
-from rich import print
 from sqlalchemy import make_url
 
 from ._error import DBOSInitializationError
@@ -441,17 +440,13 @@ def process_config(
         printable_sys_db_url = make_url(data["system_database_url"]).render_as_string(
             hide_password=True
         )
-        print(
-            f"[bold blue]DBOS system database URL: {printable_sys_db_url}[/bold blue]"
-        )
+        print(f"DBOS system database URL: {printable_sys_db_url}")
         if data["database_url"].startswith("sqlite"):
             print(
-                f"[bold blue]Using SQLite as a system database. The SQLite system database is for development and testing. PostgreSQL is recommended for production use.[/bold blue]"
+                f"Using SQLite as a system database. The SQLite system database is for development and testing. PostgreSQL is recommended for production use."
             )
         else:
-            print(
-                f"[bold blue]Database engine parameters: {data['database']['db_engine_kwargs']}[/bold blue]"
-            )
+            print(f"Database engine parameters: {data['database']['db_engine_kwargs']}")
 
     # Return data as ConfigFile type
     return data

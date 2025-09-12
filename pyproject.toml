@@ -20,7 +20,6 @@ dependencies = [
     "tomlkit>=0.13.2",
     "psycopg[binary]>=3.1", # Keep compatibility with 3.1--older Python installations/machines can't always install 3.2
     "docker>=7.1.0",
-    "rich>=13.9.4",
     "websockets>=14.0",
 ]
 requires-python = ">=3.9"

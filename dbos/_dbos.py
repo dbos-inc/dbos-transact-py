@@ -29,7 +29,6 @@ from typing import (
 )
 
 from opentelemetry.trace import Span
-from rich import print
 
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._debouncer import debouncer_workflow
@@ -558,7 +557,7 @@ class DBOS:
                     f"https://console.dbos.dev/self-host?appname={app_name}"
                 )
                 print(
-                    f"[bold]To view and manage workflows, connect to DBOS Conductor at:[/bold] [bold blue]{conductor_registration_url}[/bold blue]"
+                    f"To view and manage workflows, connect to DBOS Conductor at:{conductor_registration_url}"
                 )
 
             # Flush handlers and add OTLP to all loggers if enabled
