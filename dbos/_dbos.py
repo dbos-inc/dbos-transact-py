@@ -28,8 +28,6 @@ from typing import (
     Union,
 )
 
-from opentelemetry.trace import Span
-
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._debouncer import debouncer_workflow
 from dbos._sys_db import SystemDatabase, WorkflowStatus
@@ -52,7 +50,6 @@ from ._core import (
     set_event,
     start_workflow,
     start_workflow_async,
-    workflow_wrapper,
 )
 from ._queue import Queue, queue_thread
 from ._recovery import recover_pending_workflows, startup_recovery_thread
@@ -61,8 +58,6 @@ from ._registrations import (
     DBOSClassInfo,
     _class_fqn,
     get_or_create_class_info,
-    set_dbos_func_name,
-    set_temp_workflow_type,
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
@@ -79,6 +74,7 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
     from ._kafka import _KafkaConsumerWorkflow
     from flask import Flask
+    from opentelemetry.trace import Span
 
 from typing import ParamSpec
 
@@ -1293,7 +1289,7 @@ class DBOS:
         return ctx.parent_workflow_id
 
     @classproperty
-    def span(cls) -> Span:
+    def span(cls) -> "Span":
         """Return the tracing `Span` associated with the current context."""
         ctx = assert_current_dbos_context()
         span = ctx.get_current_active_span()
