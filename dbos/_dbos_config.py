@@ -5,7 +5,6 @@ from importlib import resources
 from typing import Any, Dict, List, Optional, TypedDict, cast
 
 import yaml
-from jsonschema import ValidationError, validate
 from sqlalchemy import make_url
 
 from ._error import DBOSInitializationError
@@ -265,17 +264,6 @@ def load_config(
             f"dbos-config.yaml must contain a dictionary, not {type(data)}"
         )
     data = cast(Dict[str, Any], data)
-
-    # Load the JSON schema relative to the package root
-    schema_file = resources.files("dbos").joinpath("dbos-config.schema.json")
-    with schema_file.open("r") as f:
-        schema = json.load(f)
-
-    # Validate the data against the schema
-    try:
-        validate(instance=data, schema=schema)
-    except ValidationError as e:
-        raise DBOSInitializationError(f"Validation error: {e}")
 
     # Special case: convert logsEndpoint and tracesEndpoint from strings to lists of strings, if present
     if "telemetry" in data and "OTLPExporter" in data["telemetry"]:

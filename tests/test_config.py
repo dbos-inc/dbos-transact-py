@@ -143,25 +143,6 @@ def test_load_config_file_not_a_dict(mocker):
     assert "must contain a dictionary" in str(exc_info.value)
 
 
-def test_load_config_file_schema_validation_error(mocker):
-    """Test handling when the config fails schema validation."""
-    mock_config = """
-    name: "test-app"
-    invalid_field: "this shouldn't be here"
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
-    )
-
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        load_config()
-
-    assert (
-        "Validation error: Additional properties are not allowed ('invalid_field' was unexpected)"
-        in str(exc_info.value)
-    )
-
-
 def test_load_config_file_custom_path():
     """Test parsing a config file from a custom path."""
     mock_config = """

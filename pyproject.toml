@@ -7,7 +7,6 @@ authors = [
 ]
 dependencies = [
     "pyyaml>=6.0.2",
-    "jsonschema>=4.23.0",
     "jsonpickle>=3.3.0",
     "python-dateutil>=2.9.0.post0",
     "psycopg[binary]>=3.1", # Keep compatibility with 3.1--older Python installations/machines can't always install 3.2
