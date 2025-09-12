@@ -1,13 +1,9 @@
 import os
 from typing import TYPE_CHECKING, Optional
 
-from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-from opentelemetry.semconv.attributes.service_attributes import SERVICE_NAME
-from opentelemetry.trace import Span
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
+    from opentelemetry.sdk.trace import TracerProvider
 
 from dbos._utils import GlobalParams
 
@@ -30,6 +26,18 @@ class DBOSTracer:
         self.otlp_attributes = config.get("telemetry", {}).get("otlp_attributes", {})  # type: ignore
         self.disable_otlp = config.get("telemetry", {}).get("disable_otlp", False)  # type: ignore
         if not self.disable_otlp:
+            from opentelemetry import trace
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                OTLPSpanExporter,
+            )
+            from opentelemetry.sdk.resources import Resource
+            from opentelemetry.sdk.trace import TracerProvider
+            from opentelemetry.sdk.trace.export import (
+                BatchSpanProcessor,
+                ConsoleSpanExporter,
+            )
+            from opentelemetry.semconv.attributes.service_attributes import SERVICE_NAME
+
             if not isinstance(trace.get_tracer_provider(), TracerProvider):
                 resource = Resource(
                     attributes={
@@ -50,12 +58,14 @@ class DBOSTracer:
                         provider.add_span_processor(processor)
                 trace.set_tracer_provider(provider)
 
-    def set_provider(self, provider: Optional[TracerProvider]) -> None:
+    def set_provider(self, provider: "Optional[TracerProvider]") -> None:
         self.provider = provider
 
     def start_span(
-        self, attributes: "TracedAttributes", parent: Optional[Span] = None
-    ) -> Span:
+        self, attributes: "TracedAttributes", parent: "Optional[Span]" = None
+    ) -> "Span":
+        from opentelemetry import trace
+
         tracer = (
             self.provider.get_tracer("dbos-tracer")
             if self.provider is not None
@@ -73,11 +83,13 @@ class DBOSTracer:
             span.set_attribute(k, v)
         return span
 
-    def end_span(self, span: Span) -> None:
+    def end_span(self, span: "Span") -> None:
         span.end()
 
-    def get_current_span(self) -> Optional[Span]:
+    def get_current_span(self) -> "Optional[Span]":
         # Return the current active span if any. It might not be a DBOS span.
+        from opentelemetry import trace
+
         span = trace.get_current_span()
         if span.get_span_context().is_valid:
             return span
