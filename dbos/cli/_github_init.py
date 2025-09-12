@@ -1,7 +1,7 @@
 import json
 import os
 from base64 import b64decode
-from typing import List, TypedDict
+from typing import Any, List, TypedDict
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -35,7 +35,7 @@ class GitHubItem(TypedDict):
     size: int
 
 
-def _fetch_github(url: str) -> dict:
+def _fetch_github(url: str) -> Any:
     headers = {}
     github_token = os.getenv("GITHUB_TOKEN")
     if github_token:
