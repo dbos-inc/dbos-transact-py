@@ -1,16 +1,11 @@
-import logging
-import os
-import re
 import sys
 
 import sqlalchemy as sa
-from alembic import command
-from alembic.config import Config
 
 from ._logger import dbos_logger
 
 
-def ensure_dbos_schema(engine: sa.Engine) -> bool:
+def ensure_dbos_schema(engine: sa.Engine) -> None:
     """
     True if using DBOS migrations (DBOS schema and migrations table already exist or were created)
     False if using Alembic migrations (DBOS schema exists, but dbos_migrations table doesn't)
@@ -22,10 +17,10 @@ def ensure_dbos_schema(engine: sa.Engine) -> bool:
                 "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'dbos'"
             )
         )
-        schema_existed = schema_result.fetchone() is not None
+        schema_exists = schema_result.fetchone() is not None
 
         # Create schema if it doesn't exist
-        if not schema_existed:
+        if not schema_exists:
             conn.execute(sa.text("CREATE SCHEMA dbos"))
 
         # Check if dbos_migrations table exists
@@ -36,44 +31,12 @@ def ensure_dbos_schema(engine: sa.Engine) -> bool:
         )
         table_exists = table_result.fetchone() is not None
 
-        if table_exists:
-            return True
-        elif schema_existed:
-            return False
-        else:
+        if not table_exists:
             conn.execute(
                 sa.text(
                     "CREATE TABLE dbos.dbos_migrations (version BIGINT NOT NULL PRIMARY KEY)"
                 )
             )
-            return True
-
-
-def run_alembic_migrations(engine: sa.Engine) -> None:
-    """Run system database schema migrations with Alembic.
-    This is DEPRECATED in favor of DBOS-managed migrations.
-    It is retained only for backwards compatibility and
-    will be removed in the next major version."""
-    # Run a schema migration for the system database
-    migration_dir = os.path.join(
-        os.path.dirname(os.path.realpath(__file__)), "_alembic_migrations"
-    )
-    alembic_cfg = Config()
-    alembic_cfg.set_main_option("script_location", migration_dir)
-    logging.getLogger("alembic").setLevel(logging.WARNING)
-    # Alembic requires the % in URL-escaped parameters to itself be escaped to %%.
-    escaped_conn_string = re.sub(
-        r"%(?=[0-9A-Fa-f]{2})",
-        "%%",
-        engine.url.render_as_string(hide_password=False),
-    )
-    alembic_cfg.set_main_option("sqlalchemy.url", escaped_conn_string)
-    try:
-        command.upgrade(alembic_cfg, "head")
-    except Exception as e:
-        dbos_logger.warning(
-            f"Exception during system database construction. This is most likely because the system database was configured using a later version of DBOS: {e}"
-        )
 
 
 def run_dbos_migrations(engine: sa.Engine) -> None:

@@ -58,7 +58,7 @@ def copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
     package_name = project_name.replace("-", "_")
     default_migration_section = """database:
   migrate:
-    - alembic upgrade head
+    - python3 migrations/create_table.py
 """
     ctx = {
         "project_name": project_name,
