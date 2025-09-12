@@ -33,18 +33,18 @@ def test_debouncer(dbos: DBOS) -> None:
 
         debounce_period = 2
 
-        debouncer = Debouncer.create(workflow, debounce_key="key")
-        first_handle = debouncer.debounce(debounce_period, first_value)
-        debouncer = Debouncer.create(workflow, debounce_key="key")
-        second_handle = debouncer.debounce(debounce_period, second_value)
+        debouncer = Debouncer.create(workflow)
+        first_handle = debouncer.debounce("key", debounce_period, first_value)
+        debouncer = Debouncer.create(workflow)
+        second_handle = debouncer.debounce("key", debounce_period, second_value)
         assert first_handle.workflow_id == second_handle.workflow_id
         assert first_handle.get_result() == second_value
         assert second_handle.get_result() == second_value
 
-        debouncer = Debouncer.create(workflow, debounce_key="key")
-        third_handle = debouncer.debounce(debounce_period, third_value)
-        debouncer = Debouncer.create(workflow, debounce_key="key")
-        fourth_handle = debouncer.debounce(debounce_period, fourth_value)
+        debouncer = Debouncer.create(workflow)
+        third_handle = debouncer.debounce("key", debounce_period, third_value)
+        debouncer = Debouncer.create(workflow)
+        fourth_handle = debouncer.debounce("key", debounce_period, fourth_value)
         assert third_handle.workflow_id != first_handle.workflow_id
         assert third_handle.workflow_id == fourth_handle.workflow_id
         assert third_handle.get_result() == fourth_value
@@ -53,7 +53,7 @@ def test_debouncer(dbos: DBOS) -> None:
         # Test SetWorkflowID works
         wfid = generate_uuid()
         with SetWorkflowID(wfid):
-            handle = debouncer.debounce(debounce_period, first_value)
+            handle = debouncer.debounce("key", debounce_period, first_value)
         assert handle.workflow_id == wfid
         assert handle.get_result() == first_value
 
@@ -83,19 +83,18 @@ def test_debouncer_timeout(dbos: DBOS) -> None:
     # Set a huge period but small timeout, verify workflows start after the timeout
     debouncer = Debouncer.create(
         workflow,
-        debounce_key="key",
         debounce_timeout_sec=2,
     )
     long_debounce_period = 10000000
 
-    first_handle = debouncer.debounce(long_debounce_period, first_value)
-    second_handle = debouncer.debounce(long_debounce_period, second_value)
+    first_handle = debouncer.debounce("key", long_debounce_period, first_value)
+    second_handle = debouncer.debounce("key", long_debounce_period, second_value)
     assert first_handle.workflow_id == second_handle.workflow_id
     assert first_handle.get_result() == second_value
     assert second_handle.get_result() == second_value
 
-    third_handle = debouncer.debounce(long_debounce_period, third_value)
-    fourth_handle = debouncer.debounce(long_debounce_period, fourth_value)
+    third_handle = debouncer.debounce("key", long_debounce_period, third_value)
+    fourth_handle = debouncer.debounce("key", long_debounce_period, fourth_value)
     assert third_handle.workflow_id != first_handle.workflow_id
     assert third_handle.workflow_id == fourth_handle.workflow_id
     assert third_handle.get_result() == fourth_value
@@ -104,12 +103,11 @@ def test_debouncer_timeout(dbos: DBOS) -> None:
     # Submit first with a long period then with a short one, verify workflows start on time
     debouncer = Debouncer.create(
         workflow,
-        debounce_key="key",
     )
     short_debounce_period = 1
 
-    first_handle = debouncer.debounce(long_debounce_period, first_value)
-    second_handle = debouncer.debounce(short_debounce_period, second_value)
+    first_handle = debouncer.debounce("key", long_debounce_period, first_value)
+    second_handle = debouncer.debounce("key", short_debounce_period, second_value)
     assert fourth_handle.workflow_id != first_handle.workflow_id
     assert first_handle.workflow_id == second_handle.workflow_id
     assert first_handle.get_result() == second_value
@@ -125,14 +123,14 @@ def test_multiple_debouncers(dbos: DBOS) -> None:
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
 
     # Set a huge period but small timeout, verify workflows start after the timeout
-    debouncer_one = Debouncer.create(workflow, debounce_key="key_one")
-    debouncer_two = Debouncer.create(workflow, debounce_key="key_two")
+    debouncer_one = Debouncer.create(workflow)
+    debouncer_two = Debouncer.create(workflow)
     debounce_period = 2
 
-    first_handle = debouncer_one.debounce(debounce_period, first_value)
-    second_handle = debouncer_one.debounce(debounce_period, second_value)
-    third_handle = debouncer_two.debounce(debounce_period, third_value)
-    fourth_handle = debouncer_two.debounce(debounce_period, fourth_value)
+    first_handle = debouncer_one.debounce("key_one", debounce_period, first_value)
+    second_handle = debouncer_one.debounce("key_one", debounce_period, second_value)
+    third_handle = debouncer_two.debounce("key_two", debounce_period, third_value)
+    fourth_handle = debouncer_two.debounce("key_two", debounce_period, fourth_value)
     assert first_handle.workflow_id == second_handle.workflow_id
     assert first_handle.workflow_id != third_handle.workflow_id
     assert third_handle.workflow_id == fourth_handle.workflow_id
@@ -151,11 +149,11 @@ def test_debouncer_queue(dbos: DBOS) -> None:
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
     queue = Queue("test-queue")
 
-    debouncer = Debouncer.create(workflow, debounce_key="key", queue=queue)
+    debouncer = Debouncer.create(workflow, queue=queue)
     debounce_period_sec = 2
 
-    first_handle = debouncer.debounce(debounce_period_sec, first_value)
-    second_handle = debouncer.debounce(debounce_period_sec, second_value)
+    first_handle = debouncer.debounce("key", debounce_period_sec, first_value)
+    second_handle = debouncer.debounce("key", debounce_period_sec, second_value)
     assert first_handle.workflow_id == second_handle.workflow_id
     assert first_handle.get_result() == second_value
     assert second_handle.get_result() == second_value
@@ -163,8 +161,8 @@ def test_debouncer_queue(dbos: DBOS) -> None:
 
     # Test SetWorkflowTimeout works
     with SetWorkflowTimeout(5.0):
-        third_handle = debouncer.debounce(debounce_period_sec, third_value)
-        fourth_handle = debouncer.debounce(debounce_period_sec, fourth_value)
+        third_handle = debouncer.debounce("key", debounce_period_sec, third_value)
+        fourth_handle = debouncer.debounce("key", debounce_period_sec, fourth_value)
     assert third_handle.workflow_id != first_handle.workflow_id
     assert third_handle.workflow_id == fourth_handle.workflow_id
     assert third_handle.get_result() == fourth_value
@@ -176,7 +174,7 @@ def test_debouncer_queue(dbos: DBOS) -> None:
     # Test SetWorkflowID works
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        handle = debouncer.debounce(debounce_period_sec, first_value)
+        handle = debouncer.debounce("key", debounce_period_sec, first_value)
     assert handle.workflow_id == wfid
     assert handle.get_result() == first_value
     assert handle.get_status().queue_name == queue.name
@@ -187,7 +185,7 @@ def test_debouncer_queue(dbos: DBOS) -> None:
     with SetEnqueueOptions(
         priority=1, deduplication_id="test", app_version=test_version
     ):
-        handle = debouncer.debounce(debounce_period_sec, first_value)
+        handle = debouncer.debounce("key", debounce_period_sec, first_value)
     assert handle.get_result() == first_value
     assert handle.get_status().queue_name == queue.name
     assert handle.get_status().app_version == test_version
@@ -202,17 +200,25 @@ async def test_debouncer_async(dbos: DBOS) -> None:
 
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
 
-    debouncer = Debouncer.create_async(workflow_async, debounce_key="key")
+    debouncer = Debouncer.create_async(workflow_async)
     debounce_period_sec = 2
 
-    first_handle = await debouncer.debounce_async(debounce_period_sec, first_value)
-    second_handle = await debouncer.debounce_async(debounce_period_sec, second_value)
+    first_handle = await debouncer.debounce_async(
+        "key", debounce_period_sec, first_value
+    )
+    second_handle = await debouncer.debounce_async(
+        "key", debounce_period_sec, second_value
+    )
     assert first_handle.workflow_id == second_handle.workflow_id
     assert await first_handle.get_result() == second_value
     assert await second_handle.get_result() == second_value
 
-    third_handle = await debouncer.debounce_async(debounce_period_sec, third_value)
-    fourth_handle = await debouncer.debounce_async(debounce_period_sec, fourth_value)
+    third_handle = await debouncer.debounce_async(
+        "key", debounce_period_sec, third_value
+    )
+    fourth_handle = await debouncer.debounce_async(
+        "key", debounce_period_sec, fourth_value
+    )
     assert third_handle.workflow_id != first_handle.workflow_id
     assert third_handle.workflow_id == fourth_handle.workflow_id
     assert await third_handle.get_result() == fourth_value
@@ -232,24 +238,24 @@ def test_debouncer_client(dbos: DBOS, client: DBOSClient) -> None:
         "workflow_name": workflow.__qualname__,
         "queue_name": queue.name,
     }
-    debouncer = DebouncerClient(client, options, debounce_key="key")
+    debouncer = DebouncerClient(client, options)
     debounce_period_sec = 2
 
     first_handle: WorkflowHandle[int] = debouncer.debounce(
-        debounce_period_sec, first_value
+        "key", debounce_period_sec, first_value
     )
     second_handle: WorkflowHandle[int] = debouncer.debounce(
-        debounce_period_sec, second_value
+        "key", debounce_period_sec, second_value
     )
     assert first_handle.workflow_id == second_handle.workflow_id
     assert first_handle.get_result() == second_value
     assert second_handle.get_result() == second_value
 
     third_handle: WorkflowHandle[int] = debouncer.debounce(
-        debounce_period_sec, third_value
+        "key", debounce_period_sec, third_value
     )
     fourth_handle: WorkflowHandle[int] = debouncer.debounce(
-        debounce_period_sec, fourth_value
+        "key", debounce_period_sec, fourth_value
     )
     assert third_handle.workflow_id != first_handle.workflow_id
     assert third_handle.workflow_id == fourth_handle.workflow_id
@@ -258,7 +264,9 @@ def test_debouncer_client(dbos: DBOS, client: DBOSClient) -> None:
 
     wfid = str(uuid.uuid4())
     options["workflow_id"] = wfid
-    handle: WorkflowHandle[int] = debouncer.debounce(debounce_period_sec, first_value)
+    handle: WorkflowHandle[int] = debouncer.debounce(
+        "key", debounce_period_sec, first_value
+    )
     assert handle.workflow_id == wfid
     assert handle.get_result() == first_value
 
@@ -277,24 +285,24 @@ async def test_debouncer_client_async(dbos: DBOS, client: DBOSClient) -> None:
         "workflow_name": workflow_async.__qualname__,
         "queue_name": queue.name,
     }
-    debouncer = DebouncerClient(client, options, debounce_key="key")
+    debouncer = DebouncerClient(client, options)
     debounce_period_sec = 2
 
     first_handle: WorkflowHandleAsync[int] = await debouncer.debounce_async(
-        debounce_period_sec, first_value
+        "key", debounce_period_sec, first_value
     )
     second_handle: WorkflowHandleAsync[int] = await debouncer.debounce_async(
-        debounce_period_sec, second_value
+        "key", debounce_period_sec, second_value
     )
     assert first_handle.workflow_id == second_handle.workflow_id
     assert await first_handle.get_result() == second_value
     assert await second_handle.get_result() == second_value
 
     third_handle: WorkflowHandleAsync[int] = await debouncer.debounce_async(
-        debounce_period_sec, third_value
+        "key", debounce_period_sec, third_value
     )
     fourth_handle: WorkflowHandleAsync[int] = await debouncer.debounce_async(
-        debounce_period_sec, fourth_value
+        "key", debounce_period_sec, fourth_value
     )
     assert third_handle.workflow_id != first_handle.workflow_id
     assert third_handle.workflow_id == fourth_handle.workflow_id
@@ -304,7 +312,7 @@ async def test_debouncer_client_async(dbos: DBOS, client: DBOSClient) -> None:
     wfid = str(uuid.uuid4())
     options["workflow_id"] = wfid
     handle: WorkflowHandleAsync[int] = await debouncer.debounce_async(
-        debounce_period_sec, first_value
+        "key", debounce_period_sec, first_value
     )
     assert handle.workflow_id == wfid
     assert await handle.get_result() == first_value
