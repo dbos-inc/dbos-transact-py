@@ -5,12 +5,11 @@ import subprocess
 import time
 import typing
 from os import path
-from typing import Any, Optional, Tuple
+from typing import Annotated, Any, List, Optional, Tuple
 
 import jsonpickle  # type: ignore
 import sqlalchemy as sa
 import typer
-from typing_extensions import Annotated, List
 
 from dbos._context import SetWorkflowID
 from dbos._debug import debug_workflow, parse_start_command
