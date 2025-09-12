@@ -7,7 +7,7 @@ from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.semconv.resource import ResourceAttributes
+from opentelemetry.semconv.attributes.service_attributes import SERVICE_NAME
 from opentelemetry.trace.span import format_trace_id
 
 from dbos._utils import GlobalParams
@@ -47,13 +47,6 @@ class DBOSLogTransformer(logging.Filter):
         return True
 
 
-# Mitigation for https://github.com/open-telemetry/opentelemetry-python/issues/3193
-# Reduce the force flush timeout
-class PatchedOTLPLoggerProvider(LoggerProvider):
-    def force_flush(self, timeout_millis: int = 5000) -> bool:
-        return super().force_flush(timeout_millis)
-
-
 def init_logger() -> None:
     # By default, log to the console
     if not dbos_logger.handlers:
@@ -80,10 +73,10 @@ def config_logger(config: "ConfigFile") -> None:
     disable_otlp = config.get("telemetry", {}).get("disable_otlp", False)  # type: ignore
 
     if not disable_otlp and otlp_logs_endpoints:
-        log_provider = PatchedOTLPLoggerProvider(
+        log_provider = LoggerProvider(
             Resource.create(
                 attributes={
-                    ResourceAttributes.SERVICE_NAME: config["name"],
+                    SERVICE_NAME: config["name"],
                 }
             )
         )

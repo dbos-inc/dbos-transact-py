@@ -6,7 +6,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-from opentelemetry.semconv.resource import ResourceAttributes
+from opentelemetry.semconv.attributes.service_attributes import SERVICE_NAME
 from opentelemetry.trace import Span
 
 from dbos._utils import GlobalParams
@@ -29,27 +29,26 @@ class DBOSTracer:
     def config(self, config: ConfigFile) -> None:
         self.otlp_attributes = config.get("telemetry", {}).get("otlp_attributes", {})  # type: ignore
         self.disable_otlp = config.get("telemetry", {}).get("disable_otlp", False)  # type: ignore
-        if not self.disable_otlp and not isinstance(
-            trace.get_tracer_provider(), TracerProvider
-        ):
-            resource = Resource(
-                attributes={
-                    ResourceAttributes.SERVICE_NAME: config["name"],
-                }
-            )
+        if not self.disable_otlp:
+            if not isinstance(trace.get_tracer_provider(), TracerProvider):
+                resource = Resource(
+                    attributes={
+                        SERVICE_NAME: config["name"],
+                    }
+                )
 
-            provider = TracerProvider(resource=resource)
-            if os.environ.get("DBOS__CONSOLE_TRACES", None) is not None:
-                processor = BatchSpanProcessor(ConsoleSpanExporter())
-                provider.add_span_processor(processor)
-            otlp_traces_endpoints = (
-                config.get("telemetry", {}).get("OTLPExporter", {}).get("tracesEndpoint")  # type: ignore
-            )
-            if otlp_traces_endpoints:
-                for e in otlp_traces_endpoints:
-                    processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=e))
+                provider = TracerProvider(resource=resource)
+                if os.environ.get("DBOS__CONSOLE_TRACES", None) is not None:
+                    processor = BatchSpanProcessor(ConsoleSpanExporter())
                     provider.add_span_processor(processor)
-            trace.set_tracer_provider(provider)
+                otlp_traces_endpoints = (
+                    config.get("telemetry", {}).get("OTLPExporter", {}).get("tracesEndpoint")  # type: ignore
+                )
+                if otlp_traces_endpoints:
+                    for e in otlp_traces_endpoints:
+                        processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=e))
+                        provider.add_span_processor(processor)
+                trace.set_tracer_provider(provider)
 
     def set_provider(self, provider: Optional[TracerProvider]) -> None:
         self.provider = provider
