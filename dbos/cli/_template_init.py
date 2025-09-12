@@ -2,9 +2,6 @@ import os
 import shutil
 import typing
 from os import path
-from typing import Any
-
-import tomlkit
 
 from dbos._dbos_config import _app_name_to_db_name
 
@@ -88,18 +85,11 @@ def copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
 
 def get_project_name() -> typing.Union[str, None]:
     name = None
+
     try:
-        with open("pyproject.toml", "rb") as file:
-            pyproj = typing.cast(dict[str, Any], tomlkit.load(file))
-            name = typing.cast(str, pyproj["project"]["name"])
+        _, parent = path.split(path.abspath("."))
+        name = parent
     except:
         pass
-
-    if name == None:
-        try:
-            _, parent = path.split(path.abspath("."))
-            name = parent
-        except:
-            pass
 
     return name

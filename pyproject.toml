@@ -14,7 +14,6 @@ dependencies = [
     "opentelemetry-sdk>=1.27.0",
     "opentelemetry-exporter-otlp-proto-http>=1.27.0",
     "python-dateutil>=2.9.0.post0",
-    "tomlkit>=0.13.2",
     "psycopg[binary]>=3.1", # Keep compatibility with 3.1--older Python installations/machines can't always install 3.2
     "docker>=7.1.0",
     "websockets>=14.0",
