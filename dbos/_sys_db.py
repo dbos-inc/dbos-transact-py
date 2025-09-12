@@ -1901,8 +1901,13 @@ class SystemDatabase(ABC):
             )
             if self._debug_mode and recorded_output is None:
                 raise Exception(
-                    "called set_event in debug mode without a previous execution"
+                    "called writeStream in debug mode without a previous execution"
                 )
+            if recorded_output is not None:
+                dbos_logger.debug(
+                    f"Replaying writeStream, id: {function_id}, key: {key}"
+                )
+                return
             # Find the maximum offset for this workflow_uuid and key combination
             max_offset_result = c.execute(
                 sa.select(sa.func.max(SystemSchema.streams.c.offset)).where(

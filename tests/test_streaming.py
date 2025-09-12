@@ -231,16 +231,19 @@ def test_stream_error_cases(dbos: DBOS) -> None:
 def test_stream_workflow_recovery(dbos: DBOS) -> None:
     """Test that stream operations are properly recovered during workflow replay."""
 
-    call_count = 0
+    workflow_call_count = 0
+    step_call_count = 0
 
     @DBOS.step()
     def counting_step() -> int:
-        nonlocal call_count
-        call_count += 1
-        return call_count
+        nonlocal step_call_count
+        step_call_count += 1
+        return step_call_count
 
     @DBOS.workflow()
     def recovery_test_workflow() -> None:
+        nonlocal workflow_call_count
+        workflow_call_count += 1
         count1 = counting_step()
         DBOS.write_stream("recovery_stream", f"step_{count1}")
 
@@ -254,13 +257,18 @@ def test_stream_workflow_recovery(dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         recovery_test_workflow()
 
+    # Validate stream contents
+    values = list(DBOS.read_stream(wfid, "recovery_stream"))
+    assert values == ["step_1", "step_2"]
+
     # Reset call count and run the same workflow ID again (should replay)
-    call_count = 0
+    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
     with SetWorkflowID(wfid):
         recovery_test_workflow()
 
-    # The counting step should not have been called again (replayed from recorded results)
-    assert call_count == 0
+    # The workflow should have been called again
+    assert workflow_call_count == 2
+    assert step_call_count == 2
 
     # Stream should still be readable and contain the same values
     values = list(DBOS.read_stream(wfid, "recovery_stream"))
