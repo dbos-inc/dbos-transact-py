@@ -1087,49 +1087,33 @@ def test_nonserializable_values(dbos: DBOS) -> None:
 
     with pytest.raises(Exception) as exc_info:
         test_ns_transaction("h")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
+    assert "Can't pickle local object" in str(exc_info.value)
     with pytest.raises(Exception) as exc_info:
         test_ns_wf("g")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
+    assert "Can't pickle local object" in str(exc_info.value)
 
     wfh = DBOS.start_workflow(test_reg_wf, "a")
     with pytest.raises(Exception) as exc_info:
         DBOS.send(wfh.workflow_id, invalid_return, "sss")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
+    assert "Can't pickle local object" in str(exc_info.value)
     wfh.get_result()
 
     with pytest.raises(Exception) as exc_info:
         test_ns_event("e")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
+    assert "Can't pickle local object" in str(exc_info.value)
 
     with pytest.raises(Exception) as exc_info:
         test_bad_wf1("a")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
+    assert "Can't pickle local object" in str(exc_info.value)
     with pytest.raises(Exception) as exc_info:
         test_bad_wf2("b")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
+    assert "Can't pickle local object" in str(exc_info.value)
     with pytest.raises(Exception) as exc_info:
         test_bad_wf3("c")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
+    assert "Can't pickle local object" in str(exc_info.value)
     with pytest.raises(Exception) as exc_info:
         test_bad_wf4("d")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
+    assert "Can't pickle local object" in str(exc_info.value)
 
 
 def test_multi_set_event(dbos: DBOS) -> None:
