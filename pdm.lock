@@ -5,7 +5,7 @@
 groups = ["default", "dev", "otel"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:b90ac4ed00fc6824e63921fe8c54137a901bde2258e21b01c4778837559435fd"
+content_hash = "sha256:2bb44a622e58031d70cd6d5a87861dde5a1860702de282d5a4b07a86abd40156"
 
 [[metadata.targets]]
 requires_python = ">=3.10"
@@ -610,17 +610,6 @@ dependencies = [
 files = [
     {file = "jinja2-3.1.4-py3-none-any.whl", hash = "sha256:bc5dd2abb727a5319567b7a813e6a2e7318c39f4f487cfe6c89c6f9c7d25197d"},
     {file = "jinja2-3.1.4.tar.gz", hash = "sha256:4a3aee7acbbe7303aede8e9648d13b8bf88a429282aa6122a993f0ac800cb369"},
-]
-
-[[package]]
-name = "jsonpickle"
-version = "4.0.0"
-requires_python = ">=3.8"
-summary = "jsonpickle encodes/decodes any Python object to/from JSON"
-groups = ["default"]
-files = [
-    {file = "jsonpickle-4.0.0-py3-none-any.whl", hash = "sha256:53730b9e094bc41f540bfdd25eaf6e6cf43811590e9e1477abcec44b866ddcd9"},
-    {file = "jsonpickle-4.0.0.tar.gz", hash = "sha256:fc670852b204d77601b08f8f9333149ac37ab6d3fe4e6ed3b578427291f63736"},
 ]
 
 [[package]]
