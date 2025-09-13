@@ -7,31 +7,25 @@ authors = [
 ]
 dependencies = [
     "pyyaml>=6.0.2",
-    "jsonschema>=4.23.0",
-    "alembic>=1.13.3",
-    "typing-extensions>=4.12.2; python_version < \"3.10\"",
-    "typer>=0.12.5",
-    "jsonpickle>=3.3.0",
-    "opentelemetry-api>=1.27.0",
-    "opentelemetry-sdk>=1.27.0",
-    "opentelemetry-exporter-otlp-proto-http>=1.27.0",
     "python-dateutil>=2.9.0.post0",
-    "fastapi[standard]>=0.115.2",
-    "tomlkit>=0.13.2",
     "psycopg[binary]>=3.1", # Keep compatibility with 3.1--older Python installations/machines can't always install 3.2
-    "docker>=7.1.0",
-    "cryptography>=43.0.3",
-    "rich>=13.9.4",
-    "pyjwt>=2.10.1",
     "websockets>=14.0",
+    "typer-slim>=0.17.4",
+    "sqlalchemy>=2.0.43",
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 readme = "README.md"
 license = {text = "MIT"}
 
 [project.scripts]
 dbos = "dbos.cli.cli:app"
 
+[project.optional-dependencies]
+otel = [
+    "opentelemetry-api>=1.37.0",
+    "opentelemetry-sdk>=1.37.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.37.0",
+]
 [build-system]
 requires = ["pdm-backend"]
 build-backend = "pdm.backend"
@@ -86,4 +80,6 @@ dev = [
     "types-docker>=7.1.0.20241229",
     "pytest-timeout>=2.3.1",
     "inline-snapshot>=0.28.0",
+    "fastapi>=0.116.1",
+    "uvicorn>=0.35.0",
 ]

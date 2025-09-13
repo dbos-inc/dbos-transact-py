@@ -458,6 +458,11 @@ def test_keyboardinterrupt_during_retries(dbos: DBOS) -> None:
     assert recovery_handles[0].get_result() == recovery_handles[0].workflow_id
 
 
+class BadException(Exception):
+    def __init__(self, one: int, two: int) -> None:
+        super().__init__(f"Message: {one}, {two}")
+
+
 def test_error_serialization() -> None:
     # Verify that each exception that can be thrown in a workflow
     # is serializable and deserializable
@@ -484,9 +489,6 @@ def test_error_serialization() -> None:
     assert str(d) == str(e)
 
     # Test safe_deserialize
-    class BadException(Exception):
-        def __init__(self, one: int, two: int) -> None:
-            super().__init__(f"Message: {one}, {two}")
 
     bad_exception = BadException(1, 2)
     with pytest.raises(TypeError):
@@ -500,7 +502,6 @@ def test_error_serialization() -> None:
     assert input is None
     assert output is None
     assert isinstance(exception, str)
-    assert "Message: 1, 2" in exception
 
 
 def test_unregistered_workflow(dbos: DBOS, config: DBOSConfig) -> None:

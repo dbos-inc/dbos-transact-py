@@ -353,7 +353,7 @@ def test_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 def test_disable_otlp_no_spans(config: DBOSConfig) -> None:
     DBOS.destroy(destroy_registry=True)
     config["otlp_attributes"] = {"foo": "bar"}
-    config["disable_otlp"] = True
+    config["enable_otlp"] = False
     DBOS(config=config)
     DBOS.launch()
 

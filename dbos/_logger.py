@@ -2,14 +2,6 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
-from opentelemetry._logs import set_logger_provider
-from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.semconv.resource import ResourceAttributes
-from opentelemetry.trace.span import format_trace_id
-
 from dbos._utils import GlobalParams
 
 if TYPE_CHECKING:
@@ -24,6 +16,7 @@ class DBOSLogTransformer(logging.Filter):
         super().__init__()
         self.app_id = os.environ.get("DBOS__APPID", "")
         self.otlp_attributes: dict[str, str] = config.get("telemetry", {}).get("otlp_attributes", {})  # type: ignore
+        self.disable_otlp = config.get("telemetry", {}).get("disable_otlp", True)  # type: ignore
 
     def filter(self, record: Any) -> bool:
         record.applicationID = self.app_id
@@ -39,19 +32,15 @@ class DBOSLogTransformer(logging.Filter):
         if ctx:
             if ctx.is_within_workflow():
                 record.operationUUID = ctx.workflow_id
-            span = ctx.get_current_active_span()
-            if span:
-                trace_id = format_trace_id(span.get_span_context().trace_id)
-                record.traceId = trace_id
+            if not self.disable_otlp:
+                from opentelemetry.trace.span import format_trace_id
+
+                span = ctx.get_current_active_span()
+                if span:
+                    trace_id = format_trace_id(span.get_span_context().trace_id)
+                    record.traceId = trace_id
 
         return True
-
-
-# Mitigation for https://github.com/open-telemetry/opentelemetry-python/issues/3193
-# Reduce the force flush timeout
-class PatchedOTLPLoggerProvider(LoggerProvider):
-    def force_flush(self, timeout_millis: int = 5000) -> bool:
-        return super().force_flush(timeout_millis)
 
 
 def init_logger() -> None:
@@ -80,10 +69,18 @@ def config_logger(config: "ConfigFile") -> None:
     disable_otlp = config.get("telemetry", {}).get("disable_otlp", False)  # type: ignore
 
     if not disable_otlp and otlp_logs_endpoints:
-        log_provider = PatchedOTLPLoggerProvider(
+
+        from opentelemetry._logs import set_logger_provider
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+        from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.semconv.attributes.service_attributes import SERVICE_NAME
+
+        log_provider = LoggerProvider(
             Resource.create(
                 attributes={
-                    ResourceAttributes.SERVICE_NAME: config["name"],
+                    SERVICE_NAME: config["name"],
                 }
             )
         )

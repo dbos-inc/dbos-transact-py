@@ -1,6 +1,5 @@
 import asyncio
 import math
-import sys
 import time
 import types
 import uuid
@@ -12,16 +11,11 @@ from typing import (
     Dict,
     Generic,
     Optional,
+    ParamSpec,
     Tuple,
     TypedDict,
     TypeVar,
-    Union,
 )
-
-if sys.version_info < (3, 10):
-    from typing_extensions import ParamSpec
-else:
-    from typing import ParamSpec
 
 from dbos._client import (
     DBOSClient,

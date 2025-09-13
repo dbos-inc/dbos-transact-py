@@ -9,13 +9,6 @@ from dbos._debug import PythonModule, parse_start_command
 from dbos._schemas.system_database import SystemSchema
 
 
-def test_parse_fast_api_command() -> None:
-    command = "fastapi run app/main.py"
-    actual = parse_start_command(command)
-    assert isinstance(actual, PythonModule)
-    assert actual.module_name == "main"
-
-
 def test_parse_python_command() -> None:
     command = "python app/main.py"
     expected = "app/main.py"

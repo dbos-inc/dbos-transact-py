@@ -83,6 +83,10 @@ def setup_fastapi_middleware(app: FastAPI, dbos: DBOS) -> None:
                     response = await call_next(request)
             else:
                 response = await call_next(request)
-            if hasattr(response, "status_code"):
+            if (
+                dbos._config["telemetry"]
+                and not dbos._config["telemetry"]["disable_otlp"]
+                and hasattr(response, "status_code")
+            ):
                 DBOS.span.set_attribute("responseCode", response.status_code)
         return response

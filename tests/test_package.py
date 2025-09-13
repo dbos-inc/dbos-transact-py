@@ -57,6 +57,11 @@ def test_package(
                 ["pip", "install", wheel_path], cwd=temp_path, env=venv
             )
 
+            # Install FastAPI into the virtual environment
+            subprocess.check_call(
+                ["pip", "install", "fastapi[standard]"], cwd=temp_path, env=venv
+            )
+
             # initalize the app with dbos scaffolding
             subprocess.check_call(
                 ["dbos", "init", template_name, "--template", template_name],

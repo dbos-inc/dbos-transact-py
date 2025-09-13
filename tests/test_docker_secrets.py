@@ -111,7 +111,6 @@ database_url: postgresql://postgres:${DOCKER_SECRET:db_password}@localhost:5432/
         # Mock the schema validation to always pass
         with (
             patch("builtins.open", mock_file),
-            patch("dbos._dbos_config.validate") as mock_validate,
             patch("dbos._dbos_config.resources.files") as mock_resources,
             patch("os.path.exists") as mock_exists,
             patch("yaml.safe_load") as mock_yaml_load,
@@ -132,9 +131,6 @@ database_url: postgresql://postgres:${DOCKER_SECRET:db_password}@localhost:5432/
                 config["database_url"],
                 "postgresql://postgres:secret_password@localhost:5432/test_db",
             )
-
-            # Verify that the schema validation was called
-            mock_validate.assert_called_once()
 
     def test_load_config_with_docker_secrets_in_list(self) -> None:
         # Create a mock configuration file with Docker secrets in a list
@@ -165,7 +161,6 @@ runtimeConfig:
         # Mock the schema validation to always pass
         with (
             patch("builtins.open", mock_file),
-            patch("dbos._dbos_config.validate") as mock_validate,
             patch("dbos._dbos_config.resources.files") as mock_resources,
             patch("os.path.exists") as mock_exists,
             patch("yaml.safe_load") as mock_yaml_load,
@@ -188,9 +183,6 @@ runtimeConfig:
                 self.assertEqual(setup_commands[1], "export API_KEY=secret_value")
                 self.assertEqual(setup_commands[2], "export DB_PASSWORD=secret_value")
 
-            # Verify that the schema validation was called
-            mock_validate.assert_called_once()
-
     def test_load_config_with_multiple_docker_secrets_in_string(self) -> None:
         # Create a mock configuration file with multiple Docker secrets in a string
         config_content = """
@@ -210,7 +202,6 @@ database_url: postgresql://${DOCKER_SECRET:db_user}:${DOCKER_SECRET:db_password}
         # Mock the schema validation to always pass
         with (
             patch("builtins.open", mock_file),
-            patch("dbos._dbos_config.validate") as mock_validate,
             patch("dbos._dbos_config.resources.files") as mock_resources,
             patch("os.path.exists") as mock_exists,
             patch("yaml.safe_load") as mock_yaml_load,
@@ -250,9 +241,6 @@ database_url: postgresql://${DOCKER_SECRET:db_user}:${DOCKER_SECRET:db_password}
                     "postgresql://user:pass@host:5432/db",
                 )
 
-                # Verify that the schema validation was called
-                mock_validate.assert_called_once()
-
     def test_load_config_without_docker_secrets(self) -> None:
         # Create a mock configuration file without Docker secrets
         config_content = """
@@ -272,7 +260,6 @@ database_url: postgresql://postgres:plain_password@localhost:5432/test_db
         # Mock the schema validation to always pass
         with (
             patch("builtins.open", mock_file),
-            patch("dbos._dbos_config.validate") as mock_validate,
             patch("dbos._dbos_config.resources.files") as mock_resources,
             patch("yaml.safe_load") as mock_yaml_load,
         ):
@@ -291,9 +278,6 @@ database_url: postgresql://postgres:plain_password@localhost:5432/test_db
             self.assertEqual(
                 make_url(config["database_url"]).password, "plain_password"
             )
-
-            # Verify that the schema validation was called
-            mock_validate.assert_called_once()
 
     def test_load_config_with_mixed_env_vars_and_docker_secrets(self) -> None:
         # Create a mock configuration file with both environment variables and Docker secrets
@@ -314,7 +298,6 @@ database_url: postgresql://${DB_USER}:${DOCKER_SECRET:db_password}@${DB_HOST}:${
         # Mock the schema validation to always pass
         with (
             patch("builtins.open", mock_file),
-            patch("dbos._dbos_config.validate") as mock_validate,
             patch("dbos._dbos_config.resources.files") as mock_resources,
             patch("os.path.exists") as mock_exists,
             patch(
@@ -347,9 +330,6 @@ database_url: postgresql://${DB_USER}:${DOCKER_SECRET:db_password}@${DB_HOST}:${
                 config["database_url"],
                 "postgresql://postgres:secret_password@localhost:5432/test_db",
             )
-
-            # Verify that the schema validation was called
-            mock_validate.assert_called_once()
 
 
 if __name__ == "__main__":

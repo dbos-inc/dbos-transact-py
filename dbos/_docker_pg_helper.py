@@ -1,11 +1,10 @@
+import json
 import logging
 import os
 import subprocess
 import time
 
-import docker
 import psycopg
-from docker.errors import APIError, NotFound
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 from typing import Any, Dict, Optional, Tuple
@@ -86,48 +85,71 @@ def start_docker_postgres(pool_config: Dict[str, Any]) -> bool:
     image_name = "pgvector/pgvector:pg16"
 
     try:
-        client = docker.from_env()
-
         # Check if the container already exists
         try:
-            container = client.containers.get(container_name)
-            if container.status == "running":
-                logging.info(f"Container '{container_name}' is already running.")
-                return True
-            elif container.status == "exited":
-                container.start()
-                logging.info(
-                    f"Container '{container_name}' was stopped and has been restarted."
-                )
-                return True
-        except NotFound:
-            # Container doesn't exist, proceed with creation
+            result = subprocess.run(
+                f"docker inspect {container_name}",
+                shell=True,
+                text=True,
+                capture_output=True,
+            )
+
+            if result.returncode == 0:
+                # Container exists, check its status
+                container_info = json.loads(result.stdout)
+                status = container_info[0]["State"]["Status"]
+
+                if status == "running":
+                    logging.info(f"Container '{container_name}' is already running.")
+                    return True
+                elif status == "exited":
+                    subprocess.run(
+                        f"docker start {container_name}", shell=True, check=True
+                    )
+                    logging.info(
+                        f"Container '{container_name}' was stopped and has been restarted."
+                    )
+                    return True
+        except (
+            subprocess.CalledProcessError,
+            json.JSONDecodeError,
+            KeyError,
+            IndexError,
+        ):
+            # Container doesn't exist or error parsing, proceed with creation
             pass
 
-        # Pull the image if it doesn't exist
-        imgs = client.images.list(name=image_name)
-        if len(imgs) == 0:
-            logging.info(f"Pulling Docker image {image_name}...")
-            client.images.pull(image_name)
-
-        # Create and start the container
-        container = client.containers.run(
-            image=image_name,
-            name=container_name,
-            detach=True,
-            environment={
-                "POSTGRES_PASSWORD": pool_config["password"],
-                "PGDATA": pg_data,
-            },
-            ports={"5432/tcp": pool_config["port"]},
-            volumes={pg_data: {"bind": pg_data, "mode": "rw"}},
-            remove=True,  # Equivalent to --rm
+        # Check if the image exists locally
+        result = subprocess.run(
+            f"docker images -q {image_name}", shell=True, text=True, capture_output=True
         )
 
-        logging.info(f"Created container: {container.id}")
+        if not result.stdout.strip():
+            logging.info(f"Pulling Docker image {image_name}...")
+            subprocess.run(f"docker pull {image_name}", shell=True, check=True)
 
-    except APIError as e:
-        raise Exception(f"Docker API error: {str(e)}")
+        # Create and start the container
+        cmd = [
+            "docker run",
+            "-d",
+            f"--name {container_name}",
+            f"-e POSTGRES_PASSWORD={pool_config['password']}",
+            f"-e PGDATA={pg_data}",
+            f"-p {pool_config['port']}:5432",
+            f"-v {pg_data}:{pg_data}",
+            "--rm",
+            image_name,
+        ]
+
+        result = subprocess.run(
+            " ".join(cmd), shell=True, text=True, capture_output=True, check=True
+        )
+
+        container_id = result.stdout.strip()
+        logging.info(f"Created container: {container_id}")
+
+    except subprocess.CalledProcessError as e:
+        raise Exception(f"Docker command error: {e.stderr if e.stderr else str(e)}")
 
     # Wait for PostgreSQL to be ready
     attempts = 30
@@ -148,15 +170,16 @@ def start_docker_postgres(pool_config: Dict[str, Any]) -> bool:
 
 def check_docker_installed() -> bool:
     """
-    Check if Docker is installed and running using the docker library.
+    Check if Docker is installed and running using the Docker CLI.
 
     Returns:
         bool: True if Docker is installed and running, False otherwise.
     """
     try:
-        client = docker.from_env()
-        client.ping()  # type: ignore
-        return True
+        result = subprocess.run(
+            "docker version --format json", shell=True, capture_output=True, text=True
+        )
+        return result.returncode == 0
     except Exception:
         return False
 
@@ -176,22 +199,41 @@ def stop_docker_pg() -> None:
     try:
         logger.info(f"Stopping Docker Postgres container {container_name}...")
 
-        client = docker.from_env()
+        # Check if container exists
+        result = subprocess.run(
+            f"docker inspect {container_name}",
+            shell=True,
+            text=True,
+            capture_output=True,
+        )
 
-        try:
-            container = client.containers.get(container_name)
+        if result.returncode == 0:
+            # Container exists, check its status
+            try:
+                container_info = json.loads(result.stdout)
+                status = container_info[0]["State"]["Status"]
 
-            if container.status == "running":
-                container.stop()
-                logger.info(
-                    f"Successfully stopped Docker Postgres container {container_name}."
-                )
-            else:
-                logger.info(f"Container {container_name} exists but is not running.")
-
-        except docker.errors.NotFound:
+                if status == "running":
+                    subprocess.run(
+                        f"docker stop {container_name}", shell=True, check=True
+                    )
+                    logger.info(
+                        f"Successfully stopped Docker Postgres container {container_name}."
+                    )
+                else:
+                    logger.info(
+                        f"Container {container_name} exists but is not running."
+                    )
+            except (json.JSONDecodeError, KeyError, IndexError) as e:
+                logger.error(f"Error parsing container info: {e}")
+                raise
+        else:
             logger.info(f"Container {container_name} does not exist.")
 
+    except subprocess.CalledProcessError as error:
+        error_message = error.stderr if error.stderr else str(error)
+        logger.error(f"Failed to stop Docker Postgres container: {error_message}")
+        raise
     except Exception as error:
         error_message = str(error)
         logger.error(f"Failed to stop Docker Postgres container: {error_message}")

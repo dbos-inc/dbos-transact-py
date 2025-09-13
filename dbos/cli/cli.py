@@ -1,3 +1,4 @@
+import json
 import os
 import platform
 import signal
@@ -5,14 +6,10 @@ import subprocess
 import time
 import typing
 from os import path
-from typing import Any, Optional, Tuple
+from typing import Annotated, Any, List, Optional, Tuple
 
-import jsonpickle  # type: ignore
 import sqlalchemy as sa
 import typer
-from rich import print as richprint
-from rich.prompt import IntPrompt
-from typing_extensions import Annotated, List
 
 from dbos._context import SetWorkflowID
 from dbos._debug import debug_workflow, parse_start_command
@@ -32,6 +29,11 @@ from .._sys_db import SystemDatabase
 from .._utils import GlobalParams
 from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
+
+
+class DefaultEncoder(json.JSONEncoder):
+    def default(self, obj: Any) -> str:
+        return str(obj)
 
 
 def _get_db_url(
@@ -201,7 +203,7 @@ def init(
                 path.join(templates_dir, template), project_name, config_mode=config
             )
     except Exception as e:
-        richprint(f"[red]{e}[/red]")
+        print(e)
 
 
 def _resolve_project_name_and_template(
@@ -222,27 +224,21 @@ def _resolve_project_name_and_template(
         if template not in templates:
             raise Exception(f"Template {template} not found in {templates_dir}")
     else:
-        richprint("\n[bold]Available templates:[/bold]")
+        print("\nAvailable templates:")
         for idx, template_name in enumerate(templates, 1):
-            richprint(f"  {idx}. {template_name}")
+            print(f"  {idx}. {template_name}")
         while True:
             try:
-                choice = IntPrompt.ask(
-                    "\nSelect template number",
-                    show_choices=False,
-                    show_default=False,
-                )
+                choice = int(input("\nSelect template number: "))
                 if 1 <= choice <= len(templates):
                     template = templates[choice - 1]
                     break
                 else:
-                    richprint(
-                        "[red]Invalid selection. Please choose a number from the list.[/red]"
-                    )
+                    print("Invalid selection. Please choose a number from the list.")
             except (KeyboardInterrupt, EOFError):
                 raise typer.Abort()
             except ValueError:
-                richprint("[red]Please enter a valid number.[/red]")
+                print("Please enter a valid number.")
 
     if template in git_templates:
         if project_name is None:
@@ -499,7 +495,7 @@ def list(
         app_version=appversion,
         name=name,
     )
-    print(jsonpickle.encode(workflows, unpicklable=False))
+    print(json.dumps([w.__dict__ for w in workflows], cls=DefaultEncoder))
 
 
 @workflow.command(help="Retrieve the status of a workflow")
@@ -531,7 +527,7 @@ def get(
         system_database_url=system_database_url,
     )
     status = client.retrieve_workflow(workflow_id=workflow_id).get_status()
-    print(jsonpickle.encode(status, unpicklable=False))
+    print(json.dumps(status.__dict__, cls=DefaultEncoder))
 
 
 @workflow.command(help="List the steps of a workflow")
@@ -562,12 +558,8 @@ def steps(
         application_database_url=application_database_url,
         system_database_url=system_database_url,
     )
-    print(
-        jsonpickle.encode(
-            client.list_workflow_steps(workflow_id=workflow_id),
-            unpicklable=False,
-        )
-    )
+    steps = client.list_workflow_steps(workflow_id=workflow_id)
+    print(json.dumps(steps, cls=DefaultEncoder))
 
 
 @workflow.command(
@@ -665,7 +657,7 @@ def restart(
         system_database_url=system_database_url,
     )
     status = client.fork_workflow(workflow_id=workflow_id, start_step=1).get_status()
-    print(jsonpickle.encode(status, unpicklable=False))
+    print(json.dumps(status.__dict__, cls=DefaultEncoder))
 
 
 @workflow.command(
@@ -736,7 +728,7 @@ def fork(
             start_step=step,
             application_version=application_version,
         ).get_status()
-    print(jsonpickle.encode(status, unpicklable=False))
+    print(json.dumps(status.__dict__, cls=DefaultEncoder))
 
 
 @queue.command(name="list", help="List enqueued functions for your application")
@@ -836,7 +828,7 @@ def list_queue(
         status=status,
         name=name,
     )
-    print(jsonpickle.encode(workflows, unpicklable=False))
+    print(json.dumps([w.__dict__ for w in workflows], cls=DefaultEncoder))
 
 
 if __name__ == "__main__":

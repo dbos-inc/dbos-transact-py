@@ -28,9 +28,6 @@ from typing import (
     Union,
 )
 
-from opentelemetry.trace import Span
-from rich import print
-
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._debouncer import debouncer_workflow
 from dbos._sys_db import SystemDatabase, WorkflowStatus
@@ -53,7 +50,6 @@ from ._core import (
     set_event,
     start_workflow,
     start_workflow_async,
-    workflow_wrapper,
 )
 from ._queue import Queue, queue_thread
 from ._recovery import recover_pending_workflows, startup_recovery_thread
@@ -62,8 +58,6 @@ from ._registrations import (
     DBOSClassInfo,
     _class_fqn,
     get_or_create_class_info,
-    set_dbos_func_name,
-    set_temp_workflow_type,
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
@@ -80,13 +74,11 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
     from ._kafka import _KafkaConsumerWorkflow
     from flask import Flask
+    from opentelemetry.trace import Span
+
+from typing import ParamSpec
 
 from sqlalchemy.orm import Session
-
-if sys.version_info < (3, 10):
-    from typing_extensions import ParamSpec
-else:
-    from typing import ParamSpec
 
 from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
@@ -558,7 +550,7 @@ class DBOS:
                     f"https://console.dbos.dev/self-host?appname={app_name}"
                 )
                 print(
-                    f"[bold]To view and manage workflows, connect to DBOS Conductor at:[/bold] [bold blue]{conductor_registration_url}[/bold blue]"
+                    f"To view and manage workflows, connect to DBOS Conductor at:{conductor_registration_url}"
                 )
 
             # Flush handlers and add OTLP to all loggers if enabled
@@ -1297,7 +1289,7 @@ class DBOS:
         return ctx.parent_workflow_id
 
     @classproperty
-    def span(cls) -> Span:
+    def span(cls) -> "Span":
         """Return the tracing `Span` associated with the current context."""
         ctx = assert_current_dbos_context()
         span = ctx.get_current_active_span()

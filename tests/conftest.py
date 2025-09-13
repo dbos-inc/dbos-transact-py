@@ -54,6 +54,7 @@ def default_config() -> DBOSConfig:
             if using_sqlite()
             else f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy_dbos_sys"
         ),
+        "enable_otlp": True,
     }
 
 
