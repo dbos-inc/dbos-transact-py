@@ -1085,35 +1085,27 @@ def test_nonserializable_values(dbos: DBOS) -> None:
     def test_bad_wf4(var: str) -> str:
         return test_ns_step(var)
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         test_ns_transaction("h")
-    assert "Can't pickle local object" in str(exc_info.value)
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         test_ns_wf("g")
-    assert "Can't pickle local object" in str(exc_info.value)
 
     wfh = DBOS.start_workflow(test_reg_wf, "a")
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         DBOS.send(wfh.workflow_id, invalid_return, "sss")
-    assert "Can't pickle local object" in str(exc_info.value)
     wfh.get_result()
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         test_ns_event("e")
-    assert "Can't pickle local object" in str(exc_info.value)
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         test_bad_wf1("a")
-    assert "Can't pickle local object" in str(exc_info.value)
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         test_bad_wf2("b")
-    assert "Can't pickle local object" in str(exc_info.value)
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         test_bad_wf3("c")
-    assert "Can't pickle local object" in str(exc_info.value)
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         test_bad_wf4("d")
-    assert "Can't pickle local object" in str(exc_info.value)
 
 
 def test_multi_set_event(dbos: DBOS) -> None:
