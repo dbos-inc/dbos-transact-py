@@ -24,11 +24,12 @@ def test_package(
     for template_name in ["dbos-db-starter", "dbos-app-starter"]:
         db_starter = template_name == "dbos-db-starter"
         app_db_name = template_name.replace("-", "_")
+        sys_db_name = f"{app_db_name}_dbos_sys"
         with db_engine.connect() as connection:
             connection.execution_options(isolation_level="AUTOCOMMIT")
             connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}"))
             connection.execute(
-                sa.text(f"DROP DATABASE IF EXISTS {app_db_name}_dbos_sys")
+                sa.text(f"DROP DATABASE IF EXISTS {sys_db_name}")
             )
 
         with tempfile.TemporaryDirectory() as temp_path:
@@ -51,11 +52,17 @@ def test_package(
             venv["DBOS_DATABASE_URL"] = db_engine.url.set(
                 database=app_db_name
             ).render_as_string(hide_password=False)
+            venv["DBOS_SYSTEM_DATABASE_URL"] = db_engine.url.set(
+                database=sys_db_name
+            ).render_as_string(hide_password=False)
 
             # Install the dbos package into the virtual environment
             subprocess.check_call(
                 ["pip", "install", wheel_path], cwd=temp_path, env=venv
             )
+
+            # Next, verify a simple DBOS-only script runs
+            subprocess.check_call(["python3", "tests/script_without_fastapi.py"], env=venv)
 
             # Install FastAPI into the virtual environment
             subprocess.check_call(
