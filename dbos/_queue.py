@@ -86,6 +86,8 @@ class Queue:
             raise Exception(
                 f"A workflow cannot be enqueued on partitioned queue {self.name} without a partition key"
             )
+        if context and context.queue_partition_key and not self.partition_queue:
+            raise Exception(f"You can only use a partition key on a partition-enabled queue. Key {context.queue_partition_key} was used with non-partitioned queue {self.name}")
 
         dbos = _get_dbos_instance()
         return start_workflow(dbos, func, self.name, False, *args, **kwargs)

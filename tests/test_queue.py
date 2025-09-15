@@ -1672,3 +1672,10 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
     # You can only enqueue on a partitioned queue with a partition key
     with pytest.raises(Exception):
         queue.enqueue(normal_workflow)
+
+    # You can only enqueue with a partition key on a partitioned queue
+    partitionless_queue = Queue("partitionless-queue")
+
+    with pytest.raises(Exception):
+        with SetEnqueueOptions(queue_partition_key="test"):
+            partitionless_queue.enqueue(normal_workflow)
