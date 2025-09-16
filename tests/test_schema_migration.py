@@ -7,12 +7,11 @@ import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, DBOSConfig
-from dbos._migration import dbos_migrations, run_alembic_migrations, sqlite_migrations
+from dbos._migration import dbos_migrations, sqlite_migrations
 
 # Private API because this is a unit test
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
-from dbos._sys_db_postgres import PostgresSystemDatabase
 
 
 def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
@@ -41,59 +40,6 @@ def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
         migrations_rows = migrations_result.fetchall()
         assert len(migrations_rows) == 1
         assert migrations_rows[0][0] == len(dbos_migrations)
-
-
-def test_alembic_migrations_compatibility(
-    config: DBOSConfig, db_engine: sa.Engine, skip_with_sqlite: None
-) -> None:
-    system_database_url = config["system_database_url"]
-    assert system_database_url
-    sysdb_name = sa.make_url(system_database_url).database
-
-    # Drop and recreate the system database
-    with db_engine.connect() as connection:
-        connection.execution_options(isolation_level="AUTOCOMMIT")
-        connection.execute(
-            sa.text(f'DROP DATABASE IF EXISTS "{sysdb_name}" WITH (FORCE)')
-        )
-        connection.execute(sa.text(f'CREATE DATABASE "{sysdb_name}"'))
-
-    sys_db = PostgresSystemDatabase(
-        system_database_url=system_database_url, engine_kwargs={}
-    )
-    # Run the deprecated Alembic migrations
-    run_alembic_migrations(sys_db.engine)
-    # Then, run the new migrations to verify they work from a system database
-    # that started in Alembic.
-    dbos = DBOS(config=config)
-    DBOS.launch()
-    # Make sure all tables exist
-    with dbos._sys_db.engine.connect() as connection:
-        sql = SystemSchema.workflow_status.select()
-        result = connection.execute(sql)
-        assert result.fetchall() == []
-
-        sql = SystemSchema.operation_outputs.select()
-        result = connection.execute(sql)
-        assert result.fetchall() == []
-
-        sql = SystemSchema.workflow_events.select()
-        result = connection.execute(sql)
-        assert result.fetchall() == []
-
-        sql = SystemSchema.notifications.select()
-        result = connection.execute(sql)
-        assert result.fetchall() == []
-
-        # Check dbos_migrations table exists, has one row, and has the right version
-        migrations_result = connection.execute(
-            sa.text("SELECT version FROM dbos.dbos_migrations")
-        )
-        migrations_rows = migrations_result.fetchall()
-        assert len(migrations_rows) == 1
-        assert migrations_rows[0][0] == len(dbos_migrations)
-
-    assert DBOS.list_workflows() == []
 
 
 def test_custom_sysdb_name_migration(

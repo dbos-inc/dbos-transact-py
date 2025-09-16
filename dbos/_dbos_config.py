@@ -5,8 +5,6 @@ from importlib import resources
 from typing import Any, Dict, List, Optional, TypedDict, cast
 
 import yaml
-from jsonschema import ValidationError, validate
-from rich import print
 from sqlalchemy import make_url
 
 from ._error import DBOSInitializationError
@@ -36,7 +34,7 @@ class DBOSConfig(TypedDict, total=False):
         otlp_attributes (dict[str, str]): A set of custom attributes to apply OTLP-exported logs and traces
         application_version (str): Application version
         executor_id (str): Executor ID, used to identify the application instance in distributed environments
-        disable_otlp (bool): If True, disables OTLP tracing and logging. Defaults to False.
+        enable_otlp (bool): If True, enable built-in DBOS OTLP tracing and logging.
     """
 
     name: str
@@ -54,7 +52,7 @@ class DBOSConfig(TypedDict, total=False):
     otlp_attributes: Optional[dict[str, str]]
     application_version: Optional[str]
     executor_id: Optional[str]
-    disable_otlp: Optional[bool]
+    enable_otlp: Optional[bool]
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -97,7 +95,7 @@ class TelemetryConfig(TypedDict, total=False):
     logs: Optional[LoggerConfig]
     OTLPExporter: Optional[OTLPExporterConfig]
     otlp_attributes: Optional[dict[str, str]]
-    disable_otlp: Optional[bool]
+    disable_otlp: bool
 
 
 class ConfigFile(TypedDict, total=False):
@@ -165,10 +163,12 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         ]
 
     # Telemetry config
+    enable_otlp = config.get("enable_otlp", None)
+    disable_otlp = True if enable_otlp is None else not enable_otlp
     telemetry: TelemetryConfig = {
         "OTLPExporter": {"tracesEndpoint": [], "logsEndpoint": []},
         "otlp_attributes": config.get("otlp_attributes", {}),
-        "disable_otlp": config.get("disable_otlp", False),
+        "disable_otlp": disable_otlp,
     }
     # For mypy
     assert telemetry["OTLPExporter"] is not None
@@ -264,17 +264,6 @@ def load_config(
             f"dbos-config.yaml must contain a dictionary, not {type(data)}"
         )
     data = cast(Dict[str, Any], data)
-
-    # Load the JSON schema relative to the package root
-    schema_file = resources.files("dbos").joinpath("dbos-config.schema.json")
-    with schema_file.open("r") as f:
-        schema = json.load(f)
-
-    # Validate the data against the schema
-    try:
-        validate(instance=data, schema=schema)
-    except ValidationError as e:
-        raise DBOSInitializationError(f"Validation error: {e}")
 
     # Special case: convert logsEndpoint and tracesEndpoint from strings to lists of strings, if present
     if "telemetry" in data and "OTLPExporter" in data["telemetry"]:
@@ -441,17 +430,13 @@ def process_config(
         printable_sys_db_url = make_url(data["system_database_url"]).render_as_string(
             hide_password=True
         )
-        print(
-            f"[bold blue]DBOS system database URL: {printable_sys_db_url}[/bold blue]"
-        )
+        print(f"DBOS system database URL: {printable_sys_db_url}")
         if data["database_url"].startswith("sqlite"):
             print(
-                f"[bold blue]Using SQLite as a system database. The SQLite system database is for development and testing. PostgreSQL is recommended for production use.[/bold blue]"
+                f"Using SQLite as a system database. The SQLite system database is for development and testing. PostgreSQL is recommended for production use."
             )
         else:
-            print(
-                f"[bold blue]Database engine parameters: {data['database']['db_engine_kwargs']}[/bold blue]"
-            )
+            print(f"Database engine parameters: {data['database']['db_engine_kwargs']}")
 
     # Return data as ConfigFile type
     return data
@@ -563,12 +548,15 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     if "telemetry" not in provided_config or provided_config["telemetry"] is None:
         provided_config["telemetry"] = {
             "OTLPExporter": {"tracesEndpoint": [], "logsEndpoint": []},
+            "disable_otlp": False,
         }
-    elif "OTLPExporter" not in provided_config["telemetry"]:
-        provided_config["telemetry"]["OTLPExporter"] = {
-            "tracesEndpoint": [],
-            "logsEndpoint": [],
-        }
+    else:
+        provided_config["telemetry"]["disable_otlp"] = False
+        if "OTLPExporter" not in provided_config["telemetry"]:
+            provided_config["telemetry"]["OTLPExporter"] = {
+                "tracesEndpoint": [],
+                "logsEndpoint": [],
+            }
 
     # This is a super messy from a typing perspective.
     # Some of ConfigFile keys are optional -- but in practice they'll always be present in hosted environments

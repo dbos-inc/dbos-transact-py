@@ -1,0 +1,34 @@
+"""
+Create the dbos_hello table using SQLAlchemy.
+"""
+
+import os
+from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String
+
+
+def create_dbos_hello_table() -> None:
+    """
+    Create the dbos_hello table in the database.
+    
+    Args:
+        database_url: Database connection string. If not provided,
+                     uses DATABASE_URL environment variable.
+    """
+    database_url = os.environ.get("DBOS_DATABASE_URL", "postgresql+psycopg://postgres:dbos@localhost:5432/${default_db_name}?connect_timeout=5")
+    
+    engine = create_engine(database_url)
+    metadata = MetaData()
+    
+    dbos_hello = Table(
+        'dbos_hello',
+        metadata,
+        Column('greet_count', Integer, primary_key=True, autoincrement=True, nullable=False),
+        Column('name', String, nullable=False)
+    )
+    
+    metadata.create_all(engine)
+    engine.dispose()
+
+
+if __name__ == "__main__":
+    create_dbos_hello_table()
