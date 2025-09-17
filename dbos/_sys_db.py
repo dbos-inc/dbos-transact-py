@@ -1444,8 +1444,13 @@ class SystemDatabase(ABC):
         system_database_url: str,
         engine_kwargs: Dict[str, Any],
         debug_mode: bool = False,
+        schema: Optional[str] = None,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
+        # Set the schema if provided
+        if schema is not None:
+            SystemSchema.set_schema(schema)
+        
         if system_database_url.startswith("sqlite"):
             from ._sys_db_sqlite import SQLiteSystemDatabase
 

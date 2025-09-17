@@ -18,6 +18,21 @@ class SystemSchema:
     ### System table schema
     metadata_obj = MetaData(schema="dbos")
     sysdb_suffix = "_dbos_sys"
+    
+    @classmethod
+    def set_schema(cls, schema_name: str) -> None:
+        """
+        Set the schema for all DBOS system tables.
+        
+        Args:
+            schema_name: The name of the schema to use for system tables
+        """
+        cls.metadata_obj.schema = schema_name
+        cls.workflow_status.schema = schema_name
+        cls.operation_outputs.schema = schema_name
+        cls.notifications.schema = schema_name
+        cls.workflow_events.schema = schema_name
+        cls.streams.schema = schema_name
 
     workflow_status = Table(
         "workflow_status",

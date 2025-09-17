@@ -23,6 +23,10 @@
         "type": ["string", "null"],
         "description": "The URL of the system database"
       },
+      "system_database_schema": {
+        "type": ["string", "null"],
+        "description": "The schema name for DBOS system tables (Default: dbos)"
+      },
       "database": {
         "type": "object",
         "additionalProperties": false,
@@ -82,6 +86,10 @@
             "type": "array",
             "description": "Specify a list of user DB rollback commands to run. DEPRECATED",
             "deprecated": true
+          },
+          "system_database_schema": {
+            "type": ["string", "null"],
+            "description": "The schema name for DBOS system tables (Default: dbos)"
           }
         }
       },

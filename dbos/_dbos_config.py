@@ -37,6 +37,7 @@ class DBOSConfig(TypedDict, total=False):
         application_version (str): Application version
         executor_id (str): Executor ID, used to identify the application instance in distributed environments
         disable_otlp (bool): If True, disables OTLP tracing and logging. Defaults to False.
+        system_database_schema (str): Schema name for DBOS system tables. Defaults to "dbos".
     """
 
     name: str
@@ -55,6 +56,7 @@ class DBOSConfig(TypedDict, total=False):
     application_version: Optional[str]
     executor_id: Optional[str]
     disable_otlp: Optional[bool]
+    system_database_schema: Optional[str]
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -72,6 +74,7 @@ class DatabaseConfig(TypedDict, total=False):
         sys_db_pool_size (int): System database pool size
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs
         migrate (List[str]): Migration commands to run on startup
+        system_database_schema (str): Schema name for DBOS system tables. Defaults to "dbos".
     """
 
     sys_db_name: Optional[str]
@@ -82,6 +85,7 @@ class DatabaseConfig(TypedDict, total=False):
     sys_db_engine_kwargs: Optional[Dict[str, Any]]
     migrate: Optional[List[str]]
     rollback: Optional[List[str]]  # Will be removed in a future version
+    system_database_schema: Optional[str]
 
 
 class OTLPExporterConfig(TypedDict, total=False):
@@ -115,6 +119,7 @@ class ConfigFile(TypedDict, total=False):
         system_database_url (str): System database URL
         telemetry (TelemetryConfig): Configuration for tracing / logging
         env (Dict[str,str]): Environment variables
+        system_database_schema (str): Schema name for DBOS system tables. Defaults to "dbos".
 
     """
 
@@ -125,6 +130,7 @@ class ConfigFile(TypedDict, total=False):
     system_database_url: Optional[str]
     telemetry: Optional[TelemetryConfig]
     env: Dict[str, str]
+    system_database_schema: Optional[str]
 
 
 def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
@@ -143,6 +149,8 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         db_config["sys_db_pool_size"] = config.get("sys_db_pool_size")
     if "db_engine_kwargs" in config:
         db_config["db_engine_kwargs"] = config.get("db_engine_kwargs")
+    if "system_database_schema" in config:
+        db_config["system_database_schema"] = config.get("system_database_schema")
     if db_config:
         translated_config["database"] = db_config
 
@@ -154,6 +162,9 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
 
     if "system_database_url" in config:
         translated_config["system_database_url"] = config.get("system_database_url")
+    
+    if "system_database_schema" in config:
+        translated_config["system_database_schema"] = config.get("system_database_schema")
 
     # Runtime config
     translated_config["runtimeConfig"] = {"run_admin_server": True}

@@ -458,10 +458,13 @@ class DBOS:
             self._background_event_loop.start()
             assert self._config["database_url"] is not None
             assert self._config["database"]["sys_db_engine_kwargs"] is not None
+            # Get the schema configuration, use "dbos" as default
+            schema = self._config.get("system_database_schema") or self._config.get("database", {}).get("system_database_schema", "dbos")
             self._sys_db_field = SystemDatabase.create(
                 system_database_url=get_system_database_url(self._config),
                 engine_kwargs=self._config["database"]["sys_db_engine_kwargs"],
                 debug_mode=debug_mode,
+                schema=schema,
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
             self._app_db_field = ApplicationDatabase.create(
