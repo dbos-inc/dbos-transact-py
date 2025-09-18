@@ -1,5 +1,4 @@
 import asyncio
-import sys
 import time
 import uuid
 from typing import (
@@ -15,16 +14,10 @@ from typing import (
     Union,
 )
 
+from dbos import _serialization
 from dbos._app_db import ApplicationDatabase
 from dbos._context import MaxPriority, MinPriority
 from dbos._sys_db import SystemDatabase
-
-if sys.version_info < (3, 11):
-    from typing_extensions import NotRequired
-else:
-    from typing import NotRequired
-
-from dbos import _serialization
 
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
@@ -58,14 +51,20 @@ from dbos._workflow_commands import (
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 
-class EnqueueOptions(TypedDict):
+# Required EnqueueOptions fields
+class _EnqueueOptionsRequired(TypedDict):
     workflow_name: str
     queue_name: str
-    workflow_id: NotRequired[str]
-    app_version: NotRequired[str]
-    workflow_timeout: NotRequired[float]
-    deduplication_id: NotRequired[str]
-    priority: NotRequired[int]
+
+
+# Optional EnqueueOptions fields
+class EnqueueOptions(_EnqueueOptionsRequired, total=False):
+    workflow_id: str
+    app_version: str
+    workflow_timeout: float
+    deduplication_id: str
+    priority: int
+    max_recovery_attempts: int
 
 
 def validate_enqueue_options(options: EnqueueOptions) -> None:

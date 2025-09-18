@@ -5,11 +5,7 @@ import psycopg
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 
-from dbos._migration import (
-    ensure_dbos_schema,
-    run_alembic_migrations,
-    run_dbos_migrations,
-)
+from dbos._migration import ensure_dbos_schema, run_dbos_migrations
 from dbos._schemas.system_database import SystemSchema
 
 from ._logger import dbos_logger
@@ -60,10 +56,7 @@ class PostgresSystemDatabase(SystemDatabase):
                 conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
         engine.dispose()
 
-        using_dbos_migrations = ensure_dbos_schema(self.engine)
-        if not using_dbos_migrations:
-            # Complete the Alembic migrations, create the dbos_migrations table
-            run_alembic_migrations(self.engine)
+        ensure_dbos_schema(self.engine)
         run_dbos_migrations(self.engine)
 
     def _cleanup_connections(self) -> None:
