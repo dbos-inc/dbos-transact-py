@@ -199,7 +199,7 @@ CREATE TABLE {schema}.event_dispatch_kv (
 """
 
 
-def get_dbos_migrations(schema: str) -> list:
+def get_dbos_migrations(schema: str) -> list[str]:
     return [get_dbos_migration_one(schema)]
 
 
