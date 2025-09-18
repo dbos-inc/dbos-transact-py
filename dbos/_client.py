@@ -114,6 +114,9 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
 
 
 class DBOSClient:
+
+    _app_db: ApplicationDatabase | None = None
+
     def __init__(
         self,
         database_url: Optional[str] = None,  # DEPRECATED
@@ -154,8 +157,6 @@ class DBOSClient:
                     "pool_size": 2,
                 },
             )
-        else:
-            self._app_db = None
 
     def destroy(self) -> None:
         self._sys_db.destroy()
