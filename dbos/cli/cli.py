@@ -287,6 +287,13 @@ def migrate(
             help="The role with which you will run your DBOS application",
         ),
     ] = None,
+    schema: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--schema",
+            help='Schema name for DBOS system tables. Defaults to "dbos".',
+        ),
+    ] = "dbos",
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -296,20 +303,26 @@ def migrate(
     typer.echo(f"Starting DBOS migrations")
     typer.echo(f"Application database: {sa.make_url(application_database_url)}")
     typer.echo(f"System database: {sa.make_url(system_database_url)}")
+    if schema is None:
+        schema = "dbos"
+    typer.echo(f"DBOS system schema: {schema}")
 
     # First, run DBOS migrations on the system database and the application database
     migrate_dbos_databases(
         app_database_url=application_database_url,
         system_database_url=system_database_url,
+        schema=schema,
     )
 
     # Next, assign permissions on the DBOS schema to the application role, if any
     if application_role:
         grant_dbos_schema_permissions(
-            database_url=application_database_url, role_name=application_role
+            database_url=application_database_url,
+            role_name=application_role,
+            schema=schema,
         )
         grant_dbos_schema_permissions(
-            database_url=system_database_url, role_name=application_role
+            database_url=system_database_url, role_name=application_role, schema=schema
         )
 
     # Next, run any custom migration commands specified in the configuration

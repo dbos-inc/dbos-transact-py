@@ -1734,7 +1734,7 @@ def test_destroy(dbos: DBOS, config: DBOSConfig) -> None:
 
 def test_custom_schema(
     config: DBOSConfig, cleanup_test_databases: None, skip_with_sqlite: None
-):
+) -> None:
     DBOS.destroy(destroy_registry=True)
     config["dbos_system_schema"] = "F8nny_sCHem@-n@m3"
     dbos = DBOS(config=config)

@@ -1,3 +1,5 @@
+from typing import Optional
+
 import sqlalchemy as sa
 import typer
 
@@ -5,7 +7,9 @@ from dbos._app_db import ApplicationDatabase
 from dbos._sys_db import SystemDatabase
 
 
-def migrate_dbos_databases(app_database_url: str, system_database_url: str) -> None:
+def migrate_dbos_databases(
+    app_database_url: str, system_database_url: str, schema: str
+) -> None:
     app_db = None
     sys_db = None
     try:
@@ -16,7 +20,7 @@ def migrate_dbos_databases(app_database_url: str, system_database_url: str) -> N
                 "max_overflow": 0,
                 "pool_size": 2,
             },
-            schema="dbos",
+            schema=schema,
         )
         app_db = ApplicationDatabase.create(
             database_url=app_database_url,
@@ -25,7 +29,7 @@ def migrate_dbos_databases(app_database_url: str, system_database_url: str) -> N
                 "max_overflow": 0,
                 "pool_size": 2,
             },
-            schema="dbos",
+            schema=schema,
         )
         sys_db.run_migrations()
         app_db.run_migrations()
@@ -39,12 +43,14 @@ def migrate_dbos_databases(app_database_url: str, system_database_url: str) -> N
             app_db.destroy()
 
 
-def grant_dbos_schema_permissions(database_url: str, role_name: str) -> None:
+def grant_dbos_schema_permissions(
+    database_url: str, role_name: str, schema: str
+) -> None:
     """
-    Grant all permissions on all entities in the dbos schema to the specified role.
+    Grant all permissions on all entities in the system schema to the specified role.
     """
     typer.echo(
-        f"Granting permissions for DBOS schema to {role_name} in database {sa.make_url(database_url)}"
+        f"Granting permissions for the {schema} schema to {role_name} in database {sa.make_url(database_url)}"
     )
     engine = None
     try:
@@ -54,38 +60,38 @@ def grant_dbos_schema_permissions(database_url: str, role_name: str) -> None:
         with engine.connect() as connection:
             connection.execution_options(isolation_level="AUTOCOMMIT")
 
-            # Grant usage on the dbos schema
-            sql = f'GRANT USAGE ON SCHEMA dbos TO "{role_name}"'
+            # Grant usage on the system schema
+            sql = f'GRANT USAGE ON SCHEMA "{schema}" TO "{role_name}"'
             typer.echo(sql)
             connection.execute(sa.text(sql))
 
-            # Grant all privileges on all existing tables in dbos schema (includes views)
-            sql = f'GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA dbos TO "{role_name}"'
+            # Grant all privileges on all existing tables in the system schema (includes views)
+            sql = f'GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA "{schema}" TO "{role_name}"'
             typer.echo(sql)
             connection.execute(sa.text(sql))
 
-            # Grant all privileges on all sequences in dbos schema
+            # Grant all privileges on all sequences in the system schema
+            sql = f'GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA "{schema}" TO "{role_name}"'
+            typer.echo(sql)
+            connection.execute(sa.text(sql))
+
+            # Grant execute on all functions and procedures in the system schema
             sql = (
-                f'GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA dbos TO "{role_name}"'
+                f'GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA "{schema}" TO "{role_name}"'
             )
             typer.echo(sql)
             connection.execute(sa.text(sql))
 
-            # Grant execute on all functions and procedures in dbos schema
-            sql = f'GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA dbos TO "{role_name}"'
+            # Grant default privileges for future objects in the system schema
+            sql = f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT ALL ON TABLES TO "{role_name}"'
             typer.echo(sql)
             connection.execute(sa.text(sql))
 
-            # Grant default privileges for future objects in dbos schema
-            sql = f'ALTER DEFAULT PRIVILEGES IN SCHEMA dbos GRANT ALL ON TABLES TO "{role_name}"'
+            sql = f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT ALL ON SEQUENCES TO "{role_name}"'
             typer.echo(sql)
             connection.execute(sa.text(sql))
 
-            sql = f'ALTER DEFAULT PRIVILEGES IN SCHEMA dbos GRANT ALL ON SEQUENCES TO "{role_name}"'
-            typer.echo(sql)
-            connection.execute(sa.text(sql))
-
-            sql = f'ALTER DEFAULT PRIVILEGES IN SCHEMA dbos GRANT EXECUTE ON FUNCTIONS TO "{role_name}"'
+            sql = f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT EXECUTE ON FUNCTIONS TO "{role_name}"'
             typer.echo(sql)
             connection.execute(sa.text(sql))
 
