@@ -36,7 +36,7 @@ class PostgresSystemDatabase(SystemDatabase):
             return
         system_db_url = self.engine.url
         sysdb_name = system_db_url.database
-        # If the system database does not already exist, create it
+        # Unless we were provided an engine, if the system database does not already exist, create it
         if self.created_engine:
             engine = sa.create_engine(
                 system_db_url.set(database="postgres"), **self._engine_kwargs
@@ -50,6 +50,10 @@ class PostgresSystemDatabase(SystemDatabase):
                     dbos_logger.info(f"Creating system database {sysdb_name}")
                     conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
             engine.dispose()
+        else:
+            # If we were provided an engine, validate it can connect
+            with self.engine.connect() as conn:
+                conn.execute(sa.text("SELECT 1"))
 
         ensure_dbos_schema(self.engine)
         run_dbos_migrations(self.engine)

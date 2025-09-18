@@ -11,6 +11,7 @@ from typing import Optional
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.exc import OperationalError
 
 # Public API
 from dbos import (
@@ -1775,3 +1776,33 @@ def test_without_appdb(config: DBOSConfig, cleanup_test_databases: None) -> None
     assert len(steps) == 3
     for s in steps:
         assert s["function_name"] == step.__qualname__
+
+
+def test_custom_engine(
+    config: DBOSConfig, cleanup_test_databases: None, db_engine: sa.Engine
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    assert config["system_database_url"]
+    config["application_database_url"] = None
+    system_database_url = config["system_database_url"]
+
+    # Create a custom engine
+    engine = sa.create_engine(system_database_url)
+    config["system_database_engine"] = engine
+
+    # Launch DBOS with the engine. It should fail because the database does not exist.
+    DBOS(config=config)
+    with pytest.raises(OperationalError):
+        DBOS.launch()
+    DBOS.destroy()
+
+    # Create the database
+    with db_engine.connect() as c:
+        c.execution_options(isolation_level="AUTOCOMMIT")
+        sysdb_name = sa.make_url(config["system_database_url"]).database
+        c.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
+
+    # Launch DBOS again using the custom pool. It should succeed despite the bogus URL.
+    config["system_database_url"] = "postgresql://bogus:url@not:42/fake"
+    DBOS(config=config)
+    DBOS.launch()
