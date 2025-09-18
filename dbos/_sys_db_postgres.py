@@ -60,7 +60,7 @@ class PostgresSystemDatabase(SystemDatabase):
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
-        with self._cleanup_lock:
+        with self._listener_thread_lock:
             if self.notification_conn and self.notification_conn.dbapi_connection:
                 self.notification_conn.dbapi_connection.close()
                 self.notification_conn.invalidate()
@@ -106,16 +106,16 @@ class PostgresSystemDatabase(SystemDatabase):
         """Listen for PostgreSQL notifications using psycopg."""
         while self._run_background_processes:
             try:
-                self.notification_conn = self.engine.raw_connection()
-                self.notification_conn.detach()
-                psycopg_conn = cast(
-                    psycopg.connection.Connection, self.notification_conn
-                )
-                psycopg_conn.set_autocommit(True)
+                with self._listener_thread_lock:
+                    self.notification_conn = self.engine.raw_connection()
+                    self.notification_conn.detach()
+                    psycopg_conn = cast(
+                        psycopg.connection.Connection, self.notification_conn
+                    )
+                    psycopg_conn.set_autocommit(True)
 
-                psycopg_conn.execute("LISTEN dbos_notifications_channel")
-                psycopg_conn.execute("LISTEN dbos_workflow_events_channel")
-
+                    psycopg_conn.execute("LISTEN dbos_notifications_channel")
+                    psycopg_conn.execute("LISTEN dbos_workflow_events_channel")
                 while self._run_background_processes:
                     gen = psycopg_conn.notifies()
                     for notify in gen:

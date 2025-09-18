@@ -363,7 +363,7 @@ class SystemDatabase(ABC):
 
         self.notifications_map = ThreadSafeConditionDict()
         self.workflow_events_map = ThreadSafeConditionDict()
-        self._cleanup_lock = threading.Lock()
+        self._listener_thread_lock = threading.Lock()
 
         # Now we can run background processes
         self._run_background_processes = True
