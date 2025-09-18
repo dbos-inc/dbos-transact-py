@@ -20,6 +20,7 @@ class PostgresSystemDatabase(SystemDatabase):
         *,
         system_database_url: str,
         engine_kwargs: Dict[str, Any],
+        schema: Optional[str],
         debug_mode: bool = False,
     ):
         super().__init__(
@@ -27,6 +28,8 @@ class PostgresSystemDatabase(SystemDatabase):
             engine_kwargs=engine_kwargs,
             debug_mode=debug_mode,
         )
+        if schema is not None:
+            SystemSchema.set_schema(schema)
         self.notification_conn: Optional[psycopg.connection.Connection] = None
 
     def _create_engine(

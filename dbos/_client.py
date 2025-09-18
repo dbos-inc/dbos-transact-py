@@ -124,6 +124,7 @@ class DBOSClient:
         *,
         system_database_url: Optional[str] = None,
         application_database_url: Optional[str] = None,
+        system_database_schema: Optional[str] = "dbos",
         system_database: Optional[str] = None,  # DEPRECATED
     ):
         application_database_url = get_application_database_url(
@@ -151,6 +152,7 @@ class DBOSClient:
                 "max_overflow": 0,
                 "pool_size": 2,
             },
+            schema=system_database_schema,
         )
         self._sys_db.check_connection()
         self._app_db = ApplicationDatabase.create(

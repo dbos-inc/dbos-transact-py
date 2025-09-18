@@ -1,3 +1,5 @@
+from typing import Optional
+
 from sqlalchemy import (
     BigInteger,
     Column,
@@ -18,12 +20,12 @@ class SystemSchema:
     ### System table schema
     metadata_obj = MetaData(schema="dbos")
     sysdb_suffix = "_dbos_sys"
-    
+
     @classmethod
-    def set_schema(cls, schema_name: str) -> None:
+    def set_schema(cls, schema_name: Optional[str]) -> None:
         """
         Set the schema for all DBOS system tables.
-        
+
         Args:
             schema_name: The name of the schema to use for system tables
         """

@@ -116,7 +116,10 @@ def test_sqlite_systemdb_migration() -> None:
 
         # Create and run migrations
         sys_db = SystemDatabase.create(
-            system_database_url=sqlite_url, engine_kwargs={}, debug_mode=False
+            system_database_url=sqlite_url,
+            engine_kwargs={},
+            debug_mode=False,
+            schema=None,
         )
 
         # Run migrations
