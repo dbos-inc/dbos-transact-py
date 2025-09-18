@@ -98,10 +98,10 @@ def get_workflow(sys_db: SystemDatabase, workflow_id: str) -> Optional[WorkflowS
 
 
 def list_workflow_steps(
-    sys_db: SystemDatabase, app_db: ApplicationDatabase, workflow_id: str
+    sys_db: SystemDatabase, app_db: Optional[ApplicationDatabase], workflow_id: str
 ) -> List[StepInfo]:
     steps = sys_db.get_workflow_steps(workflow_id)
-    transactions = app_db.get_transactions(workflow_id)
+    transactions = app_db.get_transactions(workflow_id) if app_db else []
     merged_steps = steps + transactions
     merged_steps.sort(key=lambda step: step["function_id"])
     return merged_steps
@@ -109,7 +109,7 @@ def list_workflow_steps(
 
 def fork_workflow(
     sys_db: SystemDatabase,
-    app_db: ApplicationDatabase,
+    app_db: Optional[ApplicationDatabase],
     workflow_id: str,
     start_step: int,
     *,
@@ -122,7 +122,8 @@ def fork_workflow(
         ctx.id_assigned_for_next_workflow = ""
     else:
         forked_workflow_id = str(uuid.uuid4())
-    app_db.clone_workflow_transactions(workflow_id, forked_workflow_id, start_step)
+    if app_db:
+        app_db.clone_workflow_transactions(workflow_id, forked_workflow_id, start_step)
     sys_db.fork_workflow(
         workflow_id,
         forked_workflow_id,
@@ -145,7 +146,10 @@ def garbage_collect(
     )
     if result is not None:
         cutoff_epoch_timestamp_ms, pending_workflow_ids = result
-        dbos._app_db.garbage_collect(cutoff_epoch_timestamp_ms, pending_workflow_ids)
+        if dbos._app_db:
+            dbos._app_db.garbage_collect(
+                cutoff_epoch_timestamp_ms, pending_workflow_ids
+            )
 
 
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:

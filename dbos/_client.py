@@ -22,11 +22,7 @@ from dbos._sys_db import SystemDatabase
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 
-from dbos._dbos_config import (
-    get_application_database_url,
-    get_system_database_url,
-    is_valid_database_url,
-)
+from dbos._dbos_config import get_system_database_url, is_valid_database_url
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._serialization import WorkflowInputs
@@ -118,6 +114,9 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
 
 
 class DBOSClient:
+
+    _app_db: ApplicationDatabase | None = None
+
     def __init__(
         self,
         database_url: Optional[str] = None,  # DEPRECATED
@@ -126,13 +125,8 @@ class DBOSClient:
         application_database_url: Optional[str] = None,
         system_database: Optional[str] = None,  # DEPRECATED
     ):
-        application_database_url = get_application_database_url(
-            {
-                "system_database_url": system_database_url,
-                "database_url": (
-                    database_url if database_url else application_database_url
-                ),
-            }
+        application_database_url = (
+            database_url if database_url else application_database_url
         )
         system_database_url = get_system_database_url(
             {
@@ -142,7 +136,8 @@ class DBOSClient:
             }
         )
         assert is_valid_database_url(system_database_url)
-        assert is_valid_database_url(application_database_url)
+        if application_database_url:
+            assert is_valid_database_url(application_database_url)
         # We only create database connections but do not run migrations
         self._sys_db = SystemDatabase.create(
             system_database_url=system_database_url,
@@ -153,14 +148,15 @@ class DBOSClient:
             },
         )
         self._sys_db.check_connection()
-        self._app_db = ApplicationDatabase.create(
-            database_url=application_database_url,
-            engine_kwargs={
-                "pool_timeout": 30,
-                "max_overflow": 0,
-                "pool_size": 2,
-            },
-        )
+        if application_database_url:
+            self._app_db = ApplicationDatabase.create(
+                database_url=application_database_url,
+                engine_kwargs={
+                    "pool_timeout": 30,
+                    "max_overflow": 0,
+                    "pool_size": 2,
+                },
+            )
 
     def destroy(self) -> None:
         self._sys_db.destroy()

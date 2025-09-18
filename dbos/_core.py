@@ -896,7 +896,9 @@ def decorate_transaction(
                 raise DBOSWorkflowCancelledError(
                     f"Workflow {ctx.workflow_id} is cancelled. Aborting transaction {transaction_name}."
                 )
-
+            assert (
+                dbos._app_db
+            ), "Transactions can only be used if DBOS is configured with an application_database_url"
             with dbos._app_db.sessionmaker() as session:
                 attributes: TracedAttributes = {
                     "name": transaction_name,

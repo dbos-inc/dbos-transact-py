@@ -38,7 +38,7 @@ class DefaultEncoder(json.JSONEncoder):
 
 def _get_db_url(
     *, system_database_url: Optional[str], application_database_url: Optional[str]
-) -> Tuple[str, str]:
+) -> Tuple[str, str | None]:
     """
     Get the database URL to use for the DBOS application.
     Order of precedence:
@@ -294,7 +294,8 @@ def migrate(
     )
 
     typer.echo(f"Starting DBOS migrations")
-    typer.echo(f"Application database: {sa.make_url(application_database_url)}")
+    if application_database_url:
+        typer.echo(f"Application database: {sa.make_url(application_database_url)}")
     typer.echo(f"System database: {sa.make_url(system_database_url)}")
 
     # First, run DBOS migrations on the system database and the application database
@@ -305,9 +306,10 @@ def migrate(
 
     # Next, assign permissions on the DBOS schema to the application role, if any
     if application_role:
-        grant_dbos_schema_permissions(
-            database_url=application_database_url, role_name=application_role
-        )
+        if application_database_url:
+            grant_dbos_schema_permissions(
+                database_url=application_database_url, role_name=application_role
+            )
         grant_dbos_schema_permissions(
             database_url=system_database_url, role_name=application_role
         )
