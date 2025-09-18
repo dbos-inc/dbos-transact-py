@@ -7,7 +7,7 @@ import os
 import threading
 import time
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 import pytest
 import sqlalchemy as sa
@@ -1806,3 +1806,31 @@ def test_custom_engine(
     config["system_database_url"] = "postgresql://bogus:url@not:42/fake"
     DBOS(config=config)
     DBOS.launch()
+
+    key = "key"
+    val = "val"
+
+    @DBOS.workflow()
+    def recv_workflow() -> Any:
+        DBOS.set_event(key, val)
+        return DBOS.recv()
+
+    handle = DBOS.start_workflow(recv_workflow)
+    assert DBOS.get_event(handle.workflow_id, key) == val
+    DBOS.send(handle.workflow_id, val)
+    assert handle.get_result() == val
+    assert len(DBOS.list_workflows()) == 2
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 3
+    assert "setEvent" in steps[0]["function_name"]
+    DBOS.destroy(destroy_registry=True)
+
+    # Test custom engine with client
+    client = DBOSClient(
+        system_database_url=config["system_database_url"],
+        system_database_engine=config["system_database_engine"],
+    )
+    assert len(client.list_workflows()) == 2
+    steps = client.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 3
+    assert "setEvent" in steps[0]["function_name"]
