@@ -56,10 +56,11 @@ class PostgresSystemDatabase(SystemDatabase):
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
-        if self.notification_conn is not None:
-            if self.notification_conn.dbapi_connection:
-                self.notification_conn.dbapi_connection.close()
-            self.notification_conn.invalidate()
+        with self._cleanup_lock:
+            if self.notification_conn is not None:
+                if self.notification_conn.dbapi_connection:
+                    self.notification_conn.dbapi_connection.close()
+                    self.notification_conn.invalidate()
 
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation in PostgreSQL."""
