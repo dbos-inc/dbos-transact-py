@@ -451,9 +451,7 @@ class DBOS:
             assert self._config["database_url"] is not None
             assert self._config["database"]["sys_db_engine_kwargs"] is not None
             # Get the schema configuration, use "dbos" as default
-            schema = self._config.get("system_database_schema") or self._config.get(
-                "database", {}
-            ).get("system_database_schema", "dbos")
+            schema = self._config.get("system_database_schema", "dbos")
             self._sys_db_field = SystemDatabase.create(
                 system_database_url=get_system_database_url(self._config),
                 engine_kwargs=self._config["database"]["sys_db_engine_kwargs"],

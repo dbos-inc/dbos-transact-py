@@ -81,7 +81,6 @@ class DatabaseConfig(TypedDict, total=False):
     sys_db_engine_kwargs: Optional[Dict[str, Any]]
     migrate: Optional[List[str]]
     rollback: Optional[List[str]]  # Will be removed in a future version
-    system_database_schema: Optional[str]
 
 
 class OTLPExporterConfig(TypedDict, total=False):
@@ -145,8 +144,6 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         db_config["sys_db_pool_size"] = config.get("sys_db_pool_size")
     if "db_engine_kwargs" in config:
         db_config["db_engine_kwargs"] = config.get("db_engine_kwargs")
-    if "system_database_schema" in config:
-        db_config["system_database_schema"] = config.get("system_database_schema")
     if db_config:
         translated_config["database"] = db_config
 
@@ -554,6 +551,8 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
             "DBOS_SYSTEM_DATABASE_URL environment variable is not set. This is required to connect to the database."
         )
     provided_config["system_database_url"] = system_db_url
+    # Always use the "dbos" schema when deploying to DBOS Cloud
+    provided_config["system_database_schema"] = "dbos"
 
     # Telemetry config
     if "telemetry" not in provided_config or provided_config["telemetry"] is None:
