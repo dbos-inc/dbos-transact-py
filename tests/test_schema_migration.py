@@ -42,6 +42,35 @@ def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
         assert migrations_rows[0][0] == len(get_dbos_migrations("dbos"))
 
 
+def test_systemdb_migration_custom_schema(
+    config: DBOSConfig, skip_with_sqlite: None
+) -> None:
+    config["application_database_url"] = None
+    schema = "foobar"
+    config["system_database_schema"] = "foobar"
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    DBOS.launch()
+    # Make sure all tables exist
+    with dbos._sys_db.engine.connect() as connection:
+        # Check dbos_migrations table exists, has one row, and has the right version
+        migrations_result = connection.execute(
+            sa.text(f"SELECT version FROM {schema}.dbos_migrations")
+        )
+        migrations_rows = migrations_result.fetchall()
+        assert len(migrations_rows) == 1
+        assert migrations_rows[0][0] == len(get_dbos_migrations(schema))
+
+        # # Check that the 'dbos' schema does not exist
+        # schema_check_result = connection.execute(
+        #     sa.text("SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'dbos'")
+        # )
+        # dbos_schema_rows = schema_check_result.fetchall()
+        # assert len(dbos_schema_rows) == 0
+
+    DBOS.destroy()
+
+
 def test_custom_sysdb_name_migration(
     config: DBOSConfig, db_engine: sa.Engine, skip_with_sqlite: None
 ) -> None:
