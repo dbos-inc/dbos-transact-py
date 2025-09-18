@@ -488,6 +488,13 @@ def list(
             help="Offset for pagination",
         ),
     ] = None,
+    schema: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--schema",
+            help='Schema name for DBOS system tables. Defaults to "dbos".',
+        ),
+    ] = "dbos",
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -496,6 +503,7 @@ def list(
     client = DBOSClient(
         application_database_url=application_database_url,
         system_database_url=system_database_url,
+        dbos_system_schema=schema,
     )
     workflows = client.list_workflows(
         limit=limit,
@@ -530,6 +538,13 @@ def get(
             help="Your DBOS system database URL",
         ),
     ] = None,
+    schema: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--schema",
+            help='Schema name for DBOS system tables. Defaults to "dbos".',
+        ),
+    ] = "dbos",
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -538,6 +553,7 @@ def get(
     client = DBOSClient(
         application_database_url=application_database_url,
         system_database_url=system_database_url,
+        dbos_system_schema=schema,
     )
     status = client.retrieve_workflow(workflow_id=workflow_id).get_status()
     print(json.dumps(status.__dict__, cls=DefaultEncoder))
@@ -562,6 +578,13 @@ def steps(
             help="Your DBOS system database URL",
         ),
     ] = None,
+    schema: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--schema",
+            help='Schema name for DBOS system tables. Defaults to "dbos".',
+        ),
+    ] = "dbos",
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -570,6 +593,7 @@ def steps(
     client = DBOSClient(
         application_database_url=application_database_url,
         system_database_url=system_database_url,
+        dbos_system_schema=schema,
     )
     steps = client.list_workflow_steps(workflow_id=workflow_id)
     print(json.dumps(steps, cls=DefaultEncoder))
@@ -596,6 +620,13 @@ def cancel(
             help="Your DBOS system database URL",
         ),
     ] = None,
+    schema: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--schema",
+            help='Schema name for DBOS system tables. Defaults to "dbos".',
+        ),
+    ] = "dbos",
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -604,6 +635,7 @@ def cancel(
     client = DBOSClient(
         application_database_url=application_database_url,
         system_database_url=system_database_url,
+        dbos_system_schema=schema,
     )
     client.cancel_workflow(workflow_id=workflow_id)
 
@@ -627,6 +659,13 @@ def resume(
             help="Your DBOS system database URL",
         ),
     ] = None,
+    schema: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--schema",
+            help='Schema name for DBOS system tables. Defaults to "dbos".',
+        ),
+    ] = "dbos",
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -635,6 +674,7 @@ def resume(
     client = DBOSClient(
         application_database_url=application_database_url,
         system_database_url=system_database_url,
+        dbos_system_schema=schema,
     )
     client.resume_workflow(workflow_id=workflow_id)
 
@@ -660,6 +700,13 @@ def restart(
             help="Your DBOS system database URL",
         ),
     ] = None,
+    schema: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--schema",
+            help='Schema name for DBOS system tables. Defaults to "dbos".',
+        ),
+    ] = "dbos",
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -668,6 +715,7 @@ def restart(
     client = DBOSClient(
         application_database_url=application_database_url,
         system_database_url=system_database_url,
+        dbos_system_schema=schema,
     )
     status = client.fork_workflow(workflow_id=workflow_id, start_step=1).get_status()
     print(json.dumps(status.__dict__, cls=DefaultEncoder))
@@ -718,6 +766,13 @@ def fork(
             help="Your DBOS system database URL",
         ),
     ] = None,
+    schema: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--schema",
+            help='Schema name for DBOS system tables. Defaults to "dbos".',
+        ),
+    ] = "dbos",
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -726,6 +781,7 @@ def fork(
     client = DBOSClient(
         application_database_url=application_database_url,
         system_database_url=system_database_url,
+        dbos_system_schema=schema,
     )
 
     if forked_workflow_id is not None:
@@ -822,6 +878,13 @@ def list_queue(
             help="Offset for pagination",
         ),
     ] = None,
+    schema: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--schema",
+            help='Schema name for DBOS system tables. Defaults to "dbos".',
+        ),
+    ] = "dbos",
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -830,6 +893,7 @@ def list_queue(
     client = DBOSClient(
         application_database_url=application_database_url,
         system_database_url=system_database_url,
+        dbos_system_schema=schema,
     )
     workflows = client.list_queued_workflows(
         limit=limit,
