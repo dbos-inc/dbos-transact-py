@@ -1762,7 +1762,7 @@ def test_without_appdb(config: DBOSConfig, cleanup_test_databases: None) -> None
     assert forked_handle.get_result() == forked_handle.workflow_id
 
     @DBOS.transaction()
-    def transaction():
+    def transaction() -> None:
         return
 
     with pytest.raises(AssertionError):

@@ -414,12 +414,11 @@ def process_config(
         assert data["system_database_url"]
         data["database_url"] = None
 
-    # If neither URL is provided, use a default SQLite database URL.
+    # If neither URL is provided, use a default SQLite system database URL.
     if not data.get("database_url") and not data.get("system_database_url"):
         _app_db_name = _app_name_to_db_name(data["name"])
-        data["system_database_url"] = data["database_url"] = (
-            f"sqlite:///{_app_db_name}.sqlite"
-        )
+        data["system_database_url"] = f"sqlite:///{_app_db_name}.sqlite"
+        data["database_url"] = None
 
     configure_db_engine_parameters(data["database"], connect_timeout=connect_timeout)
 
@@ -430,6 +429,11 @@ def process_config(
             hide_password=True
         )
         print(f"DBOS system database URL: {printable_sys_db_url}")
+        if data["database_url"]:
+            printable_app_db_url = make_url(data["database_url"]).render_as_string(
+                hide_password=True
+            )
+            print(f"DBOS application database URL: {printable_app_db_url}")
         if data["system_database_url"].startswith("sqlite"):
             print(
                 f"Using SQLite as a system database. The SQLite system database is for development and testing. PostgreSQL is recommended for production use."
