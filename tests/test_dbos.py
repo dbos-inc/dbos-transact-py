@@ -24,6 +24,7 @@ from dbos import (
 )
 
 # Private API because this is a test
+from dbos._client import DBOSClient
 from dbos._context import assert_current_dbos_context, get_local_dbos_context
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
@@ -1760,3 +1761,9 @@ def test_without_appdb(config: DBOSConfig, cleanup_test_databases: None) -> None
     forked_handle = DBOS.fork_workflow(wfid, start_step=1)
     assert forked_handle.get_result() == forked_handle.workflow_id
     DBOS.destroy(destroy_registry=True)
+
+    client = DBOSClient(system_database_url=config["system_database_url"])
+    steps = client.list_workflow_steps(wfid)
+    assert len(steps) == 3
+    for s in steps:
+        assert s["function_name"] == step.__qualname__

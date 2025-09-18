@@ -614,12 +614,11 @@ def get_system_database_url(config: ConfigFile) -> str:
         )
 
 
-def get_application_database_url(config: ConfigFile) -> str:
+def get_application_database_url(config: ConfigFile) -> str | None:
     # For backwards compatibility, the application database URL is "database_url"
     if config.get("database_url"):
         assert config["database_url"]
         return config["database_url"]
     else:
-        # If the application database URL is not specified, set it to the system database URL
-        assert config["system_database_url"]
-        return config["system_database_url"]
+        # If the application database URL is not specified, return None
+        return None
