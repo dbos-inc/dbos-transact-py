@@ -1779,7 +1779,10 @@ def test_without_appdb(config: DBOSConfig, cleanup_test_databases: None) -> None
 
 
 def test_custom_engine(
-    config: DBOSConfig, cleanup_test_databases: None, db_engine: sa.Engine
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    db_engine: sa.Engine,
+    skip_with_sqlite: None,
 ) -> None:
     DBOS.destroy(destroy_registry=True)
     assert config["system_database_url"]
