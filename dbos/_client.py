@@ -162,6 +162,7 @@ class DBOSClient:
                 "max_overflow": 0,
                 "pool_size": 2,
             },
+            schema=system_database_schema,
         )
 
     def destroy(self) -> None:

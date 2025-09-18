@@ -43,8 +43,11 @@ def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
 
 
 def test_systemdb_migration_custom_schema(
-    config: DBOSConfig, skip_with_sqlite: None
+    config: DBOSConfig,
+    skip_with_sqlite: None,
+    cleanup_test_databases: None,
 ) -> None:
+
     config["application_database_url"] = None
     schema = "foobar"
     config["system_database_schema"] = "foobar"
@@ -53,20 +56,25 @@ def test_systemdb_migration_custom_schema(
     DBOS.launch()
     # Make sure all tables exist
     with dbos._sys_db.engine.connect() as connection:
+        result = connection.execute(sa.text(f"SELECT * FROM {schema}.workflow_status"))
+        rows = result.fetchall()
+        assert len(rows) == 0
         # Check dbos_migrations table exists, has one row, and has the right version
-        migrations_result = connection.execute(
+        result = connection.execute(
             sa.text(f"SELECT version FROM {schema}.dbos_migrations")
         )
-        migrations_rows = migrations_result.fetchall()
-        assert len(migrations_rows) == 1
-        assert migrations_rows[0][0] == len(get_dbos_migrations(schema))
+        rows = result.fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == len(get_dbos_migrations(schema))
 
-        # # Check that the 'dbos' schema does not exist
-        # schema_check_result = connection.execute(
-        #     sa.text("SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'dbos'")
-        # )
-        # dbos_schema_rows = schema_check_result.fetchall()
-        # assert len(dbos_schema_rows) == 0
+        # Check that the 'dbos' schema does not exist
+        result = connection.execute(
+            sa.text(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'dbos'"
+            )
+        )
+        rows = result.fetchall()
+        assert len(rows) == 0
 
     DBOS.destroy()
 

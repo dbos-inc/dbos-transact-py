@@ -25,6 +25,7 @@ def migrate_dbos_databases(app_database_url: str, system_database_url: str) -> N
                 "max_overflow": 0,
                 "pool_size": 2,
             },
+            schema="dbos",
         )
         sys_db.run_migrations()
         app_db.run_migrations()

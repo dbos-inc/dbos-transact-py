@@ -28,9 +28,7 @@ def test_package(
         with db_engine.connect() as connection:
             connection.execution_options(isolation_level="AUTOCOMMIT")
             connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}"))
-            connection.execute(
-                sa.text(f"DROP DATABASE IF EXISTS {sys_db_name}")
-            )
+            connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sys_db_name}"))
 
         with tempfile.TemporaryDirectory() as temp_path:
             temp_path = tempfile.mkdtemp(prefix="dbos-")
@@ -62,7 +60,9 @@ def test_package(
             )
 
             # Next, verify a simple DBOS-only script runs
-            subprocess.check_call(["python3", "tests/script_without_fastapi.py"], env=venv)
+            subprocess.check_call(
+                ["python3", "tests/script_without_fastapi.py"], env=venv
+            )
 
             # Install FastAPI into the virtual environment
             subprocess.check_call(

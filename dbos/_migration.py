@@ -133,7 +133,7 @@ CREATE TABLE {schema}.notifications (
     message TEXT NOT NULL,
     created_at_epoch_ms BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000::numeric)::bigint,
     message_uuid TEXT NOT NULL DEFAULT gen_random_uuid(), -- Built-in function
-    FOREIGN KEY (destination_uuid) REFERENCES dbos.workflow_status(workflow_uuid) 
+    FOREIGN KEY (destination_uuid) REFERENCES {schema}.workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
 CREATE INDEX idx_workflow_topic ON {schema}.notifications (destination_uuid, topic);

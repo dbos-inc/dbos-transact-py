@@ -463,6 +463,7 @@ class DBOS:
                 database_url=self._config["database_url"],
                 engine_kwargs=self._config["database"]["db_engine_kwargs"],
                 debug_mode=debug_mode,
+                schema=schema,
             )
 
             if debug_mode:
