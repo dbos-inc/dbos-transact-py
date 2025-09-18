@@ -1794,7 +1794,7 @@ def test_custom_engine(
     DBOS(config=config)
     with pytest.raises(OperationalError):
         DBOS.launch()
-    DBOS.destroy()
+    DBOS.destroy(destroy_registry=True)
 
     # Create the database
     with db_engine.connect() as c:
