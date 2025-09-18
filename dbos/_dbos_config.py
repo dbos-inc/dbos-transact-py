@@ -415,22 +415,20 @@ def process_config(
                 url = url.set(database=f"{url.database}{SystemSchema.sysdb_suffix}")
             data["system_database_url"] = url.render_as_string(hide_password=False)
 
-    # If a system database URL is provided but not an application database URL, set the
-    # application database URL to the system database URL.
+    # If a system database URL is provided but not an application database URL,
+    # do not create an application database.
     if data.get("system_database_url") and not data.get("database_url"):
         assert data["system_database_url"]
-        data["database_url"] = data["system_database_url"]
+        data["database_url"] = None
 
-    # If neither URL is provided, use a default SQLite database URL.
+    # If neither URL is provided, use a default SQLite system database URL.
     if not data.get("database_url") and not data.get("system_database_url"):
         _app_db_name = _app_name_to_db_name(data["name"])
-        data["system_database_url"] = data["database_url"] = (
-            f"sqlite:///{_app_db_name}.sqlite"
-        )
+        data["system_database_url"] = f"sqlite:///{_app_db_name}.sqlite"
+        data["database_url"] = None
 
     configure_db_engine_parameters(data["database"], connect_timeout=connect_timeout)
 
-    assert data["database_url"] is not None
     assert data["system_database_url"] is not None
     # Pretty-print connection information, respecting log level
     if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
@@ -438,7 +436,12 @@ def process_config(
             hide_password=True
         )
         print(f"DBOS system database URL: {printable_sys_db_url}")
-        if data["database_url"].startswith("sqlite"):
+        if data["database_url"]:
+            printable_app_db_url = make_url(data["database_url"]).render_as_string(
+                hide_password=True
+            )
+            print(f"DBOS application database URL: {printable_app_db_url}")
+        if data["system_database_url"].startswith("sqlite"):
             print(
                 f"Using SQLite as a system database. The SQLite system database is for development and testing. PostgreSQL is recommended for production use."
             )
@@ -624,12 +627,11 @@ def get_system_database_url(config: ConfigFile) -> str:
         )
 
 
-def get_application_database_url(config: ConfigFile) -> str:
+def get_application_database_url(config: ConfigFile) -> str | None:
     # For backwards compatibility, the application database URL is "database_url"
     if config.get("database_url"):
         assert config["database_url"]
         return config["database_url"]
     else:
-        # If the application database URL is not specified, set it to the system database URL
-        assert config["system_database_url"]
-        return config["system_database_url"]
+        # If the application database URL is not specified, return None
+        return None

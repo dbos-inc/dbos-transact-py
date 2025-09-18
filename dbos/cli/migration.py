@@ -8,7 +8,7 @@ from dbos._sys_db import SystemDatabase
 
 
 def migrate_dbos_databases(
-    app_database_url: str, system_database_url: str, schema: str
+    app_database_url: Optional[str], system_database_url: str, schema: str
 ) -> None:
     app_db = None
     sys_db = None
@@ -22,17 +22,18 @@ def migrate_dbos_databases(
             },
             schema=schema,
         )
-        app_db = ApplicationDatabase.create(
-            database_url=app_database_url,
-            engine_kwargs={
-                "pool_timeout": 30,
-                "max_overflow": 0,
-                "pool_size": 2,
-            },
-            schema=schema,
-        )
         sys_db.run_migrations()
-        app_db.run_migrations()
+        if app_database_url:
+            app_db = ApplicationDatabase.create(
+                database_url=app_database_url,
+                engine_kwargs={
+                    "pool_timeout": 30,
+                    "max_overflow": 0,
+                    "pool_size": 2,
+                },
+                schema=schema,
+            )
+            app_db.run_migrations()
     except Exception as e:
         typer.echo(f"DBOS migrations failed: {e}")
         raise typer.Exit(code=1)

@@ -669,6 +669,7 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     assert len(workflows) == 2
     assert workflows[0].workflow_id == handle.workflow_id
     # Verify txn outputs are preserved only for the remaining workflows
+    assert dbos._app_db
     with dbos._app_db.engine.begin() as c:
         rows = c.execute(
             sa.select(

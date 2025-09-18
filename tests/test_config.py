@@ -279,7 +279,7 @@ def test_process_config_only_system_database():
     configFile = process_config(data=config)
     assert configFile["name"] == "some-app"
     assert configFile["system_database_url"] == config["system_database_url"]
-    assert configFile["database_url"] == config["system_database_url"]
+    assert configFile["database_url"] is None
 
 
 def test_process_config_sqlite():
@@ -331,8 +331,8 @@ def test_process_config_load_defaults():
     }
     processed_config = process_config(data=config)
     assert processed_config["name"] == "some-app"
-    assert processed_config["database_url"] == f"sqlite:///some_app.sqlite"
-    assert processed_config["system_database_url"] == processed_config["database_url"]
+    assert processed_config["database_url"] is None
+    assert processed_config["system_database_url"] == f"sqlite:///some_app.sqlite"
     assert processed_config["database"]["db_engine_kwargs"] is not None
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
     assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
@@ -346,8 +346,8 @@ def test_process_config_load_default_with_None_database_url():
     }
     processed_config = process_config(data=config)
     assert processed_config["name"] == "some-app"
-    assert processed_config["database_url"] == f"sqlite:///some_app.sqlite"
-    assert processed_config["system_database_url"] == processed_config["database_url"]
+    assert processed_config["database_url"] is None
+    assert processed_config["system_database_url"] == f"sqlite:///some_app.sqlite"
     assert processed_config["database"]["db_engine_kwargs"] is not None
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
     assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
@@ -361,8 +361,8 @@ def test_process_config_load_default_with_empty_database_url():
     }
     processed_config = process_config(data=config)
     assert processed_config["name"] == "some-app"
-    assert processed_config["database_url"] == f"sqlite:///some_app.sqlite"
-    assert processed_config["system_database_url"] == processed_config["database_url"]
+    assert processed_config["database_url"] is None
+    assert processed_config["system_database_url"] == f"sqlite:///some_app.sqlite"
     assert processed_config["database"]["db_engine_kwargs"] is not None
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
     assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
@@ -396,8 +396,8 @@ def test_config_mixed_params():
 
     configFile = process_config(data=config)
     assert configFile["name"] == "some-app"
-    assert configFile["database_url"] == f"sqlite:///some_app.sqlite"
-    assert configFile["system_database_url"] == configFile["database_url"]
+    assert configFile["database_url"] is None
+    assert configFile["system_database_url"] == f"sqlite:///some_app.sqlite"
     assert configFile["database"]["db_engine_kwargs"] is not None
     assert configFile["database"]["sys_db_engine_kwargs"] is not None
     assert configFile["telemetry"]["logs"]["logLevel"] == "INFO"

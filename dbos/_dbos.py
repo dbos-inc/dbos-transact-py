@@ -409,13 +409,8 @@ class DBOS:
         return rv
 
     @property
-    def _app_db(self) -> ApplicationDatabase:
-        if self._app_db_field is None:
-            raise DBOSException(
-                "Application database accessed before DBOS was launched"
-            )
-        rv: ApplicationDatabase = self._app_db_field
-        return rv
+    def _app_db(self) -> ApplicationDatabase | None:
+        return self._app_db_field
 
     @property
     def _admin_server(self) -> AdminServer:
@@ -448,7 +443,6 @@ class DBOS:
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             self._executor_field = ThreadPoolExecutor(max_workers=sys.maxsize)
             self._background_event_loop.start()
-            assert self._config["database_url"] is not None
             assert self._config["database"]["sys_db_engine_kwargs"] is not None
             # Get the schema configuration, use "dbos" as default
             schema = self._config.get("dbos_system_schema", "dbos")
@@ -459,19 +453,21 @@ class DBOS:
                 schema=schema,
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
-            self._app_db_field = ApplicationDatabase.create(
-                database_url=self._config["database_url"],
-                engine_kwargs=self._config["database"]["db_engine_kwargs"],
-                debug_mode=debug_mode,
-                schema=schema,
-            )
+            if self._config["database_url"]:
+                self._app_db_field = ApplicationDatabase.create(
+                    database_url=self._config["database_url"],
+                    engine_kwargs=self._config["database"]["db_engine_kwargs"],
+                    debug_mode=debug_mode,
+                    schema=schema,
+                )
 
             if debug_mode:
                 return
 
             # Run migrations for the system and application databases
             self._sys_db.run_migrations()
-            self._app_db.run_migrations()
+            if self._app_db:
+                self._app_db.run_migrations()
 
             admin_port = self._config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:
