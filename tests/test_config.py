@@ -279,7 +279,7 @@ def test_process_config_only_system_database():
     configFile = process_config(data=config)
     assert configFile["name"] == "some-app"
     assert configFile["system_database_url"] == config["system_database_url"]
-    assert configFile["database_url"] == config["system_database_url"]
+    assert configFile["database_url"] is None
 
 
 def test_process_config_sqlite():
