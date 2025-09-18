@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from ._logger import dbos_logger
 
 
-def ensure_dbos_schema(engine: sa.Engine) -> None:
+def ensure_dbos_schema(engine: sa.Engine, schema: str) -> None:
     """
     True if using DBOS migrations (DBOS schema and migrations table already exist or were created)
     False if using Alembic migrations (DBOS schema exists, but dbos_migrations table doesn't)
@@ -39,7 +39,7 @@ def ensure_dbos_schema(engine: sa.Engine) -> None:
             )
 
 
-def run_dbos_migrations(engine: sa.Engine) -> None:
+def run_dbos_migrations(engine: sa.Engine, schema: str) -> None:
     """Run DBOS-managed migrations by executing each SQL command in dbos_migrations."""
     with engine.begin() as conn:
         # Get current migration version

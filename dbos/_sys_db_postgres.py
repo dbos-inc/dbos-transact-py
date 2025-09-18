@@ -28,8 +28,11 @@ class PostgresSystemDatabase(SystemDatabase):
             engine_kwargs=engine_kwargs,
             debug_mode=debug_mode,
         )
-        if schema is not None:
-            SystemSchema.set_schema(schema)
+        if schema is None:
+            self.schema = "dbos"
+        else:
+            self.schema = schema
+        SystemSchema.set_schema(self.schema)
         self.notification_conn: Optional[psycopg.connection.Connection] = None
 
     def _create_engine(
@@ -59,8 +62,8 @@ class PostgresSystemDatabase(SystemDatabase):
                 conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
         engine.dispose()
 
-        ensure_dbos_schema(self.engine)
-        run_dbos_migrations(self.engine)
+        ensure_dbos_schema(self.engine, self.schema)
+        run_dbos_migrations(self.engine, self.schema)
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
