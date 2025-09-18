@@ -1730,3 +1730,33 @@ def test_destroy(dbos: DBOS, config: DBOSConfig) -> None:
     blocking_event.set()
     with pytest.raises(DBOSException):
         handle.get_result()
+
+
+def test_without_appdb(config: DBOSConfig, cleanup_test_databases: None) -> None:
+    DBOS.destroy(destroy_registry=True)
+    config["application_database_url"] = None
+    dbos = DBOS(config=config)
+    DBOS.launch()
+    assert dbos._app_db is None
+
+    @DBOS.step()
+    def step() -> None:
+        return
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        step()
+        step()
+        step()
+        assert DBOS.workflow_id
+        return DBOS.workflow_id
+
+    wfid = workflow()
+    assert wfid
+    steps = DBOS.list_workflow_steps(wfid)
+    assert len(steps) == 3
+    for s in steps:
+        assert s["function_name"] == step.__qualname__
+    forked_handle = DBOS.fork_workflow(wfid, start_step=1)
+    assert forked_handle.get_result() == forked_handle.workflow_id
+    DBOS.destroy(destroy_registry=True)
