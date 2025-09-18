@@ -57,8 +57,8 @@ class PostgresSystemDatabase(SystemDatabase):
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
         if self.notification_conn is not None:
-            assert self.notification_conn.dbapi_connection
-            self.notification_conn.dbapi_connection.close()
+            if self.notification_conn.dbapi_connection:
+                self.notification_conn.dbapi_connection.close()
             self.notification_conn.invalidate()
 
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
@@ -151,5 +151,4 @@ class PostgresSystemDatabase(SystemDatabase):
                     time.sleep(1)
                     # Then the loop will try to reconnect and restart the listener
             finally:
-                if self.notification_conn is not None:
-                    self.notification_conn.close()
+                self._cleanup_connections()
