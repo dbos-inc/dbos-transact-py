@@ -88,7 +88,6 @@ def test_load_valid_config_file(mocker):
             OTLPExporter:
                 logsEndpoint: 'fooLogs'
                 tracesEndpoint: 'fooTraces'
-        dbos_system_schema: "foobar"
     """
     mocker.patch(
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
@@ -107,7 +106,6 @@ def test_load_valid_config_file(mocker):
 
     assert configFile["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["fooLogs"]
     assert configFile["telemetry"]["OTLPExporter"]["tracesEndpoint"] == ["fooTraces"]
-    assert configFile["dbos_system_schema"] == "foobar"
 
 
 def test_load_config_with_unset_database_url_env_var(mocker):
