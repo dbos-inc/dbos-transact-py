@@ -1736,7 +1736,7 @@ def test_custom_schema(
     config: DBOSConfig, cleanup_test_databases: None, skip_with_sqlite: None
 ):
     DBOS.destroy(destroy_registry=True)
-    config["dbos_system_schema"] = "foobar"
+    config["dbos_system_schema"] = "F8nny_sCHem@-n@m3"
     dbos = DBOS(config=config)
     DBOS.launch()
     with dbos._sys_db.engine.connect() as connection:

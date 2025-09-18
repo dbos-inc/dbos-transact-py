@@ -22,7 +22,7 @@ def ensure_dbos_schema(engine: sa.Engine, schema: str) -> None:
 
         # Create schema if it doesn't exist
         if not schema_exists:
-            conn.execute(sa.text(f"CREATE SCHEMA {schema}"))
+            conn.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
 
         # Check if dbos_migrations table exists
         table_result = conn.execute(
@@ -36,7 +36,7 @@ def ensure_dbos_schema(engine: sa.Engine, schema: str) -> None:
         if not table_exists:
             conn.execute(
                 sa.text(
-                    f"CREATE TABLE {schema}.dbos_migrations (version BIGINT NOT NULL PRIMARY KEY)"
+                    f'CREATE TABLE "{schema}".dbos_migrations (version BIGINT NOT NULL PRIMARY KEY)'
                 )
             )
 
@@ -45,7 +45,9 @@ def run_dbos_migrations(engine: sa.Engine, schema: str) -> None:
     """Run DBOS-managed migrations by executing each SQL command in dbos_migrations."""
     with engine.begin() as conn:
         # Get current migration version
-        result = conn.execute(sa.text(f"SELECT version FROM {schema}.dbos_migrations"))
+        result = conn.execute(
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+        )
         current_version = result.fetchone()
         last_applied = current_version[0] if current_version else 0
 
@@ -63,13 +65,15 @@ def run_dbos_migrations(engine: sa.Engine, schema: str) -> None:
             if last_applied == 0:
                 conn.execute(
                     sa.text(
-                        f"INSERT INTO {schema}.dbos_migrations (version) VALUES (:version)"
+                        f'INSERT INTO "{schema}".dbos_migrations (version) VALUES (:version)'
                     ),
                     {"version": i},
                 )
             else:
                 conn.execute(
-                    sa.text(f"UPDATE {schema}.dbos_migrations SET version = :version"),
+                    sa.text(
+                        f'UPDATE "{schema}".dbos_migrations SET version = :version'
+                    ),
                     {"version": i},
                 )
             last_applied = i
@@ -80,7 +84,7 @@ def get_dbos_migration_one(schema: str) -> str:
 -- Enable uuid extension for generating UUIDs
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
-CREATE TABLE {schema}.workflow_status (
+CREATE TABLE \"{schema}\".workflow_status (
     workflow_uuid TEXT PRIMARY KEY,
     status TEXT,
     name TEXT,
@@ -107,15 +111,15 @@ CREATE TABLE {schema}.workflow_status (
     priority INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE INDEX workflow_status_created_at_index ON {schema}.workflow_status (created_at);
-CREATE INDEX workflow_status_executor_id_index ON {schema}.workflow_status (executor_id);
-CREATE INDEX workflow_status_status_index ON {schema}.workflow_status (status);
+CREATE INDEX workflow_status_created_at_index ON \"{schema}\".workflow_status (created_at);
+CREATE INDEX workflow_status_executor_id_index ON \"{schema}\".workflow_status (executor_id);
+CREATE INDEX workflow_status_status_index ON \"{schema}\".workflow_status (status);
 
-ALTER TABLE {schema}.workflow_status 
+ALTER TABLE \"{schema}\".workflow_status 
 ADD CONSTRAINT uq_workflow_status_queue_name_dedup_id 
 UNIQUE (queue_name, deduplication_id);
 
-CREATE TABLE {schema}.operation_outputs (
+CREATE TABLE \"{schema}\".operation_outputs (
     workflow_uuid TEXT NOT NULL,
     function_id INTEGER NOT NULL,
     function_name TEXT NOT NULL DEFAULT '',
@@ -123,23 +127,23 @@ CREATE TABLE {schema}.operation_outputs (
     error TEXT,
     child_workflow_id TEXT,
     PRIMARY KEY (workflow_uuid, function_id),
-    FOREIGN KEY (workflow_uuid) REFERENCES {schema}.workflow_status(workflow_uuid) 
+    FOREIGN KEY (workflow_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
 
-CREATE TABLE {schema}.notifications (
+CREATE TABLE \"{schema}\".notifications (
     destination_uuid TEXT NOT NULL,
     topic TEXT,
     message TEXT NOT NULL,
     created_at_epoch_ms BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000::numeric)::bigint,
     message_uuid TEXT NOT NULL DEFAULT gen_random_uuid(), -- Built-in function
-    FOREIGN KEY (destination_uuid) REFERENCES {schema}.workflow_status(workflow_uuid) 
+    FOREIGN KEY (destination_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
-CREATE INDEX idx_workflow_topic ON {schema}.notifications (destination_uuid, topic);
+CREATE INDEX idx_workflow_topic ON \"{schema}\".notifications (destination_uuid, topic);
 
 -- Create notification function
-CREATE OR REPLACE FUNCTION {schema}.notifications_function() RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION \"{schema}\".notifications_function() RETURNS TRIGGER AS $$
 DECLARE
     payload text := NEW.destination_uuid || '::' || NEW.topic;
 BEGIN
@@ -150,20 +154,20 @@ $$ LANGUAGE plpgsql;
 
 -- Create notification trigger
 CREATE TRIGGER dbos_notifications_trigger
-AFTER INSERT ON {schema}.notifications
-FOR EACH ROW EXECUTE FUNCTION {schema}.notifications_function();
+AFTER INSERT ON \"{schema}\".notifications
+FOR EACH ROW EXECUTE FUNCTION \"{schema}\".notifications_function();
 
-CREATE TABLE {schema}.workflow_events (
+CREATE TABLE \"{schema}\".workflow_events (
     workflow_uuid TEXT NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
     PRIMARY KEY (workflow_uuid, key),
-    FOREIGN KEY (workflow_uuid) REFERENCES {schema}.workflow_status(workflow_uuid) 
+    FOREIGN KEY (workflow_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 -- Create events function
-CREATE OR REPLACE FUNCTION {schema}.workflow_events_function() RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION \"{schema}\".workflow_events_function() RETURNS TRIGGER AS $$
 DECLARE
     payload text := NEW.workflow_uuid || '::' || NEW.key;
 BEGIN
@@ -174,20 +178,20 @@ $$ LANGUAGE plpgsql;
 
 -- Create events trigger
 CREATE TRIGGER dbos_workflow_events_trigger
-AFTER INSERT ON {schema}.workflow_events
-FOR EACH ROW EXECUTE FUNCTION {schema}.workflow_events_function();
+AFTER INSERT ON \"{schema}\".workflow_events
+FOR EACH ROW EXECUTE FUNCTION \"{schema}\".workflow_events_function();
 
-CREATE TABLE {schema}.streams (
+CREATE TABLE \"{schema}\".streams (
     workflow_uuid TEXT NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
     "offset" INTEGER NOT NULL,
     PRIMARY KEY (workflow_uuid, key, "offset"),
-    FOREIGN KEY (workflow_uuid) REFERENCES {schema}.workflow_status(workflow_uuid) 
+    FOREIGN KEY (workflow_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
 
-CREATE TABLE {schema}.event_dispatch_kv (
+CREATE TABLE \"{schema}\".event_dispatch_kv (
     service_name TEXT NOT NULL,
     workflow_fn_name TEXT NOT NULL,
     key TEXT NOT NULL,

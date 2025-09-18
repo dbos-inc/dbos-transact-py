@@ -49,19 +49,21 @@ def test_systemdb_migration_custom_schema(
 ) -> None:
 
     config["application_database_url"] = None
-    schema = "foobar"
-    config["dbos_system_schema"] = "foobar"
+    schema = "F8nny_sCHem@-n@m3"
+    config["dbos_system_schema"] = schema
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
     DBOS.launch()
     # Make sure all tables exist
     with dbos._sys_db.engine.connect() as connection:
-        result = connection.execute(sa.text(f"SELECT * FROM {schema}.workflow_status"))
+        result = connection.execute(
+            sa.text(f'SELECT * FROM "{schema}".workflow_status')
+        )
         rows = result.fetchall()
         assert len(rows) == 0
         # Check dbos_migrations table exists, has one row, and has the right version
         result = connection.execute(
-            sa.text(f"SELECT version FROM {schema}.dbos_migrations")
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
         )
         rows = result.fetchall()
         assert len(rows) == 1

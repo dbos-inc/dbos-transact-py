@@ -329,7 +329,7 @@ class PostgresApplicationDatabase(ApplicationDatabase):
             ).scalar()
 
             if not schema_exists:
-                schema_creation_query = sa.text(f"CREATE SCHEMA {self.schema}")
+                schema_creation_query = sa.text(f'CREATE SCHEMA "{self.schema}"')
                 conn.execute(schema_creation_query)
 
         inspector = inspect(self.engine)
@@ -345,7 +345,7 @@ class PostgresApplicationDatabase(ApplicationDatabase):
                     conn.execute(
                         text(
                             f"""
-                        ALTER TABLE {self.schema}.transaction_outputs
+                        ALTER TABLE \"{self.schema}\".transaction_outputs
                         ADD COLUMN function_name TEXT NOT NULL DEFAULT '';
                         """
                         )
