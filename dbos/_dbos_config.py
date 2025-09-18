@@ -1,5 +1,6 @@
 import os
 import re
+from importlib import resources
 from typing import Any, Dict, List, Optional, TypedDict, cast
 
 import yaml
