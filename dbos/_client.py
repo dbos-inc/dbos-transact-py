@@ -14,6 +14,8 @@ from typing import (
     Union,
 )
 
+import sqlalchemy as sa
+
 from dbos import _serialization
 from dbos._app_db import ApplicationDatabase
 from dbos._context import MaxPriority, MinPriority
@@ -122,6 +124,7 @@ class DBOSClient:
         database_url: Optional[str] = None,  # DEPRECATED
         *,
         system_database_url: Optional[str] = None,
+        system_database_engine: Optional[sa.Engine] = None,
         application_database_url: Optional[str] = None,
         system_database: Optional[str] = None,  # DEPRECATED
     ):
@@ -146,6 +149,7 @@ class DBOSClient:
                 "max_overflow": 0,
                 "pool_size": 2,
             },
+            engine=system_database_engine,
         )
         self._sys_db.check_connection()
         if application_database_url:

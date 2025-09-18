@@ -20,6 +20,7 @@ def migrate_dbos_databases(
                 "max_overflow": 0,
                 "pool_size": 2,
             },
+            engine=None,
         )
         sys_db.run_migrations()
         if app_database_url:

@@ -15,19 +15,7 @@ from ._sys_db import SystemDatabase
 class PostgresSystemDatabase(SystemDatabase):
     """PostgreSQL-specific implementation of SystemDatabase."""
 
-    def __init__(
-        self,
-        *,
-        system_database_url: str,
-        engine_kwargs: Dict[str, Any],
-        debug_mode: bool = False,
-    ):
-        super().__init__(
-            system_database_url=system_database_url,
-            engine_kwargs=engine_kwargs,
-            debug_mode=debug_mode,
-        )
-        self.notification_conn: Optional[sa.PoolProxiedConnection] = None
+    notification_conn: Optional[sa.PoolProxiedConnection] = None
 
     def _create_engine(
         self, system_database_url: str, engine_kwargs: Dict[str, Any]
@@ -49,18 +37,19 @@ class PostgresSystemDatabase(SystemDatabase):
         system_db_url = self.engine.url
         sysdb_name = system_db_url.database
         # If the system database does not already exist, create it
-        engine = sa.create_engine(
-            system_db_url.set(database="postgres"), **self._engine_kwargs
-        )
-        with engine.connect() as conn:
-            conn.execution_options(isolation_level="AUTOCOMMIT")
-            if not conn.execute(
-                sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
-                parameters={"db_name": sysdb_name},
-            ).scalar():
-                dbos_logger.info(f"Creating system database {sysdb_name}")
-                conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
-        engine.dispose()
+        if self.created_engine:
+            engine = sa.create_engine(
+                system_db_url.set(database="postgres"), **self._engine_kwargs
+            )
+            with engine.connect() as conn:
+                conn.execution_options(isolation_level="AUTOCOMMIT")
+                if not conn.execute(
+                    sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
+                    parameters={"db_name": sysdb_name},
+                ).scalar():
+                    dbos_logger.info(f"Creating system database {sysdb_name}")
+                    conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
+            engine.dispose()
 
         ensure_dbos_schema(self.engine)
         run_dbos_migrations(self.engine)
