@@ -24,6 +24,7 @@ from dbos import (
 )
 
 # Private API because this is a test
+from dbos._client import DBOSClient
 from dbos._context import assert_current_dbos_context, get_local_dbos_context
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
@@ -1771,3 +1772,14 @@ def test_custom_schema(
     assert len(steps) == 4
     assert "transaction" in steps[0]["function_name"]
     DBOS.destroy(destroy_registry=True)
+
+    # Test custom schema with client
+    client = DBOSClient(
+        system_database_url=config["system_database_url"],
+        application_database_url=config["application_database_url"],
+        dbos_system_schema=config["dbos_system_schema"],
+    )
+    assert len(client.list_workflows()) == 2
+    steps = client.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 4
+    assert "transaction" in steps[0]["function_name"]
