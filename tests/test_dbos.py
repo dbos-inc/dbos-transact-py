@@ -1794,7 +1794,7 @@ def test_custom_engine(
     config["system_database_engine"] = engine
 
     # Launch DBOS with the engine. It should fail because the database does not exist.
-    DBOS(config=config)
+    dbos = DBOS(config=config)
     with pytest.raises(OperationalError):
         DBOS.launch()
     DBOS.destroy(destroy_registry=True)
@@ -1807,7 +1807,7 @@ def test_custom_engine(
 
     # Launch DBOS again using the custom pool. It should succeed despite the bogus URL.
     config["system_database_url"] = "postgresql://bogus:url@not:42/fake"
-    DBOS(config=config)
+    dbos = DBOS(config=config)
     DBOS.launch()
 
     key = "key"
@@ -1818,6 +1818,7 @@ def test_custom_engine(
         DBOS.set_event(key, val)
         return DBOS.recv()
 
+    assert dbos._sys_db.engine == engine
     handle = DBOS.start_workflow(recv_workflow)
     assert DBOS.get_event(handle.workflow_id, key) == val
     DBOS.send(handle.workflow_id, val)
