@@ -50,7 +50,7 @@ def test_systemdb_migration_custom_schema(
 
     config["application_database_url"] = None
     schema = "foobar"
-    config["system_database_schema"] = "foobar"
+    config["dbos_system_schema"] = "foobar"
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
     DBOS.launch()
