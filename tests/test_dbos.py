@@ -7,7 +7,7 @@ import os
 import threading
 import time
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 import pytest
 import sqlalchemy as sa
@@ -1730,3 +1730,44 @@ def test_destroy(dbos: DBOS, config: DBOSConfig) -> None:
     blocking_event.set()
     with pytest.raises(DBOSException):
         handle.get_result()
+
+
+def test_custom_schema(
+    config: DBOSConfig, cleanup_test_databases: None, skip_with_sqlite: None
+):
+    DBOS.destroy(destroy_registry=True)
+    config["dbos_system_schema"] = "foobar"
+    dbos = DBOS(config=config)
+    DBOS.launch()
+    with dbos._sys_db.engine.connect() as connection:
+        # Check that the 'dbos' schema does not exist
+        result = connection.execute(
+            sa.text(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'dbos'"
+            )
+        )
+        rows = result.fetchall()
+        assert len(rows) == 0
+
+    key = "key"
+    val = "val"
+
+    @DBOS.transaction()
+    def transaction() -> None:
+        return
+
+    @DBOS.workflow()
+    def recv_workflow() -> Any:
+        transaction()
+        DBOS.set_event(key, val)
+        return DBOS.recv()
+
+    handle = DBOS.start_workflow(recv_workflow)
+    assert DBOS.get_event(handle.workflow_id, key) == val
+    DBOS.send(handle.workflow_id, val)
+    assert handle.get_result() == val
+    assert len(DBOS.list_workflows()) == 2
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 4
+    assert "transaction" in steps[0]["function_name"]
+    DBOS.destroy(destroy_registry=True)
