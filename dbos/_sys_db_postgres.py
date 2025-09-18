@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 import psycopg
 import sqlalchemy as sa
@@ -27,7 +27,7 @@ class PostgresSystemDatabase(SystemDatabase):
             engine_kwargs=engine_kwargs,
             debug_mode=debug_mode,
         )
-        self.notification_conn: Optional[psycopg.connection.Connection] = None
+        self.notification_conn: Optional[sa.PoolProxiedConnection] = None
 
     def _create_engine(
         self, system_database_url: str, engine_kwargs: Dict[str, Any]
@@ -68,7 +68,9 @@ class PostgresSystemDatabase(SystemDatabase):
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
         if self.notification_conn is not None:
-            self.notification_conn.close()
+            assert self.notification_conn.dbapi_connection
+            self.notification_conn.dbapi_connection.close()
+            self.notification_conn.invalidate()
 
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation in PostgreSQL."""
@@ -111,20 +113,18 @@ class PostgresSystemDatabase(SystemDatabase):
         """Listen for PostgreSQL notifications using psycopg."""
         while self._run_background_processes:
             try:
-                # since we're using the psycopg connection directly, we need a url without the "+psycopg" suffix
-                url = sa.URL.create(
-                    "postgresql", **self.engine.url.translate_connect_args()
+                self.notification_conn = self.engine.raw_connection()
+                self.notification_conn.detach()
+                psycopg_conn = cast(
+                    psycopg.connection.Connection, self.notification_conn
                 )
-                # Listen to notifications
-                self.notification_conn = psycopg.connect(
-                    url.render_as_string(hide_password=False), autocommit=True
-                )
+                psycopg_conn.set_autocommit(True)
 
-                self.notification_conn.execute("LISTEN dbos_notifications_channel")
-                self.notification_conn.execute("LISTEN dbos_workflow_events_channel")
+                psycopg_conn.execute("LISTEN dbos_notifications_channel")
+                psycopg_conn.execute("LISTEN dbos_workflow_events_channel")
 
                 while self._run_background_processes:
-                    gen = self.notification_conn.notifies()
+                    gen = psycopg_conn.notifies()
                     for notify in gen:
                         channel = notify.channel
                         dbos_logger.debug(
