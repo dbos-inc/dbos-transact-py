@@ -121,6 +121,7 @@ def test_appdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
         wf_counter += 1
 
     time.sleep(2)
+    assert dbos._app_db
     simulate_db_restart(dbos._app_db.engine, 2)
     time.sleep(2)
     assert wf_counter > 2

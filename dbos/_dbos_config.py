@@ -408,11 +408,11 @@ def process_config(
                 url = url.set(database=f"{url.database}{SystemSchema.sysdb_suffix}")
             data["system_database_url"] = url.render_as_string(hide_password=False)
 
-    # If a system database URL is provided but not an application database URL, set the
-    # application database URL to the system database URL.
+    # If a system database URL is provided but not an application database URL,
+    # do not create an application database.
     if data.get("system_database_url") and not data.get("database_url"):
         assert data["system_database_url"]
-        data["database_url"] = data["system_database_url"]
+        data["database_url"] = None
 
     # If neither URL is provided, use a default SQLite database URL.
     if not data.get("database_url") and not data.get("system_database_url"):

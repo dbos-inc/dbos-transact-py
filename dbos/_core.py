@@ -896,7 +896,7 @@ def decorate_transaction(
                 raise DBOSWorkflowCancelledError(
                     f"Workflow {ctx.workflow_id} is cancelled. Aborting transaction {transaction_name}."
                 )
-
+            assert dbos._app_db
             with dbos._app_db.sessionmaker() as session:
                 attributes: TracedAttributes = {
                     "name": transaction_name,
