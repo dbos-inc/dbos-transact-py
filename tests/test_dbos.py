@@ -1760,6 +1760,14 @@ def test_without_appdb(config: DBOSConfig, cleanup_test_databases: None) -> None
         assert s["function_name"] == step.__qualname__
     forked_handle = DBOS.fork_workflow(wfid, start_step=1)
     assert forked_handle.get_result() == forked_handle.workflow_id
+
+    @DBOS.transaction()
+    def transaction():
+        return
+
+    with pytest.raises(AssertionError):
+        transaction()
+
     DBOS.destroy(destroy_registry=True)
 
     client = DBOSClient(system_database_url=config["system_database_url"])
