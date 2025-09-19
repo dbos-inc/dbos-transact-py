@@ -7,7 +7,7 @@ import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, DBOSConfig
-from dbos._migration import dbos_migrations, sqlite_migrations
+from dbos._migration import get_dbos_migrations, sqlite_migrations
 
 # Private API because this is a unit test
 from dbos._schemas.system_database import SystemSchema
@@ -39,7 +39,46 @@ def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
         )
         migrations_rows = migrations_result.fetchall()
         assert len(migrations_rows) == 1
-        assert migrations_rows[0][0] == len(dbos_migrations)
+        assert migrations_rows[0][0] == len(get_dbos_migrations("dbos"))
+
+
+def test_systemdb_migration_custom_schema(
+    config: DBOSConfig,
+    skip_with_sqlite: None,
+    cleanup_test_databases: None,
+) -> None:
+
+    config["application_database_url"] = None
+    schema = "F8nny_sCHem@-n@m3"
+    config["dbos_system_schema"] = schema
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    DBOS.launch()
+    # Make sure all tables exist
+    with dbos._sys_db.engine.connect() as connection:
+        result = connection.execute(
+            sa.text(f'SELECT * FROM "{schema}".workflow_status')
+        )
+        rows = result.fetchall()
+        assert len(rows) == 0
+        # Check dbos_migrations table exists, has one row, and has the right version
+        result = connection.execute(
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+        )
+        rows = result.fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == len(get_dbos_migrations(schema))
+
+        # Check that the 'dbos' schema does not exist
+        result = connection.execute(
+            sa.text(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'dbos'"
+            )
+        )
+        rows = result.fetchall()
+        assert len(rows) == 0
+
+    DBOS.destroy()
 
 
 def test_custom_sysdb_name_migration(
@@ -119,6 +158,7 @@ def test_sqlite_systemdb_migration() -> None:
             system_database_url=sqlite_url,
             engine_kwargs={},
             engine=None,
+            schema=None,
             debug_mode=False,
         )
 
@@ -189,93 +229,107 @@ def test_migrate(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
     db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
     db_url_string = db_url.render_as_string(hide_password=False)
 
-    for use_app_db in [True, False]:
-        # Drop the DBOS database if it exists. Create a test role with no permissions.
-        with db_engine.connect() as connection:
-            connection.execution_options(isolation_level="AUTOCOMMIT")
-            connection.execute(
-                sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
-            )
-            connection.execute(sa.text(f'DROP ROLE IF EXISTS "{role_name}"'))
-            connection.execute(
-                sa.text(
-                    f"CREATE ROLE \"{role_name}\" WITH LOGIN PASSWORD '{role_password}'"
+    # Test with different system schema names
+    for schema in ["dbos", "public", "F8nny_sCHem@-n@m3"]:
+        for use_app_db in [True, False]:
+            # Drop the DBOS database if it exists. Create a test role with no permissions.
+            with db_engine.connect() as connection:
+                connection.execution_options(isolation_level="AUTOCOMMIT")
+                connection.execute(
+                    sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
                 )
-            )
-
-        # Using the admin role, create the DBOS database and verify it exists.
-        # Set permissions for the test role.
-        if use_app_db:
-            subprocess.check_call(
-                [
-                    "dbos",
-                    "migrate",
-                    "-D",
-                    db_url_string,
-                    "-s",
-                    db_url_string,
-                    "-r",
-                    role_name,
-                ]
-            )
-        else:
-            subprocess.check_call(
-                ["dbos", "migrate", "-s", db_url_string, "-r", role_name]
-            )
-        with db_engine.connect() as c:
-            c.execution_options(isolation_level="AUTOCOMMIT")
-            result = c.execute(
-                sa.text(
-                    f"SELECT COUNT(*) FROM pg_database WHERE datname = '{database_name}'"
+                connection.execute(sa.text(f'DROP ROLE IF EXISTS "{role_name}"'))
+                connection.execute(
+                    sa.text(
+                        f"CREATE ROLE \"{role_name}\" WITH LOGIN PASSWORD '{role_password}'"
+                    )
                 )
-            ).scalar()
-            assert result == 1
 
-        # Initialize DBOS with the test role. Verify various operations work.
-        test_db_url = (
-            db_url.set(username=role_name).set(password=role_password)
-        ).render_as_string(hide_password=False)
-        DBOS.destroy(destroy_registry=True)
-        config: DBOSConfig = {
-            "name": "test_migrate",
-            "database_url": test_db_url if use_app_db else None,
-            "system_database_url": test_db_url,
-        }
-        dbos = DBOS(config=config)
-        if not use_app_db:
-            assert dbos._app_db is None
-
-        @DBOS.transaction()
-        def test_transaction() -> str:
-            rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
-            return str(rows[0][0])
-
-        @DBOS.step()
-        def test_step() -> str:
-            return "1"
-
-        @DBOS.workflow()
-        def test_workflow() -> str:
+            # Using the admin role, create the DBOS database and verify it exists.
+            # Set permissions for the test role.
             if use_app_db:
-                assert test_transaction() == "1"
+                subprocess.check_call(
+                    [
+                        "dbos",
+                        "migrate",
+                        "-D",
+                        db_url_string,
+                        "-s",
+                        db_url_string,
+                        "-r",
+                        role_name,
+                        "--schema",
+                        schema,
+                    ]
+                )
             else:
-                assert test_step() == "1"
-            id = DBOS.workflow_id
-            assert id
-            DBOS.set_event(id, id)
-            return id
+                subprocess.check_call(
+                    [
+                        "dbos",
+                        "migrate",
+                        "-s",
+                        db_url_string,
+                        "-r",
+                        role_name,
+                        "--schema",
+                        schema,
+                    ]
+                )
+            with db_engine.connect() as c:
+                c.execution_options(isolation_level="AUTOCOMMIT")
+                result = c.execute(
+                    sa.text(
+                        f"SELECT COUNT(*) FROM pg_database WHERE datname = '{database_name}'"
+                    )
+                ).scalar()
+                assert result == 1
 
-        DBOS.launch()
+            # Initialize DBOS with the test role. Verify various operations work.
+            test_db_url = (
+                db_url.set(username=role_name).set(password=role_password)
+            ).render_as_string(hide_password=False)
+            DBOS.destroy(destroy_registry=True)
+            config: DBOSConfig = {
+                "name": "test_migrate",
+                "database_url": test_db_url if use_app_db else None,
+                "system_database_url": test_db_url,
+                "dbos_system_schema": schema,
+            }
+            dbos = DBOS(config=config)
+            if not use_app_db:
+                assert dbos._app_db is None
 
-        workflow_id = test_workflow()
-        assert workflow_id
-        assert DBOS.get_event(workflow_id, workflow_id) == workflow_id
+            @DBOS.transaction()
+            def test_transaction() -> str:
+                rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+                return str(rows[0][0])
 
-        steps = DBOS.list_workflow_steps(workflow_id)
-        assert len(steps) == 2
-        assert (
-            steps[0]["function_name"] == test_transaction.__qualname__
-            if use_app_db
-            else test_step.__qualname__
-        )
-        assert steps[1]["function_name"] == "DBOS.setEvent"
+            @DBOS.step()
+            def test_step() -> str:
+                return "1"
+
+            @DBOS.workflow()
+            def test_workflow() -> str:
+                if use_app_db:
+                    assert test_transaction() == "1"
+                else:
+                    assert test_step() == "1"
+                id = DBOS.workflow_id
+                assert id
+                DBOS.set_event(id, id)
+                return id
+
+            DBOS.launch()
+
+            workflow_id = test_workflow()
+            assert workflow_id
+            assert DBOS.get_event(workflow_id, workflow_id) == workflow_id
+
+            steps = DBOS.list_workflow_steps(workflow_id)
+            assert len(steps) == 2
+            assert (
+                steps[0]["function_name"] == test_transaction.__qualname__
+                if use_app_db
+                else test_step.__qualname__
+            )
+            assert steps[1]["function_name"] == "DBOS.setEvent"

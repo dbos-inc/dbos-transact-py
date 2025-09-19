@@ -1,4 +1,3 @@
-import json
 import os
 import re
 from importlib import resources
@@ -35,6 +34,7 @@ class DBOSConfig(TypedDict, total=False):
         otlp_attributes (dict[str, str]): A set of custom attributes to apply OTLP-exported logs and traces
         application_version (str): Application version
         executor_id (str): Executor ID, used to identify the application instance in distributed environments
+        dbos_system_schema (str): Schema name for DBOS system tables. Defaults to "dbos".
         enable_otlp (bool): If True, enable built-in DBOS OTLP tracing and logging.
         system_database_engine (sa.Engine): A custom system database engine. If provided, DBOS will not create an engine but use this instead.
     """
@@ -54,6 +54,7 @@ class DBOSConfig(TypedDict, total=False):
     otlp_attributes: Optional[dict[str, str]]
     application_version: Optional[str]
     executor_id: Optional[str]
+    dbos_system_schema: Optional[str]
     enable_otlp: Optional[bool]
     system_database_engine: Optional[sa.Engine]
 
@@ -73,6 +74,7 @@ class DatabaseConfig(TypedDict, total=False):
         sys_db_pool_size (int): System database pool size
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs
         migrate (List[str]): Migration commands to run on startup
+        dbos_system_schema (str): Schema name for DBOS system tables. Defaults to "dbos".
     """
 
     sys_db_name: Optional[str]
@@ -115,6 +117,7 @@ class ConfigFile(TypedDict, total=False):
     telemetry: Optional[TelemetryConfig]
     env: Dict[str, str]
     system_database_engine: Optional[sa.Engine]
+    dbos_system_schema: Optional[str]
 
 
 def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
@@ -144,6 +147,9 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
 
     if "system_database_url" in config:
         translated_config["system_database_url"] = config.get("system_database_url")
+
+    if "dbos_system_schema" in config:
+        translated_config["dbos_system_schema"] = config.get("dbos_system_schema")
 
     # Runtime config
     translated_config["runtimeConfig"] = {"run_admin_server": True}
@@ -540,6 +546,8 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
             "DBOS_SYSTEM_DATABASE_URL environment variable is not set. This is required to connect to the database."
         )
     provided_config["system_database_url"] = system_db_url
+    # Always use the "dbos" schema when deploying to DBOS Cloud
+    provided_config["dbos_system_schema"] = "dbos"
 
     # Telemetry config
     if "telemetry" not in provided_config or provided_config["telemetry"] is None:

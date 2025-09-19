@@ -347,12 +347,20 @@ class SystemDatabase(ABC):
         system_database_url: str,
         engine_kwargs: Dict[str, Any],
         engine: Optional[sa.Engine],
+        schema: Optional[str],
         debug_mode: bool = False,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
 
         self.dialect = sq if system_database_url.startswith("sqlite") else pg
+
+        if system_database_url.startswith("sqlite"):
+            self.schema = None
+        else:
+            self.schema = schema if schema else "dbos"
+        SystemSchema.set_schema(self.schema)
+
         if engine:
             self.engine = engine
             self.created_engine = False
@@ -1451,6 +1459,7 @@ class SystemDatabase(ABC):
         system_database_url: str,
         engine_kwargs: Dict[str, Any],
         engine: Optional[sa.Engine],
+        schema: Optional[str],
         debug_mode: bool = False,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
@@ -1461,6 +1470,7 @@ class SystemDatabase(ABC):
                 system_database_url=system_database_url,
                 engine_kwargs=engine_kwargs,
                 engine=engine,
+                schema=schema,
                 debug_mode=debug_mode,
             )
         else:
@@ -1470,6 +1480,7 @@ class SystemDatabase(ABC):
                 system_database_url=system_database_url,
                 engine_kwargs=engine_kwargs,
                 engine=engine,
+                schema=schema,
                 debug_mode=debug_mode,
             )
 

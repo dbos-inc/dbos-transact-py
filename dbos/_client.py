@@ -126,6 +126,7 @@ class DBOSClient:
         system_database_url: Optional[str] = None,
         system_database_engine: Optional[sa.Engine] = None,
         application_database_url: Optional[str] = None,
+        dbos_system_schema: Optional[str] = "dbos",
         system_database: Optional[str] = None,  # DEPRECATED
     ):
         application_database_url = (
@@ -150,6 +151,7 @@ class DBOSClient:
                 "pool_size": 2,
             },
             engine=system_database_engine,
+            schema=dbos_system_schema,
         )
         self._sys_db.check_connection()
         if application_database_url:
@@ -160,6 +162,7 @@ class DBOSClient:
                     "max_overflow": 0,
                     "pool_size": 2,
                 },
+                schema=dbos_system_schema,
             )
 
     def destroy(self) -> None:

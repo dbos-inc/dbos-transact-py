@@ -6,7 +6,6 @@ import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 
 from dbos._migration import ensure_dbos_schema, run_dbos_migrations
-from dbos._schemas.system_database import SystemSchema
 
 from ._logger import dbos_logger
 from ._sys_db import SystemDatabase
@@ -20,12 +19,6 @@ class PostgresSystemDatabase(SystemDatabase):
     def _create_engine(
         self, system_database_url: str, engine_kwargs: Dict[str, Any]
     ) -> sa.Engine:
-        # TODO: Make the schema dynamic so this isn't needed
-        SystemSchema.workflow_status.schema = "dbos"
-        SystemSchema.operation_outputs.schema = "dbos"
-        SystemSchema.notifications.schema = "dbos"
-        SystemSchema.workflow_events.schema = "dbos"
-        SystemSchema.streams.schema = "dbos"
         url = sa.make_url(system_database_url).set(drivername="postgresql+psycopg")
         return sa.create_engine(url, **engine_kwargs)
 
@@ -55,8 +48,9 @@ class PostgresSystemDatabase(SystemDatabase):
             with self.engine.connect() as conn:
                 conn.execute(sa.text("SELECT 1"))
 
-        ensure_dbos_schema(self.engine)
-        run_dbos_migrations(self.engine)
+        assert self.schema
+        ensure_dbos_schema(self.engine, self.schema)
+        run_dbos_migrations(self.engine, self.schema)
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
