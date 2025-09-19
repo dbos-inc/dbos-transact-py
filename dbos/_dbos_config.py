@@ -36,6 +36,7 @@ class DBOSConfig(TypedDict, total=False):
         application_version (str): Application version
         executor_id (str): Executor ID, used to identify the application instance in distributed environments
         enable_otlp (bool): If True, enable built-in DBOS OTLP tracing and logging.
+        system_database_engine (sa.Engine): A custom system database engine. If provided, DBOS will not create an engine but use this instead.
     """
 
     name: str
