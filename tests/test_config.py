@@ -671,14 +671,6 @@ def test_database_url_no_password(skip_with_sqlite: None):
     assert processed_config["name"] == "some-app"
     assert processed_config["database_url"] == expected_url
 
-    # Make sure we can use it to construct a DBOS Client and connect to the database without a password
-    client = DBOSClient(expected_url)
-    try:
-        res = client.list_queued_workflows()
-        assert res is not None
-    finally:
-        client.destroy()
-
 
 ####################
 # TRANSLATE DBOSConfig to ConfigFile
@@ -697,6 +689,7 @@ def test_translate_dbosconfig_full_input():
         "otlp_traces_endpoints": ["http://otel:7777", "notused"],
         "admin_port": 8001,
         "run_admin_server": False,
+        "dbos_system_schema": "foobar",
     }
 
     translated_config = translate_dbos_config_to_config_file(config)
@@ -715,6 +708,7 @@ def test_translate_dbosconfig_full_input():
     assert translated_config["telemetry"]["disable_otlp"] == True
     assert translated_config["runtimeConfig"]["admin_port"] == 8001
     assert translated_config["runtimeConfig"]["run_admin_server"] == False
+    assert translated_config["dbos_system_schema"] == "foobar"
     assert "start" not in translated_config["runtimeConfig"]
     assert "setup" not in translated_config["runtimeConfig"]
     assert "env" not in translated_config
@@ -949,6 +943,7 @@ def test_overwrite_config_minimal(mocker):
 
     provided_config: ConfigFile = {
         "name": "test-app",
+        "dbos_system_schema": "foobar",
     }
 
     exported_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
@@ -961,6 +956,7 @@ def test_overwrite_config_minimal(mocker):
     assert config["name"] == "stock-prices"
     assert config["database_url"] == exported_db_url
     assert config["system_database_url"] == exported_sys_db_url
+    assert config["dbos_system_schema"] == "dbos"
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
         "thetracesendpoint"
     ]

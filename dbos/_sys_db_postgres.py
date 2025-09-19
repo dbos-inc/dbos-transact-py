@@ -20,6 +20,7 @@ class PostgresSystemDatabase(SystemDatabase):
         *,
         system_database_url: str,
         engine_kwargs: Dict[str, Any],
+        schema: Optional[str],
         debug_mode: bool = False,
     ):
         super().__init__(
@@ -27,17 +28,16 @@ class PostgresSystemDatabase(SystemDatabase):
             engine_kwargs=engine_kwargs,
             debug_mode=debug_mode,
         )
+        if schema is None:
+            self.schema = "dbos"
+        else:
+            self.schema = schema
+        SystemSchema.set_schema(self.schema)
         self.notification_conn: Optional[psycopg.connection.Connection] = None
 
     def _create_engine(
         self, system_database_url: str, engine_kwargs: Dict[str, Any]
     ) -> sa.Engine:
-        # TODO: Make the schema dynamic so this isn't needed
-        SystemSchema.workflow_status.schema = "dbos"
-        SystemSchema.operation_outputs.schema = "dbos"
-        SystemSchema.notifications.schema = "dbos"
-        SystemSchema.workflow_events.schema = "dbos"
-        SystemSchema.streams.schema = "dbos"
         url = sa.make_url(system_database_url).set(drivername="postgresql+psycopg")
         return sa.create_engine(url, **engine_kwargs)
 
@@ -62,8 +62,8 @@ class PostgresSystemDatabase(SystemDatabase):
                 conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
         engine.dispose()
 
-        ensure_dbos_schema(self.engine)
-        run_dbos_migrations(self.engine)
+        ensure_dbos_schema(self.engine, self.schema)
+        run_dbos_migrations(self.engine, self.schema)
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""

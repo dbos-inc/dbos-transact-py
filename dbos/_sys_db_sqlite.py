@@ -19,12 +19,7 @@ class SQLiteSystemDatabase(SystemDatabase):
         self, system_database_url: str, engine_kwargs: Dict[str, Any]
     ) -> sa.Engine:
         """Create a SQLite engine."""
-        # TODO: Make the schema dynamic so this isn't needed
-        SystemSchema.workflow_status.schema = None
-        SystemSchema.operation_outputs.schema = None
-        SystemSchema.notifications.schema = None
-        SystemSchema.workflow_events.schema = None
-        SystemSchema.streams.schema = None
+        SystemSchema.set_schema(None)
         return sa.create_engine(system_database_url)
 
     def run_migrations(self) -> None:
