@@ -320,17 +320,6 @@ def test_workflow_commands(config: DBOSConfig) -> None:
         assert isinstance(get_wf_data, dict)
         assert get_wf_data["status"] == "ENQUEUED"
 
-        # restart the workflow and check it has a new ID and its status is ENQUEUED
-        output = subprocess.check_output(
-            ["dbos", "workflow", "restart", wf_id, "--schema", schema],
-            cwd=temp_path,
-            env=env,
-        )
-        restart_wf_data = json.loads(output)
-        assert isinstance(restart_wf_data, dict)
-        assert restart_wf_data["workflow_id"] != wf_id
-        assert restart_wf_data["status"] == "ENQUEUED"
-
         # fork the workflow at step 5 and check it has a new ID and its status is ENQUEUED
         output = subprocess.check_output(
             ["dbos", "workflow", "fork", wf_id, "--step", "5", "--schema", schema],

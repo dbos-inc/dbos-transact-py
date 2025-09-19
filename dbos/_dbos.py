@@ -1030,16 +1030,6 @@ class DBOS:
         return await cls.retrieve_workflow_async(workflow_id)
 
     @classmethod
-    def restart_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
-        """Restart a workflow with a new workflow ID"""
-        return cls.fork_workflow(workflow_id, 1)
-
-    @classmethod
-    async def restart_workflow_async(cls, workflow_id: str) -> WorkflowHandleAsync[Any]:
-        """Restart a workflow with a new workflow ID"""
-        return await cls.fork_workflow_async(workflow_id, 1)
-
-    @classmethod
     def fork_workflow(
         cls,
         workflow_id: str,
