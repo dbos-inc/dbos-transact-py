@@ -138,6 +138,7 @@ def test_notification_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
         time.sleep(1)
     system_database._cleanup_connections()
 
+    # Wait for the connection to re-establish
     time.sleep(3)
 
     dest_uuid = str("sruuid1")
