@@ -1265,20 +1265,6 @@ class DBOS:
             return None
 
     @classproperty
-    def parent_workflow_id(cls) -> str:
-        """
-        This method is deprecated and should not be used.
-        """
-        dbos_logger.warning(
-            "DBOS.parent_workflow_id is deprecated and should not be used"
-        )
-        ctx = assert_current_dbos_context()
-        assert (
-            ctx.is_within_workflow()
-        ), "parent_workflow_id is only available within a workflow."
-        return ctx.parent_workflow_id
-
-    @classproperty
     def span(cls) -> "Span":
         """Return the tracing `Span` associated with the current context."""
         ctx = assert_current_dbos_context()
