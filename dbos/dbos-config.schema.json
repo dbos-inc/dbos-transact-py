@@ -60,10 +60,6 @@
             "description": "The name of the application database. DEPRECATED: Use database_url instead",
             "deprecated": true
           },
-          "sys_db_name": {
-            "type": "string",
-            "description": "The name of the system database"
-          },
           "ssl": {
             "type": ["boolean", "null"],
             "description": "Use SSL/TLS to securely connect to the database (default: true). DEPRECATED: Use database_url instead",
