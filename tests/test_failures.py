@@ -136,12 +136,10 @@ def test_notification_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
     system_database = cast(PostgresSystemDatabase, dbos._sys_db)
     while system_database.notification_conn is None:
         time.sleep(1)
-    system_database.notification_conn.close()
-    assert system_database.notification_conn.closed == 1
+    system_database._cleanup_connections()
 
-    # Wait for the connection to be re-established
-    while system_database.notification_conn.closed != 0:
-        time.sleep(1)
+    # Wait for the connection to re-establish
+    time.sleep(3)
 
     dest_uuid = str("sruuid1")
     with SetWorkflowID(dest_uuid):

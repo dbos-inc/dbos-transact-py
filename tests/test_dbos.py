@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.exc import OperationalError
 
 # Public API
 from dbos import (
@@ -1827,3 +1828,65 @@ def test_custom_schema(
     steps = client.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 4
     assert "transaction" in steps[0]["function_name"]
+
+
+def test_custom_engine(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    db_engine: sa.Engine,
+    skip_with_sqlite: None,
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    assert config["system_database_url"]
+    config["application_database_url"] = None
+    system_database_url = config["system_database_url"]
+
+    # Create a custom engine
+    engine = sa.create_engine(system_database_url)
+    config["system_database_engine"] = engine
+
+    # Launch DBOS with the engine. It should fail because the database does not exist.
+    dbos = DBOS(config=config)
+    with pytest.raises(OperationalError):
+        DBOS.launch()
+    DBOS.destroy(destroy_registry=True)
+
+    # Create the database
+    with db_engine.connect() as c:
+        c.execution_options(isolation_level="AUTOCOMMIT")
+        sysdb_name = sa.make_url(config["system_database_url"]).database
+        c.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
+
+    # Launch DBOS again using the custom pool. It should succeed despite the bogus URL.
+    config["system_database_url"] = "postgresql://bogus:url@not:42/fake"
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    key = "key"
+    val = "val"
+
+    @DBOS.workflow()
+    def recv_workflow() -> Any:
+        DBOS.set_event(key, val)
+        return DBOS.recv()
+
+    assert dbos._sys_db.engine == engine
+    handle = DBOS.start_workflow(recv_workflow)
+    assert DBOS.get_event(handle.workflow_id, key) == val
+    DBOS.send(handle.workflow_id, val)
+    assert handle.get_result() == val
+    assert len(DBOS.list_workflows()) == 2
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 3
+    assert "setEvent" in steps[0]["function_name"]
+    DBOS.destroy(destroy_registry=True)
+
+    # Test custom engine with client
+    client = DBOSClient(
+        system_database_url=config["system_database_url"],
+        system_database_engine=config["system_database_engine"],
+    )
+    assert len(client.list_workflows()) == 2
+    steps = client.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 3
+    assert "setEvent" in steps[0]["function_name"]

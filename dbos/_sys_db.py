@@ -346,17 +346,32 @@ class SystemDatabase(ABC):
         *,
         system_database_url: str,
         engine_kwargs: Dict[str, Any],
+        engine: Optional[sa.Engine],
+        schema: Optional[str],
         debug_mode: bool = False,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
 
         self.dialect = sq if system_database_url.startswith("sqlite") else pg
-        self.engine = self._create_engine(system_database_url, engine_kwargs)
+
+        if system_database_url.startswith("sqlite"):
+            self.schema = None
+        else:
+            self.schema = schema if schema else "dbos"
+        SystemSchema.set_schema(self.schema)
+
+        if engine:
+            self.engine = engine
+            self.created_engine = False
+        else:
+            self.engine = self._create_engine(system_database_url, engine_kwargs)
+            self.created_engine = True
         self._engine_kwargs = engine_kwargs
 
         self.notifications_map = ThreadSafeConditionDict()
         self.workflow_events_map = ThreadSafeConditionDict()
+        self._listener_thread_lock = threading.Lock()
 
         # Now we can run background processes
         self._run_background_processes = True
@@ -1443,6 +1458,7 @@ class SystemDatabase(ABC):
     def create(
         system_database_url: str,
         engine_kwargs: Dict[str, Any],
+        engine: Optional[sa.Engine],
         schema: Optional[str],
         debug_mode: bool = False,
     ) -> "SystemDatabase":
@@ -1453,6 +1469,8 @@ class SystemDatabase(ABC):
             return SQLiteSystemDatabase(
                 system_database_url=system_database_url,
                 engine_kwargs=engine_kwargs,
+                engine=engine,
+                schema=schema,
                 debug_mode=debug_mode,
             )
         else:
@@ -1461,8 +1479,9 @@ class SystemDatabase(ABC):
             return PostgresSystemDatabase(
                 system_database_url=system_database_url,
                 engine_kwargs=engine_kwargs,
-                debug_mode=debug_mode,
+                engine=engine,
                 schema=schema,
+                debug_mode=debug_mode,
             )
 
     @db_retry()
