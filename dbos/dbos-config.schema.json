@@ -27,6 +27,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "app_db_name": {
+            "type": ["string", "null"],
+            "description": "The name of the application database in DBOS Cloud",
+            "deprecated": true
+          },
           "migrate": {
             "type": "array",
             "description": "Specify a list of user database migration commands to run in DBOS Cloud"
