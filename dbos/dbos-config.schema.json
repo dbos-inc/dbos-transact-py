@@ -27,99 +27,14 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "hostname": {
-            "type": ["string", "null"],
-            "description": "The hostname or IP address of the application database. DEPRECATED: Use database_url instead",
-            "deprecated": true
-          },
-          "port": {
-            "type": ["number", "null"],
-            "description": "The port number of the application database. DEPRECATED: Use database_url instead",
-            "deprecated": true
-          },
-          "username": {
-            "type": ["string", "null"],
-            "description": "The username to use when connecting to the application database. DEPRECATED: Use database_url instead",
-            "not": {
-              "enum": ["dbos"]
-            },
-            "deprecated": true
-          },
-          "password": {
-            "type": ["string", "null"],
-            "description": "The password to use when connecting to the application database. Developers are strongly encouraged to use environment variable substitution (${VAR_NAME}) or Docker secrets (${DOCKER_SECRET:SECRET_NAME}) to avoid storing secrets in source. DEPRECATED: Use database_url instead",
-            "deprecated": true
-          },
-          "connectionTimeoutMillis": {
-            "type": ["number", "null"],
-            "description": "The number of milliseconds the system waits before timing out when connecting to the application database. DEPRECATED: Use database_url instead",
-            "deprecated": true
-          },
           "app_db_name": {
             "type": ["string", "null"],
-            "description": "The name of the application database. DEPRECATED: Use database_url instead",
-            "deprecated": true
-          },
-          "sys_db_name": {
-            "type": "string",
-            "description": "The name of the system database"
-          },
-          "ssl": {
-            "type": ["boolean", "null"],
-            "description": "Use SSL/TLS to securely connect to the database (default: true). DEPRECATED: Use database_url instead",
-            "deprecated": true
-          },
-          "ssl_ca": {
-            "type": ["string", "null"],
-            "description": "If using SSL/TLS to securely connect to a database, path to an SSL root certificate file. DEPRECATED: Use database_url instead",
+            "description": "The name of the application database in DBOS Cloud",
             "deprecated": true
           },
           "migrate": {
             "type": "array",
-            "description": "Specify a list of user DB migration commands to run"
-          },
-          "rollback": {
-            "type": "array",
-            "description": "Specify a list of user DB rollback commands to run. DEPRECATED",
-            "deprecated": true
-          }
-        }
-      },
-      "telemetry": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "logs": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "addContextMetadata": {
-                "type": "boolean",
-                "description": "Adds contextual information, such as workflow UUID, to each log entry"
-              },
-              "logLevel": {
-                "type": "string",
-                "description": "A filter on what logs should be printed to the standard output"
-              },
-              "silent": {
-                "type": "boolean",
-                "description": "Silences the logger such that nothing is printed to the standard output"
-              }
-            }
-          },
-          "OTLPExporter": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "logsEndpoint": {
-                "type": "string",
-                "description": "The URL of an OTLP collector to which to export logs"
-              },
-              "tracesEndpoint": {
-                "type": "string",
-                "description": "The URL of an OTLP collector to which to export traces"
-              }
-            }
+            "description": "Specify a list of user database migration commands to run in DBOS Cloud"
           }
         }
       },
@@ -127,56 +42,20 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "entrypoints": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "port": {
-            "type": "number"
-          },
           "start": {
             "type": "array",
-            "description": "Specify commands to run to start your application (Python only)"
+            "description": "Specify commands to run to start your application in DBOS Cloud"
           },
           "setup": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Commands to setup the application execution environment"
-          },
-          "admin_port": {
-            "type": "number",
-            "description": "The port number of the admin server (Default: 3001)"
+            "description": "Commands to setup the application execution environment in DBOS Cloud"
           }
         }
       },
-      "http": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "cors_middleware": {
-            "type": "boolean"
-          },
-          "credentials": {
-            "type": "boolean"
-          },
-          "allowed_origins": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        }
-      },
-      "application": {},
-      "env": {},
-      "version": {
-        "type": "string",
-        "deprecated": true
-      }
+      "env": {}
     }
   }
   

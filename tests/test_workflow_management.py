@@ -170,62 +170,6 @@ def test_cancel_resume_queue(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_restart(dbos: DBOS) -> None:
-    input = 2
-    multiplier = 5
-
-    @DBOS.dbos_class()
-    class TestClass(DBOSConfiguredInstance):
-
-        def __init__(self, multiplier: int) -> None:
-            self.multiply: Callable[[int], int] = lambda x: x * multiplier
-            super().__init__("test_class")
-
-        @DBOS.workflow()
-        def workflow(self, x: int) -> int:
-            return self.multiply(x)
-
-        @DBOS.step()
-        def step(self, x: int) -> int:
-            return self.multiply(x)
-
-    inst = TestClass(multiplier)
-
-    # Start the workflow, let it finish, restart it.
-    # Verify it returns the same result with a different workflow ID.
-    handle = DBOS.start_workflow(inst.workflow, input)
-    assert handle.get_result() == input * multiplier
-    forked_handle = DBOS.restart_workflow(handle.workflow_id)
-    assert forked_handle.workflow_id != handle.workflow_id
-    assert forked_handle.get_result() == input * multiplier
-
-    # Enqueue the workflow, let it finish, restart it.
-    # Verify it returns the same result with a different workflow ID and queue.
-    queue = Queue("test_queue")
-    handle = queue.enqueue(inst.workflow, input)
-    assert handle.get_result() == input * multiplier
-    forked_handle = DBOS.restart_workflow(handle.workflow_id)
-    assert forked_handle.workflow_id != handle.workflow_id
-    assert forked_handle.get_status().queue_name == INTERNAL_QUEUE_NAME
-    assert forked_handle.get_result() == input * multiplier
-
-    # Enqueue the step, let it finish, restart it.
-    # Verify it returns the same result with a different workflow ID and queue.
-    handle = queue.enqueue(inst.step, input)
-    assert handle.get_result() == input * multiplier
-    forked_handle = DBOS.restart_workflow(handle.workflow_id)
-    assert forked_handle.workflow_id != handle.workflow_id
-    assert forked_handle.get_status().queue_name != handle.get_status().queue_name
-    assert forked_handle.get_result() == input * multiplier
-
-    # Verify restarting a nonexistent workflow throws an exception
-    with pytest.raises(Exception):
-        DBOS.restart_workflow("fake_id")
-
-    # Verify nothing is left on any queue
-    assert queue_entries_are_cleaned_up(dbos)
-
-
 def test_fork_steps(
     dbos: DBOS,
 ) -> None:

@@ -96,25 +96,6 @@ async def test_resume_workflow_async(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_restart_workflow_async(dbos: DBOS) -> None:
-    """Test async restart_workflow method."""
-    input_val = 2
-    multiplier = 5
-
-    @DBOS.workflow()
-    def simple_workflow(x: int) -> int:
-        return x * multiplier
-
-    # Start the workflow, let it finish, restart it async
-    handle = DBOS.start_workflow(simple_workflow, input_val)
-    assert handle.get_result() == input_val * multiplier
-
-    forked_handle = await DBOS.restart_workflow_async(handle.workflow_id)
-    assert forked_handle.workflow_id != handle.workflow_id
-    assert (await forked_handle.get_result()) == input_val * multiplier
-
-
-@pytest.mark.asyncio
 async def test_fork_workflow_async(dbos: DBOS) -> None:
     """Test async fork_workflow method."""
     step_one_count = 0

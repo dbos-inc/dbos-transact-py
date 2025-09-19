@@ -124,7 +124,6 @@ class DBOSClient:
         system_database_url: Optional[str] = None,
         application_database_url: Optional[str] = None,
         dbos_system_schema: Optional[str] = "dbos",
-        system_database: Optional[str] = None,  # DEPRECATED
     ):
         application_database_url = (
             database_url if database_url else application_database_url
@@ -133,7 +132,6 @@ class DBOSClient:
             {
                 "system_database_url": system_database_url,
                 "database_url": application_database_url,
-                "database": {"sys_db_name": system_database},
             }
         )
         assert is_valid_database_url(system_database_url)

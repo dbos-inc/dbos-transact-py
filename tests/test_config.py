@@ -168,7 +168,6 @@ def test_process_config_full():
         "name": "some-app",
         "database_url": "postgres://user:password@localhost:7777/dbn?connect_timeout=1&sslmode=require&sslrootcert=ca.pem",
         "database": {
-            "sys_db_name": "sys_db",
             "sys_db_pool_size": 27,
             "db_engine_kwargs": {"key": "value"},
             "migrate": ["alembic upgrade head"],
@@ -199,10 +198,9 @@ def test_process_config_full():
         configFile["database_url"]
         == "postgres://user:password@localhost:7777/dbn?connect_timeout=1&sslmode=require&sslrootcert=ca.pem"
     )
-    assert configFile["database"]["sys_db_name"] == "sys_db"
     assert (
         configFile["system_database_url"]
-        == f"postgres://user:password@localhost:7777/{config['database']['sys_db_name']}?connect_timeout=1&sslmode=require&sslrootcert=ca.pem"
+        == f"postgres://user:password@localhost:7777/dbn_dbos_sys?connect_timeout=1&sslmode=require&sslrootcert=ca.pem"
     )
     assert configFile["database"]["migrate"] == ["alembic upgrade head"]
     assert configFile["database"]["db_engine_kwargs"] == {
@@ -241,7 +239,6 @@ def test_process_config_system_database():
         "database_url": "postgres://user:password@localhost:7777/dbn?connect_timeout=1&sslmode=require&sslrootcert=ca.pem",
         "system_database_url": "postgres://user:password@localhost:7778/dbn_sys?connect_timeout=1&sslmode=require&sslrootcert=ca.pem",
         "database": {
-            "sys_db_name": "sys_db",
             "sys_db_pool_size": 27,
             "db_engine_kwargs": {"key": "value"},
             "migrate": ["alembic upgrade head"],
@@ -384,24 +381,6 @@ def test_config_bad_name():
     with pytest.raises(DBOSInitializationError) as exc_info:
         process_config(data=config)
     assert "Invalid app name" in str(exc_info.value)
-
-
-def test_config_mixed_params():
-    config = {
-        "name": "some-app",
-        "database": {
-            "sys_db_name": "yoohoo",
-        },
-    }
-
-    configFile = process_config(data=config)
-    assert configFile["name"] == "some-app"
-    assert configFile["database_url"] is None
-    assert configFile["system_database_url"] == f"sqlite:///some_app.sqlite"
-    assert configFile["database"]["db_engine_kwargs"] is not None
-    assert configFile["database"]["sys_db_engine_kwargs"] is not None
-    assert configFile["telemetry"]["logs"]["logLevel"] == "INFO"
-    assert configFile["runtimeConfig"]["run_admin_server"] == True
 
 
 ####################
@@ -682,7 +661,6 @@ def test_translate_dbosconfig_full_input():
     config: DBOSConfig = {
         "name": "test-app",
         "database_url": "postgres://user:password@localhost:5432/dbname?connect_timeout=11&sslmode=require&sslrootcert=ca.pem",
-        "sys_db_name": "sysdb",
         "sys_db_pool_size": 27,
         "db_engine_kwargs": {"key": "value"},
         "log_level": "DEBUG",
@@ -696,7 +674,6 @@ def test_translate_dbosconfig_full_input():
 
     assert translated_config["name"] == "test-app"
     assert translated_config["database_url"] == config["database_url"]
-    assert translated_config["database"]["sys_db_name"] == "sysdb"
     assert translated_config["database"]["sys_db_pool_size"] == 27
     assert translated_config["database"]["db_engine_kwargs"] == {"key": "value"}
     assert translated_config["telemetry"]["logs"]["logLevel"] == "DEBUG"
@@ -728,19 +705,6 @@ def test_translate_dbosconfig_minimal_input():
     assert "env" not in translated_config
 
 
-def test_translate_dbosconfig_just_sys_db_name():
-    config: DBOSConfig = {
-        "name": "test-app",
-        "sys_db_name": "sysdb",
-    }
-    translated_config = translate_dbos_config_to_config_file(config)
-
-    assert translated_config["database"]["sys_db_name"] == "sysdb"
-    assert "sys_db_pool_size" not in translated_config["database"]
-    assert "env" not in translated_config
-    assert "admin_port" not in translated_config["runtimeConfig"]
-
-
 def test_translate_dbosconfig_just_sys_db_pool_size():
     config: DBOSConfig = {
         "name": "test-app",
@@ -749,7 +713,6 @@ def test_translate_dbosconfig_just_sys_db_pool_size():
     translated_config = translate_dbos_config_to_config_file(config)
 
     assert translated_config["database"]["sys_db_pool_size"] == 27
-    assert "sys_db_name" not in translated_config["database"]
     assert "env" not in translated_config
 
 
@@ -762,7 +725,6 @@ def test_translate_dbosconfig_just_db_engine_kwargs():
 
     assert translated_config["database"]["db_engine_kwargs"] == {"key": "value"}
     assert "sys_db_pool_size" not in translated_config["database"]
-    assert "sys_db_name" not in translated_config["database"]
     assert "env" not in translated_config
     assert "admin_port" not in translated_config["runtimeConfig"]
 
@@ -851,7 +813,6 @@ def test_overwrite_config(mocker):
     name: "stock-prices"
     language: "python"
     database:
-        sys_db_name: sysdbname
         migrate:
             - alembic upgrade head
     telemetry:
@@ -870,9 +831,7 @@ def test_overwrite_config(mocker):
 
     provided_config: ConfigFile = {
         "name": "test-app",
-        "database": {
-            "sys_db_name": "sysdb",
-        },
+        "database": {},
         "telemetry": {
             "OTLPExporter": {
                 "tracesEndpoint": ["a"],
@@ -924,7 +883,6 @@ def test_overwrite_config_minimal(mocker):
     name: "stock-prices"
     language: "python"
     database:
-        sys_db_name: sysdbname
         migrate:
             - alembic upgrade head
     telemetry:
@@ -973,7 +931,6 @@ def test_overwrite_config_has_telemetry(mocker):
     name: "stock-prices"
     language: "python"
     database:
-        sys_db_name: sysdbname
         migrate:
             - alembic upgrade head
     telemetry:
@@ -1022,8 +979,6 @@ def test_overwrite_config_no_telemetry_in_file(mocker):
     mock_config = """
     name: "stock-prices"
     language: "python"
-    database:
-        sys_db_name: sysdbname
     """
     mocker.patch(
         "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
@@ -1058,8 +1013,6 @@ def test_overwrite_config_no_otlp_in_file(mocker):
     mock_config = """
     name: "stock-prices"
     language: "python"
-    database:
-        sys_db_name: sysdbname
     telemetry:
         logs:
             logLevel: INFO
@@ -1100,7 +1053,6 @@ def test_overwrite_config_with_provided_database_url(mocker):
     name: "stock-prices"
     language: "python"
     database:
-        sys_db_name: sysdbname
         migrate:
             - alembic upgrade head
     telemetry:
@@ -1146,8 +1098,6 @@ def test_overwrite_config_with_provided_database_url(mocker):
 def test_overwrite_config_missing_dbos_database_url(mocker):
     mock_config = """
     name: "stock-prices"
-    database:
-        sys_db_name: "sysdbname"
     """
 
     mocker.patch(

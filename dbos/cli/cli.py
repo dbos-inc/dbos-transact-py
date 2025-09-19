@@ -682,48 +682,6 @@ def resume(
 
 
 @workflow.command(
-    help="[DEPRECATED - Use fork instead] Restart a workflow from the beginning with a new id"
-)
-def restart(
-    workflow_id: Annotated[str, typer.Argument()],
-    application_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--db-url",
-            "-D",
-            help="Your DBOS application database URL",
-        ),
-    ] = None,
-    system_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--sys-db-url",
-            "-s",
-            help="Your DBOS system database URL",
-        ),
-    ] = None,
-    schema: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--schema",
-            help='Schema name for DBOS system tables. Defaults to "dbos".',
-        ),
-    ] = "dbos",
-) -> None:
-    system_database_url, application_database_url = _get_db_url(
-        system_database_url=system_database_url,
-        application_database_url=application_database_url,
-    )
-    client = DBOSClient(
-        application_database_url=application_database_url,
-        system_database_url=system_database_url,
-        dbos_system_schema=schema,
-    )
-    status = client.fork_workflow(workflow_id=workflow_id, start_step=1).get_status()
-    print(json.dumps(status.__dict__, cls=DefaultEncoder))
-
-
-@workflow.command(
     help="fork a workflow from the beginning with a new id and from a step"
 )
 def fork(

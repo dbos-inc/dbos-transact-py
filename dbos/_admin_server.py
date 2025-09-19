@@ -244,7 +244,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
     def _handle_restart(self, workflow_id: str) -> None:
         try:
             print(f"Restarting workflow {workflow_id}")
-            handle = self.dbos.restart_workflow(workflow_id)
+            handle = self.dbos.fork_workflow(workflow_id, 1)
             response_body = json.dumps(
                 {
                     "workflow_id": handle.workflow_id,
