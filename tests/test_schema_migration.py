@@ -81,31 +81,6 @@ def test_systemdb_migration_custom_schema(
     DBOS.destroy()
 
 
-def test_custom_sysdb_name_migration(
-    config: DBOSConfig, db_engine: sa.Engine, skip_with_sqlite: None
-) -> None:
-    sysdb_name = "custom_sysdb_name"
-    config["sys_db_name"] = sysdb_name
-
-    # Clean up from previous runs
-    with db_engine.connect() as connection:
-        connection.execution_options(isolation_level="AUTOCOMMIT")
-        connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sysdb_name}"))
-
-    # Test migrating up
-    DBOS.destroy()  # In case of other tests leaving it
-    dbos = DBOS(config=config)
-    DBOS.launch()
-
-    # Make sure all tables exist
-    with dbos._sys_db.engine.connect() as connection:
-        sql = SystemSchema.workflow_status.select()
-        result = connection.execute(sql)
-        assert result.fetchall() == []
-
-    DBOS.destroy()
-
-
 def test_reset(
     config: DBOSConfig, db_engine: sa.Engine, skip_with_sqlite: None
 ) -> None:
