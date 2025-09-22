@@ -89,11 +89,13 @@ def debouncer_workflow(
     # Every time the debounced workflow is called, a message is sent to this workflow.
     # It waits until debounce_period_sec have passed since the last message or until
     # debounce_timeout_sec has elapsed.
-    debounce_deadline_epoch_sec = (
-        time.time() + options["debounce_timeout_sec"]
-        if options["debounce_timeout_sec"]
-        else math.inf
-    )
+    def get_debounce_deadline_epoch_sec() -> float:
+        return (
+            time.time() + options["debounce_timeout_sec"]
+            if options["debounce_timeout_sec"]
+            else math.inf
+        )
+    debounce_deadline_epoch_sec = dbos._sys_db.call_function_as_step(get_debounce_deadline_epoch_sec, "get_debounce_deadline_epoch_sec")
     debounce_period_sec = initial_debounce_period_sec
     while time.time() < debounce_deadline_epoch_sec:
         time_until_deadline = max(debounce_deadline_epoch_sec - time.time(), 0)
