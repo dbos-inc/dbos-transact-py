@@ -435,7 +435,7 @@ def test_admin_workflow_fork(dbos: DBOS) -> None:
     # test for new_workflow_id and app version
 
     new_version = "my_new_version"
-    DBOS.application_version = new_version
+    GlobalParams.app_version = new_version
 
     response = requests.post(
         f"http://localhost:3001/workflows/{wfUuid}/fork",
