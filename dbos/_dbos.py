@@ -1031,16 +1031,6 @@ class DBOS:
         return await cls.retrieve_workflow_async(workflow_id)
 
     @classmethod
-    def restart_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
-        """Restart a workflow with a new workflow ID"""
-        return cls.fork_workflow(workflow_id, 1)
-
-    @classmethod
-    async def restart_workflow_async(cls, workflow_id: str) -> WorkflowHandleAsync[Any]:
-        """Restart a workflow with a new workflow ID"""
-        return await cls.fork_workflow_async(workflow_id, 1)
-
-    @classmethod
     def fork_workflow(
         cls,
         workflow_id: str,
@@ -1274,20 +1264,6 @@ class DBOS:
             return ctx.step_status
         else:
             return None
-
-    @classproperty
-    def parent_workflow_id(cls) -> str:
-        """
-        This method is deprecated and should not be used.
-        """
-        dbos_logger.warning(
-            "DBOS.parent_workflow_id is deprecated and should not be used"
-        )
-        ctx = assert_current_dbos_context()
-        assert (
-            ctx.is_within_workflow()
-        ), "parent_workflow_id is only available within a workflow."
-        return ctx.parent_workflow_id
 
     @classproperty
     def span(cls) -> "Span":

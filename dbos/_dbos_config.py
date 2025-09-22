@@ -23,7 +23,6 @@ class DBOSConfig(TypedDict, total=False):
         system_database_url (str): Connection string for the DBOS system database. Defaults to sqlite:///{name} if not provided.
         application_database_url (str): Connection string for the DBOS application database, in which DBOS @Transaction functions run. Optional. Should be the same type of database (SQLite or Postgres) as the system database.
         database_url (str): (DEPRECATED) Database connection string
-        sys_db_name (str): (DEPRECATED) System database name
         sys_db_pool_size (int): System database pool size
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs (See https://docs.sqlalchemy.org/en/20/core/engines.html#sqlalchemy.create_engine)
         log_level (str): Log level
@@ -43,7 +42,6 @@ class DBOSConfig(TypedDict, total=False):
     system_database_url: Optional[str]
     application_database_url: Optional[str]
     database_url: Optional[str]
-    sys_db_name: Optional[str]
     sys_db_pool_size: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
     log_level: Optional[str]
@@ -77,14 +75,10 @@ class DatabaseConfig(TypedDict, total=False):
         dbos_system_schema (str): Schema name for DBOS system tables. Defaults to "dbos".
     """
 
-    sys_db_name: Optional[str]
-    sys_db_pool_size: Optional[
-        int
-    ]  # For internal use, will be removed in a future version
+    sys_db_pool_size: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
     sys_db_engine_kwargs: Optional[Dict[str, Any]]
     migrate: Optional[List[str]]
-    rollback: Optional[List[str]]  # Will be removed in a future version
 
 
 class OTLPExporterConfig(TypedDict, total=False):
@@ -130,8 +124,6 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
 
     # Database config
     db_config: DatabaseConfig = {}
-    if "sys_db_name" in config:
-        db_config["sys_db_name"] = config.get("sys_db_name")
     if "sys_db_pool_size" in config:
         db_config["sys_db_pool_size"] = config.get("sys_db_pool_size")
     if "db_engine_kwargs" in config:
@@ -402,10 +394,7 @@ def process_config(
         else:
             url = make_url(data["database_url"])
             assert url.database
-            if data["database"].get("sys_db_name"):
-                url = url.set(database=data["database"]["sys_db_name"])
-            else:
-                url = url.set(database=f"{url.database}{SystemSchema.sysdb_suffix}")
+            url = url.set(database=f"{url.database}{SystemSchema.sysdb_suffix}")
             data["system_database_url"] = url.render_as_string(hide_password=False)
 
     # If a system database URL is provided but not an application database URL,
@@ -610,11 +599,8 @@ def get_system_database_url(config: ConfigFile) -> str:
         if config["database_url"].startswith("sqlite"):
             return config["database_url"]
         app_db_url = make_url(config["database_url"])
-        if config.get("database") and config["database"].get("sys_db_name") is not None:
-            sys_db_name = config["database"]["sys_db_name"]
-        else:
-            assert app_db_url.database is not None
-            sys_db_name = app_db_url.database + SystemSchema.sysdb_suffix
+        assert app_db_url.database is not None
+        sys_db_name = app_db_url.database + SystemSchema.sysdb_suffix
         return app_db_url.set(database=sys_db_name).render_as_string(
             hide_password=False
         )
