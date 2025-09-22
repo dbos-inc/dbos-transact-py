@@ -1,14 +1,11 @@
 import threading
 import time
 import uuid
-from typing import Callable
 
 import pytest
 import sqlalchemy as sa
 
-# Public API
 from dbos import DBOS, Queue, SetWorkflowID
-from dbos._dbos import DBOSConfiguredInstance
 from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.application_database import ApplicationSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
@@ -58,7 +55,7 @@ def test_cancel_resume(dbos: DBOS) -> None:
 
     # Resume the workflow. Verify it completes successfully.
     handle = DBOS.resume_workflow(wfid)
-    assert handle.get_status().app_version == GlobalParams.app_version
+    assert handle.get_status().app_version == DBOS.application_version_version
     assert handle.get_status().queue_name == INTERNAL_QUEUE_NAME
     assert handle.get_result() == input
     assert steps_completed == 2
@@ -231,7 +228,7 @@ def test_fork_steps(
     with SetWorkflowID(fork_id):
         forked_handle = DBOS.fork_workflow(wfid, 3)
     assert forked_handle.workflow_id == fork_id
-    assert forked_handle.get_status().app_version == GlobalParams.app_version
+    assert forked_handle.get_status().app_version == DBOS.application_version_version
     assert forked_handle.get_result() == output
 
     assert stepOneCount == 1

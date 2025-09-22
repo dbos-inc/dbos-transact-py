@@ -76,7 +76,7 @@ def test_spans(config: DBOSConfig) -> None:
     for log in logs:
         assert log.log_record.attributes is not None
         assert (
-            log.log_record.attributes["applicationVersion"] == GlobalParams.app_version
+            log.log_record.attributes["applicationVersion"] == DBOS.application_version
         )
         assert log.log_record.attributes["executorID"] == GlobalParams.executor_id
         assert log.log_record.attributes["foo"] == "bar"
@@ -98,7 +98,7 @@ def test_spans(config: DBOSConfig) -> None:
             # Skip the manual span because it was not created by DBOS.tracer
             continue
         assert span.attributes is not None
-        assert span.attributes["applicationVersion"] == GlobalParams.app_version
+        assert span.attributes["applicationVersion"] == DBOS.application_version
         assert span.attributes["executorID"] == GlobalParams.executor_id
         assert span.context is not None
         assert span.attributes["foo"] == "bar"
@@ -203,7 +203,7 @@ async def test_spans_async(dbos: DBOS) -> None:
     for log in logs:
         assert log.log_record.attributes is not None
         assert (
-            log.log_record.attributes["applicationVersion"] == GlobalParams.app_version
+            log.log_record.attributes["applicationVersion"] == DBOS.application_version
         )
         assert log.log_record.attributes["executorID"] == GlobalParams.executor_id
         # Make sure the log record has a span_id and trace_id
@@ -226,7 +226,7 @@ async def test_spans_async(dbos: DBOS) -> None:
             # Skip the manual span because it was not created by DBOS.tracer
             continue
         assert span.attributes is not None
-        assert span.attributes["applicationVersion"] == GlobalParams.app_version
+        assert span.attributes["applicationVersion"] == DBOS.application_version
         assert span.attributes["executorID"] == GlobalParams.executor_id
         assert span.context is not None
         assert span.context.span_id > 0
@@ -316,7 +316,7 @@ def test_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert len(logs) == 1
     assert logs[0].log_record.attributes is not None
     assert (
-        logs[0].log_record.attributes["applicationVersion"] == GlobalParams.app_version
+        logs[0].log_record.attributes["applicationVersion"] == DBOS.application_version
     )
     assert logs[0].log_record.span_id is not None and logs[0].log_record.span_id > 0
     assert logs[0].log_record.trace_id is not None and logs[0].log_record.trace_id > 0
@@ -331,7 +331,7 @@ def test_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     for span in spans:
         assert span.attributes is not None
-        assert span.attributes["applicationVersion"] == GlobalParams.app_version
+        assert span.attributes["applicationVersion"] == DBOS.application_version
         assert span.context is not None
         assert span.context.span_id > 0
         assert span.context.trace_id > 0
@@ -389,7 +389,7 @@ def test_disable_otlp_no_spans(config: DBOSConfig) -> None:
     for log in logs:
         assert log.log_record.attributes is not None
         assert (
-            log.log_record.attributes["applicationVersion"] == GlobalParams.app_version
+            log.log_record.attributes["applicationVersion"] == DBOS.application_version
         )
         assert log.log_record.attributes["executorID"] == GlobalParams.executor_id
         assert log.log_record.attributes["foo"] == "bar"
