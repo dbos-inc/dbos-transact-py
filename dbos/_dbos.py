@@ -1222,6 +1222,10 @@ class DBOS:
     async def list_workflow_steps_async(cls, workflow_id: str) -> List[StepInfo]:
         await cls._configure_asyncio_thread_pool()
         return await asyncio.to_thread(cls.list_workflow_steps, workflow_id)
+    
+    @classproperty
+    def application_version(cls) -> str:
+        return GlobalParams.app_version
 
     @classproperty
     def logger(cls) -> Logger:
