@@ -335,6 +335,8 @@ class DBOS:
         self._background_threads: List[threading.Thread] = []
         self.conductor_url: Optional[str] = conductor_url
         self.conductor_key: Optional[str] = conductor_key
+        if config.get("conductor_key"):
+            self.conductor_key = config.get("conductor_key")
         self.conductor_websocket: Optional[ConductorWebsocket] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
         self._active_workflows_set: set[str] = set()
