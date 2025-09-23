@@ -36,6 +36,7 @@ class DBOSConfig(TypedDict, total=False):
         dbos_system_schema (str): Schema name for DBOS system tables. Defaults to "dbos".
         enable_otlp (bool): If True, enable built-in DBOS OTLP tracing and logging.
         system_database_engine (sa.Engine): A custom system database engine. If provided, DBOS will not create an engine but use this instead.
+        conductor_key (str): An API key for DBOS Conductor. Pass this in to connect your process to Conductor.
     """
 
     name: str
@@ -55,6 +56,7 @@ class DBOSConfig(TypedDict, total=False):
     dbos_system_schema: Optional[str]
     enable_otlp: Optional[bool]
     system_database_engine: Optional[sa.Engine]
+    conductor_key: Optional[str]
 
 
 class RuntimeConfig(TypedDict, total=False):
