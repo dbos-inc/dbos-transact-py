@@ -1,11 +1,11 @@
 
 <div align="center">
 
-[![GitHub Actions](https://img.shields.io/github/actions/workflow/status/dbos-inc/dbos-transact-py/unit-test.yml)](https://github.com/dbos-inc/dbos-transact-py/actions/workflows/unit-test.yml)
-[![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/dbos-inc/dbos-transact-py?sort=semver)](https://github.com/dbos-inc/dbos-transact-py/releases)
+[![GitHub Actions](https://img.shields.io/github/actions/workflow/status/dbos-inc/dbos-transact-py/unit-test.yml?query=branch%3Amain)](https://github.com/dbos-inc/dbos-transact-py/actions/workflows/unit-test.yml)
 [![PyPI release (latest SemVer)](https://img.shields.io/pypi/v/dbos.svg)](https://pypi.python.org/pypi/dbos)
-[![Join Discord](https://img.shields.io/badge/Discord-Join%20Chat-5865F2?logo=discord&logoColor=white)](https://discord.com/invite/jsmC6pXGgX)
+[![Python Versions](https://img.shields.io/pypi/pyversions/dbos.svg)](https://pypi.python.org/pypi/dbos)
 [![License (MIT)](https://img.shields.io/github/license/dbos-inc/dbos-transact-py.svg?v)](LICENSE)
+[![Join Discord](https://img.shields.io/badge/Discord-Join%20Chat-5865F2?logo=discord&logoColor=white)](https://discord.com/invite/jsmC6pXGgX)
 
 # DBOS Transact: Lightweight Durable Workflows
 
