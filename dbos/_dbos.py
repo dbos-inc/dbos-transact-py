@@ -449,6 +449,7 @@ class DBOS:
             self._sys_db_field = SystemDatabase.create(
                 system_database_url=get_system_database_url(self._config),
                 engine_kwargs=self._config["database"]["sys_db_engine_kwargs"],
+                engine=self._config["system_database_engine"],
                 debug_mode=debug_mode,
                 schema=schema,
             )
