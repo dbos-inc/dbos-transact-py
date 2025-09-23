@@ -520,7 +520,7 @@ def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
     assert workflows[0]["CreatedAt"] is not None and len(workflows[0]["CreatedAt"]) > 0
     assert workflows[0]["UpdatedAt"] is not None and len(workflows[0]["UpdatedAt"]) > 0
     assert workflows[0]["QueueName"] is None
-    assert workflows[0]["ApplicationVersion"] == GlobalParams.app_version
+    assert workflows[0]["ApplicationVersion"] == DBOS.application_version
     assert workflows[0]["ExecutorID"] == GlobalParams.executor_id
 
     # Only load input and output as requested
@@ -620,7 +620,7 @@ def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
     assert len(workflows) == 2
 
     filters = {
-        "application_version": GlobalParams.app_version,
+        "application_version": DBOS.application_version,
     }
     response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
     assert response.status_code == 200
@@ -699,7 +699,7 @@ def test_get_workflow_by_id(dbos: DBOS) -> None:
         workflow_data["UpdatedAt"] is not None and len(workflow_data["UpdatedAt"]) > 0
     )
     assert workflow_data["QueueName"] is None
-    assert workflow_data["ApplicationVersion"] == GlobalParams.app_version
+    assert workflow_data["ApplicationVersion"] == DBOS.application_version
     assert workflow_data["ExecutorID"] == GlobalParams.executor_id
 
     # Test GET /workflows/:workflow_id for a non-existing workflow
@@ -812,7 +812,7 @@ def test_queued_workflows_endpoint(
         and len(queued_workflows[0]["UpdatedAt"]) > 0
     )
     assert queued_workflows[0]["QueueName"] == test_queue1.name
-    assert queued_workflows[0]["ApplicationVersion"] == GlobalParams.app_version
+    assert queued_workflows[0]["ApplicationVersion"] == DBOS.application_version
     assert queued_workflows[0]["ExecutorID"] == GlobalParams.executor_id
 
     # Verify sort_desc inverts the order

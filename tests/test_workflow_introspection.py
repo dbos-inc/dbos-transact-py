@@ -39,7 +39,7 @@ def test_list_workflow(dbos: DBOS) -> None:
     assert output.updated_at is not None and output.updated_at > 0
     assert output.queue_name == None
     assert output.executor_id == GlobalParams.executor_id
-    assert output.app_version == GlobalParams.app_version
+    assert output.app_version == DBOS.application_version
     assert output.app_id == ""
     assert output.recovery_attempts == 1
     assert output.workflow_timeout_ms is None
@@ -77,7 +77,7 @@ def test_list_workflow(dbos: DBOS) -> None:
     # Test searching by application version
     outputs = DBOS.list_workflows(app_version="no")
     assert len(outputs) == 0
-    outputs = DBOS.list_workflows(app_version=GlobalParams.app_version)
+    outputs = DBOS.list_workflows(app_version=DBOS.application_version)
     assert len(outputs) == 1
 
 
@@ -109,7 +109,7 @@ def test_list_workflow_error(dbos: DBOS) -> None:
     assert output.updated_at is not None and output.updated_at > 0
     assert output.queue_name == None
     assert output.executor_id == GlobalParams.executor_id
-    assert output.app_version == GlobalParams.app_version
+    assert output.app_version == DBOS.application_version
     assert output.app_id == ""
     assert output.recovery_attempts == 1
     assert output.workflow_timeout_ms is None
@@ -289,7 +289,7 @@ def test_queued_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> 
         assert workflow.error is None
         assert "blocking_step" in workflow.name
         assert workflow.executor_id == GlobalParams.executor_id
-        assert workflow.app_version == GlobalParams.app_version
+        assert workflow.app_version == DBOS.application_version
         assert workflow.created_at is not None and workflow.created_at > 0
         assert workflow.updated_at is not None and workflow.updated_at > 0
         assert workflow.recovery_attempts == 1
@@ -323,7 +323,7 @@ def test_queued_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> 
         assert workflow.error is None
         assert "blocking_step" in workflow.name
         assert workflow.executor_id == GlobalParams.executor_id
-        assert workflow.app_version == GlobalParams.app_version
+        assert workflow.app_version == DBOS.application_version
         assert workflow.created_at is not None and workflow.created_at > 0
         assert workflow.updated_at is not None and workflow.updated_at > 0
         assert workflow.recovery_attempts == 1

@@ -61,7 +61,7 @@ class Queue:
 
         registry = _get_or_create_dbos_registry()
         if self.name in registry.queue_info_map and self.name != INTERNAL_QUEUE_NAME:
-            dbos_logger.warning(f"Queue {name} has already been declared")
+            raise Exception(f"Queue {name} has already been declared")
         registry.queue_info_map[self.name] = self
 
     def enqueue(
@@ -75,7 +75,7 @@ class Queue:
             and context.priority is not None
             and not self.priority_enabled
         ):
-            dbos_logger.warning(
+            raise Exception(
                 f"Priority is not enabled for queue {self.name}. Setting priority will not have any effect."
             )
 

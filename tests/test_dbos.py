@@ -1372,12 +1372,12 @@ def test_app_version(config: DBOSConfig) -> None:
     DBOS.launch()
 
     # Verify that app version is correctly set to a hex string
-    app_version = GlobalParams.app_version
+    app_version = DBOS.application_version
     assert len(app_version) > 0
     assert is_hex(app_version)
 
     DBOS.destroy(destroy_registry=True)
-    assert GlobalParams.app_version == ""
+    assert DBOS.application_version == ""
     dbos = DBOS(config=config)
 
     @DBOS.workflow()
@@ -1391,7 +1391,7 @@ def test_app_version(config: DBOSConfig) -> None:
     DBOS.launch()
 
     # Verify stability--the same workflow source produces the same app version.
-    assert GlobalParams.app_version == app_version
+    assert DBOS.application_version == app_version
 
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
@@ -1402,7 +1402,7 @@ def test_app_version(config: DBOSConfig) -> None:
 
     # Verify that changing the workflow source changes the workflow version
     DBOS.launch()
-    assert GlobalParams.app_version != app_version
+    assert DBOS.application_version != app_version
 
     # Verify that version can be overriden with an environment variable
     app_version = str(uuid.uuid4())
@@ -1416,7 +1416,7 @@ def test_app_version(config: DBOSConfig) -> None:
         return x
 
     DBOS.launch()
-    assert GlobalParams.app_version == app_version
+    assert DBOS.application_version == app_version
 
     del os.environ["DBOS__APPVERSION"]
 
@@ -1435,7 +1435,7 @@ def test_app_version(config: DBOSConfig) -> None:
         return DBOS.workflow_id
 
     DBOS.launch()
-    assert GlobalParams.app_version == app_version
+    assert DBOS.application_version == app_version
     assert GlobalParams.executor_id == executor_id
     wfid = test_workflow()
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
