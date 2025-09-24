@@ -16,6 +16,7 @@ from typing import (
     AsyncGenerator,
     Callable,
     Coroutine,
+    Dict,
     Generator,
     Generic,
     List,
@@ -975,6 +976,18 @@ class DBOS:
         )
 
     @classmethod
+    def get_events(cls, workflow_id: str) -> Dict[str, Any]:
+        def fn() -> Dict[str, Any]:
+            return _get_dbos_instance()._sys_db.get_events(workflow_id)
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.get_events")
+
+    @classmethod
+    async def get_events_async(cls, workflow_id: str) -> Dict[str, Any]:
+        await cls._configure_asyncio_thread_pool()
+        return await asyncio.to_thread(cls.get_events, workflow_id)
+
+    @classmethod
     def _execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Execute a workflow by ID (for recovery)."""
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id)
@@ -1225,7 +1238,7 @@ class DBOS:
     async def list_workflow_steps_async(cls, workflow_id: str) -> List[StepInfo]:
         await cls._configure_asyncio_thread_pool()
         return await asyncio.to_thread(cls.list_workflow_steps, workflow_id)
-    
+
     @classproperty
     def application_version(cls) -> str:
         return GlobalParams.app_version

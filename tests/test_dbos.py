@@ -1890,3 +1890,40 @@ def test_custom_engine(
     steps = client.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 3
     assert "setEvent" in steps[0]["function_name"]
+
+
+def test_get_events(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def events_workflow() -> str:
+        # Set multiple events
+        DBOS.set_event("event1", "value1")
+        DBOS.set_event("event2", {"nested": "data", "count": 42})
+        DBOS.set_event("event3", [1, 2, 3, 4, 5])
+        return "completed"
+
+    # Execute the workflow
+    handle = DBOS.start_workflow(events_workflow)
+    result = handle.get_result()
+    assert result == "completed"
+
+    # Get all events for the workflow
+    events = DBOS.get_events(handle.workflow_id)
+
+    # Verify all events are present with correct values
+    assert len(events) == 3
+    assert events["event1"] == "value1"
+    assert events["event2"] == {"nested": "data", "count": 42}
+    assert events["event3"] == [1, 2, 3, 4, 5]
+
+    # Test with a workflow that has no events
+    @DBOS.workflow()
+    def no_events_workflow() -> str:
+        return "no events"
+
+    handle2 = DBOS.start_workflow(no_events_workflow)
+    handle2.get_result()
+
+    # Should return empty dict for workflow with no events
+    events2 = DBOS.get_events(handle2.workflow_id)
+    assert events2 == {}

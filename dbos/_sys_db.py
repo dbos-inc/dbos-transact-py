@@ -1567,6 +1567,32 @@ class SystemDatabase(ABC):
             }
             self._record_operation_result_txn(output, conn=c)
 
+    def get_events(self, workflow_id: str) -> Dict[str, Any]:
+        """
+        Get all events currently present for a workflow ID.
+
+        Args:
+            workflow_id: The workflow UUID to get events for
+
+        Returns:
+            A dictionary mapping event keys to their deserialized values
+        """
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.workflow_events.c.key,
+                    SystemSchema.workflow_events.c.value,
+                ).where(SystemSchema.workflow_events.c.workflow_uuid == workflow_id)
+            ).fetchall()
+
+            events: Dict[str, Any] = {}
+            for row in rows:
+                key = row[0]
+                value = _serialization.deserialize(row[1])
+                events[key] = value
+
+            return events
+
     @db_retry()
     def get_event(
         self,
