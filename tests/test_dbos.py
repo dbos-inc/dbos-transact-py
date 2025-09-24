@@ -1927,3 +1927,15 @@ def test_get_events(dbos: DBOS) -> None:
     # Should return empty dict for workflow with no events
     events2 = DBOS.get_events(handle2.workflow_id)
     assert events2 == {}
+
+    # Test it works in a workflow
+    @DBOS.workflow()
+    def get_events_workflow() -> None:
+        events = DBOS.get_events(handle.workflow_id)
+        # Verify all events are present with correct values
+        assert len(events) == 3
+        assert events["event1"] == "value1"
+        assert events["event2"] == {"nested": "data", "count": 42}
+        assert events["event3"] == [1, 2, 3, 4, 5]
+
+    get_events_workflow()
