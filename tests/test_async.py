@@ -626,7 +626,7 @@ async def test_get_events_async(dbos: DBOS) -> None:
     assert result == "completed"
 
     # Get all events for the workflow using async method
-    events = await DBOS.get_events_async(handle.workflow_id)
+    events = await DBOS.get_all_events_async(handle.workflow_id)
 
     # Verify all events are present with correct values
     assert len(events) == 3
@@ -644,5 +644,5 @@ async def test_get_events_async(dbos: DBOS) -> None:
     await handle2.get_result()
 
     # Should return empty dict for workflow with no events
-    events2 = await DBOS.get_events_async(handle2.workflow_id)
+    events2 = await DBOS.get_all_events_async(handle2.workflow_id)
     assert events2 == {}

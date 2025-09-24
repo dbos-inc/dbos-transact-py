@@ -1567,7 +1567,7 @@ class SystemDatabase(ABC):
             }
             self._record_operation_result_txn(output, conn=c)
 
-    def get_events(self, workflow_id: str) -> Dict[str, Any]:
+    def get_all_events(self, workflow_id: str) -> Dict[str, Any]:
         """
         Get all events currently present for a workflow ID.
 

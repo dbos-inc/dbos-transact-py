@@ -976,16 +976,16 @@ class DBOS:
         )
 
     @classmethod
-    def get_events(cls, workflow_id: str) -> Dict[str, Any]:
+    def get_all_events(cls, workflow_id: str) -> Dict[str, Any]:
         def fn() -> Dict[str, Any]:
-            return _get_dbos_instance()._sys_db.get_events(workflow_id)
+            return _get_dbos_instance()._sys_db.get_all_events(workflow_id)
 
         return _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.get_events")
 
     @classmethod
-    async def get_events_async(cls, workflow_id: str) -> Dict[str, Any]:
+    async def get_all_events_async(cls, workflow_id: str) -> Dict[str, Any]:
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(cls.get_events, workflow_id)
+        return await asyncio.to_thread(cls.get_all_events, workflow_id)
 
     @classmethod
     def _execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:

@@ -1909,7 +1909,7 @@ def test_get_events(dbos: DBOS) -> None:
 
     # Get events, verify they are present with correct values
     def get_events() -> None:
-        events = DBOS.get_events(handle.workflow_id)
+        events = DBOS.get_all_events(handle.workflow_id)
 
         assert len(events) == 3
         assert events["event1"] == "value1"
@@ -1937,5 +1937,5 @@ def test_get_events(dbos: DBOS) -> None:
     handle2.get_result()
 
     # Should return empty dict for workflow with no events
-    events2 = DBOS.get_events(handle2.workflow_id)
+    events2 = DBOS.get_all_events(handle2.workflow_id)
     assert events2 == {}
