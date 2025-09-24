@@ -1907,14 +1907,26 @@ def test_get_events(dbos: DBOS) -> None:
     result = handle.get_result()
     assert result == "completed"
 
-    # Get all events for the workflow
-    events = DBOS.get_events(handle.workflow_id)
+    # Get events, verify they are present with correct values
+    def get_events() -> None:
+        events = DBOS.get_events(handle.workflow_id)
 
-    # Verify all events are present with correct values
-    assert len(events) == 3
-    assert events["event1"] == "value1"
-    assert events["event2"] == {"nested": "data", "count": 42}
-    assert events["event3"] == [1, 2, 3, 4, 5]
+        assert len(events) == 3
+        assert events["event1"] == "value1"
+        assert events["event2"] == {"nested": "data", "count": 42}
+        assert events["event3"] == [1, 2, 3, 4, 5]
+
+    # Verify it works
+    get_events()
+
+    # Run it as a workflow, verify it still works
+    get_events_workflow = DBOS.workflow()(get_events)
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        get_events_workflow()
+    steps = DBOS.list_workflow_steps(wfid)
+    assert len(steps) == 1
+    assert steps[0]["function_name"] == "DBOS.get_events"
 
     # Test with a workflow that has no events
     @DBOS.workflow()
@@ -1927,15 +1939,3 @@ def test_get_events(dbos: DBOS) -> None:
     # Should return empty dict for workflow with no events
     events2 = DBOS.get_events(handle2.workflow_id)
     assert events2 == {}
-
-    # Test it works in a workflow
-    @DBOS.workflow()
-    def get_events_workflow() -> None:
-        events = DBOS.get_events(handle.workflow_id)
-        # Verify all events are present with correct values
-        assert len(events) == 3
-        assert events["event1"] == "value1"
-        assert events["event2"] == {"nested": "data", "count": 42}
-        assert events["event3"] == [1, 2, 3, 4, 5]
-
-    get_events_workflow()

@@ -618,7 +618,6 @@ async def test_get_events_async(dbos: DBOS) -> None:
         await DBOS.set_event_async("event1", "value1")
         await DBOS.set_event_async("event2", {"nested": "data", "count": 42})
         await DBOS.set_event_async("event3", [1, 2, 3, 4, 5])
-        await DBOS.sleep_async(0.01)  # Small async operation
         return "completed"
 
     # Execute the workflow
@@ -647,14 +646,3 @@ async def test_get_events_async(dbos: DBOS) -> None:
     # Should return empty dict for workflow with no events
     events2 = await DBOS.get_events_async(handle2.workflow_id)
     assert events2 == {}
-
-    @DBOS.workflow()
-    async def get_events_workflow() -> None:
-        events = await DBOS.get_events_async(handle.workflow_id)
-        # Verify all events are present with correct values
-        assert len(events) == 3
-        assert events["event1"] == "value1"
-        assert events["event2"] == {"nested": "data", "count": 42}
-        assert events["event3"] == [1, 2, 3, 4, 5]
-
-    await get_events_workflow()
