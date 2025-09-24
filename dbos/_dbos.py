@@ -977,6 +977,14 @@ class DBOS:
 
     @classmethod
     def get_all_events(cls, workflow_id: str) -> Dict[str, Any]:
+        """
+        Get all events currently present for a workflow ID.
+        Args:
+            workflow_id: The workflow ID for which to get events
+        Returns:
+            A dictionary mapping event keys to their deserialized values
+        """
+
         def fn() -> Dict[str, Any]:
             return _get_dbos_instance()._sys_db.get_all_events(workflow_id)
 
@@ -984,6 +992,13 @@ class DBOS:
 
     @classmethod
     async def get_all_events_async(cls, workflow_id: str) -> Dict[str, Any]:
+        """
+        Get all events currently present for a workflow ID.
+        Args:
+            workflow_id: The workflow ID for which to get events
+        Returns:
+            A dictionary mapping event keys to their deserialized values
+        """
         await cls._configure_asyncio_thread_pool()
         return await asyncio.to_thread(cls.get_all_events, workflow_id)
 
