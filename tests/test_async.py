@@ -606,3 +606,43 @@ async def test_workflow_with_task_cancellation(dbos: DBOS) -> None:
     # Verify the workflow completes despite the task cancellation
     handle: WorkflowHandleAsync[str] = await DBOS.retrieve_workflow_async(wfid)
     assert await handle.get_result() == "completed"
+
+
+@pytest.mark.asyncio
+async def test_get_events_async(dbos: DBOS) -> None:
+    """Test the async version of get_events function that retrieves all events for a workflow."""
+
+    @DBOS.workflow()
+    async def async_events_workflow() -> str:
+        # Set multiple events using async methods
+        await DBOS.set_event_async("event1", "value1")
+        await DBOS.set_event_async("event2", {"nested": "data", "count": 42})
+        await DBOS.set_event_async("event3", [1, 2, 3, 4, 5])
+        return "completed"
+
+    # Execute the workflow
+    handle = await DBOS.start_workflow_async(async_events_workflow)
+    result = await handle.get_result()
+    assert result == "completed"
+
+    # Get all events for the workflow using async method
+    events = await DBOS.get_all_events_async(handle.workflow_id)
+
+    # Verify all events are present with correct values
+    assert len(events) == 3
+    assert events["event1"] == "value1"
+    assert events["event2"] == {"nested": "data", "count": 42}
+    assert events["event3"] == [1, 2, 3, 4, 5]
+
+    # Test with a workflow that has no events
+    @DBOS.workflow()
+    async def no_events_workflow() -> str:
+        await DBOS.sleep_async(0.01)
+        return "no events"
+
+    handle2 = await DBOS.start_workflow_async(no_events_workflow)
+    await handle2.get_result()
+
+    # Should return empty dict for workflow with no events
+    events2 = await DBOS.get_all_events_async(handle2.workflow_id)
+    assert events2 == {}
