@@ -521,6 +521,10 @@ def test_workflow_error_serialization(dbos: DBOS) -> None:
     assert len(workflows) == 1
     assert workflows[0].error is not None
 
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 1
+    assert steps[0]["error"] is not None
+
 
 def test_unregistered_workflow(dbos: DBOS, config: DBOSConfig) -> None:
 
