@@ -1077,24 +1077,23 @@ class SystemDatabase(ABC):
                     SystemSchema.operation_outputs.c.child_workflow_id,
                 ).where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
             ).fetchall()
-            return [
-                StepInfo(
+            steps = []
+            for row in rows:
+                _, output, exception = _serialization.safe_deserialize(
+                    workflow_id,
+                    serialized_input=None,
+                    serialized_output=row[2],
+                    serialized_exception=row[3],
+                )
+                step = StepInfo(
                     function_id=row[0],
                     function_name=row[1],
-                    output=(
-                        _serialization.deserialize(row[2])
-                        if row[2] is not None
-                        else row[2]
-                    ),
-                    error=(
-                        _serialization.deserialize_exception(row[3])
-                        if row[3] is not None
-                        else row[3]
-                    ),
+                    output=output,
+                    error=exception,
                     child_workflow_id=row[4],
                 )
-                for row in rows
-            ]
+                steps.append(step)
+            return steps
 
     def _record_operation_result_txn(
         self, result: OperationResultInternal, conn: sa.Connection

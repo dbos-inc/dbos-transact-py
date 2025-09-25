@@ -9,6 +9,7 @@ from psycopg.errors import SerializationFailure
 from sqlalchemy.exc import InvalidRequestError, OperationalError
 
 from dbos import DBOS, Queue, SetWorkflowID
+from dbos._client import DBOSClient
 from dbos._dbos_config import DBOSConfig
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
@@ -500,6 +501,36 @@ def test_error_serialization() -> None:
     assert input is None
     assert output is None
     assert isinstance(exception, str)
+
+
+def test_workflow_error_serialization(dbos: DBOS, client: DBOSClient) -> None:
+
+    @DBOS.step()
+    def step() -> None:
+        raise BadException(1, 2)
+
+    @DBOS.workflow()
+    def workflow() -> None:
+        step()
+
+    handle = DBOS.start_workflow(workflow)
+
+    with pytest.raises(BadException):
+        handle.get_result()
+
+    workflows = DBOS.list_workflows()
+    assert len(workflows) == 1
+    assert workflows[0].error is not None
+
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 1
+    assert steps[0]["error"] is not None
+
+    status = handle.get_status()
+    assert status.error is not None
+
+    status = client.retrieve_workflow(handle.workflow_id).get_status()
+    assert status.error is not None
 
 
 def test_unregistered_workflow(dbos: DBOS, config: DBOSConfig) -> None:
