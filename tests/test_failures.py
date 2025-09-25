@@ -502,6 +502,26 @@ def test_error_serialization() -> None:
     assert isinstance(exception, str)
 
 
+def test_workflow_error_serialization(dbos: DBOS) -> None:
+
+    @DBOS.step()
+    def step() -> None:
+        raise BadException(1, 2)
+
+    @DBOS.workflow()
+    def workflow() -> None:
+        step()
+
+    handle = DBOS.start_workflow(workflow)
+
+    with pytest.raises(BadException):
+        handle.get_result()
+
+    workflows = DBOS.list_workflows()
+    assert len(workflows) == 1
+    assert workflows[0].error is not None
+
+
 def test_unregistered_workflow(dbos: DBOS, config: DBOSConfig) -> None:
 
     @DBOS.workflow()
