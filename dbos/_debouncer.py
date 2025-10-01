@@ -1,6 +1,5 @@
 import asyncio
 import math
-import sys
 import time
 import types
 import uuid
@@ -12,16 +11,11 @@ from typing import (
     Dict,
     Generic,
     Optional,
+    ParamSpec,
     Tuple,
     TypedDict,
     TypeVar,
-    Union,
 )
-
-if sys.version_info < (3, 10):
-    from typing_extensions import ParamSpec
-else:
-    from typing import ParamSpec
 
 from dbos._client import (
     DBOSClient,
@@ -92,13 +86,19 @@ def debouncer_workflow(
     dbos = _get_dbos_instance()
 
     workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
+
     # Every time the debounced workflow is called, a message is sent to this workflow.
     # It waits until debounce_period_sec have passed since the last message or until
     # debounce_timeout_sec has elapsed.
-    debounce_deadline_epoch_sec = (
-        time.time() + options["debounce_timeout_sec"]
-        if options["debounce_timeout_sec"]
-        else math.inf
+    def get_debounce_deadline_epoch_sec() -> float:
+        return (
+            time.time() + options["debounce_timeout_sec"]
+            if options["debounce_timeout_sec"]
+            else math.inf
+        )
+
+    debounce_deadline_epoch_sec = dbos._sys_db.call_function_as_step(
+        get_debounce_deadline_epoch_sec, "get_debounce_deadline_epoch_sec"
     )
     debounce_period_sec = initial_debounce_period_sec
     while time.time() < debounce_deadline_epoch_sec:

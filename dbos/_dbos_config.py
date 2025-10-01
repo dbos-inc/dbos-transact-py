@@ -1,12 +1,10 @@
-import json
 import os
 import re
 from importlib import resources
 from typing import Any, Dict, List, Optional, TypedDict, cast
 
+import sqlalchemy as sa
 import yaml
-from jsonschema import ValidationError, validate
-from rich import print
 from sqlalchemy import make_url
 
 from ._error import DBOSInitializationError
@@ -25,7 +23,6 @@ class DBOSConfig(TypedDict, total=False):
         system_database_url (str): Connection string for the DBOS system database. Defaults to sqlite:///{name} if not provided.
         application_database_url (str): Connection string for the DBOS application database, in which DBOS @Transaction functions run. Optional. Should be the same type of database (SQLite or Postgres) as the system database.
         database_url (str): (DEPRECATED) Database connection string
-        sys_db_name (str): (DEPRECATED) System database name
         sys_db_pool_size (int): System database pool size
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs (See https://docs.sqlalchemy.org/en/20/core/engines.html#sqlalchemy.create_engine)
         log_level (str): Log level
@@ -36,14 +33,16 @@ class DBOSConfig(TypedDict, total=False):
         otlp_attributes (dict[str, str]): A set of custom attributes to apply OTLP-exported logs and traces
         application_version (str): Application version
         executor_id (str): Executor ID, used to identify the application instance in distributed environments
-        disable_otlp (bool): If True, disables OTLP tracing and logging. Defaults to False.
+        dbos_system_schema (str): Schema name for DBOS system tables. Defaults to "dbos".
+        enable_otlp (bool): If True, enable built-in DBOS OTLP tracing and logging.
+        system_database_engine (sa.Engine): A custom system database engine. If provided, DBOS will not create an engine but use this instead.
+        conductor_key (str): An API key for DBOS Conductor. Pass this in to connect your process to Conductor.
     """
 
     name: str
     system_database_url: Optional[str]
     application_database_url: Optional[str]
     database_url: Optional[str]
-    sys_db_name: Optional[str]
     sys_db_pool_size: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
     log_level: Optional[str]
@@ -54,7 +53,10 @@ class DBOSConfig(TypedDict, total=False):
     otlp_attributes: Optional[dict[str, str]]
     application_version: Optional[str]
     executor_id: Optional[str]
-    disable_otlp: Optional[bool]
+    dbos_system_schema: Optional[str]
+    enable_otlp: Optional[bool]
+    system_database_engine: Optional[sa.Engine]
+    conductor_key: Optional[str]
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -72,16 +74,13 @@ class DatabaseConfig(TypedDict, total=False):
         sys_db_pool_size (int): System database pool size
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs
         migrate (List[str]): Migration commands to run on startup
+        dbos_system_schema (str): Schema name for DBOS system tables. Defaults to "dbos".
     """
 
-    sys_db_name: Optional[str]
-    sys_db_pool_size: Optional[
-        int
-    ]  # For internal use, will be removed in a future version
+    sys_db_pool_size: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
     sys_db_engine_kwargs: Optional[Dict[str, Any]]
     migrate: Optional[List[str]]
-    rollback: Optional[List[str]]  # Will be removed in a future version
 
 
 class OTLPExporterConfig(TypedDict, total=False):
@@ -97,25 +96,13 @@ class TelemetryConfig(TypedDict, total=False):
     logs: Optional[LoggerConfig]
     OTLPExporter: Optional[OTLPExporterConfig]
     otlp_attributes: Optional[dict[str, str]]
-    disable_otlp: Optional[bool]
+    disable_otlp: bool
 
 
 class ConfigFile(TypedDict, total=False):
     """
     Data structure containing the DBOS Configuration.
-
-    This configuration data is typically loaded from `dbos-config.yaml`.
-    See `https://docs.dbos.dev/python/reference/configuration#dbos-configuration-file`
-
-    Attributes:
-        name (str): Application name
-        runtimeConfig (RuntimeConfig): Configuration for DBOS Cloud
-        database (DatabaseConfig): Configure pool sizes, migrate commands
-        database_url (str): Application database URL
-        system_database_url (str): System database URL
-        telemetry (TelemetryConfig): Configuration for tracing / logging
-        env (Dict[str,str]): Environment variables
-
+    The DBOSConfig object is parsed into this.
     """
 
     name: str
@@ -125,6 +112,8 @@ class ConfigFile(TypedDict, total=False):
     system_database_url: Optional[str]
     telemetry: Optional[TelemetryConfig]
     env: Dict[str, str]
+    system_database_engine: Optional[sa.Engine]
+    dbos_system_schema: Optional[str]
 
 
 def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
@@ -137,8 +126,6 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
 
     # Database config
     db_config: DatabaseConfig = {}
-    if "sys_db_name" in config:
-        db_config["sys_db_name"] = config.get("sys_db_name")
     if "sys_db_pool_size" in config:
         db_config["sys_db_pool_size"] = config.get("sys_db_pool_size")
     if "db_engine_kwargs" in config:
@@ -155,6 +142,9 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     if "system_database_url" in config:
         translated_config["system_database_url"] = config.get("system_database_url")
 
+    if "dbos_system_schema" in config:
+        translated_config["dbos_system_schema"] = config.get("dbos_system_schema")
+
     # Runtime config
     translated_config["runtimeConfig"] = {"run_admin_server": True}
     if "admin_port" in config:
@@ -165,10 +155,12 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         ]
 
     # Telemetry config
+    enable_otlp = config.get("enable_otlp", None)
+    disable_otlp = True if enable_otlp is None else not enable_otlp
     telemetry: TelemetryConfig = {
         "OTLPExporter": {"tracesEndpoint": [], "logsEndpoint": []},
         "otlp_attributes": config.get("otlp_attributes", {}),
-        "disable_otlp": config.get("disable_otlp", False),
+        "disable_otlp": disable_otlp,
     }
     # For mypy
     assert telemetry["OTLPExporter"] is not None
@@ -188,6 +180,8 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         telemetry["logs"] = {"logLevel": log_level}
     if telemetry:
         translated_config["telemetry"] = telemetry
+
+    translated_config["system_database_engine"] = config.get("system_database_engine")
 
     return translated_config
 
@@ -264,17 +258,6 @@ def load_config(
             f"dbos-config.yaml must contain a dictionary, not {type(data)}"
         )
     data = cast(Dict[str, Any], data)
-
-    # Load the JSON schema relative to the package root
-    schema_file = resources.files("dbos").joinpath("dbos-config.schema.json")
-    with schema_file.open("r") as f:
-        schema = json.load(f)
-
-    # Validate the data against the schema
-    try:
-        validate(instance=data, schema=schema)
-    except ValidationError as e:
-        raise DBOSInitializationError(f"Validation error: {e}")
 
     # Special case: convert logsEndpoint and tracesEndpoint from strings to lists of strings, if present
     if "telemetry" in data and "OTLPExporter" in data["telemetry"]:
@@ -413,45 +396,41 @@ def process_config(
         else:
             url = make_url(data["database_url"])
             assert url.database
-            if data["database"].get("sys_db_name"):
-                url = url.set(database=data["database"]["sys_db_name"])
-            else:
-                url = url.set(database=f"{url.database}{SystemSchema.sysdb_suffix}")
+            url = url.set(database=f"{url.database}{SystemSchema.sysdb_suffix}")
             data["system_database_url"] = url.render_as_string(hide_password=False)
 
-    # If a system database URL is provided but not an application database URL, set the
-    # application database URL to the system database URL.
+    # If a system database URL is provided but not an application database URL,
+    # do not create an application database.
     if data.get("system_database_url") and not data.get("database_url"):
         assert data["system_database_url"]
-        data["database_url"] = data["system_database_url"]
+        data["database_url"] = None
 
-    # If neither URL is provided, use a default SQLite database URL.
+    # If neither URL is provided, use a default SQLite system database URL.
     if not data.get("database_url") and not data.get("system_database_url"):
         _app_db_name = _app_name_to_db_name(data["name"])
-        data["system_database_url"] = data["database_url"] = (
-            f"sqlite:///{_app_db_name}.sqlite"
-        )
+        data["system_database_url"] = f"sqlite:///{_app_db_name}.sqlite"
+        data["database_url"] = None
 
     configure_db_engine_parameters(data["database"], connect_timeout=connect_timeout)
 
-    assert data["database_url"] is not None
     assert data["system_database_url"] is not None
     # Pretty-print connection information, respecting log level
     if not silent and logs["logLevel"] == "INFO" or logs["logLevel"] == "DEBUG":
         printable_sys_db_url = make_url(data["system_database_url"]).render_as_string(
             hide_password=True
         )
-        print(
-            f"[bold blue]DBOS system database URL: {printable_sys_db_url}[/bold blue]"
-        )
-        if data["database_url"].startswith("sqlite"):
+        print(f"DBOS system database URL: {printable_sys_db_url}")
+        if data["database_url"]:
+            printable_app_db_url = make_url(data["database_url"]).render_as_string(
+                hide_password=True
+            )
+            print(f"DBOS application database URL: {printable_app_db_url}")
+        if data["system_database_url"].startswith("sqlite"):
             print(
-                f"[bold blue]Using SQLite as a system database. The SQLite system database is for development and testing. PostgreSQL is recommended for production use.[/bold blue]"
+                f"Using SQLite as a system database. The SQLite system database is for development and testing. PostgreSQL is recommended for production use."
             )
         else:
-            print(
-                f"[bold blue]Database engine parameters: {data['database']['db_engine_kwargs']}[/bold blue]"
-            )
+            print(f"Database engine parameters: {data['database']['db_engine_kwargs']}")
 
     # Return data as ConfigFile type
     return data
@@ -558,17 +537,22 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
             "DBOS_SYSTEM_DATABASE_URL environment variable is not set. This is required to connect to the database."
         )
     provided_config["system_database_url"] = system_db_url
+    # Always use the "dbos" schema when deploying to DBOS Cloud
+    provided_config["dbos_system_schema"] = "dbos"
 
     # Telemetry config
     if "telemetry" not in provided_config or provided_config["telemetry"] is None:
         provided_config["telemetry"] = {
             "OTLPExporter": {"tracesEndpoint": [], "logsEndpoint": []},
+            "disable_otlp": False,
         }
-    elif "OTLPExporter" not in provided_config["telemetry"]:
-        provided_config["telemetry"]["OTLPExporter"] = {
-            "tracesEndpoint": [],
-            "logsEndpoint": [],
-        }
+    else:
+        provided_config["telemetry"]["disable_otlp"] = False
+        if "OTLPExporter" not in provided_config["telemetry"]:
+            provided_config["telemetry"]["OTLPExporter"] = {
+                "tracesEndpoint": [],
+                "logsEndpoint": [],
+            }
 
     # This is a super messy from a typing perspective.
     # Some of ConfigFile keys are optional -- but in practice they'll always be present in hosted environments
@@ -617,22 +601,18 @@ def get_system_database_url(config: ConfigFile) -> str:
         if config["database_url"].startswith("sqlite"):
             return config["database_url"]
         app_db_url = make_url(config["database_url"])
-        if config.get("database") and config["database"].get("sys_db_name") is not None:
-            sys_db_name = config["database"]["sys_db_name"]
-        else:
-            assert app_db_url.database is not None
-            sys_db_name = app_db_url.database + SystemSchema.sysdb_suffix
+        assert app_db_url.database is not None
+        sys_db_name = app_db_url.database + SystemSchema.sysdb_suffix
         return app_db_url.set(database=sys_db_name).render_as_string(
             hide_password=False
         )
 
 
-def get_application_database_url(config: ConfigFile) -> str:
+def get_application_database_url(config: ConfigFile) -> str | None:
     # For backwards compatibility, the application database URL is "database_url"
     if config.get("database_url"):
         assert config["database_url"]
         return config["database_url"]
     else:
-        # If the application database URL is not specified, set it to the system database URL
-        assert config["system_database_url"]
-        return config["system_database_url"]
+        # If the application database URL is not specified, return None
+        return None

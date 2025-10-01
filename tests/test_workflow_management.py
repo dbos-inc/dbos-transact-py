@@ -1,14 +1,11 @@
 import threading
 import time
 import uuid
-from typing import Callable
 
 import pytest
 import sqlalchemy as sa
 
-# Public API
 from dbos import DBOS, Queue, SetWorkflowID
-from dbos._dbos import DBOSConfiguredInstance
 from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.application_database import ApplicationSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
@@ -58,7 +55,7 @@ def test_cancel_resume(dbos: DBOS) -> None:
 
     # Resume the workflow. Verify it completes successfully.
     handle = DBOS.resume_workflow(wfid)
-    assert handle.get_status().app_version == GlobalParams.app_version
+    assert handle.get_status().app_version == DBOS.application_version
     assert handle.get_status().queue_name == INTERNAL_QUEUE_NAME
     assert handle.get_result() == input
     assert steps_completed == 2
@@ -170,62 +167,6 @@ def test_cancel_resume_queue(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_restart(dbos: DBOS) -> None:
-    input = 2
-    multiplier = 5
-
-    @DBOS.dbos_class()
-    class TestClass(DBOSConfiguredInstance):
-
-        def __init__(self, multiplier: int) -> None:
-            self.multiply: Callable[[int], int] = lambda x: x * multiplier
-            super().__init__("test_class")
-
-        @DBOS.workflow()
-        def workflow(self, x: int) -> int:
-            return self.multiply(x)
-
-        @DBOS.step()
-        def step(self, x: int) -> int:
-            return self.multiply(x)
-
-    inst = TestClass(multiplier)
-
-    # Start the workflow, let it finish, restart it.
-    # Verify it returns the same result with a different workflow ID.
-    handle = DBOS.start_workflow(inst.workflow, input)
-    assert handle.get_result() == input * multiplier
-    forked_handle = DBOS.restart_workflow(handle.workflow_id)
-    assert forked_handle.workflow_id != handle.workflow_id
-    assert forked_handle.get_result() == input * multiplier
-
-    # Enqueue the workflow, let it finish, restart it.
-    # Verify it returns the same result with a different workflow ID and queue.
-    queue = Queue("test_queue")
-    handle = queue.enqueue(inst.workflow, input)
-    assert handle.get_result() == input * multiplier
-    forked_handle = DBOS.restart_workflow(handle.workflow_id)
-    assert forked_handle.workflow_id != handle.workflow_id
-    assert forked_handle.get_status().queue_name == INTERNAL_QUEUE_NAME
-    assert forked_handle.get_result() == input * multiplier
-
-    # Enqueue the step, let it finish, restart it.
-    # Verify it returns the same result with a different workflow ID and queue.
-    handle = queue.enqueue(inst.step, input)
-    assert handle.get_result() == input * multiplier
-    forked_handle = DBOS.restart_workflow(handle.workflow_id)
-    assert forked_handle.workflow_id != handle.workflow_id
-    assert forked_handle.get_status().queue_name != handle.get_status().queue_name
-    assert forked_handle.get_result() == input * multiplier
-
-    # Verify restarting a nonexistent workflow throws an exception
-    with pytest.raises(Exception):
-        DBOS.restart_workflow("fake_id")
-
-    # Verify nothing is left on any queue
-    assert queue_entries_are_cleaned_up(dbos)
-
-
 def test_fork_steps(
     dbos: DBOS,
 ) -> None:
@@ -287,7 +228,7 @@ def test_fork_steps(
     with SetWorkflowID(fork_id):
         forked_handle = DBOS.fork_workflow(wfid, 3)
     assert forked_handle.workflow_id == fork_id
-    assert forked_handle.get_status().app_version == GlobalParams.app_version
+    assert forked_handle.get_status().app_version == DBOS.application_version
     assert forked_handle.get_result() == output
 
     assert stepOneCount == 1
@@ -669,6 +610,7 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     assert len(workflows) == 2
     assert workflows[0].workflow_id == handle.workflow_id
     # Verify txn outputs are preserved only for the remaining workflows
+    assert dbos._app_db
     with dbos._app_db.engine.begin() as c:
         rows = c.execute(
             sa.select(

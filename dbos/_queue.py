@@ -63,7 +63,7 @@ class Queue:
 
         registry = _get_or_create_dbos_registry()
         if self.name in registry.queue_info_map and self.name != INTERNAL_QUEUE_NAME:
-            dbos_logger.warning(f"Queue {name} has already been declared")
+            raise Exception(f"Queue {name} has already been declared")
         registry.queue_info_map[self.name] = self
 
     def enqueue(
@@ -77,7 +77,7 @@ class Queue:
             and context.priority is not None
             and not self.priority_enabled
         ):
-            dbos_logger.warning(
+            raise Exception(
                 f"Priority is not enabled for queue {self.name}. Setting priority will not have any effect."
             )
         if self.partition_queue and (
@@ -87,7 +87,9 @@ class Queue:
                 f"A workflow cannot be enqueued on partitioned queue {self.name} without a partition key"
             )
         if context and context.queue_partition_key and not self.partition_queue:
-            raise Exception(f"You can only use a partition key on a partition-enabled queue. Key {context.queue_partition_key} was used with non-partitioned queue {self.name}")
+            raise Exception(
+                f"You can only use a partition key on a partition-enabled queue. Key {context.queue_partition_key} was used with non-partitioned queue {self.name}"
+            )
 
         dbos = _get_dbos_instance()
         return start_workflow(dbos, func, self.name, False, *args, **kwargs)

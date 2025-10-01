@@ -1,5 +1,4 @@
 import asyncio
-import sys
 import time
 import uuid
 from typing import (
@@ -15,25 +14,17 @@ from typing import (
     Union,
 )
 
+import sqlalchemy as sa
+
+from dbos import _serialization
 from dbos._app_db import ApplicationDatabase
 from dbos._context import MaxPriority, MinPriority
 from dbos._sys_db import SystemDatabase
 
-if sys.version_info < (3, 11):
-    from typing_extensions import NotRequired
-else:
-    from typing import NotRequired
-
-from dbos import _serialization
-
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 
-from dbos._dbos_config import (
-    get_application_database_url,
-    get_system_database_url,
-    is_valid_database_url,
-)
+from dbos._dbos_config import get_system_database_url, is_valid_database_url
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._serialization import WorkflowInputs
@@ -58,15 +49,21 @@ from dbos._workflow_commands import (
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 
-class EnqueueOptions(TypedDict):
+# Required EnqueueOptions fields
+class _EnqueueOptionsRequired(TypedDict):
     workflow_name: str
     queue_name: str
-    workflow_id: NotRequired[str]
-    app_version: NotRequired[str]
-    workflow_timeout: NotRequired[float]
-    deduplication_id: NotRequired[str]
-    priority: NotRequired[int]
-    queue_partition_key: NotRequired[str]
+
+
+# Optional EnqueueOptions fields
+class EnqueueOptions(_EnqueueOptionsRequired, total=False):
+    workflow_id: str
+    app_version: str
+    workflow_timeout: float
+    deduplication_id: str
+    priority: int
+    max_recovery_attempts: int
+    queue_partition_key: str
 
 
 def validate_enqueue_options(options: EnqueueOptions) -> None:
@@ -120,31 +117,30 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
 
 
 class DBOSClient:
+
+    _app_db: ApplicationDatabase | None = None
+
     def __init__(
         self,
         database_url: Optional[str] = None,  # DEPRECATED
         *,
         system_database_url: Optional[str] = None,
+        system_database_engine: Optional[sa.Engine] = None,
         application_database_url: Optional[str] = None,
-        system_database: Optional[str] = None,  # DEPRECATED
+        dbos_system_schema: Optional[str] = "dbos",
     ):
-        application_database_url = get_application_database_url(
-            {
-                "system_database_url": system_database_url,
-                "database_url": (
-                    database_url if database_url else application_database_url
-                ),
-            }
+        application_database_url = (
+            database_url if database_url else application_database_url
         )
         system_database_url = get_system_database_url(
             {
                 "system_database_url": system_database_url,
                 "database_url": application_database_url,
-                "database": {"sys_db_name": system_database},
             }
         )
         assert is_valid_database_url(system_database_url)
-        assert is_valid_database_url(application_database_url)
+        if application_database_url:
+            assert is_valid_database_url(application_database_url)
         # We only create database connections but do not run migrations
         self._sys_db = SystemDatabase.create(
             system_database_url=system_database_url,
@@ -153,16 +149,20 @@ class DBOSClient:
                 "max_overflow": 0,
                 "pool_size": 2,
             },
+            engine=system_database_engine,
+            schema=dbos_system_schema,
         )
         self._sys_db.check_connection()
-        self._app_db = ApplicationDatabase.create(
-            database_url=application_database_url,
-            engine_kwargs={
-                "pool_timeout": 30,
-                "max_overflow": 0,
-                "pool_size": 2,
-            },
-        )
+        if application_database_url:
+            self._app_db = ApplicationDatabase.create(
+                database_url=application_database_url,
+                engine_kwargs={
+                    "pool_timeout": 30,
+                    "max_overflow": 0,
+                    "pool_size": 2,
+                },
+                schema=dbos_system_schema,
+            )
 
     def destroy(self) -> None:
         self._sys_db.destroy()

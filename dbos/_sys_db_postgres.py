@@ -1,16 +1,11 @@
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 import psycopg
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 
-from dbos._migration import (
-    ensure_dbos_schema,
-    run_alembic_migrations,
-    run_postgres_migrations,
-)
-from dbos._schemas.system_database import SystemSchema
+from dbos._migration import ensure_dbos_schema, run_dbos_migrations
 
 from ._logger import dbos_logger
 from ._sys_db import SystemDatabase
@@ -19,29 +14,11 @@ from ._sys_db import SystemDatabase
 class PostgresSystemDatabase(SystemDatabase):
     """PostgreSQL-specific implementation of SystemDatabase."""
 
-    def __init__(
-        self,
-        *,
-        system_database_url: str,
-        engine_kwargs: Dict[str, Any],
-        debug_mode: bool = False,
-    ):
-        super().__init__(
-            system_database_url=system_database_url,
-            engine_kwargs=engine_kwargs,
-            debug_mode=debug_mode,
-        )
-        self.notification_conn: Optional[psycopg.connection.Connection] = None
+    notification_conn: Optional[sa.PoolProxiedConnection] = None
 
     def _create_engine(
         self, system_database_url: str, engine_kwargs: Dict[str, Any]
     ) -> sa.Engine:
-        # TODO: Make the schema dynamic so this isn't needed
-        SystemSchema.workflow_status.schema = "dbos"
-        SystemSchema.operation_outputs.schema = "dbos"
-        SystemSchema.notifications.schema = "dbos"
-        SystemSchema.workflow_events.schema = "dbos"
-        SystemSchema.streams.schema = "dbos"
         url = sa.make_url(system_database_url).set(drivername="postgresql+psycopg")
         return sa.create_engine(url, **engine_kwargs)
 
@@ -52,30 +29,35 @@ class PostgresSystemDatabase(SystemDatabase):
             return
         system_db_url = self.engine.url
         sysdb_name = system_db_url.database
-        # If the system database does not already exist, create it
-        engine = sa.create_engine(
-            system_db_url.set(database="postgres"), **self._engine_kwargs
-        )
-        with engine.connect() as conn:
-            conn.execution_options(isolation_level="AUTOCOMMIT")
-            if not conn.execute(
-                sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
-                parameters={"db_name": sysdb_name},
-            ).scalar():
-                dbos_logger.info(f"Creating system database {sysdb_name}")
-                conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
-        engine.dispose()
+        # Unless we were provided an engine, if the system database does not already exist, create it
+        if self.created_engine:
+            engine = sa.create_engine(
+                system_db_url.set(database="postgres"), **self._engine_kwargs
+            )
+            with engine.connect() as conn:
+                conn.execution_options(isolation_level="AUTOCOMMIT")
+                if not conn.execute(
+                    sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
+                    parameters={"db_name": sysdb_name},
+                ).scalar():
+                    dbos_logger.info(f"Creating system database {sysdb_name}")
+                    conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
+            engine.dispose()
+        else:
+            # If we were provided an engine, validate it can connect
+            with self.engine.connect() as conn:
+                conn.execute(sa.text("SELECT 1"))
 
-        using_dbos_migrations = ensure_dbos_schema(self.engine)
-        if not using_dbos_migrations:
-            # Complete the Alembic migrations, create the dbos_migrations table
-            run_alembic_migrations(self.engine)
-        run_postgres_migrations(self.engine)
+        assert self.schema
+        ensure_dbos_schema(self.engine, self.schema)
+        run_dbos_migrations(self.engine, self.schema)
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
-        if self.notification_conn is not None:
-            self.notification_conn.close()
+        with self._listener_thread_lock:
+            if self.notification_conn and self.notification_conn.dbapi_connection:
+                self.notification_conn.dbapi_connection.close()
+                self.notification_conn.invalidate()
 
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation in PostgreSQL."""
@@ -118,20 +100,18 @@ class PostgresSystemDatabase(SystemDatabase):
         """Listen for PostgreSQL notifications using psycopg."""
         while self._run_background_processes:
             try:
-                # since we're using the psycopg connection directly, we need a url without the "+psycopg" suffix
-                url = sa.URL.create(
-                    "postgresql", **self.engine.url.translate_connect_args()
-                )
-                # Listen to notifications
-                self.notification_conn = psycopg.connect(
-                    url.render_as_string(hide_password=False), autocommit=True
-                )
+                with self._listener_thread_lock:
+                    self.notification_conn = self.engine.raw_connection()
+                    self.notification_conn.detach()
+                    psycopg_conn = cast(
+                        psycopg.connection.Connection, self.notification_conn
+                    )
+                    psycopg_conn.set_autocommit(True)
 
-                self.notification_conn.execute("LISTEN dbos_notifications_channel")
-                self.notification_conn.execute("LISTEN dbos_workflow_events_channel")
-
+                    psycopg_conn.execute("LISTEN dbos_notifications_channel")
+                    psycopg_conn.execute("LISTEN dbos_workflow_events_channel")
                 while self._run_background_processes:
-                    gen = self.notification_conn.notifies()
+                    gen = psycopg_conn.notifies()
                     for notify in gen:
                         channel = notify.channel
                         dbos_logger.debug(
@@ -169,5 +149,4 @@ class PostgresSystemDatabase(SystemDatabase):
                     time.sleep(1)
                     # Then the loop will try to reconnect and restart the listener
             finally:
-                if self.notification_conn is not None:
-                    self.notification_conn.close()
+                self._cleanup_connections()

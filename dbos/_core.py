@@ -14,6 +14,7 @@ from typing import (
     Coroutine,
     Generic,
     Optional,
+    ParamSpec,
     TypeVar,
     Union,
     cast,
@@ -22,14 +23,8 @@ from typing import (
 from dbos._outcome import Immediate, NoResult, Outcome, Pending
 from dbos._utils import GlobalParams, retriable_postgres_exception
 
-from ._app_db import ApplicationDatabase, TransactionResultInternal
-
-if sys.version_info < (3, 10):
-    from typing_extensions import ParamSpec
-else:
-    from typing import ParamSpec
-
 from . import _serialization
+from ._app_db import ApplicationDatabase, TransactionResultInternal
 from ._context import (
     DBOSAssumeRole,
     DBOSContext,
@@ -912,7 +907,9 @@ def decorate_transaction(
                 raise DBOSWorkflowCancelledError(
                     f"Workflow {ctx.workflow_id} is cancelled. Aborting transaction {transaction_name}."
                 )
-
+            assert (
+                dbos._app_db
+            ), "Transactions can only be used if DBOS is configured with an application_database_url"
             with dbos._app_db.sessionmaker() as session:
                 attributes: TracedAttributes = {
                     "name": transaction_name,

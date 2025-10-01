@@ -9,6 +9,7 @@ from psycopg.errors import SerializationFailure
 from sqlalchemy.exc import InvalidRequestError, OperationalError
 
 from dbos import DBOS, Queue, SetWorkflowID
+from dbos._client import DBOSClient
 from dbos._dbos_config import DBOSConfig
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
@@ -136,12 +137,10 @@ def test_notification_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
     system_database = cast(PostgresSystemDatabase, dbos._sys_db)
     while system_database.notification_conn is None:
         time.sleep(1)
-    system_database.notification_conn.close()
-    assert system_database.notification_conn.closed == 1
+    system_database._cleanup_connections()
 
-    # Wait for the connection to be re-established
-    while system_database.notification_conn.closed != 0:
-        time.sleep(1)
+    # Wait for the connection to re-establish
+    time.sleep(3)
 
     dest_uuid = str("sruuid1")
     with SetWorkflowID(dest_uuid):
@@ -458,6 +457,11 @@ def test_keyboardinterrupt_during_retries(dbos: DBOS) -> None:
     assert recovery_handles[0].get_result() == recovery_handles[0].workflow_id
 
 
+class BadException(Exception):
+    def __init__(self, one: int, two: int) -> None:
+        super().__init__(f"Message: {one}, {two}")
+
+
 def test_error_serialization() -> None:
     # Verify that each exception that can be thrown in a workflow
     # is serializable and deserializable
@@ -484,9 +488,6 @@ def test_error_serialization() -> None:
     assert str(d) == str(e)
 
     # Test safe_deserialize
-    class BadException(Exception):
-        def __init__(self, one: int, two: int) -> None:
-            super().__init__(f"Message: {one}, {two}")
 
     bad_exception = BadException(1, 2)
     with pytest.raises(TypeError):
@@ -500,7 +501,36 @@ def test_error_serialization() -> None:
     assert input is None
     assert output is None
     assert isinstance(exception, str)
-    assert "Message: 1, 2" in exception
+
+
+def test_workflow_error_serialization(dbos: DBOS, client: DBOSClient) -> None:
+
+    @DBOS.step()
+    def step() -> None:
+        raise BadException(1, 2)
+
+    @DBOS.workflow()
+    def workflow() -> None:
+        step()
+
+    handle = DBOS.start_workflow(workflow)
+
+    with pytest.raises(BadException):
+        handle.get_result()
+
+    workflows = DBOS.list_workflows()
+    assert len(workflows) == 1
+    assert workflows[0].error is not None
+
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 1
+    assert steps[0]["error"] is not None
+
+    status = handle.get_status()
+    assert status.error is not None
+
+    status = client.retrieve_workflow(handle.workflow_id).get_status()
+    assert status.error is not None
 
 
 def test_unregistered_workflow(dbos: DBOS, config: DBOSConfig) -> None:

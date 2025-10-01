@@ -350,17 +350,32 @@ class SystemDatabase(ABC):
         *,
         system_database_url: str,
         engine_kwargs: Dict[str, Any],
+        engine: Optional[sa.Engine],
+        schema: Optional[str],
         debug_mode: bool = False,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
 
         self.dialect = sq if system_database_url.startswith("sqlite") else pg
-        self.engine = self._create_engine(system_database_url, engine_kwargs)
+
+        if system_database_url.startswith("sqlite"):
+            self.schema = None
+        else:
+            self.schema = schema if schema else "dbos"
+        SystemSchema.set_schema(self.schema)
+
+        if engine:
+            self.engine = engine
+            self.created_engine = False
+        else:
+            self.engine = self._create_engine(system_database_url, engine_kwargs)
+            self.created_engine = True
         self._engine_kwargs = engine_kwargs
 
         self.notifications_map = ThreadSafeConditionDict()
         self.workflow_events_map = ThreadSafeConditionDict()
+        self._listener_thread_lock = threading.Lock()
 
         # Now we can run background processes
         self._run_background_processes = True
@@ -1069,24 +1084,23 @@ class SystemDatabase(ABC):
                     SystemSchema.operation_outputs.c.child_workflow_id,
                 ).where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
             ).fetchall()
-            return [
-                StepInfo(
+            steps = []
+            for row in rows:
+                _, output, exception = _serialization.safe_deserialize(
+                    workflow_id,
+                    serialized_input=None,
+                    serialized_output=row[2],
+                    serialized_exception=row[3],
+                )
+                step = StepInfo(
                     function_id=row[0],
                     function_name=row[1],
-                    output=(
-                        _serialization.deserialize(row[2])
-                        if row[2] is not None
-                        else row[2]
-                    ),
-                    error=(
-                        _serialization.deserialize_exception(row[3])
-                        if row[3] is not None
-                        else row[3]
-                    ),
+                    output=output,
+                    error=exception,
                     child_workflow_id=row[4],
                 )
-                for row in rows
-            ]
+                steps.append(step)
+            return steps
 
     def _record_operation_result_txn(
         self, result: OperationResultInternal, conn: sa.Connection
@@ -1450,6 +1464,8 @@ class SystemDatabase(ABC):
     def create(
         system_database_url: str,
         engine_kwargs: Dict[str, Any],
+        engine: Optional[sa.Engine],
+        schema: Optional[str],
         debug_mode: bool = False,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
@@ -1459,6 +1475,8 @@ class SystemDatabase(ABC):
             return SQLiteSystemDatabase(
                 system_database_url=system_database_url,
                 engine_kwargs=engine_kwargs,
+                engine=engine,
+                schema=schema,
                 debug_mode=debug_mode,
             )
         else:
@@ -1467,6 +1485,8 @@ class SystemDatabase(ABC):
             return PostgresSystemDatabase(
                 system_database_url=system_database_url,
                 engine_kwargs=engine_kwargs,
+                engine=engine,
+                schema=schema,
                 debug_mode=debug_mode,
             )
 
@@ -1552,6 +1572,32 @@ class SystemDatabase(ABC):
                 "error": None,
             }
             self._record_operation_result_txn(output, conn=c)
+
+    def get_all_events(self, workflow_id: str) -> Dict[str, Any]:
+        """
+        Get all events currently present for a workflow ID.
+
+        Args:
+            workflow_id: The workflow UUID to get events for
+
+        Returns:
+            A dictionary mapping event keys to their deserialized values
+        """
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.workflow_events.c.key,
+                    SystemSchema.workflow_events.c.value,
+                ).where(SystemSchema.workflow_events.c.workflow_uuid == workflow_id)
+            ).fetchall()
+
+            events: Dict[str, Any] = {}
+            for row in rows:
+                key = row[0]
+                value = _serialization.deserialize(row[1])
+                events[key] = value
+
+            return events
 
     @db_retry()
     def get_event(

@@ -16,6 +16,7 @@ from typing import (
     AsyncGenerator,
     Callable,
     Coroutine,
+    Dict,
     Generator,
     Generic,
     List,
@@ -27,9 +28,6 @@ from typing import (
     TypeVar,
     Union,
 )
-
-from opentelemetry.trace import Span
-from rich import print
 
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._debouncer import debouncer_workflow
@@ -53,7 +51,6 @@ from ._core import (
     set_event,
     start_workflow,
     start_workflow_async,
-    workflow_wrapper,
 )
 from ._queue import Queue, queue_thread
 from ._recovery import recover_pending_workflows, startup_recovery_thread
@@ -62,8 +59,6 @@ from ._registrations import (
     DBOSClassInfo,
     _class_fqn,
     get_or_create_class_info,
-    set_dbos_func_name,
-    set_temp_workflow_type,
 )
 from ._roles import default_required_roles, required_roles
 from ._scheduler import ScheduledWorkflow, scheduled
@@ -80,13 +75,11 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
     from ._kafka import _KafkaConsumerWorkflow
     from flask import Flask
+    from opentelemetry.trace import Span
+
+from typing import ParamSpec
 
 from sqlalchemy.orm import Session
-
-if sys.version_info < (3, 10):
-    from typing_extensions import ParamSpec
-else:
-    from typing import ParamSpec
 
 from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
@@ -343,6 +336,8 @@ class DBOS:
         self._background_threads: List[threading.Thread] = []
         self.conductor_url: Optional[str] = conductor_url
         self.conductor_key: Optional[str] = conductor_key
+        if config.get("conductor_key"):
+            self.conductor_key = config.get("conductor_key")
         self.conductor_websocket: Optional[ConductorWebsocket] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
         self._active_workflows_set: set[str] = set()
@@ -417,13 +412,8 @@ class DBOS:
         return rv
 
     @property
-    def _app_db(self) -> ApplicationDatabase:
-        if self._app_db_field is None:
-            raise DBOSException(
-                "Application database accessed before DBOS was launched"
-            )
-        rv: ApplicationDatabase = self._app_db_field
-        return rv
+    def _app_db(self) -> ApplicationDatabase | None:
+        return self._app_db_field
 
     @property
     def _admin_server(self) -> AdminServer:
@@ -456,26 +446,32 @@ class DBOS:
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             self._executor_field = ThreadPoolExecutor(max_workers=sys.maxsize)
             self._background_event_loop.start()
-            assert self._config["database_url"] is not None
             assert self._config["database"]["sys_db_engine_kwargs"] is not None
+            # Get the schema configuration, use "dbos" as default
+            schema = self._config.get("dbos_system_schema", "dbos")
             self._sys_db_field = SystemDatabase.create(
                 system_database_url=get_system_database_url(self._config),
                 engine_kwargs=self._config["database"]["sys_db_engine_kwargs"],
+                engine=self._config["system_database_engine"],
                 debug_mode=debug_mode,
+                schema=schema,
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
-            self._app_db_field = ApplicationDatabase.create(
-                database_url=self._config["database_url"],
-                engine_kwargs=self._config["database"]["db_engine_kwargs"],
-                debug_mode=debug_mode,
-            )
+            if self._config["database_url"]:
+                self._app_db_field = ApplicationDatabase.create(
+                    database_url=self._config["database_url"],
+                    engine_kwargs=self._config["database"]["db_engine_kwargs"],
+                    debug_mode=debug_mode,
+                    schema=schema,
+                )
 
             if debug_mode:
                 return
 
             # Run migrations for the system and application databases
             self._sys_db.run_migrations()
-            self._app_db.run_migrations()
+            if self._app_db:
+                self._app_db.run_migrations()
 
             admin_port = self._config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:
@@ -558,7 +554,7 @@ class DBOS:
                     f"https://console.dbos.dev/self-host?appname={app_name}"
                 )
                 print(
-                    f"[bold]To view and manage workflows, connect to DBOS Conductor at:[/bold] [bold blue]{conductor_registration_url}[/bold blue]"
+                    f"To view and manage workflows, connect to DBOS Conductor at:{conductor_registration_url}"
                 )
 
             # Flush handlers and add OTLP to all loggers if enabled
@@ -980,6 +976,33 @@ class DBOS:
         )
 
     @classmethod
+    def get_all_events(cls, workflow_id: str) -> Dict[str, Any]:
+        """
+        Get all events currently present for a workflow ID.
+        Args:
+            workflow_id: The workflow ID for which to get events
+        Returns:
+            A dictionary mapping event keys to their deserialized values
+        """
+
+        def fn() -> Dict[str, Any]:
+            return _get_dbos_instance()._sys_db.get_all_events(workflow_id)
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.get_events")
+
+    @classmethod
+    async def get_all_events_async(cls, workflow_id: str) -> Dict[str, Any]:
+        """
+        Get all events currently present for a workflow ID.
+        Args:
+            workflow_id: The workflow ID for which to get events
+        Returns:
+            A dictionary mapping event keys to their deserialized values
+        """
+        await cls._configure_asyncio_thread_pool()
+        return await asyncio.to_thread(cls.get_all_events, workflow_id)
+
+    @classmethod
     def _execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Execute a workflow by ID (for recovery)."""
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id)
@@ -1036,16 +1059,6 @@ class DBOS:
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(cls.resume_workflow, workflow_id)
         return await cls.retrieve_workflow_async(workflow_id)
-
-    @classmethod
-    def restart_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
-        """Restart a workflow with a new workflow ID"""
-        return cls.fork_workflow(workflow_id, 1)
-
-    @classmethod
-    async def restart_workflow_async(cls, workflow_id: str) -> WorkflowHandleAsync[Any]:
-        """Restart a workflow with a new workflow ID"""
-        return await cls.fork_workflow_async(workflow_id, 1)
 
     @classmethod
     def fork_workflow(
@@ -1242,6 +1255,10 @@ class DBOS:
         return await asyncio.to_thread(cls.list_workflow_steps, workflow_id)
 
     @classproperty
+    def application_version(cls) -> str:
+        return GlobalParams.app_version
+
+    @classproperty
     def logger(cls) -> Logger:
         """Return the DBOS `Logger` for the current context."""
         return dbos_logger  # TODO get from context if appropriate...
@@ -1283,21 +1300,7 @@ class DBOS:
             return None
 
     @classproperty
-    def parent_workflow_id(cls) -> str:
-        """
-        This method is deprecated and should not be used.
-        """
-        dbos_logger.warning(
-            "DBOS.parent_workflow_id is deprecated and should not be used"
-        )
-        ctx = assert_current_dbos_context()
-        assert (
-            ctx.is_within_workflow()
-        ), "parent_workflow_id is only available within a workflow."
-        return ctx.parent_workflow_id
-
-    @classproperty
-    def span(cls) -> Span:
+    def span(cls) -> "Span":
         """Return the tracing `Span` associated with the current context."""
         ctx = assert_current_dbos_context()
         span = ctx.get_current_active_span()

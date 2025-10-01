@@ -8,9 +8,11 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
 from types import TracebackType
-from typing import List, Literal, Optional, Type, TypedDict
+from typing import TYPE_CHECKING, List, Literal, Optional, Type, TypedDict
 
-from opentelemetry.trace import Span, Status, StatusCode, use_span
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
+
 from sqlalchemy.orm import Session
 
 from dbos._utils import GlobalParams
@@ -78,8 +80,8 @@ class ContextSpan:
         context_manager: The context manager that is used to manage the span's lifecycle.
     """
 
-    span: Span
-    context_manager: AbstractContextManager[Span]
+    span: "Span"
+    context_manager: "AbstractContextManager[Span]"
 
 
 class DBOSContext:
@@ -219,19 +221,21 @@ class DBOSContext:
 
     """ Return the current DBOS span if any. It must be a span created by DBOS."""
 
-    def get_current_dbos_span(self) -> Optional[Span]:
+    def get_current_dbos_span(self) -> "Optional[Span]":
         if len(self.context_spans) > 0:
             return self.context_spans[-1].span
         return None
 
     """ Return the current active span if any. It might not be a DBOS span."""
 
-    def get_current_active_span(self) -> Optional[Span]:
+    def get_current_active_span(self) -> "Optional[Span]":
         return dbos_tracer.get_current_span()
 
     def _start_span(self, attributes: TracedAttributes) -> None:
         if dbos_tracer.disable_otlp:
             return
+        from opentelemetry.trace import use_span
+
         attributes["operationUUID"] = (
             self.workflow_id if len(self.workflow_id) > 0 else None
         )
@@ -259,6 +263,8 @@ class DBOSContext:
     def _end_span(self, exc_value: Optional[BaseException]) -> None:
         if dbos_tracer.disable_otlp:
             return
+        from opentelemetry.trace import Status, StatusCode
+
         context_span = self.context_spans.pop()
         if exc_value is None:
             context_span.span.set_status(Status(StatusCode.OK))

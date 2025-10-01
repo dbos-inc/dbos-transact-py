@@ -241,6 +241,7 @@ class ApplicationDatabase(ABC):
     def create(
         database_url: str,
         engine_kwargs: Dict[str, Any],
+        schema: Optional[str],
         debug_mode: bool = False,
     ) -> "ApplicationDatabase":
         """Factory method to create the appropriate ApplicationDatabase implementation based on URL."""
@@ -256,11 +257,31 @@ class ApplicationDatabase(ABC):
                 database_url=database_url,
                 engine_kwargs=engine_kwargs,
                 debug_mode=debug_mode,
+                schema=schema,
             )
 
 
 class PostgresApplicationDatabase(ApplicationDatabase):
     """PostgreSQL-specific implementation of ApplicationDatabase."""
+
+    def __init__(
+        self,
+        *,
+        database_url: str,
+        engine_kwargs: Dict[str, Any],
+        schema: Optional[str],
+        debug_mode: bool = False,
+    ):
+        super().__init__(
+            database_url=database_url,
+            engine_kwargs=engine_kwargs,
+            debug_mode=debug_mode,
+        )
+        if schema is None:
+            self.schema = "dbos"
+        else:
+            self.schema = schema
+        ApplicationSchema.transaction_outputs.schema = schema
 
     def _create_engine(
         self, database_url: str, engine_kwargs: Dict[str, Any]
@@ -270,9 +291,6 @@ class PostgresApplicationDatabase(ApplicationDatabase):
 
         if engine_kwargs is None:
             engine_kwargs = {}
-
-        # TODO: Make the schema dynamic so this isn't needed
-        ApplicationSchema.transaction_outputs.schema = "dbos"
 
         return sa.create_engine(
             app_db_url,
@@ -307,24 +325,18 @@ class PostgresApplicationDatabase(ApplicationDatabase):
                 sa.text(
                     "SELECT 1 FROM information_schema.schemata WHERE schema_name = :schema_name"
                 ),
-                parameters={"schema_name": ApplicationSchema.schema},
+                parameters={"schema_name": self.schema},
             ).scalar()
 
             if not schema_exists:
-                schema_creation_query = sa.text(
-                    f"CREATE SCHEMA {ApplicationSchema.schema}"
-                )
+                schema_creation_query = sa.text(f'CREATE SCHEMA "{self.schema}"')
                 conn.execute(schema_creation_query)
 
         inspector = inspect(self.engine)
-        if not inspector.has_table(
-            "transaction_outputs", schema=ApplicationSchema.schema
-        ):
+        if not inspector.has_table("transaction_outputs", schema=self.schema):
             ApplicationSchema.metadata_obj.create_all(self.engine)
         else:
-            columns = inspector.get_columns(
-                "transaction_outputs", schema=ApplicationSchema.schema
-            )
+            columns = inspector.get_columns("transaction_outputs", schema=self.schema)
             column_names = [col["name"] for col in columns]
 
             if "function_name" not in column_names:
@@ -333,7 +345,7 @@ class PostgresApplicationDatabase(ApplicationDatabase):
                     conn.execute(
                         text(
                             f"""
-                        ALTER TABLE {ApplicationSchema.schema}.transaction_outputs
+                        ALTER TABLE \"{self.schema}\".transaction_outputs
                         ADD COLUMN function_name TEXT NOT NULL DEFAULT '';
                         """
                         )

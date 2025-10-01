@@ -5,9 +5,6 @@ from typing import List, Optional
 
 import pytest
 import sqlalchemy as sa
-from opentelemetry._logs import set_logger_provider
-from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, InMemoryLogExporter
 
 # Public API
 from dbos import (
@@ -22,8 +19,6 @@ from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandle
 from dbos._dbos_config import ConfigFile
 from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException
-from dbos._logger import dbos_logger
-from dbos._registrations import get_dbos_func_name
 
 
 @pytest.mark.asyncio
@@ -614,80 +609,40 @@ async def test_workflow_with_task_cancellation(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_check_async_violation(dbos: DBOS) -> None:
-    # Set up in-memory log exporter
-    log_exporter = InMemoryLogExporter()  # type: ignore
-    log_processor = BatchLogRecordProcessor(log_exporter)
-    log_provider = LoggerProvider()
-    log_provider.add_log_record_processor(log_processor)
-    set_logger_provider(log_provider)
-    dbos_logger.addHandler(LoggingHandler(logger_provider=log_provider))
+async def test_get_events_async(dbos: DBOS) -> None:
+    """Test the async version of get_events function that retrieves all events for a workflow."""
 
     @DBOS.workflow()
-    def sync_workflow() -> str:
-        return "sync"
+    async def async_events_workflow() -> str:
+        # Set multiple events using async methods
+        await DBOS.set_event_async("event1", "value1")
+        await DBOS.set_event_async("event2", {"nested": "data", "count": 42})
+        await DBOS.set_event_async("event3", [1, 2, 3, 4, 5])
+        return "completed"
 
-    @DBOS.step()
-    def sync_step() -> str:
-        return "step"
+    # Execute the workflow
+    handle = await DBOS.start_workflow_async(async_events_workflow)
+    result = await handle.get_result()
+    assert result == "completed"
 
+    # Get all events for the workflow using async method
+    events = await DBOS.get_all_events_async(handle.workflow_id)
+
+    # Verify all events are present with correct values
+    assert len(events) == 3
+    assert events["event1"] == "value1"
+    assert events["event2"] == {"nested": "data", "count": 42}
+    assert events["event3"] == [1, 2, 3, 4, 5]
+
+    # Test with a workflow that has no events
     @DBOS.workflow()
-    async def async_workflow_sync_step() -> str:
-        return sync_step()
+    async def no_events_workflow() -> str:
+        await DBOS.sleep_async(0.01)
+        return "no events"
 
-    @DBOS.transaction()
-    def sync_transaction() -> str:
-        return "txn"
+    handle2 = await DBOS.start_workflow_async(no_events_workflow)
+    await handle2.get_result()
 
-    @DBOS.workflow()
-    async def async_workflow_sync_txn() -> str:
-        return sync_transaction()
-
-    # Call a sync workflow should log a warning
-    sync_workflow()
-
-    log_processor.force_flush(timeout_millis=5000)
-    logs = log_exporter.get_finished_logs()
-    assert len(logs) == 1
-    assert (
-        logs[0].log_record.body is not None
-        and f"Sync workflow ({get_dbos_func_name(sync_workflow)}) shouldn't be invoked from within another async function."
-        in logs[0].log_record.body
-    )
-    log_exporter.clear()
-
-    # Call a sync step from within an async workflow should log a warning
-    await async_workflow_sync_step()
-    log_processor.force_flush(timeout_millis=5000)
-    logs = log_exporter.get_finished_logs()
-    assert len(logs) == 1
-    assert (
-        logs[0].log_record.body is not None
-        and f"Sync step ({get_dbos_func_name(sync_step)}) shouldn't be invoked from within another async function."
-        in logs[0].log_record.body
-    )
-    log_exporter.clear()
-
-    # Directly call a sync step should log a warning
-    sync_step()
-    log_processor.force_flush(timeout_millis=5000)
-    logs = log_exporter.get_finished_logs()
-    assert len(logs) == 1
-    assert (
-        logs[0].log_record.body is not None
-        and f"Sync step ({get_dbos_func_name(sync_step)}) shouldn't be invoked from within another async function."
-        in logs[0].log_record.body
-    )
-    log_exporter.clear()
-
-    # Call a sync transaction from within an async workflow should log a warning
-    await async_workflow_sync_txn()
-    log_processor.force_flush(timeout_millis=5000)
-    logs = log_exporter.get_finished_logs()
-    assert len(logs) == 1
-    assert (
-        logs[0].log_record.body is not None
-        and f"Transaction function ({get_dbos_func_name(sync_transaction)}) shouldn't be invoked from within another async function."
-        in logs[0].log_record.body
-    )
-    log_exporter.clear()
+    # Should return empty dict for workflow with no events
+    events2 = await DBOS.get_all_events_async(handle2.workflow_id)
+    assert events2 == {}

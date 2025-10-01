@@ -14,8 +14,6 @@ from sqlalchemy.exc import DBAPIError
 
 from dbos import DBOS, DBOSClient, DBOSConfig, EnqueueOptions, SetWorkflowID
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
-from dbos._sys_db import SystemDatabase
-from dbos._utils import GlobalParams
 from tests import client_collateral
 from tests.client_collateral import event_test, retrieve_test, send_test
 
@@ -125,7 +123,7 @@ def test_client_enqueue_appver_not_set(dbos: DBOS, client: DBOSClient) -> None:
     assert wf_status is not None
     assert wf_status.status == "SUCCESS"
     assert wf_status.name == "enqueue_test"
-    assert wf_status.app_version == GlobalParams.app_version
+    assert wf_status.app_version == DBOS.application_version
 
 
 def test_client_enqueue_appver_set(dbos: DBOS, client: DBOSClient) -> None:
@@ -138,7 +136,7 @@ def test_client_enqueue_appver_set(dbos: DBOS, client: DBOSClient) -> None:
         "queue_name": "test_queue",
         "workflow_name": "enqueue_test",
         "workflow_id": wfid,
-        "app_version": GlobalParams.app_version,
+        "app_version": DBOS.application_version,
     }
 
     client.enqueue(options, 42, "test", johnDoe)
@@ -151,7 +149,7 @@ def test_client_enqueue_appver_set(dbos: DBOS, client: DBOSClient) -> None:
     assert wf_status is not None
     assert wf_status.status == "SUCCESS"
     assert wf_status.name == "enqueue_test"
-    assert wf_status.app_version == GlobalParams.app_version
+    assert wf_status.app_version == DBOS.application_version
 
 
 def test_client_enqueue_wrong_appver(dbos: DBOS, client: DBOSClient) -> None:
@@ -205,7 +203,7 @@ def test_client_enqueue_idempotent(config: DBOSConfig, client: DBOSClient) -> No
     assert wf_status is not None
     assert wf_status.status == "SUCCESS"
     assert wf_status.name == "enqueue_test"
-    assert wf_status.app_version == GlobalParams.app_version
+    assert wf_status.app_version == DBOS.application_version
 
     DBOS.destroy(destroy_registry=True)
 
@@ -272,7 +270,7 @@ def test_client_send_idempotent(
     idempotency_key = f"test-idempotency-{now}"
     sendWFID = f"{wfid}-{idempotency_key}"
 
-    run_send_worker(wfid, topic, GlobalParams.app_version)
+    run_send_worker(wfid, topic, DBOS.application_version)
 
     client.send(wfid, message, topic, idempotency_key)
     client.send(wfid, message, topic, idempotency_key)
@@ -315,7 +313,7 @@ def test_client_send_failure(
     idempotency_key = f"test-idempotency-{now}"
     sendWFID = f"{wfid}-{idempotency_key}"
 
-    run_send_worker(wfid, topic, GlobalParams.app_version)
+    run_send_worker(wfid, topic, DBOS.application_version)
 
     client.send(wfid, message, topic, idempotency_key)
 

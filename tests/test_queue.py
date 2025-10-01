@@ -55,6 +55,10 @@ def test_simple_queue(dbos: DBOS) -> None:
 
     queue = Queue("test_queue")
 
+    # Test that redeclaring a queue is an exception
+    with pytest.raises(Exception):
+        Queue(queue.name)
+
     with SetWorkflowID(wfid):
         handle = queue.enqueue(test_workflow, "abc", "123")
     assert handle.get_result() == "abcd123"
@@ -908,7 +912,6 @@ def test_timeout_queue(dbos: DBOS) -> None:
 
     # Verify if a parent called with a timeout enqueues a blocked child
     # then exits the deadline propagates and the child is cancelled.
-    queue = Queue("regular_queue")
 
     @DBOS.workflow()
     def exiting_parent_workflow() -> str:

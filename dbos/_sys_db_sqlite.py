@@ -6,7 +6,6 @@ import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 
 from dbos._migration import sqlite_migrations
-from dbos._schemas.system_database import SystemSchema
 
 from ._logger import dbos_logger
 from ._sys_db import SystemDatabase
@@ -19,12 +18,6 @@ class SQLiteSystemDatabase(SystemDatabase):
         self, system_database_url: str, engine_kwargs: Dict[str, Any]
     ) -> sa.Engine:
         """Create a SQLite engine."""
-        # TODO: Make the schema dynamic so this isn't needed
-        SystemSchema.workflow_status.schema = None
-        SystemSchema.operation_outputs.schema = None
-        SystemSchema.notifications.schema = None
-        SystemSchema.workflow_events.schema = None
-        SystemSchema.streams.schema = None
         return sa.create_engine(system_database_url)
 
     def run_migrations(self) -> None:

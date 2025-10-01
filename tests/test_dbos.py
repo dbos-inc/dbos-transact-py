@@ -7,10 +7,11 @@ import os
 import threading
 import time
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.exc import OperationalError
 
 # Public API
 from dbos import (
@@ -24,6 +25,7 @@ from dbos import (
 )
 
 # Private API because this is a test
+from dbos._client import DBOSClient
 from dbos._context import assert_current_dbos_context, get_local_dbos_context
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
@@ -1085,51 +1087,27 @@ def test_nonserializable_values(dbos: DBOS) -> None:
     def test_bad_wf4(var: str) -> str:
         return test_ns_step(var)
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         test_ns_transaction("h")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         test_ns_wf("g")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
 
     wfh = DBOS.start_workflow(test_reg_wf, "a")
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         DBOS.send(wfh.workflow_id, invalid_return, "sss")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
     wfh.get_result()
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         test_ns_event("e")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         test_bad_wf1("a")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         test_bad_wf2("b")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         test_bad_wf3("c")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(AttributeError):
         test_bad_wf4("d")
-    assert "Serialized function should be defined at the top level of a module" in str(
-        exc_info.value
-    )
 
 
 def test_multi_set_event(dbos: DBOS) -> None:
@@ -1394,12 +1372,12 @@ def test_app_version(config: DBOSConfig) -> None:
     DBOS.launch()
 
     # Verify that app version is correctly set to a hex string
-    app_version = GlobalParams.app_version
+    app_version = DBOS.application_version
     assert len(app_version) > 0
     assert is_hex(app_version)
 
     DBOS.destroy(destroy_registry=True)
-    assert GlobalParams.app_version == ""
+    assert DBOS.application_version == ""
     dbos = DBOS(config=config)
 
     @DBOS.workflow()
@@ -1413,7 +1391,7 @@ def test_app_version(config: DBOSConfig) -> None:
     DBOS.launch()
 
     # Verify stability--the same workflow source produces the same app version.
-    assert GlobalParams.app_version == app_version
+    assert DBOS.application_version == app_version
 
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
@@ -1424,7 +1402,7 @@ def test_app_version(config: DBOSConfig) -> None:
 
     # Verify that changing the workflow source changes the workflow version
     DBOS.launch()
-    assert GlobalParams.app_version != app_version
+    assert DBOS.application_version != app_version
 
     # Verify that version can be overriden with an environment variable
     app_version = str(uuid.uuid4())
@@ -1438,7 +1416,7 @@ def test_app_version(config: DBOSConfig) -> None:
         return x
 
     DBOS.launch()
-    assert GlobalParams.app_version == app_version
+    assert DBOS.application_version == app_version
 
     del os.environ["DBOS__APPVERSION"]
 
@@ -1457,7 +1435,7 @@ def test_app_version(config: DBOSConfig) -> None:
         return DBOS.workflow_id
 
     DBOS.launch()
-    assert GlobalParams.app_version == app_version
+    assert DBOS.application_version == app_version
     assert GlobalParams.executor_id == executor_id
     wfid = test_workflow()
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
@@ -1754,3 +1732,210 @@ def test_destroy(dbos: DBOS, config: DBOSConfig) -> None:
     blocking_event.set()
     with pytest.raises(DBOSException):
         handle.get_result()
+
+
+def test_without_appdb(config: DBOSConfig, cleanup_test_databases: None) -> None:
+    DBOS.destroy(destroy_registry=True)
+    config["application_database_url"] = None
+    dbos = DBOS(config=config)
+    DBOS.launch()
+    assert dbos._app_db is None
+
+    @DBOS.step()
+    def step() -> None:
+        return
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        step()
+        step()
+        step()
+        assert DBOS.workflow_id
+        return DBOS.workflow_id
+
+    wfid = workflow()
+    assert wfid
+    steps = DBOS.list_workflow_steps(wfid)
+    assert len(steps) == 3
+    for s in steps:
+        assert s["function_name"] == step.__qualname__
+    forked_handle = DBOS.fork_workflow(wfid, start_step=1)
+    assert forked_handle.get_result() == forked_handle.workflow_id
+
+    @DBOS.transaction()
+    def transaction() -> None:
+        return
+
+    with pytest.raises(AssertionError):
+        transaction()
+
+    DBOS.destroy(destroy_registry=True)
+
+    client = DBOSClient(system_database_url=config["system_database_url"])
+    steps = client.list_workflow_steps(wfid)
+    assert len(steps) == 3
+    for s in steps:
+        assert s["function_name"] == step.__qualname__
+
+
+def test_custom_schema(
+    config: DBOSConfig, cleanup_test_databases: None, skip_with_sqlite: None
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    config["dbos_system_schema"] = "F8nny_sCHem@-n@m3"
+    dbos = DBOS(config=config)
+    DBOS.launch()
+    with dbos._sys_db.engine.connect() as connection:
+        # Check that the 'dbos' schema does not exist
+        result = connection.execute(
+            sa.text(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'dbos'"
+            )
+        )
+        rows = result.fetchall()
+        assert len(rows) == 0
+
+    key = "key"
+    val = "val"
+
+    @DBOS.transaction()
+    def transaction() -> None:
+        return
+
+    @DBOS.workflow()
+    def recv_workflow() -> Any:
+        transaction()
+        DBOS.set_event(key, val)
+        return DBOS.recv()
+
+    handle = DBOS.start_workflow(recv_workflow)
+    assert DBOS.get_event(handle.workflow_id, key) == val
+    DBOS.send(handle.workflow_id, val)
+    assert handle.get_result() == val
+    assert len(DBOS.list_workflows()) == 2
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 4
+    assert "transaction" in steps[0]["function_name"]
+    DBOS.destroy(destroy_registry=True)
+
+    # Test custom schema with client
+    client = DBOSClient(
+        system_database_url=config["system_database_url"],
+        application_database_url=config["application_database_url"],
+        dbos_system_schema=config["dbos_system_schema"],
+    )
+    assert len(client.list_workflows()) == 2
+    steps = client.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 4
+    assert "transaction" in steps[0]["function_name"]
+
+
+def test_custom_engine(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    db_engine: sa.Engine,
+    skip_with_sqlite: None,
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    assert config["system_database_url"]
+    config["application_database_url"] = None
+    system_database_url = config["system_database_url"]
+
+    # Create a custom engine
+    engine = sa.create_engine(system_database_url)
+    config["system_database_engine"] = engine
+
+    # Launch DBOS with the engine. It should fail because the database does not exist.
+    dbos = DBOS(config=config)
+    with pytest.raises(OperationalError):
+        DBOS.launch()
+    DBOS.destroy(destroy_registry=True)
+
+    # Create the database
+    with db_engine.connect() as c:
+        c.execution_options(isolation_level="AUTOCOMMIT")
+        sysdb_name = sa.make_url(config["system_database_url"]).database
+        c.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
+
+    # Launch DBOS again using the custom pool. It should succeed despite the bogus URL.
+    config["system_database_url"] = "postgresql://bogus:url@not:42/fake"
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    key = "key"
+    val = "val"
+
+    @DBOS.workflow()
+    def recv_workflow() -> Any:
+        DBOS.set_event(key, val)
+        return DBOS.recv()
+
+    assert dbos._sys_db.engine == engine
+    handle = DBOS.start_workflow(recv_workflow)
+    assert DBOS.get_event(handle.workflow_id, key) == val
+    DBOS.send(handle.workflow_id, val)
+    assert handle.get_result() == val
+    assert len(DBOS.list_workflows()) == 2
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 3
+    assert "setEvent" in steps[0]["function_name"]
+    DBOS.destroy(destroy_registry=True)
+
+    # Test custom engine with client
+    client = DBOSClient(
+        system_database_url=config["system_database_url"],
+        system_database_engine=config["system_database_engine"],
+    )
+    assert len(client.list_workflows()) == 2
+    steps = client.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 3
+    assert "setEvent" in steps[0]["function_name"]
+
+
+def test_get_events(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def events_workflow() -> str:
+        # Set multiple events
+        DBOS.set_event("event1", "value1")
+        DBOS.set_event("event2", {"nested": "data", "count": 42})
+        DBOS.set_event("event3", [1, 2, 3, 4, 5])
+        return "completed"
+
+    # Execute the workflow
+    handle = DBOS.start_workflow(events_workflow)
+    result = handle.get_result()
+    assert result == "completed"
+
+    # Get events, verify they are present with correct values
+    def get_events() -> None:
+        events = DBOS.get_all_events(handle.workflow_id)
+
+        assert len(events) == 3
+        assert events["event1"] == "value1"
+        assert events["event2"] == {"nested": "data", "count": 42}
+        assert events["event3"] == [1, 2, 3, 4, 5]
+
+    # Verify it works
+    get_events()
+
+    # Run it as a workflow, verify it still works
+    get_events_workflow = DBOS.workflow()(get_events)
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        get_events_workflow()
+    steps = DBOS.list_workflow_steps(wfid)
+    assert len(steps) == 1
+    assert steps[0]["function_name"] == "DBOS.get_events"
+
+    # Test with a workflow that has no events
+    @DBOS.workflow()
+    def no_events_workflow() -> str:
+        return "no events"
+
+    handle2 = DBOS.start_workflow(no_events_workflow)
+    handle2.get_result()
+
+    # Should return empty dict for workflow with no events
+    events2 = DBOS.get_all_events(handle2.workflow_id)
+    assert events2 == {}

@@ -2,10 +2,6 @@ import os
 import shutil
 import typing
 from os import path
-from typing import Any
-
-import tomlkit
-from rich import print
 
 from dbos._dbos_config import _app_name_to_db_name
 
@@ -46,7 +42,7 @@ def _copy_template_dir(src_dir: str, dst_dir: str, ctx: dict[str, str]) -> None:
 
             dst = path.join(dst_root, base if ext == ".dbos" else file)
             if path.exists(dst):
-                print(f"[yellow]File {dst} already exists, skipping[/yellow]")
+                print(f"File {dst} already exists, skipping")
                 continue
 
             if ext == ".dbos":
@@ -62,7 +58,7 @@ def copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
     package_name = project_name.replace("-", "_")
     default_migration_section = """database:
   migrate:
-    - alembic upgrade head
+    - python3 migrations/create_table.py
 """
     ctx = {
         "project_name": project_name,
@@ -89,18 +85,11 @@ def copy_template(src_dir: str, project_name: str, config_mode: bool) -> None:
 
 def get_project_name() -> typing.Union[str, None]:
     name = None
+
     try:
-        with open("pyproject.toml", "rb") as file:
-            pyproj = typing.cast(dict[str, Any], tomlkit.load(file))
-            name = typing.cast(str, pyproj["project"]["name"])
+        _, parent = path.split(path.abspath("."))
+        name = parent
     except:
         pass
-
-    if name == None:
-        try:
-            _, parent = path.split(path.abspath("."))
-            name = parent
-        except:
-            pass
 
     return name

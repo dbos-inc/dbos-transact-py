@@ -24,12 +24,11 @@ def test_package(
     for template_name in ["dbos-db-starter", "dbos-app-starter"]:
         db_starter = template_name == "dbos-db-starter"
         app_db_name = template_name.replace("-", "_")
+        sys_db_name = f"{app_db_name}_dbos_sys"
         with db_engine.connect() as connection:
             connection.execution_options(isolation_level="AUTOCOMMIT")
             connection.execute(sa.text(f"DROP DATABASE IF EXISTS {app_db_name}"))
-            connection.execute(
-                sa.text(f"DROP DATABASE IF EXISTS {app_db_name}_dbos_sys")
-            )
+            connection.execute(sa.text(f"DROP DATABASE IF EXISTS {sys_db_name}"))
 
         with tempfile.TemporaryDirectory() as temp_path:
             temp_path = tempfile.mkdtemp(prefix="dbos-")
@@ -51,10 +50,23 @@ def test_package(
             venv["DBOS_DATABASE_URL"] = db_engine.url.set(
                 database=app_db_name
             ).render_as_string(hide_password=False)
+            venv["DBOS_SYSTEM_DATABASE_URL"] = db_engine.url.set(
+                database=sys_db_name
+            ).render_as_string(hide_password=False)
 
             # Install the dbos package into the virtual environment
             subprocess.check_call(
                 ["pip", "install", wheel_path], cwd=temp_path, env=venv
+            )
+
+            # Next, verify a simple DBOS-only script runs
+            subprocess.check_call(
+                ["python3", "tests/script_without_fastapi.py"], env=venv
+            )
+
+            # Install FastAPI into the virtual environment
+            subprocess.check_call(
+                ["pip", "install", "fastapi[standard]"], cwd=temp_path, env=venv
             )
 
             # initalize the app with dbos scaffolding
@@ -191,6 +203,7 @@ def test_workflow_commands(config: DBOSConfig) -> None:
             ["dbos", "reset", "-y", "--sys-db-url", db_url], cwd=temp_path
         )
 
+        schema = "dbos"
         # Get some workflows enqueued on the toolbox, then kill the toolbox
         process = subprocess.Popen(["python3", "main.py"], cwd=temp_path, env=env)
         try:
@@ -216,20 +229,40 @@ def test_workflow_commands(config: DBOSConfig) -> None:
 
         # Verify the output is valid JSON
         output = subprocess.check_output(
-            ["dbos", "workflow", "list", "--sys-db-url", db_url], cwd=temp_path
+            ["dbos", "workflow", "list", "--sys-db-url", db_url, "--schema", schema],
+            cwd=temp_path,
         )
         data = json.loads(output)
         assert isinstance(data, list) and len(data) == 10
 
         # Verify the output is valid JSON
         output = subprocess.check_output(
-            ["dbos", "workflow", "queue", "list", "--sys-db-url", db_url], cwd=temp_path
+            [
+                "dbos",
+                "workflow",
+                "queue",
+                "list",
+                "--sys-db-url",
+                db_url,
+                "--schema",
+                schema,
+            ],
+            cwd=temp_path,
         )
         workflows = json.loads(output)
         assert isinstance(workflows, list) and len(workflows) == 10
         for wf in workflows:
             output = subprocess.check_output(
-                ["dbos", "workflow", "get", wf["workflow_id"], "--sys-db-url", db_url],
+                [
+                    "dbos",
+                    "workflow",
+                    "get",
+                    wf["workflow_id"],
+                    "--sys-db-url",
+                    db_url,
+                    "--schema",
+                    schema,
+                ],
                 cwd=temp_path,
             )
             get_wf_data = json.loads(output)
@@ -239,7 +272,17 @@ def test_workflow_commands(config: DBOSConfig) -> None:
         # workflow ID is a preffix to each step ID
         wf_id = "-".join(workflows[0]["workflow_id"].split("-")[:-1])
         get_steps_output = subprocess.check_output(
-            ["dbos", "workflow", "steps", wf_id, "--sys-db-url", db_url], cwd=temp_path
+            [
+                "dbos",
+                "workflow",
+                "steps",
+                wf_id,
+                "--sys-db-url",
+                db_url,
+                "--schema",
+                schema,
+            ],
+            cwd=temp_path,
         )
         get_steps_data = json.loads(get_steps_output)
         assert isinstance(get_steps_data, list)
@@ -249,10 +292,14 @@ def test_workflow_commands(config: DBOSConfig) -> None:
 
         # cancel the workflow and check the status is CANCELLED
         subprocess.check_output(
-            ["dbos", "workflow", "cancel", wf_id], cwd=temp_path, env=env
+            ["dbos", "workflow", "cancel", wf_id, "--schema", schema],
+            cwd=temp_path,
+            env=env,
         )
         output = subprocess.check_output(
-            ["dbos", "workflow", "get", wf_id], cwd=temp_path, env=env
+            ["dbos", "workflow", "get", wf_id, "--schema", schema],
+            cwd=temp_path,
+            env=env,
         )
         get_wf_data = json.loads(output)
         assert isinstance(get_wf_data, dict)
@@ -260,27 +307,22 @@ def test_workflow_commands(config: DBOSConfig) -> None:
 
         # resume the workflow and check the status is ENQUEUED
         subprocess.check_output(
-            ["dbos", "workflow", "resume", wf_id], cwd=temp_path, env=env
+            ["dbos", "workflow", "resume", wf_id, "--schema", schema],
+            cwd=temp_path,
+            env=env,
         )
         output = subprocess.check_output(
-            ["dbos", "workflow", "get", wf_id], cwd=temp_path, env=env
+            ["dbos", "workflow", "get", wf_id, "--schema", schema],
+            cwd=temp_path,
+            env=env,
         )
         get_wf_data = json.loads(output)
         assert isinstance(get_wf_data, dict)
         assert get_wf_data["status"] == "ENQUEUED"
 
-        # restart the workflow and check it has a new ID and its status is ENQUEUED
-        output = subprocess.check_output(
-            ["dbos", "workflow", "restart", wf_id], cwd=temp_path, env=env
-        )
-        restart_wf_data = json.loads(output)
-        assert isinstance(restart_wf_data, dict)
-        assert restart_wf_data["workflow_id"] != wf_id
-        assert restart_wf_data["status"] == "ENQUEUED"
-
         # fork the workflow at step 5 and check it has a new ID and its status is ENQUEUED
         output = subprocess.check_output(
-            ["dbos", "workflow", "fork", wf_id, "--step", "5"],
+            ["dbos", "workflow", "fork", wf_id, "--step", "5", "--schema", schema],
             cwd=temp_path,
             env=env,
         )
