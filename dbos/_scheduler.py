@@ -1,3 +1,4 @@
+import random
 import threading
 import traceback
 from datetime import datetime, timezone
@@ -21,22 +22,34 @@ scheduler_queue: Queue
 def scheduler_loop(
     func: ScheduledWorkflow, cron: str, stop_event: threading.Event
 ) -> None:
+    from dbos._dbos import _get_dbos_instance
+
+    dbos = _get_dbos_instance()
     try:
         iter = croniter(cron, datetime.now(timezone.utc), second_at_beginning=True)
-    except Exception as e:
+    except Exception:
         dbos_logger.error(
             f'Cannot run scheduled function {get_dbos_func_name(func)}. Invalid crontab "{cron}"'
         )
+        raise
     while not stop_event.is_set():
-        nextExecTime = iter.get_next(datetime)
-        sleepTime = nextExecTime - datetime.now(timezone.utc)
-        if stop_event.wait(timeout=sleepTime.total_seconds()):
+        next_exec_time = iter.get_next(datetime)
+        sleep_time = (next_exec_time - datetime.now(timezone.utc)).total_seconds()
+        # To prevent a "thundering herd" problem in a distributed setting,
+        # apply jitter of up to 10% the sleep time, capped at 10 seconds
+        max_jitter = min(sleep_time / 10, 10)
+        jitter = random.uniform(0, max_jitter)
+        if stop_event.wait(timeout=sleep_time + jitter):
             return
         try:
-            with SetWorkflowID(
-                f"sched-{get_dbos_func_name(func)}-{nextExecTime.isoformat()}"
-            ):
-                scheduler_queue.enqueue(func, nextExecTime, datetime.now(timezone.utc))
+            workflowID = (
+                f"sched-{get_dbos_func_name(func)}-{next_exec_time.isoformat()}"
+            )
+            if not dbos._sys_db.get_workflow_status(workflowID):
+                with SetWorkflowID(workflowID):
+                    scheduler_queue.enqueue(
+                        func, next_exec_time, datetime.now(timezone.utc)
+                    )
         except Exception:
             dbos_logger.warning(
                 f"Exception encountered in scheduler thread: {traceback.format_exc()})"
@@ -49,7 +62,7 @@ def scheduled(
     def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
         try:
             croniter(cron, datetime.now(timezone.utc), second_at_beginning=True)
-        except Exception as e:
+        except Exception:
             raise ValueError(
                 f'Invalid crontab "{cron}" for scheduled function function {get_dbos_func_name(func)}.'
             )
