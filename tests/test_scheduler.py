@@ -206,7 +206,7 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
         txn_counter += 1
 
     time.sleep(4)
-    assert wf_counter >= 1 and wf_counter <= 3
+    assert wf_counter >= 1 and wf_counter <= 4
     max_tries = 10
     for i in range(max_tries):
         try:

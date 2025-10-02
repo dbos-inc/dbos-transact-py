@@ -35,6 +35,7 @@ def scheduler_loop(
     while not stop_event.is_set():
         next_exec_time = iter.get_next(datetime)
         sleep_time = (next_exec_time - datetime.now(timezone.utc)).total_seconds()
+        sleep_time = 0 if sleep_time < 0 else sleep_time
         # To prevent a "thundering herd" problem in a distributed setting,
         # apply jitter of up to 10% the sleep time, capped at 10 seconds
         max_jitter = min(sleep_time / 10, 10)
