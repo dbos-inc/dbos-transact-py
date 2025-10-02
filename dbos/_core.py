@@ -1278,8 +1278,8 @@ def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60)
 def set_event(dbos: "DBOS", key: str, value: Any) -> None:
     cur_ctx = get_local_dbos_context()
     if cur_ctx is not None:
-        # Must call it within a workflow
         if cur_ctx.is_workflow():
+            # If called from a workflow function, run as a step
             attributes: TracedAttributes = {
                 "name": "set_event",
             }
