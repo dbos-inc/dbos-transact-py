@@ -1524,7 +1524,7 @@ class SystemDatabase(ABC):
         return duration
 
     @db_retry()
-    def set_event(
+    def set_event_from_workflow(
         self,
         workflow_uuid: str,
         function_id: int,
@@ -1565,6 +1565,26 @@ class SystemDatabase(ABC):
                 "error": None,
             }
             self._record_operation_result_txn(output, conn=c)
+
+    def set_event_from_step(
+        self,
+        workflow_uuid: str,
+        key: str,
+        message: Any,
+    ) -> None:
+        with self.engine.begin() as c:
+            c.execute(
+                self.dialect.insert(SystemSchema.workflow_events)
+                .values(
+                    workflow_uuid=workflow_uuid,
+                    key=key,
+                    value=_serialization.serialize(message),
+                )
+                .on_conflict_do_update(
+                    index_elements=["workflow_uuid", "key"],
+                    set_={"value": _serialization.serialize(message)},
+                )
+            )
 
     def get_all_events(self, workflow_id: str) -> Dict[str, Any]:
         """
