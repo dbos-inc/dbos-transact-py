@@ -16,8 +16,6 @@ from ._registrations import get_dbos_func_name
 
 ScheduledWorkflow = Callable[[datetime, datetime], None]
 
-scheduler_queue: Queue
-
 
 def scheduler_loop(
     func: ScheduledWorkflow, cron: str, stop_event: threading.Event
@@ -25,6 +23,7 @@ def scheduler_loop(
     from dbos._dbos import _get_dbos_instance
 
     dbos = _get_dbos_instance()
+    scheduler_queue = dbos._registry.get_internal_queue()
     try:
         iter = croniter(cron, datetime.now(timezone.utc), second_at_beginning=True)
     except Exception:
@@ -67,9 +66,6 @@ def scheduled(
             raise ValueError(
                 f'Invalid crontab "{cron}" for scheduled function function {get_dbos_func_name(func)}.'
             )
-
-        global scheduler_queue
-        scheduler_queue = dbosreg.get_internal_queue()
         stop_event = threading.Event()
         dbosreg.register_poller(stop_event, scheduler_loop, func, cron, stop_event)
         return func
