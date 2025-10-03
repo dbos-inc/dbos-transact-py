@@ -1278,21 +1278,24 @@ def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60)
 def set_event(dbos: "DBOS", key: str, value: Any) -> None:
     cur_ctx = get_local_dbos_context()
     if cur_ctx is not None:
-        # Must call it within a workflow
-        assert (
-            cur_ctx.is_workflow()
-        ), "set_event() must be called from within a workflow"
-        attributes: TracedAttributes = {
-            "name": "set_event",
-        }
-        with EnterDBOSStep(attributes):
-            ctx = assert_current_dbos_context()
-            dbos._sys_db.set_event(
-                ctx.workflow_id, ctx.curr_step_function_id, key, value
+        if cur_ctx.is_workflow():
+            # If called from a workflow function, run as a step
+            attributes: TracedAttributes = {
+                "name": "set_event",
+            }
+            with EnterDBOSStep(attributes):
+                ctx = assert_current_dbos_context()
+                dbos._sys_db.set_event_from_workflow(
+                    ctx.workflow_id, ctx.curr_step_function_id, key, value
+                )
+        elif cur_ctx.is_step():
+            dbos._sys_db.set_event_from_step(cur_ctx.workflow_id, key, value)
+        else:
+            raise DBOSException(
+                "set_event() must be called from within a workflow or step"
             )
     else:
-        # Cannot call it from outside of a workflow
-        raise DBOSException("set_event() must be called from within a workflow")
+        raise DBOSException("set_event() must be called from within a workflow or step")
 
 
 def get_event(
