@@ -965,41 +965,57 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
 def test_set_get_events(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_setevent_workflow() -> None:
-        dbos.set_event("key1", "value1")
-        dbos.set_event("key2", "value2")
-        dbos.set_event("key3", None)
+        DBOS.set_event("key1", "value1")
+        DBOS.set_event("key2", "value2")
+        DBOS.set_event("key3", None)
+        set_event_step()
+
+    @DBOS.step()
+    def set_event_step() -> None:
+        DBOS.set_event("key4", "value4")
 
     @DBOS.workflow()
     def test_getevent_workflow(
-        target_uuid: str, key: str, timeout_seconds: float = 10
+        target_uuid: str, key: str, timeout: float = 0.0
     ) -> Optional[str]:
-        msg = dbos.get_event(target_uuid, key, timeout_seconds)
+        msg = dbos.get_event(target_uuid, key, timeout)
         return str(msg) if msg is not None else None
 
-    wfuuid = str(uuid.uuid4())
-    with SetWorkflowID(wfuuid):
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
         test_setevent_workflow()
-    with SetWorkflowID(wfuuid):
+    with SetWorkflowID(wfid):
         test_setevent_workflow()
 
-    value1 = test_getevent_workflow(wfuuid, "key1")
+    value1 = test_getevent_workflow(wfid, "key1")
     assert value1 == "value1"
 
-    value2 = test_getevent_workflow(wfuuid, "key2")
+    value2 = test_getevent_workflow(wfid, "key2")
     assert value2 == "value2"
 
     # Run getEvent outside of a workflow
-    value1 = dbos.get_event(wfuuid, "key1")
+    value1 = DBOS.get_event(wfid, "key1", 0)
     assert value1 == "value1"
 
-    value2 = dbos.get_event(wfuuid, "key2")
+    value2 = DBOS.get_event(wfid, "key2", 0)
     assert value2 == "value2"
 
     begin_time = time.time()
-    value3 = test_getevent_workflow(wfuuid, "key3")
+    value3 = test_getevent_workflow(wfid, "key3")
     assert value3 is None
-    duration = time.time() - begin_time
-    assert duration < 1  # None is from the event not from the timeout
+
+    value4 = DBOS.get_event(wfid, "key4", 0)
+    assert value4 == "value4"
+
+    steps = DBOS.list_workflow_steps(wfid)
+    assert len(steps) == 4
+    assert (
+        steps[0]["function_name"]
+        == steps[1]["function_name"]
+        == steps[2]["function_name"]
+        == "DBOS.setEvent"
+    )
+    assert steps[3]["function_name"] == set_event_step.__qualname__
 
     # Test OAOO
     timeout_uuid = str(uuid.uuid4())
