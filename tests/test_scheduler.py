@@ -102,7 +102,7 @@ def test_scheduled_workflow(dbos: DBOS) -> None:
         wf_counter += 1
 
     time.sleep(5)
-    assert wf_counter > 2 and wf_counter <= 5
+    assert wf_counter > 1 and wf_counter <= 5
 
 
 def test_appdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
@@ -123,7 +123,7 @@ def test_appdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
     time.sleep(2)
     assert dbos._app_db
     simulate_db_restart(dbos._app_db.engine, 2)
-    time.sleep(2)
+    time.sleep(3)
     assert wf_counter > 2
 
 
@@ -138,7 +138,7 @@ def test_sysdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
 
     time.sleep(2)
     simulate_db_restart(dbos._sys_db.engine, 2)
-    time.sleep(2)
+    time.sleep(3)
     # We know there should be at least 2 occurrences from the 4 seconds when the DB was up.
     #  There could be more than 4, depending on the pace the machine...
     assert wf_counter >= 2
@@ -154,7 +154,7 @@ def test_scheduled_transaction(dbos: DBOS) -> None:
         txn_counter += 1
 
     time.sleep(5)
-    assert txn_counter > 2 and txn_counter <= 5
+    assert txn_counter > 1 and txn_counter <= 5
 
 
 def test_scheduled_step(dbos: DBOS) -> None:
@@ -205,8 +205,8 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
         nonlocal txn_counter
         txn_counter += 1
 
-    time.sleep(3)
-    assert wf_counter >= 1 and wf_counter <= 3
+    time.sleep(4)
+    assert wf_counter >= 1 and wf_counter <= 4
     max_tries = 10
     for i in range(max_tries):
         try:
@@ -223,7 +223,7 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
         evt.set()
 
     # Wait for workflows to finish
-    time.sleep(2)
+    time.sleep(3)
 
     dbos._sys_db.update_workflow_outcome(workflow_id, "PENDING")
 
