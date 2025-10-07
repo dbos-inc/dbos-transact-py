@@ -1,12 +1,10 @@
 # mypy: disable-error-code="no-redef"
 
 import asyncio
-import base64
 import datetime
 import json
 import logging
 import os
-import pickle
 import threading
 import time
 import uuid
@@ -25,6 +23,7 @@ from dbos import (
     SetWorkflowTimeout,
     WorkflowHandle,
     WorkflowStatusString,
+    Serializer,
 )
 
 # Private API because this is a test
@@ -36,7 +35,6 @@ from dbos._error import (
     DBOSException,
 )
 from dbos._schemas.system_database import SystemSchema
-from dbos._serialization import Serializer, WorkflowInputs
 from dbos._sys_db import GetWorkflowsInput
 from dbos._utils import GlobalParams
 
