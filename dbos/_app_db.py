@@ -47,6 +47,7 @@ class ApplicationDatabase(ABC):
             return SQLiteApplicationDatabase(
                 database_url=database_url,
                 engine_kwargs=engine_kwargs,
+                schema=schema,
                 serializer=serializer,
                 debug_mode=debug_mode,
             )
@@ -55,9 +56,9 @@ class ApplicationDatabase(ABC):
             return PostgresApplicationDatabase(
                 database_url=database_url,
                 engine_kwargs=engine_kwargs,
-                debug_mode=debug_mode,
-                serializer=serializer,
                 schema=schema,
+                serializer=serializer,
+                debug_mode=debug_mode,
             )
 
     def __init__(
@@ -66,8 +67,14 @@ class ApplicationDatabase(ABC):
         database_url: str,
         engine_kwargs: Dict[str, Any],
         serializer: Serializer,
+        schema: Optional[str],
         debug_mode: bool = False,
     ):
+        if database_url.startswith("sqlite"):
+            self.schema = None
+        else:
+            self.schema = schema if schema else "dbos"
+        ApplicationSchema.transaction_outputs.schema = schema
         self.engine = self._create_engine(database_url, engine_kwargs)
         self._engine_kwargs = engine_kwargs
         self.sessionmaker = sessionmaker(bind=self.engine)
@@ -268,27 +275,6 @@ class ApplicationDatabase(ABC):
 
 class PostgresApplicationDatabase(ApplicationDatabase):
     """PostgreSQL-specific implementation of ApplicationDatabase."""
-
-    def __init__(
-        self,
-        *,
-        database_url: str,
-        engine_kwargs: Dict[str, Any],
-        schema: Optional[str],
-        serializer: Serializer,
-        debug_mode: bool = False,
-    ):
-        super().__init__(
-            database_url=database_url,
-            engine_kwargs=engine_kwargs,
-            debug_mode=debug_mode,
-            serializer=serializer,
-        )
-        if schema is None:
-            self.schema = "dbos"
-        else:
-            self.schema = schema
-        ApplicationSchema.transaction_outputs.schema = schema
 
     def _create_engine(
         self, database_url: str, engine_kwargs: Dict[str, Any]
