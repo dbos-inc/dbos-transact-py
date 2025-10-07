@@ -342,7 +342,8 @@ class DBOS:
         self.conductor_websocket: Optional[ConductorWebsocket] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
         self._active_workflows_set: set[str] = set()
-        self._serializer: Serializer = DefaultSerializer()
+        serializer = config.get("serializer")
+        self._serializer: Serializer = serializer if serializer else DefaultSerializer()
 
         # Globally set the application version and executor ID.
         # In DBOS Cloud, instead use the values supplied through environment variables.
