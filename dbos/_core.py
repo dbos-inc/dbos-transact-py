@@ -23,7 +23,6 @@ from typing import (
 from dbos._outcome import Immediate, NoResult, Outcome, Pending
 from dbos._utils import GlobalParams, retriable_postgres_exception
 
-from . import _serialization
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 from ._context import (
     DBOSAssumeRole,
@@ -116,10 +115,10 @@ class WorkflowHandleFuture(Generic[R]):
         try:
             r = self.future.result()
         except Exception as e:
-            serialized_e = _serialization.serialize_exception(e)
+            serialized_e = self.dbos._serializer.serialize(e)
             self.dbos._sys_db.record_get_result(self.workflow_id, None, serialized_e)
             raise
-        serialized_r = _serialization.serialize(r)
+        serialized_r = self.dbos._serializer.serialize(r)
         self.dbos._sys_db.record_get_result(self.workflow_id, serialized_r, None)
         return r
 
@@ -143,10 +142,10 @@ class WorkflowHandlePolling(Generic[R]):
         try:
             r: R = self.dbos._sys_db.await_workflow_result(self.workflow_id)
         except Exception as e:
-            serialized_e = _serialization.serialize_exception(e)
+            serialized_e = self.dbos._serializer.serialize(e)
             self.dbos._sys_db.record_get_result(self.workflow_id, None, serialized_e)
             raise
-        serialized_r = _serialization.serialize(r)
+        serialized_r = self.dbos._serializer.serialize(r)
         self.dbos._sys_db.record_get_result(self.workflow_id, serialized_r, None)
         return r
 
@@ -171,7 +170,7 @@ class WorkflowHandleAsyncTask(Generic[R]):
         try:
             r = await self.task
         except Exception as e:
-            serialized_e = _serialization.serialize_exception(e)
+            serialized_e = self.dbos._serializer.serialize(e)
             await asyncio.to_thread(
                 self.dbos._sys_db.record_get_result,
                 self.workflow_id,
@@ -179,7 +178,7 @@ class WorkflowHandleAsyncTask(Generic[R]):
                 serialized_e,
             )
             raise
-        serialized_r = _serialization.serialize(r)
+        serialized_r = self.dbos._serializer.serialize(r)
         await asyncio.to_thread(
             self.dbos._sys_db.record_get_result, self.workflow_id, serialized_r, None
         )
@@ -207,7 +206,7 @@ class WorkflowHandleAsyncPolling(Generic[R]):
                 self.dbos._sys_db.await_workflow_result, self.workflow_id
             )
         except Exception as e:
-            serialized_e = _serialization.serialize_exception(e)
+            serialized_e = self.dbos._serializer.serialize(e)
             await asyncio.to_thread(
                 self.dbos._sys_db.record_get_result,
                 self.workflow_id,
@@ -215,7 +214,7 @@ class WorkflowHandleAsyncPolling(Generic[R]):
                 serialized_e,
             )
             raise
-        serialized_r = _serialization.serialize(r)
+        serialized_r = self.dbos._serializer.serialize(r)
         await asyncio.to_thread(
             self.dbos._sys_db.record_get_result, self.workflow_id, serialized_r, None
         )
@@ -303,7 +302,7 @@ def _init_workflow(
             if enqueue_options is not None
             else 0
         ),
-        "inputs": _serialization.serialize_args(inputs),
+        "inputs": dbos._serializer.serialize(inputs),
     }
 
     # Synchronously record the status and inputs for workflows
@@ -319,7 +318,7 @@ def _init_workflow(
                 "function_id": ctx.parent_workflow_fid,
                 "function_name": wf_name,
                 "output": None,
-                "error": _serialization.serialize_exception(e),
+                "error": dbos._serializer.serialize(e),
             }
             dbos._sys_db.record_operation_result(result)
         raise
@@ -378,7 +377,7 @@ def _get_wf_invoke_func(
                 dbos._sys_db.update_workflow_outcome(
                     status["workflow_uuid"],
                     "SUCCESS",
-                    output=_serialization.serialize(output),
+                    output=dbos._serializer.serialize(output),
                 )
             return output
         except DBOSWorkflowConflictIDError:
@@ -392,7 +391,7 @@ def _get_wf_invoke_func(
                 dbos._sys_db.update_workflow_outcome(
                     status["workflow_uuid"],
                     "ERROR",
-                    error=_serialization.serialize_exception(error),
+                    error=dbos._serializer.serialize(error),
                 )
             raise
         finally:
@@ -464,7 +463,7 @@ def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[An
     status = dbos._sys_db.get_workflow_status(workflow_id)
     if not status:
         raise DBOSRecoveryError(workflow_id, "Workflow status not found")
-    inputs = _serialization.deserialize_args(status["inputs"])
+    inputs: WorkflowInputs = dbos._serializer.deserialize(status["inputs"])
     wf_func = dbos._registry.workflow_info_map.get(status["name"], None)
     if not wf_func:
         raise DBOSWorkflowFunctionNotFoundError(
@@ -837,11 +836,11 @@ def workflow_wrapper(
             try:
                 r = func()
             except Exception as e:
-                serialized_e = _serialization.serialize_exception(e)
+                serialized_e = dbos._serializer.serialize(e)
                 assert workflow_id is not None
                 dbos._sys_db.record_get_result(workflow_id, None, serialized_e)
                 raise
-            serialized_r = _serialization.serialize(r)
+            serialized_r = dbos._serializer.serialize(r)
             assert workflow_id is not None
             dbos._sys_db.record_get_result(workflow_id, serialized_r, None)
             return r
@@ -948,15 +947,15 @@ def decorate_transaction(
                                         f"Replaying transaction, id: {ctx.function_id}, name: {attributes['name']}"
                                     )
                                     if recorded_output["error"]:
-                                        deserialized_error = (
-                                            _serialization.deserialize_exception(
+                                        deserialized_error: Exception = (
+                                            dbos._serializer.deserialize(
                                                 recorded_output["error"]
                                             )
                                         )
                                         has_recorded_error = True
                                         raise deserialized_error
                                     elif recorded_output["output"]:
-                                        return _serialization.deserialize(
+                                        return dbos._serializer.deserialize(
                                             recorded_output["output"]
                                         )
                                     else:
@@ -969,7 +968,7 @@ def decorate_transaction(
                                     )
 
                                 output = func(*args, **kwargs)
-                                txn_output["output"] = _serialization.serialize(output)
+                                txn_output["output"] = dbos._serializer.serialize(output)
                                 assert (
                                     ctx.sql_session is not None
                                 ), "Cannot find a database connection"
@@ -1011,7 +1010,7 @@ def decorate_transaction(
                             # Don't record the error if it was already recorded
                             if txn_error and not has_recorded_error:
                                 txn_output["error"] = (
-                                    _serialization.serialize_exception(txn_error)
+                                    dbos._serializer.serialize(txn_error)
                                 )
                                 dbos._app_db.record_transaction_error(txn_output)
             return output
@@ -1128,10 +1127,10 @@ def decorate_step(
                 try:
                     output = func()
                 except Exception as error:
-                    step_output["error"] = _serialization.serialize_exception(error)
+                    step_output["error"] = dbos._serializer.serialize(error)
                     dbos._sys_db.record_operation_result(step_output)
                     raise
-                step_output["output"] = _serialization.serialize(output)
+                step_output["output"] = dbos._serializer.serialize(output)
                 dbos._sys_db.record_operation_result(step_output)
                 return output
 
@@ -1147,13 +1146,13 @@ def decorate_step(
                         f"Replaying step, id: {ctx.function_id}, name: {attributes['name']}"
                     )
                     if recorded_output["error"] is not None:
-                        deserialized_error = _serialization.deserialize_exception(
+                        deserialized_error: Exception = dbos._serializer.deserialize(
                             recorded_output["error"]
                         )
                         raise deserialized_error
                     elif recorded_output["output"] is not None:
                         return cast(
-                            R, _serialization.deserialize(recorded_output["output"])
+                            R, dbos._serializer.deserialize(recorded_output["output"])
                         )
                     else:
                         raise Exception("Output and error are both None")

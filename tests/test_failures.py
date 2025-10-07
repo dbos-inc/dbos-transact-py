@@ -22,9 +22,7 @@ from dbos._error import (
 )
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._serialization import (
-    deserialize_exception,
     safe_deserialize,
-    serialize_exception,
 )
 from dbos._sys_db import WorkflowStatusString
 from dbos._sys_db_postgres import PostgresSystemDatabase

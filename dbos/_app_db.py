@@ -8,8 +8,8 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from dbos._migration import get_sqlite_timestamp_expr
+from dbos._serialization import Serializer
 
-from . import _serialization
 from ._error import DBOSUnexpectedStepError, DBOSWorkflowConflictIDError
 from ._logger import dbos_logger
 from ._schemas.application_database import ApplicationSchema
@@ -34,17 +34,45 @@ class RecordedResult(TypedDict):
 
 class ApplicationDatabase(ABC):
 
+    @staticmethod
+    def create(
+        database_url: str,
+        engine_kwargs: Dict[str, Any],
+        schema: Optional[str],
+        serializer: Serializer,
+        debug_mode: bool = False,
+    ) -> "ApplicationDatabase":
+        """Factory method to create the appropriate ApplicationDatabase implementation based on URL."""
+        if database_url.startswith("sqlite"):
+            return SQLiteApplicationDatabase(
+                database_url=database_url,
+                engine_kwargs=engine_kwargs,
+                serializer=serializer,
+                debug_mode=debug_mode,
+            )
+        else:
+            # Default to PostgreSQL for postgresql://, postgres://, or other URLs
+            return PostgresApplicationDatabase(
+                database_url=database_url,
+                engine_kwargs=engine_kwargs,
+                debug_mode=debug_mode,
+                serializer=serializer,
+                schema=schema,
+            )
+
     def __init__(
         self,
         *,
         database_url: str,
         engine_kwargs: Dict[str, Any],
+        serializer: Serializer,
         debug_mode: bool = False,
     ):
         self.engine = self._create_engine(database_url, engine_kwargs)
         self._engine_kwargs = engine_kwargs
         self.sessionmaker = sessionmaker(bind=self.engine)
         self.debug_mode = debug_mode
+        self.serializer = serializer
 
     @abstractmethod
     def _create_engine(
@@ -156,10 +184,10 @@ class ApplicationDatabase(ABC):
                 function_id=row[0],
                 function_name=row[1],
                 output=(
-                    _serialization.deserialize(row[2]) if row[2] is not None else row[2]
+                    self.serializer.deserialize(row[2]) if row[2] is not None else row[2]
                 ),
                 error=(
-                    _serialization.deserialize_exception(row[3])
+                    self.serializer.deserialize(row[3])
                     if row[3] is not None
                     else row[3]
                 ),
@@ -237,29 +265,6 @@ class ApplicationDatabase(ABC):
         """Check if the error is a serialization/concurrency error."""
         pass
 
-    @staticmethod
-    def create(
-        database_url: str,
-        engine_kwargs: Dict[str, Any],
-        schema: Optional[str],
-        debug_mode: bool = False,
-    ) -> "ApplicationDatabase":
-        """Factory method to create the appropriate ApplicationDatabase implementation based on URL."""
-        if database_url.startswith("sqlite"):
-            return SQLiteApplicationDatabase(
-                database_url=database_url,
-                engine_kwargs=engine_kwargs,
-                debug_mode=debug_mode,
-            )
-        else:
-            # Default to PostgreSQL for postgresql://, postgres://, or other URLs
-            return PostgresApplicationDatabase(
-                database_url=database_url,
-                engine_kwargs=engine_kwargs,
-                debug_mode=debug_mode,
-                schema=schema,
-            )
-
 
 class PostgresApplicationDatabase(ApplicationDatabase):
     """PostgreSQL-specific implementation of ApplicationDatabase."""
@@ -270,12 +275,14 @@ class PostgresApplicationDatabase(ApplicationDatabase):
         database_url: str,
         engine_kwargs: Dict[str, Any],
         schema: Optional[str],
+        serializer: Serializer,
         debug_mode: bool = False,
     ):
         super().__init__(
             database_url=database_url,
             engine_kwargs=engine_kwargs,
             debug_mode=debug_mode,
+            serializer=serializer,
         )
         if schema is None:
             self.schema = "dbos"

@@ -30,7 +30,7 @@ from dbos._utils import (
     retriable_sqlite_exception,
 )
 
-from . import _serialization
+from ._serialization import Serializer, WorkflowInputs, safe_deserialize
 from ._context import get_local_dbos_context
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
@@ -95,7 +95,7 @@ class WorkflowStatus:
     # All roles which the authenticated user could assume
     authenticated_roles: Optional[list[str]]
     # The deserialized workflow input object
-    input: Optional[_serialization.WorkflowInputs]
+    input: Optional[WorkflowInputs]
     # The workflow's output, if any
     output: Optional[Any] = None
     # The error the workflow threw, if any
@@ -341,6 +341,39 @@ def db_retry(
 
 class SystemDatabase(ABC):
 
+    @staticmethod
+    def create(
+        system_database_url: str,
+        engine_kwargs: Dict[str, Any],
+        engine: Optional[sa.Engine],
+        schema: Optional[str],
+        serializer: Serializer,
+        debug_mode: bool = False,
+    ) -> "SystemDatabase":
+        """Factory method to create the appropriate SystemDatabase implementation based on URL."""
+        if system_database_url.startswith("sqlite"):
+            from ._sys_db_sqlite import SQLiteSystemDatabase
+
+            return SQLiteSystemDatabase(
+                system_database_url=system_database_url,
+                engine_kwargs=engine_kwargs,
+                engine=engine,
+                schema=schema,
+                serializer=serializer,
+                debug_mode=debug_mode,
+            )
+        else:
+            from ._sys_db_postgres import PostgresSystemDatabase
+
+            return PostgresSystemDatabase(
+                system_database_url=system_database_url,
+                engine_kwargs=engine_kwargs,
+                engine=engine,
+                schema=schema,
+                serializer=serializer,
+                debug_mode=debug_mode,
+            )
+
     def __init__(
         self,
         *,
@@ -348,12 +381,15 @@ class SystemDatabase(ABC):
         engine_kwargs: Dict[str, Any],
         engine: Optional[sa.Engine],
         schema: Optional[str],
+        serializer: Serializer,
         debug_mode: bool = False,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
 
         self.dialect = sq if system_database_url.startswith("sqlite") else pg
+
+        self.serializer = serializer
 
         if system_database_url.startswith("sqlite"):
             self.schema = None
@@ -797,10 +833,11 @@ class SystemDatabase(ABC):
                     status = row[0]
                     if status == WorkflowStatusString.SUCCESS.value:
                         output = row[1]
-                        return _serialization.deserialize(output)
+                        return self.serializer.deserialize(output)
                     elif status == WorkflowStatusString.ERROR.value:
                         error = row[2]
-                        raise _serialization.deserialize_exception(error)
+                        e: Exception = self.serializer.deserialize(error)
+                        raise e
                     elif status == WorkflowStatusString.CANCELLED.value:
                         # Raise AwaitedWorkflowCancelledError here, not the cancellation exception
                         # because the awaiting workflow is not being cancelled.
@@ -917,7 +954,8 @@ class SystemDatabase(ABC):
             raw_input = row[17] if load_input else None
             raw_output = row[18] if load_output else None
             raw_error = row[19] if load_output else None
-            inputs, output, exception = _serialization.safe_deserialize(
+            inputs, output, exception = safe_deserialize(
+                self.serializer,
                 info.workflow_id,
                 serialized_input=raw_input,
                 serialized_output=raw_output,
@@ -1028,7 +1066,8 @@ class SystemDatabase(ABC):
             raw_input = row[17] if load_input else None
 
             # Error and Output are not loaded because they should always be None for queued workflows.
-            inputs, output, exception = _serialization.safe_deserialize(
+            inputs, output, exception = safe_deserialize(
+                self.serializer,
                 info.workflow_id,
                 serialized_input=raw_input,
                 serialized_output=None,
@@ -1079,7 +1118,8 @@ class SystemDatabase(ABC):
             ).fetchall()
             steps = []
             for row in rows:
-                _, output, exception = _serialization.safe_deserialize(
+                _, output, exception = safe_deserialize(
+                    self.serializer,
                     workflow_id,
                     serialized_input=None,
                     serialized_output=row[2],
@@ -1278,7 +1318,8 @@ class SystemDatabase(ABC):
         if row is None:
             return None
         elif row[1]:
-            raise _serialization.deserialize_exception(row[1])
+            e: Exception = self.serializer.deserialize(row[1])
+            raise e
         else:
             return str(row[0])
 
@@ -1317,7 +1358,7 @@ class SystemDatabase(ABC):
                     sa.insert(SystemSchema.notifications).values(
                         destination_uuid=destination_uuid,
                         topic=topic,
-                        message=_serialization.serialize(message),
+                        message=self.serializer.serialize(message),
                     )
                 )
             except DBAPIError as dbapi_error:
@@ -1354,7 +1395,7 @@ class SystemDatabase(ABC):
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying recv, id: {function_id}, topic: {topic}")
             if recorded_output["output"] is not None:
-                return _serialization.deserialize(recorded_output["output"])
+                return self.serializer.deserialize(recorded_output["output"])
             else:
                 raise Exception("No output recorded in the last recv")
         else:
@@ -1421,13 +1462,13 @@ class SystemDatabase(ABC):
             rows = c.execute(delete_stmt).fetchall()
             message: Any = None
             if len(rows) > 0:
-                message = _serialization.deserialize(rows[0][0])
+                message = self.serializer.deserialize(rows[0][0])
             self._record_operation_result_txn(
                 {
                     "workflow_uuid": workflow_uuid,
                     "function_id": function_id,
                     "function_name": function_name,
-                    "output": _serialization.serialize(
+                    "output": self.serializer.serialize(
                         message
                     ),  # None will be serialized to 'null'
                     "error": None,
@@ -1453,36 +1494,6 @@ class SystemDatabase(ABC):
 
             PostgresSystemDatabase._reset_system_database(database_url)
 
-    @staticmethod
-    def create(
-        system_database_url: str,
-        engine_kwargs: Dict[str, Any],
-        engine: Optional[sa.Engine],
-        schema: Optional[str],
-        debug_mode: bool = False,
-    ) -> "SystemDatabase":
-        """Factory method to create the appropriate SystemDatabase implementation based on URL."""
-        if system_database_url.startswith("sqlite"):
-            from ._sys_db_sqlite import SQLiteSystemDatabase
-
-            return SQLiteSystemDatabase(
-                system_database_url=system_database_url,
-                engine_kwargs=engine_kwargs,
-                engine=engine,
-                schema=schema,
-                debug_mode=debug_mode,
-            )
-        else:
-            from ._sys_db_postgres import PostgresSystemDatabase
-
-            return PostgresSystemDatabase(
-                system_database_url=system_database_url,
-                engine_kwargs=engine_kwargs,
-                engine=engine,
-                schema=schema,
-                debug_mode=debug_mode,
-            )
-
     @db_retry()
     def sleep(
         self,
@@ -1502,7 +1513,7 @@ class SystemDatabase(ABC):
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying sleep, id: {function_id}, seconds: {seconds}")
             assert recorded_output["output"] is not None, "no recorded end time"
-            end_time = _serialization.deserialize(recorded_output["output"])
+            end_time = self.serializer.deserialize(recorded_output["output"])
         else:
             dbos_logger.debug(f"Running sleep, id: {function_id}, seconds: {seconds}")
             end_time = time.time() + seconds
@@ -1512,7 +1523,7 @@ class SystemDatabase(ABC):
                         "workflow_uuid": workflow_uuid,
                         "function_id": function_id,
                         "function_name": function_name,
-                        "output": _serialization.serialize(end_time),
+                        "output": self.serializer.serialize(end_time),
                         "error": None,
                     }
                 )
@@ -1550,11 +1561,11 @@ class SystemDatabase(ABC):
                 .values(
                     workflow_uuid=workflow_uuid,
                     key=key,
-                    value=_serialization.serialize(message),
+                    value=self.serializer.serialize(message),
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key"],
-                    set_={"value": _serialization.serialize(message)},
+                    set_={"value": self.serializer.serialize(message)},
                 )
             )
             output: OperationResultInternal = {
@@ -1578,11 +1589,11 @@ class SystemDatabase(ABC):
                 .values(
                     workflow_uuid=workflow_uuid,
                     key=key,
-                    value=_serialization.serialize(message),
+                    value=self.serializer.serialize(message),
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key"],
-                    set_={"value": _serialization.serialize(message)},
+                    set_={"value": self.serializer.serialize(message)},
                 )
             )
 
@@ -1607,7 +1618,7 @@ class SystemDatabase(ABC):
             events: Dict[str, Any] = {}
             for row in rows:
                 key = row[0]
-                value = _serialization.deserialize(row[1])
+                value = self.serializer.deserialize(row[1])
                 events[key] = value
 
             return events
@@ -1641,7 +1652,7 @@ class SystemDatabase(ABC):
                     f"Replaying get_event, id: {caller_ctx['function_id']}, key: {key}"
                 )
                 if recorded_output["output"] is not None:
-                    return _serialization.deserialize(recorded_output["output"])
+                    return self.serializer.deserialize(recorded_output["output"])
                 else:
                     raise Exception("No output recorded in the last get_event")
             else:
@@ -1666,7 +1677,7 @@ class SystemDatabase(ABC):
 
         value: Any = None
         if len(init_recv) > 0:
-            value = _serialization.deserialize(init_recv[0][0])
+            value = self.serializer.deserialize(init_recv[0][0])
         else:
             # Wait for the notification
             actual_timeout = timeout_seconds
@@ -1684,7 +1695,7 @@ class SystemDatabase(ABC):
             with self.engine.begin() as c:
                 final_recv = c.execute(get_sql).fetchall()
                 if len(final_recv) > 0:
-                    value = _serialization.deserialize(final_recv[0][0])
+                    value = self.serializer.deserialize(final_recv[0][0])
         condition.release()
         self.workflow_events_map.pop(payload)
 
@@ -1695,7 +1706,7 @@ class SystemDatabase(ABC):
                     "workflow_uuid": caller_ctx["workflow_uuid"],
                     "function_id": caller_ctx["function_id"],
                     "function_name": function_name,
-                    "output": _serialization.serialize(
+                    "output": self.serializer.serialize(
                         value
                     ),  # None will be serialized to 'null'
                     "error": None,
@@ -1897,12 +1908,13 @@ class SystemDatabase(ABC):
             )
             if res is not None:
                 if res["output"] is not None:
-                    resstat: SystemDatabase.T = _serialization.deserialize(
+                    resstat: SystemDatabase.T = self.serializer.deserialize(
                         res["output"]
                     )
                     return resstat
                 elif res["error"] is not None:
-                    raise _serialization.deserialize_exception(res["error"])
+                    e: Exception = self.serializer.deserialize(res["error"])
+                    raise e
                 else:
                     raise Exception(
                         f"Recorded output and error are both None for {function_name}"
@@ -1914,7 +1926,7 @@ class SystemDatabase(ABC):
                     "workflow_uuid": ctx.workflow_id,
                     "function_id": ctx.function_id,
                     "function_name": function_name,
-                    "output": _serialization.serialize(result),
+                    "output": self.serializer.serialize(result),
                     "error": None,
                 }
             )
@@ -1968,7 +1980,7 @@ class SystemDatabase(ABC):
             )
 
             # Serialize the value before storing
-            serialized_value = _serialization.serialize(value)
+            serialized_value = self.serializer.serialize(value)
 
             # Insert the new stream entry
             c.execute(
@@ -2023,7 +2035,7 @@ class SystemDatabase(ABC):
             )
 
             # Serialize the value before storing
-            serialized_value = _serialization.serialize(value)
+            serialized_value = self.serializer.serialize(value)
 
             # Insert the new stream entry
             c.execute(
@@ -2068,7 +2080,7 @@ class SystemDatabase(ABC):
                 )
 
             # Deserialize the value before returning
-            return _serialization.deserialize(result[0])
+            return self.serializer.deserialize(result[0])
 
     def garbage_collect(
         self, cutoff_epoch_timestamp_ms: Optional[int], rows_threshold: Optional[int]

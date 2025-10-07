@@ -4,6 +4,7 @@ import sqlalchemy as sa
 import typer
 
 from dbos._app_db import ApplicationDatabase
+from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
 
 
@@ -22,6 +23,7 @@ def migrate_dbos_databases(
             },
             engine=None,
             schema=schema,
+            serializer=DefaultSerializer(),
         )
         sys_db.run_migrations()
         if app_database_url:
@@ -33,6 +35,7 @@ def migrate_dbos_databases(
                     "pool_size": 2,
                 },
                 schema=schema,
+            serializer=DefaultSerializer(),
             )
             app_db.run_migrations()
     except Exception as e:
