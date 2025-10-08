@@ -12,8 +12,8 @@ from ._dbos_config import DBOSConfig
 from ._debouncer import Debouncer, DebouncerClient
 from ._kafka_message import KafkaMessage
 from ._queue import Queue
-from ._sys_db import GetWorkflowsInput, WorkflowStatus, WorkflowStatusString
 from ._serialization import Serializer
+from ._sys_db import GetWorkflowsInput, WorkflowStatus, WorkflowStatusString
 
 __all__ = [
     "DBOSConfig",

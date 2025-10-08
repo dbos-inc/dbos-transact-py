@@ -30,7 +30,6 @@ from dbos._utils import (
     retriable_sqlite_exception,
 )
 
-from ._serialization import Serializer, WorkflowInputs, safe_deserialize
 from ._context import get_local_dbos_context
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
@@ -44,6 +43,7 @@ from ._error import (
 )
 from ._logger import dbos_logger
 from ._schemas.system_database import SystemSchema
+from ._serialization import Serializer, WorkflowInputs, safe_deserialize
 
 if TYPE_CHECKING:
     from ._queue import Queue

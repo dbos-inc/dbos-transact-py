@@ -968,7 +968,9 @@ def decorate_transaction(
                                     )
 
                                 output = func(*args, **kwargs)
-                                txn_output["output"] = dbos._serializer.serialize(output)
+                                txn_output["output"] = dbos._serializer.serialize(
+                                    output
+                                )
                                 assert (
                                     ctx.sql_session is not None
                                 ), "Cannot find a database connection"
@@ -1009,8 +1011,8 @@ def decorate_transaction(
                         finally:
                             # Don't record the error if it was already recorded
                             if txn_error and not has_recorded_error:
-                                txn_output["error"] = (
-                                    dbos._serializer.serialize(txn_error)
+                                txn_output["error"] = dbos._serializer.serialize(
+                                    txn_error
                                 )
                                 dbos._app_db.record_transaction_error(txn_output)
             return output

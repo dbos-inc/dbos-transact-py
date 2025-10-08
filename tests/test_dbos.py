@@ -19,11 +19,11 @@ from dbos import (
     DBOS,
     DBOSConfig,
     Queue,
+    Serializer,
     SetWorkflowID,
     SetWorkflowTimeout,
     WorkflowHandle,
     WorkflowStatusString,
-    Serializer,
 )
 
 # Private API because this is a test
@@ -1960,16 +1960,17 @@ def test_get_events(dbos: DBOS) -> None:
 
 
 def test_custom_serializer(
-    config: DBOSConfig, cleanup_test_databases: None,
+    config: DBOSConfig,
+    cleanup_test_databases: None,
 ) -> None:
-    
+
     class JsonSerializer(Serializer):
         def serialize(self, data: Any) -> str:
             return json.dumps(data)
 
         def deserialize(cls, serialized_data: str) -> Any:
             return json.loads(serialized_data)
-    
+
     # Configure DBOS with a JSON-based custom serializer
     DBOS.destroy(destroy_registry=True)
     config["serializer"] = JsonSerializer()
@@ -1988,7 +1989,7 @@ def test_custom_serializer(
         "args": [val],
         "kwargs": {},
     }
-    
+
     # Run an enqueued workflow testing workflow communication methods
     queue = Queue("example_queue")
     handle = queue.enqueue(recv_workflow, val)
@@ -2016,11 +2017,13 @@ def test_custom_serializer(
     assert "setEvent" in steps[0]["function_name"]
     assert "DBOS.recv" in steps[1]["function_name"]
     assert steps[1]["output"] == val
-    handle = client.enqueue({"queue_name": queue.name, "workflow_name": recv_workflow.__qualname__}, val)
+    handle = client.enqueue(
+        {"queue_name": queue.name, "workflow_name": recv_workflow.__qualname__}, val
+    )
     client.send(handle.workflow_id, val)
     assert handle.get_result() == val
 
-    # Verify that a client without the custom serializer does not fail, 
+    # Verify that a client without the custom serializer does not fail,
     # but emits warnings and falls back to returning raw strings
 
     client = DBOSClient(

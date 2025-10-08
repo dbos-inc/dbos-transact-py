@@ -191,7 +191,9 @@ class ApplicationDatabase(ABC):
                 function_id=row[0],
                 function_name=row[1],
                 output=(
-                    self.serializer.deserialize(row[2]) if row[2] is not None else row[2]
+                    self.serializer.deserialize(row[2])
+                    if row[2] is not None
+                    else row[2]
                 ),
                 error=(
                     self.serializer.deserialize(row[3])

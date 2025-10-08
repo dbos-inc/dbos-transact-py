@@ -35,7 +35,7 @@ def migrate_dbos_databases(
                     "pool_size": 2,
                 },
                 schema=schema,
-            serializer=DefaultSerializer(),
+                serializer=DefaultSerializer(),
             )
             app_db.run_migrations()
     except Exception as e:
