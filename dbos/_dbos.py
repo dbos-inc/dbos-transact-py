@@ -449,6 +449,7 @@ class DBOS:
             assert self._config["database"]["sys_db_engine_kwargs"] is not None
             # Get the schema configuration, use "dbos" as default
             schema = self._config.get("dbos_system_schema", "dbos")
+            dbos_logger.debug("Creating system database")
             self._sys_db_field = SystemDatabase.create(
                 system_database_url=get_system_database_url(self._config),
                 engine_kwargs=self._config["database"]["sys_db_engine_kwargs"],
@@ -458,6 +459,7 @@ class DBOS:
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
             if self._config["database_url"]:
+                dbos_logger.debug("Creating application database")
                 self._app_db_field = ApplicationDatabase.create(
                     database_url=self._config["database_url"],
                     engine_kwargs=self._config["database"]["db_engine_kwargs"],
@@ -469,8 +471,10 @@ class DBOS:
                 return
 
             # Run migrations for the system and application databases
+            dbos_logger.debug("Running system database migrations")
             self._sys_db.run_migrations()
             if self._app_db:
+                dbos_logger.debug("Running application database migrations")
                 self._app_db.run_migrations()
 
             admin_port = self._config.get("runtimeConfig", {}).get("admin_port")
@@ -481,10 +485,12 @@ class DBOS:
             )
             if run_admin_server:
                 try:
+                    dbos_logger.debug("Starting admin server")
                     self._admin_server_field = AdminServer(dbos=self, port=admin_port)
                 except Exception as e:
                     dbos_logger.warning(f"Failed to start admin server: {e}")
 
+            dbos_logger.debug("Retrieving local pending workflows for recovery")
             workflow_ids = self._sys_db.get_pending_workflows(
                 GlobalParams.executor_id, GlobalParams.app_version
             )
@@ -500,6 +506,7 @@ class DBOS:
             self._executor.submit(startup_recovery_thread, self, workflow_ids)
 
             # Listen to notifications
+            dbos_logger.debug("Starting notifications listener thread")
             notification_listener_thread = threading.Thread(
                 target=self._sys_db._notification_listener,
                 daemon=True,
@@ -511,6 +518,7 @@ class DBOS:
             self._registry.get_internal_queue()
 
             # Start the queue thread
+            dbos_logger.debug("Starting queue thread")
             evt = threading.Event()
             self.background_thread_stop_events.append(evt)
             bg_queue_thread = threading.Thread(
@@ -526,6 +534,7 @@ class DBOS:
                     self.conductor_url = f"wss://{dbos_domain}/conductor/v1alpha1"
                 evt = threading.Event()
                 self.background_thread_stop_events.append(evt)
+                dbos_logger.debug("Starting Conductor thread")
                 self.conductor_websocket = ConductorWebsocket(
                     self,
                     conductor_url=self.conductor_url,
@@ -536,6 +545,7 @@ class DBOS:
                 self._background_threads.append(self.conductor_websocket)
 
             # Grab any pollers that were deferred and start them
+            dbos_logger.debug("Starting event receivers")
             for evt, func, args, kwargs in self._registry.pollers:
                 self.poller_stop_events.append(evt)
                 poller_thread = threading.Thread(
