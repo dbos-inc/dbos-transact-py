@@ -7,6 +7,8 @@ import sqlalchemy as sa
 import yaml
 from sqlalchemy import make_url
 
+from dbos._serialization import Serializer
+
 from ._error import DBOSInitializationError
 from ._logger import dbos_logger
 from ._schemas.system_database import SystemSchema
@@ -37,6 +39,7 @@ class DBOSConfig(TypedDict, total=False):
         enable_otlp (bool): If True, enable built-in DBOS OTLP tracing and logging.
         system_database_engine (sa.Engine): A custom system database engine. If provided, DBOS will not create an engine but use this instead.
         conductor_key (str): An API key for DBOS Conductor. Pass this in to connect your process to Conductor.
+        serializer (Serializer): A custom serializer and deserializer DBOS uses when storing program data in the system database
     """
 
     name: str
@@ -57,6 +60,7 @@ class DBOSConfig(TypedDict, total=False):
     enable_otlp: Optional[bool]
     system_database_engine: Optional[sa.Engine]
     conductor_key: Optional[str]
+    serializer: Optional[Serializer]
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -67,16 +71,6 @@ class RuntimeConfig(TypedDict, total=False):
 
 
 class DatabaseConfig(TypedDict, total=False):
-    """
-    Internal data structure containing the DBOS database configuration.
-    Attributes:
-        sys_db_name (str): System database name
-        sys_db_pool_size (int): System database pool size
-        db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs
-        migrate (List[str]): Migration commands to run on startup
-        dbos_system_schema (str): Schema name for DBOS system tables. Defaults to "dbos".
-    """
-
     sys_db_pool_size: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
     sys_db_engine_kwargs: Optional[Dict[str, Any]]
