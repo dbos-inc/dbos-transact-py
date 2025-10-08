@@ -22,9 +22,8 @@ from dbos._error import (
 )
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._serialization import (
-    deserialize_exception,
+    DefaultSerializer,
     safe_deserialize,
-    serialize_exception,
 )
 from dbos._sys_db import WorkflowStatusString
 from dbos._sys_db_postgres import PostgresSystemDatabase
@@ -466,24 +465,25 @@ def test_error_serialization() -> None:
     # Verify that each exception that can be thrown in a workflow
     # is serializable and deserializable
     # DBOSMaxStepRetriesExceeded
+    serializer = DefaultSerializer()
     e: Exception = DBOSMaxStepRetriesExceeded("step", 1, [Exception()])
-    d = deserialize_exception(serialize_exception(e))
+    d = serializer.deserialize(serializer.serialize(e))
     assert isinstance(d, DBOSMaxStepRetriesExceeded)
     assert str(d) == str(e)
     assert isinstance(d.errors[0], Exception)
     # DBOSNotAuthorizedError
     e = DBOSNotAuthorizedError("no")
-    d = deserialize_exception(serialize_exception(e))
+    d = serializer.deserialize(serializer.serialize(e))
     assert isinstance(d, DBOSNotAuthorizedError)
     assert str(d) == str(e)
     # DBOSQueueDeduplicatedError
     e = DBOSQueueDeduplicatedError("id", "queue", "dedup")
-    d = deserialize_exception(serialize_exception(e))
+    d = serializer.deserialize(serializer.serialize(e))
     assert isinstance(d, DBOSQueueDeduplicatedError)
     assert str(d) == str(e)
     # AwaitedWorkflowCancelledError
     e = DBOSAwaitedWorkflowCancelledError("id")
-    d = deserialize_exception(serialize_exception(e))
+    d = serializer.deserialize(serializer.serialize(e))
     assert isinstance(d, DBOSAwaitedWorkflowCancelledError)
     assert str(d) == str(e)
 
@@ -491,11 +491,12 @@ def test_error_serialization() -> None:
 
     bad_exception = BadException(1, 2)
     with pytest.raises(TypeError):
-        deserialize_exception(serialize_exception(bad_exception))
+        serializer.deserialize(serializer.serialize(bad_exception))
     input, output, exception = safe_deserialize(
+        serializer,
         "my_id",
         serialized_input=None,
-        serialized_exception=serialize_exception(bad_exception),
+        serialized_exception=serializer.serialize(bad_exception),
         serialized_output=None,
     )
     assert input is None

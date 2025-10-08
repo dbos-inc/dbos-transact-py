@@ -31,6 +31,7 @@ from typing import (
 
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._debouncer import debouncer_workflow
+from dbos._serialization import DefaultSerializer, Serializer
 from dbos._sys_db import SystemDatabase, WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import fork_workflow, list_queued_workflows, list_workflows
@@ -341,6 +342,8 @@ class DBOS:
         self.conductor_websocket: Optional[ConductorWebsocket] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
         self._active_workflows_set: set[str] = set()
+        serializer = config.get("serializer")
+        self._serializer: Serializer = serializer if serializer else DefaultSerializer()
 
         # Globally set the application version and executor ID.
         # In DBOS Cloud, instead use the values supplied through environment variables.
@@ -455,6 +458,7 @@ class DBOS:
                 engine=self._config["system_database_engine"],
                 debug_mode=debug_mode,
                 schema=schema,
+                serializer=self._serializer,
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
             if self._config["database_url"]:
@@ -463,6 +467,7 @@ class DBOS:
                     engine_kwargs=self._config["database"]["db_engine_kwargs"],
                     debug_mode=debug_mode,
                     schema=schema,
+                    serializer=self._serializer,
                 )
 
             if debug_mode:
