@@ -1724,7 +1724,7 @@ class SystemDatabase(ABC):
     @db_retry()
     def get_queue_partitions(self, queue_name: str) -> List[str]:
         """
-        Get all unique partition names associated with a queue for ENQUEUED or PENDING workflows.
+        Get all unique partition names associated with a queue for ENQUEUED workflows.
 
         Args:
             queue_name: The name of the queue to get partitions for
@@ -1741,7 +1741,6 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.status.in_(
                         [
                             WorkflowStatusString.ENQUEUED.value,
-                            WorkflowStatusString.PENDING.value,
                         ]
                     )
                 )
