@@ -203,8 +203,14 @@ CREATE TABLE \"{schema}\".event_dispatch_kv (
 """
 
 
+def get_dbos_migration_two(schema: str) -> str:
+    return f"""
+ALTER TABLE \"{schema}\".workflow_status ADD COLUMN queue_partition_key TEXT;
+"""
+
+
 def get_dbos_migrations(schema: str) -> list[str]:
-    return [get_dbos_migration_one(schema)]
+    return [get_dbos_migration_one(schema), get_dbos_migration_two(schema)]
 
 
 def get_sqlite_timestamp_expr() -> str:
@@ -293,4 +299,8 @@ CREATE TABLE streams (
 );
 """
 
-sqlite_migrations = [sqlite_migration_one]
+sqlite_migration_two = """
+ALTER TABLE workflow_status ADD COLUMN queue_partition_key TEXT;
+"""
+
+sqlite_migrations = [sqlite_migration_one, sqlite_migration_two]

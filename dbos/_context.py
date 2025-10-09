@@ -120,6 +120,8 @@ class DBOSContext:
         self.deduplication_id: Optional[str] = None
         # A user-specified priority for the enqueuing workflow.
         self.priority: Optional[int] = None
+        # If the workflow is enqueued on a partitioned queue, its partition key
+        self.queue_partition_key: Optional[str] = None
 
     def create_child(self) -> DBOSContext:
         rv = DBOSContext()
@@ -479,6 +481,7 @@ class SetEnqueueOptions:
         deduplication_id: Optional[str] = None,
         priority: Optional[int] = None,
         app_version: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
     ) -> None:
         self.created_ctx = False
         self.deduplication_id: Optional[str] = deduplication_id
@@ -491,6 +494,8 @@ class SetEnqueueOptions:
         self.saved_priority: Optional[int] = None
         self.app_version: Optional[str] = app_version
         self.saved_app_version: Optional[str] = None
+        self.queue_partition_key = queue_partition_key
+        self.saved_queue_partition_key: Optional[str] = None
 
     def __enter__(self) -> SetEnqueueOptions:
         # Code to create a basic context
@@ -505,6 +510,8 @@ class SetEnqueueOptions:
         ctx.priority = self.priority
         self.saved_app_version = ctx.app_version
         ctx.app_version = self.app_version
+        self.saved_queue_partition_key = ctx.queue_partition_key
+        ctx.queue_partition_key = self.queue_partition_key
         return self
 
     def __exit__(
@@ -517,6 +524,7 @@ class SetEnqueueOptions:
         curr_ctx.deduplication_id = self.saved_deduplication_id
         curr_ctx.priority = self.saved_priority
         curr_ctx.app_version = self.saved_app_version
+        curr_ctx.queue_partition_key = self.saved_queue_partition_key
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()

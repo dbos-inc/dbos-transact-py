@@ -77,6 +77,7 @@ class SystemSchema:
         Column("deduplication_id", Text(), nullable=True),
         Column("inputs", Text()),
         Column("priority", Integer(), nullable=False, server_default=text("'0'::int")),
+        Column("queue_partition_key", Text()),
         Index("workflow_status_created_at_index", "created_at"),
         Index("workflow_status_executor_id_index", "executor_id"),
         Index("workflow_status_status_index", "status"),

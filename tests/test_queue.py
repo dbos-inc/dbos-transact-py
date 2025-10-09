@@ -1612,3 +1612,80 @@ async def test_enqueue_version_async(dbos: DBOS) -> None:
     # Change the global version, verify it works
     GlobalParams.app_version = future_version
     assert await handle.get_result() == input
+
+
+def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
+
+    blocking_event = threading.Event()
+    waiting_event = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow() -> str:
+        waiting_event.set()
+        blocking_event.wait()
+        assert DBOS.workflow_id
+        return DBOS.workflow_id
+
+    @DBOS.workflow()
+    def normal_workflow() -> str:
+        assert DBOS.workflow_id
+        return DBOS.workflow_id
+
+    queue = Queue("queue", partition_queue=True, worker_concurrency=1)
+
+    blocked_partition_key = "blocked"
+    normal_partition_key = "normal"
+
+    # Enqueue a blocked workflow and a normal workflow on
+    # the blocked partition. Verify the blocked workflow starts
+    # but the normal workflow is stuck behind it.
+    with SetEnqueueOptions(queue_partition_key=blocked_partition_key):
+        blocked_blocked_handle = queue.enqueue(blocked_workflow)
+        blocked_normal_handle = queue.enqueue(normal_workflow)
+
+    waiting_event.wait()
+    assert (
+        blocked_blocked_handle.get_status().status == WorkflowStatusString.PENDING.value
+    )
+    assert (
+        blocked_normal_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
+    )
+
+    # Enqueue a normal workflow on the other partition and verify it runs normally
+    with SetEnqueueOptions(queue_partition_key=normal_partition_key):
+        normal_handle = queue.enqueue(normal_workflow)
+
+    assert normal_handle.get_result()
+
+    # Unblock the blocked partition and verify its workflows complete
+    blocking_event.set()
+    assert blocked_blocked_handle.get_result()
+    assert blocked_normal_handle.get_result()
+
+    # Confirm client enqueue works with partitions
+    client_handle: WorkflowHandle[None] = client.enqueue(
+        {
+            "queue_name": queue.name,
+            "workflow_name": normal_workflow.__qualname__,
+            "queue_partition_key": blocked_partition_key,
+        }
+    )
+    assert client_handle.get_result()
+
+    # You can only enqueue on a partitioned queue with a partition key
+    with pytest.raises(Exception):
+        queue.enqueue(normal_workflow)
+
+    # Deduplication is not supported for partitioned queues
+    with pytest.raises(Exception):
+        with SetEnqueueOptions(
+            queue_partition_key=normal_partition_key, deduplication_id="key"
+        ):
+            queue.enqueue(normal_workflow)
+
+    # You can only enqueue with a partition key on a partitioned queue
+    partitionless_queue = Queue("partitionless-queue")
+
+    with pytest.raises(Exception):
+        with SetEnqueueOptions(queue_partition_key="test"):
+            partitionless_queue.enqueue(normal_workflow)

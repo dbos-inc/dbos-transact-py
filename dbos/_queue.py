@@ -43,6 +43,7 @@ class Queue:
         *,  # Disable positional arguments from here on
         worker_concurrency: Optional[int] = None,
         priority_enabled: bool = False,
+        partition_queue: bool = False,
     ) -> None:
         if (
             worker_concurrency is not None
@@ -57,6 +58,7 @@ class Queue:
         self.worker_concurrency = worker_concurrency
         self.limiter = limiter
         self.priority_enabled = priority_enabled
+        self.partition_queue = partition_queue
         from ._dbos import _get_or_create_dbos_registry
 
         registry = _get_or_create_dbos_registry()
@@ -78,6 +80,18 @@ class Queue:
             raise Exception(
                 f"Priority is not enabled for queue {self.name}. Setting priority will not have any effect."
             )
+        if self.partition_queue and (
+            context is None or context.queue_partition_key is None
+        ):
+            raise Exception(
+                f"A workflow cannot be enqueued on partitioned queue {self.name} without a partition key"
+            )
+        if context and context.queue_partition_key and not self.partition_queue:
+            raise Exception(
+                f"You can only use a partition key on a partition-enabled queue. Key {context.queue_partition_key} was used with non-partitioned queue {self.name}"
+            )
+        if context and context.queue_partition_key and context.deduplication_id:
+            raise Exception("Deduplication is not supported for partitioned queues")
 
         dbos = _get_dbos_instance()
         return start_workflow(dbos, func, self.name, False, *args, **kwargs)
@@ -105,10 +119,21 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
         queues = dict(dbos._registry.queue_info_map)
         for _, queue in queues.items():
             try:
-                wf_ids = dbos._sys_db.start_queued_workflows(
-                    queue, GlobalParams.executor_id, GlobalParams.app_version
-                )
-                for id in wf_ids:
+                if queue.partition_queue:
+                    dequeued_workflows = []
+                    queue_partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
+                    for key in queue_partition_keys:
+                        dequeued_workflows += dbos._sys_db.start_queued_workflows(
+                            queue,
+                            GlobalParams.executor_id,
+                            GlobalParams.app_version,
+                            key,
+                        )
+                else:
+                    dequeued_workflows = dbos._sys_db.start_queued_workflows(
+                        queue, GlobalParams.executor_id, GlobalParams.app_version, None
+                    )
+                for id in dequeued_workflows:
                     execute_workflow_by_id(dbos, id)
             except OperationalError as e:
                 if isinstance(

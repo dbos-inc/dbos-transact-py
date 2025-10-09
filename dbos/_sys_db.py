@@ -152,6 +152,8 @@ class WorkflowStatusInternal(TypedDict):
     priority: int
     # Serialized workflow inputs
     inputs: str
+    # If this workflow is enqueued on a partitioned queue, its partition key
+    queue_partition_key: Optional[str]
 
 
 class EnqueueOptionsInternal(TypedDict):
@@ -161,6 +163,8 @@ class EnqueueOptionsInternal(TypedDict):
     priority: Optional[int]
     # On what version the workflow is enqueued. Current version if not specified.
     app_version: Optional[str]
+    # If the workflow is enqueued on a partitioned queue, its partition key
+    queue_partition_key: Optional[str]
 
 
 class RecordedResult(TypedDict):
@@ -490,6 +494,7 @@ class SystemDatabase(ABC):
                 deduplication_id=status["deduplication_id"],
                 priority=status["priority"],
                 inputs=status["inputs"],
+                queue_partition_key=status["queue_partition_key"],
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
@@ -761,6 +766,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.deduplication_id,
                     SystemSchema.workflow_status.c.priority,
                     SystemSchema.workflow_status.c.inputs,
+                    SystemSchema.workflow_status.c.queue_partition_key,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -788,6 +794,7 @@ class SystemDatabase(ABC):
                 "deduplication_id": row[16],
                 "priority": row[17],
                 "inputs": row[18],
+                "queue_partition_key": row[19],
             }
             return status
 
@@ -1714,8 +1721,41 @@ class SystemDatabase(ABC):
             )
         return value
 
+    @db_retry()
+    def get_queue_partitions(self, queue_name: str) -> List[str]:
+        """
+        Get all unique partition names associated with a queue for ENQUEUED workflows.
+
+        Args:
+            queue_name: The name of the queue to get partitions for
+
+        Returns:
+            A list of unique partition names for the queue
+        """
+        with self.engine.begin() as c:
+            query = (
+                sa.select(SystemSchema.workflow_status.c.queue_partition_key)
+                .distinct()
+                .where(SystemSchema.workflow_status.c.queue_name == queue_name)
+                .where(
+                    SystemSchema.workflow_status.c.status.in_(
+                        [
+                            WorkflowStatusString.ENQUEUED.value,
+                        ]
+                    )
+                )
+                .where(SystemSchema.workflow_status.c.queue_partition_key.isnot(None))
+            )
+
+            rows = c.execute(query).fetchall()
+            return [row[0] for row in rows]
+
     def start_queued_workflows(
-        self, queue: "Queue", executor_id: str, app_version: str
+        self,
+        queue: "Queue",
+        executor_id: str,
+        app_version: str,
+        queue_partition_key: Optional[str],
     ) -> List[str]:
         if self._debug_mode:
             return []
@@ -1734,6 +1774,10 @@ class SystemDatabase(ABC):
                     sa.select(sa.func.count())
                     .select_from(SystemSchema.workflow_status)
                     .where(SystemSchema.workflow_status.c.queue_name == queue.name)
+                    .where(
+                        SystemSchema.workflow_status.c.queue_partition_key
+                        == queue_partition_key
+                    )
                     .where(
                         SystemSchema.workflow_status.c.status
                         != WorkflowStatusString.ENQUEUED.value
@@ -1758,6 +1802,10 @@ class SystemDatabase(ABC):
                     )
                     .select_from(SystemSchema.workflow_status)
                     .where(SystemSchema.workflow_status.c.queue_name == queue.name)
+                    .where(
+                        SystemSchema.workflow_status.c.queue_partition_key
+                        == queue_partition_key
+                    )
                     .where(
                         SystemSchema.workflow_status.c.status
                         == WorkflowStatusString.PENDING.value
@@ -1799,6 +1847,10 @@ class SystemDatabase(ABC):
                 )
                 .select_from(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_status.c.queue_name == queue.name)
+                .where(
+                    SystemSchema.workflow_status.c.queue_partition_key
+                    == queue_partition_key
+                )
                 .where(
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.ENQUEUED.value
