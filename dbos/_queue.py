@@ -90,6 +90,8 @@ class Queue:
             raise Exception(
                 f"You can only use a partition key on a partition-enabled queue. Key {context.queue_partition_key} was used with non-partitioned queue {self.name}"
             )
+        if context and context.queue_partition_key and context.deduplication_id:
+            raise Exception("Deduplication is not supported for partitioned queues")
 
         dbos = _get_dbos_instance()
         return start_workflow(dbos, func, self.name, False, *args, **kwargs)

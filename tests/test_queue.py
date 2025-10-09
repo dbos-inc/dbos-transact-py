@@ -1676,6 +1676,13 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
     with pytest.raises(Exception):
         queue.enqueue(normal_workflow)
 
+    # Deduplication is not supported for partitioned queues
+    with pytest.raises(Exception):
+        with SetEnqueueOptions(
+            queue_partition_key=normal_partition_key, deduplication_id="key"
+        ):
+            queue.enqueue(normal_workflow)
+
     # You can only enqueue with a partition key on a partitioned queue
     partitionless_queue = Queue("partitionless-queue")
 
