@@ -11,6 +11,7 @@ from dbos._migration import get_dbos_migrations, sqlite_migrations
 
 # Private API because this is a unit test
 from dbos._schemas.system_database import SystemSchema
+from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
 
 
@@ -135,6 +136,7 @@ def test_sqlite_systemdb_migration() -> None:
             engine=None,
             schema=None,
             debug_mode=False,
+            serializer=DefaultSerializer(),
         )
 
         # Run migrations

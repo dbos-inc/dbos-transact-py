@@ -2,12 +2,13 @@
 
 import asyncio
 import datetime
+import json
 import logging
 import os
 import threading
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import pytest
 import sqlalchemy as sa
@@ -18,6 +19,7 @@ from dbos import (
     DBOS,
     DBOSConfig,
     Queue,
+    Serializer,
     SetWorkflowID,
     SetWorkflowTimeout,
     WorkflowHandle,
@@ -1955,3 +1957,81 @@ def test_get_events(dbos: DBOS) -> None:
     # Should return empty dict for workflow with no events
     events2 = DBOS.get_all_events(handle2.workflow_id)
     assert events2 == {}
+
+
+def test_custom_serializer(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+) -> None:
+
+    class JsonSerializer(Serializer):
+        def serialize(self, data: Any) -> str:
+            return json.dumps(data)
+
+        def deserialize(cls, serialized_data: str) -> Any:
+            return json.loads(serialized_data)
+
+    # Configure DBOS with a JSON-based custom serializer
+    DBOS.destroy(destroy_registry=True)
+    config["serializer"] = JsonSerializer()
+    DBOS(config=config)
+    DBOS.launch()
+
+    key = "key"
+    val = "val"
+
+    @DBOS.workflow()
+    def recv_workflow(input: str) -> Any:
+        DBOS.set_event(key, input)
+        return DBOS.recv()
+
+    expected_input = {
+        "args": [val],
+        "kwargs": {},
+    }
+
+    # Run an enqueued workflow testing workflow communication methods
+    queue = Queue("example_queue")
+    handle = queue.enqueue(recv_workflow, val)
+    assert DBOS.get_event(handle.workflow_id, key) == val
+    DBOS.send(handle.workflow_id, val)
+    assert handle.get_result() == val
+    assert handle.get_status().input == expected_input
+
+    # Verify the workflow is correctly stored in the system database
+    assert len(DBOS.list_workflows()) == 2
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 3
+    assert "setEvent" in steps[0]["function_name"]
+    assert "DBOS.recv" in steps[1]["function_name"]
+    assert steps[1]["output"] == val
+
+    # Verify the client also supports custom serialization
+    client = DBOSClient(
+        system_database_url=config["system_database_url"],
+        serializer=JsonSerializer(),
+    )
+    assert len(client.list_workflows()) == 2
+    steps = client.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 3
+    assert "setEvent" in steps[0]["function_name"]
+    assert "DBOS.recv" in steps[1]["function_name"]
+    assert steps[1]["output"] == val
+    handle = client.enqueue(
+        {"queue_name": queue.name, "workflow_name": recv_workflow.__qualname__}, val
+    )
+    client.send(handle.workflow_id, val)
+    assert handle.get_result() == val
+
+    # Verify that a client without the custom serializer does not fail,
+    # but emits warnings and falls back to returning raw strings
+
+    client = DBOSClient(
+        system_database_url=config["system_database_url"],
+    )
+    workflows = client.list_workflows()
+    assert len(workflows) == 4
+    assert cast(str, workflows[0].input) == json.dumps(expected_input)
+    assert workflows[0].output == json.dumps(val)
+
+    DBOS.destroy(destroy_registry=True)

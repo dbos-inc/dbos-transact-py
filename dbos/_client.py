@@ -16,7 +16,6 @@ from typing import (
 
 import sqlalchemy as sa
 
-from dbos import _serialization
 from dbos._app_db import ApplicationDatabase
 from dbos._context import MaxPriority, MinPriority
 from dbos._sys_db import SystemDatabase
@@ -27,7 +26,7 @@ if TYPE_CHECKING:
 from dbos._dbos_config import get_system_database_url, is_valid_database_url
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
-from dbos._serialization import WorkflowInputs
+from dbos._serialization import DefaultSerializer, Serializer, WorkflowInputs
 from dbos._sys_db import (
     EnqueueOptionsInternal,
     StepInfo,
@@ -128,7 +127,9 @@ class DBOSClient:
         system_database_engine: Optional[sa.Engine] = None,
         application_database_url: Optional[str] = None,
         dbos_system_schema: Optional[str] = "dbos",
+        serializer: Serializer = DefaultSerializer(),
     ):
+        self._serializer = serializer
         application_database_url = (
             database_url if database_url else application_database_url
         )
@@ -151,6 +152,7 @@ class DBOSClient:
             },
             engine=system_database_engine,
             schema=dbos_system_schema,
+            serializer=serializer,
         )
         self._sys_db.check_connection()
         if application_database_url:
@@ -162,6 +164,7 @@ class DBOSClient:
                     "pool_size": 2,
                 },
                 schema=dbos_system_schema,
+                serializer=serializer,
             )
 
     def destroy(self) -> None:
@@ -219,7 +222,7 @@ class DBOSClient:
                 if enqueue_options_internal["priority"] is not None
                 else 0
             ),
-            "inputs": _serialization.serialize_args(inputs),
+            "inputs": self._serializer.serialize(inputs),
             "queue_partition_key": enqueue_options_internal["queue_partition_key"],
         }
 
@@ -285,7 +288,7 @@ class DBOSClient:
             "workflow_deadline_epoch_ms": None,
             "deduplication_id": None,
             "priority": 0,
-            "inputs": _serialization.serialize_args({"args": (), "kwargs": {}}),
+            "inputs": self._serializer.serialize({"args": (), "kwargs": {}}),
             "queue_partition_key": None,
         }
         with self._sys_db.engine.begin() as conn:
