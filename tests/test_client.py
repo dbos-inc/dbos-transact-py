@@ -593,3 +593,35 @@ def test_enqueue_with_priority(dbos: DBOS, client: DBOSClient) -> None:
 def test_client_bad_url() -> None:
     with pytest.raises(DBAPIError) as exc_info:
         DBOSClient("postgresql://postgres:fakepassword@localhost:5433/fake_database")
+
+
+def test_client_auth(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    johnDoe: Person = {"first": "John", "last": "Doe", "age": 30}
+    wfid = str(uuid.uuid4())
+
+    user = "testuser"
+    roles = ["role1", "role2"]
+
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "enqueue_test",
+        "workflow_id": wfid,
+        "authenticated_user": user,
+        "authenticated_roles": roles,
+    }
+
+    handle: WorkflowHandle[str] = client.enqueue(options, 42, "test", johnDoe)
+    result = handle.get_result()
+    assert result == '42-test-{"first": "John", "last": "Doe", "age": 30}'
+
+    list_results = client.list_workflows()
+    assert len(list_results) == 1
+    assert list_results[0].workflow_id == wfid
+    assert list_results[0].status == "SUCCESS"
+    assert list_results[0].output == result
+    assert list_results[0].input is not None
+    assert list_results[0].authenticated_user == user
+    assert list_results[0].authenticated_roles == roles
+    assert list_results[0].assumed_role is None
