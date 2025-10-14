@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 import uuid
 from typing import (
@@ -63,6 +64,8 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     priority: int
     max_recovery_attempts: int
     queue_partition_key: str
+    authenticated_user: str
+    authenticated_roles: list[str]
 
 
 def validate_enqueue_options(options: EnqueueOptions) -> None:
@@ -189,6 +192,13 @@ class DBOSClient:
             "queue_partition_key": options.get("queue_partition_key"),
         }
 
+        authenticated_user = options.get("authenticated_user")
+        authenticated_roles = (
+            json.dumps(options.get("authenticated_roles"))
+            if options.get("authenticated_roles")
+            else None
+        )
+
         inputs: WorkflowInputs = {
             "args": args,
             "kwargs": kwargs,
@@ -202,9 +212,9 @@ class DBOSClient:
             "queue_name": queue_name,
             "app_version": enqueue_options_internal["app_version"],
             "config_name": None,
-            "authenticated_user": None,
+            "authenticated_user": authenticated_user,
             "assumed_role": None,
-            "authenticated_roles": None,
+            "authenticated_roles": authenticated_roles,
             "output": None,
             "error": None,
             "created_at": None,
