@@ -41,7 +41,7 @@ class PostgresSystemDatabase(SystemDatabase):
                     parameters={"db_name": sysdb_name},
                 ).scalar():
                     dbos_logger.info(f"Creating system database {sysdb_name}")
-                    conn.execute(sa.text(f"CREATE DATABASE {sysdb_name}"))
+                    conn.execute(sa.text(f"CREATE DATABASE \"{sysdb_name}\""))
             engine.dispose()
         else:
             # If we were provided an engine, validate it can connect
