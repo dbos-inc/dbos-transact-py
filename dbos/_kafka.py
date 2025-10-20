@@ -15,7 +15,9 @@ from ._kafka_message import KafkaMessage
 from ._logger import dbos_logger
 from ._registrations import get_dbos_func_name
 
-_KafkaConsumerWorkflow = Callable[[KafkaMessage], None] | Callable[[KafkaMessage], Coroutine[Any, Any, None]]
+_KafkaConsumerWorkflow = (
+    Callable[[KafkaMessage], None] | Callable[[KafkaMessage], Coroutine[Any, Any, None]]
+)
 
 _kafka_queue: Queue
 _in_order_kafka_queues: dict[str, Queue] = {}
@@ -100,6 +102,7 @@ def _kafka_consumer_loop(
 
     finally:
         consumer.close()
+
 
 def kafka_consumer(
     dbosreg: "DBOSRegistry", config: dict[str, Any], topics: list[str], in_order: bool

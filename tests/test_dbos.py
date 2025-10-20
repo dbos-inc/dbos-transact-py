@@ -1795,6 +1795,7 @@ def test_without_appdb(config: DBOSConfig, cleanup_test_databases: None) -> None
     for s in steps:
         assert s["function_name"] == step.__qualname__
 
+
 def test_custom_database(
     config: DBOSConfig, db_engine: sa.Engine, cleanup_test_databases: None
 ) -> None:
@@ -1804,7 +1805,7 @@ def test_custom_database(
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(
-            sa.text(f"DROP DATABASE IF EXISTS \"{custom_database}\" WITH (FORCE)")
+            sa.text(f'DROP DATABASE IF EXISTS "{custom_database}" WITH (FORCE)')
         )
     url = sa.make_url(config["system_database_url"])
     url = url.set(database=custom_database)
@@ -1844,6 +1845,7 @@ def test_custom_database(
     steps = client.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 4
     assert "transaction" in steps[0]["function_name"]
+
 
 def test_custom_schema(
     config: DBOSConfig, cleanup_test_databases: None, skip_with_sqlite: None

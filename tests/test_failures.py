@@ -554,6 +554,7 @@ def test_unregistered_workflow(dbos: DBOS, config: DBOSConfig) -> None:
     with pytest.raises(DBOSWorkflowFunctionNotFoundError):
         DBOS._recover_pending_workflows()
 
+
 def test_nonserializable_return(dbos: DBOS) -> None:
     @DBOS.step()
     def step() -> Generator[str, Any, None]:

@@ -89,6 +89,7 @@ def test_kafka(dbos: DBOS) -> None:
     assert wait
     assert kafka_count == 3
 
+
 def test_kafka_async(dbos: DBOS) -> None:
     event = threading.Event()
     kafka_count = 0
