@@ -39,7 +39,7 @@ def _kafka_consumer_loop(
     in_order: bool,
 ) -> None:
 
-    def on_error(err: KafkaError) -> NoReturn:
+    def on_error(err: KafkaError) -> None:
         dbos_logger.error(f"Exception in Kafka consumer: {err}")
 
     config["error_cb"] = on_error
