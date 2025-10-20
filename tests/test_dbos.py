@@ -1799,6 +1799,7 @@ def test_custom_database(
     config: DBOSConfig, db_engine: sa.Engine, cleanup_test_databases: None
 ) -> None:
     DBOS.destroy(destroy_registry=True)
+    assert config["system_database_url"]
     custom_database = "F8nny_dAtaB@s3@-n@m3"
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
