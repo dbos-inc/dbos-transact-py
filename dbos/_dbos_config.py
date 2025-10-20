@@ -444,6 +444,7 @@ def configure_db_engine_parameters(
 
     # Configure user database engine parameters
     app_engine_kwargs: dict[str, Any] = {
+        "connect_args": {"application_name": "dbos_transact"},
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,

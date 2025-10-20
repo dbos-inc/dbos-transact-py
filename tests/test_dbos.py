@@ -37,6 +37,7 @@ from dbos._error import (
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import GetWorkflowsInput
 from dbos._utils import GlobalParams
+from tests.conftest import using_sqlite
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -1794,6 +1795,65 @@ def test_without_appdb(config: DBOSConfig, cleanup_test_databases: None) -> None
     assert len(steps) == 3
     for s in steps:
         assert s["function_name"] == step.__qualname__
+
+
+def test_custom_database(
+    config: DBOSConfig, db_engine: sa.Engine, cleanup_test_databases: None
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    assert config["system_database_url"]
+    custom_database = "F8nny_dAtaB@s3@-n@m3.sqlite"
+    url = sa.make_url(config["system_database_url"])
+    url = url.set(database=custom_database)
+    config["system_database_url"] = url.render_as_string(hide_password=False)
+    # Destroy the database if it exists
+    if using_sqlite():
+        parsed_url = sa.make_url(config["system_database_url"])
+        db_path = parsed_url.database
+        assert db_path is not None
+        if os.path.exists(db_path):
+            os.remove(db_path)
+    else:
+        with db_engine.connect() as connection:
+            connection.execution_options(isolation_level="AUTOCOMMIT")
+            connection.execute(
+                sa.text(f'DROP DATABASE IF EXISTS "{custom_database}" WITH (FORCE)')
+            )
+    DBOS(config=config)
+    DBOS.launch()
+
+    key = "key"
+    val = "val"
+
+    @DBOS.transaction()
+    def transaction() -> None:
+        return
+
+    @DBOS.workflow()
+    def recv_workflow() -> Any:
+        transaction()
+        DBOS.set_event(key, val)
+        return DBOS.recv()
+
+    handle = DBOS.start_workflow(recv_workflow)
+    assert DBOS.get_event(handle.workflow_id, key) == val
+    DBOS.send(handle.workflow_id, val)
+    assert handle.get_result() == val
+    assert len(DBOS.list_workflows()) == 2
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 4
+    assert "transaction" in steps[0]["function_name"]
+    DBOS.destroy(destroy_registry=True)
+
+    # Test custom database with client
+    client = DBOSClient(
+        system_database_url=config["system_database_url"],
+        application_database_url=config["application_database_url"],
+    )
+    assert len(client.list_workflows()) == 2
+    steps = client.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 4
+    assert "transaction" in steps[0]["function_name"]
 
 
 def test_custom_schema(

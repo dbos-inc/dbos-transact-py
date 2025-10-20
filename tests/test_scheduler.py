@@ -105,6 +105,19 @@ def test_scheduled_workflow(dbos: DBOS) -> None:
     assert wf_counter > 1 and wf_counter <= 5
 
 
+def test_async_scheduled_workflow(dbos: DBOS) -> None:
+    wf_counter: int = 0
+
+    @DBOS.scheduled("* * * * * *")
+    @DBOS.workflow()
+    async def test_workflow(scheduled: datetime, actual: datetime) -> None:
+        nonlocal wf_counter
+        wf_counter += 1
+
+    time.sleep(5)
+    assert wf_counter > 1 and wf_counter <= 5
+
+
 def test_appdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
     wf_counter: int = 0
 

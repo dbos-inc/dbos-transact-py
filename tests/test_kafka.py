@@ -12,24 +12,25 @@ from dbos import DBOS, KafkaMessage
 # Without it, they're automatically skipped.
 # Here's a docker-compose script you can use to set up local Kafka:
 
-# version: "3.7"
 # services:
 #   broker:
-#       image: bitnami/kafka:latest
+#       image: apache/kafka:latest
 #       hostname: broker
 #       container_name: broker
 #       ports:
 #         - '9092:9092'
 #       environment:
-#         KAFKA_CFG_NODE_ID: 1
-#         KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
-#         KAFKA_CFG_ADVERTISED_LISTENERS: 'PLAINTEXT_HOST://localhost:9092,PLAINTEXT://broker:19092'
-#         KAFKA_CFG_PROCESS_ROLES: 'broker,controller'
-#         KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: '1@broker:29093'
-#         KAFKA_CFG_LISTENERS: 'CONTROLLER://:29093,PLAINTEXT_HOST://:9092,PLAINTEXT://:19092'
-#         KAFKA_CFG_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
-#         KAFKA_CFG_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
-
+#           KAFKA_NODE_ID: 1
+#           KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+#           KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://127.0.0.1:9092
+#           KAFKA_PROCESS_ROLES: broker,controller
+#           KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+#           KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+#           KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+#           KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+#           KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+#           KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+#           CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
 
 NUM_EVENTS = 3
 
@@ -81,12 +82,44 @@ def test_kafka(dbos: DBOS) -> None:
         assert b"test message key" in msg.key  # type: ignore
         assert b"test message value" in msg.value  # type: ignore
         print(msg)
-        if kafka_count == 3:
+        if kafka_count == NUM_EVENTS:
             event.set()
 
     wait = event.wait(timeout=10)
     assert wait
-    assert kafka_count == 3
+    assert kafka_count == NUM_EVENTS
+
+
+def test_kafka_async(dbos: DBOS) -> None:
+    event = threading.Event()
+    kafka_count = 0
+    server = "localhost:9092"
+    topic = f"dbos-kafka-{random.randrange(1_000_000_000)}"
+
+    if not send_test_messages(server, topic):
+        pytest.skip("Kafka not available")
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": "dbos-test",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+    )
+    @DBOS.workflow()
+    async def test_kafka_workflow(msg: KafkaMessage) -> None:
+        nonlocal kafka_count
+        kafka_count += 1
+        assert b"test message key" in msg.key  # type: ignore
+        assert b"test message value" in msg.value  # type: ignore
+        print(msg)
+        if kafka_count == NUM_EVENTS:
+            event.set()
+
+    wait = event.wait(timeout=10)
+    assert wait
+    assert kafka_count == NUM_EVENTS
 
 
 def test_kafka_in_order(dbos: DBOS) -> None:
@@ -114,12 +147,12 @@ def test_kafka_in_order(dbos: DBOS) -> None:
         kafka_count += 1
         assert f"test message key {kafka_count - 1}".encode() == msg.key
         print(msg)
-        if kafka_count == 3:
+        if kafka_count == NUM_EVENTS:
             event.set()
 
     wait = event.wait(timeout=15)
     assert wait
-    assert kafka_count == 3
+    assert kafka_count == NUM_EVENTS
     time.sleep(2)  # Wait for things to clean up
 
 
@@ -150,9 +183,9 @@ def test_kafka_no_groupid(dbos: DBOS) -> None:
         assert b"test message key" in msg.key  # type: ignore
         assert b"test message value" in msg.value  # type: ignore
         print(msg)
-        if kafka_count == 6:
+        if kafka_count == NUM_EVENTS * 2:
             event.set()
 
     wait = event.wait(timeout=10)
     assert wait
-    assert kafka_count == 6
+    assert kafka_count == NUM_EVENTS * 2
