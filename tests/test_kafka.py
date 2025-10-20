@@ -89,6 +89,37 @@ def test_kafka(dbos: DBOS) -> None:
     assert wait
     assert kafka_count == 3
 
+def test_kafka_async(dbos: DBOS) -> None:
+    event = threading.Event()
+    kafka_count = 0
+    server = "localhost:9092"
+    topic = f"dbos-kafka-{random.randrange(1_000_000_000)}"
+
+    if not send_test_messages(server, topic):
+        pytest.skip("Kafka not available")
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": "dbos-test",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+    )
+    @DBOS.workflow()
+    async def test_kafka_workflow(msg: KafkaMessage) -> None:
+        nonlocal kafka_count
+        kafka_count += 1
+        assert b"test message key" in msg.key  # type: ignore
+        assert b"test message value" in msg.value  # type: ignore
+        print(msg)
+        if kafka_count == 3:
+            event.set()
+
+    wait = event.wait(timeout=10)
+    assert wait
+    assert kafka_count == 3
+
 
 def test_kafka_in_order(dbos: DBOS) -> None:
     event = threading.Event()
