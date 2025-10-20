@@ -82,12 +82,12 @@ def test_kafka(dbos: DBOS) -> None:
         assert b"test message key" in msg.key  # type: ignore
         assert b"test message value" in msg.value  # type: ignore
         print(msg)
-        if kafka_count == 3:
+        if kafka_count == NUM_EVENTS:
             event.set()
 
     wait = event.wait(timeout=10)
     assert wait
-    assert kafka_count == 3
+    assert kafka_count == NUM_EVENTS
 
 
 def test_kafka_async(dbos: DBOS) -> None:
@@ -114,12 +114,12 @@ def test_kafka_async(dbos: DBOS) -> None:
         assert b"test message key" in msg.key  # type: ignore
         assert b"test message value" in msg.value  # type: ignore
         print(msg)
-        if kafka_count == 3:
+        if kafka_count == NUM_EVENTS:
             event.set()
 
     wait = event.wait(timeout=10)
     assert wait
-    assert kafka_count == 3
+    assert kafka_count == NUM_EVENTS
 
 
 def test_kafka_in_order(dbos: DBOS) -> None:
@@ -147,12 +147,12 @@ def test_kafka_in_order(dbos: DBOS) -> None:
         kafka_count += 1
         assert f"test message key {kafka_count - 1}".encode() == msg.key
         print(msg)
-        if kafka_count == 3:
+        if kafka_count == NUM_EVENTS:
             event.set()
 
     wait = event.wait(timeout=15)
     assert wait
-    assert kafka_count == 3
+    assert kafka_count == NUM_EVENTS
     time.sleep(2)  # Wait for things to clean up
 
 
@@ -183,9 +183,9 @@ def test_kafka_no_groupid(dbos: DBOS) -> None:
         assert b"test message key" in msg.key  # type: ignore
         assert b"test message value" in msg.value  # type: ignore
         print(msg)
-        if kafka_count == 6:
+        if kafka_count == NUM_EVENTS * 2:
             event.set()
 
     wait = event.wait(timeout=10)
     assert wait
-    assert kafka_count == 6
+    assert kafka_count == NUM_EVENTS * 2
