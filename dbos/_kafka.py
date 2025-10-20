@@ -40,7 +40,7 @@ def _kafka_consumer_loop(
 ) -> None:
 
     def on_error(err: KafkaError) -> NoReturn:
-        raise KafkaException(err)
+        dbos_logger.error(f"Exception in Kafka consumer: {err}")
 
     config["error_cb"] = on_error
     if "auto.offset.reset" not in config:
