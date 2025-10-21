@@ -209,7 +209,7 @@ def test_process_config_full():
         "max_overflow": 0,
         "pool_size": 20,
         "pool_pre_ping": True,
-        "connect_args": {"connect_timeout": 1},
+        "connect_args": {"connect_timeout": 1, "application_name": "dbos_transact"},
     }
     assert configFile["database"]["sys_db_engine_kwargs"] == {
         "key": "value",
@@ -217,7 +217,7 @@ def test_process_config_full():
         "max_overflow": 0,
         "pool_size": 27,
         "pool_pre_ping": True,
-        "connect_args": {"connect_timeout": 1},
+        "connect_args": {"connect_timeout": 1, "application_name": "dbos_transact"},
     }
     assert configFile["runtimeConfig"]["start"] == ["python3 main.py"]
     assert configFile["runtimeConfig"]["admin_port"] == 8001
@@ -255,7 +255,7 @@ def test_process_config_system_database():
         "max_overflow": 0,
         "pool_size": 20,
         "pool_pre_ping": True,
-        "connect_args": {"connect_timeout": 1},
+        "connect_args": {"connect_timeout": 1, "application_name": "dbos_transact"},
     }
     assert configFile["database"]["sys_db_engine_kwargs"] == {
         "key": "value",
@@ -263,7 +263,7 @@ def test_process_config_system_database():
         "max_overflow": 0,
         "pool_size": 27,
         "pool_pre_ping": True,
-        "connect_args": {"connect_timeout": 1},
+        "connect_args": {"connect_timeout": 1, "application_name": "dbos_transact"},
     }
 
 
@@ -397,14 +397,14 @@ def test_configure_db_engine_parameters_defaults():
         "max_overflow": 0,
         "pool_size": 20,
         "pool_pre_ping": True,
-        "connect_args": {"connect_timeout": 10},
+        "connect_args": {"connect_timeout": 10, "application_name": "dbos_transact"},
     }
     assert data["sys_db_engine_kwargs"] == {
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,
         "pool_pre_ping": True,
-        "connect_args": {"connect_timeout": 10},
+        "connect_args": {"connect_timeout": 10, "application_name": "dbos_transact"},
     }
 
 
@@ -419,14 +419,14 @@ def test_configure_db_engine_parameters_custom_sys_db_pool_sizes():
         "max_overflow": 0,
         "pool_size": 20,
         "pool_pre_ping": True,
-        "connect_args": {"connect_timeout": 10},
+        "connect_args": {"connect_timeout": 10, "application_name": "dbos_transact"},
     }
     assert data["sys_db_engine_kwargs"] == {
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 35,
         "pool_pre_ping": True,
-        "connect_args": {"connect_timeout": 10},
+        "connect_args": {"connect_timeout": 10, "application_name": "dbos_transact"},
     }
 
 
@@ -440,7 +440,11 @@ def test_configure_db_engine_parameters_user_kwargs_override():
             "pool_pre_ping": True,
             "custom_param": "value",
             "pool_size": 50,
-            "connect_args": {"connect_timeout": 30, "key": "value"},
+            "connect_args": {
+                "connect_timeout": 30,
+                "key": "value",
+                "application_name": "dbos_transact",
+            },
         },
     }
 
@@ -453,7 +457,11 @@ def test_configure_db_engine_parameters_user_kwargs_override():
         "pool_pre_ping": True,
         "custom_param": "value",
         "pool_size": 50,
-        "connect_args": {"connect_timeout": 30, "key": "value"},
+        "connect_args": {
+            "connect_timeout": 30,
+            "key": "value",
+            "application_name": "dbos_transact",
+        },
     }
 
     # System engine kwargs should use system pool size but same user overrides
@@ -463,7 +471,11 @@ def test_configure_db_engine_parameters_user_kwargs_override():
         "pool_pre_ping": True,
         "custom_param": "value",
         "pool_size": 35,
-        "connect_args": {"connect_timeout": 30, "key": "value"},
+        "connect_args": {
+            "connect_timeout": 30,
+            "key": "value",
+            "application_name": "dbos_transact",
+        },
     }
 
 
@@ -487,7 +499,7 @@ def test_configure_db_engine_parameters_user_kwargs_and_db_url_connect_timeout()
         "pool_pre_ping": True,
         "custom_param": "value",
         "pool_size": 50,
-        "connect_args": {"connect_timeout": 22},
+        "connect_args": {"connect_timeout": 22, "application_name": "dbos_transact"},
     }
 
     # System engine kwargs should use system pool size but same user overrides
@@ -497,7 +509,7 @@ def test_configure_db_engine_parameters_user_kwargs_and_db_url_connect_timeout()
         "pool_pre_ping": True,
         "custom_param": "value",
         "pool_size": 50,
-        "connect_args": {"connect_timeout": 22},
+        "connect_args": {"connect_timeout": 22, "application_name": "dbos_transact"},
     }
 
 
@@ -556,7 +568,7 @@ def test_configure_db_engine_parameters_user_kwargs_mixed_params():
         "pool_pre_ping": True,
         "custom_param": "value",
         "pool_size": 50,
-        "connect_args": {"connect_timeout": 10},
+        "connect_args": {"connect_timeout": 10, "application_name": "dbos_transact"},
     }
 
     # System engine kwargs should use system pool size but same user overrides
@@ -566,7 +578,7 @@ def test_configure_db_engine_parameters_user_kwargs_mixed_params():
         "pool_pre_ping": True,
         "custom_param": "value",
         "pool_size": 50,
-        "connect_args": {"connect_timeout": 10},
+        "connect_args": {"connect_timeout": 10, "application_name": "dbos_transact"},
     }
 
 
@@ -581,14 +593,14 @@ def test_configure_db_engine_parameters_empty_user_kwargs():
         "max_overflow": 0,
         "pool_size": 20,
         "pool_pre_ping": True,
-        "connect_args": {"connect_timeout": 10},
+        "connect_args": {"connect_timeout": 10, "application_name": "dbos_transact"},
     }
     assert data["sys_db_engine_kwargs"] == {
         "pool_timeout": 30,
         "max_overflow": 0,
         "pool_size": 20,
         "pool_pre_ping": True,
-        "connect_args": {"connect_timeout": 10},
+        "connect_args": {"connect_timeout": 10, "application_name": "dbos_transact"},
     }
 
 

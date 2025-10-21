@@ -25,9 +25,13 @@ class Serializer(ABC):
 class DefaultSerializer(Serializer):
 
     def serialize(self, data: Any) -> str:
-        pickled_data: bytes = pickle.dumps(data)
-        encoded_data: str = base64.b64encode(pickled_data).decode("utf-8")
-        return encoded_data
+        try:
+            pickled_data: bytes = pickle.dumps(data)
+            encoded_data: str = base64.b64encode(pickled_data).decode("utf-8")
+            return encoded_data
+        except Exception as e:
+            dbos_logger.error(f"Error serializing object: {data}", exc_info=e)
+            raise
 
     def deserialize(cls, serialized_data: str) -> Any:
         pickled_data: bytes = base64.b64decode(serialized_data)

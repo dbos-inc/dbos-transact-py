@@ -1,6 +1,6 @@
 import re
 import threading
-from typing import TYPE_CHECKING, Any, Callable, NoReturn
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, NoReturn
 
 from confluent_kafka import Consumer, KafkaError, KafkaException
 
@@ -15,7 +15,9 @@ from ._kafka_message import KafkaMessage
 from ._logger import dbos_logger
 from ._registrations import get_dbos_func_name
 
-_KafkaConsumerWorkflow = Callable[[KafkaMessage], None]
+_KafkaConsumerWorkflow = (
+    Callable[[KafkaMessage], None] | Callable[[KafkaMessage], Coroutine[Any, Any, None]]
+)
 
 _kafka_queue: Queue
 _in_order_kafka_queues: dict[str, Queue] = {}
@@ -37,8 +39,8 @@ def _kafka_consumer_loop(
     in_order: bool,
 ) -> None:
 
-    def on_error(err: KafkaError) -> NoReturn:
-        raise KafkaException(err)
+    def on_error(err: KafkaError) -> None:
+        dbos_logger.error(f"Exception in Kafka consumer: {err}")
 
     config["error_cb"] = on_error
     if "auto.offset.reset" not in config:

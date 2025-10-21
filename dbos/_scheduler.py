@@ -2,7 +2,7 @@ import random
 import threading
 import traceback
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
 from ._logger import dbos_logger
 from ._queue import Queue
@@ -14,7 +14,10 @@ from ._context import SetWorkflowID
 from ._croniter import croniter  # type: ignore
 from ._registrations import get_dbos_func_name
 
-ScheduledWorkflow = Callable[[datetime, datetime], None]
+ScheduledWorkflow = (
+    Callable[[datetime, datetime], None]
+    | Callable[[datetime, datetime], Coroutine[Any, Any, None]]
+)
 
 
 def scheduler_loop(
