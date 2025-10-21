@@ -478,8 +478,6 @@ def is_valid_database_url(database_url: str) -> bool:
         return True
     url = make_url(database_url)
     required_fields = [
-        ("username", "Username must be specified in the connection URL"),
-        ("host", "Host must be specified in the connection URL"),
         ("database", "Database name must be specified in the connection URL"),
     ]
     for field_name, error_message in required_fields:

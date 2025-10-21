@@ -610,24 +610,6 @@ def test_configure_db_engine_parameters_empty_user_kwargs():
 
 
 def test_process_config_with_wrong_db_url():
-    # Missing username
-    config: ConfigFile = {
-        "name": "some-app",
-        "database_url": "postgres://:password@h:1234/dbname",
-    }
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        process_config(data=config)
-    assert "Username must be specified in the connection URL" in str(exc_info.value)
-
-    # Missing host
-    config: ConfigFile = {
-        "name": "some-app",
-        "database_url": "postgres://user:password@:1234/dbname",
-    }
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        process_config(data=config)
-    assert "Host must be specified in the connection URL" in str(exc_info.value)
-
     # Missing dbname
     config: ConfigFile = {
         "name": "some-app",
