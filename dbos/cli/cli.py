@@ -140,26 +140,12 @@ def start() -> None:
             Forward kill signals to children.
 
             When we receive a signal, send it to the entire process group of the child.
-            If that doesn't work, SIGKILL them then exit.
             """
             # Send the signal to the child's entire process group
             if process.poll() is None:
                 os.killpg(os.getpgid(process.pid), signum)
 
-            # Give some time for the child to terminate
-            for _ in range(10):  # Wait up to 1 second
-                if process.poll() is not None:
-                    break
-                time.sleep(0.1)
-
-            # If the child is still running, force kill it
-            if process.poll() is None:
-                try:
-                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                except Exception:
-                    pass
-
-            # Exit immediately
+            # Exit 
             os._exit(process.returncode if process.returncode is not None else 1)
 
         # Configure the single handler only on Unix-like systems.
