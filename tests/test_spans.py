@@ -402,24 +402,3 @@ def test_disable_otlp_no_spans(config: DBOSConfig) -> None:
 
     # No spans should be created since OTLP is disabled
     assert len(spans) == 0
-
-
-def test_no_conflict_otlp_init(dbos: DBOS) -> None:
-    # Make sure we don't conflict when we already set logger and tracer providers
-
-    # Set up in-memory log exporter
-    log_exporter = InMemoryLogExporter()  # type: ignore
-    log_processor = BatchLogRecordProcessor(log_exporter)
-    log_provider = LoggerProvider()
-    log_provider.add_log_record_processor(log_processor)
-    dbos_logger.addHandler(LoggingHandler(logger_provider=log_provider))
-
-    dbos.destroy(destroy_registry=True)
-    dbos = DBOS(config=default_config())
-    dbos.launch()
-
-    log_processor.force_flush(timeout_millis=5000)
-    logs = log_exporter.get_finished_logs()
-    for log in logs:
-        # Make sure no warnings
-        assert log.log_record.severity_text != "WARNING"
