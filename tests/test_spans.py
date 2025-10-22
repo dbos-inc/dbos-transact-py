@@ -5,7 +5,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from inline_snapshot import snapshot
-from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk import trace as tracesdk
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, InMemoryLogExporter
@@ -17,6 +16,7 @@ from dbos import DBOS, DBOSConfig
 from dbos._logger import dbos_logger
 from dbos._tracer import dbos_tracer
 from dbos._utils import GlobalParams
+from tests.conftest import default_config
 
 
 @dataclass
@@ -65,7 +65,6 @@ def test_spans(config: DBOSConfig) -> None:
     log_processor = BatchLogRecordProcessor(log_exporter)
     log_provider = LoggerProvider()
     log_provider.add_log_record_processor(log_processor)
-    set_logger_provider(log_provider)
     dbos_logger.addHandler(LoggingHandler(logger_provider=log_provider))
 
     test_workflow()
@@ -192,7 +191,6 @@ async def test_spans_async(dbos: DBOS) -> None:
     log_processor = BatchLogRecordProcessor(log_exporter)
     log_provider = LoggerProvider()
     log_provider.add_log_record_processor(log_processor)
-    set_logger_provider(log_provider)
     dbos_logger.addHandler(LoggingHandler(logger_provider=log_provider))
 
     await test_workflow()
@@ -303,7 +301,6 @@ def test_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     log_processor = BatchLogRecordProcessor(log_exporter)
     log_provider = LoggerProvider()
     log_provider.add_log_record_processor(log_processor)
-    set_logger_provider(log_provider)
     dbos_logger.addHandler(LoggingHandler(logger_provider=log_provider))
 
     client = TestClient(app)
@@ -378,7 +375,6 @@ def test_disable_otlp_no_spans(config: DBOSConfig) -> None:
     log_processor = BatchLogRecordProcessor(log_exporter)
     log_provider = LoggerProvider()
     log_provider.add_log_record_processor(log_processor)
-    set_logger_provider(log_provider)
     dbos_logger.addHandler(LoggingHandler(logger_provider=log_provider))
 
     test_workflow()
@@ -406,3 +402,24 @@ def test_disable_otlp_no_spans(config: DBOSConfig) -> None:
 
     # No spans should be created since OTLP is disabled
     assert len(spans) == 0
+
+
+def test_no_conflict_otlp_init(dbos: DBOS) -> None:
+    # Make sure we don't conflict when we already set logger and tracer providers
+
+    # Set up in-memory log exporter
+    log_exporter = InMemoryLogExporter()  # type: ignore
+    log_processor = BatchLogRecordProcessor(log_exporter)
+    log_provider = LoggerProvider()
+    log_provider.add_log_record_processor(log_processor)
+    dbos_logger.addHandler(LoggingHandler(logger_provider=log_provider))
+
+    dbos.destroy(destroy_registry=True)
+    dbos = DBOS(config=default_config())
+    dbos.launch()
+
+    log_processor.force_flush(timeout_millis=5000)
+    logs = log_exporter.get_finished_logs()
+    for log in logs:
+        # Make sure no warnings
+        assert log.log_record.severity_text != "WARNING"
