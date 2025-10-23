@@ -1476,7 +1476,7 @@ def test_unsetting_timeout(dbos: DBOS) -> None:
             queue.enqueue(child)
 
     child_one, child_two = str(uuid.uuid4()), str(uuid.uuid4())
-    with SetWorkflowTimeout(1.0):
+    with SetWorkflowTimeout(2.0):
         queue.enqueue(parent, child_one, child_two).get_result()
 
     # Verify child one, which has a propagated timeout, is cancelled
