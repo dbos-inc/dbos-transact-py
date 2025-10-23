@@ -68,30 +68,37 @@ def config_logger(config: "ConfigFile") -> None:
     )
     disable_otlp = config.get("telemetry", {}).get("disable_otlp", False)  # type: ignore
 
-    if not disable_otlp and otlp_logs_endpoints:
+    if not disable_otlp:
 
-        from opentelemetry._logs import set_logger_provider
+        from opentelemetry._logs import get_logger_provider, set_logger_provider
         from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
         from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.semconv.attributes.service_attributes import SERVICE_NAME
 
-        log_provider = LoggerProvider(
-            Resource.create(
-                attributes={
-                    SERVICE_NAME: config["name"],
-                }
-            )
-        )
-        set_logger_provider(log_provider)
-        for e in otlp_logs_endpoints:
-            log_provider.add_log_record_processor(
-                BatchLogRecordProcessor(
-                    OTLPLogExporter(endpoint=e),
-                    export_timeout_millis=5000,
+        # Only set up OTLP provider and exporter if endpoints are provided
+        log_provider = get_logger_provider()
+        if otlp_logs_endpoints is not None:
+            if not isinstance(log_provider, LoggerProvider):
+                log_provider = LoggerProvider(
+                    Resource.create(
+                        attributes={
+                            SERVICE_NAME: config["name"],
+                        }
+                    )
                 )
-            )
+                set_logger_provider(log_provider)
+
+            for e in otlp_logs_endpoints:
+                log_provider.add_log_record_processor(
+                    BatchLogRecordProcessor(
+                        OTLPLogExporter(endpoint=e),
+                        export_timeout_millis=5000,
+                    )
+                )
+
+        # Even if no endpoints are provided, we still need a LoggerProvider to create the LoggingHandler
         global _otlp_handler
         _otlp_handler = LoggingHandler(logger_provider=log_provider)
 
