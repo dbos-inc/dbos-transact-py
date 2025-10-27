@@ -209,8 +209,18 @@ ALTER TABLE \"{schema}\".workflow_status ADD COLUMN queue_partition_key TEXT;
 """
 
 
+def get_dbos_migration_three(schema: str) -> str:
+    return f"""
+create index "idx_workflow_status_queue_status_started" on \"{schema}\"."workflow_status" ("queue_name", "status", "started_at_epoch_ms")
+"""
+
+
 def get_dbos_migrations(schema: str) -> list[str]:
-    return [get_dbos_migration_one(schema), get_dbos_migration_two(schema)]
+    return [
+        get_dbos_migration_one(schema),
+        get_dbos_migration_two(schema),
+        get_dbos_migration_three(schema),
+    ]
 
 
 def get_sqlite_timestamp_expr() -> str:
@@ -303,4 +313,9 @@ sqlite_migration_two = """
 ALTER TABLE workflow_status ADD COLUMN queue_partition_key TEXT;
 """
 
-sqlite_migrations = [sqlite_migration_one, sqlite_migration_two]
+sqlite_migration_three = """
+CREATE INDEX "idx_workflow_status_queue_status_started"
+ON "workflow_status" ("queue_name", "status", "started_at_epoch_ms")
+"""
+
+sqlite_migrations = [sqlite_migration_one, sqlite_migration_two, sqlite_migration_three]
