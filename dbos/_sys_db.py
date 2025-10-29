@@ -182,7 +182,7 @@ class OperationResultInternal(TypedDict):
     function_name: str
     output: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
-    started_at_epoch_ms: Optional[int]
+    started_at_epoch_ms: int
 
 
 class GetEventWorkflowContext(TypedDict):
@@ -1201,6 +1201,8 @@ class SystemDatabase(ABC):
             workflow_uuid=result["workflow_uuid"],
             function_id=result["function_id"],
             function_name=result["function_name"],
+            started_at_epoch_ms=result["started_at_epoch_ms"],
+            completed_at_epoch_ms=int(time.time() * 1000),
             output=output,
             error=error,
         )
