@@ -317,6 +317,7 @@ def _init_workflow(
                 "function_name": wf_name,
                 "output": None,
                 "error": dbos._serializer.serialize(e),
+                "started_at_epoch_ms": None,
             }
             dbos._sys_db.record_operation_result(result)
         raise
@@ -1119,6 +1120,7 @@ def decorate_step(
                     "function_name": step_name,
                     "output": None,
                     "error": None,
+                    "started_at_epoch_ms": int(time.time() * 1000),
                 }
 
                 try:

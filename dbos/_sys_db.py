@@ -182,6 +182,7 @@ class OperationResultInternal(TypedDict):
     function_name: str
     output: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
+    started_at_epoch_ms: Optional[int]
 
 
 class GetEventWorkflowContext(TypedDict):
@@ -1386,6 +1387,7 @@ class SystemDatabase(ABC):
         topic: Optional[str] = None,
     ) -> None:
         function_name = "DBOS.send"
+        start_time = int(time.time() * 1000)
         topic = topic if topic is not None else _dbos_null_topic
         with self.engine.begin() as c:
             recorded_output = self._check_operation_execution_txn(
@@ -1422,6 +1424,7 @@ class SystemDatabase(ABC):
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
                 "function_name": function_name,
+                "started_at_epoch_ms": start_time,
                 "output": None,
                 "error": None,
             }
@@ -1437,6 +1440,7 @@ class SystemDatabase(ABC):
         timeout_seconds: float = 60,
     ) -> Any:
         function_name = "DBOS.recv"
+        start_time = int(time.time() * 1000)
         topic = topic if topic is not None else _dbos_null_topic
 
         # First, check for previous executions.
@@ -1521,6 +1525,7 @@ class SystemDatabase(ABC):
                     "workflow_uuid": workflow_uuid,
                     "function_id": function_id,
                     "function_name": function_name,
+                    "started_at_epoch_ms": start_time,
                     "output": self.serializer.serialize(
                         message
                     ),  # None will be serialized to 'null'
@@ -1556,6 +1561,7 @@ class SystemDatabase(ABC):
         skip_sleep: bool = False,
     ) -> float:
         function_name = "DBOS.sleep"
+        start_time = int(time.time() * 1000)
         recorded_output = self.check_operation_execution(
             workflow_uuid, function_id, function_name
         )
@@ -1576,6 +1582,7 @@ class SystemDatabase(ABC):
                         "workflow_uuid": workflow_uuid,
                         "function_id": function_id,
                         "function_name": function_name,
+                        "started_at_epoch_ms": start_time,
                         "output": self.serializer.serialize(end_time),
                         "error": None,
                     }
@@ -1596,6 +1603,7 @@ class SystemDatabase(ABC):
         message: Any,
     ) -> None:
         function_name = "DBOS.setEvent"
+        start_time = int(time.time() * 1000)
         with self.engine.begin() as c:
             recorded_output = self._check_operation_execution_txn(
                 workflow_uuid, function_id, function_name, conn=c
@@ -1625,6 +1633,7 @@ class SystemDatabase(ABC):
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
                 "function_name": function_name,
+                "started_at_epoch_ms": start_time,
                 "output": None,
                 "error": None,
             }
@@ -1685,6 +1694,7 @@ class SystemDatabase(ABC):
         caller_ctx: Optional[GetEventWorkflowContext] = None,
     ) -> Any:
         function_name = "DBOS.getEvent"
+        start_time = int(time.time() * 1000)
         get_sql = sa.select(
             SystemSchema.workflow_events.c.value,
         ).where(
@@ -1759,6 +1769,7 @@ class SystemDatabase(ABC):
                     "workflow_uuid": caller_ctx["workflow_uuid"],
                     "function_id": caller_ctx["function_id"],
                     "function_name": function_name,
+                    "started_at_epoch_ms": start_time,
                     "output": self.serializer.serialize(
                         value
                     ),  # None will be serialized to 'null'
@@ -1997,6 +2008,7 @@ class SystemDatabase(ABC):
 
     def call_function_as_step(self, fn: Callable[[], T], function_name: str) -> T:
         ctx = get_local_dbos_context()
+        start_time = int(time.time() * 1000)
         if ctx and ctx.is_transaction():
             raise Exception(f"Invalid call to `{function_name}` inside a transaction")
         if ctx and ctx.is_workflow():
@@ -2024,6 +2036,7 @@ class SystemDatabase(ABC):
                     "workflow_uuid": ctx.workflow_id,
                     "function_id": ctx.function_id,
                     "function_name": function_name,
+                    "started_at_epoch_ms": start_time,
                     "output": self.serializer.serialize(result),
                     "error": None,
                 }
@@ -2102,6 +2115,7 @@ class SystemDatabase(ABC):
             if value == _dbos_stream_closed_sentinel
             else "DBOS.writeStream"
         )
+        start_time = int(time.time() * 1000)
 
         with self.engine.begin() as c:
 
@@ -2148,6 +2162,7 @@ class SystemDatabase(ABC):
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
                 "function_name": function_name,
+                "started_at_epoch_ms": start_time,
                 "output": None,
                 "error": None,
             }
