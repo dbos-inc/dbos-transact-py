@@ -114,6 +114,12 @@ class WorkflowStatus:
     workflow_timeout_ms: Optional[int]
     # The deadline of a workflow, computed by adding its timeout to its start time.
     workflow_deadline_epoch_ms: Optional[int]
+    # Unique ID for deduplication on a queue
+    deduplication_id: Optional[str]
+    # Priority of the workflow on the queue, starting from 1 ~ 2,147,483,647. Default 0 (highest priority).
+    priority: Optional[int]
+    # If this workflow is enqueued on a partitioned queue, its partition key
+    queue_partition_key: Optional[str]
 
     # INTERNAL FIELDS
 
@@ -881,6 +887,9 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.application_id,
             SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
             SystemSchema.workflow_status.c.workflow_timeout_ms,
+            SystemSchema.workflow_status.c.deduplication_id,
+            SystemSchema.workflow_status.c.priority,
+            SystemSchema.workflow_status.c.queue_partition_key,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -957,10 +966,13 @@ class SystemDatabase(ABC):
             info.app_id = row[14]
             info.workflow_deadline_epoch_ms = row[15]
             info.workflow_timeout_ms = row[16]
+            info.deduplication_id = row[17]
+            info.priority = row[18]
+            info.queue_partition_key = row[19]
 
-            raw_input = row[17] if load_input else None
-            raw_output = row[18] if load_output else None
-            raw_error = row[19] if load_output else None
+            raw_input = row[20] if load_input else None
+            raw_output = row[21] if load_output else None
+            raw_error = row[22] if load_output else None
             inputs, output, exception = safe_deserialize(
                 self.serializer,
                 info.workflow_id,
@@ -1002,6 +1014,9 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.application_id,
             SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
             SystemSchema.workflow_status.c.workflow_timeout_ms,
+            SystemSchema.workflow_status.c.deduplication_id,
+            SystemSchema.workflow_status.c.priority,
+            SystemSchema.workflow_status.c.queue_partition_key,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -1069,8 +1084,11 @@ class SystemDatabase(ABC):
             info.app_id = row[14]
             info.workflow_deadline_epoch_ms = row[15]
             info.workflow_timeout_ms = row[16]
+            info.deduplication_id = row[17]
+            info.priority = row[18]
+            info.queue_partition_key = row[19]
 
-            raw_input = row[17] if load_input else None
+            raw_input = row[20] if load_input else None
 
             # Error and Output are not loaded because they should always be None for queued workflows.
             inputs, output, exception = safe_deserialize(
