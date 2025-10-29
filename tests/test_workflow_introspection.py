@@ -1087,3 +1087,31 @@ def test_call_as_step_within_step(dbos: DBOS) -> None:
     assert "Invalid call to `DBOS.getStatus` inside a transaction" in str(
         exc_info.value
     )
+
+
+def test_step_timing(dbos: DBOS) -> None:
+    num_steps = 5
+    start_time = int(time.time() * 1000)
+
+    @DBOS.step()
+    def step():
+        time.sleep(0.1)
+
+    @DBOS.workflow()
+    def workflow():
+        for _ in range(num_steps):
+            step()
+        DBOS.set_event("key", "value")
+        DBOS.list_workflows()
+        DBOS.recv(timeout_seconds=0)
+
+    handle = DBOS.start_workflow(workflow)
+    handle.get_result()
+
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    for s in steps:
+        assert s["started_at_epoch_ms"] and s["completed_at_epoch_ms"]
+        assert s["started_at_epoch_ms"] > start_time
+        assert s["completed_at_epoch_ms"] > s["started_at_epoch_ms"]
+        if s["function_id"] < num_steps:
+            assert s["completed_at_epoch_ms"] - s["started_at_epoch_ms"] >= 100
