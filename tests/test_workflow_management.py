@@ -5,7 +5,7 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, Queue, SetWorkflowID
+from dbos import DBOS, Queue, SetWorkflowID, WorkflowHandle
 from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.application_database import ApplicationSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
@@ -262,7 +262,7 @@ def test_fork_steps(
     assert stepFourCount == 3
     assert stepFiveCount == 4
 
-    handle = DBOS.retrieve_workflow(wfid)
+    handle: WorkflowHandle[int] = DBOS.retrieve_workflow(wfid)
     assert handle.get_status().forked_to == [fork_id, fork_id_2, fork_id_3]
 
 
@@ -327,6 +327,7 @@ def test_restart_fromsteps_transactionsonly(
 
     forked_handle = DBOS.fork_workflow(wfid, 2)
     assert forked_handle.workflow_id != wfid
+    fork_id_one = forked_handle.workflow_id
     forked_handle.get_result()
 
     assert trOneCount == 1
@@ -337,6 +338,7 @@ def test_restart_fromsteps_transactionsonly(
 
     forked_handle = DBOS.fork_workflow(wfid, 4)
     assert forked_handle.workflow_id != wfid
+    fork_id_two = forked_handle.workflow_id
     forked_handle.get_result()
 
     assert trOneCount == 1
@@ -347,6 +349,7 @@ def test_restart_fromsteps_transactionsonly(
 
     forked_handle = DBOS.fork_workflow(wfid, 1)
     assert forked_handle.workflow_id != wfid
+    fork_id_three = forked_handle.workflow_id
     forked_handle.get_result()
 
     assert trOneCount == 2
@@ -354,6 +357,11 @@ def test_restart_fromsteps_transactionsonly(
     assert trThreeCount == 3
     assert trFourCount == 4
     assert trFiveCount == 4
+    assert DBOS.retrieve_workflow(wfid).get_status().forked_to == [
+        fork_id_one,
+        fork_id_two,
+        fork_id_three,
+    ]
 
 
 def test_restart_fromsteps_steps_tr(
