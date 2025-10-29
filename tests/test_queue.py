@@ -1303,7 +1303,7 @@ def test_priority_queue(dbos: DBOS) -> None:
             queue.enqueue(test_workflow, -100)
     assert "Invalid priority" in str(exc_info.value)
 
-    wf_handles: list[WorkflowHandle] = []
+    wf_handles: list[WorkflowHandle[int]] = []
     # First, enqueue a workflow without priority
     handle = queue.enqueue(test_workflow, 0)
     wf_handles.append(handle)

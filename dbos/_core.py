@@ -300,6 +300,7 @@ def _init_workflow(
             if enqueue_options is not None
             else None
         ),
+        "forked_from": None,
     }
 
     # Synchronously record the status and inputs for workflows
