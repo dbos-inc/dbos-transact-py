@@ -909,3 +909,51 @@ def test_queued_workflows_endpoint(
         empty_result, list
     ), "Response should be a list even for non-existent queue"
     assert len(empty_result) == 0, "Expected no workflows for non-existent queue"
+
+
+def test_list_workflow_steps(dbos: DBOS) -> None:
+    """Test the /workflows/:workflow_id/steps endpoint."""
+
+    @DBOS.workflow()
+    def workflow_with_steps() -> str:
+        step1_result = test_step("hello")
+        step2_result = test_step("world")
+        return step1_result + " " + step2_result
+
+    @DBOS.step()
+    def test_step(value: str) -> str:
+        return value + "!"
+
+    # Execute the workflow
+    handle = DBOS.start_workflow(workflow_with_steps)
+    result = handle.get_result()
+    assert result == "hello! world!"
+
+    # Get the workflow ID
+    workflow_id = handle.workflow_id
+
+    # Test GET /workflows/:workflow_id/steps
+    response = requests.get(
+        f"http://localhost:3001/workflows/{workflow_id}/steps", timeout=5
+    )
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+
+    steps = response.json()
+    assert isinstance(steps, list), "Response should be a list"
+    assert len(steps) == 2, f"Expected 2 steps, got {len(steps)}"
+
+    # Verify first step
+    assert steps[0]["function_name"] == test_step.__qualname__
+    assert steps[0]["output"] is not None
+    assert "hello!" in steps[0]["output"]
+    assert steps[0]["error"] is None
+    assert steps[0]["started_at_epoch_ms"]
+    assert steps[0]["completed_at_epoch_ms"]
+
+    # Verify second step
+    assert steps[1]["function_name"] == test_step.__qualname__
+    assert steps[1]["output"] is not None
+    assert "world!" in steps[1]["output"]
+    assert steps[1]["error"] is None
+    assert steps[1]["started_at_epoch_ms"]
+    assert steps[1]["completed_at_epoch_ms"]
