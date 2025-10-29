@@ -1050,6 +1050,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.deduplication_id,
             SystemSchema.workflow_status.c.priority,
             SystemSchema.workflow_status.c.queue_partition_key,
+            SystemSchema.workflow_status.c.forked_from,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -1096,6 +1097,7 @@ class SystemDatabase(ABC):
             rows = c.execute(query).fetchall()
 
         infos: List[WorkflowStatus] = []
+        workflow_ids: List[str] = []
         for row in rows:
             info = WorkflowStatus()
             info.workflow_id = row[0]
@@ -1120,8 +1122,9 @@ class SystemDatabase(ABC):
             info.deduplication_id = row[17]
             info.priority = row[18]
             info.queue_partition_key = row[19]
+            info.forked_from = row[20]
 
-            raw_input = row[20] if load_input else None
+            raw_input = row[21] if load_input else None
 
             # Error and Output are not loaded because they should always be None for queued workflows.
             inputs, output, exception = safe_deserialize(
@@ -1135,7 +1138,30 @@ class SystemDatabase(ABC):
             info.output = output
             info.error = exception
 
+            workflow_ids.append(info.workflow_id)
             infos.append(info)
+
+        # Calculate forked_to relationships
+        if workflow_ids:
+            with self.engine.begin() as c:
+                forked_to_query = sa.select(
+                    SystemSchema.workflow_status.c.forked_from,
+                    SystemSchema.workflow_status.c.workflow_uuid,
+                ).where(SystemSchema.workflow_status.c.forked_from.in_(workflow_ids))
+                forked_to_rows = c.execute(forked_to_query).fetchall()
+
+            # Build a mapping of fork-parent workflow ID to list of fork-child workflow IDs
+            forked_to_map: Dict[str, List[str]] = {}
+            for row in forked_to_rows:
+                parent_id = row[0]
+                child_id = row[1]
+                if parent_id not in forked_to_map:
+                    forked_to_map[parent_id] = []
+                forked_to_map[parent_id].append(child_id)
+
+            # Populate the forked_to field for each workflow
+            for info in infos:
+                info.forked_to = forked_to_map.get(info.workflow_id, None)
 
         return infos
 
