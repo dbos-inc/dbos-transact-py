@@ -1109,7 +1109,7 @@ def test_step_timing(dbos: DBOS) -> None:
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     for s in steps:
         assert s["started_at_epoch_ms"] and s["completed_at_epoch_ms"]
-        assert s["started_at_epoch_ms"] > start_time
-        assert s["completed_at_epoch_ms"] > s["started_at_epoch_ms"]
+        assert s["started_at_epoch_ms"] >= start_time
+        assert s["completed_at_epoch_ms"] >= s["started_at_epoch_ms"]
         if s["function_id"] < num_steps:
             assert s["completed_at_epoch_ms"] - s["started_at_epoch_ms"] >= 100

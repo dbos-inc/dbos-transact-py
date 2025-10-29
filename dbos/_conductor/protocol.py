@@ -143,6 +143,13 @@ class WorkflowsOutput:
     QueueName: Optional[str]
     ApplicationVersion: Optional[str]
     ExecutorID: Optional[str]
+    WorkflowTimeoutMS: Optional[str]
+    WorkflowDeadlineEpochMS: Optional[str]
+    DeduplicationID: Optional[str]
+    Priority: Optional[str]
+    QueuePartitionKey: Optional[str]
+    ForkedFrom: Optional[str]
+    ForkedTo: Optional[list[str]]
 
     @classmethod
     def from_workflow_information(cls, info: WorkflowStatus) -> "WorkflowsOutput":
@@ -152,12 +159,22 @@ class WorkflowsOutput:
         inputs_str = str(info.input) if info.input is not None else None
         outputs_str = str(info.output) if info.output is not None else None
         error_str = str(info.error) if info.error is not None else None
-        request_str = None
         roles_str = (
             str(info.authenticated_roles)
             if info.authenticated_roles is not None
             else None
         )
+        workflow_timeout_ms_str = (
+            str(info.workflow_timeout_ms)
+            if info.workflow_timeout_ms is not None
+            else None
+        )
+        workflow_deadline_epoch_ms_str = (
+            str(info.workflow_deadline_epoch_ms)
+            if info.workflow_deadline_epoch_ms is not None
+            else None
+        )
+        priority_str = str(info.priority) if info.priority is not None else None
 
         return cls(
             WorkflowUUID=info.workflow_id,
@@ -176,6 +193,13 @@ class WorkflowsOutput:
             QueueName=info.queue_name,
             ApplicationVersion=info.app_version,
             ExecutorID=info.executor_id,
+            WorkflowTimeoutMS=workflow_timeout_ms_str,
+            WorkflowDeadlineEpochMS=workflow_deadline_epoch_ms_str,
+            DeduplicationID=info.deduplication_id,
+            Priority=priority_str,
+            QueuePartitionKey=info.queue_partition_key,
+            ForkedFrom=info.forked_from,
+            ForkedTo=info.forked_to,
         )
 
 

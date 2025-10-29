@@ -471,16 +471,16 @@ def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
     handle_1 = DBOS.start_workflow(test_workflow_1)
     time.sleep(2)  # Sleep for 2 seconds between workflows
     handle_2 = DBOS.start_workflow(test_workflow_2, datetime.now())
+    handle_3 = DBOS.fork_workflow(handle_1.workflow_id, 0)
 
     # Wait for workflows to complete
     handle_1.get_result()
     handle_2.get_result()
+    handle_3.get_result()
 
     # List workflows and dynamically set the filter "name"
     workflows_list = DBOS.list_workflows()
-    assert (
-        len(workflows_list) >= 2
-    ), f"Expected at least 2 workflows, but got {len(workflows_list)}"
+    assert len(workflows_list) >= 3
 
     workflow_ids = [w.workflow_id for w in workflows_list]
 
@@ -493,7 +493,6 @@ def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
         created_at_second_workflow / 1000, tz=timezone.utc
     ).isoformat()
 
-    # Test POST /workflows with filters
     filters: Dict[str, Any] = {
         "workflow_uuids": workflow_ids,
         "start_time": start_time_filter,
@@ -502,7 +501,7 @@ def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
     assert response.status_code == 200
 
     workflows = response.json()
-    assert len(workflows) == 1, f"Expected 1 workflows, but got {len(workflows)}"
+    assert len(workflows) == 2
 
     # Make sure it contains all the expected fields
     assert workflows[0]["WorkflowUUID"] == handle_2.workflow_id, "Workflow ID mismatch"
@@ -522,6 +521,13 @@ def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
     assert workflows[0]["QueueName"] is None
     assert workflows[0]["ApplicationVersion"] == DBOS.application_version
     assert workflows[0]["ExecutorID"] == GlobalParams.executor_id
+    assert workflows[0]["WorkflowTimeoutMS"] is None
+    assert workflows[0]["WorkflowDeadlineEpochMS"] is None
+    assert workflows[0]["DeduplicationID"] is None
+    assert workflows[0]["Priority"] == "0"
+    assert workflows[0]["QueuePartitionKey"] is None
+    assert workflows[0]["ForkedFrom"] is None
+    assert workflows[0]["ForkedTo"] is None
 
     # Only load input and output as requested
     filters = {
@@ -534,7 +540,7 @@ def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
     assert response.status_code == 200
 
     workflows = response.json()
-    assert len(workflows) == 1
+    assert len(workflows) == 2
     assert workflows[0]["Output"] is not None and len(workflows[0]["Output"]) > 0
     assert workflows[0]["Input"] is not None and len(workflows[0]["Input"]) > 0
 
@@ -557,9 +563,7 @@ def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
     assert response.status_code == 200
     workflows = response.json()
     assert len(workflows) == len(workflows_list)
-    assert (
-        workflows[0]["WorkflowUUID"] == handle_2.workflow_id
-    ), "First workflow should be the last one started"
+    assert workflows[0]["WorkflowUUID"] == handle_3.workflow_id
 
     # Test all filters
     filters = {
@@ -586,14 +590,20 @@ def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
     workflows = response.json()
     assert len(workflows) == 0
 
+    # Test the workflow name filter, and also test fork data is correct
     filters = {
         "workflow_name": test_workflow_1.__qualname__,
     }
     response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
     assert response.status_code == 200
     workflows = response.json()
-    assert len(workflows) == 1
+    assert len(workflows) == 2
     assert workflows[0]["WorkflowUUID"] == handle_1.workflow_id
+    assert workflows[0]["ForkedFrom"] == None
+    assert workflows[0]["ForkedTo"] == [handle_3.workflow_id]
+    assert workflows[1]["WorkflowUUID"] == handle_3.workflow_id
+    assert workflows[1]["ForkedFrom"] == handle_1.workflow_id
+    assert workflows[1]["ForkedTo"] == None
 
     filters = {
         "end_time": (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
@@ -617,7 +627,7 @@ def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
     response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
     assert response.status_code == 200
     workflows = response.json()
-    assert len(workflows) == 2
+    assert len(workflows) == 3
 
     filters = {
         "application_version": DBOS.application_version,
@@ -625,7 +635,7 @@ def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
     response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
     assert response.status_code == 200
     workflows = response.json()
-    assert len(workflows) == 2
+    assert len(workflows) == 3
 
     filters = {
         "limit": 1,
