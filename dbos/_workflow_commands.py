@@ -27,6 +27,7 @@ def list_workflows(
     name: Optional[str] = None,
     app_version: Optional[str] = None,
     user: Optional[str] = None,
+    queue_name: Optional[str] = None,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
     sort_desc: bool = False,
@@ -41,6 +42,7 @@ def list_workflows(
     input.end_time = end_time
     input.status = status if status is None or isinstance(status, list) else [status]
     input.application_version = app_version
+    input.queue_name = queue_name
     input.limit = limit
     input.name = name
     input.offset = offset

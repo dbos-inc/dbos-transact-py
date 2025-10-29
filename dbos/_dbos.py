@@ -1128,6 +1128,7 @@ class DBOS:
         name: Optional[str] = None,
         app_version: Optional[str] = None,
         user: Optional[str] = None,
+        queue_name: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
@@ -1151,6 +1152,7 @@ class DBOS:
                 workflow_id_prefix=workflow_id_prefix,
                 load_input=load_input,
                 load_output=load_output,
+                queue_name=queue_name,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(

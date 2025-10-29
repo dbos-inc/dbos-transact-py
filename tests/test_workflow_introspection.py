@@ -333,6 +333,8 @@ def test_queued_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> 
     assert len(workflows) == 0
     workflows = DBOS.list_queued_workflows(status=["ENQUEUED", "PENDING"])
     assert len(workflows) == queued_steps
+    workflows = DBOS.list_workflows(queue_name=queue.name)
+    assert len(workflows) == queued_steps
     workflows = DBOS.list_queued_workflows(queue_name=queue.name)
     assert len(workflows) == queued_steps
     workflows = DBOS.list_queued_workflows(queue_name="no")
