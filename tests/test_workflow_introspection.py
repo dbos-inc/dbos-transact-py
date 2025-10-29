@@ -1094,11 +1094,11 @@ def test_step_timing(dbos: DBOS) -> None:
     start_time = int(time.time() * 1000)
 
     @DBOS.step()
-    def step():
+    def step() -> None:
         time.sleep(0.1)
 
     @DBOS.workflow()
-    def workflow():
+    def workflow() -> None:
         for _ in range(num_steps):
             step()
         DBOS.set_event("key", "value")
