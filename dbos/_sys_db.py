@@ -120,6 +120,8 @@ class WorkflowStatus:
     priority: Optional[int]
     # If this workflow is enqueued on a partitioned queue, its partition key
     queue_partition_key: Optional[str]
+    # If this workflow was forked from another, that workflow's ID.
+    forked_from: Optional[str]
 
     # INTERNAL FIELDS
 
@@ -147,19 +149,13 @@ class WorkflowStatusInternal(TypedDict):
     app_version: Optional[str]
     app_id: Optional[str]
     recovery_attempts: Optional[int]
-    # The start-to-close timeout of the workflow in ms
     workflow_timeout_ms: Optional[int]
-    # The deadline of a workflow, computed by adding its timeout to its start time.
-    # Deadlines propagate to children. When the deadline is reached, the workflow is cancelled.
     workflow_deadline_epoch_ms: Optional[int]
-    # Unique ID for deduplication on a queue
     deduplication_id: Optional[str]
-    # Priority of the workflow on the queue, starting from 1 ~ 2,147,483,647. Default 0 (highest priority).
     priority: int
-    # Serialized workflow inputs
     inputs: str
-    # If this workflow is enqueued on a partitioned queue, its partition key
     queue_partition_key: Optional[str]
+    forked_from: Optional[str]
 
 
 class EnqueueOptionsInternal(TypedDict):
@@ -773,6 +769,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.priority,
                     SystemSchema.workflow_status.c.inputs,
                     SystemSchema.workflow_status.c.queue_partition_key,
+                    SystemSchema.workflow_status.c.forked_from,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -801,6 +798,7 @@ class SystemDatabase(ABC):
                 "priority": row[17],
                 "inputs": row[18],
                 "queue_partition_key": row[19],
+                "forked_from": row[20],
             }
             return status
 
@@ -890,6 +888,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.deduplication_id,
             SystemSchema.workflow_status.c.priority,
             SystemSchema.workflow_status.c.queue_partition_key,
+            SystemSchema.workflow_status.c.forked_from,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -969,10 +968,11 @@ class SystemDatabase(ABC):
             info.deduplication_id = row[17]
             info.priority = row[18]
             info.queue_partition_key = row[19]
+            info.forked_from = row[20]
 
-            raw_input = row[20] if load_input else None
-            raw_output = row[21] if load_output else None
-            raw_error = row[22] if load_output else None
+            raw_input = row[21] if load_input else None
+            raw_output = row[22] if load_output else None
+            raw_error = row[23] if load_output else None
             inputs, output, exception = safe_deserialize(
                 self.serializer,
                 info.workflow_id,
