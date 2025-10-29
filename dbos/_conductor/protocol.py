@@ -210,14 +210,28 @@ class WorkflowSteps:
     output: Optional[str]
     error: Optional[str]
     child_workflow_id: Optional[str]
+    started_at_epoch_ms: Optional[str]
+    completed_at_epoch_ms: Optional[str]
 
     @classmethod
     def from_step_info(cls, info: StepInfo) -> "WorkflowSteps":
         output_str = str(info["output"]) if info["output"] is not None else None
         error_str = str(info["error"]) if info["error"] is not None else None
+        started_at_str = (
+            str(info["started_at_epoch_ms"])
+            if info["started_at_epoch_ms"] is not None
+            else None
+        )
+        completed_at_str = (
+            str(info["completed_at_epoch_ms"])
+            if info["completed_at_epoch_ms"] is not None
+            else None
+        )
         return cls(
             function_id=info["function_id"],
             function_name=info["function_name"],
+            started_at_epoch_ms=started_at_str,
+            completed_at_epoch_ms=completed_at_str,
             output=output_str,
             error=error_str,
             child_workflow_id=info["child_workflow_id"],
