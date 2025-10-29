@@ -149,9 +149,11 @@ class DBOSClient:
         self._sys_db = SystemDatabase.create(
             system_database_url=system_database_url,
             engine_kwargs={
+                "connect_args": {"application_name": "dbos_transact_client"},
                 "pool_timeout": 30,
                 "max_overflow": 0,
                 "pool_size": 2,
+                "pool_pre_ping": True,
             },
             engine=system_database_engine,
             schema=dbos_system_schema,
@@ -162,9 +164,11 @@ class DBOSClient:
             self._app_db = ApplicationDatabase.create(
                 database_url=application_database_url,
                 engine_kwargs={
+                    "connect_args": {"application_name": "dbos_transact_client"},
                     "pool_timeout": 30,
                     "max_overflow": 0,
                     "pool_size": 2,
+                    "pool_pre_ping": True,
                 },
                 schema=dbos_system_schema,
                 serializer=serializer,
