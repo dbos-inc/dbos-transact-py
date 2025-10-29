@@ -8,8 +8,6 @@ import pytest
 
 # Public API
 from dbos import DBOS, Queue, SetWorkflowID, WorkflowStatusString, _workflow_commands
-from dbos._app_db import ApplicationDatabase
-from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
 
 
