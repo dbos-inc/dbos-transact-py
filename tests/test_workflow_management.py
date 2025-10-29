@@ -229,6 +229,7 @@ def test_fork_steps(
         forked_handle = DBOS.fork_workflow(wfid, 3)
     assert forked_handle.workflow_id == fork_id
     assert forked_handle.get_status().app_version == DBOS.application_version
+    assert forked_handle.get_status().forked_from == wfid
     assert forked_handle.get_result() == output
 
     assert stepOneCount == 1
@@ -239,6 +240,7 @@ def test_fork_steps(
 
     forked_handle = DBOS.fork_workflow(wfid, 5)
     assert forked_handle.workflow_id != wfid
+    assert forked_handle.get_status().forked_from == wfid
     assert forked_handle.get_result() == output
 
     assert stepOneCount == 1
@@ -249,6 +251,7 @@ def test_fork_steps(
 
     forked_handle = DBOS.fork_workflow(wfid, 1)
     assert forked_handle.workflow_id != wfid
+    assert forked_handle.get_status().forked_from == wfid
     assert forked_handle.get_result() == output
 
     assert stepOneCount == 2

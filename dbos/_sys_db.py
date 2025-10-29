@@ -708,6 +708,7 @@ class SystemDatabase(ABC):
                     assumed_role=status["assumed_role"],
                     queue_name=INTERNAL_QUEUE_NAME,
                     inputs=status["inputs"],
+                    forked_from=original_workflow_id,
                 )
             )
 
