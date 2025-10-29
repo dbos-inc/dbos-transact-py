@@ -254,6 +254,10 @@ class StepInfo(TypedDict):
     error: Optional[Exception]
     # If the step starts or retrieves the result of a workflow, its ID
     child_workflow_id: Optional[str]
+    # The UNIX epoch timestamp at which this step started
+    started_at_epoch_ms: Optional[int]
+    # The UNIX epoch timestamp at which this step completed
+    completed_at_epoch_ms: Optional[int]
 
 
 _dbos_null_topic = "__null__topic__"
@@ -1168,6 +1172,8 @@ class SystemDatabase(ABC):
                     SystemSchema.operation_outputs.c.output,
                     SystemSchema.operation_outputs.c.error,
                     SystemSchema.operation_outputs.c.child_workflow_id,
+                    SystemSchema.operation_outputs.c.started_at_epoch_ms,
+                    SystemSchema.operation_outputs.c.completed_at_epoch_ms,
                 ).where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
             ).fetchall()
             steps = []
@@ -1185,6 +1191,8 @@ class SystemDatabase(ABC):
                     output=output,
                     error=exception,
                     child_workflow_id=row[4],
+                    started_at_epoch_ms=row[5],
+                    completed_at_epoch_ms=row[6],
                 )
                 steps.append(step)
             return steps
