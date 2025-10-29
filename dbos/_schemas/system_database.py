@@ -105,6 +105,8 @@ class SystemSchema:
         Column("output", Text, nullable=True),
         Column("error", Text, nullable=True),
         Column("child_workflow_id", Text, nullable=True),
+        Column("started_at_epoch_ms", BigInteger, nullable=True),
+        Column("completed_at_epoch_ms", BigInteger, nullable=True),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
     )
 
