@@ -199,31 +199,32 @@ class GetWorkflowsInput:
     """
 
     def __init__(self) -> None:
-        self.workflow_ids: Optional[List[str]] = (
-            None  # Search only in these workflow IDs
-        )
-        self.name: Optional[str] = None  # The name of the workflow function
-        self.authenticated_user: Optional[str] = None  # The user who ran the workflow.
-        self.start_time: Optional[str] = None  # Timestamp in ISO 8601 format
-        self.end_time: Optional[str] = None  # Timestamp in ISO 8601 format
-        self.status: Optional[List[str]] = (
-            None  # Get workflows with one of these statuses
-        )
-        self.application_version: Optional[str] = (
-            None  # The application version that ran this workflow. = None
-        )
-        self.limit: Optional[int] = (
-            None  # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
-        )
-        self.offset: Optional[int] = (
-            None  # Offset into the matching records for pagination
-        )
-        self.sort_desc: bool = (
-            False  # If true, sort by created_at in DESC order. Default false (in ASC order).
-        )
-        self.workflow_id_prefix: Optional[str] = (
-            None  # If set, search for workflow IDs starting with this string
-        )
+        # Search only in these workflow IDs
+        self.workflow_ids: Optional[List[str]] = None
+        # The name of the workflow function
+        self.name: Optional[str] = None
+        # The user who ran the workflow.
+        self.authenticated_user: Optional[str] = None
+        # Timestamp in ISO 8601 format
+        self.start_time: Optional[str] = None
+        # Timestamp in ISO 8601 format
+        self.end_time: Optional[str] = None
+        # Get workflows with one of these statuses
+        self.status: Optional[List[str]] = None
+        # The application version that ran this workflow.
+        self.application_version: Optional[str] = None
+        # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
+        self.limit: Optional[int] = None
+        # Offset into the matching records for pagination
+        self.offset: Optional[int] = None
+        # If true, sort by created_at in DESC order. Default false (in ASC order).
+        self.sort_desc: bool = False
+        # Search only for workflow IDs starting with this string
+        self.workflow_id_prefix: Optional[str] = None
+        # Search only for workflows enqueued on this queue
+        self.queue_name: Optional[str] = None
+        # Search only currently enqueued workflows
+        self.queues_only: bool = False
 
 
 class GetQueuedWorkflowsInput(TypedDict):
