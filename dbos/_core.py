@@ -300,6 +300,7 @@ def _init_workflow(
             if enqueue_options is not None
             else None
         ),
+        "forked_from": None,
     }
 
     # Synchronously record the status and inputs for workflows
@@ -316,6 +317,7 @@ def _init_workflow(
                 "function_name": wf_name,
                 "output": None,
                 "error": dbos._serializer.serialize(e),
+                "started_at_epoch_ms": int(time.time() * 1000),
             }
             dbos._sys_db.record_operation_result(result)
         raise
@@ -1118,6 +1120,7 @@ def decorate_step(
                     "function_name": step_name,
                     "output": None,
                     "error": None,
+                    "started_at_epoch_ms": int(time.time() * 1000),
                 }
 
                 try:

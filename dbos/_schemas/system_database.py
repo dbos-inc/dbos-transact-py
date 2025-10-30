@@ -78,6 +78,7 @@ class SystemSchema:
         Column("inputs", Text()),
         Column("priority", Integer(), nullable=False, server_default=text("'0'::int")),
         Column("queue_partition_key", Text()),
+        Column("forked_from", Text()),
         Index("workflow_status_created_at_index", "created_at"),
         Index("workflow_status_executor_id_index", "executor_id"),
         Index("workflow_status_status_index", "status"),
@@ -104,6 +105,8 @@ class SystemSchema:
         Column("output", Text, nullable=True),
         Column("error", Text, nullable=True),
         Column("child_workflow_id", Text, nullable=True),
+        Column("started_at_epoch_ms", BigInteger, nullable=True),
+        Column("completed_at_epoch_ms", BigInteger, nullable=True),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
     )
 

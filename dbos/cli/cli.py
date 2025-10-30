@@ -145,7 +145,7 @@ def start() -> None:
             if process.poll() is None:
                 os.killpg(os.getpgid(process.pid), signum)
 
-            # Exit 
+            # Exit
             os._exit(process.returncode if process.returncode is not None else 1)
 
         # Configure the single handler only on Unix-like systems.

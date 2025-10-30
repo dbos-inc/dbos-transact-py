@@ -114,6 +114,16 @@ class WorkflowStatus:
     workflow_timeout_ms: Optional[int]
     # The deadline of a workflow, computed by adding its timeout to its start time.
     workflow_deadline_epoch_ms: Optional[int]
+    # Unique ID for deduplication on a queue
+    deduplication_id: Optional[str]
+    # Priority of the workflow on the queue, starting from 1 ~ 2,147,483,647. Default 0 (highest priority).
+    priority: Optional[int]
+    # If this workflow is enqueued on a partitioned queue, its partition key
+    queue_partition_key: Optional[str]
+    # If this workflow was forked from another, that workflow's ID.
+    forked_from: Optional[str]
+    # If this workflow was forked to others, those workflows' IDs
+    forked_to: Optional[list[str]]
 
     # INTERNAL FIELDS
 
@@ -141,19 +151,13 @@ class WorkflowStatusInternal(TypedDict):
     app_version: Optional[str]
     app_id: Optional[str]
     recovery_attempts: Optional[int]
-    # The start-to-close timeout of the workflow in ms
     workflow_timeout_ms: Optional[int]
-    # The deadline of a workflow, computed by adding its timeout to its start time.
-    # Deadlines propagate to children. When the deadline is reached, the workflow is cancelled.
     workflow_deadline_epoch_ms: Optional[int]
-    # Unique ID for deduplication on a queue
     deduplication_id: Optional[str]
-    # Priority of the workflow on the queue, starting from 1 ~ 2,147,483,647. Default 0 (highest priority).
     priority: int
-    # Serialized workflow inputs
     inputs: str
-    # If this workflow is enqueued on a partitioned queue, its partition key
     queue_partition_key: Optional[str]
+    forked_from: Optional[str]
 
 
 class EnqueueOptionsInternal(TypedDict):
@@ -178,6 +182,7 @@ class OperationResultInternal(TypedDict):
     function_name: str
     output: Optional[str]  # JSON (jsonpickle)
     error: Optional[str]  # JSON (jsonpickle)
+    started_at_epoch_ms: int
 
 
 class GetEventWorkflowContext(TypedDict):
@@ -194,42 +199,32 @@ class GetWorkflowsInput:
     """
 
     def __init__(self) -> None:
-        self.workflow_ids: Optional[List[str]] = (
-            None  # Search only in these workflow IDs
-        )
-        self.name: Optional[str] = None  # The name of the workflow function
-        self.authenticated_user: Optional[str] = None  # The user who ran the workflow.
-        self.start_time: Optional[str] = None  # Timestamp in ISO 8601 format
-        self.end_time: Optional[str] = None  # Timestamp in ISO 8601 format
-        self.status: Optional[List[str]] = (
-            None  # Get workflows with one of these statuses
-        )
-        self.application_version: Optional[str] = (
-            None  # The application version that ran this workflow. = None
-        )
-        self.limit: Optional[int] = (
-            None  # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
-        )
-        self.offset: Optional[int] = (
-            None  # Offset into the matching records for pagination
-        )
-        self.sort_desc: bool = (
-            False  # If true, sort by created_at in DESC order. Default false (in ASC order).
-        )
-        self.workflow_id_prefix: Optional[str] = (
-            None  # If set, search for workflow IDs starting with this string
-        )
-
-
-class GetQueuedWorkflowsInput(TypedDict):
-    queue_name: Optional[str]  # Get workflows belonging to this queue
-    status: Optional[list[str]]  # Get workflows with one of these statuses
-    start_time: Optional[str]  # Timestamp in ISO 8601 format
-    end_time: Optional[str]  # Timestamp in ISO 8601 format
-    limit: Optional[int]  # Return up to this many workflows IDs.
-    offset: Optional[int]  # Offset into the matching records for pagination
-    name: Optional[str]  # The name of the workflow function
-    sort_desc: Optional[bool]  # Sort by created_at in DESC or ASC order
+        # Search only in these workflow IDs
+        self.workflow_ids: Optional[List[str]] = None
+        # The name of the workflow function
+        self.name: Optional[str] = None
+        # The user who ran the workflow.
+        self.authenticated_user: Optional[str] = None
+        # Timestamp in ISO 8601 format
+        self.start_time: Optional[str] = None
+        # Timestamp in ISO 8601 format
+        self.end_time: Optional[str] = None
+        # Get workflows with one of these statuses
+        self.status: Optional[List[str]] = None
+        # The application version that ran this workflow.
+        self.application_version: Optional[str] = None
+        # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
+        self.limit: Optional[int] = None
+        # Offset into the matching records for pagination
+        self.offset: Optional[int] = None
+        # If true, sort by created_at in DESC order. Default false (in ASC order).
+        self.sort_desc: bool = False
+        # Search only for workflow IDs starting with this string
+        self.workflow_id_prefix: Optional[str] = None
+        # Search only for workflows enqueued on this queue
+        self.queue_name: Optional[str] = None
+        # Search only currently enqueued workflows
+        self.queues_only: bool = False
 
 
 class GetPendingWorkflowsOutput:
@@ -249,6 +244,10 @@ class StepInfo(TypedDict):
     error: Optional[Exception]
     # If the step starts or retrieves the result of a workflow, its ID
     child_workflow_id: Optional[str]
+    # The UNIX epoch timestamp at which this step started
+    started_at_epoch_ms: Optional[int]
+    # The UNIX epoch timestamp at which this step completed
+    completed_at_epoch_ms: Optional[int]
 
 
 _dbos_null_topic = "__null__topic__"
@@ -706,6 +705,7 @@ class SystemDatabase(ABC):
                     assumed_role=status["assumed_role"],
                     queue_name=INTERNAL_QUEUE_NAME,
                     inputs=status["inputs"],
+                    forked_from=original_workflow_id,
                 )
             )
 
@@ -767,6 +767,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.priority,
                     SystemSchema.workflow_status.c.inputs,
                     SystemSchema.workflow_status.c.queue_partition_key,
+                    SystemSchema.workflow_status.c.forked_from,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -795,6 +796,7 @@ class SystemDatabase(ABC):
                 "priority": row[17],
                 "inputs": row[18],
                 "queue_partition_key": row[19],
+                "forked_from": row[20],
             }
             return status
 
@@ -881,6 +883,10 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.application_id,
             SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
             SystemSchema.workflow_status.c.workflow_timeout_ms,
+            SystemSchema.workflow_status.c.deduplication_id,
+            SystemSchema.workflow_status.c.priority,
+            SystemSchema.workflow_status.c.queue_partition_key,
+            SystemSchema.workflow_status.c.forked_from,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -888,7 +894,15 @@ class SystemDatabase(ABC):
             load_columns.append(SystemSchema.workflow_status.c.output)
             load_columns.append(SystemSchema.workflow_status.c.error)
 
-        query = sa.select(*load_columns)
+        if input.queues_only:
+            query = sa.select(*load_columns).where(
+                sa.and_(
+                    SystemSchema.workflow_status.c.queue_name.isnot(None),
+                    SystemSchema.workflow_status.c.status.in_(["ENQUEUED", "PENDING"]),
+                )
+            )
+        else:
+            query = sa.select(*load_columns)
         if input.sort_desc:
             query = query.order_by(SystemSchema.workflow_status.c.created_at.desc())
         else:
@@ -927,6 +941,10 @@ class SystemDatabase(ABC):
                     input.workflow_id_prefix
                 )
             )
+        if input.queue_name:
+            query = query.where(
+                SystemSchema.workflow_status.c.queue_name == input.queue_name
+            )
         if input.limit:
             query = query.limit(input.limit)
         if input.offset:
@@ -936,6 +954,7 @@ class SystemDatabase(ABC):
             rows = c.execute(query).fetchall()
 
         infos: List[WorkflowStatus] = []
+        workflow_ids: List[str] = []
         for row in rows:
             info = WorkflowStatus()
             info.workflow_id = row[0]
@@ -957,10 +976,14 @@ class SystemDatabase(ABC):
             info.app_id = row[14]
             info.workflow_deadline_epoch_ms = row[15]
             info.workflow_timeout_ms = row[16]
+            info.deduplication_id = row[17]
+            info.priority = row[18]
+            info.queue_partition_key = row[19]
+            info.forked_from = row[20]
 
-            raw_input = row[17] if load_input else None
-            raw_output = row[18] if load_output else None
-            raw_error = row[19] if load_output else None
+            raw_input = row[21] if load_input else None
+            raw_output = row[22] if load_output else None
+            raw_error = row[23] if load_output else None
             inputs, output, exception = safe_deserialize(
                 self.serializer,
                 info.workflow_id,
@@ -972,119 +995,30 @@ class SystemDatabase(ABC):
             info.output = output
             info.error = exception
 
+            workflow_ids.append(info.workflow_id)
             infos.append(info)
-        return infos
 
-    def get_queued_workflows(
-        self,
-        input: GetQueuedWorkflowsInput,
-        *,
-        load_input: bool = True,
-    ) -> List[WorkflowStatus]:
-        """
-        Retrieve a list of queued workflows result and inputs based on the input criteria. The result is a list of external-facing workflow status objects.
-        """
-        load_columns = [
-            SystemSchema.workflow_status.c.workflow_uuid,
-            SystemSchema.workflow_status.c.status,
-            SystemSchema.workflow_status.c.name,
-            SystemSchema.workflow_status.c.recovery_attempts,
-            SystemSchema.workflow_status.c.config_name,
-            SystemSchema.workflow_status.c.class_name,
-            SystemSchema.workflow_status.c.authenticated_user,
-            SystemSchema.workflow_status.c.authenticated_roles,
-            SystemSchema.workflow_status.c.assumed_role,
-            SystemSchema.workflow_status.c.queue_name,
-            SystemSchema.workflow_status.c.executor_id,
-            SystemSchema.workflow_status.c.created_at,
-            SystemSchema.workflow_status.c.updated_at,
-            SystemSchema.workflow_status.c.application_version,
-            SystemSchema.workflow_status.c.application_id,
-            SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
-            SystemSchema.workflow_status.c.workflow_timeout_ms,
-        ]
-        if load_input:
-            load_columns.append(SystemSchema.workflow_status.c.inputs)
+        # Calculate forked_to relationships
+        if workflow_ids:
+            with self.engine.begin() as c:
+                forked_to_query = sa.select(
+                    SystemSchema.workflow_status.c.forked_from,
+                    SystemSchema.workflow_status.c.workflow_uuid,
+                ).where(SystemSchema.workflow_status.c.forked_from.in_(workflow_ids))
+                forked_to_rows = c.execute(forked_to_query).fetchall()
 
-        query = sa.select(*load_columns).where(
-            sa.and_(
-                SystemSchema.workflow_status.c.queue_name.isnot(None),
-                SystemSchema.workflow_status.c.status.in_(["ENQUEUED", "PENDING"]),
-            )
-        )
-        if input["sort_desc"]:
-            query = query.order_by(SystemSchema.workflow_status.c.created_at.desc())
-        else:
-            query = query.order_by(SystemSchema.workflow_status.c.created_at.asc())
+            # Build a mapping of fork-parent workflow ID to list of fork-child workflow IDs
+            forked_to_map: Dict[str, List[str]] = {}
+            for row in forked_to_rows:
+                parent_id = row[0]
+                child_id = row[1]
+                if parent_id not in forked_to_map:
+                    forked_to_map[parent_id] = []
+                forked_to_map[parent_id].append(child_id)
 
-        if input.get("name"):
-            query = query.where(SystemSchema.workflow_status.c.name == input["name"])
-
-        if input.get("queue_name"):
-            query = query.where(
-                SystemSchema.workflow_status.c.queue_name == input["queue_name"]
-            )
-
-        status = input.get("status", None)
-        if status:
-            query = query.where(SystemSchema.workflow_status.c.status.in_(status))
-        if "start_time" in input and input["start_time"] is not None:
-            query = query.where(
-                SystemSchema.workflow_status.c.created_at
-                >= datetime.datetime.fromisoformat(input["start_time"]).timestamp()
-                * 1000
-            )
-        if "end_time" in input and input["end_time"] is not None:
-            query = query.where(
-                SystemSchema.workflow_status.c.created_at
-                <= datetime.datetime.fromisoformat(input["end_time"]).timestamp() * 1000
-            )
-        if input.get("limit"):
-            query = query.limit(input["limit"])
-        if input.get("offset"):
-            query = query.offset(input["offset"])
-
-        with self.engine.begin() as c:
-            rows = c.execute(query).fetchall()
-
-        infos: List[WorkflowStatus] = []
-        for row in rows:
-            info = WorkflowStatus()
-            info.workflow_id = row[0]
-            info.status = row[1]
-            info.name = row[2]
-            info.recovery_attempts = row[3]
-            info.config_name = row[4]
-            info.class_name = row[5]
-            info.authenticated_user = row[6]
-            info.authenticated_roles = (
-                json.loads(row[7]) if row[7] is not None else None
-            )
-            info.assumed_role = row[8]
-            info.queue_name = row[9]
-            info.executor_id = row[10]
-            info.created_at = row[11]
-            info.updated_at = row[12]
-            info.app_version = row[13]
-            info.app_id = row[14]
-            info.workflow_deadline_epoch_ms = row[15]
-            info.workflow_timeout_ms = row[16]
-
-            raw_input = row[17] if load_input else None
-
-            # Error and Output are not loaded because they should always be None for queued workflows.
-            inputs, output, exception = safe_deserialize(
-                self.serializer,
-                info.workflow_id,
-                serialized_input=raw_input,
-                serialized_output=None,
-                serialized_exception=None,
-            )
-            info.input = inputs
-            info.output = output
-            info.error = exception
-
-            infos.append(info)
+            # Populate the forked_to field for each workflow
+            for info in infos:
+                info.forked_to = forked_to_map.get(info.workflow_id, None)
 
         return infos
 
@@ -1121,6 +1055,8 @@ class SystemDatabase(ABC):
                     SystemSchema.operation_outputs.c.output,
                     SystemSchema.operation_outputs.c.error,
                     SystemSchema.operation_outputs.c.child_workflow_id,
+                    SystemSchema.operation_outputs.c.started_at_epoch_ms,
+                    SystemSchema.operation_outputs.c.completed_at_epoch_ms,
                 ).where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
             ).fetchall()
             steps = []
@@ -1138,6 +1074,8 @@ class SystemDatabase(ABC):
                     output=output,
                     error=exception,
                     child_workflow_id=row[4],
+                    started_at_epoch_ms=row[5],
+                    completed_at_epoch_ms=row[6],
                 )
                 steps.append(step)
             return steps
@@ -1154,6 +1092,8 @@ class SystemDatabase(ABC):
             workflow_uuid=result["workflow_uuid"],
             function_id=result["function_id"],
             function_name=result["function_name"],
+            started_at_epoch_ms=result["started_at_epoch_ms"],
+            completed_at_epoch_ms=int(time.time() * 1000),
             output=output,
             error=error,
         )
@@ -1340,6 +1280,7 @@ class SystemDatabase(ABC):
         topic: Optional[str] = None,
     ) -> None:
         function_name = "DBOS.send"
+        start_time = int(time.time() * 1000)
         topic = topic if topic is not None else _dbos_null_topic
         with self.engine.begin() as c:
             recorded_output = self._check_operation_execution_txn(
@@ -1376,6 +1317,7 @@ class SystemDatabase(ABC):
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
                 "function_name": function_name,
+                "started_at_epoch_ms": start_time,
                 "output": None,
                 "error": None,
             }
@@ -1391,6 +1333,7 @@ class SystemDatabase(ABC):
         timeout_seconds: float = 60,
     ) -> Any:
         function_name = "DBOS.recv"
+        start_time = int(time.time() * 1000)
         topic = topic if topic is not None else _dbos_null_topic
 
         # First, check for previous executions.
@@ -1475,6 +1418,7 @@ class SystemDatabase(ABC):
                     "workflow_uuid": workflow_uuid,
                     "function_id": function_id,
                     "function_name": function_name,
+                    "started_at_epoch_ms": start_time,
                     "output": self.serializer.serialize(
                         message
                     ),  # None will be serialized to 'null'
@@ -1510,6 +1454,7 @@ class SystemDatabase(ABC):
         skip_sleep: bool = False,
     ) -> float:
         function_name = "DBOS.sleep"
+        start_time = int(time.time() * 1000)
         recorded_output = self.check_operation_execution(
             workflow_uuid, function_id, function_name
         )
@@ -1530,6 +1475,7 @@ class SystemDatabase(ABC):
                         "workflow_uuid": workflow_uuid,
                         "function_id": function_id,
                         "function_name": function_name,
+                        "started_at_epoch_ms": start_time,
                         "output": self.serializer.serialize(end_time),
                         "error": None,
                     }
@@ -1550,6 +1496,7 @@ class SystemDatabase(ABC):
         message: Any,
     ) -> None:
         function_name = "DBOS.setEvent"
+        start_time = int(time.time() * 1000)
         with self.engine.begin() as c:
             recorded_output = self._check_operation_execution_txn(
                 workflow_uuid, function_id, function_name, conn=c
@@ -1579,6 +1526,7 @@ class SystemDatabase(ABC):
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
                 "function_name": function_name,
+                "started_at_epoch_ms": start_time,
                 "output": None,
                 "error": None,
             }
@@ -1639,6 +1587,7 @@ class SystemDatabase(ABC):
         caller_ctx: Optional[GetEventWorkflowContext] = None,
     ) -> Any:
         function_name = "DBOS.getEvent"
+        start_time = int(time.time() * 1000)
         get_sql = sa.select(
             SystemSchema.workflow_events.c.value,
         ).where(
@@ -1713,6 +1662,7 @@ class SystemDatabase(ABC):
                     "workflow_uuid": caller_ctx["workflow_uuid"],
                     "function_id": caller_ctx["function_id"],
                     "function_name": function_name,
+                    "started_at_epoch_ms": start_time,
                     "output": self.serializer.serialize(
                         value
                     ),  # None will be serialized to 'null'
@@ -1951,6 +1901,7 @@ class SystemDatabase(ABC):
 
     def call_function_as_step(self, fn: Callable[[], T], function_name: str) -> T:
         ctx = get_local_dbos_context()
+        start_time = int(time.time() * 1000)
         if ctx and ctx.is_transaction():
             raise Exception(f"Invalid call to `{function_name}` inside a transaction")
         if ctx and ctx.is_workflow():
@@ -1978,6 +1929,7 @@ class SystemDatabase(ABC):
                     "workflow_uuid": ctx.workflow_id,
                     "function_id": ctx.function_id,
                     "function_name": function_name,
+                    "started_at_epoch_ms": start_time,
                     "output": self.serializer.serialize(result),
                     "error": None,
                 }
@@ -2056,6 +2008,7 @@ class SystemDatabase(ABC):
             if value == _dbos_stream_closed_sentinel
             else "DBOS.writeStream"
         )
+        start_time = int(time.time() * 1000)
 
         with self.engine.begin() as c:
 
@@ -2102,6 +2055,7 @@ class SystemDatabase(ABC):
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
                 "function_name": function_name,
+                "started_at_epoch_ms": start_time,
                 "output": None,
                 "error": None,
             }

@@ -1135,6 +1135,7 @@ def test_queue_deduplication(dbos: DBOS) -> None:
     with SetEnqueueOptions(deduplication_id=dedup_id):
         with SetWorkflowID(wfid):
             handle1 = queue.enqueue(test_workflow, "abc")
+    assert handle1.get_status().deduplication_id == dedup_id
 
     # Enqueue the same workflow with a different deduplication ID should be fine.
     with SetEnqueueOptions(deduplication_id="my_other_dedup_id"):
@@ -1302,7 +1303,7 @@ def test_priority_queue(dbos: DBOS) -> None:
             queue.enqueue(test_workflow, -100)
     assert "Invalid priority" in str(exc_info.value)
 
-    wf_handles = []
+    wf_handles: list[WorkflowHandle[int]] = []
     # First, enqueue a workflow without priority
     handle = queue.enqueue(test_workflow, 0)
     wf_handles.append(handle)
@@ -1311,6 +1312,7 @@ def test_priority_queue(dbos: DBOS) -> None:
     for i in range(1, 6):
         with SetEnqueueOptions(priority=i):
             handle = queue.enqueue(test_workflow, i)
+            assert handle.get_status().priority == i
         wf_handles.append(handle)
 
     # Finally, enqueue two workflows without priority again
@@ -1650,7 +1652,11 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
     assert (
         blocked_normal_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
     )
-
+    assert (
+        blocked_blocked_handle.get_status().queue_partition_key
+        == blocked_normal_handle.get_status().queue_partition_key
+        == blocked_partition_key
+    )
     # Enqueue a normal workflow on the other partition and verify it runs normally
     with SetEnqueueOptions(queue_partition_key=normal_partition_key):
         normal_handle = queue.enqueue(normal_workflow)

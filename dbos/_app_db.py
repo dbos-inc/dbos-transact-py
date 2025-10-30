@@ -201,6 +201,8 @@ class ApplicationDatabase(ABC):
                     else row[3]
                 ),
                 child_workflow_id=None,
+                started_at_epoch_ms=None,
+                completed_at_epoch_ms=None,
             )
             for row in rows
         ]

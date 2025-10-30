@@ -215,11 +215,25 @@ create index "idx_workflow_status_queue_status_started" on \"{schema}\"."workflo
 """
 
 
+def get_dbos_migration_four(schema: str) -> str:
+    return f"""
+ALTER TABLE \"{schema}\".workflow_status ADD COLUMN forked_from TEXT;
+"""
+
+
+def get_dbos_migration_five(schema: str) -> str:
+    return f"""
+ALTER TABLE \"{schema}\".operation_outputs ADD COLUMN started_at_epoch_ms BIGINT, ADD COLUMN completed_at_epoch_ms BIGINT;
+"""
+
+
 def get_dbos_migrations(schema: str) -> list[str]:
     return [
         get_dbos_migration_one(schema),
         get_dbos_migration_two(schema),
         get_dbos_migration_three(schema),
+        get_dbos_migration_four(schema),
+        get_dbos_migration_five(schema),
     ]
 
 
@@ -318,4 +332,20 @@ CREATE INDEX "idx_workflow_status_queue_status_started"
 ON "workflow_status" ("queue_name", "status", "started_at_epoch_ms")
 """
 
-sqlite_migrations = [sqlite_migration_one, sqlite_migration_two, sqlite_migration_three]
+sqlite_migration_four = """
+ALTER TABLE workflow_status ADD COLUMN forked_from TEXT;
+"""
+
+sqlite_migration_five = """
+ALTER TABLE operation_outputs ADD COLUMN started_at_epoch_ms BIGINT;
+ALTER TABLE operation_outputs ADD COLUMN completed_at_epoch_ms BIGINT;
+"""
+
+
+sqlite_migrations = [
+    sqlite_migration_one,
+    sqlite_migration_two,
+    sqlite_migration_three,
+    sqlite_migration_four,
+    sqlite_migration_five,
+]

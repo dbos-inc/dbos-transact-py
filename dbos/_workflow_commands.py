@@ -1,4 +1,3 @@
-import time
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional, Union
@@ -7,7 +6,6 @@ from dbos._context import get_local_dbos_context
 
 from ._app_db import ApplicationDatabase
 from ._sys_db import (
-    GetQueuedWorkflowsInput,
     GetWorkflowsInput,
     StepInfo,
     SystemDatabase,
@@ -29,6 +27,7 @@ def list_workflows(
     name: Optional[str] = None,
     app_version: Optional[str] = None,
     user: Optional[str] = None,
+    queue_name: Optional[str] = None,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
     sort_desc: bool = False,
@@ -43,6 +42,7 @@ def list_workflows(
     input.end_time = end_time
     input.status = status if status is None or isinstance(status, list) else [status]
     input.application_version = app_version
+    input.queue_name = queue_name
     input.limit = limit
     input.name = name
     input.offset = offset
@@ -69,19 +69,19 @@ def list_queued_workflows(
     sort_desc: bool = False,
     load_input: bool = True,
 ) -> List[WorkflowStatus]:
-    input: GetQueuedWorkflowsInput = {
-        "queue_name": queue_name,
-        "start_time": start_time,
-        "end_time": end_time,
-        "status": status if status is None or isinstance(status, list) else [status],
-        "limit": limit,
-        "name": name,
-        "offset": offset,
-        "sort_desc": sort_desc,
-    }
+    input = GetWorkflowsInput()
+    input.start_time = start_time
+    input.end_time = end_time
+    input.status = status if status is None or isinstance(status, list) else [status]
+    input.limit = limit
+    input.name = name
+    input.offset = offset
+    input.sort_desc = sort_desc
+    input.queues_only = True
+    input.queue_name = queue_name
 
-    infos: List[WorkflowStatus] = sys_db.get_queued_workflows(
-        input, load_input=load_input
+    infos: List[WorkflowStatus] = sys_db.get_workflows(
+        input, load_input=load_input, load_output=False
     )
     return infos
 

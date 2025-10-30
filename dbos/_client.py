@@ -149,9 +149,11 @@ class DBOSClient:
         self._sys_db = SystemDatabase.create(
             system_database_url=system_database_url,
             engine_kwargs={
+                "connect_args": {"application_name": "dbos_transact_client"},
                 "pool_timeout": 30,
                 "max_overflow": 0,
                 "pool_size": 2,
+                "pool_pre_ping": True,
             },
             engine=system_database_engine,
             schema=dbos_system_schema,
@@ -162,9 +164,11 @@ class DBOSClient:
             self._app_db = ApplicationDatabase.create(
                 database_url=application_database_url,
                 engine_kwargs={
+                    "connect_args": {"application_name": "dbos_transact_client"},
                     "pool_timeout": 30,
                     "max_overflow": 0,
                     "pool_size": 2,
+                    "pool_pre_ping": True,
                 },
                 schema=dbos_system_schema,
                 serializer=serializer,
@@ -234,6 +238,7 @@ class DBOSClient:
             ),
             "inputs": self._serializer.serialize(inputs),
             "queue_partition_key": enqueue_options_internal["queue_partition_key"],
+            "forked_from": None,
         }
 
         self._sys_db.init_workflow(
@@ -300,6 +305,7 @@ class DBOSClient:
             "priority": 0,
             "inputs": self._serializer.serialize({"args": (), "kwargs": {}}),
             "queue_partition_key": None,
+            "forked_from": None,
         }
         with self._sys_db.engine.begin() as conn:
             self._sys_db._insert_workflow_status(
