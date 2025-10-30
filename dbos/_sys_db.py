@@ -106,7 +106,7 @@ class WorkflowStatus:
     updated_at: Optional[int]
     # If this workflow was enqueued, on which queue
     queue_name: Optional[str]
-    # The executor to most recently executed this workflow
+    # The executor to most recently execute this workflow
     executor_id: Optional[str]
     # The application version on which this workflow was started
     app_version: Optional[str]
