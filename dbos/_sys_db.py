@@ -122,8 +122,6 @@ class WorkflowStatus:
     queue_partition_key: Optional[str]
     # If this workflow was forked from another, that workflow's ID.
     forked_from: Optional[str]
-    # If this workflow was forked to others, those workflows' IDs
-    forked_to: Optional[list[str]]
 
     # INTERNAL FIELDS
 
@@ -1003,29 +1001,6 @@ class SystemDatabase(ABC):
 
             workflow_ids.append(info.workflow_id)
             infos.append(info)
-
-        # Calculate forked_to relationships
-        if workflow_ids:
-            with self.engine.begin() as c:
-                forked_to_query = sa.select(
-                    SystemSchema.workflow_status.c.forked_from,
-                    SystemSchema.workflow_status.c.workflow_uuid,
-                ).where(SystemSchema.workflow_status.c.forked_from.in_(workflow_ids))
-                forked_to_rows = c.execute(forked_to_query).fetchall()
-
-            # Build a mapping of fork-parent workflow ID to list of fork-child workflow IDs
-            forked_to_map: Dict[str, List[str]] = {}
-            for row in forked_to_rows:
-                parent_id = row[0]
-                child_id = row[1]
-                if parent_id not in forked_to_map:
-                    forked_to_map[parent_id] = []
-                forked_to_map[parent_id].append(child_id)
-
-            # Populate the forked_to field for each workflow
-            for info in infos:
-                info.forked_to = forked_to_map.get(info.workflow_id, None)
-
         return infos
 
     def get_pending_workflows(

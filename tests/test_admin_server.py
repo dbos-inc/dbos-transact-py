@@ -527,7 +527,6 @@ def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
     assert workflows[0]["Priority"] == "0"
     assert workflows[0]["QueuePartitionKey"] is None
     assert workflows[0]["ForkedFrom"] is None
-    assert workflows[0]["ForkedTo"] is None
 
     # Only load input and output as requested
     filters = {
@@ -600,10 +599,8 @@ def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
     assert len(workflows) == 2
     assert workflows[0]["WorkflowUUID"] == handle_1.workflow_id
     assert workflows[0]["ForkedFrom"] == None
-    assert workflows[0]["ForkedTo"] == [handle_3.workflow_id]
     assert workflows[1]["WorkflowUUID"] == handle_3.workflow_id
     assert workflows[1]["ForkedFrom"] == handle_1.workflow_id
-    assert workflows[1]["ForkedTo"] == None
 
     filters = {
         "end_time": (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()

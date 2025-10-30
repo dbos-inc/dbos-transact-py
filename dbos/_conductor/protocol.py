@@ -149,7 +149,6 @@ class WorkflowsOutput:
     Priority: Optional[str]
     QueuePartitionKey: Optional[str]
     ForkedFrom: Optional[str]
-    ForkedTo: Optional[list[str]]
 
     @classmethod
     def from_workflow_information(cls, info: WorkflowStatus) -> "WorkflowsOutput":
@@ -199,7 +198,6 @@ class WorkflowsOutput:
             Priority=priority_str,
             QueuePartitionKey=info.queue_partition_key,
             ForkedFrom=info.forked_from,
-            ForkedTo=info.forked_to,
         )
 
 

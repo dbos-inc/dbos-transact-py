@@ -358,11 +358,6 @@ def test_restart_fromsteps_transactionsonly(
     assert trThreeCount == 3
     assert trFourCount == 4
     assert trFiveCount == 4
-    assert DBOS.retrieve_workflow(wfid).get_status().forked_to == [
-        fork_id_one,
-        fork_id_two,
-        fork_id_three,
-    ]
 
 
 def test_restart_fromsteps_steps_tr(
