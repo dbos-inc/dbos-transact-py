@@ -244,9 +244,9 @@ class StepInfo(TypedDict):
     error: Optional[Exception]
     # If the step starts or retrieves the result of a workflow, its ID
     child_workflow_id: Optional[str]
-    # The UNIX epoch timestamp at which this step started
+    # The Unix epoch timestamp at which this step started
     started_at_epoch_ms: Optional[int]
-    # The UNIX epoch timestamp at which this step completed
+    # The Unix epoch timestamp at which this step completed
     completed_at_epoch_ms: Optional[int]
 
 
