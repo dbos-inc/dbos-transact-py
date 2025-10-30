@@ -213,6 +213,8 @@ class GetWorkflowsInput:
         self.status: Optional[List[str]] = None
         # The application version that ran this workflow.
         self.application_version: Optional[str] = None
+        # Get workflows forked from this workflow ID.
+        self.forked_from: Optional[str] = None
         # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
         self.limit: Optional[int] = None
         # Offset into the matching records for pagination
@@ -930,6 +932,10 @@ class SystemDatabase(ABC):
             query = query.where(
                 SystemSchema.workflow_status.c.application_version
                 == input.application_version
+            )
+        if input.forked_from:
+            query = query.where(
+                SystemSchema.workflow_status.c.forked_from == input.forked_from
             )
         if input.workflow_ids:
             query = query.where(
