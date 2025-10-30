@@ -619,6 +619,14 @@ def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
     assert len(workflows) == 0
 
     filters = {
+        "forked_from": "not-an-id",
+    }
+    response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
+    assert response.status_code == 200
+    workflows = response.json()
+    assert len(workflows) == 0
+
+    filters = {
         "status": ["SUCCESS", "CANCELLED"],
     }
     response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)

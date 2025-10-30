@@ -118,6 +118,7 @@ class ListWorkflowsBody(TypedDict, total=False):
     end_time: Optional[str]
     status: Optional[str]
     application_version: Optional[str]
+    forked_from: Optional[str]
     limit: Optional[int]
     offset: Optional[int]
     sort_desc: bool
@@ -252,6 +253,7 @@ class ListQueuedWorkflowsBody(TypedDict, total=False):
     start_time: Optional[str]
     end_time: Optional[str]
     status: Optional[str]
+    forked_from: Optional[str]
     queue_name: Optional[str]
     limit: Optional[int]
     offset: Optional[int]
