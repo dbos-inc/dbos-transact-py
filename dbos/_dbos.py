@@ -460,6 +460,7 @@ class DBOS:
                 debug_mode=debug_mode,
                 schema=schema,
                 serializer=self._serializer,
+                executor_id=GlobalParams.executor_id,
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
             if self._config["database_url"]:

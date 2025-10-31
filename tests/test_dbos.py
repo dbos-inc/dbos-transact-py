@@ -117,6 +117,40 @@ def test_simple_workflow_attempts_counter(dbos: DBOS) -> None:
             assert updated_at >= created_at
 
 
+def test_eid_reset(dbos: DBOS) -> None:
+    @DBOS.step()
+    def test_step() -> str:
+        return "hello"
+
+    @DBOS.workflow()
+    def test_workflow() -> str:
+        DBOS.set_event("started", 1)
+        DBOS.recv("run_step")
+        return test_step()
+
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowID(wfuuid):
+        wfh = dbos.start_workflow(test_workflow)
+        DBOS.get_event(wfuuid, "started")
+        with dbos._sys_db.engine.connect() as c:
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .values(executor_id="some_other_executor")
+                .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
+            )
+            c.commit()
+        DBOS.send(wfuuid, 1, "run_step")
+        wfh.get_result()
+        with dbos._sys_db.engine.connect() as c:
+            x = c.execute(
+                sa.select(SystemSchema.workflow_status.c.executor_id).where(
+                    SystemSchema.workflow_status.c.workflow_uuid == wfuuid
+                )
+            ).fetchone()
+            assert x is not None
+            assert x[0] == "local"
+
+
 def test_child_workflow(dbos: DBOS) -> None:
     txn_counter: int = 0
     wf_counter: int = 0
