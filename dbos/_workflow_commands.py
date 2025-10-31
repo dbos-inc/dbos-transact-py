@@ -26,6 +26,7 @@ def list_workflows(
     end_time: Optional[str] = None,
     name: Optional[str] = None,
     app_version: Optional[str] = None,
+    forked_from: Optional[str] = None,
     user: Optional[str] = None,
     queue_name: Optional[str] = None,
     limit: Optional[int] = None,
@@ -42,6 +43,7 @@ def list_workflows(
     input.end_time = end_time
     input.status = status if status is None or isinstance(status, list) else [status]
     input.application_version = app_version
+    input.forked_from = forked_from
     input.queue_name = queue_name
     input.limit = limit
     input.name = name
@@ -61,6 +63,7 @@ def list_queued_workflows(
     *,
     queue_name: Optional[str] = None,
     status: Optional[Union[str, List[str]]] = None,
+    forked_from: Optional[str] = None,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     name: Optional[str] = None,
@@ -73,6 +76,7 @@ def list_queued_workflows(
     input.start_time = start_time
     input.end_time = end_time
     input.status = status if status is None or isinstance(status, list) else [status]
+    input.forked_from = forked_from
     input.limit = limit
     input.name = name
     input.offset = offset

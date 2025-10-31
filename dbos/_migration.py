@@ -218,6 +218,7 @@ create index "idx_workflow_status_queue_status_started" on \"{schema}\"."workflo
 def get_dbos_migration_four(schema: str) -> str:
     return f"""
 ALTER TABLE \"{schema}\".workflow_status ADD COLUMN forked_from TEXT;
+CREATE INDEX "idx_workflow_status_forked_from" ON \"{schema}\"."workflow_status" ("forked_from")
 """
 
 
@@ -334,6 +335,7 @@ ON "workflow_status" ("queue_name", "status", "started_at_epoch_ms")
 
 sqlite_migration_four = """
 ALTER TABLE workflow_status ADD COLUMN forked_from TEXT;
+CREATE INDEX "idx_workflow_status_forked_from" ON "workflow_status" ("forked_from")
 """
 
 sqlite_migration_five = """
