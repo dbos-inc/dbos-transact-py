@@ -145,6 +145,7 @@ def test_eid_reset(dbos: DBOS) -> None:
                     f"select executor_id from dbos.workflow_status where workflow_uuid = '{wfuuid}'"
                 )
             ).fetchone()
+            assert x is not None
             assert x[0] == "local"
 
 

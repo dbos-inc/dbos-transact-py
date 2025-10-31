@@ -388,7 +388,7 @@ class SystemDatabase(ABC):
         engine: Optional[sa.Engine],
         schema: Optional[str],
         serializer: Serializer,
-        executor_id=Optional[str],
+        executor_id: Optional[str],
         debug_mode: bool = False,
     ):
         import sqlalchemy.dialects.postgresql as pg
@@ -1101,6 +1101,7 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_status.c.workflow_uuid == result["workflow_uuid"]
             )
         ).fetchone()
+        assert wf_executor_id_row is not None
         wf_executor_id = wf_executor_id_row[0]
         if self.executor_id is not None and wf_executor_id != self.executor_id:
             dbos_logger.debug(
