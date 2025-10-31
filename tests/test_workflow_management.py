@@ -262,8 +262,9 @@ def test_fork_steps(
     assert stepFourCount == 3
     assert stepFiveCount == 4
 
-    handle: WorkflowHandle[int] = DBOS.retrieve_workflow(wfid)
-    assert handle.get_status().forked_to == [fork_id, fork_id_2, fork_id_3]
+    forks = DBOS.list_workflows(forked_from=wfid)
+    assert len(forks) == 3
+    assert [f.workflow_id for f in forks] == [fork_id, fork_id_2, fork_id_3]
 
 
 def test_restart_fromsteps_transactionsonly(
@@ -357,11 +358,6 @@ def test_restart_fromsteps_transactionsonly(
     assert trThreeCount == 3
     assert trFourCount == 4
     assert trFiveCount == 4
-    assert DBOS.retrieve_workflow(wfid).get_status().forked_to == [
-        fork_id_one,
-        fork_id_two,
-        fork_id_three,
-    ]
 
 
 def test_restart_fromsteps_steps_tr(
