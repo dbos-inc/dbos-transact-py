@@ -133,16 +133,16 @@ def test_eid_reset(dbos: DBOS) -> None:
         time.sleep(1)
         with dbos._sys_db.engine.connect() as c:
             c.execute(
-                sa.text(
-                    f"update dbos.workflow_status set executor_id = 'some_other_executor' where workflow_uuid = '{wfuuid}'"
-                )
+                sa.update(SystemSchema.workflow_status)
+                .values(executor_id="some_other_executor")
+                .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
             )
             c.commit()
         wfh.get_result()
         with dbos._sys_db.engine.connect() as c:
             x = c.execute(
-                sa.text(
-                    f"select executor_id from dbos.workflow_status where workflow_uuid = '{wfuuid}'"
+                sa.select(SystemSchema.workflow_status.c.executor_id).where(
+                    SystemSchema.workflow_status.c.workflow_uuid == wfuuid
                 )
             ).fetchone()
             assert x is not None
