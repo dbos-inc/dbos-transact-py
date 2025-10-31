@@ -1102,7 +1102,6 @@ class SystemDatabase(ABC):
             )
         ).fetchone()
         wf_executor_id = wf_executor_id_row[0]
-        dbos_logger.info(f"Current executor id {wf_executor_id}")
         if self.executor_id is not None and wf_executor_id != self.executor_id:
             dbos_logger.debug(
                 f'Resetting executor_id from {wf_executor_id} to {self.executor_id} for workflow {result["workflow_uuid"]}'
