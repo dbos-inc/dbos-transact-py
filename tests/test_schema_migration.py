@@ -135,8 +135,9 @@ def test_sqlite_systemdb_migration() -> None:
             engine_kwargs={},
             engine=None,
             schema=None,
-            debug_mode=False,
+            executor_id=None,
             serializer=DefaultSerializer(),
+            debug_mode=False,
         )
 
         # Run migrations

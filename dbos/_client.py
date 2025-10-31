@@ -158,6 +158,7 @@ class DBOSClient:
             engine=system_database_engine,
             schema=dbos_system_schema,
             serializer=serializer,
+            executor_id=None,
         )
         self._sys_db.check_connection()
         if application_database_url:

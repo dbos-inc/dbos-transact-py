@@ -351,6 +351,7 @@ class SystemDatabase(ABC):
         engine: Optional[sa.Engine],
         schema: Optional[str],
         serializer: Serializer,
+        executor_id: Optional[str],
         debug_mode: bool = False,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
@@ -363,6 +364,7 @@ class SystemDatabase(ABC):
                 engine=engine,
                 schema=schema,
                 serializer=serializer,
+                executor_id=executor_id,
                 debug_mode=debug_mode,
             )
         else:
@@ -374,6 +376,7 @@ class SystemDatabase(ABC):
                 engine=engine,
                 schema=schema,
                 serializer=serializer,
+                executor_id=executor_id,
                 debug_mode=debug_mode,
             )
 
@@ -385,6 +388,7 @@ class SystemDatabase(ABC):
         engine: Optional[sa.Engine],
         schema: Optional[str],
         serializer: Serializer,
+        executor_id=Optional[str],
         debug_mode: bool = False,
     ):
         import sqlalchemy.dialects.postgresql as pg
@@ -410,6 +414,8 @@ class SystemDatabase(ABC):
 
         self.notifications_map = ThreadSafeConditionDict()
         self.workflow_events_map = ThreadSafeConditionDict()
+        self.executor_id = executor_id
+
         self._listener_thread_lock = threading.Lock()
 
         # Now we can run background processes
@@ -1088,6 +1094,27 @@ class SystemDatabase(ABC):
         error = result["error"]
         output = result["output"]
         assert error is None or output is None, "Only one of error or output can be set"
+        wf_executor_id_row = conn.execute(
+            sa.select(
+                SystemSchema.workflow_status.c.executor_id,
+            ).where(
+                SystemSchema.workflow_status.c.workflow_uuid == result["workflow_uuid"]
+            )
+        ).fetchone()
+        wf_executor_id = wf_executor_id_row[0]
+        dbos_logger.info(f"Current executor id {wf_executor_id}")
+        if self.executor_id is not None and wf_executor_id != self.executor_id:
+            dbos_logger.debug(
+                f'Resetting executor_id from {wf_executor_id} to {self.executor_id} for workflow {result["workflow_uuid"]}'
+            )
+            conn.execute(
+                sa.update(SystemSchema.workflow_status)
+                .values(executor_id=self.executor_id)
+                .where(
+                    SystemSchema.workflow_status.c.workflow_uuid
+                    == result["workflow_uuid"]
+                )
+            )
         sql = sa.insert(SystemSchema.operation_outputs).values(
             workflow_uuid=result["workflow_uuid"],
             function_id=result["function_id"],

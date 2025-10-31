@@ -45,7 +45,7 @@ pdm run pre-commit install
 To run unit tests:
 
 ```
-pdm run pytest
+pdm run pytest tests
 ```
 
 NOTE: The tests need a Postgres database running on `localhost:5432`. To start

@@ -24,6 +24,7 @@ def migrate_dbos_databases(
             engine=None,
             schema=schema,
             serializer=DefaultSerializer(),
+            executor_id=None,
         )
         sys_db.run_migrations()
         if app_database_url:
