@@ -124,13 +124,14 @@ def test_eid_reset(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def test_workflow() -> str:
-        time.sleep(2)
+        DBOS.set_event("started", 1)
+        DBOS.recv("run_step")
         return test_step()
 
     wfuuid = str(uuid.uuid4())
     with SetWorkflowID(wfuuid):
         wfh = dbos.start_workflow(test_workflow)
-        time.sleep(1)
+        DBOS.get_event(wfuuid, "started")
         with dbos._sys_db.engine.connect() as c:
             c.execute(
                 sa.update(SystemSchema.workflow_status)
@@ -138,6 +139,7 @@ def test_eid_reset(dbos: DBOS) -> None:
                 .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
             )
             c.commit()
+        DBOS.send(wfuuid, 1, "run_step")
         wfh.get_result()
         with dbos._sys_db.engine.connect() as c:
             x = c.execute(
