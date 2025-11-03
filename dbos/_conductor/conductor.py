@@ -223,23 +223,21 @@ class ConductorWebsocket(threading.Thread):
                             body = list_workflows_message.body
                             infos = []
                             try:
-                                load_input = body.get("load_input", False)
-                                load_output = body.get("load_output", False)
                                 infos = list_workflows(
                                     self.dbos._sys_db,
-                                    workflow_ids=body["workflow_uuids"],
-                                    user=body["authenticated_user"],
-                                    start_time=body["start_time"],
-                                    end_time=body["end_time"],
-                                    status=body["status"],
-                                    app_version=body["application_version"],
-                                    forked_from=body["forked_from"],
-                                    name=body["workflow_name"],
-                                    limit=body["limit"],
-                                    offset=body["offset"],
-                                    sort_desc=body["sort_desc"],
-                                    load_input=load_input,
-                                    load_output=load_output,
+                                    workflow_ids=body.get("workflow_uuids", None),
+                                    user=body.get("authenticated_user", None),
+                                    start_time=body.get("start_time", None),
+                                    end_time=body.get("end_time", None),
+                                    status=body.get("status", None),
+                                    app_version=body.get("application_version", None),
+                                    forked_from=body.get("forked_from", None),
+                                    name=body.get("workflow_name", None),
+                                    limit=body.get("limit", None),
+                                    offset=body.get("offset", None),
+                                    sort_desc=body.get("sort_desc", False),
+                                    load_input=body.get("load_input", False),
+                                    load_output=body.get("load_output", False),
                                 )
                             except Exception as e:
                                 error_message = f"Exception encountered when listing workflows: {traceback.format_exc()}"
@@ -262,19 +260,18 @@ class ConductorWebsocket(threading.Thread):
                             q_body = list_queued_workflows_message.body
                             infos = []
                             try:
-                                q_load_input = q_body.get("load_input", False)
                                 infos = list_queued_workflows(
                                     self.dbos._sys_db,
-                                    start_time=q_body["start_time"],
-                                    end_time=q_body["end_time"],
-                                    status=q_body["status"],
-                                    forked_from=q_body["forked_from"],
-                                    name=q_body["workflow_name"],
-                                    limit=q_body["limit"],
-                                    offset=q_body["offset"],
-                                    queue_name=q_body["queue_name"],
-                                    sort_desc=q_body["sort_desc"],
-                                    load_input=q_load_input,
+                                    start_time=q_body.get("start_time", None),
+                                    end_time=q_body.get("end_time", None),
+                                    status=q_body.get("status", None),
+                                    forked_from=q_body.get("forked_from", None),
+                                    name=q_body.get("workflow_name", None),
+                                    limit=q_body.get("limit", None),
+                                    offset=q_body.get("offset", None),
+                                    queue_name=q_body.get("queue_name", None),
+                                    sort_desc=q_body.get("sort_desc", False),
+                                    load_input=q_body.get("load_input", False),
                                 )
                             except Exception as e:
                                 error_message = f"Exception encountered when listing queued workflows: {traceback.format_exc()}"
