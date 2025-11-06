@@ -12,6 +12,7 @@ request_id_header = "x-request-id"
 class GlobalParams:
     app_version: str = os.environ.get("DBOS__APPVERSION", "")
     executor_id: str = os.environ.get("DBOS__VMID", "local")
+    dbos_cloud: bool = os.environ.get("DBOS__CLOUD") == "true"
     try:
         # Only works on Python >= 3.8
         dbos_version = importlib.metadata.version("dbos")

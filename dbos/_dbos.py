@@ -496,20 +496,21 @@ class DBOS:
                 except Exception as e:
                     dbos_logger.warning(f"Failed to start admin server: {e}")
 
-            dbos_logger.debug("Retrieving local pending workflows for recovery")
-            workflow_ids = self._sys_db.get_pending_workflows(
-                GlobalParams.executor_id, GlobalParams.app_version
-            )
-            if (len(workflow_ids)) > 0:
-                self.logger.info(
-                    f"Recovering {len(workflow_ids)} workflows from application version {GlobalParams.app_version}"
+            # Recover local workflows if not using a recovery service
+            if not self.conductor_key and not GlobalParams.dbos_cloud:
+                dbos_logger.debug("Retrieving local pending workflows for recovery")
+                workflow_ids = self._sys_db.get_pending_workflows(
+                    GlobalParams.executor_id, GlobalParams.app_version
                 )
-            else:
-                self.logger.info(
-                    f"No workflows to recover from application version {GlobalParams.app_version}"
-                )
-
-            self._executor.submit(startup_recovery_thread, self, workflow_ids)
+                if (len(workflow_ids)) > 0:
+                    self.logger.info(
+                        f"Recovering {len(workflow_ids)} workflows from application version {GlobalParams.app_version}"
+                    )
+                else:
+                    self.logger.info(
+                        f"No workflows to recover from application version {GlobalParams.app_version}"
+                    )
+                self._executor.submit(startup_recovery_thread, self, workflow_ids)
 
             # Listen to notifications
             dbos_logger.debug("Starting notifications listener thread")
