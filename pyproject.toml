@@ -80,7 +80,6 @@ dev = [
     "mypy>=1.15.0",
     "pytest-mock>=3.14.0",
     "types-PyYAML>=6.0.12.20240808",
-    "types-jsonschema>=4.23.0.20240813",
     "black>=24.10.0",
     "pre-commit>=4.0.1",
     "isort>=5.13.2",
@@ -99,6 +98,6 @@ dev = [
     "types-docker>=7.1.0.20241229",
     "pytest-timeout>=2.3.1",
     "inline-snapshot>=0.28.0",
-    "fastapi>=0.116.1",
     "uvicorn>=0.35.0",
+    "fastapi>=0.121.0",
 ]
