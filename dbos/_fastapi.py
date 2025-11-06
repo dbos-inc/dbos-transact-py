@@ -1,4 +1,3 @@
-import uuid
 from typing import Any, Callable, MutableMapping, cast
 
 from fastapi import FastAPI
@@ -9,7 +8,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from . import DBOS
 from ._context import EnterDBOSHandler, OperationType, SetWorkflowID, TracedAttributes
 from ._error import DBOSException
-from ._utils import request_id_header
+from ._utils import generate_uuid, request_id_header
 
 
 def _get_or_generate_request_id(request: FastAPIRequest) -> str:
@@ -17,7 +16,7 @@ def _get_or_generate_request_id(request: FastAPIRequest) -> str:
     if request_id is not None:
         return request_id
     else:
-        return str(uuid.uuid4())
+        return generate_uuid()
 
 
 async def _dbos_error_handler(request: FastAPIRequest, gexc: Exception) -> JSONResponse:

@@ -7,7 +7,6 @@ import os
 import sys
 import threading
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from logging import Logger
 from typing import (
@@ -33,7 +32,7 @@ from dbos._conductor.conductor import ConductorWebsocket
 from dbos._debouncer import debouncer_workflow
 from dbos._serialization import DefaultSerializer, Serializer
 from dbos._sys_db import SystemDatabase, WorkflowStatus
-from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, generate_uuid
 from dbos._workflow_commands import fork_workflow, list_queued_workflows, list_workflows
 
 from ._classproperty import classproperty
@@ -444,7 +443,7 @@ class DBOS:
             if GlobalParams.app_version == "":
                 GlobalParams.app_version = self._registry.compute_app_version()
             if self.conductor_key is not None:
-                GlobalParams.executor_id = str(uuid.uuid4())
+                GlobalParams.executor_id = generate_uuid()
             dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             self._executor_field = ThreadPoolExecutor(max_workers=sys.maxsize)

@@ -1,7 +1,6 @@
 import asyncio
 import json
 import time
-import uuid
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -20,6 +19,7 @@ import sqlalchemy as sa
 from dbos._app_db import ApplicationDatabase
 from dbos._context import MaxPriority, MinPriority
 from dbos._sys_db import SystemDatabase
+from dbos._utils import generate_uuid
 
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
@@ -188,7 +188,7 @@ class DBOSClient:
             max_recovery_attempts = DEFAULT_MAX_RECOVERY_ATTEMPTS
         workflow_id = options.get("workflow_id")
         if workflow_id is None:
-            workflow_id = str(uuid.uuid4())
+            workflow_id = generate_uuid()
         workflow_timeout = options.get("workflow_timeout", None)
         enqueue_options_internal: EnqueueOptionsInternal = {
             "deduplication_id": options.get("deduplication_id"),
@@ -281,7 +281,7 @@ class DBOSClient:
         topic: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> None:
-        idempotency_key = idempotency_key if idempotency_key else str(uuid.uuid4())
+        idempotency_key = idempotency_key if idempotency_key else generate_uuid()
         status: WorkflowStatusInternal = {
             "workflow_uuid": f"{destination_id}-{idempotency_key}",
             "status": WorkflowStatusString.SUCCESS.value,
