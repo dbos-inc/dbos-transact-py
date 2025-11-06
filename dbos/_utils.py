@@ -1,5 +1,7 @@
 import importlib.metadata
 import os
+import sys
+import uuid
 
 import psycopg
 from sqlalchemy.exc import DBAPIError
@@ -58,3 +60,10 @@ def retriable_sqlite_exception(e: Exception) -> bool:
         return True
     else:
         return False
+
+
+def generate_uuid() -> str:
+    if sys.version_info >= (3, 14):
+        return str(uuid.uuid7())
+    else:
+        return str(uuid.uuid4())
