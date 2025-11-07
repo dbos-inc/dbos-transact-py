@@ -653,9 +653,7 @@ def test_list_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
     assert workflows[0]["WorkflowUUID"] == handle_2.workflow_id
 
     filters = {
-        "workflow_id_prefix": handle_1.workflow_id[
-            :10
-        ],  # First 10 characters of the workflow name
+        "workflow_id_prefix": handle_1.workflow_id,
     }
     response = requests.post("http://localhost:3001/workflows", json=filters, timeout=5)
     assert response.status_code == 200
