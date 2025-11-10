@@ -1583,6 +1583,8 @@ class SystemDatabase(ABC):
                 .order_by(SystemSchema.workflow_events.c.function_id.asc())
             ).fetchall()
 
+            # Because events are ordered by function_id, the final dicst
+            # will contain the latest version of each event.
             events: Dict[str, Any] = {}
             for row in rows:
                 key = row[0]
