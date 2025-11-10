@@ -151,6 +151,7 @@ class SystemSchema:
         ),
         Column("key", Text, nullable=False),
         Column("value", Text, nullable=False),
+        Column("function_id", Integer, nullable=True),
         PrimaryKeyConstraint("workflow_uuid", "key"),
     )
 

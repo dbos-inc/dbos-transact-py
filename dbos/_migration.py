@@ -228,6 +228,12 @@ ALTER TABLE \"{schema}\".operation_outputs ADD COLUMN started_at_epoch_ms BIGINT
 """
 
 
+def get_dbos_migration_six(schema: str) -> str:
+    return f"""
+ALTER TABLE \"{schema}\".workflow_events ADD COLUMN function_id INTEGER;
+"""
+
+
 def get_dbos_migrations(schema: str) -> list[str]:
     return [
         get_dbos_migration_one(schema),
@@ -235,6 +241,7 @@ def get_dbos_migrations(schema: str) -> list[str]:
         get_dbos_migration_three(schema),
         get_dbos_migration_four(schema),
         get_dbos_migration_five(schema),
+        get_dbos_migration_six(schema),
     ]
 
 
@@ -343,6 +350,10 @@ ALTER TABLE operation_outputs ADD COLUMN started_at_epoch_ms BIGINT;
 ALTER TABLE operation_outputs ADD COLUMN completed_at_epoch_ms BIGINT;
 """
 
+sqlite_migration_six = """
+ALTER TABLE workflow_events ADD COLUMN function_id INTEGER;
+"""
+
 
 sqlite_migrations = [
     sqlite_migration_one,
@@ -350,4 +361,5 @@ sqlite_migrations = [
     sqlite_migration_three,
     sqlite_migration_four,
     sqlite_migration_five,
+    sqlite_migration_six,
 ]
