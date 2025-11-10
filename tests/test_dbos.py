@@ -1009,6 +1009,7 @@ def test_set_get_events(dbos: DBOS) -> None:
 
     @DBOS.step()
     def set_event_step() -> None:
+        DBOS.set_event("key4", "badvalue")
         DBOS.set_event("key4", "value4")
 
     @DBOS.workflow()

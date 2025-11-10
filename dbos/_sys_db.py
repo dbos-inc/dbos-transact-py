@@ -1522,6 +1522,7 @@ class SystemDatabase(ABC):
                 self.dialect.insert(SystemSchema.workflow_events)
                 .values(
                     workflow_uuid=workflow_uuid,
+                    function_id=function_id,
                     key=key,
                     value=self.serializer.serialize(message),
                 )
@@ -1598,11 +1599,16 @@ class SystemDatabase(ABC):
     ) -> Any:
         function_name = "DBOS.getEvent"
         start_time = int(time.time() * 1000)
-        get_sql = sa.select(
-            SystemSchema.workflow_events.c.value,
-        ).where(
-            SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
-            SystemSchema.workflow_events.c.key == key,
+        get_sql = (
+            sa.select(
+                SystemSchema.workflow_events.c.value,
+            )
+            .where(
+                SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
+                SystemSchema.workflow_events.c.key == key,
+            )
+            .order_by(SystemSchema.workflow_events.c.function_id.desc())
+            .limit(1)
         )
         # Check for previous executions only if it's in a workflow
         if caller_ctx is not None:
