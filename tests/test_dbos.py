@@ -2010,6 +2010,7 @@ def test_get_events(dbos: DBOS) -> None:
     @DBOS.workflow()
     def events_workflow() -> str:
         # Set multiple events
+        DBOS.set_event("event1", "badvalue")
         DBOS.set_event("event1", "value1")
         DBOS.set_event("event2", {"nested": "data", "count": 42})
         DBOS.set_event("event3", [1, 2, 3, 4, 5])

@@ -1578,7 +1578,9 @@ class SystemDatabase(ABC):
                 sa.select(
                     SystemSchema.workflow_events.c.key,
                     SystemSchema.workflow_events.c.value,
-                ).where(SystemSchema.workflow_events.c.workflow_uuid == workflow_id)
+                )
+                .where(SystemSchema.workflow_events.c.workflow_uuid == workflow_id)
+                .order_by(SystemSchema.workflow_events.c.function_id.asc())
             ).fetchall()
 
             events: Dict[str, Any] = {}
