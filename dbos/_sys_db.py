@@ -1526,7 +1526,7 @@ class SystemDatabase(ABC):
                     value=self.serializer.serialize(message),
                 )
                 .on_conflict_do_update(
-                    index_elements=["workflow_uuid", "key"],
+                    index_elements=["workflow_uuid", "key", "function_id"],
                     set_={"value": self.serializer.serialize(message)},
                 )
             )
@@ -1557,7 +1557,7 @@ class SystemDatabase(ABC):
                     value=self.serializer.serialize(message),
                 )
                 .on_conflict_do_update(
-                    index_elements=["workflow_uuid", "key"],
+                    index_elements=["workflow_uuid", "key", "function_id"],
                     set_={"value": self.serializer.serialize(message)},
                 )
             )

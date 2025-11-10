@@ -151,8 +151,8 @@ class SystemSchema:
         ),
         Column("key", Text, nullable=False),
         Column("value", Text, nullable=False),
-        Column("function_id", Integer, nullable=True),
-        PrimaryKeyConstraint("workflow_uuid", "key"),
+        Column("function_id", Integer, nullable=False, server_default=text("'0'::int")),
+        PrimaryKeyConstraint("workflow_uuid", "key", "function_id"),
     )
 
     streams = Table(
