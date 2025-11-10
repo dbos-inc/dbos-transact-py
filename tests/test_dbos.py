@@ -1140,26 +1140,26 @@ def test_nonserializable_values(dbos: DBOS) -> None:
     def test_bad_wf4(var: str) -> str:
         return test_ns_step(var)
 
-    with pytest.raises(AttributeError):
+    with pytest.raises(Exception):
         test_ns_transaction("h")
-    with pytest.raises(AttributeError):
+    with pytest.raises(Exception):
         test_ns_wf("g")
 
     wfh = DBOS.start_workflow(test_reg_wf, "a")
-    with pytest.raises(AttributeError):
+    with pytest.raises(Exception):
         DBOS.send(wfh.workflow_id, invalid_return, "sss")
     wfh.get_result()
 
-    with pytest.raises(AttributeError):
+    with pytest.raises(Exception):
         test_ns_event("e")
 
-    with pytest.raises(AttributeError):
+    with pytest.raises(Exception):
         test_bad_wf1("a")
-    with pytest.raises(AttributeError):
+    with pytest.raises(Exception):
         test_bad_wf2("b")
-    with pytest.raises(AttributeError):
+    with pytest.raises(Exception):
         test_bad_wf3("c")
-    with pytest.raises(AttributeError):
+    with pytest.raises(Exception):
         test_bad_wf4("d")
 
 

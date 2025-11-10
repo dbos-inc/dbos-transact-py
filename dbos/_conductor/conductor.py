@@ -2,7 +2,6 @@ import socket
 import threading
 import time
 import traceback
-import uuid
 from importlib.metadata import version
 from typing import TYPE_CHECKING, Optional
 
@@ -11,7 +10,7 @@ from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
 from dbos._context import SetWorkflowID
-from dbos._utils import GlobalParams
+from dbos._utils import GlobalParams, generate_uuid
 from dbos._workflow_commands import (
     garbage_collect,
     get_workflow,
@@ -192,7 +191,7 @@ class ConductorWebsocket(threading.Thread):
                             fork_message = p.ForkWorkflowRequest.from_json(message)
                             new_workflow_id = fork_message.body["new_workflow_id"]
                             if new_workflow_id is None:
-                                new_workflow_id = str(uuid.uuid4())
+                                new_workflow_id = generate_uuid()
                             workflow_id = fork_message.body["workflow_id"]
                             start_step = fork_message.body["start_step"]
                             app_version = fork_message.body["application_version"]
