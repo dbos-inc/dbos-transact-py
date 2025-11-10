@@ -1543,6 +1543,7 @@ class SystemDatabase(ABC):
     def set_event_from_step(
         self,
         workflow_uuid: str,
+        function_id: int,
         key: str,
         message: Any,
     ) -> None:
@@ -1551,6 +1552,7 @@ class SystemDatabase(ABC):
                 self.dialect.insert(SystemSchema.workflow_events)
                 .values(
                     workflow_uuid=workflow_uuid,
+                    function_id=function_id,
                     key=key,
                     value=self.serializer.serialize(message),
                 )

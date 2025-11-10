@@ -1283,7 +1283,9 @@ def set_event(dbos: "DBOS", key: str, value: Any) -> None:
                     ctx.workflow_id, ctx.curr_step_function_id, key, value
                 )
         elif cur_ctx.is_step():
-            dbos._sys_db.set_event_from_step(cur_ctx.workflow_id, key, value)
+            dbos._sys_db.set_event_from_step(
+                cur_ctx.workflow_id, cur_ctx.curr_step_function_id, key, value
+            )
         else:
             raise DBOSException(
                 "set_event() must be called from within a workflow or step"
