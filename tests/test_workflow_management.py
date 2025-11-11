@@ -743,3 +743,46 @@ def test_fork_events(dbos: DBOS) -> None:
     for handle in [fork_one, fork_two, fork_three, fork_four]:
         assert handle.get_result()
         assert DBOS.get_event(handle.workflow_id, key) == 2
+
+
+def test_fork_streams(dbos: DBOS) -> None:
+    key = "key"
+    event = threading.Event()
+
+    def read_stream(id: str, x: int) -> list[int]:
+        gen = DBOS.read_stream(id, key)
+        return [next(gen) for _ in range(x)]
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        event.wait()
+        DBOS.write_stream(key, 0)
+        DBOS.write_stream(key, 1)
+        DBOS.write_stream(key, 2)
+        assert DBOS.workflow_id
+        return DBOS.workflow_id
+
+    # Verify the workflow runs and the event's final value is correct
+    event.set()
+    handle = DBOS.start_workflow(workflow)
+    assert handle.get_result() == handle.workflow_id
+    assert list(DBOS.read_stream(handle.workflow_id, key)) == [0, 1, 2]
+
+    # Block the workflow so forked workflows cannot advance
+    event.clear()
+
+    # Fork the workflow from each step, verify the event is set to the appropriate value
+    fork_one = DBOS.fork_workflow(handle.workflow_id, 1)
+    assert read_stream(fork_one.workflow_id, 0) == []
+    fork_two = DBOS.fork_workflow(handle.workflow_id, 2)
+    assert read_stream(fork_two.workflow_id, 1) == [0]
+    fork_three = DBOS.fork_workflow(handle.workflow_id, 3)
+    assert read_stream(fork_three.workflow_id, 2) == [0, 1]
+    fork_four = DBOS.fork_workflow(handle.workflow_id, 4)
+    assert read_stream(fork_four.workflow_id, 3) == [0, 1, 2]
+
+    # Unblock the forked workflows, verify they successfully complete
+    event.set()
+    for handle in [fork_one, fork_two, fork_three, fork_four]:
+        assert handle.get_result()
+        assert list(DBOS.read_stream(handle.workflow_id, key)) == [0, 1, 2]

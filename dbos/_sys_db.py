@@ -2036,7 +2036,7 @@ class SystemDatabase(ABC):
             raise
 
     def write_stream_from_step(
-        self, workflow_uuid: str, function_id, key: str, value: Any
+        self, workflow_uuid: str, function_id: int, key: str, value: Any
     ) -> None:
         """
         Write a key-value pair to the stream at the first unused offset.
