@@ -157,9 +157,11 @@ def client(config: DBOSConfig, dbos: DBOS) -> Generator[DBOSClient, Any, None]:
 
 
 @pytest.fixture()
-def dbos_fastapi(
-    config: DBOSConfig, cleanup_test_databases: None
+def dbos_fastapi(  # type: ignore
+    config: DBOSConfig, cleanup_test_databases: None, setup_in_memory_otlp_collector
 ) -> Generator[Tuple[DBOS, FastAPI], Any, None]:
+    provider, exporter, log_processor, log_exporter = setup_in_memory_otlp_collector
+    config["enable_otlp"] = True
     DBOS.destroy(destroy_registry=True)
     app = FastAPI()
     dbos = DBOS(fastapi=app, config=config)
@@ -189,7 +191,7 @@ def dbos_flask(
     DBOS.destroy(destroy_registry=True)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def setup_in_memory_otlp_collector() -> Generator[
     Tuple[
         tracesdk.TracerProvider,

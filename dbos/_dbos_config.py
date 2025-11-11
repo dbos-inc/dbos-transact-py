@@ -264,8 +264,7 @@ def load_config(
                 data["telemetry"]["OTLPExporter"]["tracesEndpoint"]
             ]
 
-    data = cast(ConfigFile, data)
-    return data
+    return cast(ConfigFile, data)
 
 
 def process_config(
