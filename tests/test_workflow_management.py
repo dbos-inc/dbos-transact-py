@@ -741,10 +741,13 @@ def test_fork_events(dbos: DBOS) -> None:
     assert DBOS.get_event(fork_three.workflow_id, key) == 1
     fork_four = DBOS.fork_workflow(handle.workflow_id, 4)
     assert DBOS.get_event(fork_four.workflow_id, key) == 2
+    # Fork from a fork
+    fork_five = DBOS.fork_workflow(fork_four.workflow_id, 4)
+    assert DBOS.get_event(fork_four.workflow_id, key) == 2
 
     # Unblock the forked workflows, verify they successfully complete
     event.set()
-    for handle in [fork_one, fork_two, fork_three, fork_four]:
+    for handle in [fork_one, fork_two, fork_three, fork_four, fork_five]:
         assert handle.get_result()
         assert DBOS.get_event(handle.workflow_id, key) == 2
 
