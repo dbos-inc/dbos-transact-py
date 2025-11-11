@@ -771,7 +771,7 @@ def test_fork_streams(dbos: DBOS) -> None:
         assert DBOS.workflow_id
         return DBOS.workflow_id
 
-    # Verify the workflow runs and the event's final value is correct
+    # Verify the workflow runs and streams the appropriate values
     event.set()
     handle = DBOS.start_workflow(workflow)
     assert handle.get_result() == handle.workflow_id
@@ -780,7 +780,7 @@ def test_fork_streams(dbos: DBOS) -> None:
     # Block the workflow so forked workflows cannot advance
     event.clear()
 
-    # Fork the workflow from each step, verify the event is set to the appropriate value
+    # Fork the workflow from each step, verify the stream contains the appropriate values
     fork_one = DBOS.fork_workflow(handle.workflow_id, 1)
     assert read_stream(fork_one.workflow_id, 0) == []
     fork_two = DBOS.fork_workflow(handle.workflow_id, 2)
