@@ -5,6 +5,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from inline_snapshot import snapshot
+from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk import trace as tracesdk
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, InMemoryLogExporter
@@ -26,15 +27,12 @@ class BasicSpan:
     parent_id: Optional[int] = field(repr=False, compare=False, default=None)
 
 
-def test_spans(config: DBOSConfig) -> None:
-    exporter = InMemorySpanExporter()
-    span_processor = SimpleSpanProcessor(exporter)
-    provider = tracesdk.TracerProvider()
-    provider.add_span_processor(span_processor)
-    dbos_tracer.set_provider(provider)
+def test_spans(config: DBOSConfig, setup_in_memory_otlp_collector) -> None:
+    provider, exporter, log_processor, log_exporter = setup_in_memory_otlp_collector
 
     DBOS.destroy(destroy_registry=True)
     config["otlp_attributes"] = {"foo": "bar"}
+    config["enable_otlp"] = True
     DBOS(config=config)
     DBOS.launch()
 
@@ -60,12 +58,8 @@ def test_spans(config: DBOSConfig) -> None:
         DBOS.logger.info("This is a test_step")
         return
 
-    # Set up in-memory log exporter
-    log_exporter = InMemoryLogExporter()  # type: ignore
-    log_processor = BatchLogRecordProcessor(log_exporter)
-    log_provider = LoggerProvider()
-    log_provider.add_log_record_processor(log_processor)
-    dbos_logger.addHandler(LoggingHandler(logger_provider=log_provider))
+    log_processor.force_flush(timeout_millis=5000)
+    log_exporter.clear()  # Clear any logs generated during setup
 
     test_workflow()
 
@@ -91,6 +85,7 @@ def test_spans(config: DBOSConfig) -> None:
         )
 
     spans = exporter.get_finished_spans()
+    exporter.clear()
 
     for span in spans:
         if span.name == "manual_span":
@@ -157,12 +152,14 @@ def test_spans(config: DBOSConfig) -> None:
 
 
 @pytest.mark.asyncio
-async def test_spans_async(dbos: DBOS) -> None:
-    exporter = InMemorySpanExporter()
-    span_processor = SimpleSpanProcessor(exporter)
-    provider = tracesdk.TracerProvider()
-    provider.add_span_processor(span_processor)
-    dbos_tracer.set_provider(provider)
+async def test_spans_async(config: DBOSConfig, setup_in_memory_otlp_collector) -> None:
+    provider, exporter, log_processor, log_exporter = setup_in_memory_otlp_collector
+
+    DBOS.destroy(destroy_registry=True)
+    config["otlp_attributes"] = {"foo": "bar"}
+    config["enable_otlp"] = True
+    DBOS(config=config)
+    DBOS.launch()
 
     my_tracer = provider.get_tracer("dbos")
 
@@ -186,12 +183,8 @@ async def test_spans_async(dbos: DBOS) -> None:
         DBOS.logger.info("This is a test_step")
         return
 
-    # Set up in-memory log exporter
-    log_exporter = InMemoryLogExporter()  # type: ignore
-    log_processor = BatchLogRecordProcessor(log_exporter)
-    log_provider = LoggerProvider()
-    log_provider.add_log_record_processor(log_processor)
-    dbos_logger.addHandler(LoggingHandler(logger_provider=log_provider))
+    log_processor.force_flush(timeout_millis=5000)
+    log_exporter.clear()  # Clear any logs generated during setup
 
     await test_workflow()
 
@@ -216,6 +209,7 @@ async def test_spans_async(dbos: DBOS) -> None:
         )
 
     spans = exporter.get_finished_spans()
+    exporter.clear()
 
     assert len(spans) == 4
 
@@ -281,8 +275,14 @@ async def test_spans_async(dbos: DBOS) -> None:
     )
 
 
-def test_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
-    dbos, app = dbos_fastapi
+def test_wf_fastapi(config: DBOSConfig, setup_in_memory_otlp_collector) -> None:
+    provider, exporter, log_processor, log_exporter = setup_in_memory_otlp_collector
+
+    DBOS.destroy(destroy_registry=True)
+    config["enable_otlp"] = True
+    app = FastAPI()
+    dbos = DBOS(fastapi=app, config=config)
+    DBOS.launch()
 
     @app.get("/wf")
     @DBOS.workflow()
@@ -290,18 +290,8 @@ def test_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         dbos.logger.info("This is a test_workflow_endpoint")
         return "test"
 
-    exporter = InMemorySpanExporter()
-    span_processor = SimpleSpanProcessor(exporter)
-    provider = tracesdk.TracerProvider()
-    provider.add_span_processor(span_processor)
-    dbos_tracer.set_provider(provider)
-
-    # Set up in-memory log exporter
-    log_exporter = InMemoryLogExporter()  # type: ignore
-    log_processor = BatchLogRecordProcessor(log_exporter)
-    log_provider = LoggerProvider()
-    log_provider.add_log_record_processor(log_processor)
-    dbos_logger.addHandler(LoggingHandler(logger_provider=log_provider))
+    log_processor.force_flush(timeout_millis=5000)
+    log_exporter.clear()  # Clear any logs generated during setup
 
     client = TestClient(app)
     response = client.get("/wf")
@@ -310,7 +300,8 @@ def test_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     log_processor.force_flush(timeout_millis=5000)
     logs = log_exporter.get_finished_logs()
-    assert len(logs) == 1
+
+    assert len(logs) == 2
     assert logs[0].log_record.attributes is not None
     assert (
         logs[0].log_record.attributes["applicationVersion"] == DBOS.application_version
@@ -323,6 +314,7 @@ def test_wf_fastapi(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     )
 
     spans = exporter.get_finished_spans()
+    exporter.clear()
 
     assert len(spans) == 2
 

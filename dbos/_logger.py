@@ -100,10 +100,11 @@ def config_logger(config: "ConfigFile") -> None:
 
         # Even if no endpoints are provided, we still need a LoggerProvider to create the LoggingHandler
         global _otlp_handler
-        _otlp_handler = LoggingHandler(logger_provider=log_provider)
+        if _otlp_handler is None:
+            _otlp_handler = LoggingHandler(logger_provider=log_provider)
 
-        # Direct DBOS logs to OTLP
-        dbos_logger.addHandler(_otlp_handler)
+            # Direct DBOS logs to OTLP
+            dbos_logger.addHandler(_otlp_handler)
 
     # Attach DBOS-specific attributes to all log entries.
     global _dbos_log_transformer
