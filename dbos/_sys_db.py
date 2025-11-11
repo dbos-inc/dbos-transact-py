@@ -2010,7 +2010,9 @@ class SystemDatabase(ABC):
             dbos_logger.error(f"Error connecting to the DBOS system database: {e}")
             raise
 
-    def write_stream_from_step(self, workflow_uuid: str, key: str, value: Any) -> None:
+    def write_stream_from_step(
+        self, workflow_uuid: str, function_id, key: str, value: Any
+    ) -> None:
         """
         Write a key-value pair to the stream at the first unused offset.
         """
@@ -2040,6 +2042,7 @@ class SystemDatabase(ABC):
             c.execute(
                 sa.insert(SystemSchema.streams).values(
                     workflow_uuid=workflow_uuid,
+                    function_id=function_id,
                     key=key,
                     value=serialized_value,
                     offset=next_offset,
@@ -2096,6 +2099,7 @@ class SystemDatabase(ABC):
             c.execute(
                 sa.insert(SystemSchema.streams).values(
                     workflow_uuid=workflow_uuid,
+                    function_id=function_id,
                     key=key,
                     value=serialized_value,
                     offset=next_offset,
