@@ -232,7 +232,7 @@ def get_dbos_migration_six(schema: str) -> str:
     return f"""
 CREATE TABLE \"{schema}\".workflow_events_history (
     workflow_uuid TEXT NOT NULL,
-    function_id TEXT NOT NULL,
+    function_id INTEGER NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
     PRIMARY KEY (workflow_uuid, function_id, key),

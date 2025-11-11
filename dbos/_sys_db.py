@@ -776,6 +776,21 @@ class SystemDatabase(ABC):
                         ),
                     )
                 )
+                # Copy only the latest version of each workflow event from the history table
+                # (the one with the maximum function_id for each key where function_id < start_step)
+                weh1 = SystemSchema.workflow_events_history.alias("weh1")
+                weh2 = SystemSchema.workflow_events_history.alias("weh2")
+
+                max_function_id_subquery = (
+                    sa.select(sa.func.max(weh2.c.function_id))
+                    .where(
+                        (weh2.c.workflow_uuid == original_workflow_id)
+                        & (weh2.c.key == weh1.c.key)
+                        & (weh2.c.function_id < start_step)
+                    )
+                    .scalar_subquery()
+                )
+
                 c.execute(
                     sa.insert(SystemSchema.workflow_events).from_select(
                         [
@@ -785,17 +800,12 @@ class SystemDatabase(ABC):
                         ],
                         sa.select(
                             sa.literal(forked_workflow_id).label("workflow_uuid"),
-                            SystemSchema.workflow_events_history.c.key,
-                            SystemSchema.workflow_events_history.c.value,
+                            weh1.c.key,
+                            weh1.c.value,
                         ).where(
-                            (
-                                SystemSchema.workflow_events_history.c.workflow_uuid
-                                == original_workflow_id
-                            )
-                            & (
-                                SystemSchema.workflow_events_history.c.function_id
-                                < start_step
-                            )
+                            (weh1.c.workflow_uuid == original_workflow_id)
+                            & (weh1.c.function_id < start_step)
+                            & (weh1.c.function_id == max_function_id_subquery)
                         ),
                     )
                 )
