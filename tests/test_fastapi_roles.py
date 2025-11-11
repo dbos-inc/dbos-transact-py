@@ -18,18 +18,15 @@ from dbos import DBOS, DBOSContextSetAuth
 from dbos._context import assert_current_dbos_context
 from dbos._error import DBOSInitializationError, DBOSNotAuthorizedError
 from dbos._sys_db import GetWorkflowsInput
-from dbos._tracer import dbos_tracer
+from tests.conftest import TestOtelType
 
 
 @pytest.mark.order(1)
-def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
-    # Set up a simple in-memory span exporter for testing
-    exporter = InMemorySpanExporter()
-    span_processor = SimpleSpanProcessor(exporter)
-    provider = tracesdk.TracerProvider()
-    provider.add_span_processor(span_processor)
-    dbos_tracer.set_provider(provider)
+def test_simple_endpoint(
+    dbos_fastapi: Tuple[DBOS, FastAPI], setup_in_memory_otlp_collector: TestOtelType
+) -> None:
 
+    exporter, log_processor, log_exporter = setup_in_memory_otlp_collector
     dbos, app = dbos_fastapi
 
     @app.middleware("http")
@@ -100,6 +97,7 @@ def test_simple_endpoint(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
         raise HTTPException(status_code=401)
 
     client = TestClient(app)
+    exporter.clear()
 
     response = client.get("/user/b")
     assert response.status_code == 200

@@ -160,7 +160,7 @@ def client(config: DBOSConfig, dbos: DBOS) -> Generator[DBOSClient, Any, None]:
 def dbos_fastapi(  # type: ignore
     config: DBOSConfig, cleanup_test_databases: None, setup_in_memory_otlp_collector
 ) -> Generator[Tuple[DBOS, FastAPI], Any, None]:
-    provider, exporter, log_processor, log_exporter = setup_in_memory_otlp_collector
+    exporter, log_processor, log_exporter = setup_in_memory_otlp_collector
     config["enable_otlp"] = True
     DBOS.destroy(destroy_registry=True)
     app = FastAPI()
@@ -191,14 +191,18 @@ def dbos_flask(
     DBOS.destroy(destroy_registry=True)
 
 
+# Type for mypy
+# define type
+TestOtelType = Tuple[
+    InMemorySpanExporter,
+    BatchLogRecordProcessor,
+    InMemoryLogExporter,
+]
+
+
 @pytest.fixture(scope="session")
 def setup_in_memory_otlp_collector() -> Generator[
-    Tuple[
-        tracesdk.TracerProvider,
-        InMemorySpanExporter,
-        BatchLogRecordProcessor,
-        InMemoryLogExporter,
-    ],
+    TestOtelType,
     Any,
     None,
 ]:
@@ -215,7 +219,7 @@ def setup_in_memory_otlp_collector() -> Generator[
     log_provider.add_log_record_processor(log_processor)
     set_logger_provider(log_provider)
 
-    yield provider, exporter, log_processor, log_exporter
+    yield exporter, log_processor, log_exporter
 
 
 # Pretty-print test names
