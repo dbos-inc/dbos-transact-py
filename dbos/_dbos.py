@@ -7,7 +7,6 @@ import os
 import sys
 import threading
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from logging import Logger
 from typing import (
@@ -33,7 +32,7 @@ from dbos._conductor.conductor import ConductorWebsocket
 from dbos._debouncer import debouncer_workflow
 from dbos._serialization import DefaultSerializer, Serializer
 from dbos._sys_db import SystemDatabase, WorkflowStatus
-from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, generate_uuid
 from dbos._workflow_commands import fork_workflow, list_queued_workflows, list_workflows
 
 from ._classproperty import classproperty
@@ -444,7 +443,7 @@ class DBOS:
             if GlobalParams.app_version == "":
                 GlobalParams.app_version = self._registry.compute_app_version()
             if self.conductor_key is not None:
-                GlobalParams.executor_id = str(uuid.uuid4())
+                GlobalParams.executor_id = generate_uuid()
             dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             self._executor_field = ThreadPoolExecutor(max_workers=sys.maxsize)
@@ -496,20 +495,21 @@ class DBOS:
                 except Exception as e:
                     dbos_logger.warning(f"Failed to start admin server: {e}")
 
-            dbos_logger.debug("Retrieving local pending workflows for recovery")
-            workflow_ids = self._sys_db.get_pending_workflows(
-                GlobalParams.executor_id, GlobalParams.app_version
-            )
-            if (len(workflow_ids)) > 0:
-                self.logger.info(
-                    f"Recovering {len(workflow_ids)} workflows from application version {GlobalParams.app_version}"
+            # Recover local workflows if not using a recovery service
+            if not self.conductor_key and not GlobalParams.dbos_cloud:
+                dbos_logger.debug("Retrieving local pending workflows for recovery")
+                workflow_ids = self._sys_db.get_pending_workflows(
+                    GlobalParams.executor_id, GlobalParams.app_version
                 )
-            else:
-                self.logger.info(
-                    f"No workflows to recover from application version {GlobalParams.app_version}"
-                )
-
-            self._executor.submit(startup_recovery_thread, self, workflow_ids)
+                if (len(workflow_ids)) > 0:
+                    self.logger.info(
+                        f"Recovering {len(workflow_ids)} workflows from application version {GlobalParams.app_version}"
+                    )
+                else:
+                    self.logger.info(
+                        f"No workflows to recover from application version {GlobalParams.app_version}"
+                    )
+                self._executor.submit(startup_recovery_thread, self, workflow_ids)
 
             # Listen to notifications
             dbos_logger.debug("Starting notifications listener thread")

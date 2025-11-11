@@ -1,4 +1,3 @@
-import uuid
 from typing import Any
 from urllib.parse import urlparse
 
@@ -6,7 +5,7 @@ from flask import Flask
 from werkzeug.wrappers import Request as WRequest
 
 from ._context import EnterDBOSHandler, OperationType, SetWorkflowID, TracedAttributes
-from ._utils import request_id_header
+from ._utils import generate_uuid, request_id_header
 
 
 class FlaskMiddleware:
@@ -41,7 +40,7 @@ def _get_or_generate_request_id(request: WRequest) -> str:
     if request_id is not None:
         return request_id
     else:
-        return str(uuid.uuid4())
+        return generate_uuid()
 
 
 def setup_flask_middleware(app: Flask) -> None:

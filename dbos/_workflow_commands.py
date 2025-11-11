@@ -1,8 +1,8 @@
-import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional, Union
 
 from dbos._context import get_local_dbos_context
+from dbos._utils import generate_uuid
 
 from ._app_db import ApplicationDatabase
 from ._sys_db import (
@@ -125,7 +125,7 @@ def fork_workflow(
         forked_workflow_id = ctx.id_assigned_for_next_workflow
         ctx.id_assigned_for_next_workflow = ""
     else:
-        forked_workflow_id = str(uuid.uuid4())
+        forked_workflow_id = generate_uuid()
     if app_db:
         app_db.clone_workflow_transactions(workflow_id, forked_workflow_id, start_step)
     sys_db.fork_workflow(

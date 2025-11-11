@@ -1,5 +1,7 @@
 import importlib.metadata
 import os
+import sys
+import uuid
 
 import psycopg
 from sqlalchemy.exc import DBAPIError
@@ -12,6 +14,7 @@ request_id_header = "x-request-id"
 class GlobalParams:
     app_version: str = os.environ.get("DBOS__APPVERSION", "")
     executor_id: str = os.environ.get("DBOS__VMID", "local")
+    dbos_cloud: bool = os.environ.get("DBOS__CLOUD") == "true"
     try:
         # Only works on Python >= 3.8
         dbos_version = importlib.metadata.version("dbos")
@@ -57,3 +60,10 @@ def retriable_sqlite_exception(e: Exception) -> bool:
         return True
     else:
         return False
+
+
+def generate_uuid() -> str:
+    if sys.version_info >= (3, 14):
+        return str(uuid.uuid7())
+    else:
+        return str(uuid.uuid4())

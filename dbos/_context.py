@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import uuid
 from contextlib import AbstractContextManager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -15,7 +14,7 @@ if TYPE_CHECKING:
 
 from sqlalchemy.orm import Session
 
-from dbos._utils import GlobalParams
+from dbos._utils import GlobalParams, generate_uuid
 
 from ._logger import dbos_logger
 from ._tracer import dbos_tracer
@@ -151,7 +150,7 @@ class DBOSContext:
                 self.logger.warning(
                     f"Multiple workflows started in the same SetWorkflowID block. Only the first workflow is assigned the specified workflow ID; subsequent workflows will use a generated workflow ID."
                 )
-            wfid = str(uuid.uuid4())
+            wfid = generate_uuid()
         return wfid
 
     def start_workflow(

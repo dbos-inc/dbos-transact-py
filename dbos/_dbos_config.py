@@ -265,7 +265,7 @@ def load_config(
             ]
 
     data = cast(ConfigFile, data)
-    return data  # type: ignore
+    return data
 
 
 def process_config(
