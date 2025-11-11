@@ -10,6 +10,13 @@ import pytest
 import sqlalchemy as sa
 from fastapi import FastAPI
 from flask import Flask
+from opentelemetry import trace
+from opentelemetry._logs import set_logger_provider
+from opentelemetry.sdk import trace as tracesdk
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, InMemoryLogExporter
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from dbos import DBOS, DBOSClient, DBOSConfig
 from dbos._schemas.system_database import SystemSchema
@@ -54,7 +61,7 @@ def default_config() -> DBOSConfig:
             if using_sqlite()
             else f"postgresql+psycopg://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy_dbos_sys"
         ),
-        "enable_otlp": True,
+        "enable_otlp": False,
     }
 
 
@@ -150,9 +157,11 @@ def client(config: DBOSConfig, dbos: DBOS) -> Generator[DBOSClient, Any, None]:
 
 
 @pytest.fixture()
-def dbos_fastapi(
-    config: DBOSConfig, cleanup_test_databases: None
+def dbos_fastapi(  # type: ignore
+    config: DBOSConfig, cleanup_test_databases: None, setup_in_memory_otlp_collector
 ) -> Generator[Tuple[DBOS, FastAPI], Any, None]:
+    exporter, log_processor, log_exporter = setup_in_memory_otlp_collector
+    config["enable_otlp"] = True
     DBOS.destroy(destroy_registry=True)
     app = FastAPI()
     dbos = DBOS(fastapi=app, config=config)
@@ -180,6 +189,37 @@ def dbos_flask(
 
     yield dbos, app
     DBOS.destroy(destroy_registry=True)
+
+
+# Type for mypy
+# define type
+TestOtelType = Tuple[
+    InMemorySpanExporter,
+    BatchLogRecordProcessor,
+    InMemoryLogExporter,
+]
+
+
+@pytest.fixture(scope="session")
+def setup_in_memory_otlp_collector() -> Generator[
+    TestOtelType,
+    Any,
+    None,
+]:
+    exporter = InMemorySpanExporter()
+    span_processor = SimpleSpanProcessor(exporter)
+    provider = tracesdk.TracerProvider()
+    provider.add_span_processor(span_processor)
+    trace.set_tracer_provider(provider)
+
+    # Set up in-memory log exporter
+    log_exporter = InMemoryLogExporter()  # type: ignore
+    log_processor = BatchLogRecordProcessor(log_exporter)
+    log_provider = LoggerProvider()
+    log_provider.add_log_record_processor(log_processor)
+    set_logger_provider(log_provider)
+
+    yield exporter, log_processor, log_exporter
 
 
 # Pretty-print test names
