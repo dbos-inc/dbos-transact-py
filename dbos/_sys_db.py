@@ -716,34 +716,64 @@ class SystemDatabase(ABC):
             )
 
             if start_step > 1:
-
-                # Copy the original workflow's outputs into the forked workflow
-                insert_stmt = sa.insert(SystemSchema.operation_outputs).from_select(
-                    [
-                        "workflow_uuid",
-                        "function_id",
-                        "output",
-                        "error",
-                        "function_name",
-                        "child_workflow_id",
-                    ],
-                    sa.select(
-                        sa.literal(forked_workflow_id).label("workflow_uuid"),
-                        SystemSchema.operation_outputs.c.function_id,
-                        SystemSchema.operation_outputs.c.output,
-                        SystemSchema.operation_outputs.c.error,
-                        SystemSchema.operation_outputs.c.function_name,
-                        SystemSchema.operation_outputs.c.child_workflow_id,
-                    ).where(
-                        (
-                            SystemSchema.operation_outputs.c.workflow_uuid
-                            == original_workflow_id
-                        )
-                        & (SystemSchema.operation_outputs.c.function_id < start_step)
-                    ),
+                # Copy the original workflow's step checkpoints
+                c.execute(
+                    sa.insert(SystemSchema.operation_outputs).from_select(
+                        [
+                            "workflow_uuid",
+                            "function_id",
+                            "output",
+                            "error",
+                            "function_name",
+                            "child_workflow_id",
+                            "started_at_epoch_ms",
+                            "completed_at_epoch_ms",
+                        ],
+                        sa.select(
+                            sa.literal(forked_workflow_id).label("workflow_uuid"),
+                            SystemSchema.operation_outputs.c.function_id,
+                            SystemSchema.operation_outputs.c.output,
+                            SystemSchema.operation_outputs.c.error,
+                            SystemSchema.operation_outputs.c.function_name,
+                            SystemSchema.operation_outputs.c.child_workflow_id,
+                            SystemSchema.operation_outputs.c.started_at_epoch_ms,
+                            SystemSchema.operation_outputs.c.completed_at_epoch_ms,
+                        ).where(
+                            (
+                                SystemSchema.operation_outputs.c.workflow_uuid
+                                == original_workflow_id
+                            )
+                            & (
+                                SystemSchema.operation_outputs.c.function_id
+                                < start_step
+                            )
+                        ),
+                    )
+                )
+                # Copy the original workflow's events
+                c.execute(
+                    sa.insert(SystemSchema.workflow_events).from_select(
+                        [
+                            "workflow_uuid",
+                            "function_id",
+                            "key",
+                            "value",
+                        ],
+                        sa.select(
+                            sa.literal(forked_workflow_id).label("workflow_uuid"),
+                            SystemSchema.workflow_events.c.function_id,
+                            SystemSchema.workflow_events.c.key,
+                            SystemSchema.workflow_events.c.value,
+                        ).where(
+                            (
+                                SystemSchema.workflow_events.c.workflow_uuid
+                                == original_workflow_id
+                            )
+                            & (SystemSchema.workflow_events.c.function_id < start_step)
+                        ),
+                    )
                 )
 
-                c.execute(insert_stmt)
         return forked_workflow_id
 
     @db_retry()
