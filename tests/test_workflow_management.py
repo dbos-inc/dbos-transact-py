@@ -704,3 +704,44 @@ def test_global_timeout(dbos: DBOS) -> None:
             handle.get_result()
     event.set()
     assert final_handle.get_result() is not None
+
+
+def test_fork_events(dbos: DBOS) -> None:
+
+    key = "key"
+    event = threading.Event()
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        event.wait()
+        DBOS.set_event(key, 0)
+        event.wait()
+        DBOS.set_event(key, 1)
+        event.wait()
+        DBOS.set_event(key, 2)
+        assert DBOS.workflow_id
+        return DBOS.workflow_id
+
+    event.set()
+    handle = DBOS.start_workflow(workflow)
+    assert handle.get_result() == handle.workflow_id
+    assert DBOS.get_event(handle.workflow_id, key) == 2
+
+    event.clear()
+
+    fork_one = DBOS.fork_workflow(handle.workflow_id, 1)
+    assert DBOS.get_event(fork_one.workflow_id, key, timeout_seconds=0.0) is None
+
+    fork_two = DBOS.fork_workflow(handle.workflow_id, 2)
+    assert DBOS.get_event(fork_two.workflow_id, key) == 0
+
+    fork_three = DBOS.fork_workflow(handle.workflow_id, 3)
+    assert DBOS.get_event(fork_three.workflow_id, key) == 1
+
+    fork_four = DBOS.fork_workflow(handle.workflow_id, 4)
+    assert DBOS.get_event(fork_four.workflow_id, key) == 2
+
+    event.set()
+    for handle in [fork_one, fork_two, fork_three, fork_four]:
+        assert handle.get_result()
+        assert DBOS.get_event(handle.workflow_id, key) == 2
