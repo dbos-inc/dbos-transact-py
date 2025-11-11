@@ -707,7 +707,6 @@ def test_global_timeout(dbos: DBOS) -> None:
 
 
 def test_fork_events(dbos: DBOS) -> None:
-
     key = "key"
     event = threading.Event()
 
