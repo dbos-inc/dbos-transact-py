@@ -752,7 +752,7 @@ class SystemDatabase(ABC):
                 )
                 # Copy the original workflow's events
                 c.execute(
-                    sa.insert(SystemSchema.workflow_events).from_select(
+                    sa.insert(SystemSchema.workflow_events_history).from_select(
                         [
                             "workflow_uuid",
                             "function_id",
@@ -761,15 +761,41 @@ class SystemDatabase(ABC):
                         ],
                         sa.select(
                             sa.literal(forked_workflow_id).label("workflow_uuid"),
-                            SystemSchema.workflow_events.c.function_id,
-                            SystemSchema.workflow_events.c.key,
-                            SystemSchema.workflow_events.c.value,
+                            SystemSchema.workflow_events_history.c.function_id,
+                            SystemSchema.workflow_events_history.c.key,
+                            SystemSchema.workflow_events_history.c.value,
                         ).where(
                             (
-                                SystemSchema.workflow_events.c.workflow_uuid
+                                SystemSchema.workflow_events_history.c.workflow_uuid
                                 == original_workflow_id
                             )
-                            & (SystemSchema.workflow_events.c.function_id < start_step)
+                            & (
+                                SystemSchema.workflow_events_history.c.function_id
+                                < start_step
+                            )
+                        ),
+                    )
+                )
+                c.execute(
+                    sa.insert(SystemSchema.workflow_events).from_select(
+                        [
+                            "workflow_uuid",
+                            "key",
+                            "value",
+                        ],
+                        sa.select(
+                            sa.literal(forked_workflow_id).label("workflow_uuid"),
+                            SystemSchema.workflow_events_history.c.key,
+                            SystemSchema.workflow_events_history.c.value,
+                        ).where(
+                            (
+                                SystemSchema.workflow_events_history.c.workflow_uuid
+                                == original_workflow_id
+                            )
+                            & (
+                                SystemSchema.workflow_events_history.c.function_id
+                                < start_step
+                            )
                         ),
                     )
                 )
@@ -1577,6 +1603,18 @@ class SystemDatabase(ABC):
                 self.dialect.insert(SystemSchema.workflow_events)
                 .values(
                     workflow_uuid=workflow_uuid,
+                    key=key,
+                    value=self.serializer.serialize(message),
+                )
+                .on_conflict_do_update(
+                    index_elements=["workflow_uuid", "key"],
+                    set_={"value": self.serializer.serialize(message)},
+                )
+            )
+            c.execute(
+                self.dialect.insert(SystemSchema.workflow_events_history)
+                .values(
+                    workflow_uuid=workflow_uuid,
                     function_id=function_id,
                     key=key,
                     value=self.serializer.serialize(message),
@@ -1608,6 +1646,18 @@ class SystemDatabase(ABC):
                 self.dialect.insert(SystemSchema.workflow_events)
                 .values(
                     workflow_uuid=workflow_uuid,
+                    key=key,
+                    value=self.serializer.serialize(message),
+                )
+                .on_conflict_do_update(
+                    index_elements=["workflow_uuid", "key"],
+                    set_={"value": self.serializer.serialize(message)},
+                )
+            )
+            c.execute(
+                self.dialect.insert(SystemSchema.workflow_events_history)
+                .values(
+                    workflow_uuid=workflow_uuid,
                     function_id=function_id,
                     key=key,
                     value=self.serializer.serialize(message),
@@ -1633,13 +1683,8 @@ class SystemDatabase(ABC):
                 sa.select(
                     SystemSchema.workflow_events.c.key,
                     SystemSchema.workflow_events.c.value,
-                )
-                .where(SystemSchema.workflow_events.c.workflow_uuid == workflow_id)
-                .order_by(SystemSchema.workflow_events.c.function_id.asc())
+                ).where(SystemSchema.workflow_events.c.workflow_uuid == workflow_id)
             ).fetchall()
-
-            # Because events are ordered by function_id, the final dicst
-            # will contain the latest version of each event.
             events: Dict[str, Any] = {}
             for row in rows:
                 key = row[0]
@@ -1658,16 +1703,11 @@ class SystemDatabase(ABC):
     ) -> Any:
         function_name = "DBOS.getEvent"
         start_time = int(time.time() * 1000)
-        get_sql = (
-            sa.select(
-                SystemSchema.workflow_events.c.value,
-            )
-            .where(
-                SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
-                SystemSchema.workflow_events.c.key == key,
-            )
-            .order_by(SystemSchema.workflow_events.c.function_id.desc())
-            .limit(1)
+        get_sql = sa.select(
+            SystemSchema.workflow_events.c.value,
+        ).where(
+            SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
+            SystemSchema.workflow_events.c.key == key,
         )
         # Check for previous executions only if it's in a workflow
         if caller_ctx is not None:
