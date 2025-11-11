@@ -233,6 +233,7 @@ def get_dbos_migration_six(schema: str) -> str:
 ALTER TABLE \"{schema}\".workflow_events ADD COLUMN function_id INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE \"{schema}\".workflow_events DROP CONSTRAINT workflow_events_pkey;
 ALTER TABLE \"{schema}\".workflow_events ADD PRIMARY KEY (workflow_uuid, key, function_id);
+ALTER TABLE \"{schema}\".streams ADD COLUMN function_id INTEGER NOT NULL DEFAULT 0;
 """
 
 
@@ -370,6 +371,8 @@ SELECT workflow_uuid, key, value, 0 FROM workflow_events;
 DROP TABLE workflow_events;
 
 ALTER TABLE workflow_events_new RENAME TO workflow_events;
+
+ALTER TABLE streams ADD COLUMN function_id INTEGER NOT NULL DEFAULT 0;
 """
 
 
