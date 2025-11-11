@@ -45,7 +45,7 @@ class DBOSTracer:
             tracer_provider = trace.get_tracer_provider()
 
             # Only set up OTLP provider and exporter if endpoints are provided
-            if otlp_traces_endpoints is not None:
+            if otlp_traces_endpoints is not None and len(otlp_traces_endpoints) > 0:
                 if not isinstance(tracer_provider, TracerProvider):
                     resource = Resource(
                         attributes={

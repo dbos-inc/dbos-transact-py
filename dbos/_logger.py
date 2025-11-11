@@ -79,7 +79,7 @@ def config_logger(config: "ConfigFile") -> None:
 
         # Only set up OTLP provider and exporter if endpoints are provided
         log_provider = get_logger_provider()
-        if otlp_logs_endpoints is not None:
+        if otlp_logs_endpoints is not None and len(otlp_logs_endpoints) > 0:
             if not isinstance(log_provider, LoggerProvider):
                 log_provider = LoggerProvider(
                     Resource.create(
@@ -100,10 +100,11 @@ def config_logger(config: "ConfigFile") -> None:
 
         # Even if no endpoints are provided, we still need a LoggerProvider to create the LoggingHandler
         global _otlp_handler
-        _otlp_handler = LoggingHandler(logger_provider=log_provider)
+        if _otlp_handler is None:
+            _otlp_handler = LoggingHandler(logger_provider=log_provider)
 
-        # Direct DBOS logs to OTLP
-        dbos_logger.addHandler(_otlp_handler)
+            # Direct DBOS logs to OTLP
+            dbos_logger.addHandler(_otlp_handler)
 
     # Attach DBOS-specific attributes to all log entries.
     global _dbos_log_transformer
