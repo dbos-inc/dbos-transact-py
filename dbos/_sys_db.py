@@ -773,6 +773,31 @@ class SystemDatabase(ABC):
                         ),
                     )
                 )
+                # Copy the original workflow's streams
+                c.execute(
+                    sa.insert(SystemSchema.streams).from_select(
+                        [
+                            "workflow_uuid",
+                            "function_id",
+                            "key",
+                            "value",
+                            "offset",
+                        ],
+                        sa.select(
+                            sa.literal(forked_workflow_id).label("workflow_uuid"),
+                            SystemSchema.streams.c.function_id,
+                            SystemSchema.streams.c.key,
+                            SystemSchema.streams.c.value,
+                            SystemSchema.streams.c.offset,
+                        ).where(
+                            (
+                                SystemSchema.streams.c.workflow_uuid
+                                == original_workflow_id
+                            )
+                            & (SystemSchema.streams.c.function_id < start_step)
+                        ),
+                    )
+                )
 
         return forked_workflow_id
 
