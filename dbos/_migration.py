@@ -360,24 +360,15 @@ ALTER TABLE operation_outputs ADD COLUMN completed_at_epoch_ms BIGINT;
 """
 
 sqlite_migration_six = """
--- SQLite doesn't support dropping primary keys, so we need to recreate the table
-CREATE TABLE workflow_events_new (
+CREATE TABLE workflow_events_history (
     workflow_uuid TEXT NOT NULL,
+    function_id INTEGER NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
-    function_id INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (workflow_uuid, key, function_id),
+    PRIMARY KEY (workflow_uuid, function_id, key),
     FOREIGN KEY (workflow_uuid) REFERENCES workflow_status(workflow_uuid)
         ON UPDATE CASCADE ON DELETE CASCADE
 );
-
-INSERT INTO workflow_events_new (workflow_uuid, key, value, function_id)
-SELECT workflow_uuid, key, value, 0 FROM workflow_events;
-
-DROP TABLE workflow_events;
-
-ALTER TABLE workflow_events_new RENAME TO workflow_events;
-
 ALTER TABLE streams ADD COLUMN function_id INTEGER NOT NULL DEFAULT 0;
 """
 
