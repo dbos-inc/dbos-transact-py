@@ -1,23 +1,14 @@
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Optional
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from inline_snapshot import snapshot
-from opentelemetry._logs import set_logger_provider
-from opentelemetry.sdk import trace as tracesdk
-from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, InMemoryLogExporter
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace.span import format_trace_id
 
 from dbos import DBOS, DBOSConfig
-from dbos._logger import dbos_logger
-from dbos._tracer import dbos_tracer
 from dbos._utils import GlobalParams
-from tests.conftest import default_config
 
 
 @dataclass
@@ -27,7 +18,7 @@ class BasicSpan:
     parent_id: Optional[int] = field(repr=False, compare=False, default=None)
 
 
-def test_spans(config: DBOSConfig, setup_in_memory_otlp_collector) -> None:
+def test_spans(config: DBOSConfig, setup_in_memory_otlp_collector) -> None:  # type: ignore
     provider, exporter, log_processor, log_exporter = setup_in_memory_otlp_collector
 
     DBOS.destroy(destroy_registry=True)
@@ -103,9 +94,9 @@ def test_spans(config: DBOSConfig, setup_in_memory_otlp_collector) -> None:
     assert spans[1].name == "a new span"
     assert spans[3].name == test_workflow.__qualname__
 
-    assert spans[0].parent.span_id == spans[2].context.span_id  # type: ignore
-    assert spans[1].parent.span_id == spans[2].context.span_id  # type: ignore
-    assert spans[2].parent.span_id == spans[3].context.span_id  # type: ignore
+    assert spans[0].parent.span_id == spans[2].context.span_id
+    assert spans[1].parent.span_id == spans[2].context.span_id
+    assert spans[2].parent.span_id == spans[3].context.span_id
     assert spans[3].parent == None
 
     # Span ID and trace ID should match the log record
@@ -152,7 +143,7 @@ def test_spans(config: DBOSConfig, setup_in_memory_otlp_collector) -> None:
 
 
 @pytest.mark.asyncio
-async def test_spans_async(config: DBOSConfig, setup_in_memory_otlp_collector) -> None:
+async def test_spans_async(config: DBOSConfig, setup_in_memory_otlp_collector) -> None:  # type: ignore
     provider, exporter, log_processor, log_exporter = setup_in_memory_otlp_collector
 
     DBOS.destroy(destroy_registry=True)
@@ -228,9 +219,9 @@ async def test_spans_async(config: DBOSConfig, setup_in_memory_otlp_collector) -
     assert spans[1].name == "a new span"
     assert spans[3].name == test_workflow.__qualname__
 
-    assert spans[0].parent.span_id == spans[2].context.span_id  # type: ignore
-    assert spans[1].parent.span_id == spans[2].context.span_id  # type: ignore
-    assert spans[2].parent.span_id == spans[3].context.span_id  # type: ignore
+    assert spans[0].parent.span_id == spans[2].context.span_id
+    assert spans[1].parent.span_id == spans[2].context.span_id
+    assert spans[2].parent.span_id == spans[3].context.span_id
     assert spans[3].parent == None
 
     # Span ID and trace ID should match the log record
@@ -275,7 +266,7 @@ async def test_spans_async(config: DBOSConfig, setup_in_memory_otlp_collector) -
     )
 
 
-def test_wf_fastapi(config: DBOSConfig, setup_in_memory_otlp_collector) -> None:
+def test_wf_fastapi(config: DBOSConfig, setup_in_memory_otlp_collector) -> None:  # type: ignore
     provider, exporter, log_processor, log_exporter = setup_in_memory_otlp_collector
 
     DBOS.destroy(destroy_registry=True)
@@ -330,7 +321,7 @@ def test_wf_fastapi(config: DBOSConfig, setup_in_memory_otlp_collector) -> None:
     assert spans[1].attributes is not None
     assert spans[1].attributes["responseCode"] == 200
 
-    assert spans[0].parent.span_id == spans[1].context.span_id  # type: ignore
+    assert spans[0].parent.span_id == spans[1].context.span_id
     assert spans[1].parent == None
 
     # Span ID and trace ID should match the log record
@@ -339,7 +330,11 @@ def test_wf_fastapi(config: DBOSConfig, setup_in_memory_otlp_collector) -> None:
     assert logs[0].log_record.trace_id == spans[0].context.trace_id
 
 
-def test_disable_otlp_no_spans(config: DBOSConfig) -> None:
+def test_disable_otlp_no_spans(  # type: ignore
+    config: DBOSConfig, setup_in_memory_otlp_collector
+) -> None:
+    provider, exporter, log_processor, log_exporter = setup_in_memory_otlp_collector
+
     DBOS.destroy(destroy_registry=True)
     config["otlp_attributes"] = {"foo": "bar"}
     config["enable_otlp"] = False
@@ -356,18 +351,8 @@ def test_disable_otlp_no_spans(config: DBOSConfig) -> None:
         DBOS.logger.info("This is a test_step")
         return
 
-    exporter = InMemorySpanExporter()
-    span_processor = SimpleSpanProcessor(exporter)
-    provider = tracesdk.TracerProvider()
-    provider.add_span_processor(span_processor)
-    dbos_tracer.set_provider(provider)
-
-    # Set up in-memory log exporter
-    log_exporter = InMemoryLogExporter()  # type: ignore
-    log_processor = BatchLogRecordProcessor(log_exporter)
-    log_provider = LoggerProvider()
-    log_provider.add_log_record_processor(log_processor)
-    dbos_logger.addHandler(LoggingHandler(logger_provider=log_provider))
+    log_processor.force_flush(timeout_millis=5000)
+    log_exporter.clear()  # Clear any logs generated during setup
 
     test_workflow()
 

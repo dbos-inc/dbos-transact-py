@@ -13,11 +13,10 @@ from flask import Flask
 from opentelemetry import trace
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk import trace as tracesdk
-from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, InMemoryLogExporter
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.trace.span import format_trace_id
 
 from dbos import DBOS, DBOSClient, DBOSConfig
 from dbos._schemas.system_database import SystemSchema
