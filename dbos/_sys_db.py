@@ -804,7 +804,6 @@ class SystemDatabase(ABC):
                             weh1.c.value,
                         ).where(
                             (weh1.c.workflow_uuid == original_workflow_id)
-                            & (weh1.c.function_id < start_step)
                             & (weh1.c.function_id == max_function_id_subquery)
                         ),
                     )
