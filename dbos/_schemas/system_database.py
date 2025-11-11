@@ -35,6 +35,7 @@ class SystemSchema:
         cls.notifications.schema = schema_name
         cls.workflow_events.schema = schema_name
         cls.streams.schema = schema_name
+        cls.workflow_events_history.schema = schema_name
 
     workflow_status = Table(
         "workflow_status",
@@ -154,6 +155,24 @@ class SystemSchema:
         PrimaryKeyConstraint("workflow_uuid", "key"),
     )
 
+    # This is an immutable version of workflow_events. Two tables are needed for backwards compatibility.
+    workflow_events_history = Table(
+        "workflow_events_history",
+        metadata_obj,
+        Column(
+            "workflow_uuid",
+            Text,
+            ForeignKey(
+                "workflow_status.workflow_uuid", onupdate="CASCADE", ondelete="CASCADE"
+            ),
+            nullable=False,
+        ),
+        Column("key", Text, nullable=False),
+        Column("value", Text, nullable=False),
+        Column("function_id", Integer, nullable=False, server_default=text("'0'::int")),
+        PrimaryKeyConstraint("workflow_uuid", "key", "function_id"),
+    )
+
     streams = Table(
         "streams",
         metadata_obj,
@@ -168,5 +187,6 @@ class SystemSchema:
         Column("key", Text, nullable=False),
         Column("value", Text, nullable=False),
         Column("offset", Integer, nullable=False),
+        Column("function_id", Integer, nullable=False, server_default=text("'0'::int")),
         PrimaryKeyConstraint("workflow_uuid", "key", "offset"),
     )

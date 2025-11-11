@@ -228,6 +228,21 @@ ALTER TABLE \"{schema}\".operation_outputs ADD COLUMN started_at_epoch_ms BIGINT
 """
 
 
+def get_dbos_migration_six(schema: str) -> str:
+    return f"""
+CREATE TABLE \"{schema}\".workflow_events_history (
+    workflow_uuid TEXT NOT NULL,
+    function_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (workflow_uuid, function_id, key),
+    FOREIGN KEY (workflow_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid) 
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+ALTER TABLE \"{schema}\".streams ADD COLUMN function_id INTEGER NOT NULL DEFAULT 0;
+"""
+
+
 def get_dbos_migrations(schema: str) -> list[str]:
     return [
         get_dbos_migration_one(schema),
@@ -235,6 +250,7 @@ def get_dbos_migrations(schema: str) -> list[str]:
         get_dbos_migration_three(schema),
         get_dbos_migration_four(schema),
         get_dbos_migration_five(schema),
+        get_dbos_migration_six(schema),
     ]
 
 
@@ -343,6 +359,19 @@ ALTER TABLE operation_outputs ADD COLUMN started_at_epoch_ms BIGINT;
 ALTER TABLE operation_outputs ADD COLUMN completed_at_epoch_ms BIGINT;
 """
 
+sqlite_migration_six = """
+CREATE TABLE workflow_events_history (
+    workflow_uuid TEXT NOT NULL,
+    function_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (workflow_uuid, function_id, key),
+    FOREIGN KEY (workflow_uuid) REFERENCES workflow_status(workflow_uuid)
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+ALTER TABLE streams ADD COLUMN function_id INTEGER NOT NULL DEFAULT 0;
+"""
+
 
 sqlite_migrations = [
     sqlite_migration_one,
@@ -350,4 +379,5 @@ sqlite_migrations = [
     sqlite_migration_three,
     sqlite_migration_four,
     sqlite_migration_five,
+    sqlite_migration_six,
 ]

@@ -1384,7 +1384,7 @@ class DBOS:
                     )
             elif ctx.is_step():
                 _get_dbos_instance()._sys_db.write_stream_from_step(
-                    ctx.workflow_id, key, value
+                    ctx.workflow_id, ctx.function_id, key, value
                 )
             else:
                 raise DBOSException(

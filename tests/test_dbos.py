@@ -1009,6 +1009,7 @@ def test_set_get_events(dbos: DBOS) -> None:
 
     @DBOS.step()
     def set_event_step() -> None:
+        DBOS.set_event("key4", "badvalue")
         DBOS.set_event("key4", "value4")
 
     @DBOS.workflow()
@@ -1168,19 +1169,33 @@ def test_multi_set_event(dbos: DBOS) -> None:
 
     wfid = str(uuid.uuid4())
 
+    workflow_key = "workflow_key"
+    step_key = "step_key"
+    value1 = "value1"
+    value2 = "value2"
+
+    @DBOS.step()
+    def set_event_step(value: str) -> None:
+        DBOS.set_event(step_key, value)
+
     @DBOS.workflow()
-    def test_setevent_workflow() -> None:
+    def set_event_workflow() -> None:
         assert DBOS.workflow_id == wfid
-        DBOS.set_event("key", "value1")
+        DBOS.set_event(workflow_key, value1)
+        set_event_step(value1)
         event.wait()
-        DBOS.set_event("key", "value2")
+        DBOS.set_event(workflow_key, value2)
+        set_event_step(value2)
 
     with SetWorkflowID(wfid):
-        handle = DBOS.start_workflow(test_setevent_workflow)
-    assert DBOS.get_event(wfid, "key") == "value1"
+        handle = DBOS.start_workflow(set_event_workflow)
+    assert DBOS.get_event(wfid, workflow_key) == value1
+    assert DBOS.get_event(wfid, step_key) == value1
     event.set()
     assert handle.get_result() == None
-    assert DBOS.get_event(wfid, "key") == "value2"
+    assert DBOS.get_event(wfid, workflow_key) == value2
+    assert DBOS.get_event(wfid, step_key) == value2
+    assert DBOS.get_all_events(wfid) == {workflow_key: value2, step_key: value2}
 
 
 def test_debug_logging(
@@ -2009,6 +2024,7 @@ def test_get_events(dbos: DBOS) -> None:
     @DBOS.workflow()
     def events_workflow() -> str:
         # Set multiple events
+        DBOS.set_event("event1", "badvalue")
         DBOS.set_event("event1", "value1")
         DBOS.set_event("event2", {"nested": "data", "count": 42})
         DBOS.set_event("event3", [1, 2, 3, 4, 5])

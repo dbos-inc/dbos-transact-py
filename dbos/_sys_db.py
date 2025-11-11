@@ -716,34 +716,124 @@ class SystemDatabase(ABC):
             )
 
             if start_step > 1:
+                # Copy the original workflow's step checkpoints
+                c.execute(
+                    sa.insert(SystemSchema.operation_outputs).from_select(
+                        [
+                            "workflow_uuid",
+                            "function_id",
+                            "output",
+                            "error",
+                            "function_name",
+                            "child_workflow_id",
+                            "started_at_epoch_ms",
+                            "completed_at_epoch_ms",
+                        ],
+                        sa.select(
+                            sa.literal(forked_workflow_id).label("workflow_uuid"),
+                            SystemSchema.operation_outputs.c.function_id,
+                            SystemSchema.operation_outputs.c.output,
+                            SystemSchema.operation_outputs.c.error,
+                            SystemSchema.operation_outputs.c.function_name,
+                            SystemSchema.operation_outputs.c.child_workflow_id,
+                            SystemSchema.operation_outputs.c.started_at_epoch_ms,
+                            SystemSchema.operation_outputs.c.completed_at_epoch_ms,
+                        ).where(
+                            (
+                                SystemSchema.operation_outputs.c.workflow_uuid
+                                == original_workflow_id
+                            )
+                            & (
+                                SystemSchema.operation_outputs.c.function_id
+                                < start_step
+                            )
+                        ),
+                    )
+                )
+                # Copy the original workflow's events
+                c.execute(
+                    sa.insert(SystemSchema.workflow_events_history).from_select(
+                        [
+                            "workflow_uuid",
+                            "function_id",
+                            "key",
+                            "value",
+                        ],
+                        sa.select(
+                            sa.literal(forked_workflow_id).label("workflow_uuid"),
+                            SystemSchema.workflow_events_history.c.function_id,
+                            SystemSchema.workflow_events_history.c.key,
+                            SystemSchema.workflow_events_history.c.value,
+                        ).where(
+                            (
+                                SystemSchema.workflow_events_history.c.workflow_uuid
+                                == original_workflow_id
+                            )
+                            & (
+                                SystemSchema.workflow_events_history.c.function_id
+                                < start_step
+                            )
+                        ),
+                    )
+                )
+                # Copy only the latest version of each workflow event from the history table
+                # (the one with the maximum function_id for each key where function_id < start_step)
+                weh1 = SystemSchema.workflow_events_history.alias("weh1")
+                weh2 = SystemSchema.workflow_events_history.alias("weh2")
 
-                # Copy the original workflow's outputs into the forked workflow
-                insert_stmt = sa.insert(SystemSchema.operation_outputs).from_select(
-                    [
-                        "workflow_uuid",
-                        "function_id",
-                        "output",
-                        "error",
-                        "function_name",
-                        "child_workflow_id",
-                    ],
-                    sa.select(
-                        sa.literal(forked_workflow_id).label("workflow_uuid"),
-                        SystemSchema.operation_outputs.c.function_id,
-                        SystemSchema.operation_outputs.c.output,
-                        SystemSchema.operation_outputs.c.error,
-                        SystemSchema.operation_outputs.c.function_name,
-                        SystemSchema.operation_outputs.c.child_workflow_id,
-                    ).where(
-                        (
-                            SystemSchema.operation_outputs.c.workflow_uuid
-                            == original_workflow_id
-                        )
-                        & (SystemSchema.operation_outputs.c.function_id < start_step)
-                    ),
+                max_function_id_subquery = (
+                    sa.select(sa.func.max(weh2.c.function_id))
+                    .where(
+                        (weh2.c.workflow_uuid == original_workflow_id)
+                        & (weh2.c.key == weh1.c.key)
+                        & (weh2.c.function_id < start_step)
+                    )
+                    .scalar_subquery()
                 )
 
-                c.execute(insert_stmt)
+                c.execute(
+                    sa.insert(SystemSchema.workflow_events).from_select(
+                        [
+                            "workflow_uuid",
+                            "key",
+                            "value",
+                        ],
+                        sa.select(
+                            sa.literal(forked_workflow_id).label("workflow_uuid"),
+                            weh1.c.key,
+                            weh1.c.value,
+                        ).where(
+                            (weh1.c.workflow_uuid == original_workflow_id)
+                            & (weh1.c.function_id == max_function_id_subquery)
+                        ),
+                    )
+                )
+                # Copy the original workflow's streams
+                c.execute(
+                    sa.insert(SystemSchema.streams).from_select(
+                        [
+                            "workflow_uuid",
+                            "function_id",
+                            "key",
+                            "value",
+                            "offset",
+                        ],
+                        sa.select(
+                            sa.literal(forked_workflow_id).label("workflow_uuid"),
+                            SystemSchema.streams.c.function_id,
+                            SystemSchema.streams.c.key,
+                            SystemSchema.streams.c.value,
+                            SystemSchema.streams.c.offset,
+                        ).where(
+                            (
+                                SystemSchema.streams.c.workflow_uuid
+                                == original_workflow_id
+                            )
+                            & (SystemSchema.streams.c.function_id < start_step)
+                        ),
+                    )
+                )
+
         return forked_workflow_id
 
     @db_retry()
@@ -1530,6 +1620,19 @@ class SystemDatabase(ABC):
                     set_={"value": self.serializer.serialize(message)},
                 )
             )
+            c.execute(
+                self.dialect.insert(SystemSchema.workflow_events_history)
+                .values(
+                    workflow_uuid=workflow_uuid,
+                    function_id=function_id,
+                    key=key,
+                    value=self.serializer.serialize(message),
+                )
+                .on_conflict_do_update(
+                    index_elements=["workflow_uuid", "key", "function_id"],
+                    set_={"value": self.serializer.serialize(message)},
+                )
+            )
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
                 "function_id": function_id,
@@ -1543,6 +1646,7 @@ class SystemDatabase(ABC):
     def set_event_from_step(
         self,
         workflow_uuid: str,
+        function_id: int,
         key: str,
         message: Any,
     ) -> None:
@@ -1556,6 +1660,19 @@ class SystemDatabase(ABC):
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key"],
+                    set_={"value": self.serializer.serialize(message)},
+                )
+            )
+            c.execute(
+                self.dialect.insert(SystemSchema.workflow_events_history)
+                .values(
+                    workflow_uuid=workflow_uuid,
+                    function_id=function_id,
+                    key=key,
+                    value=self.serializer.serialize(message),
+                )
+                .on_conflict_do_update(
+                    index_elements=["workflow_uuid", "key", "function_id"],
                     set_={"value": self.serializer.serialize(message)},
                 )
             )
@@ -1577,7 +1694,6 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_events.c.value,
                 ).where(SystemSchema.workflow_events.c.workflow_uuid == workflow_id)
             ).fetchall()
-
             events: Dict[str, Any] = {}
             for row in rows:
                 key = row[0]
@@ -1968,7 +2084,9 @@ class SystemDatabase(ABC):
             dbos_logger.error(f"Error connecting to the DBOS system database: {e}")
             raise
 
-    def write_stream_from_step(self, workflow_uuid: str, key: str, value: Any) -> None:
+    def write_stream_from_step(
+        self, workflow_uuid: str, function_id: int, key: str, value: Any
+    ) -> None:
         """
         Write a key-value pair to the stream at the first unused offset.
         """
@@ -1998,6 +2116,7 @@ class SystemDatabase(ABC):
             c.execute(
                 sa.insert(SystemSchema.streams).values(
                     workflow_uuid=workflow_uuid,
+                    function_id=function_id,
                     key=key,
                     value=serialized_value,
                     offset=next_offset,
@@ -2054,6 +2173,7 @@ class SystemDatabase(ABC):
             c.execute(
                 sa.insert(SystemSchema.streams).values(
                     workflow_uuid=workflow_uuid,
+                    function_id=function_id,
                     key=key,
                     value=serialized_value,
                     offset=next_offset,
