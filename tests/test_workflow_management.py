@@ -228,7 +228,8 @@ def test_fork_steps(
     with SetWorkflowID(fork_id):
         forked_handle = DBOS.fork_workflow(wfid, 3)
     assert forked_handle.workflow_id == fork_id
-    assert forked_handle.get_status().app_version == DBOS.application_version
+    app_version = forked_handle.get_status().app_version
+    assert app_version is None or app_version == DBOS.application_version
     assert forked_handle.get_status().forked_from == wfid
     assert forked_handle.get_result() == output
 

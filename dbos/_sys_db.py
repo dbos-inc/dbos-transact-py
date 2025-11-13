@@ -700,11 +700,7 @@ class SystemDatabase(ABC):
                     name=status["name"],
                     class_name=status["class_name"],
                     config_name=status["config_name"],
-                    application_version=(
-                        application_version
-                        if application_version is not None
-                        else status["app_version"]
-                    ),
+                    application_version=(application_version),
                     application_id=status["app_id"],
                     authenticated_user=status["authenticated_user"],
                     authenticated_roles=status["authenticated_roles"],
