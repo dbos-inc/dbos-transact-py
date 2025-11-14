@@ -63,6 +63,7 @@ class ExecutorInfoResponse(BaseMessage):
     executor_id: str
     application_version: str
     hostname: Optional[str]
+    language: Optional[str]
     error_message: Optional[str] = None
 
 

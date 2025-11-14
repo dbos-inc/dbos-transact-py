@@ -117,6 +117,7 @@ class ConductorWebsocket(threading.Thread):
                                 executor_id=GlobalParams.executor_id,
                                 application_version=GlobalParams.app_version,
                                 hostname=socket.gethostname(),
+                                language="python",
                             )
                             websocket.send(info_response.to_json())
                             self.dbos.logger.info("Connected to DBOS conductor")
