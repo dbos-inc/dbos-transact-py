@@ -38,6 +38,10 @@ def format_version(git_version: SCMVersion) -> str:
 
 
 def guess_next_version(version_number: str) -> str:
-    major, minor, patch = map(int, version_number.split("."))
+    parts = version_number.split(".")
+    # Pad with zeros if there are fewer than 3 parts
+    while len(parts) < 3:
+        parts.append("0")
+    major, minor, patch = map(int, parts[:3])
     minor += 1
     return f"{major}.{minor}.{patch}"
