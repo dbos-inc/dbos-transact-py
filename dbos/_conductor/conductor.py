@@ -398,6 +398,36 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(retention_response.to_json())
+                        elif msg_type == p.MessageType.GET_METRICS:
+                            get_metrics_message = p.GetMetricsRequest.from_json(message)
+                            self.dbos.logger.info(
+                                f"Received metrics request for time range {get_metrics_message.start_time} to {get_metrics_message.end_time}"
+                            )
+                            # Return mocked data for now
+                            mocked_metrics = [
+                                p.MetricData(
+                                    metric_type="workflow",
+                                    metric_name="example_workflow",
+                                    count=42,
+                                ),
+                                p.MetricData(
+                                    metric_type="workflow",
+                                    metric_name="another_workflow",
+                                    count=17,
+                                ),
+                                p.MetricData(
+                                    metric_type="step",
+                                    metric_name="example_step",
+                                    count=128,
+                                ),
+                            ]
+                            get_metrics_response = p.GetMetricsResponse(
+                                type=p.MessageType.GET_METRICS,
+                                request_id=base_message.request_id,
+                                metrics=mocked_metrics,
+                                error_message=error_message,
+                            )
+                            websocket.send(get_metrics_response.to_json())
                         else:
                             self.dbos.logger.warning(
                                 f"Unexpected message type: {msg_type}"

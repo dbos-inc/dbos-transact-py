@@ -19,6 +19,7 @@ class MessageType(str, Enum):
     LIST_STEPS = "list_steps"
     FORK_WORKFLOW = "fork_workflow"
     RETENTION = "retention"
+    GET_METRICS = "get_metrics"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -339,4 +340,23 @@ class RetentionRequest(BaseMessage):
 @dataclass
 class RetentionResponse(BaseMessage):
     success: bool
+    error_message: Optional[str] = None
+
+
+@dataclass
+class GetMetricsRequest(BaseMessage):
+    start_time: str  # ISO 8601
+    end_time: str  # ISO 8601
+
+
+@dataclass
+class MetricData:
+    metric_type: str
+    metric_name: str
+    count: int
+
+
+@dataclass
+class GetMetricsResponse(BaseMessage):
+    metrics: List[MetricData]
     error_message: Optional[str] = None
