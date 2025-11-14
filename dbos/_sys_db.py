@@ -2306,8 +2306,7 @@ class SystemDatabase(ABC):
                 .where(
                     sa.and_(
                         SystemSchema.workflow_status.c.created_at >= start_epoch_ms,
-                        SystemSchema.workflow_status.c.created_at <= end_epoch_ms,
-                        SystemSchema.workflow_status.c.name.isnot(None),
+                        SystemSchema.workflow_status.c.created_at < end_epoch_ms,
                     )
                 )
                 .group_by(SystemSchema.workflow_status.c.name)
@@ -2334,9 +2333,7 @@ class SystemDatabase(ABC):
                         SystemSchema.operation_outputs.c.started_at_epoch_ms
                         >= start_epoch_ms,
                         SystemSchema.operation_outputs.c.started_at_epoch_ms
-                        <= end_epoch_ms,
-                        SystemSchema.operation_outputs.c.function_name.isnot(None),
-                        SystemSchema.operation_outputs.c.function_name != "",
+                        < end_epoch_ms,
                     )
                 )
                 .group_by(SystemSchema.operation_outputs.c.function_name)
