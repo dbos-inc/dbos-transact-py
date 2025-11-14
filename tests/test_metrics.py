@@ -3,7 +3,7 @@ import datetime
 from dbos import DBOS
 
 
-def test_get_metrics(dbos: DBOS) -> None:
+def test_get_metrics(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
     """Test the get_metrics method returns correct workflow and step counts."""
 
     @DBOS.workflow()
