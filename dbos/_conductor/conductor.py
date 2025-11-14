@@ -400,31 +400,31 @@ class ConductorWebsocket(threading.Thread):
                             websocket.send(retention_response.to_json())
                         elif msg_type == p.MessageType.GET_METRICS:
                             get_metrics_message = p.GetMetricsRequest.from_json(message)
-                            self.dbos.logger.info(
+                            self.dbos.logger.debug(
                                 f"Received metrics request for time range {get_metrics_message.start_time} to {get_metrics_message.end_time}"
                             )
-                            # Return mocked data for now
-                            mocked_metrics = [
-                                p.MetricData(
-                                    metric_type="workflow",
-                                    metric_name="example_workflow",
-                                    count=42,
-                                ),
-                                p.MetricData(
-                                    metric_type="workflow",
-                                    metric_name="another_workflow",
-                                    count=17,
-                                ),
-                                p.MetricData(
-                                    metric_type="step",
-                                    metric_name="example_step",
-                                    count=128,
-                                ),
-                            ]
+                            metrics_data = []
+                            try:
+                                sys_metrics = self.dbos._sys_db.get_metrics(
+                                    get_metrics_message.start_time,
+                                    get_metrics_message.end_time,
+                                )
+                                metrics_data = [
+                                    p.MetricData(
+                                        metric_type=m["metric_type"],
+                                        metric_name=m["metric_name"],
+                                        count=m["count"],
+                                    )
+                                    for m in sys_metrics
+                                ]
+                            except Exception as e:
+                                error_message = f"Exception encountered when getting metrics: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+
                             get_metrics_response = p.GetMetricsResponse(
                                 type=p.MessageType.GET_METRICS,
                                 request_id=base_message.request_id,
-                                metrics=mocked_metrics,
+                                metrics=metrics_data,
                                 error_message=error_message,
                             )
                             websocket.send(get_metrics_response.to_json())
