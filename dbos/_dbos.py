@@ -569,8 +569,8 @@ class DBOS:
                 conductor_registration_url = (
                     f"https://console.dbos.dev/self-host?appname={app_name}"
                 )
-                print(
-                    f"To view and manage workflows, connect to DBOS Conductor at:{conductor_registration_url}"
+                dbos_logger.info(
+                    f"To view and manage workflows, connect to DBOS Conductor at: {conductor_registration_url}"
                 )
 
             # Flush handlers and add OTLP to all loggers if enabled
