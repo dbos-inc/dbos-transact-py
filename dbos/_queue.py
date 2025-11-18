@@ -44,6 +44,7 @@ class Queue:
         worker_concurrency: Optional[int] = None,
         priority_enabled: bool = False,
         partition_queue: bool = False,
+        polling_interval_sec: float = 1.0,
     ) -> None:
         if (
             worker_concurrency is not None
@@ -53,12 +54,15 @@ class Queue:
             raise ValueError(
                 "worker_concurrency must be less than or equal to concurrency"
             )
+        if polling_interval_sec <= 0.0:
+            raise ValueError("polling_interval_sec must be positive")
         self.name = name
         self.concurrency = concurrency
         self.worker_concurrency = worker_concurrency
         self.limiter = limiter
         self.priority_enabled = priority_enabled
         self.partition_queue = partition_queue
+        self.polling_interval_sec = polling_interval_sec
         from ._dbos import _get_or_create_dbos_registry
 
         registry = _get_or_create_dbos_registry()
@@ -112,9 +116,9 @@ def queue_worker_thread(
     stop_event: threading.Event, dbos: "DBOS", queue: Queue
 ) -> None:
     """Worker thread for processing a single queue."""
-    polling_interval = 1.0
-    min_polling_interval = 1.0
-    max_polling_interval = 120.0
+    polling_interval = queue.polling_interval_sec
+    min_polling_interval = queue.polling_interval_sec
+    max_polling_interval = max(queue.polling_interval_sec, 120.0)
 
     while not stop_event.is_set():
         # Wait for the polling interval with jitter
@@ -168,7 +172,7 @@ def queue_worker_thread(
 def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     """Main queue manager thread that spawns and monitors worker threads for each queue."""
     queue_threads: dict[str, threading.Thread] = {}
-    check_interval = 5.0  # Check for new queues every 5 seconds
+    check_interval = 1.0  # Check for new queues every second
 
     while not stop_event.is_set():
         # Check for new queues
