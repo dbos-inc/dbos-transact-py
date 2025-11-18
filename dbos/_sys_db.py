@@ -988,11 +988,12 @@ class SystemDatabase(ABC):
 
         if input.queues_only:
             query = sa.select(*load_columns).where(
-                sa.and_(
-                    SystemSchema.workflow_status.c.queue_name.isnot(None),
-                    SystemSchema.workflow_status.c.status.in_(["ENQUEUED", "PENDING"]),
-                )
+                SystemSchema.workflow_status.c.queue_name.isnot(None),
             )
+            if not input.status:
+                query = query.where(
+                    SystemSchema.workflow_status.c.status.in_(["ENQUEUED", "PENDING"])
+                )
         else:
             query = sa.select(*load_columns)
         if input.sort_desc:
