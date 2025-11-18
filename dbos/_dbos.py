@@ -336,6 +336,8 @@ class DBOS:
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
         self.conductor_url: Optional[str] = conductor_url
+        if config.get("conductor_url"):
+            self.conductor_url = config.get("conductor_url")
         self.conductor_key: Optional[str] = conductor_key
         if config.get("conductor_key"):
             self.conductor_key = config.get("conductor_key")
