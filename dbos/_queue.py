@@ -108,50 +108,102 @@ class Queue:
         return await start_workflow_async(dbos, func, self.name, False, *args, **kwargs)
 
 
-def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
+def queue_worker_thread(
+    stop_event: threading.Event, dbos: "DBOS", queue: Queue
+) -> None:
+    """Worker thread for processing a single queue."""
     polling_interval = 1.0
     min_polling_interval = 1.0
     max_polling_interval = 120.0
+
     while not stop_event.is_set():
         # Wait for the polling interval with jitter
         if stop_event.wait(timeout=polling_interval * random.uniform(0.95, 1.05)):
             return
-        queues = dict(dbos._registry.queue_info_map)
-        for _, queue in queues.items():
-            try:
-                if queue.partition_queue:
-                    dequeued_workflows = []
-                    queue_partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
-                    for key in queue_partition_keys:
-                        dequeued_workflows += dbos._sys_db.start_queued_workflows(
-                            queue,
-                            GlobalParams.executor_id,
-                            GlobalParams.app_version,
-                            key,
-                        )
-                else:
-                    dequeued_workflows = dbos._sys_db.start_queued_workflows(
-                        queue, GlobalParams.executor_id, GlobalParams.app_version, None
+
+        try:
+            if queue.partition_queue:
+                dequeued_workflows = []
+                queue_partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
+                for key in queue_partition_keys:
+                    dequeued_workflows += dbos._sys_db.start_queued_workflows(
+                        queue,
+                        GlobalParams.executor_id,
+                        GlobalParams.app_version,
+                        key,
                     )
-                for id in dequeued_workflows:
-                    execute_workflow_by_id(dbos, id)
-            except OperationalError as e:
-                if isinstance(
-                    e.orig, (errors.SerializationFailure, errors.LockNotAvailable)
-                ):
-                    # If a serialization error is encountered, increase the polling interval
-                    polling_interval = min(
-                        max_polling_interval,
-                        polling_interval * 2.0,
-                    )
-                    dbos.logger.warning(
-                        f"Contention detected in queue thread for {queue.name}. Increasing polling interval to {polling_interval:.2f}."
-                    )
-                else:
-                    dbos.logger.warning(f"Exception encountered in queue thread: {e}")
-            except Exception as e:
-                if not stop_event.is_set():
-                    # Only print the error if the thread is not stopping
-                    dbos.logger.warning(f"Exception encountered in queue thread: {e}")
+            else:
+                dequeued_workflows = dbos._sys_db.start_queued_workflows(
+                    queue, GlobalParams.executor_id, GlobalParams.app_version, None
+                )
+            for id in dequeued_workflows:
+                execute_workflow_by_id(dbos, id)
+        except OperationalError as e:
+            if isinstance(
+                e.orig, (errors.SerializationFailure, errors.LockNotAvailable)
+            ):
+                # If a serialization error is encountered, increase the polling interval
+                polling_interval = min(
+                    max_polling_interval,
+                    polling_interval * 2.0,
+                )
+                dbos.logger.warning(
+                    f"Contention detected in queue thread for {queue.name}. Increasing polling interval to {polling_interval:.2f}."
+                )
+            else:
+                dbos.logger.warning(
+                    f"Exception encountered in queue thread for {queue.name}: {e}"
+                )
+        except Exception as e:
+            if not stop_event.is_set():
+                # Only print the error if the thread is not stopping
+                dbos.logger.warning(
+                    f"Exception encountered in queue thread for {queue.name}: {e}"
+                )
+
         # Attempt to scale back the polling interval on each iteration
         polling_interval = max(min_polling_interval, polling_interval * 0.9)
+
+
+def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
+    """Main queue manager thread that spawns and monitors worker threads for each queue."""
+    queue_threads: dict[str, threading.Thread] = {}
+    check_interval = 5.0  # Check for new queues every 5 seconds
+
+    while not stop_event.is_set():
+        # Check for new queues
+        current_queues = dict(dbos._registry.queue_info_map)
+
+        # Start threads for new queues
+        for queue_name, queue in current_queues.items():
+            if (
+                queue_name not in queue_threads
+                or not queue_threads[queue_name].is_alive()
+            ):
+                thread = threading.Thread(
+                    target=queue_worker_thread,
+                    args=(stop_event, dbos, queue),
+                    name=f"queue-worker-{queue_name}",
+                    daemon=True,
+                )
+                thread.start()
+                queue_threads[queue_name] = thread
+                dbos.logger.debug(f"Started worker thread for queue: {queue_name}")
+
+        # Wait for the check interval or stop event
+        if stop_event.wait(timeout=check_interval):
+            break
+
+    # Join all queue worker threads
+    dbos.logger.info("Stopping queue manager, joining all worker threads...")
+    for queue_name, thread in queue_threads.items():
+        if thread.is_alive():
+            thread.join(timeout=10.0)  # Give each thread 10 seconds to finish
+            if thread.is_alive():
+                dbos.logger.debug(
+                    f"Queue worker thread for {queue_name} did not stop in time"
+                )
+            else:
+                dbos.logger.debug(
+                    f"Queue worker thread for {queue_name} stopped successfully"
+                )
