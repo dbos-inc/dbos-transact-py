@@ -38,6 +38,7 @@ from dbos._workflow_commands import fork_workflow, list_queued_workflows, list_w
 from ._classproperty import classproperty
 from ._core import (
     DEBOUNCER_WORKFLOW_NAME,
+    DEFAULT_POLLING_INTERVAL,
     TEMP_SEND_WF_NAME,
     WorkflowHandleAsyncPolling,
     WorkflowHandlePolling,
@@ -1551,7 +1552,9 @@ class WorkflowHandle(Generic[R], Protocol):
         """Return the applicable workflow ID."""
         ...
 
-    def get_result(self) -> R:
+    def get_result(
+        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+    ) -> R:
         """Return the result of the workflow function invocation, waiting if necessary."""
         ...
 
@@ -1580,7 +1583,9 @@ class WorkflowHandleAsync(Generic[R], Protocol):
         """Return the applicable workflow ID."""
         ...
 
-    async def get_result(self) -> R:
+    async def get_result(
+        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+    ) -> R:
         """Return the result of the workflow function invocation, waiting if necessary."""
         ...
 

@@ -1707,8 +1707,7 @@ def test_polling_interval(dbos: DBOS) -> None:
 
     assert queue.enqueue(workflow).get_result()
 
-    # for _ in range(10):
-    #     start_time = time.time()
-    #     print(start_time)
-    #     assert queue.enqueue(workflow).get_result()
-    #     assert time.time() - start_time < 1.0
+    for _ in range(10):
+        start_time = time.time()
+        assert queue.enqueue(workflow).get_result(polling_interval_sec=0.1)
+        assert time.time() - start_time < 1.0
