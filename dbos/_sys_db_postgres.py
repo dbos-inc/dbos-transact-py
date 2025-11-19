@@ -43,11 +43,12 @@ class PostgresSystemDatabase(SystemDatabase):
                     ).scalar():
                         dbos_logger.info(f"Creating system database {sysdb_name}")
                         conn.execute(sa.text(f'CREATE DATABASE "{sysdb_name}"'))
-                engine.dispose()
             except Exception:
                 dbos_logger.warning(
                     f"Could not connect to postgres database to verify existence of {sysdb_name}. Continuing..."
                 )
+            finally:
+                engine.dispose()
         else:
             # If we were provided an engine, validate it can connect
             with self.engine.connect() as conn:

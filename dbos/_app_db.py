@@ -314,11 +314,12 @@ class PostgresApplicationDatabase(ApplicationDatabase):
                     parameters={"db_name": app_db_url.database},
                 ).scalar():
                     conn.execute(sa.text(f"CREATE DATABASE {app_db_url.database}"))
-            postgres_db_engine.dispose()
         except Exception:
             dbos_logger.warning(
                 f"Could not connect to postgres database to verify existence of {app_db_url.database}. Continuing..."
             )
+        finally:
+            postgres_db_engine.dispose()
 
         # Create the dbos schema and transaction_outputs table in the application database
         with self.engine.begin() as conn:
