@@ -316,12 +316,12 @@ def test_migrate(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
 
 def test_programmatic_migration(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
     database_name = "migrate_test"
-    role_name = "migrate-test-role"
+    migrate_role = "migrate-test-role"
+    app_role = "app-test-role"
     role_password = "migrate_test_password"
 
     # Verify migration is agnostic to driver name (under the hood it uses postgresql+psycopg)
     db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
-    db_url_string = db_url.render_as_string(hide_password=False)
 
     # Drop the DBOS database if it exists. Create a test role with no permissions.
     with db_engine.connect() as connection:
@@ -329,21 +329,31 @@ def test_programmatic_migration(db_engine: sa.Engine, skip_with_sqlite: None) ->
         connection.execute(
             sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
         )
-        connection.execute(sa.text(f'DROP ROLE IF EXISTS "{role_name}"'))
-        connection.execute(
-            sa.text(
-                f"CREATE ROLE \"{role_name}\" WITH LOGIN PASSWORD '{role_password}'"
+        for role in [migrate_role, app_role]:
+            connection.execute(sa.text(f'DROP ROLE IF EXISTS "{role}"'))
+            connection.execute(
+                sa.text(f"CREATE ROLE \"{role}\" WITH LOGIN PASSWORD '{role_password}'")
             )
+            connection.execute(
+                sa.text(f'REVOKE CONNECT ON DATABASE postgres FROM "{role}"')
+            )
+        connection.execute(
+            sa.text(f'CREATE DATABASE {database_name} OWNER "{migrate_role}"')
         )
 
     # Using the admin role, create the DBOS database and verify it exists.
     # Set permissions for the test role.
     schema = "F8nny_sCHem@-n@m3"
+    migrate_url = (
+        db_url.set(username=migrate_role)
+        .set(password=role_password)
+        .render_as_string(hide_password=False)
+    )
     run_dbos_database_migrations(
-        db_url_string,
-        app_database_url=db_url_string,
+        migrate_url,
+        app_database_url=migrate_url,
         schema=schema,
-        application_role=role_name,
+        application_role=app_role,
     )
     with db_engine.connect() as c:
         c.execution_options(isolation_level="AUTOCOMMIT")
@@ -356,7 +366,7 @@ def test_programmatic_migration(db_engine: sa.Engine, skip_with_sqlite: None) ->
 
     # Initialize DBOS with the test role. Verify various operations work.
     test_db_url = (
-        db_url.set(username=role_name).set(password=role_password)
+        db_url.set(username=app_role).set(password=role_password)
     ).render_as_string(hide_password=False)
     DBOS.destroy(destroy_registry=True)
     config: DBOSConfig = {
