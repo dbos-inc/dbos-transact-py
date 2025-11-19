@@ -3,7 +3,6 @@ import os
 import platform
 import signal
 import subprocess
-import time
 import typing
 from os import path
 from typing import Annotated, Any, List, Optional, Tuple
@@ -13,7 +12,7 @@ import typer
 
 from dbos._context import SetWorkflowID
 from dbos._debug import debug_workflow, parse_start_command
-from dbos.cli.migration import grant_dbos_schema_permissions, migrate_dbos_databases
+from dbos.cli.migration import run_dbos_database_migrations
 
 from .._client import DBOSClient
 from .._dbos_config import (
@@ -294,24 +293,12 @@ def migrate(
         schema = "dbos"
     typer.echo(f"DBOS system schema: {schema}")
 
-    # First, run DBOS migrations on the system database and the application database
-    migrate_dbos_databases(
-        app_database_url=application_database_url,
+    run_dbos_database_migrations(
         system_database_url=system_database_url,
+        app_database_url=application_database_url,
         schema=schema,
+        application_role=application_role,
     )
-
-    # Next, assign permissions on the DBOS schema to the application role, if any
-    if application_role:
-        if application_database_url:
-            grant_dbos_schema_permissions(
-                database_url=application_database_url,
-                role_name=application_role,
-                schema=schema,
-            )
-        grant_dbos_schema_permissions(
-            database_url=system_database_url, role_name=application_role, schema=schema
-        )
 
     # Next, run any custom migration commands specified in the configuration
     if os.path.exists("dbos-config.yaml"):

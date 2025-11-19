@@ -302,18 +302,24 @@ class PostgresApplicationDatabase(ApplicationDatabase):
             return
         # Check if the database exists
         app_db_url = self.engine.url
-        postgres_db_engine = sa.create_engine(
-            app_db_url.set(database="postgres"),
-            **self._engine_kwargs,
-        )
-        with postgres_db_engine.connect() as conn:
-            conn.execution_options(isolation_level="AUTOCOMMIT")
-            if not conn.execute(
-                sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
-                parameters={"db_name": app_db_url.database},
-            ).scalar():
-                conn.execute(sa.text(f"CREATE DATABASE {app_db_url.database}"))
-        postgres_db_engine.dispose()
+        try:
+            postgres_db_engine = sa.create_engine(
+                app_db_url.set(database="postgres"),
+                **self._engine_kwargs,
+            )
+            with postgres_db_engine.connect() as conn:
+                conn.execution_options(isolation_level="AUTOCOMMIT")
+                if not conn.execute(
+                    sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
+                    parameters={"db_name": app_db_url.database},
+                ).scalar():
+                    conn.execute(sa.text(f"CREATE DATABASE {app_db_url.database}"))
+        except Exception:
+            dbos_logger.warning(
+                f"Could not connect to postgres database to verify existence of {app_db_url.database}. Continuing..."
+            )
+        finally:
+            postgres_db_engine.dispose()
 
         # Create the dbos schema and transaction_outputs table in the application database
         with self.engine.begin() as conn:

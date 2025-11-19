@@ -8,8 +8,35 @@ from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
 
 
+def run_dbos_database_migrations(
+    system_database_url: str,
+    *,
+    app_database_url: Optional[str] = None,
+    schema: str = "dbos",
+    application_role: Optional[str] = None,
+) -> None:
+    # First, run DBOS migrations on the system database and (optionally) the application database
+    migrate_dbos_databases(
+        system_database_url=system_database_url,
+        app_database_url=app_database_url,
+        schema=schema,
+    )
+
+    # Then, assign permissions on the DBOS schema to the application role, if any
+    if application_role:
+        if app_database_url:
+            grant_dbos_schema_permissions(
+                database_url=app_database_url,
+                role_name=application_role,
+                schema=schema,
+            )
+        grant_dbos_schema_permissions(
+            database_url=system_database_url, role_name=application_role, schema=schema
+        )
+
+
 def migrate_dbos_databases(
-    app_database_url: Optional[str], system_database_url: str, schema: str
+    system_database_url: str, app_database_url: Optional[str], schema: str
 ) -> None:
     app_db = None
     sys_db = None
