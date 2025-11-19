@@ -170,16 +170,17 @@ class EnqueueOptionsInternal(TypedDict):
 
 
 class RecordedResult(TypedDict):
-    output: Optional[str]  # JSON (jsonpickle)
-    error: Optional[str]  # JSON (jsonpickle)
+    output: Optional[str]  # Serialized
+    error: Optional[str]  # Serialized
+    child_workflow_id: Optional[str]
 
 
 class OperationResultInternal(TypedDict):
     workflow_uuid: str
     function_id: int
     function_name: str
-    output: Optional[str]  # JSON (jsonpickle)
-    error: Optional[str]  # JSON (jsonpickle)
+    output: Optional[str]  # Serialized
+    error: Optional[str]  # Serialized
     started_at_epoch_ms: int
 
 
@@ -1281,6 +1282,7 @@ class SystemDatabase(ABC):
             SystemSchema.operation_outputs.c.output,
             SystemSchema.operation_outputs.c.error,
             SystemSchema.operation_outputs.c.function_name,
+            SystemSchema.operation_outputs.c.child_workflow_id,
         ).where(
             (SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
             & (SystemSchema.operation_outputs.c.function_id == function_id)
@@ -1309,10 +1311,11 @@ class SystemDatabase(ABC):
             return None
 
         # Extract operation output data
-        output, error, recorded_function_name = (
+        output, error, recorded_function_name, child_workflow_id = (
             operation_output_rows[0][0],
             operation_output_rows[0][1],
             operation_output_rows[0][2],
+            operation_output_rows[0][3],
         )
 
         # If the provided and recorded function name are different, throw an exception
@@ -1327,6 +1330,7 @@ class SystemDatabase(ABC):
         result: RecordedResult = {
             "output": output,
             "error": error,
+            "child_workflow_id": child_workflow_id,
         }
         return result
 
@@ -1338,31 +1342,6 @@ class SystemDatabase(ABC):
             return self._check_operation_execution_txn(
                 workflow_id, function_id, function_name, c
             )
-
-    @db_retry()
-    def check_child_workflow(
-        self, workflow_uuid: str, function_id: int
-    ) -> Optional[str]:
-        sql = sa.select(
-            SystemSchema.operation_outputs.c.child_workflow_id,
-            SystemSchema.operation_outputs.c.error,
-        ).where(
-            SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
-            SystemSchema.operation_outputs.c.function_id == function_id,
-        )
-
-        # If in a transaction, use the provided connection
-        row: Any
-        with self.engine.begin() as c:
-            row = c.execute(sql).fetchone()
-
-        if row is None:
-            return None
-        elif row[1]:
-            e: Exception = self.serializer.deserialize(row[1])
-            raise e
-        else:
-            return str(row[0])
 
     @db_retry()
     def send(

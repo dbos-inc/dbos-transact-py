@@ -579,11 +579,14 @@ def start_workflow(
     ctx = new_wf_ctx
     new_child_workflow_id = ctx.id_assigned_for_next_workflow
     if ctx.has_parent():
-        child_workflow_id = dbos._sys_db.check_child_workflow(
-            ctx.parent_workflow_id, ctx.parent_workflow_fid
+        recorded_result = dbos._sys_db.check_operation_execution(
+            ctx.parent_workflow_id, ctx.parent_workflow_fid, get_dbos_func_name(func)
         )
-        if child_workflow_id is not None:
-            return WorkflowHandlePolling(child_workflow_id, dbos)
+        if recorded_result and recorded_result["error"]:
+            e: Exception = dbos._sys_db.serializer.deserialize(recorded_result["error"])
+            raise e
+        elif recorded_result and recorded_result["child_workflow_id"]:
+            return WorkflowHandlePolling(recorded_result["child_workflow_id"], dbos)
 
     status = _init_workflow(
         dbos,
@@ -675,13 +678,19 @@ async def start_workflow_async(
     ctx = new_wf_ctx
     new_child_workflow_id = ctx.id_assigned_for_next_workflow
     if ctx.has_parent():
-        child_workflow_id = await asyncio.to_thread(
-            dbos._sys_db.check_child_workflow,
+        recorded_result = await asyncio.to_thread(
+            dbos._sys_db.check_operation_execution,
             ctx.parent_workflow_id,
             ctx.parent_workflow_fid,
+            get_dbos_func_name(func),
         )
-        if child_workflow_id is not None:
-            return WorkflowHandleAsyncPolling(child_workflow_id, dbos)
+        if recorded_result and recorded_result["error"]:
+            e: Exception = dbos._sys_db.serializer.deserialize(recorded_result["error"])
+            raise e
+        elif recorded_result and recorded_result["child_workflow_id"]:
+            return WorkflowHandleAsyncPolling(
+                recorded_result["child_workflow_id"], dbos
+            )
 
     status = await asyncio.to_thread(
         _init_workflow,
@@ -798,11 +807,16 @@ def workflow_wrapper(
             workflow_id = ctx.workflow_id
 
             if ctx.has_parent():
-                child_workflow_id = dbos._sys_db.check_child_workflow(
-                    ctx.parent_workflow_id, ctx.parent_workflow_fid
+                r = dbos._sys_db.check_operation_execution(
+                    ctx.parent_workflow_id,
+                    ctx.parent_workflow_fid,
+                    get_dbos_func_name(func),
                 )
-                if child_workflow_id is not None:
-                    return recorded_result(child_workflow_id, dbos)
+                if r and r["error"]:
+                    e: Exception = dbos._sys_db.serializer.deserialize(r["error"])
+                    raise e
+                elif r and r["child_workflow_id"]:
+                    return recorded_result(r["child_workflow_id"], dbos)
 
             status = _init_workflow(
                 dbos,
