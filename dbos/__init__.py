@@ -14,6 +14,7 @@ from ._kafka_message import KafkaMessage
 from ._queue import Queue
 from ._serialization import Serializer
 from ._sys_db import GetWorkflowsInput, WorkflowStatus, WorkflowStatusString
+from .cli.migration import run_dbos_database_migrations
 
 __all__ = [
     "DBOSConfig",
@@ -37,4 +38,5 @@ __all__ = [
     "Debouncer",
     "DebouncerClient",
     "Serializer",
+    "run_dbos_database_migrations",
 ]
