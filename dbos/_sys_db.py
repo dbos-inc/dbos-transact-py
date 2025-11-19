@@ -1162,6 +1162,9 @@ class SystemDatabase(ABC):
         error = result["error"]
         output = result["output"]
         assert error is None or output is None, "Only one of error or output can be set"
+
+        # Check if the executor ID belong to another process.
+        # Reset it to this process's executor ID if so.
         wf_executor_id_row = conn.execute(
             sa.select(
                 SystemSchema.workflow_status.c.executor_id,
@@ -1183,17 +1186,20 @@ class SystemDatabase(ABC):
                     == result["workflow_uuid"]
                 )
             )
-        sql = sa.insert(SystemSchema.operation_outputs).values(
-            workflow_uuid=result["workflow_uuid"],
-            function_id=result["function_id"],
-            function_name=result["function_name"],
-            started_at_epoch_ms=result["started_at_epoch_ms"],
-            completed_at_epoch_ms=int(time.time() * 1000),
-            output=output,
-            error=error,
-        )
+
+        # Record the outcome, throwing DBOSWorkflowConflictIDError if it is already present
         try:
-            conn.execute(sql)
+            conn.execute(
+                sa.insert(SystemSchema.operation_outputs).values(
+                    workflow_uuid=result["workflow_uuid"],
+                    function_id=result["function_id"],
+                    function_name=result["function_name"],
+                    started_at_epoch_ms=result["started_at_epoch_ms"],
+                    completed_at_epoch_ms=int(time.time() * 1000),
+                    output=output,
+                    error=error,
+                )
+            )
         except DBAPIError as dbapi_error:
             if self._is_unique_constraint_violation(dbapi_error):
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
