@@ -31,18 +31,23 @@ class PostgresSystemDatabase(SystemDatabase):
         sysdb_name = system_db_url.database
         # Unless we were provided an engine, if the system database does not already exist, create it
         if self.created_engine:
-            engine = sa.create_engine(
-                system_db_url.set(database="postgres"), **self._engine_kwargs
-            )
-            with engine.connect() as conn:
-                conn.execution_options(isolation_level="AUTOCOMMIT")
-                if not conn.execute(
-                    sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
-                    parameters={"db_name": sysdb_name},
-                ).scalar():
-                    dbos_logger.info(f"Creating system database {sysdb_name}")
-                    conn.execute(sa.text(f'CREATE DATABASE "{sysdb_name}"'))
-            engine.dispose()
+            try:
+                engine = sa.create_engine(
+                    system_db_url.set(database="postgres"), **self._engine_kwargs
+                )
+                with engine.connect() as conn:
+                    conn.execution_options(isolation_level="AUTOCOMMIT")
+                    if not conn.execute(
+                        sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
+                        parameters={"db_name": sysdb_name},
+                    ).scalar():
+                        dbos_logger.info(f"Creating system database {sysdb_name}")
+                        conn.execute(sa.text(f'CREATE DATABASE "{sysdb_name}"'))
+                engine.dispose()
+            except Exception:
+                dbos_logger.warning(
+                    f"Could not connect to postgres database to verify existence of {sysdb_name}. Continuing..."
+                )
         else:
             # If we were provided an engine, validate it can connect
             with self.engine.connect() as conn:
