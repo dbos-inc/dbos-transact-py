@@ -404,11 +404,11 @@ class ConductorWebsocket(threading.Thread):
                             self.dbos.logger.debug(
                                 f"Received metrics request for time range {get_metrics_message.start_time} to {get_metrics_message.end_time}"
                             )
+                            metrics_data = []
                             if (
                                 get_metrics_message.metric_class
                                 == "workflow_step_count"
                             ):
-                                metrics_data = []
                                 try:
                                     sys_metrics = self.dbos._sys_db.get_metrics(
                                         get_metrics_message.start_time,
