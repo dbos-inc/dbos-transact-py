@@ -1044,16 +1044,15 @@ def decorate_transaction(
                                 )
                                 dbos._app_db.record_transaction_error(txn_output)
                             # Also record this transaction as a step
-                            if not has_recorded_error:
-                                step_output: OperationResultInternal = {
-                                    "workflow_uuid": ctx.workflow_id,
-                                    "function_id": ctx.function_id,
-                                    "function_name": transaction_name,
-                                    "output": txn_output["output"],
-                                    "error": txn_output["error"],
-                                    "started_at_epoch_ms": int(time.time() * 1000),
-                                }
-                                dbos._sys_db.record_operation_result(step_output)
+                            step_output: OperationResultInternal = {
+                                "workflow_uuid": ctx.workflow_id,
+                                "function_id": ctx.function_id,
+                                "function_name": transaction_name,
+                                "output": txn_output["output"],
+                                "error": txn_output["error"],
+                                "started_at_epoch_ms": int(time.time() * 1000),
+                            }
+                            dbos._sys_db.record_operation_result(step_output)
             return output
 
         if inspect.iscoroutinefunction(func):
