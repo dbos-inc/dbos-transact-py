@@ -158,6 +158,16 @@ class WorkflowStatusInternal(TypedDict):
     forked_from: Optional[str]
 
 
+class MetricData(TypedDict):
+    """
+    Metrics data for workflows and steps within a time range.
+    """
+
+    metric_type: str  # Type of metric: "workflow" or "step"
+    metric_name: str  # Name of the workflow or step
+    value: int  # Number of times the operation ran in the time interval
+
+
 class EnqueueOptionsInternal(TypedDict):
     # Unique ID for deduplication on a queue
     deduplication_id: Optional[str]
@@ -2254,3 +2264,76 @@ class SystemDatabase(ABC):
             return cutoff_epoch_timestamp_ms, [
                 row[0] for row in pending_enqueued_result
             ]
+
+    def get_metrics(self, start_time: str, end_time: str) -> List[MetricData]:
+        """
+        Retrieve the number of workflows and steps that ran in a time range.
+
+        Args:
+            start_time: ISO 8601 formatted start time
+            end_time: ISO 8601 formatted end time
+        """
+        # Convert ISO 8601 times to epoch milliseconds
+        start_epoch_ms = int(
+            datetime.datetime.fromisoformat(start_time).timestamp() * 1000
+        )
+        end_epoch_ms = int(datetime.datetime.fromisoformat(end_time).timestamp() * 1000)
+
+        metrics: List[MetricData] = []
+
+        with self.engine.begin() as c:
+            # Query workflow metrics
+            workflow_query = (
+                sa.select(
+                    SystemSchema.workflow_status.c.name,
+                    func.count(SystemSchema.workflow_status.c.workflow_uuid).label(
+                        "count"
+                    ),
+                )
+                .where(
+                    sa.and_(
+                        SystemSchema.workflow_status.c.created_at >= start_epoch_ms,
+                        SystemSchema.workflow_status.c.created_at < end_epoch_ms,
+                    )
+                )
+                .group_by(SystemSchema.workflow_status.c.name)
+            )
+
+            workflow_results = c.execute(workflow_query).fetchall()
+            for row in workflow_results:
+                metrics.append(
+                    MetricData(
+                        metric_type="workflow_count",
+                        metric_name=row[0],
+                        value=row[1],
+                    )
+                )
+
+            # Query step metrics
+            step_query = (
+                sa.select(
+                    SystemSchema.operation_outputs.c.function_name,
+                    func.count().label("count"),
+                )
+                .where(
+                    sa.and_(
+                        SystemSchema.operation_outputs.c.started_at_epoch_ms
+                        >= start_epoch_ms,
+                        SystemSchema.operation_outputs.c.started_at_epoch_ms
+                        < end_epoch_ms,
+                    )
+                )
+                .group_by(SystemSchema.operation_outputs.c.function_name)
+            )
+
+            step_results = c.execute(step_query).fetchall()
+            for row in step_results:
+                metrics.append(
+                    MetricData(
+                        metric_type="step_count",
+                        metric_name=row[0],
+                        value=row[1],
+                    )
+                )
+
+        return metrics
