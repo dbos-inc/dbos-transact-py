@@ -981,8 +981,10 @@ def decorate_transaction(
                                             )
                                         )
                                         has_recorded_error = True
+                                        txn_output["error"] = recorded_output["error"]
                                         raise deserialized_error
                                     elif recorded_output["output"]:
+                                        txn_output["output"] = recorded_output["output"]
                                         return dbos._serializer.deserialize(
                                             recorded_output["output"]
                                         )
