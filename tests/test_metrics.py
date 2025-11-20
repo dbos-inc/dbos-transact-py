@@ -44,9 +44,9 @@ def test_get_metrics(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
     metrics_dict = {(m["metric_type"], m["metric_name"]): m["value"] for m in metrics}
 
     # Verify workflow counts
-    assert metrics_dict[("workflow", test_workflow_a.__qualname__)] == 2
-    assert metrics_dict[("workflow", test_workflow_b.__qualname__)] == 1
+    assert metrics_dict[("workflow_count", test_workflow_a.__qualname__)] == 2
+    assert metrics_dict[("workflow_count", test_workflow_b.__qualname__)] == 1
 
     # Verify step counts
-    assert metrics_dict[("step", test_step_x.__qualname__)] == 4
-    assert metrics_dict[("step", test_step_y.__qualname__)] == 1
+    assert metrics_dict[("step_count", test_step_x.__qualname__)] == 4
+    assert metrics_dict[("step_count", test_step_y.__qualname__)] == 1

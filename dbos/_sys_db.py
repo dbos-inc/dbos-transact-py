@@ -2316,7 +2316,7 @@ class SystemDatabase(ABC):
             for row in workflow_results:
                 metrics.append(
                     MetricData(
-                        metric_type="workflow",
+                        metric_type="workflow_count",
                         metric_name=row[0],
                         value=row[1],
                     )
@@ -2343,7 +2343,7 @@ class SystemDatabase(ABC):
             for row in step_results:
                 metrics.append(
                     MetricData(
-                        metric_type="step",
+                        metric_type="step_count",
                         metric_name=row[0],
                         value=row[1],
                     )
