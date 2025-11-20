@@ -2340,7 +2340,7 @@ class SystemDatabase(ABC):
         return metrics
 
     @db_retry()
-    def patch(self, workflow_id: str, function_id: int, patch_name: str) -> bool:
+    def patch(self, *, workflow_id: str, function_id: int, patch_name: str) -> bool:
         with self.engine.begin() as c:
             checkpoint_name: str | None = c.execute(
                 sa.select(SystemSchema.operation_outputs.c.function_name).where(
