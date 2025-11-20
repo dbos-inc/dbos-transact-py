@@ -353,7 +353,7 @@ class GetMetricsRequest(BaseMessage):
 class MetricData:
     metric_type: str
     metric_name: str
-    count: int
+    value: int
 
 
 @dataclass

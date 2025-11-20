@@ -413,7 +413,7 @@ class ConductorWebsocket(threading.Thread):
                                     p.MetricData(
                                         metric_type=m["metric_type"],
                                         metric_name=m["metric_name"],
-                                        count=m["count"],
+                                        value=m["value"],
                                     )
                                     for m in sys_metrics
                                 ]

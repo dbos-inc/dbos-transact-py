@@ -41,7 +41,7 @@ def test_get_metrics(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
     assert len(metrics) == 4
 
     # Convert to dict for easier assertion
-    metrics_dict = {(m["metric_type"], m["metric_name"]): m["count"] for m in metrics}
+    metrics_dict = {(m["metric_type"], m["metric_name"]): m["value"] for m in metrics}
 
     # Verify workflow counts
     assert metrics_dict[("workflow", test_workflow_a.__qualname__)] == 2

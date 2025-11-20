@@ -165,7 +165,7 @@ class MetricData(TypedDict):
 
     metric_type: str  # Type of metric: "workflow" or "step"
     metric_name: str  # Name of the workflow or step
-    count: int  # Count of occurrences
+    value: int  # Number of times the operation ran in the time interval
 
 
 class EnqueueOptionsInternal(TypedDict):
@@ -2280,7 +2280,7 @@ class SystemDatabase(ABC):
 
     def get_metrics(self, start_time: str, end_time: str) -> List[MetricData]:
         """
-        Retrieve metrics for workflows and steps within a time range.
+        Retrieve the number of workflows and steps that ran in a time range.
 
         Args:
             start_time: ISO 8601 formatted start time
@@ -2318,7 +2318,7 @@ class SystemDatabase(ABC):
                     MetricData(
                         metric_type="workflow",
                         metric_name=row[0],
-                        count=row[1],
+                        value=row[1],
                     )
                 )
 
@@ -2345,7 +2345,7 @@ class SystemDatabase(ABC):
                     MetricData(
                         metric_type="step",
                         metric_name=row[0],
-                        count=row[1],
+                        value=row[1],
                     )
                 )
 
