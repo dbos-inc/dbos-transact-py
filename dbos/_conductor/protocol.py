@@ -65,7 +65,7 @@ class ExecutorInfoResponse(BaseMessage):
     application_version: str
     hostname: Optional[str]
     language: Optional[str]
-    transact_version: Optional[str]
+    dbos_version: Optional[str]
     error_message: Optional[str] = None
 
 
