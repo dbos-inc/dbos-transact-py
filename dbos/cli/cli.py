@@ -71,7 +71,7 @@ def _get_db_url(
                 _app_db_name = _app_name_to_db_name(config["name"])
                 # Fallback on the same defaults than the DBOS library
                 default_url = f"sqlite:///{_app_db_name}.sqlite"
-                return default_url, default_url
+                return default_url, None
         except (FileNotFoundError, OSError):
             typer.echo(
                 f"Error: Missing database URL: please set it using CLI flags or your dbos-config.yaml file.",
