@@ -943,6 +943,14 @@ def decorate_transaction(
                         "txn_id": None,
                         "function_name": transaction_name,
                     }
+                    step_output: OperationResultInternal = {
+                        "workflow_uuid": ctx.workflow_id,
+                        "function_id": ctx.function_id,
+                        "function_name": transaction_name,
+                        "output": None,
+                        "error": None,
+                        "started_at_epoch_ms": int(time.time() * 1000),
+                    }
                     retry_wait_seconds = 0.001
                     backoff_factor = 1.5
                     max_retry_wait_seconds = 2.0
@@ -981,10 +989,18 @@ def decorate_transaction(
                                             )
                                         )
                                         has_recorded_error = True
-                                        txn_output["error"] = recorded_output["error"]
+                                        step_output["error"] = recorded_output["error"]
+                                        dbos._sys_db.record_operation_result(
+                                            step_output
+                                        )
                                         raise deserialized_error
                                     elif recorded_output["output"]:
-                                        txn_output["output"] = recorded_output["output"]
+                                        step_output["output"] = recorded_output[
+                                            "output"
+                                        ]
+                                        dbos._sys_db.record_operation_result(
+                                            step_output
+                                        )
                                         return dbos._serializer.deserialize(
                                             recorded_output["output"]
                                         )
@@ -1041,20 +1057,13 @@ def decorate_transaction(
                         finally:
                             # Don't record the error if it was already recorded
                             if txn_error and not has_recorded_error:
-                                txn_output["error"] = dbos._serializer.serialize(
-                                    txn_error
+                                step_output["error"] = txn_output["error"] = (
+                                    dbos._serializer.serialize(txn_error)
                                 )
                                 dbos._app_db.record_transaction_error(txn_output)
-                            # Also record this transaction as a step
-                            step_output: OperationResultInternal = {
-                                "workflow_uuid": ctx.workflow_id,
-                                "function_id": ctx.function_id,
-                                "function_name": transaction_name,
-                                "output": txn_output["output"],
-                                "error": txn_output["error"],
-                                "started_at_epoch_ms": int(time.time() * 1000),
-                            }
-                            dbos._sys_db.record_operation_result(step_output)
+                                dbos._sys_db.record_operation_result(step_output)
+            step_output["output"] = output
+            dbos._sys_db.record_operation_result(step_output)
             return output
 
         if inspect.iscoroutinefunction(func):
