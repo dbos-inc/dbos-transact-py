@@ -1062,7 +1062,7 @@ def decorate_transaction(
                                 )
                                 dbos._app_db.record_transaction_error(txn_output)
                                 dbos._sys_db.record_operation_result(step_output)
-            step_output["output"] = output
+            step_output["output"] = dbos._serializer.serialize(output)
             dbos._sys_db.record_operation_result(step_output)
             return output
 
