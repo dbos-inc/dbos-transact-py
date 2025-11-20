@@ -1525,6 +1525,7 @@ class DBOS:
                 await asyncio.sleep(1.0)
                 continue
 
+    @classmethod
     def patch(cls, patch_name: str = "") -> bool:
         ctx = get_local_dbos_context()
         if ctx is None or not ctx.is_workflow():
