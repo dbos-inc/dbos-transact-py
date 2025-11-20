@@ -91,6 +91,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 DEBOUNCER_WORKFLOW_NAME = "_dbos_debouncer_workflow"
+DEFAULT_POLLING_INTERVAL = 1.0
 
 
 class WorkflowHandleFuture(Generic[R]):
@@ -103,7 +104,9 @@ class WorkflowHandleFuture(Generic[R]):
     def get_workflow_id(self) -> str:
         return self.workflow_id
 
-    def get_result(self) -> R:
+    def get_result(
+        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+    ) -> R:
         try:
             r = self.future.result()
         except Exception as e:
@@ -130,9 +133,13 @@ class WorkflowHandlePolling(Generic[R]):
     def get_workflow_id(self) -> str:
         return self.workflow_id
 
-    def get_result(self) -> R:
+    def get_result(
+        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+    ) -> R:
         try:
-            r: R = self.dbos._sys_db.await_workflow_result(self.workflow_id)
+            r: R = self.dbos._sys_db.await_workflow_result(
+                self.workflow_id, polling_interval_sec
+            )
         except Exception as e:
             serialized_e = self.dbos._serializer.serialize(e)
             self.dbos._sys_db.record_get_result(self.workflow_id, None, serialized_e)
@@ -158,7 +165,9 @@ class WorkflowHandleAsyncTask(Generic[R]):
     def get_workflow_id(self) -> str:
         return self.workflow_id
 
-    async def get_result(self) -> R:
+    async def get_result(
+        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+    ) -> R:
         try:
             r = await self.task
         except Exception as e:
@@ -192,10 +201,14 @@ class WorkflowHandleAsyncPolling(Generic[R]):
     def get_workflow_id(self) -> str:
         return self.workflow_id
 
-    async def get_result(self) -> R:
+    async def get_result(
+        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+    ) -> R:
         try:
             r: R = await asyncio.to_thread(
-                self.dbos._sys_db.await_workflow_result, self.workflow_id
+                self.dbos._sys_db.await_workflow_result,
+                self.workflow_id,
+                polling_interval_sec,
             )
         except Exception as e:
             serialized_e = self.dbos._serializer.serialize(e)
@@ -366,7 +379,7 @@ def _get_wf_invoke_func(
             )
             # Directly return the result if the workflow is already completed
             recorded_result: R = dbos._sys_db.await_workflow_result(
-                status["workflow_uuid"]
+                status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL
             )
             return recorded_result
         try:
@@ -381,7 +394,9 @@ def _get_wf_invoke_func(
             return output
         except DBOSWorkflowConflictIDError:
             # Await the workflow result
-            r: R = dbos._sys_db.await_workflow_result(status["workflow_uuid"])
+            r: R = dbos._sys_db.await_workflow_result(
+                status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL
+            )
             return r
         except DBOSWorkflowCancelledError as error:
             raise DBOSAwaitedWorkflowCancelledError(status["workflow_uuid"])
@@ -788,7 +803,9 @@ def workflow_wrapper(
                 c_wfid: str, dbos: "DBOS"
             ) -> Callable[[Callable[[], R]], R]:
                 def recorded_result_inner(func: Callable[[], R]) -> R:
-                    r: R = dbos._sys_db.await_workflow_result(c_wfid)
+                    r: R = dbos._sys_db.await_workflow_result(
+                        c_wfid, polling_interval=DEFAULT_POLLING_INTERVAL
+                    )
                     return r
 
                 return recorded_result_inner

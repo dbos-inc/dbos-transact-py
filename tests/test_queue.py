@@ -1695,3 +1695,19 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
     with pytest.raises(Exception):
         with SetEnqueueOptions(queue_partition_key="test"):
             partitionless_queue.enqueue(normal_workflow)
+
+
+def test_polling_interval(dbos: DBOS) -> None:
+    queue = Queue("queue", polling_interval_sec=0.1)
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        assert DBOS.workflow_id
+        return DBOS.workflow_id
+
+    assert queue.enqueue(workflow).get_result()
+
+    for _ in range(10):
+        start_time = time.time()
+        assert queue.enqueue(workflow).get_result(polling_interval_sec=0.1)
+        assert time.time() - start_time < 1.0
