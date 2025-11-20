@@ -39,6 +39,7 @@ class DBOSConfig(TypedDict, total=False):
         enable_otlp (bool): If True, enable built-in DBOS OTLP tracing and logging.
         system_database_engine (sa.Engine): A custom system database engine. If provided, DBOS will not create an engine but use this instead.
         conductor_key (str): An API key for DBOS Conductor. Pass this in to connect your process to Conductor.
+        conductor_url (str): The websockets URL for your DBOS Conductor service. Only set if you're self-hosting Conductor.
         serializer (Serializer): A custom serializer and deserializer DBOS uses when storing program data in the system database
     """
 
@@ -60,6 +61,7 @@ class DBOSConfig(TypedDict, total=False):
     enable_otlp: Optional[bool]
     system_database_engine: Optional[sa.Engine]
     conductor_key: Optional[str]
+    conductor_url: Optional[str]
     serializer: Optional[Serializer]
 
 

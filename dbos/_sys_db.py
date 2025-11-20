@@ -931,7 +931,7 @@ class SystemDatabase(ABC):
             return workflow_id
 
     @db_retry()
-    def await_workflow_result(self, workflow_id: str) -> Any:
+    def await_workflow_result(self, workflow_id: str, polling_interval: float) -> Any:
         while True:
             with self.engine.begin() as c:
                 row = c.execute(
@@ -956,7 +956,7 @@ class SystemDatabase(ABC):
                         raise DBOSAwaitedWorkflowCancelledError(workflow_id)
                 else:
                     pass  # CB: I guess we're assuming the WF will show up eventually.
-            time.sleep(1)
+            time.sleep(polling_interval)
 
     def get_workflows(
         self,
@@ -999,11 +999,12 @@ class SystemDatabase(ABC):
 
         if input.queues_only:
             query = sa.select(*load_columns).where(
-                sa.and_(
-                    SystemSchema.workflow_status.c.queue_name.isnot(None),
-                    SystemSchema.workflow_status.c.status.in_(["ENQUEUED", "PENDING"]),
-                )
+                SystemSchema.workflow_status.c.queue_name.isnot(None),
             )
+            if not input.status:
+                query = query.where(
+                    SystemSchema.workflow_status.c.status.in_(["ENQUEUED", "PENDING"])
+                )
         else:
             query = sa.select(*load_columns)
         if input.sort_desc:

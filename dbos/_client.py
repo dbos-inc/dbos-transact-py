@@ -18,6 +18,7 @@ import sqlalchemy as sa
 
 from dbos._app_db import ApplicationDatabase
 from dbos._context import MaxPriority, MinPriority
+from dbos._core import DEFAULT_POLLING_INTERVAL
 from dbos._sys_db import SystemDatabase
 from dbos._utils import generate_uuid
 
@@ -84,8 +85,12 @@ class WorkflowHandleClientPolling(Generic[R]):
     def get_workflow_id(self) -> str:
         return self.workflow_id
 
-    def get_result(self) -> R:
-        res: R = self._sys_db.await_workflow_result(self.workflow_id)
+    def get_result(
+        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+    ) -> R:
+        res: R = self._sys_db.await_workflow_result(
+            self.workflow_id, polling_interval_sec
+        )
         return res
 
     def get_status(self) -> WorkflowStatus:
@@ -104,9 +109,11 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
     def get_workflow_id(self) -> str:
         return self.workflow_id
 
-    async def get_result(self) -> R:
+    async def get_result(
+        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+    ) -> R:
         res: R = await asyncio.to_thread(
-            self._sys_db.await_workflow_result, self.workflow_id
+            self._sys_db.await_workflow_result, self.workflow_id, polling_interval_sec
         )
         return res
 
