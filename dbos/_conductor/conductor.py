@@ -404,24 +404,30 @@ class ConductorWebsocket(threading.Thread):
                             self.dbos.logger.debug(
                                 f"Received metrics request for time range {get_metrics_message.start_time} to {get_metrics_message.end_time}"
                             )
-                            metrics_data = []
-                            try:
-                                sys_metrics = self.dbos._sys_db.get_metrics(
-                                    get_metrics_message.start_time,
-                                    get_metrics_message.end_time,
-                                )
-                                metrics_data = [
-                                    p.MetricData(
-                                        metric_type=m["metric_type"],
-                                        metric_name=m["metric_name"],
-                                        value=m["value"],
+                            if (
+                                get_metrics_message.metric_class
+                                == "workflow_step_count"
+                            ):
+                                metrics_data = []
+                                try:
+                                    sys_metrics = self.dbos._sys_db.get_metrics(
+                                        get_metrics_message.start_time,
+                                        get_metrics_message.end_time,
                                     )
-                                    for m in sys_metrics
-                                ]
-                            except Exception as e:
-                                error_message = f"Exception encountered when getting metrics: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
-
+                                    metrics_data = [
+                                        p.MetricData(
+                                            metric_type=m["metric_type"],
+                                            metric_name=m["metric_name"],
+                                            value=m["value"],
+                                        )
+                                        for m in sys_metrics
+                                    ]
+                                except Exception as e:
+                                    error_message = f"Exception encountered when getting metrics: {traceback.format_exc()}"
+                                    self.dbos.logger.error(error_message)
+                            else:
+                                error_message = f"Unexpected metric class: {get_metrics_message.metric_class}"
+                                self.dbos.logger.warning(error_message)
                             get_metrics_response = p.GetMetricsResponse(
                                 type=p.MessageType.GET_METRICS,
                                 request_id=base_message.request_id,

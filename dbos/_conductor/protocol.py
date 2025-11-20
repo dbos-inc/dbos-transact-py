@@ -348,6 +348,7 @@ class RetentionResponse(BaseMessage):
 class GetMetricsRequest(BaseMessage):
     start_time: str  # ISO 8601
     end_time: str  # ISO 8601
+    metric_class: str
 
 
 @dataclass
