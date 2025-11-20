@@ -1120,7 +1120,7 @@ class SystemDatabase(ABC):
                 for row in rows
             ]
 
-    def get_workflow_steps(self, workflow_id: str) -> List[StepInfo]:
+    def list_workflow_steps(self, workflow_id: str) -> List[StepInfo]:
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(
@@ -1131,7 +1131,9 @@ class SystemDatabase(ABC):
                     SystemSchema.operation_outputs.c.child_workflow_id,
                     SystemSchema.operation_outputs.c.started_at_epoch_ms,
                     SystemSchema.operation_outputs.c.completed_at_epoch_ms,
-                ).where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
+                )
+                .where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
+                .order_by(SystemSchema.operation_outputs.c.function_id)
             ).fetchall()
             steps = []
             for row in rows:

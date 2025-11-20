@@ -111,7 +111,7 @@ from ._logger import (
     dbos_logger,
     init_logger,
 )
-from ._workflow_commands import get_workflow, list_workflow_steps
+from ._workflow_commands import get_workflow
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
@@ -1090,7 +1090,6 @@ class DBOS:
             dbos_logger.info(f"Forking workflow: {workflow_id} from step {start_step}")
             return fork_workflow(
                 _get_dbos_instance()._sys_db,
-                _get_dbos_instance()._app_db,
                 workflow_id,
                 start_step,
                 application_version=application_version,
@@ -1267,9 +1266,7 @@ class DBOS:
     @classmethod
     def list_workflow_steps(cls, workflow_id: str) -> List[StepInfo]:
         def fn() -> List[StepInfo]:
-            return list_workflow_steps(
-                _get_dbos_instance()._sys_db, _get_dbos_instance()._app_db, workflow_id
-            )
+            return _get_dbos_instance()._sys_db.list_workflow_steps(workflow_id)
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
             fn, "DBOS.listWorkflowSteps"

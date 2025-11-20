@@ -16,7 +16,6 @@ from dbos._workflow_commands import (
     get_workflow,
     global_timeout,
     list_queued_workflows,
-    list_workflow_steps,
     list_workflows,
 )
 
@@ -339,10 +338,8 @@ class ConductorWebsocket(threading.Thread):
                             list_steps_message = p.ListStepsRequest.from_json(message)
                             step_info = None
                             try:
-                                step_info = list_workflow_steps(
-                                    self.dbos._sys_db,
-                                    self.dbos._app_db,
-                                    list_steps_message.workflow_id,
+                                self.dbos._sys_db.list_workflow_steps(
+                                    list_steps_message.workflow_id
                                 )
                             except Exception as e:
                                 error_message = f"Exception encountered when getting workflow {list_steps_message.workflow_id}: {traceback.format_exc()}"
