@@ -4,10 +4,8 @@ from typing import TYPE_CHECKING, List, Optional, Union
 from dbos._context import get_local_dbos_context
 from dbos._utils import generate_uuid
 
-from ._app_db import ApplicationDatabase
 from ._sys_db import (
     GetWorkflowsInput,
-    StepInfo,
     SystemDatabase,
     WorkflowStatus,
     WorkflowStatusString,
@@ -101,19 +99,8 @@ def get_workflow(sys_db: SystemDatabase, workflow_id: str) -> Optional[WorkflowS
     return infos[0]
 
 
-def list_workflow_steps(
-    sys_db: SystemDatabase, app_db: Optional[ApplicationDatabase], workflow_id: str
-) -> List[StepInfo]:
-    steps = sys_db.get_workflow_steps(workflow_id)
-    transactions = app_db.get_transactions(workflow_id) if app_db else []
-    merged_steps = steps + transactions
-    merged_steps.sort(key=lambda step: step["function_id"])
-    return merged_steps
-
-
 def fork_workflow(
     sys_db: SystemDatabase,
-    app_db: Optional[ApplicationDatabase],
     workflow_id: str,
     start_step: int,
     *,
@@ -126,8 +113,6 @@ def fork_workflow(
         ctx.id_assigned_for_next_workflow = ""
     else:
         forked_workflow_id = generate_uuid()
-    if app_db:
-        app_db.clone_workflow_transactions(workflow_id, forked_workflow_id, start_step)
     sys_db.fork_workflow(
         workflow_id,
         forked_workflow_id,

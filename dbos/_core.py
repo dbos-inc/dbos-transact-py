@@ -594,11 +594,14 @@ def start_workflow(
     ctx = new_wf_ctx
     new_child_workflow_id = ctx.id_assigned_for_next_workflow
     if ctx.has_parent():
-        child_workflow_id = dbos._sys_db.check_child_workflow(
-            ctx.parent_workflow_id, ctx.parent_workflow_fid
+        recorded_result = dbos._sys_db.check_operation_execution(
+            ctx.parent_workflow_id, ctx.parent_workflow_fid, get_dbos_func_name(func)
         )
-        if child_workflow_id is not None:
-            return WorkflowHandlePolling(child_workflow_id, dbos)
+        if recorded_result and recorded_result["error"]:
+            e: Exception = dbos._sys_db.serializer.deserialize(recorded_result["error"])
+            raise e
+        elif recorded_result and recorded_result["child_workflow_id"]:
+            return WorkflowHandlePolling(recorded_result["child_workflow_id"], dbos)
 
     status = _init_workflow(
         dbos,
@@ -690,13 +693,19 @@ async def start_workflow_async(
     ctx = new_wf_ctx
     new_child_workflow_id = ctx.id_assigned_for_next_workflow
     if ctx.has_parent():
-        child_workflow_id = await asyncio.to_thread(
-            dbos._sys_db.check_child_workflow,
+        recorded_result = await asyncio.to_thread(
+            dbos._sys_db.check_operation_execution,
             ctx.parent_workflow_id,
             ctx.parent_workflow_fid,
+            get_dbos_func_name(func),
         )
-        if child_workflow_id is not None:
-            return WorkflowHandleAsyncPolling(child_workflow_id, dbos)
+        if recorded_result and recorded_result["error"]:
+            e: Exception = dbos._sys_db.serializer.deserialize(recorded_result["error"])
+            raise e
+        elif recorded_result and recorded_result["child_workflow_id"]:
+            return WorkflowHandleAsyncPolling(
+                recorded_result["child_workflow_id"], dbos
+            )
 
     status = await asyncio.to_thread(
         _init_workflow,
@@ -815,11 +824,16 @@ def workflow_wrapper(
             workflow_id = ctx.workflow_id
 
             if ctx.has_parent():
-                child_workflow_id = dbos._sys_db.check_child_workflow(
-                    ctx.parent_workflow_id, ctx.parent_workflow_fid
+                r = dbos._sys_db.check_operation_execution(
+                    ctx.parent_workflow_id,
+                    ctx.parent_workflow_fid,
+                    get_dbos_func_name(func),
                 )
-                if child_workflow_id is not None:
-                    return recorded_result(child_workflow_id, dbos)
+                if r and r["error"]:
+                    e: Exception = dbos._sys_db.serializer.deserialize(r["error"])
+                    raise e
+                elif r and r["child_workflow_id"]:
+                    return recorded_result(r["child_workflow_id"], dbos)
 
             status = _init_workflow(
                 dbos,
@@ -906,12 +920,6 @@ def decorate_transaction(
                 )
 
             dbos = dbosreg.dbos
-            ctx = assert_current_dbos_context()
-            status = dbos._sys_db.get_workflow_status(ctx.workflow_id)
-            if status and status["status"] == WorkflowStatusString.CANCELLED.value:
-                raise DBOSWorkflowCancelledError(
-                    f"Workflow {ctx.workflow_id} is cancelled. Aborting transaction {transaction_name}."
-                )
             assert (
                 dbos._app_db
             ), "Transactions can only be used if DBOS is configured with an application_database_url"
@@ -922,6 +930,26 @@ def decorate_transaction(
                 }
                 with EnterDBOSTransaction(session, attributes=attributes):
                     ctx = assert_current_dbos_context()
+                    # Check if the step record for this transaction exists
+                    recorded_step_output = dbos._sys_db.check_operation_execution(
+                        ctx.workflow_id, ctx.function_id, transaction_name
+                    )
+                    if recorded_step_output:
+                        dbos.logger.debug(
+                            f"Replaying transaction, id: {ctx.function_id}, name: {attributes['name']}"
+                        )
+                        if recorded_step_output["error"]:
+                            step_error: Exception = dbos._serializer.deserialize(
+                                recorded_step_output["error"]
+                            )
+                            raise step_error
+                        elif recorded_step_output["output"]:
+                            return dbos._serializer.deserialize(
+                                recorded_step_output["output"]
+                            )
+                        else:
+                            raise Exception("Output and error are both None")
+
                     txn_output: TransactionResultInternal = {
                         "workflow_uuid": ctx.workflow_id,
                         "function_id": ctx.function_id,
@@ -931,6 +959,14 @@ def decorate_transaction(
                         "executor_id": None,
                         "txn_id": None,
                         "function_name": transaction_name,
+                    }
+                    step_output: OperationResultInternal = {
+                        "workflow_uuid": ctx.workflow_id,
+                        "function_id": ctx.function_id,
+                        "function_name": transaction_name,
+                        "output": None,
+                        "error": None,
+                        "started_at_epoch_ms": int(time.time() * 1000),
                     }
                     retry_wait_seconds = 0.001
                     backoff_factor = 1.5
@@ -970,8 +1006,18 @@ def decorate_transaction(
                                             )
                                         )
                                         has_recorded_error = True
+                                        step_output["error"] = recorded_output["error"]
+                                        dbos._sys_db.record_operation_result(
+                                            step_output
+                                        )
                                         raise deserialized_error
                                     elif recorded_output["output"]:
+                                        step_output["output"] = recorded_output[
+                                            "output"
+                                        ]
+                                        dbos._sys_db.record_operation_result(
+                                            step_output
+                                        )
                                         return dbos._serializer.deserialize(
                                             recorded_output["output"]
                                         )
@@ -1028,10 +1074,13 @@ def decorate_transaction(
                         finally:
                             # Don't record the error if it was already recorded
                             if txn_error and not has_recorded_error:
-                                txn_output["error"] = dbos._serializer.serialize(
-                                    txn_error
+                                step_output["error"] = txn_output["error"] = (
+                                    dbos._serializer.serialize(txn_error)
                                 )
                                 dbos._app_db.record_transaction_error(txn_output)
+                                dbos._sys_db.record_operation_result(step_output)
+            step_output["output"] = dbos._serializer.serialize(output)
+            dbos._sys_db.record_operation_result(step_output)
             return output
 
         if inspect.iscoroutinefunction(func):
