@@ -903,12 +903,6 @@ def decorate_transaction(
                 )
 
             dbos = dbosreg.dbos
-            ctx = assert_current_dbos_context()
-            status = dbos._sys_db.get_workflow_status(ctx.workflow_id)
-            if status and status["status"] == WorkflowStatusString.CANCELLED.value:
-                raise DBOSWorkflowCancelledError(
-                    f"Workflow {ctx.workflow_id} is cancelled. Aborting transaction {transaction_name}."
-                )
             assert (
                 dbos._app_db
             ), "Transactions can only be used if DBOS is configured with an application_database_url"
@@ -919,6 +913,26 @@ def decorate_transaction(
                 }
                 with EnterDBOSTransaction(session, attributes=attributes):
                     ctx = assert_current_dbos_context()
+                    # Check if the step record for this transaction exists
+                    recorded_step_output = dbos._sys_db.check_operation_execution(
+                        ctx.workflow_id, ctx.function_id, transaction_name
+                    )
+                    if recorded_step_output:
+                        dbos.logger.debug(
+                            f"Replaying transaction, id: {ctx.function_id}, name: {attributes['name']}"
+                        )
+                        if recorded_step_output["error"]:
+                            step_error: Exception = dbos._serializer.deserialize(
+                                recorded_step_output["error"]
+                            )
+                            raise step_error
+                        elif recorded_step_output["output"]:
+                            return dbos._serializer.deserialize(
+                                recorded_step_output["output"]
+                            )
+                        else:
+                            raise Exception("Output and error are both None")
+
                     txn_output: TransactionResultInternal = {
                         "workflow_uuid": ctx.workflow_id,
                         "function_id": ctx.function_id,
@@ -1029,6 +1043,17 @@ def decorate_transaction(
                                     txn_error
                                 )
                                 dbos._app_db.record_transaction_error(txn_output)
+                            # Also record this transaction as a step
+                            if not has_recorded_error:
+                                step_output: OperationResultInternal = {
+                                    "workflow_uuid": ctx.workflow_id,
+                                    "function_id": ctx.function_id,
+                                    "function_name": transaction_name,
+                                    "output": txn_output["output"],
+                                    "error": txn_output["error"],
+                                    "started_at_epoch_ms": int(time.time() * 1000),
+                                }
+                                dbos._sys_db.record_operation_result(step_output)
             return output
 
         if inspect.iscoroutinefunction(func):
