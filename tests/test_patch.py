@@ -40,7 +40,7 @@ def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
 
     @DBOS.workflow()
     def workflow() -> int:
-        if DBOS.patch():
+        if DBOS.patch("v2"):
             a = step_three()
         else:
             a = step_one()
@@ -56,7 +56,7 @@ def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
     assert handle.get_result() == 5
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 3
-    assert steps[0]["function_name"] == "DBOS.patch"
+    assert steps[0]["function_name"] == "DBOS.patch-v2"
 
     # Verify an execution containing the patch marker
     # can recover past the patch marker
@@ -64,7 +64,7 @@ def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
     assert handle.get_result() == 5
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 3
-    assert steps[0]["function_name"] == "DBOS.patch"
+    assert steps[0]["function_name"] == "DBOS.patch-v2"
 
     # Verify an old execution runs the pre-patch workflow
     # and does not store a patch marker
@@ -84,7 +84,7 @@ def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
     def workflow() -> int:
         if DBOS.patch("v3"):
             a = step_two()
-        elif DBOS.patch():
+        elif DBOS.patch("v2"):
             a = step_three()
         else:
             a = step_one()
@@ -116,7 +116,7 @@ def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
     assert handle.get_result() == 5
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 3
-    assert steps[0]["function_name"] == "DBOS.patch"
+    assert steps[0]["function_name"] == "DBOS.patch-v2"
 
     # Verify a v1 execution recovers the pre-patch workflow
     # and does not store a patch marker

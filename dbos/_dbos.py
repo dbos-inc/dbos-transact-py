@@ -1526,16 +1526,13 @@ class DBOS:
                 continue
 
     @classmethod
-    def patch(cls, patch_name: str = "") -> bool:
+    def patch(cls, patch_name: str) -> bool:
         ctx = get_local_dbos_context()
         if ctx is None or not ctx.is_workflow():
             raise DBOSException("DBOS.patch must be called from a workflow")
         workflow_id = ctx.workflow_id
         function_id = ctx.function_id
-        if patch_name:
-            patch_name = f"DBOS.patch-{patch_name}"
-        else:
-            patch_name = f"DBOS.patch"
+        patch_name = f"DBOS.patch-{patch_name}"
         patched = _get_dbos_instance()._sys_db.patch(
             workflow_id=workflow_id, function_id=function_id + 1, patch_name=patch_name
         )
@@ -1545,16 +1542,13 @@ class DBOS:
         return patched
 
     @classmethod
-    def deprecate_patch(cls, patch_name: str = "") -> bool:
+    def deprecate_patch(cls, patch_name: str) -> bool:
         ctx = get_local_dbos_context()
         if ctx is None or not ctx.is_workflow():
             raise DBOSException("DBOS.deprecate_patch must be called from a workflow")
         workflow_id = ctx.workflow_id
         function_id = ctx.function_id
-        if patch_name:
-            patch_name = f"DBOS.patch-{patch_name}"
-        else:
-            patch_name = f"DBOS.patch"
+        patch_name = f"DBOS.patch-{patch_name}"
         patch_exists = _get_dbos_instance()._sys_db.deprecate_patch(
             workflow_id=workflow_id, function_id=function_id + 1, patch_name=patch_name
         )
