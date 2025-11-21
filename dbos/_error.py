@@ -143,7 +143,7 @@ class DBOSNotAuthorizedError(DBOSException):
         self.status_code = 403
 
     def __reduce__(self) -> Any:
-        # Tell jsonpickle how to reconstruct this object
+        # Tell pickle how to reconstruct this object
         return (self.__class__, (self.msg,))
 
 
@@ -162,7 +162,7 @@ class DBOSMaxStepRetriesExceeded(DBOSException):
         )
 
     def __reduce__(self) -> Any:
-        # Tell jsonpickle how to reconstruct this object
+        # Tell pickle how to reconstruct this object
         return (self.__class__, (self.step_name, self.max_retries, self.errors))
 
 
@@ -227,7 +227,7 @@ class DBOSAwaitedWorkflowCancelledError(DBOSException):
         )
 
     def __reduce__(self) -> Any:
-        # Tell jsonpickle how to reconstruct this object
+        # Tell pickle how to reconstruct this object
         return (self.__class__, (self.workflow_id,))
 
 
