@@ -1547,6 +1547,10 @@ class DBOS:
         return patched
 
     @classmethod
+    def patch_async(cls, patch_name: str) -> Coroutine[Any, Any, bool]:
+        return asyncio.to_thread(cls.patch, patch_name)
+
+    @classmethod
     def deprecate_patch(cls, patch_name: str) -> bool:
         if not _get_dbos_instance().enable_patching:
             raise DBOSException("enable_patching must be True in DBOS configuration")
@@ -1563,6 +1567,10 @@ class DBOS:
         if patch_exists:
             ctx.function_id += 1
         return True
+
+    @classmethod
+    def deprecate_patch_async(cls, patch_name: str) -> Coroutine[Any, Any, bool]:
+        return asyncio.to_thread(cls.deprecate_patch, patch_name)
 
     @classproperty
     def tracer(self) -> DBOSTracer:
