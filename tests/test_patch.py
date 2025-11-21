@@ -1,5 +1,8 @@
 # mypy: disable-error-code="no-redef"
+import pytest
+
 from dbos import DBOS, DBOSConfig
+from dbos._error import DBOSUnexpectedStepError
 
 
 def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
@@ -120,3 +123,47 @@ def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
     handle = DBOS.fork_workflow(v1_id, 2)
     assert handle.get_result() == 3
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 2
+
+    # Now, let's deprecate the patch
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+
+    step_one = DBOS.step()(step_one)
+    step_two = DBOS.step()(step_two)
+    step_three = DBOS.step()(step_three)
+
+    @DBOS.workflow()
+    def workflow() -> int:
+        DBOS.deprecate_patch("v3")
+        a = step_two()
+        b = step_two()
+        return a + b
+
+    DBOS.launch()
+
+    # Verify a new execution runs the final workflow
+    # but does not store a patch marker
+    handle = DBOS.start_workflow(workflow)
+    v4_id = handle.workflow_id
+    assert handle.get_result() == 4
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 2
+
+    # Verify an execution containing the v3 patch marker
+    # recovers to v3
+    handle = DBOS.fork_workflow(v3_id, 3)
+    assert handle.get_result() == 4
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 3
+    assert steps[0]["function_name"] == "DBOS.patch-v3"
+
+    # Verify an execution containing the v2 patch marker
+    # cleanly fails
+    handle = DBOS.fork_workflow(v2_id, 3)
+    with pytest.raises(DBOSUnexpectedStepError):
+        handle.get_result()
+
+    # Verify a v1 execution cleanly fails
+    handle = DBOS.fork_workflow(v1_id, 2)
+    with pytest.raises(DBOSUnexpectedStepError):
+        handle.get_result()

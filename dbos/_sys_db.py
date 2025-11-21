@@ -2384,4 +2384,4 @@ class SystemDatabase(ABC):
                     expected_name=patch_name,
                     recorded_name=checkpoint_name,
                 )
-            return checkpoint_name is None
+            return checkpoint_name is not None
