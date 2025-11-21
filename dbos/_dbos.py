@@ -341,6 +341,7 @@ class DBOS:
         self.conductor_key: Optional[str] = conductor_key
         if config.get("conductor_key"):
             self.conductor_key = config.get("conductor_key")
+        self.enable_patching = config.get("enable_patching") == True
         self.conductor_websocket: Optional[ConductorWebsocket] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
         self._active_workflows_set: set[str] = set()
@@ -350,6 +351,8 @@ class DBOS:
         # Globally set the application version and executor ID.
         # In DBOS Cloud, instead use the values supplied through environment variables.
         if not os.environ.get("DBOS__CLOUD") == "true":
+            if self.enable_patching:
+                GlobalParams.app_version = "PATCHING_ENABLED"
             if (
                 "application_version" in config
                 and config["application_version"] is not None
@@ -1527,6 +1530,8 @@ class DBOS:
 
     @classmethod
     def patch(cls, patch_name: str) -> bool:
+        if not _get_dbos_instance().enable_patching:
+            raise DBOSException("enable_patching must be True in DBOS configuration")
         ctx = get_local_dbos_context()
         if ctx is None or not ctx.is_workflow():
             raise DBOSException("DBOS.patch must be called from a workflow")
@@ -1543,6 +1548,8 @@ class DBOS:
 
     @classmethod
     def deprecate_patch(cls, patch_name: str) -> bool:
+        if not _get_dbos_instance().enable_patching:
+            raise DBOSException("enable_patching must be True in DBOS configuration")
         ctx = get_local_dbos_context()
         if ctx is None or not ctx.is_workflow():
             raise DBOSException("DBOS.deprecate_patch must be called from a workflow")

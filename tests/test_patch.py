@@ -3,9 +3,13 @@ import pytest
 
 from dbos import DBOS, DBOSConfig
 from dbos._error import DBOSUnexpectedStepError
+from dbos._utils import GlobalParams
 
 
 def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
+    DBOS.destroy(destroy_registry=True)
+    config["enable_patching"] = True
+    DBOS(config=config)
 
     @DBOS.step()
     def step_one() -> int:
@@ -24,6 +28,8 @@ def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
         a = step_one()
         b = step_two()
         return a + b
+
+    DBOS.launch()
 
     # Register and run the first version of a workflow
     handle = DBOS.start_workflow(workflow)
@@ -53,6 +59,7 @@ def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
     # and stores a patch marker
     handle = DBOS.start_workflow(workflow)
     v2_id = handle.workflow_id
+    assert handle.get_status().app_version == "PATCHING_ENABLED"
     assert handle.get_result() == 5
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 3
@@ -106,6 +113,7 @@ def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
     # recovers to v3
     handle = DBOS.fork_workflow(v3_id, 3)
     assert handle.get_result() == 4
+    assert handle.get_status().app_version == "PATCHING_ENABLED"
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 3
     assert steps[0]["function_name"] == "DBOS.patch-v3"
