@@ -167,3 +167,43 @@ def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
     handle = DBOS.fork_workflow(v1_id, 2)
     with pytest.raises(DBOSUnexpectedStepError):
         handle.get_result()
+
+    # Finally, let's remove the patch
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+
+    step_one = DBOS.step()(step_one)
+    step_two = DBOS.step()(step_two)
+    step_three = DBOS.step()(step_three)
+
+    @DBOS.workflow()
+    def workflow() -> int:
+        a = step_two()
+        b = step_two()
+        return a + b
+
+    DBOS.launch()
+
+    # Verify an execution from the deprecated patch works
+    # sans patch marker
+    handle = DBOS.fork_workflow(v4_id, 3)
+    assert handle.get_result() == 4
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 2
+
+    # Verify an execution containing the v3 patch marker
+    # cleanly fails
+    handle = DBOS.fork_workflow(v3_id, 3)
+    with pytest.raises(DBOSUnexpectedStepError):
+        handle.get_result()
+
+    # Verify an execution containing the v2 patch marker
+    # cleanly fails
+    handle = DBOS.fork_workflow(v2_id, 3)
+    with pytest.raises(DBOSUnexpectedStepError):
+        handle.get_result()
+
+    # Verify a v1 execution cleanly fails
+    handle = DBOS.fork_workflow(v1_id, 2)
+    with pytest.raises(DBOSUnexpectedStepError):
+        handle.get_result()
