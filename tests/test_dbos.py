@@ -2078,7 +2078,7 @@ def test_custom_serializer(
         def serialize(self, data: Any) -> str:
             return json.dumps(data)
 
-        def deserialize(cls, serialized_data: str) -> Any:
+        def deserialize(self, serialized_data: str) -> Any:
             return json.loads(serialized_data)
 
     # Configure DBOS with a JSON-based custom serializer
