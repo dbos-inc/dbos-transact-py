@@ -2377,11 +2377,4 @@ class SystemDatabase(ABC):
                     & (SystemSchema.operation_outputs.c.function_id == function_id)
                 )
             ).scalar()
-            if checkpoint_name and checkpoint_name != patch_name:
-                raise DBOSUnexpectedStepError(
-                    workflow_id=workflow_id,
-                    step_id=function_id,
-                    expected_name=patch_name,
-                    recorded_name=checkpoint_name,
-                )
-            return checkpoint_name is not None
+            return checkpoint_name == patch_name

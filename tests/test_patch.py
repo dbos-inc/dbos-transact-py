@@ -149,6 +149,12 @@ def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 2
 
+    # Verify an execution sans patch marker recovers correctly
+    handle = DBOS.fork_workflow(v4_id, 3)
+    assert handle.get_result() == 4
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 2
+
     # Verify an execution containing the v3 patch marker
     # recovers to v3
     handle = DBOS.fork_workflow(v3_id, 3)
