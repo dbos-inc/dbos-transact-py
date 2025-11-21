@@ -44,8 +44,16 @@ def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
 
     DBOS.launch()
 
+    # Verify a new execution runs the post-patch workflow
+    # and stores a patch marker
     handle = DBOS.start_workflow(workflow)
     assert handle.get_result() == 5
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 3
+    assert steps[0]["function_name"] == "DBOS.patch"
 
+    # Verify an old execution runs the pre-patch workflow
+    # and does not store a patch marker
     handle = DBOS.fork_workflow(v1_id, 2)
     assert handle.get_result() == 3
+    assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 2

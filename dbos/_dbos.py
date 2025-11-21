@@ -1532,7 +1532,10 @@ class DBOS:
             raise DBOSException("DBOS.patch must be called from a workflow")
         workflow_id = ctx.workflow_id
         function_id = ctx.function_id
-        patch_name = f"DBOS.patch-{patch_name}"
+        if patch_name:
+            patch_name = f"DBOS.patch-{patch_name}"
+        else:
+            patch_name = f"DBOS.patch"
         patched = _get_dbos_instance()._sys_db.patch(
             workflow_id=workflow_id, function_id=function_id + 1, patch_name=patch_name
         )
