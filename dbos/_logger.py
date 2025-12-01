@@ -71,6 +71,7 @@ def config_logger(config: "ConfigFile") -> None:
     if not disable_otlp:
 
         from opentelemetry._logs import get_logger_provider, set_logger_provider
+        from opentelemetry._logs._internal import ProxyLoggerProvider
         from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
         from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
@@ -80,7 +81,8 @@ def config_logger(config: "ConfigFile") -> None:
         # Only set up OTLP provider and exporter if endpoints are provided
         log_provider = get_logger_provider()
         if otlp_logs_endpoints is not None and len(otlp_logs_endpoints) > 0:
-            if not isinstance(log_provider, LoggerProvider):
+            if isinstance(log_provider, ProxyLoggerProvider):
+                # Set a real LoggerProvider if it was previously a ProxyLoggerProvider
                 log_provider = LoggerProvider(
                     Resource.create(
                         attributes={
@@ -101,10 +103,14 @@ def config_logger(config: "ConfigFile") -> None:
         # Even if no endpoints are provided, we still need a LoggerProvider to create the LoggingHandler
         global _otlp_handler
         if _otlp_handler is None:
-            _otlp_handler = LoggingHandler(logger_provider=log_provider)
-
-            # Direct DBOS logs to OTLP
-            dbos_logger.addHandler(_otlp_handler)
+            if isinstance(log_provider, ProxyLoggerProvider):
+                dbos_logger.warning(
+                    "OTLP is enabled but logger provider not set, skipping log exporter setup."
+                )
+            else:
+                _otlp_handler = LoggingHandler(logger_provider=log_provider)
+                # Direct DBOS logs to OTLP
+                dbos_logger.addHandler(_otlp_handler)
 
     # Attach DBOS-specific attributes to all log entries.
     global _dbos_log_transformer
