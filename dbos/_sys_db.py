@@ -405,6 +405,26 @@ class SystemDatabase(ABC):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
 
+        # Log system database connection information
+        if engine:
+            dbos_logger.info("Initializing DBOS system database with custom engine")
+        else:
+            printable_sys_db_url = sa.make_url(system_database_url).render_as_string(
+                hide_password=True
+            )
+            dbos_logger.info(
+                f"Initializing DBOS system database with URL: {printable_sys_db_url}"
+            )
+            if system_database_url.startswith("sqlite"):
+                dbos_logger.info(
+                    f"Using SQLite as a system database. The SQLite system database is for development and testing. PostgreSQL is recommended for production use."
+                )
+            else:
+                dbos_logger.info(
+                    f"DBOS system database engine parameters: {engine_kwargs}"
+                )
+
+        # Configure and initialize the system database
         self.dialect = sq if system_database_url.startswith("sqlite") else pg
 
         self.serializer = serializer
