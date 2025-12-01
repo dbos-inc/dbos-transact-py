@@ -70,6 +70,13 @@ class ApplicationDatabase(ABC):
         schema: Optional[str],
         debug_mode: bool = False,
     ):
+        # Log application database connection information
+        printable_url = sa.make_url(database_url).render_as_string(hide_password=True)
+        dbos_logger.info(f"DBOS application database URL: {printable_url}")
+        if not database_url.startswith("sqlite"):
+            dbos_logger.info(f"Application database engine parameters: {engine_kwargs}")
+
+        # Configure and initialize the application database
         if database_url.startswith("sqlite"):
             self.schema = None
         else:

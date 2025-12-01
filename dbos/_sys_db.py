@@ -420,6 +420,7 @@ class SystemDatabase(ABC):
             else:
                 dbos_logger.info(f"System database engine parameters: {engine_kwargs}")
 
+        # Configure and initialize the system database
         self.dialect = sq if system_database_url.startswith("sqlite") else pg
 
         self.serializer = serializer
