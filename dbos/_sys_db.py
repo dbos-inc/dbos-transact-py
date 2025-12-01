@@ -407,7 +407,7 @@ class SystemDatabase(ABC):
 
         # Log system database connection information
         if engine:
-            dbos_logger.info("Using custom system database engine")
+            dbos_logger.info("Initializing DBOS system database with custom engine")
         else:
             printable_sys_db_url = sa.make_url(system_database_url).render_as_string(
                 hide_password=True
@@ -418,7 +418,9 @@ class SystemDatabase(ABC):
                     f"Using SQLite as a system database. The SQLite system database is for development and testing. PostgreSQL is recommended for production use."
                 )
             else:
-                dbos_logger.info(f"System database engine parameters: {engine_kwargs}")
+                dbos_logger.info(
+                    f"DBOS system database engine parameters: {engine_kwargs}"
+                )
 
         # Configure and initialize the system database
         self.dialect = sq if system_database_url.startswith("sqlite") else pg
