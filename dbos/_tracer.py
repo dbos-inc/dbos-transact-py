@@ -63,7 +63,7 @@ class DBOSTracer:
 
                 for e in otlp_traces_endpoints:
                     processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=e))
-                    tracer_provider.add_span_processor(processor)
+                    tracer_provider.add_span_processor(processor)  # type: ignore
 
             if isinstance(tracer_provider, trace.ProxyTracerProvider):
                 dbos_logger.warning(

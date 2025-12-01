@@ -93,7 +93,7 @@ def config_logger(config: "ConfigFile") -> None:
                 set_logger_provider(log_provider)
 
             for e in otlp_logs_endpoints:
-                log_provider.add_log_record_processor(
+                log_provider.add_log_record_processor(  # type: ignore
                     BatchLogRecordProcessor(
                         OTLPLogExporter(endpoint=e),
                         export_timeout_millis=5000,
