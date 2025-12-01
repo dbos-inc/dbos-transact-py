@@ -72,7 +72,9 @@ class ApplicationDatabase(ABC):
     ):
         # Log application database connection information
         printable_url = sa.make_url(database_url).render_as_string(hide_password=True)
-        dbos_logger.info(f"DBOS application database URL: {printable_url}")
+        dbos_logger.info(
+            f"Initializing DBOS application database with URL: {printable_url}"
+        )
         if not database_url.startswith("sqlite"):
             dbos_logger.info(
                 f"DBOS application database engine parameters: {engine_kwargs}"
