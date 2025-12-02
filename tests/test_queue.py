@@ -1000,6 +1000,47 @@ def test_resuming_queued_workflows(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def test_resuming_queued_partitioned_workflows(dbos: DBOS) -> None:
+    start_event = threading.Event()
+    blocking_event = threading.Event()
+
+    @DBOS.workflow()
+    def stuck_workflow() -> None:
+        start_event.set()
+        blocking_event.wait()
+
+    @DBOS.workflow()
+    def regular_workflow() -> None:
+        return
+
+    # Enqueue a blocked workflow and two regular workflows on a queue with concurrency 1
+    queue = Queue("test_queue", concurrency=1, partition_queue=True)
+    wfid = str(uuid.uuid4())
+    with SetEnqueueOptions(queue_partition_key="key"):
+        blocked_handle = queue.enqueue(stuck_workflow)
+        with SetWorkflowID(wfid):
+            regular_handle_1 = queue.enqueue(regular_workflow)
+        regular_handle_2 = queue.enqueue(regular_workflow)
+
+    # Verify that the blocked workflow starts and is PENDING while the regular workflows remain ENQUEUED.
+    start_event.wait()
+    assert blocked_handle.get_status().status == WorkflowStatusString.PENDING.value
+    assert regular_handle_1.get_status().status == WorkflowStatusString.ENQUEUED.value
+    assert regular_handle_2.get_status().status == WorkflowStatusString.ENQUEUED.value
+
+    # Resume a regular workflow. Verify it completes.
+    dbos.resume_workflow(wfid)
+    assert regular_handle_1.get_result() == None
+
+    # Complete the blocked workflow. Verify the second regular workflow also completes.
+    blocking_event.set()
+    assert blocked_handle.get_result() == None
+    assert regular_handle_2.get_result() == None
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
+
+
 def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
     start_event = threading.Event()
     blocking_event = threading.Event()
