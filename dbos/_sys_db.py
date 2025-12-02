@@ -1863,10 +1863,6 @@ class SystemDatabase(ABC):
                     .select_from(SystemSchema.workflow_status)
                     .where(SystemSchema.workflow_status.c.queue_name == queue.name)
                     .where(
-                        SystemSchema.workflow_status.c.queue_partition_key
-                        == queue_partition_key
-                    )
-                    .where(
                         SystemSchema.workflow_status.c.status
                         != WorkflowStatusString.ENQUEUED.value
                     )
@@ -1875,6 +1871,11 @@ class SystemDatabase(ABC):
                         > start_time_ms - limiter_period_ms
                     )
                 )
+                if queue_partition_key is not None:
+                    query = query.where(
+                        SystemSchema.workflow_status.c.queue_partition_key
+                        == queue_partition_key
+                    )
                 num_recent_queries = c.execute(query).fetchone()[0]  # type: ignore
                 if num_recent_queries >= queue.limiter["limit"]:
                     return []
@@ -1891,15 +1892,16 @@ class SystemDatabase(ABC):
                     .select_from(SystemSchema.workflow_status)
                     .where(SystemSchema.workflow_status.c.queue_name == queue.name)
                     .where(
-                        SystemSchema.workflow_status.c.queue_partition_key
-                        == queue_partition_key
-                    )
-                    .where(
                         SystemSchema.workflow_status.c.status
                         == WorkflowStatusString.PENDING.value
                     )
                     .group_by(SystemSchema.workflow_status.c.executor_id)
                 )
+                if queue_partition_key is not None:
+                    pending_tasks_query = pending_tasks_query.where(
+                        SystemSchema.workflow_status.c.queue_partition_key
+                        == queue_partition_key
+                    )
                 pending_workflows = c.execute(pending_tasks_query).fetchall()
                 pending_workflows_dict = {row[0]: row[1] for row in pending_workflows}
                 local_pending_workflows = pending_workflows_dict.get(executor_id, 0)
@@ -1936,10 +1938,6 @@ class SystemDatabase(ABC):
                 .select_from(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_status.c.queue_name == queue.name)
                 .where(
-                    SystemSchema.workflow_status.c.queue_partition_key
-                    == queue_partition_key
-                )
-                .where(
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.ENQUEUED.value
                 )
@@ -1955,6 +1953,11 @@ class SystemDatabase(ABC):
                 # to ensure all processes have a consistent view of the table.
                 .with_for_update(skip_locked=skip_locks, nowait=(not skip_locks))
             )
+            if queue_partition_key is not None:
+                query = query.where(
+                    SystemSchema.workflow_status.c.queue_partition_key
+                    == queue_partition_key
+                )
             if queue.priority_enabled:
                 query = query.order_by(
                     SystemSchema.workflow_status.c.priority.asc(),
