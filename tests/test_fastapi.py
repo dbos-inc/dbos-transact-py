@@ -34,6 +34,7 @@ def test_simple_endpoint(
     @app.get("/workflow/{var1}/{var2}")
     @DBOS.workflow()
     def test_workflow(var1: str, var2: str) -> str:
+        assert DBOS.span is not None
         DBOS.span.set_attribute("test_key", "test_value")
         res1 = test_transaction(var1)
         res2 = test_step(var2)
@@ -85,6 +86,7 @@ def test_start_workflow(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
 
     @DBOS.workflow()
     def test_workflow(var1: str, var2: str) -> str:
+        assert DBOS.span is not None
         DBOS.span.set_attribute("test_key", "test_value")
         res1 = test_transaction(var1)
         res2 = test_step(var2)
