@@ -8,6 +8,7 @@ if TYPE_CHECKING:
 from dbos._utils import GlobalParams
 
 from ._dbos_config import ConfigFile
+from ._logger import dbos_logger
 
 if TYPE_CHECKING:
     from ._context import TracedAttributes
@@ -46,7 +47,8 @@ class DBOSTracer:
 
             # Only set up OTLP provider and exporter if endpoints are provided
             if otlp_traces_endpoints is not None and len(otlp_traces_endpoints) > 0:
-                if not isinstance(tracer_provider, TracerProvider):
+                if isinstance(tracer_provider, trace.ProxyTracerProvider):
+                    # Set a real TracerProvider if it was previously a ProxyTracerProvider
                     resource = Resource(
                         attributes={
                             SERVICE_NAME: config["name"],
@@ -61,7 +63,12 @@ class DBOSTracer:
 
                 for e in otlp_traces_endpoints:
                     processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=e))
-                    tracer_provider.add_span_processor(processor)
+                    tracer_provider.add_span_processor(processor)  # type: ignore
+
+            if isinstance(tracer_provider, trace.ProxyTracerProvider):
+                dbos_logger.warning(
+                    "OTLP is enabled but tracer provider not set, skipping trace exporter setup."
+                )
 
     def set_provider(self, provider: "Optional[TracerProvider]") -> None:
         self.provider = provider

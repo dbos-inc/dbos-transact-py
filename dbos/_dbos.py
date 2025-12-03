@@ -1329,11 +1329,10 @@ class DBOS:
             return None
 
     @classproperty
-    def span(cls) -> "Span":
+    def span(cls) -> Optional["Span"]:
         """Return the tracing `Span` associated with the current context."""
         ctx = assert_current_dbos_context()
         span = ctx.get_current_active_span()
-        assert span
         return span
 
     @classproperty

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import platform
 import signal
@@ -24,6 +25,7 @@ from .._dbos_config import (
     load_config,
 )
 from .._docker_pg_helper import start_docker_pg, stop_docker_pg
+from .._logger import dbos_logger
 from .._sys_db import SystemDatabase
 from .._utils import GlobalParams
 from ..cli._github_init import create_template_from_github
@@ -48,6 +50,7 @@ def _get_db_url(
     Otherwise fallback to the same SQLite Postgres URL than the DBOS library.
     Note that for the latter to be possible, a configuration file must have been found, with an application name set.
     """
+    dbos_logger.setLevel(logging.WARNING)  # The CLI should not emit INFO logs
     if os.environ.get("DBOS__CLOUD") == "true":
         system_database_url = os.environ.get("DBOS_SYSTEM_DATABASE_URL")
         application_database_url = os.environ.get("DBOS_DATABASE_URL")
