@@ -142,8 +142,8 @@ def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
 
     @DBOS.workflow()
     def workflow() -> int:
-        if DBOS.deprecate_patch("v3"):
-            a = step_two()
+        DBOS.deprecate_patch("v3")
+        a = step_two()
         b = step_two()
         return a + b
 
@@ -298,8 +298,8 @@ async def test_patch_async(dbos: DBOS, config: DBOSConfig) -> None:
 
     @DBOS.workflow()
     async def workflow() -> int:
-        if await DBOS.deprecate_patch_async("v3"):
-            a = await step_two()
+        await DBOS.deprecate_patch_async("v3")
+        a = await step_two()
         b = await step_two()
         return a + b
 
