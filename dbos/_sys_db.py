@@ -2341,9 +2341,9 @@ class SystemDatabase(ABC):
                 )
                 .where(
                     sa.and_(
-                        SystemSchema.operation_outputs.c.started_at_epoch_ms
+                        SystemSchema.operation_outputs.c.completed_at_epoch_ms
                         >= start_epoch_ms,
-                        SystemSchema.operation_outputs.c.started_at_epoch_ms
+                        SystemSchema.operation_outputs.c.completed_at_epoch_ms
                         < end_epoch_ms,
                     )
                 )
