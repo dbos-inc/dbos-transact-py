@@ -340,7 +340,7 @@ class ConductorWebsocket(threading.Thread):
                             list_steps_message = p.ListStepsRequest.from_json(message)
                             step_info = None
                             try:
-                                self.dbos._sys_db.list_workflow_steps(
+                                step_info = self.dbos._sys_db.list_workflow_steps(
                                     list_steps_message.workflow_id
                                 )
                             except Exception as e:
