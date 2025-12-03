@@ -2361,3 +2361,43 @@ class SystemDatabase(ABC):
                 )
 
         return metrics
+
+    @db_retry()
+    def patch(self, *, workflow_id: str, function_id: int, patch_name: str) -> bool:
+        """If there is no checkpoint for this point in history,
+        insert a patch marker and return True.
+        Otherwise, return whether the checkpoint is this patch marker."""
+        with self.engine.begin() as c:
+            checkpoint_name: str | None = c.execute(
+                sa.select(SystemSchema.operation_outputs.c.function_name).where(
+                    (SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
+                    & (SystemSchema.operation_outputs.c.function_id == function_id)
+                )
+            ).scalar()
+            if checkpoint_name is None:
+                result: OperationResultInternal = {
+                    "workflow_uuid": workflow_id,
+                    "function_id": function_id,
+                    "function_name": patch_name,
+                    "output": None,
+                    "error": None,
+                    "started_at_epoch_ms": int(time.time() * 1000),
+                }
+                self._record_operation_result_txn(result, c)
+                return True
+            else:
+                return checkpoint_name == patch_name
+
+    @db_retry()
+    def deprecate_patch(
+        self, *, workflow_id: str, function_id: int, patch_name: str
+    ) -> bool:
+        """Respect patch markers in history, but do not introduce new patch markers"""
+        with self.engine.begin() as c:
+            checkpoint_name: str | None = c.execute(
+                sa.select(SystemSchema.operation_outputs.c.function_name).where(
+                    (SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
+                    & (SystemSchema.operation_outputs.c.function_id == function_id)
+                )
+            ).scalar()
+            return checkpoint_name == patch_name

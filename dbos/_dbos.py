@@ -341,6 +341,7 @@ class DBOS:
         self.conductor_key: Optional[str] = conductor_key
         if config.get("conductor_key"):
             self.conductor_key = config.get("conductor_key")
+        self.enable_patching = config.get("enable_patching") == True
         self.conductor_websocket: Optional[ConductorWebsocket] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
         self._active_workflows_set: set[str] = set()
@@ -350,6 +351,8 @@ class DBOS:
         # Globally set the application version and executor ID.
         # In DBOS Cloud, instead use the values supplied through environment variables.
         if not os.environ.get("DBOS__CLOUD") == "true":
+            if self.enable_patching:
+                GlobalParams.app_version = "PATCHING_ENABLED"
             if (
                 "application_version" in config
                 and config["application_version"] is not None
@@ -1523,6 +1526,50 @@ class DBOS:
                     break
                 await asyncio.sleep(1.0)
                 continue
+
+    @classmethod
+    def patch(cls, patch_name: str) -> bool:
+        if not _get_dbos_instance().enable_patching:
+            raise DBOSException("enable_patching must be True in DBOS configuration")
+        ctx = get_local_dbos_context()
+        if ctx is None or not ctx.is_workflow():
+            raise DBOSException("DBOS.patch must be called from a workflow")
+        workflow_id = ctx.workflow_id
+        function_id = ctx.function_id
+        patch_name = f"DBOS.patch-{patch_name}"
+        patched = _get_dbos_instance()._sys_db.patch(
+            workflow_id=workflow_id, function_id=function_id + 1, patch_name=patch_name
+        )
+        # If the patch was applied, increment function ID
+        if patched:
+            ctx.function_id += 1
+        return patched
+
+    @classmethod
+    def patch_async(cls, patch_name: str) -> Coroutine[Any, Any, bool]:
+        return asyncio.to_thread(cls.patch, patch_name)
+
+    @classmethod
+    def deprecate_patch(cls, patch_name: str) -> bool:
+        if not _get_dbos_instance().enable_patching:
+            raise DBOSException("enable_patching must be True in DBOS configuration")
+        ctx = get_local_dbos_context()
+        if ctx is None or not ctx.is_workflow():
+            raise DBOSException("DBOS.deprecate_patch must be called from a workflow")
+        workflow_id = ctx.workflow_id
+        function_id = ctx.function_id
+        patch_name = f"DBOS.patch-{patch_name}"
+        patch_exists = _get_dbos_instance()._sys_db.deprecate_patch(
+            workflow_id=workflow_id, function_id=function_id + 1, patch_name=patch_name
+        )
+        # If the patch is already in history, increment function ID
+        if patch_exists:
+            ctx.function_id += 1
+        return True
+
+    @classmethod
+    def deprecate_patch_async(cls, patch_name: str) -> Coroutine[Any, Any, bool]:
+        return asyncio.to_thread(cls.deprecate_patch, patch_name)
 
     @classproperty
     def tracer(self) -> DBOSTracer:
