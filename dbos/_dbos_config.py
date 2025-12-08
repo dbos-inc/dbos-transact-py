@@ -63,6 +63,7 @@ class DBOSConfig(TypedDict, total=False):
     conductor_key: Optional[str]
     conductor_url: Optional[str]
     serializer: Optional[Serializer]
+    enable_patching: Optional[bool]
 
 
 class RuntimeConfig(TypedDict, total=False):

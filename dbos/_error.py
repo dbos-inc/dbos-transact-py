@@ -143,7 +143,7 @@ class DBOSNotAuthorizedError(DBOSException):
         self.status_code = 403
 
     def __reduce__(self) -> Any:
-        # Tell jsonpickle how to reconstruct this object
+        # Tell pickle how to reconstruct this object
         return (self.__class__, (self.msg,))
 
 
@@ -162,7 +162,7 @@ class DBOSMaxStepRetriesExceeded(DBOSException):
         )
 
     def __reduce__(self) -> Any:
-        # Tell jsonpickle how to reconstruct this object
+        # Tell pickle how to reconstruct this object
         return (self.__class__, (self.step_name, self.max_retries, self.errors))
 
 
@@ -182,9 +182,17 @@ class DBOSUnexpectedStepError(DBOSException):
     def __init__(
         self, workflow_id: str, step_id: int, expected_name: str, recorded_name: str
     ) -> None:
+        self.inputs = (workflow_id, step_id, expected_name, recorded_name)
         super().__init__(
             f"During execution of workflow {workflow_id} step {step_id}, function {recorded_name} was recorded when {expected_name} was expected. Check that your workflow is deterministic.",
             dbos_error_code=DBOSErrorCode.UnexpectedStep.value,
+        )
+
+    def __reduce__(self) -> Any:
+        # Tell pickle how to reconstruct this object
+        return (
+            self.__class__,
+            self.inputs,
         )
 
 
@@ -203,7 +211,7 @@ class DBOSQueueDeduplicatedError(DBOSException):
         )
 
     def __reduce__(self) -> Any:
-        # Tell jsonpickle how to reconstruct this object
+        # Tell pickle how to reconstruct this object
         return (
             self.__class__,
             (self.workflow_id, self.queue_name, self.deduplication_id),
@@ -219,7 +227,7 @@ class DBOSAwaitedWorkflowCancelledError(DBOSException):
         )
 
     def __reduce__(self) -> Any:
-        # Tell jsonpickle how to reconstruct this object
+        # Tell pickle how to reconstruct this object
         return (self.__class__, (self.workflow_id,))
 
 
