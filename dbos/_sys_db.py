@@ -1066,7 +1066,7 @@ class SystemDatabase(ABC):
         if input.workflow_id_prefix:
             query = query.where(
                 SystemSchema.workflow_status.c.workflow_uuid.startswith(
-                    input.workflow_id_prefix
+                    input.workflow_id_prefix, autoescape=True
                 )
             )
         if input.queue_name:
