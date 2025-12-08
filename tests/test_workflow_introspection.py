@@ -198,6 +198,27 @@ def test_list_workflow_start_end_times(dbos: DBOS) -> None:
     assert len(output) == 0, f"Expected list length to be 0, but got {len(output)}"
 
 
+def test_list_workflow_prefix(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        print("Executed Simple workflow")
+        return
+
+    with SetWorkflowID("test1"):
+        simple_workflow()
+    with SetWorkflowID("test_"):
+        simple_workflow()
+
+    output = DBOS.list_workflows(workflow_id_prefix="invalid")
+    assert len(output) == 0
+    output = DBOS.list_workflows(workflow_id_prefix="test")
+    assert len(output) == 2
+    output = DBOS.list_workflows(workflow_id_prefix="test_")
+    assert len(output) == 1
+    output = DBOS.list_workflows(workflow_id_prefix="test1")
+    assert len(output) == 1
+
+
 def test_list_workflow_end_times_positive(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None
 ) -> None:
