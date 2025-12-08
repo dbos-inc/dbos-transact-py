@@ -1588,7 +1588,7 @@ class DBOS:
         dbos = _get_dbos_instance()
         if dbos._launched:
             raise DBOSException("listen_queues called after DBOS is launched")
-        if dbos._listening_queues is None:
+        if dbos._listening_queues is not None:
             raise DBOSException("listen_queues called more than once")
         dbos._listening_queues = queues
 

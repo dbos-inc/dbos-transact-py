@@ -1752,3 +1752,33 @@ def test_polling_interval(dbos: DBOS) -> None:
         start_time = time.time()
         assert queue.enqueue(workflow).get_result(polling_interval_sec=0.1)
         assert time.time() - start_time < 1.0
+
+
+def test_listen_queue(dbos: DBOS, config: DBOSConfig) -> None:
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+
+    queue_one = Queue("queue_one")
+    queue_two = Queue("queue_two")
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        assert DBOS.workflow_id
+        return DBOS.workflow_id
+
+    DBOS.listen_queues([queue_one])
+    DBOS.launch()
+
+    # While only listening to queue one, only workflows enqueued there execute
+    handle_one = queue_one.enqueue(workflow)
+    handle_two = queue_two.enqueue(workflow)
+    assert handle_one.get_result()
+    assert handle_two.get_status().status == "ENQUEUED"
+
+    DBOS.destroy()
+    DBOS(config=config)
+    DBOS.listen_queues([queue_two])
+    DBOS.launch()
+
+    # Listening to queue two completes its workflows
+    assert DBOS.retrieve_workflow(handle_two.workflow_id).get_result()
