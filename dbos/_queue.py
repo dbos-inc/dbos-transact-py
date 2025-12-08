@@ -175,10 +175,22 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     queue_threads: dict[str, threading.Thread] = {}
     check_interval = 1.0  # Check for new queues every second
 
+    if dbos._listening_queues is not None:
+        listening_queues = dbos._listening_queues
+    else:
+        listening_queues = list(dbos._registry.queue_info_map.values())
+        listening_queues = [
+            q for q in listening_queues if q.name != INTERNAL_QUEUE_NAME
+        ]
+    dbos.logger.info(f"Listening to {len(listening_queues)} queues:")
+    log_queues(listening_queues)
+
     while not stop_event.is_set():
         if dbos._listening_queues is not None:
             # If explicitly listening for queues, only use those queues
             current_queues = {queue.name: queue for queue in dbos._listening_queues}
+            # Add the internal queue to the list
+            current_queues[INTERNAL_QUEUE_NAME] = dbos._registry.get_internal_queue()
         else:
             # Else, check all declared queues
             current_queues = dict(dbos._registry.queue_info_map)
@@ -216,3 +228,21 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                 dbos.logger.debug(
                     f"Queue worker thread for {queue_name} stopped successfully"
                 )
+
+
+def log_queues(queues: list[Queue]) -> None:
+    """Helper function to log queues on DBOS launch."""
+    for q in queues:
+        opts = []
+        if q.concurrency is not None:
+            opts.append(f"concurrency={q.concurrency}")
+        if q.worker_concurrency is not None:
+            opts.append(f"worker_concurrency={q.worker_concurrency}")
+        if q.limiter is not None:
+            opts.append(f"limit={q.limiter['limit']}/{q.limiter['period']}s")
+        if q.priority_enabled:
+            opts.append("priority")
+        if q.partition_queue:
+            opts.append("partitioned")
+        opts_str = f" ({', '.join(opts)})" if opts else ""
+        dbos_logger.info(f"Queue: {q.name}{opts_str}")

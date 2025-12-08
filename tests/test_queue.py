@@ -1782,3 +1782,5 @@ def test_listen_queue(dbos: DBOS, config: DBOSConfig) -> None:
 
     # Listening to queue two completes its workflows
     assert DBOS.retrieve_workflow(handle_two.workflow_id).get_result()
+    # Verify the internal queue works
+    assert DBOS.fork_workflow(handle_two.workflow_id, 0).get_result()
