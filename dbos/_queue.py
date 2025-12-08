@@ -189,7 +189,7 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
         if dbos._listening_queues is not None:
             # If explicitly listening for queues, only use those queues
             current_queues = {queue.name: queue for queue in dbos._listening_queues}
-            # Add the internal queue to the list
+            # Always listen to the internal queue
             current_queues[INTERNAL_QUEUE_NAME] = dbos._registry.get_internal_queue()
         else:
             # Else, check all declared queues
