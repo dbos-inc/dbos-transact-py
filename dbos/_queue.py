@@ -176,8 +176,12 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     check_interval = 1.0  # Check for new queues every second
 
     while not stop_event.is_set():
-        # Check for new queues
-        current_queues = dict(dbos._registry.queue_info_map)
+        if dbos._listening_queues is not None:
+            # If explicitly listening for queues, only use those queues
+            current_queues = {queue.name: queue for queue in dbos._listening_queues}
+        else:
+            # Else, check all declared queues
+            current_queues = dict(dbos._registry.queue_info_map)
 
         # Start threads for new queues
         for queue_name, queue in current_queues.items():
