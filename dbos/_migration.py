@@ -243,6 +243,10 @@ ALTER TABLE \"{schema}\".streams ADD COLUMN function_id INTEGER NOT NULL DEFAULT
 """
 
 
+def get_dbos_migration_seven(schema: str) -> str:
+    return f"""ALTER TABLE "{schema}"."workflow_status" ADD COLUMN "owner_xid" TEXT DEFAULT NULL;"""
+
+
 def get_dbos_migrations(schema: str) -> list[str]:
     return [
         get_dbos_migration_one(schema),
@@ -251,6 +255,7 @@ def get_dbos_migrations(schema: str) -> list[str]:
         get_dbos_migration_four(schema),
         get_dbos_migration_five(schema),
         get_dbos_migration_six(schema),
+        get_dbos_migration_seven(schema),
     ]
 
 
@@ -371,6 +376,10 @@ CREATE TABLE workflow_events_history (
 );
 ALTER TABLE streams ADD COLUMN function_id INTEGER NOT NULL DEFAULT 0;
 """
+
+sqlite_migration_seven = (
+    """ALTER TABLE workflow_status ADD COLUMN "owner_xid" TEXT DEFAULT NULL;"""
+)
 
 
 sqlite_migrations = [
