@@ -80,6 +80,7 @@ class SystemSchema:
         Column("priority", Integer(), nullable=False, server_default=text("'0'::int")),
         Column("queue_partition_key", Text()),
         Column("forked_from", Text()),
+        Column("owner_xid", Text()),
         Index("workflow_status_created_at_index", "created_at"),
         Index("workflow_status_executor_id_index", "executor_id"),
         Index("workflow_status_status_index", "status"),
