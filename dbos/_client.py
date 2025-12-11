@@ -373,6 +373,7 @@ class DBOSClient:
         workflow_id_prefix: Optional[str] = None,
         load_input: bool = True,
         load_output: bool = True,
+        executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         return list_workflows(
             self._sys_db,
@@ -389,6 +390,7 @@ class DBOSClient:
             workflow_id_prefix=workflow_id_prefix,
             load_input=load_input,
             load_output=load_output,
+            executor_id=executor_id,
         )
 
     async def list_workflows_async(
@@ -407,6 +409,7 @@ class DBOSClient:
         workflow_id_prefix: Optional[str] = None,
         load_input: bool = True,
         load_output: bool = True,
+        executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_workflows,
@@ -423,6 +426,7 @@ class DBOSClient:
             workflow_id_prefix=workflow_id_prefix,
             load_input=load_input,
             load_output=load_output,
+            executor_id=executor_id,
         )
 
     def list_queued_workflows(
@@ -437,6 +441,7 @@ class DBOSClient:
         offset: Optional[int] = None,
         sort_desc: bool = False,
         load_input: bool = True,
+        executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         return list_queued_workflows(
             self._sys_db,
@@ -449,6 +454,7 @@ class DBOSClient:
             offset=offset,
             sort_desc=sort_desc,
             load_input=load_input,
+            executor_id=executor_id,
         )
 
     async def list_queued_workflows_async(
@@ -463,6 +469,7 @@ class DBOSClient:
         offset: Optional[int] = None,
         sort_desc: bool = False,
         load_input: bool = True,
+        executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_queued_workflows,
@@ -475,6 +482,7 @@ class DBOSClient:
             offset=offset,
             sort_desc=sort_desc,
             load_input=load_input,
+            executor_id=executor_id,
         )
 
     def list_workflow_steps(self, workflow_id: str) -> List[StepInfo]:

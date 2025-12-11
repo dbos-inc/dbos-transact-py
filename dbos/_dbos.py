@@ -1143,6 +1143,7 @@ class DBOS:
         workflow_id_prefix: Optional[str] = None,
         load_input: bool = True,
         load_output: bool = True,
+        executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         def fn() -> List[WorkflowStatus]:
             return list_workflows(
@@ -1162,6 +1163,7 @@ class DBOS:
                 load_input=load_input,
                 load_output=load_output,
                 queue_name=queue_name,
+                executor_id=executor_id,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -1186,6 +1188,7 @@ class DBOS:
         workflow_id_prefix: Optional[str] = None,
         load_input: bool = True,
         load_output: bool = True,
+        executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         await cls._configure_asyncio_thread_pool()
         return await asyncio.to_thread(
@@ -1204,6 +1207,7 @@ class DBOS:
             workflow_id_prefix=workflow_id_prefix,
             load_input=load_input,
             load_output=load_output,
+            executor_id=executor_id,
         )
 
     @classmethod
@@ -1220,6 +1224,7 @@ class DBOS:
         offset: Optional[int] = None,
         sort_desc: bool = False,
         load_input: bool = True,
+        executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         def fn() -> List[WorkflowStatus]:
             return list_queued_workflows(
@@ -1234,6 +1239,7 @@ class DBOS:
                 offset=offset,
                 sort_desc=sort_desc,
                 load_input=load_input,
+                executor_id=executor_id,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -1254,6 +1260,7 @@ class DBOS:
         offset: Optional[int] = None,
         sort_desc: bool = False,
         load_input: bool = True,
+        executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         await cls._configure_asyncio_thread_pool()
         return await asyncio.to_thread(
@@ -1268,6 +1275,7 @@ class DBOS:
             offset=offset,
             sort_desc=sort_desc,
             load_input=load_input,
+            executor_id=executor_id,
         )
 
     @classmethod

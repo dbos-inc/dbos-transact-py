@@ -236,6 +236,8 @@ class GetWorkflowsInput:
         self.queue_name: Optional[str] = None
         # Search only currently enqueued workflows
         self.queues_only: bool = False
+        # Search only for workflows run by this executor
+        self.executor_id: Optional[str] = None
 
 
 class GetPendingWorkflowsOutput:
@@ -1072,6 +1074,10 @@ class SystemDatabase(ABC):
         if input.queue_name:
             query = query.where(
                 SystemSchema.workflow_status.c.queue_name == input.queue_name
+            )
+        if input.executor_id:
+            query = query.where(
+                SystemSchema.workflow_status.c.executor_id == input.executor_id
             )
         if input.limit:
             query = query.limit(input.limit)
