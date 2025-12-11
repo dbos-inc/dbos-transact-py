@@ -1504,7 +1504,7 @@ def test_app_version(config: DBOSConfig) -> None:
 
     DBOS.launch()
     assert DBOS.application_version == app_version
-    assert GlobalParams.executor_id == executor_id
+    assert GlobalParams.executor_id == executor_id == DBOS.executor_id
     wfid = test_workflow()
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     assert handle.get_status().app_version == app_version

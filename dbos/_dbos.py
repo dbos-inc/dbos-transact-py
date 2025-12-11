@@ -1297,6 +1297,10 @@ class DBOS:
         return GlobalParams.app_version
 
     @classproperty
+    def executor_id(cls) -> str:
+        return GlobalParams.executor_id
+
+    @classproperty
     def logger(cls) -> Logger:
         """Return the DBOS `Logger` for the current context."""
         return dbos_logger  # TODO get from context if appropriate...
