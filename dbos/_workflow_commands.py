@@ -33,6 +33,7 @@ def list_workflows(
     workflow_id_prefix: Optional[str] = None,
     load_input: bool = True,
     load_output: bool = True,
+    executor_id: Optional[str] = None,
 ) -> List[WorkflowStatus]:
     input = GetWorkflowsInput()
     input.workflow_ids = workflow_ids
@@ -48,6 +49,7 @@ def list_workflows(
     input.offset = offset
     input.sort_desc = sort_desc
     input.workflow_id_prefix = workflow_id_prefix
+    input.executor_id = executor_id
 
     infos: List[WorkflowStatus] = sys_db.get_workflows(
         input, load_input=load_input, load_output=load_output
@@ -69,6 +71,7 @@ def list_queued_workflows(
     offset: Optional[int] = None,
     sort_desc: bool = False,
     load_input: bool = True,
+    executor_id: Optional[str] = None,
 ) -> List[WorkflowStatus]:
     input = GetWorkflowsInput()
     input.start_time = start_time
@@ -81,6 +84,7 @@ def list_queued_workflows(
     input.sort_desc = sort_desc
     input.queues_only = True
     input.queue_name = queue_name
+    input.executor_id = executor_id
 
     infos: List[WorkflowStatus] = sys_db.get_workflows(
         input, load_input=load_input, load_output=False

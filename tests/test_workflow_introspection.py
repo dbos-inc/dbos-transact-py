@@ -78,6 +78,12 @@ def test_list_workflow(dbos: DBOS) -> None:
     outputs = DBOS.list_workflows(app_version=DBOS.application_version)
     assert len(outputs) == 1
 
+    # Test searching by executor ID
+    outputs = DBOS.list_workflows(executor_id="nonexistent_executor")
+    assert len(outputs) == 0
+    outputs = DBOS.list_workflows(executor_id=GlobalParams.executor_id)
+    assert len(outputs) == 1
+
 
 def test_list_workflow_error(dbos: DBOS) -> None:
     @DBOS.workflow()
@@ -379,6 +385,10 @@ def test_queued_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> 
     assert len(workflows) == 2
     workflows = DBOS.list_queued_workflows(offset=queued_steps - 1)
     assert len(workflows) == 1
+    workflows = DBOS.list_queued_workflows(executor_id="nonexistent_executor")
+    assert len(workflows) == 0
+    workflows = DBOS.list_queued_workflows(executor_id=GlobalParams.executor_id)
+    assert len(workflows) == queued_steps
 
     # Confirm the workflow finishes and nothing is enqueued afterwards
     event.set()
