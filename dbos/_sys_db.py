@@ -1585,10 +1585,13 @@ class SystemDatabase(ABC):
                     dest_uuid, topic = split_payload(payload)
                     with self.engine.begin() as conn:
                         result = conn.execute(
-                            sa.text(
-                                "SELECT 1 FROM notifications WHERE destination_uuid = :dest_uuid AND topic = :topic LIMIT 1"
-                            ),
-                            {"dest_uuid": dest_uuid, "topic": topic},
+                            sa.select(sa.literal(1))
+                            .where(
+                                SystemSchema.notifications.c.destination_uuid
+                                == dest_uuid,
+                                SystemSchema.notifications.c.topic == topic,
+                            )
+                            .limit(1)
                         )
                         if result.fetchone():
                             signal_condition(self.notifications_map, payload)
@@ -1598,17 +1601,20 @@ class SystemDatabase(ABC):
                     workflow_uuid, key = split_payload(payload)
                     with self.engine.begin() as conn:
                         result = conn.execute(
-                            sa.text(
-                                "SELECT 1 FROM workflow_events WHERE workflow_uuid = :workflow_uuid AND key = :key LIMIT 1"
-                            ),
-                            {"workflow_uuid": workflow_uuid, "key": key},
+                            sa.select(sa.literal(1))
+                            .where(
+                                SystemSchema.workflow_events.c.workflow_uuid
+                                == workflow_uuid,
+                                SystemSchema.workflow_events.c.key == key,
+                            )
+                            .limit(1)
                         )
                         if result.fetchone():
                             signal_condition(self.workflow_events_map, payload)
 
             except Exception as e:
                 if self._run_background_processes:
-                    dbos_logger.warning(f"SQLite notification poller error: {e}")
+                    dbos_logger.warning(f"Notification poller error: {e}")
                     time.sleep(1)
 
     @staticmethod
