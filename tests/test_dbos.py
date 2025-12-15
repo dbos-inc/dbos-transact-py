@@ -1107,6 +1107,29 @@ def test_set_get_events(dbos: DBOS, config: DBOSConfig) -> None:
             exc_info.value
         )
 
+        # Test timing when listening for an event that has not yet been set
+        event = threading.Event()
+
+        @DBOS.workflow()
+        def set_event_workflow() -> None:
+            event.wait()
+            DBOS.set_event("key", "value")
+
+        @DBOS.workflow()
+        def get_event_workflow(id: str) -> Any:
+            return DBOS.get_event(id, "key", timeout_seconds=60.0)
+
+        start_time = time.time()
+        set_event_handle = DBOS.start_workflow(set_event_workflow)
+        get_event_handle = DBOS.start_workflow(
+            get_event_workflow, set_event_handle.workflow_id
+        )
+        time.sleep(1)
+        event.set()
+        set_event_handle.get_result()
+        assert get_event_handle.get_result() == "value"
+        assert time.time() - start_time < 5
+
 
 def test_nonserializable_values(dbos: DBOS) -> None:
     def invalid_return() -> str:
