@@ -2076,7 +2076,10 @@ class SystemDatabase(ABC):
                                         None
                                     ),
                                 ),
-                                sa.func.extract("epoch", sa.func.now()) * 1000
+                                sa.cast(
+                                    sa.func.extract("epoch", sa.func.now()) * 1000,
+                                    sa.BigInteger,
+                                )
                                 + SystemSchema.workflow_status.c.workflow_timeout_ms,
                             ),
                             else_=SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,

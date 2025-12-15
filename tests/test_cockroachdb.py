@@ -3,7 +3,7 @@ import os
 import pytest
 from sqlalchemy import create_engine
 
-from dbos import DBOS, DBOSConfig
+from dbos import DBOS, DBOSConfig, Queue
 
 
 def test_cockroachdb() -> None:
@@ -11,13 +11,29 @@ def test_cockroachdb() -> None:
     if database_url is None:
         pytest.skip("No CockroachDB database URL provided")
 
-    engine = create_engine(database_url)
+    key = "key"
+    value = "value"
 
-    config: DBOSConfig = {
-        "name": "cockroachdb-test",
-        "system_database_url": database_url,
-        "use_listen_notify": False,
-        "system_database_engine": engine,
-    }
-    DBOS(config=config)
-    DBOS.launch()
+    @DBOS.workflow()
+    def workflow():
+        DBOS.set_event(key, value)
+        return DBOS.recv()
+
+    queue = Queue("queue")
+
+    try:
+        engine = create_engine(database_url)
+        config: DBOSConfig = {
+            "name": "cockroachdb-test",
+            "system_database_url": database_url,
+            "use_listen_notify": False,
+            "system_database_engine": engine,
+        }
+        DBOS(config=config)
+        DBOS.launch()
+        handle = queue.enqueue(workflow)
+        assert DBOS.get_event(handle.workflow_id, key) == value
+        DBOS.send(handle.workflow_id, value)
+        assert handle.get_result() == value
+    finally:
+        DBOS.destroy(destroy_registry=True)
