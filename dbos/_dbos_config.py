@@ -41,7 +41,7 @@ class DBOSConfig(TypedDict, total=False):
         conductor_key (str): An API key for DBOS Conductor. Pass this in to connect your process to Conductor.
         conductor_url (str): The websockets URL for your DBOS Conductor service. Only set if you're self-hosting Conductor.
         serializer (Serializer): A custom serializer and deserializer DBOS uses when storing program data in the system database
-        use_listen_notify (bool): Whether to use LISTEN/NOTIFY or polling to listen for notifications and events
+        use_listen_notify (bool): Whether to use LISTEN/NOTIFY or polling to listen for notifications and events.  Defaults to True. As this affects migrations, may not be changed after the system database is first created.
     """
 
     name: str
