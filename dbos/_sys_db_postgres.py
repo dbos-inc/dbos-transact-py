@@ -104,6 +104,8 @@ class PostgresSystemDatabase(SystemDatabase):
 
     def _notification_listener(self) -> None:
         """Listen for PostgreSQL notifications using psycopg."""
+        if not self.use_listen_notify:
+            return self._notification_listener_polling()
         while self._run_background_processes:
             try:
                 with self._listener_thread_lock:

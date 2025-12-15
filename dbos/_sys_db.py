@@ -366,6 +366,7 @@ class SystemDatabase(ABC):
         schema: Optional[str],
         serializer: Serializer,
         executor_id: Optional[str],
+        use_listen_notify: bool = True,
         debug_mode: bool = False,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
@@ -379,6 +380,7 @@ class SystemDatabase(ABC):
                 schema=schema,
                 serializer=serializer,
                 executor_id=executor_id,
+                use_listen_notify=use_listen_notify,
                 debug_mode=debug_mode,
             )
         else:
@@ -391,6 +393,7 @@ class SystemDatabase(ABC):
                 schema=schema,
                 serializer=serializer,
                 executor_id=executor_id,
+                use_listen_notify=use_listen_notify,
                 debug_mode=debug_mode,
             )
 
@@ -403,6 +406,7 @@ class SystemDatabase(ABC):
         schema: Optional[str],
         serializer: Serializer,
         executor_id: Optional[str],
+        use_listen_notify: bool = True,
         debug_mode: bool = False,
     ):
         import sqlalchemy.dialects.postgresql as pg
@@ -429,8 +433,8 @@ class SystemDatabase(ABC):
 
         # Configure and initialize the system database
         self.dialect = sq if system_database_url.startswith("sqlite") else pg
-
         self.serializer = serializer
+        self.use_listen_notify = use_listen_notify
 
         if system_database_url.startswith("sqlite"):
             self.schema = None
@@ -1553,7 +1557,7 @@ class SystemDatabase(ABC):
         pass
 
     def _notification_listener_polling(self) -> None:
-        """Poll for notifications and workflow events in SQLite."""
+        """Poll for notifications and workflow events"""
 
         def split_payload(payload: str) -> Tuple[str, Optional[str]]:
             """Split payload into components (first::second format)."""
