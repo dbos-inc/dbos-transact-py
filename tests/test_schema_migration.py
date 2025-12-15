@@ -40,7 +40,7 @@ def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
         )
         migrations_rows = migrations_result.fetchall()
         assert len(migrations_rows) == 1
-        assert migrations_rows[0][0] == len(get_dbos_migrations("dbos"))
+        assert migrations_rows[0][0] == len(get_dbos_migrations("dbos", True))
 
 
 def test_systemdb_migration_custom_schema(
@@ -68,7 +68,7 @@ def test_systemdb_migration_custom_schema(
         )
         rows = result.fetchall()
         assert len(rows) == 1
-        assert rows[0][0] == len(get_dbos_migrations(schema))
+        assert rows[0][0] == len(get_dbos_migrations(schema, True))
 
         # Check that the 'dbos' schema does not exist
         result = connection.execute(

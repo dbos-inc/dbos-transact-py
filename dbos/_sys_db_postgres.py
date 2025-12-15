@@ -56,7 +56,7 @@ class PostgresSystemDatabase(SystemDatabase):
 
         assert self.schema
         ensure_dbos_schema(self.engine, self.schema)
-        run_dbos_migrations(self.engine, self.schema)
+        run_dbos_migrations(self.engine, self.schema, self.use_listen_notify)
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
