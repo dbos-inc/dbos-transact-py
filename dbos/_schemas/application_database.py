@@ -30,7 +30,7 @@ class ApplicationSchema:
             "created_at",
             BigInteger,
             nullable=False,
-            server_default=text("(EXTRACT(epoch FROM now()) * 1000::numeric)::bigint"),
+            server_default=text("(EXTRACT(epoch FROM now()) * 1000.0)::bigint"),
         ),
         Index("transaction_outputs_created_at_index", "created_at"),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
