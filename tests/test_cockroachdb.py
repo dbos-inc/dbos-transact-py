@@ -15,9 +15,10 @@ def test_cockroachdb() -> None:
     value = "value"
 
     @DBOS.workflow()
-    def workflow():
+    def workflow() -> str:
         DBOS.set_event(key, value)
-        return DBOS.recv()
+        message: str = DBOS.recv()
+        return message
 
     queue = Queue("queue")
 
