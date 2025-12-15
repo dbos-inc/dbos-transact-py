@@ -680,6 +680,7 @@ def test_translate_dbosconfig_full_input():
     assert translated_config["runtimeConfig"]["admin_port"] == 8001
     assert translated_config["runtimeConfig"]["run_admin_server"] == False
     assert translated_config["dbos_system_schema"] == "foobar"
+    assert translated_config["use_listen_notify"] == True
     assert "start" not in translated_config["runtimeConfig"]
     assert "setup" not in translated_config["runtimeConfig"]
     assert "env" not in translated_config
