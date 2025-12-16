@@ -466,6 +466,7 @@ class DBOS:
                 debug_mode=debug_mode,
                 schema=schema,
                 serializer=self._serializer,
+                use_listen_notify=self._config["use_listen_notify"],
                 executor_id=GlobalParams.executor_id,
             )
             assert self._config["database"]["db_engine_kwargs"] is not None

@@ -41,7 +41,9 @@ def ensure_dbos_schema(engine: sa.Engine, schema: str) -> None:
             )
 
 
-def run_dbos_migrations(engine: sa.Engine, schema: str) -> None:
+def run_dbos_migrations(
+    engine: sa.Engine, schema: str, use_listen_notify: bool
+) -> None:
     """Run DBOS-managed migrations by executing each SQL command in dbos_migrations."""
     with engine.begin() as conn:
         # Get current migration version
@@ -52,7 +54,7 @@ def run_dbos_migrations(engine: sa.Engine, schema: str) -> None:
         last_applied = current_version[0] if current_version else 0
 
         # Apply migrations starting from the next version
-        migrations = get_dbos_migrations(schema)
+        migrations = get_dbos_migrations(schema, use_listen_notify)
         for i, migration_sql in enumerate(migrations, 1):
             if i <= last_applied:
                 continue
@@ -79,8 +81,8 @@ def run_dbos_migrations(engine: sa.Engine, schema: str) -> None:
             last_applied = i
 
 
-def get_dbos_migration_one(schema: str) -> str:
-    return f"""
+def get_dbos_migration_one(schema: str, use_listen_notify: bool) -> str:
+    migration = f"""
 -- Enable uuid extension for generating UUIDs
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
@@ -95,8 +97,8 @@ CREATE TABLE \"{schema}\".workflow_status (
     output TEXT,
     error TEXT,
     executor_id TEXT,
-    created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000::numeric)::bigint,
-    updated_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000::numeric)::bigint,
+    created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
+    updated_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
     application_version TEXT,
     application_id TEXT,
     class_name VARCHAR(255) DEFAULT NULL,
@@ -135,27 +137,12 @@ CREATE TABLE \"{schema}\".notifications (
     destination_uuid TEXT NOT NULL,
     topic TEXT,
     message TEXT NOT NULL,
-    created_at_epoch_ms BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000::numeric)::bigint,
+    created_at_epoch_ms BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
     message_uuid TEXT NOT NULL DEFAULT gen_random_uuid(), -- Built-in function
     FOREIGN KEY (destination_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
 CREATE INDEX idx_workflow_topic ON \"{schema}\".notifications (destination_uuid, topic);
-
--- Create notification function
-CREATE OR REPLACE FUNCTION \"{schema}\".notifications_function() RETURNS TRIGGER AS $$
-DECLARE
-    payload text := NEW.destination_uuid || '::' || NEW.topic;
-BEGIN
-    PERFORM pg_notify('dbos_notifications_channel', payload);
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create notification trigger
-CREATE TRIGGER dbos_notifications_trigger
-AFTER INSERT ON \"{schema}\".notifications
-FOR EACH ROW EXECUTE FUNCTION \"{schema}\".notifications_function();
 
 CREATE TABLE \"{schema}\".workflow_events (
     workflow_uuid TEXT NOT NULL,
@@ -165,21 +152,6 @@ CREATE TABLE \"{schema}\".workflow_events (
     FOREIGN KEY (workflow_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
-
--- Create events function
-CREATE OR REPLACE FUNCTION \"{schema}\".workflow_events_function() RETURNS TRIGGER AS $$
-DECLARE
-    payload text := NEW.workflow_uuid || '::' || NEW.key;
-BEGIN
-    PERFORM pg_notify('dbos_workflow_events_channel', payload);
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create events trigger
-CREATE TRIGGER dbos_workflow_events_trigger
-AFTER INSERT ON \"{schema}\".workflow_events
-FOR EACH ROW EXECUTE FUNCTION \"{schema}\".workflow_events_function();
 
 CREATE TABLE \"{schema}\".streams (
     workflow_uuid TEXT NOT NULL,
@@ -201,6 +173,39 @@ CREATE TABLE \"{schema}\".event_dispatch_kv (
     PRIMARY KEY (service_name, workflow_fn_name, key)
 );
 """
+    if use_listen_notify:
+        migration += f"""
+-- Create notification function
+CREATE OR REPLACE FUNCTION \"{schema}\".notifications_function() RETURNS TRIGGER AS $$
+DECLARE
+    payload text := NEW.destination_uuid || '::' || NEW.topic;
+BEGIN
+    PERFORM pg_notify('dbos_notifications_channel', payload);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create notification trigger
+CREATE TRIGGER dbos_notifications_trigger
+AFTER INSERT ON \"{schema}\".notifications
+FOR EACH ROW EXECUTE FUNCTION \"{schema}\".notifications_function();
+
+-- Create events function
+CREATE OR REPLACE FUNCTION \"{schema}\".workflow_events_function() RETURNS TRIGGER AS $$
+DECLARE
+    payload text := NEW.workflow_uuid || '::' || NEW.key;
+BEGIN
+    PERFORM pg_notify('dbos_workflow_events_channel', payload);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create events trigger
+CREATE TRIGGER dbos_workflow_events_trigger
+AFTER INSERT ON \"{schema}\".workflow_events
+FOR EACH ROW EXECUTE FUNCTION \"{schema}\".workflow_events_function();
+"""
+    return migration
 
 
 def get_dbos_migration_two(schema: str) -> str:
@@ -247,9 +252,9 @@ def get_dbos_migration_seven(schema: str) -> str:
     return f"""ALTER TABLE "{schema}"."workflow_status" ADD COLUMN "owner_xid" TEXT DEFAULT NULL;"""
 
 
-def get_dbos_migrations(schema: str) -> list[str]:
+def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
     return [
-        get_dbos_migration_one(schema),
+        get_dbos_migration_one(schema, use_listen_notify),
         get_dbos_migration_two(schema),
         get_dbos_migration_three(schema),
         get_dbos_migration_four(schema),

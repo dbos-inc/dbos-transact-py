@@ -15,6 +15,7 @@ from typing import (
     Literal,
     Optional,
     Sequence,
+    Tuple,
     TypedDict,
     TypeVar,
     cast,
@@ -365,6 +366,7 @@ class SystemDatabase(ABC):
         schema: Optional[str],
         serializer: Serializer,
         executor_id: Optional[str],
+        use_listen_notify: bool = True,
         debug_mode: bool = False,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
@@ -378,6 +380,7 @@ class SystemDatabase(ABC):
                 schema=schema,
                 serializer=serializer,
                 executor_id=executor_id,
+                use_listen_notify=use_listen_notify,
                 debug_mode=debug_mode,
             )
         else:
@@ -390,6 +393,7 @@ class SystemDatabase(ABC):
                 schema=schema,
                 serializer=serializer,
                 executor_id=executor_id,
+                use_listen_notify=use_listen_notify,
                 debug_mode=debug_mode,
             )
 
@@ -402,6 +406,7 @@ class SystemDatabase(ABC):
         schema: Optional[str],
         serializer: Serializer,
         executor_id: Optional[str],
+        use_listen_notify: bool = True,
         debug_mode: bool = False,
     ):
         import sqlalchemy.dialects.postgresql as pg
@@ -428,8 +433,8 @@ class SystemDatabase(ABC):
 
         # Configure and initialize the system database
         self.dialect = sq if system_database_url.startswith("sqlite") else pg
-
         self.serializer = serializer
+        self.use_listen_notify = use_listen_notify
 
         if system_database_url.startswith("sqlite"):
             self.schema = None
@@ -1551,6 +1556,67 @@ class SystemDatabase(ABC):
         """Listen for database notifications using database-specific mechanisms."""
         pass
 
+    def _notification_listener_polling(self) -> None:
+        """Poll for notifications and workflow events"""
+
+        def split_payload(payload: str) -> Tuple[str, Optional[str]]:
+            """Split payload into components (first::second format)."""
+            if "::" in payload:
+                parts = payload.split("::", 1)
+                return parts[0], parts[1]
+            return payload, None
+
+        def signal_condition(condition_map: Any, payload: str) -> None:
+            """Signal a condition variable if it exists."""
+            condition = condition_map.get(payload)
+            if condition:
+                condition.acquire()
+                condition.notify_all()
+                condition.release()
+                dbos_logger.debug(f"Signaled condition for {payload}")
+
+        while self._run_background_processes:
+            try:
+                # Poll every second
+                time.sleep(1)
+
+                # Check all payloads in the notifications_map
+                for payload in list(self.notifications_map._dict.keys()):
+                    dest_uuid, topic = split_payload(payload)
+                    with self.engine.begin() as conn:
+                        result = conn.execute(
+                            sa.select(sa.literal(1))
+                            .where(
+                                SystemSchema.notifications.c.destination_uuid
+                                == dest_uuid,
+                                SystemSchema.notifications.c.topic == topic,
+                            )
+                            .limit(1)
+                        )
+                        if result.fetchone():
+                            signal_condition(self.notifications_map, payload)
+
+                # Check all payloads in the workflow_events_map
+                for payload in list(self.workflow_events_map._dict.keys()):
+                    workflow_uuid, key = split_payload(payload)
+                    with self.engine.begin() as conn:
+                        result = conn.execute(
+                            sa.select(sa.literal(1))
+                            .where(
+                                SystemSchema.workflow_events.c.workflow_uuid
+                                == workflow_uuid,
+                                SystemSchema.workflow_events.c.key == key,
+                            )
+                            .limit(1)
+                        )
+                        if result.fetchone():
+                            signal_condition(self.workflow_events_map, payload)
+
+            except Exception as e:
+                if self._run_background_processes:
+                    dbos_logger.warning(f"Notification poller error: {e}")
+                    time.sleep(1)
+
     @staticmethod
     def reset_system_database(database_url: str) -> None:
         """Reset the system database by calling the appropriate implementation."""
@@ -2010,7 +2076,10 @@ class SystemDatabase(ABC):
                                         None
                                     ),
                                 ),
-                                sa.func.extract("epoch", sa.func.now()) * 1000
+                                sa.cast(
+                                    sa.func.extract("epoch", sa.func.now()) * 1000,
+                                    sa.BigInteger,
+                                )
                                 + SystemSchema.workflow_status.c.workflow_timeout_ms,
                             ),
                             else_=SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,

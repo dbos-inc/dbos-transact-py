@@ -41,6 +41,7 @@ class DBOSConfig(TypedDict, total=False):
         conductor_key (str): An API key for DBOS Conductor. Pass this in to connect your process to Conductor.
         conductor_url (str): The websockets URL for your DBOS Conductor service. Only set if you're self-hosting Conductor.
         serializer (Serializer): A custom serializer and deserializer DBOS uses when storing program data in the system database
+        use_listen_notify (bool): Whether to use LISTEN/NOTIFY or polling to listen for notifications and events.  Defaults to True. As this affects migrations, may not be changed after the system database is first created.
     """
 
     name: str
@@ -64,6 +65,7 @@ class DBOSConfig(TypedDict, total=False):
     conductor_url: Optional[str]
     serializer: Optional[Serializer]
     enable_patching: Optional[bool]
+    use_listen_notify: Optional[bool]
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -111,6 +113,7 @@ class ConfigFile(TypedDict, total=False):
     env: Dict[str, str]
     system_database_engine: Optional[sa.Engine]
     dbos_system_schema: Optional[str]
+    use_listen_notify: bool
 
 
 def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
@@ -179,6 +182,10 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         translated_config["telemetry"] = telemetry
 
     translated_config["system_database_engine"] = config.get("system_database_engine")
+    use_listen_notify = config.get("use_listen_notify", None)
+    translated_config["use_listen_notify"] = (
+        use_listen_notify if use_listen_notify is not None else True
+    )
 
     return translated_config
 
