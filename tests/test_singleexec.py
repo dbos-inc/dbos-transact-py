@@ -197,3 +197,41 @@ def test_step_undoredo2(dbos: DBOS):
     assert UsingFinallyClause.started
     assert UsingFinallyClause.completed
     assert not UsingFinallyClause.trouble
+
+
+def test_step_sequence(dbos: DBOS):
+    @DBOS.dbos_class()
+    class TryConcExec2:
+        curExec = 0
+        curStep = 0
+
+        @DBOS.step()
+        @staticmethod
+        def step1():
+            # This makes the step take a while ... sometimes.
+            if TryConcExec2.curExec % 2 == 0:
+                TryConcExec2.curExec += 1
+                sleep(1)
+            TryConcExec2.curStep = 1
+
+        @DBOS.step()
+        @staticmethod
+        def step2():
+            TryConcExec2.curStep = 2
+
+        @DBOS.workflow()
+        @staticmethod
+        def testConcWorkflow():
+            TryConcExec2.step1()
+            TryConcExec2.step2()
+
+    wfid = str(uuid.uuid4())
+
+    with SetWorkflowID(wfid):
+        wfh1 = DBOS.start_workflow(TryConcExec2.testConcWorkflow)
+    # with SetWorkflowID(wfid):
+    #    wfh2 = DBOS.start_workflow(TryConcExec2.testConcWorkflow)
+
+    wfh1.get_result()
+    # wfh2.get_result()
+    assert TryConcExec2.curStep == 2
