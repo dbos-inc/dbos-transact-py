@@ -157,6 +157,7 @@ class WorkflowStatusInternal(TypedDict):
     inputs: str
     queue_partition_key: Optional[str]
     forked_from: Optional[str]
+    owner_xid: Optional[str]
 
 
 class MetricData(TypedDict):
@@ -927,6 +928,7 @@ class SystemDatabase(ABC):
                 "inputs": row[18],
                 "queue_partition_key": row[19],
                 "forked_from": row[20],
+                "owner_xid": None,
             }
             return status
 

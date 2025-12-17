@@ -93,6 +93,7 @@ def test_concurrent_conflict_uuid(dbos: DBOS) -> None:
         wf_handle2 = dbos.start_workflow(test_workflow)
 
     # These two workflows should run concurrently, but both should succeed.
+    # TODO no they should NOT
     assert wf_handle1.get_result() == wfuuid
     assert wf_handle2.get_result() == wfuuid
 

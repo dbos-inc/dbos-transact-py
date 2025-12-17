@@ -246,6 +246,7 @@ class DBOSClient:
             "inputs": self._serializer.serialize(inputs),
             "queue_partition_key": enqueue_options_internal["queue_partition_key"],
             "forked_from": None,
+            "owner_xid": None,
         }
 
         self._sys_db.init_workflow(
@@ -313,6 +314,7 @@ class DBOSClient:
             "inputs": self._serializer.serialize({"args": (), "kwargs": {}}),
             "queue_partition_key": None,
             "forked_from": None,
+            "owner_xid": None,
         }
         with self._sys_db.engine.begin() as conn:
             self._sys_db._insert_workflow_status(

@@ -314,6 +314,7 @@ def _init_workflow(
             else None
         ),
         "forked_from": None,
+        "owner_xid": None,
     }
 
     # Synchronously record the status and inputs for workflows
