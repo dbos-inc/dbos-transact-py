@@ -1,7 +1,10 @@
 import uuid
 from time import sleep
 
+from sqlalchemy.exc import DBAPIError
+
 from dbos import DBOS, SetWorkflowID
+from dbos._debug_trigger import DebugAction, DebugTriggers
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -235,3 +238,46 @@ def test_step_sequence(dbos: DBOS):
     wfh1.get_result()
     # wfh2.get_result()
     assert TryConcExec2.curStep == 2
+
+
+def test_commit_hiccup(dbos: DBOS) -> None:
+    @DBOS.dbos_class()
+    class TryDbGlitch:
+        @DBOS.step()
+        @staticmethod
+        def step1() -> str:
+            sleep(1)
+            return "Yay!"
+
+        @DBOS.workflow()
+        @staticmethod
+        def testWorkflow() -> None:
+            return TryDbGlitch.step1()
+
+    assert TryDbGlitch.testWorkflow() == "Yay!"
+    """
+    DebugTriggers.set_debug_trigger(
+        DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT,
+        DebugAction().set_exception_to_throw(DBAPIError.instance(
+            statement=None,
+            params=None,
+            orig=None,
+            dbapi_base_err=None,
+            connection_invalidated=True,))
+    )
+    """
+
+    assert TryDbGlitch.testWorkflow() == "Yay!"
+    DebugTriggers.set_debug_trigger(
+        DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT,
+        DebugAction().set_exception_to_throw(
+            DBAPIError.instance(
+                statement=None,
+                params=None,
+                orig=None,
+                dbapi_base_err=None,
+                connection_invalidated=True,
+            )
+        ),
+    )
+    assert TryDbGlitch.testWorkflow() == "Yay!"

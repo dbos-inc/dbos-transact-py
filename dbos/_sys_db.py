@@ -25,6 +25,7 @@ import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.sql import func
 
+from dbos._debug_trigger import DebugTriggers
 from dbos._utils import (
     INTERNAL_QUEUE_NAME,
     retriable_postgres_exception,
@@ -1255,6 +1256,7 @@ class SystemDatabase(ABC):
     def record_operation_result(self, result: OperationResultInternal) -> None:
         with self.engine.begin() as c:
             self._record_operation_result_txn(result, c)
+        DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
 
     @db_retry()
     def record_get_result(
@@ -2168,6 +2170,7 @@ class SystemDatabase(ABC):
             wf_status, workflow_deadline_epoch_ms = self._insert_workflow_status(
                 status, conn, max_recovery_attempts=max_recovery_attempts
             )
+        DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT)
         return wf_status, workflow_deadline_epoch_ms
 
     def check_connection(self) -> None:
