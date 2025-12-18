@@ -1,8 +1,8 @@
 import uuid
 from time import sleep
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, SetWorkflowID
 from dbos._debug_trigger import DebugAction, DebugTriggers
@@ -10,10 +10,8 @@ from dbos._debug_trigger import DebugAction, DebugTriggers
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle
 
-R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
-
-def reexecute_workflow_by_id(dbos: DBOS, wfid: str) -> "WorkflowHandle[R]":
+def reexecute_workflow_by_id(dbos: DBOS, wfid: str) -> "WorkflowHandle[Any]":
     dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
     return dbos._execute_workflow_id(wfid)
 
@@ -268,13 +266,12 @@ def test_commit_hiccup(dbos: DBOS) -> None:
     DebugTriggers.set_debug_trigger(
         DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT,
         DebugAction().set_exception_to_throw(
-            DBAPIError.instance(
+            OperationalError(
                 statement=None,
                 params=None,
-                orig=None,
-                dbapi_base_err=None,
+                orig=BaseException("Connection lost"),
                 connection_invalidated=True,
-            )  # type: ignore[call-overload]
+            )
         ),
     )
 
@@ -282,13 +279,12 @@ def test_commit_hiccup(dbos: DBOS) -> None:
     DebugTriggers.set_debug_trigger(
         DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT,
         DebugAction().set_exception_to_throw(
-            DBAPIError.instance(
+            OperationalError(
                 statement=None,
                 params=None,
-                orig=None,
-                dbapi_base_err=None,
+                orig=BaseException("Connection lost"),
                 connection_invalidated=True,
-            )  # type: ignore[call-overload]
+            )
         ),
     )
     assert TryDbGlitch.testWorkflow() == "Yay!"
