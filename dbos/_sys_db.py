@@ -1202,7 +1202,10 @@ class SystemDatabase(ABC):
             return steps
 
     def _record_operation_result_txn(
-        self, result: OperationResultInternal, conn: sa.Connection
+        self,
+        result: OperationResultInternal,
+        completed_at_epoch_ms: int,
+        conn: sa.Connection,
     ) -> None:
         if self._debug_mode:
             raise Exception("called record_operation_result in debug mode")
@@ -1236,26 +1239,46 @@ class SystemDatabase(ABC):
 
         # Record the outcome, throwing DBOSWorkflowConflictIDError if it is already present
         try:
-            conn.execute(
-                sa.insert(SystemSchema.operation_outputs).values(
+            stmt = (
+                self.dialect.insert(SystemSchema.operation_outputs)
+                .values(
                     workflow_uuid=result["workflow_uuid"],
                     function_id=result["function_id"],
                     function_name=result["function_name"],
                     started_at_epoch_ms=result["started_at_epoch_ms"],
-                    completed_at_epoch_ms=int(time.time() * 1000),
+                    completed_at_epoch_ms=completed_at_epoch_ms,
                     output=output,
                     error=error,
                 )
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        SystemSchema.operation_outputs.c.workflow_uuid,
+                        SystemSchema.operation_outputs.c.function_id,
+                    ]
+                )
+                .returning(SystemSchema.operation_outputs.c.completed_at_epoch_ms)
             )
+
+            res = conn.execute(stmt)
+            rows = res.fetchall()
+            if len(rows) > 0 and int(rows[0][0]) != completed_at_epoch_ms:
+                raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+
         except DBAPIError as dbapi_error:
             if self._is_unique_constraint_violation(dbapi_error):
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
             raise
 
-    @db_retry()
     def record_operation_result(self, result: OperationResultInternal) -> None:
+        completed_at_epoch_ms = int(time.time() * 1000)
+        self._record_operation_result_retry(result, completed_at_epoch_ms)
+
+    @db_retry()
+    def _record_operation_result_retry(
+        self, result: OperationResultInternal, completed_at_epoch_ms: int
+    ) -> None:
         with self.engine.begin() as c:
-            self._record_operation_result_txn(result, c)
+            self._record_operation_result_txn(result, completed_at_epoch_ms, c)
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
 
     @db_retry()
@@ -1448,7 +1471,7 @@ class SystemDatabase(ABC):
                 "output": None,
                 "error": None,
             }
-            self._record_operation_result_txn(output, conn=c)
+            self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
 
     @db_retry()
     def recv(
@@ -1551,6 +1574,7 @@ class SystemDatabase(ABC):
                     ),  # None will be serialized to 'null'
                     "error": None,
                 },
+                int(time.time() * 1000),
                 conn=c,
             )
         return message
@@ -1731,7 +1755,7 @@ class SystemDatabase(ABC):
                 "output": None,
                 "error": None,
             }
-            self._record_operation_result_txn(output, conn=c)
+            self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
 
     def set_event_from_step(
         self,
@@ -2284,7 +2308,7 @@ class SystemDatabase(ABC):
                 "output": None,
                 "error": None,
             }
-            self._record_operation_result_txn(output, conn=c)
+            self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
 
     def close_stream(self, workflow_uuid: str, function_id: int, key: str) -> None:
         """Write a sentinel value to the stream at the first unused offset to mark it as closed."""
@@ -2463,7 +2487,7 @@ class SystemDatabase(ABC):
                     "error": None,
                     "started_at_epoch_ms": int(time.time() * 1000),
                 }
-                self._record_operation_result_txn(result, c)
+                self._record_operation_result_txn(result, int(time.time() * 1000), c)
                 return True
             else:
                 return checkpoint_name == patch_name

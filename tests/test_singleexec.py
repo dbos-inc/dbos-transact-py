@@ -255,17 +255,18 @@ def test_commit_hiccup(dbos: DBOS) -> None:
             return TryDbGlitch.step1()
 
     assert TryDbGlitch.testWorkflow() == "Yay!"
-    """
     DebugTriggers.set_debug_trigger(
         DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT,
-        DebugAction().set_exception_to_throw(DBAPIError.instance(
-            statement=None,
-            params=None,
-            orig=None,
-            dbapi_base_err=None,
-            connection_invalidated=True,))
+        DebugAction().set_exception_to_throw(
+            DBAPIError.instance(
+                statement=None,
+                params=None,
+                orig=None,
+                dbapi_base_err=None,
+                connection_invalidated=True,
+            )
+        ),
     )
-    """
 
     assert TryDbGlitch.testWorkflow() == "Yay!"
     DebugTriggers.set_debug_trigger(
