@@ -57,7 +57,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
     # assert TryConcExec.max_wf == 1
 
 
-def test_step_undoredo(dbos: DBOS):
+def test_step_undoredo(dbos: DBOS) -> None:
     @DBOS.dbos_class()
     class CatchPlainException1:
         execNum = 0
@@ -68,31 +68,31 @@ def test_step_undoredo(dbos: DBOS):
 
         @DBOS.step()
         @staticmethod
-        def testStartAction():
+        def testStartAction() -> None:
             sleep(1)
             CatchPlainException1.started = True
 
         @DBOS.step()
         @staticmethod
-        def testCompleteAction():
+        def testCompleteAction() -> None:
             assert CatchPlainException1.started
             sleep(1)
             CatchPlainException1.completed = True
 
         @DBOS.step()
         @staticmethod
-        def testCancelAction():
+        def testCancelAction() -> None:
             CatchPlainException1.aborted = True
             CatchPlainException1.started = False
 
         @staticmethod
-        def reportTrouble():
+        def reportTrouble() -> None:
             CatchPlainException1.trouble = True
-            assert "Trouble?" == "None!"
+            assert str("Trouble?") == "None!"
 
         @DBOS.workflow()
         @staticmethod
-        def testConcWorkflow():
+        def testConcWorkflow() -> None:
             try:
                 # Step 1, tell external system to start processing
                 CatchPlainException1.testStartAction()
@@ -128,7 +128,7 @@ def test_step_undoredo(dbos: DBOS):
     assert not CatchPlainException1.trouble
 
 
-def test_step_undoredo2(dbos: DBOS):
+def test_step_undoredo2(dbos: DBOS) -> None:
     @DBOS.dbos_class()
     class UsingFinallyClause:
         execNum = 0
@@ -139,31 +139,31 @@ def test_step_undoredo2(dbos: DBOS):
 
         @DBOS.step()
         @staticmethod
-        def testStartAction():
+        def testStartAction() -> None:
             sleep(1)
             UsingFinallyClause.started = True
 
         @DBOS.step()
         @staticmethod
-        def testCompleteAction():
+        def testCompleteAction() -> None:
             assert UsingFinallyClause.started
             sleep(1)
             UsingFinallyClause.completed = True
 
         @DBOS.step()
         @staticmethod
-        def testCancelAction():
+        def testCancelAction() -> None:
             UsingFinallyClause.aborted = True
             UsingFinallyClause.started = False
 
         @staticmethod
-        def reportTrouble():
+        def reportTrouble() -> None:
             UsingFinallyClause.trouble = True
-            assert "Trouble?" == "None!"
+            assert str("Trouble?") == "None!"
 
         @DBOS.workflow()
         @staticmethod
-        def testConcWorkflow():
+        def testConcWorkflow() -> None:
             finished = False
             try:
                 # Step 1, tell external system to start processing
@@ -202,7 +202,7 @@ def test_step_undoredo2(dbos: DBOS):
     assert not UsingFinallyClause.trouble
 
 
-def test_step_sequence(dbos: DBOS):
+def test_step_sequence(dbos: DBOS) -> None:
     @DBOS.dbos_class()
     class TryConcExec2:
         curExec = 0
@@ -210,7 +210,7 @@ def test_step_sequence(dbos: DBOS):
 
         @DBOS.step()
         @staticmethod
-        def step1():
+        def step1() -> None:
             # This makes the step take a while ... sometimes.
             if TryConcExec2.curExec % 2 == 0:
                 TryConcExec2.curExec += 1
@@ -219,12 +219,12 @@ def test_step_sequence(dbos: DBOS):
 
         @DBOS.step()
         @staticmethod
-        def step2():
+        def step2() -> None:
             TryConcExec2.curStep = 2
 
         @DBOS.workflow()
         @staticmethod
-        def testConcWorkflow():
+        def testConcWorkflow() -> None:
             TryConcExec2.step1()
             TryConcExec2.step2()
 
@@ -251,7 +251,7 @@ def test_commit_hiccup(dbos: DBOS) -> None:
 
         @DBOS.workflow()
         @staticmethod
-        def testWorkflow() -> None:
+        def testWorkflow() -> str:
             return TryDbGlitch.step1()
 
     assert TryDbGlitch.testWorkflow() == "Yay!"
@@ -264,7 +264,7 @@ def test_commit_hiccup(dbos: DBOS) -> None:
                 orig=None,
                 dbapi_base_err=None,
                 connection_invalidated=True,
-            )
+            )  # type: ignore[call-overload]
         ),
     )
 
@@ -278,7 +278,7 @@ def test_commit_hiccup(dbos: DBOS) -> None:
                 orig=None,
                 dbapi_base_err=None,
                 connection_invalidated=True,
-            )
+            )  # type: ignore[call-overload]
         ),
     )
     assert TryDbGlitch.testWorkflow() == "Yay!"
