@@ -1,10 +1,21 @@
 import uuid
 from time import sleep
+from typing import TYPE_CHECKING, TypeVar
 
 from sqlalchemy.exc import DBAPIError
 
 from dbos import DBOS, SetWorkflowID
 from dbos._debug_trigger import DebugAction, DebugTriggers
+
+if TYPE_CHECKING:
+    from dbos._dbos import WorkflowHandle
+
+R = TypeVar("R", covariant=True)  # A generic type for workflow return values
+
+
+def reexecute_workflow_by_id(dbos: DBOS, wfid: str) -> "WorkflowHandle[R]":
+    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+    return dbos._execute_workflow_id(wfid)
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -47,12 +58,11 @@ def test_simple_workflow(dbos: DBOS) -> None:
     # assert TryConcExec.max_wf == 1
 
     # Recovery part
-    """
-    wfh1r = reexecute_workflow_by_id(wfid);
-    wfh2r = reexecute_workflow_by_id(wfid);
-    wfh1r.get_result();
-    wfh2r.get_result();
-    """
+    wfh1r: WorkflowHandle[str] = reexecute_workflow_by_id(dbos, wfid)
+    wfh2r: WorkflowHandle[str] = reexecute_workflow_by_id(dbos, wfid)
+    wfh1r.get_result()
+    wfh2r.get_result()
+
     # assert TryConcExec.max_conc == 1
     # assert TryConcExec.max_wf == 1
 
