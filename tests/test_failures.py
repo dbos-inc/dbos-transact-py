@@ -163,20 +163,23 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     def dead_letter_workflow() -> None:
         nonlocal recovery_count
         recovery_count += 1
-        event.wait()
 
-    # Start a workflow that blocks forever
+    # Start a workflow that we will restart
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(dead_letter_workflow)
+    handle.get_result()
 
     # Attempt to recover the blocked workflow the maximum number of times
     for i in range(max_recovery_attempts):
-        DBOS._recover_pending_workflows()
+        dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+        handles = DBOS._recover_pending_workflows()
+        handles[0].get_result()
         assert recovery_count == i + 2
 
     # Verify an additional attempt (either through recovery or through a direct call) throws a DLQ error
     # and puts the workflow in the DLQ status.
+    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
     with pytest.raises(Exception) as exc_info:
         DBOS._recover_pending_workflows()
     assert exc_info.errisinstance(MaxRecoveryAttemptsExceededError)
@@ -193,35 +196,32 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     resumed_handle = dbos.resume_workflow(wfid)
     DBOS._recover_pending_workflows()
 
-    # Complete the blocked workflow
+    # Complete the resumed workflow
     event.set()
     assert handle.get_result() == resumed_handle.get_result() == None
     assert handle.get_status().status == WorkflowStatusString.SUCCESS.value
 
     # Verify that retries of a completed workflow do not raise the DLQ exception
     for _ in range(max_recovery_attempts * 2):
+        dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
         with SetWorkflowID(wfid):
             dead_letter_workflow()
 
-    event.clear()
-
     @DBOS.workflow(max_recovery_attempts=None)
     def infinite_dead_letter_workflow() -> None:
-        event.wait()
+        return
 
     # Verify that a workflow with max_recovery_attempts=None is retried infinitely.
     wfid = str(uuid.uuid4())
-    handles = []
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(infinite_dead_letter_workflow)
-        handles.append(handle)
+        handle.get_result
 
     # Attempt to recover the blocked workflow the maximum number of times
     for i in range(DEFAULT_MAX_RECOVERY_ATTEMPTS * 2):
-        handles.extend(DBOS._recover_pending_workflows())
-    event.set()
-    for handle in handles:
-        assert handle.get_result() == None
+        handles = DBOS._recover_pending_workflows()
+        for handle in handles:
+            assert handle.get_result() == None
 
 
 def test_nondeterministic_workflow(dbos: DBOS) -> None:
