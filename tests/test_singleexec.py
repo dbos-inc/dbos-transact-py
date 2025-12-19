@@ -61,8 +61,8 @@ def test_simple_workflow(dbos: DBOS) -> None:
     wfh1r.get_result()
     wfh2r.get_result()
 
-    # assert TryConcExec.max_conc == 1
-    # assert TryConcExec.max_wf == 1
+    assert TryConcExec.max_conc == 1
+    assert TryConcExec.max_wf == 1
 
 
 def test_step_undoredo(dbos: DBOS) -> None:

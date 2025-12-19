@@ -423,6 +423,36 @@ def _get_wf_invoke_func(
     return persist
 
 
+class InFlightById:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._m: dict[str, bool] = {}
+
+    def acquire(self, key: str) -> bool:
+        """
+        Returns is_owner
+        """
+        with self._lock:
+            entry = self._m.get(key)
+            if entry is None:
+                self._m[key] = True
+                return True
+            return False
+
+    def release(
+        self,
+        key: str,
+    ) -> None:
+        """
+        Removes the key when work done
+        """
+        with self._lock:
+            del self._m[key]
+
+
+inflight = InFlightById()
+
+
 def _execute_workflow_wthread(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
@@ -454,6 +484,8 @@ def _execute_workflow_wthread(
                     f"Exception encountered in asynchronous workflow:", exc_info=e
                 )
                 raise
+            finally:
+                inflight.release(status["workflow_uuid"])
 
 
 async def _execute_workflow_async(
@@ -653,6 +685,7 @@ def start_workflow(
                 or wf_status == WorkflowStatusString.SUCCESS.value
             )
         )
+        or not inflight.acquire(status["workflow_uuid"])
     ):
         return WorkflowHandlePolling(new_wf_id, dbos)
 
