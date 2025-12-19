@@ -252,6 +252,9 @@ class DBOSClient:
         self._sys_db.init_workflow(
             status,
             max_recovery_attempts=None,
+            owner_xid=None,
+            is_dequeued_request=False,
+            is_recovery_request=False,
         )
         return workflow_id
 
@@ -318,7 +321,12 @@ class DBOSClient:
         }
         with self._sys_db.engine.begin() as conn:
             self._sys_db._insert_workflow_status(
-                status, conn, max_recovery_attempts=None
+                status,
+                conn,
+                max_recovery_attempts=None,
+                owner_xid=None,
+                is_dequeued_request=False,
+                is_recovery_request=False,
             )
         self._sys_db.send(status["workflow_uuid"], 0, destination_id, message, topic)
 

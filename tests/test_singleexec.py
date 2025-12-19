@@ -52,8 +52,8 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     wfh1.get_result()
     wfh2.get_result()
-    # assert TryConcExec.max_conc == 1
-    # assert TryConcExec.max_wf == 1
+    assert TryConcExec.max_conc == 1
+    assert TryConcExec.max_wf == 1
 
     # Recovery part
     wfh1r: WorkflowHandle[str] = reexecute_workflow_by_id(dbos, wfid)
@@ -119,8 +119,8 @@ def test_step_undoredo(dbos: DBOS) -> None:
 
     with SetWorkflowID(wfid):
         wfh1 = DBOS.start_workflow(CatchPlainException1.testConcWorkflow)
-    # with SetWorkflowID(wfid):
-    #    wfh2 = DBOS.start_workflow(CatchPlainException1.testConcWorkflow)
+    with SetWorkflowID(wfid):
+        wfh2 = DBOS.start_workflow(CatchPlainException1.testConcWorkflow)
 
     wfh1.get_result()
     # wfh2.get_result()
@@ -193,11 +193,11 @@ def test_step_undoredo2(dbos: DBOS) -> None:
 
     with SetWorkflowID(wfid):
         wfh1 = DBOS.start_workflow(UsingFinallyClause.testConcWorkflow)
-    # with SetWorkflowID(wfid):
-    #    wfh2 = DBOS.start_workflow(UsingFinallyClause.testConcWorkflow)
+    with SetWorkflowID(wfid):
+        wfh2 = DBOS.start_workflow(UsingFinallyClause.testConcWorkflow)
 
     wfh1.get_result()
-    # wfh2.get_result()
+    wfh2.get_result()
 
     print(
         f"Started: {UsingFinallyClause.started}; "
@@ -240,11 +240,11 @@ def test_step_sequence(dbos: DBOS) -> None:
 
     with SetWorkflowID(wfid):
         wfh1 = DBOS.start_workflow(TryConcExec2.testConcWorkflow)
-    # with SetWorkflowID(wfid):
-    #    wfh2 = DBOS.start_workflow(TryConcExec2.testConcWorkflow)
+    with SetWorkflowID(wfid):
+        wfh2 = DBOS.start_workflow(TryConcExec2.testConcWorkflow)
 
     wfh1.get_result()
-    # wfh2.get_result()
+    wfh2.get_result()
     assert TryConcExec2.curStep == 2
 
 

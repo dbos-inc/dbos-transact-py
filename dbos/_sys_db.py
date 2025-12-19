@@ -491,12 +491,17 @@ class SystemDatabase(ABC):
         conn: sa.Connection,
         *,
         max_recovery_attempts: Optional[int],
-    ) -> tuple[WorkflowStatuses, Optional[int]]:
+        owner_xid: Optional[str],
+        is_recovery_request: Optional[bool],
+        is_dequeued_request: Optional[bool],
+    ) -> tuple[WorkflowStatuses, Optional[int], bool]:
         """Insert or update workflow status using PostgreSQL upsert operations."""
         if self._debug_mode:
             raise Exception("called insert_workflow_status in debug mode")
         wf_status: WorkflowStatuses = status["status"]
         workflow_deadline_epoch_ms: Optional[int] = status["workflow_deadline_epoch_ms"]
+        force_execute = is_recovery_request or is_dequeued_request
+        should_execute = True
 
         # Values to update when a row already exists for this workflow
         update_values: dict[str, Any] = {
@@ -504,7 +509,8 @@ class SystemDatabase(ABC):
                 (
                     SystemSchema.workflow_status.c.status
                     != WorkflowStatusString.ENQUEUED.value,
-                    SystemSchema.workflow_status.c.recovery_attempts + 1,
+                    SystemSchema.workflow_status.c.recovery_attempts
+                    + (1 if force_execute else 0),
                 ),
                 else_=SystemSchema.workflow_status.c.recovery_attempts,
             ),
@@ -540,6 +546,7 @@ class SystemDatabase(ABC):
                 priority=status["priority"],
                 inputs=status["inputs"],
                 queue_partition_key=status["queue_partition_key"],
+                owner_xid=owner_xid,
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
@@ -555,6 +562,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.class_name,
             SystemSchema.workflow_status.c.config_name,
             SystemSchema.workflow_status.c.queue_name,
+            SystemSchema.workflow_status.c.owner_xid,
         )
 
         try:
@@ -571,6 +579,7 @@ class SystemDatabase(ABC):
                 )
             else:
                 raise
+
         row = results.fetchone()
         if row is not None:
             # Check the started workflow matches the expected name, class_name, config_name, and queue_name
@@ -599,6 +608,7 @@ class SystemDatabase(ABC):
                 (wf_status != "SUCCESS" and wf_status != "ERROR")
                 and max_recovery_attempts is not None
                 and recovery_attempts > max_recovery_attempts + 1
+                and owner_xid != row[7]
             ):
                 dlq_cmd = (
                     sa.update(SystemSchema.workflow_status)
@@ -624,7 +634,14 @@ class SystemDatabase(ABC):
                     status["workflow_uuid"], max_recovery_attempts
                 )
 
-        return wf_status, workflow_deadline_epoch_ms
+            if (
+                owner_xid != row[7]
+                and not is_dequeued_request
+                and not is_recovery_request
+            ):
+                should_execute = False
+
+        return wf_status, workflow_deadline_epoch_ms, should_execute
 
     @db_retry()
     def update_workflow_outcome(
@@ -2186,16 +2203,26 @@ class SystemDatabase(ABC):
         status: WorkflowStatusInternal,
         *,
         max_recovery_attempts: Optional[int],
-    ) -> tuple[WorkflowStatuses, Optional[int]]:
+        owner_xid: Optional[str],
+        is_recovery_request: Optional[bool],
+        is_dequeued_request: Optional[bool],
+    ) -> tuple[WorkflowStatuses, Optional[int], bool]:
         """
         Synchronously record the status and inputs for workflows in a single transaction
         """
         with self.engine.begin() as conn:
-            wf_status, workflow_deadline_epoch_ms = self._insert_workflow_status(
-                status, conn, max_recovery_attempts=max_recovery_attempts
+            wf_status, workflow_deadline_epoch_ms, should_execute = (
+                self._insert_workflow_status(
+                    status,
+                    conn,
+                    max_recovery_attempts=max_recovery_attempts,
+                    owner_xid=owner_xid,
+                    is_recovery_request=is_recovery_request,
+                    is_dequeued_request=is_dequeued_request,
+                )
             )
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT)
-        return wf_status, workflow_deadline_epoch_ms
+        return wf_status, workflow_deadline_epoch_ms, should_execute
 
     def check_connection(self) -> None:
         try:

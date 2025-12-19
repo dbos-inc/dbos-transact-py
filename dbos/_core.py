@@ -5,6 +5,7 @@ import json
 import sys
 import threading
 import time
+import uuid
 from concurrent.futures import Future
 from functools import wraps
 from typing import (
@@ -245,7 +246,9 @@ def _init_workflow(
     workflow_deadline_epoch_ms: Optional[int],
     max_recovery_attempts: Optional[int],
     enqueue_options: Optional[EnqueueOptionsInternal],
-) -> WorkflowStatusInternal:
+    is_recovery_request: Optional[bool],
+    is_dequeued_request: Optional[bool],
+) -> tuple[WorkflowStatusInternal, bool]:
     wfid = (
         ctx.workflow_id
         if len(ctx.workflow_id) > 0
@@ -257,7 +260,7 @@ def _init_workflow(
         get_status_result = dbos._sys_db.get_workflow_status(wfid)
         if get_status_result is None:
             raise DBOSNonExistentWorkflowError(wfid)
-        return get_status_result
+        return get_status_result, False
 
     # If we have a class name, the first arg is the instance and do not serialize
     if class_name is not None:
@@ -319,9 +322,14 @@ def _init_workflow(
 
     # Synchronously record the status and inputs for workflows
     try:
-        wf_status, workflow_deadline_epoch_ms = dbos._sys_db.init_workflow(
-            status,
-            max_recovery_attempts=max_recovery_attempts,
+        wf_status, workflow_deadline_epoch_ms, should_execute = (
+            dbos._sys_db.init_workflow(
+                status,
+                max_recovery_attempts=max_recovery_attempts,
+                is_dequeued_request=is_dequeued_request,
+                is_recovery_request=is_recovery_request,
+                owner_xid=str(uuid.uuid4()),
+            )
         )
     except DBOSQueueDeduplicatedError as e:
         if ctx.has_parent():
@@ -336,7 +344,7 @@ def _init_workflow(
             dbos._sys_db.record_operation_result(result)
         raise
 
-    if workflow_deadline_epoch_ms is not None:
+    if should_execute and workflow_deadline_epoch_ms is not None:
         evt = threading.Event()
         dbos.background_thread_stop_events.append(evt)
 
@@ -363,7 +371,7 @@ def _init_workflow(
     ctx.workflow_deadline_epoch_ms = workflow_deadline_epoch_ms
     status["workflow_deadline_epoch_ms"] = workflow_deadline_epoch_ms
     status["status"] = wf_status
-    return status
+    return status, should_execute
 
 
 def _get_wf_invoke_func(
@@ -474,7 +482,9 @@ async def _execute_workflow_async(
                 raise
 
 
-def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]":
+def execute_workflow_by_id(
+    dbos: "DBOS", workflow_id: str, is_recovery: bool, is_dequeue: bool
+) -> "WorkflowHandle[Any]":
     status = dbos._sys_db.get_workflow_status(workflow_id)
     if not status:
         raise DBOSRecoveryError(workflow_id, "Workflow status not found")
@@ -515,6 +525,8 @@ def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[An
                 wf_func,
                 status["queue_name"],
                 True,
+                is_recovery,
+                is_dequeue,
                 *inputs["args"],
                 **inputs["kwargs"],
             )
@@ -550,6 +562,8 @@ def start_workflow(
     func: "Callable[P, Union[R, Coroutine[Any, Any, R]]]",
     queue_name: Optional[str],
     execute_workflow: bool,
+    is_recovery: bool,
+    is_dequeued: bool,
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> "WorkflowHandle[R]":
@@ -604,7 +618,7 @@ def start_workflow(
         elif recorded_result and recorded_result["child_workflow_id"]:
             return WorkflowHandlePolling(recorded_result["child_workflow_id"], dbos)
 
-    status = _init_workflow(
+    status, should_execute = _init_workflow(
         dbos,
         new_wf_ctx,
         inputs=inputs,
@@ -616,6 +630,8 @@ def start_workflow(
         workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
         max_recovery_attempts=fi.max_recovery_attempts,
         enqueue_options=enqueue_options,
+        is_recovery_request=is_recovery,
+        is_dequeued_request=is_dequeued,
     )
 
     wf_status = status["status"]
@@ -627,11 +643,15 @@ def start_workflow(
             get_dbos_func_name(func),
         )
 
-    if not execute_workflow or (
-        not dbos.debug_mode
-        and (
-            wf_status == WorkflowStatusString.ERROR.value
-            or wf_status == WorkflowStatusString.SUCCESS.value
+    if (
+        not execute_workflow
+        or not should_execute
+        or (
+            not dbos.debug_mode
+            and (
+                wf_status == WorkflowStatusString.ERROR.value
+                or wf_status == WorkflowStatusString.SUCCESS.value
+            )
         )
     ):
         return WorkflowHandlePolling(new_wf_id, dbos)
@@ -653,6 +673,8 @@ async def start_workflow_async(
     func: "Callable[P, Coroutine[Any, Any, R]]",
     queue_name: Optional[str],
     execute_workflow: bool,
+    is_recovery_request: bool,
+    is_dequeued_request: bool,
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> "WorkflowHandleAsync[R]":
@@ -708,7 +730,7 @@ async def start_workflow_async(
                 recorded_result["child_workflow_id"], dbos
             )
 
-    status = await asyncio.to_thread(
+    status, should_execute = await asyncio.to_thread(
         _init_workflow,
         dbos,
         new_wf_ctx,
@@ -721,6 +743,8 @@ async def start_workflow_async(
         workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
         max_recovery_attempts=fi.max_recovery_attempts,
         enqueue_options=enqueue_options,
+        is_recovery_request=is_recovery_request,
+        is_dequeued_request=is_dequeued_request,
     )
 
     if ctx.has_parent():
@@ -734,11 +758,15 @@ async def start_workflow_async(
 
     wf_status = status["status"]
 
-    if not execute_workflow or (
-        not dbos.debug_mode
-        and (
-            wf_status == WorkflowStatusString.ERROR.value
-            or wf_status == WorkflowStatusString.SUCCESS.value
+    if (
+        not execute_workflow
+        or not should_execute
+        or (
+            not dbos.debug_mode
+            and (
+                wf_status == WorkflowStatusString.ERROR.value
+                or wf_status == WorkflowStatusString.SUCCESS.value
+            )
         )
     ):
         return WorkflowHandleAsyncPolling(new_wf_id, dbos)
@@ -836,7 +864,7 @@ def workflow_wrapper(
                 elif r and r["child_workflow_id"]:
                     return recorded_result(r["child_workflow_id"], dbos)
 
-            status = _init_workflow(
+            status, _should_execute = _init_workflow(
                 dbos,
                 ctx,
                 inputs=inputs,
@@ -848,6 +876,8 @@ def workflow_wrapper(
                 workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
                 max_recovery_attempts=max_recovery_attempts,
                 enqueue_options=None,
+                is_recovery_request=False,
+                is_dequeued_request=False,
             )
 
             # TODO: maybe modify the parameters if they've been changed by `_init_workflow`
