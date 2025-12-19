@@ -113,7 +113,9 @@ def test_simple_workflow_attempts_counter(dbos: DBOS) -> None:
             result = c.execute(stmt).fetchone()
             assert result is not None
             recovery_attempts, created_at, updated_at = result
-            assert recovery_attempts == i + 1
+            assert (
+                recovery_attempts == 1
+            )  # This is just runs, and does not imply recovery retries
             assert updated_at >= created_at
 
 
@@ -537,7 +539,9 @@ def test_workflow_returns_none(dbos: DBOS) -> None:
     # Test that there was a recovery attempt of this
     stat = workflow_handles[0].get_status()
     assert stat
-    assert stat.recovery_attempts == 3  # 2 calls to test_workflow + 1 recovery attempt
+    assert (
+        stat.recovery_attempts == 2
+    )  # 1 actual call to test_workflow + 1 recovery attempt
 
 
 def test_recovery_temp_workflow(dbos: DBOS) -> None:
@@ -799,13 +803,13 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
     with SetWorkflowID("parent_b"):
         assert test_workflow_status_b() == "PENDINGrun_this_once_bSUCCESS"
 
-    # Test that the number of attempts matches the number of calls
+    # Test that the number of attempts matches the number of calls requiring work (1)
     stat = dbos.get_workflow_status("parent_a")
     assert stat
-    assert stat.recovery_attempts == 2
+    assert stat.recovery_attempts == 1
     stat = dbos.get_workflow_status("parent_b")
     assert stat
-    assert stat.recovery_attempts == 2
+    assert stat.recovery_attempts == 1
     stat = dbos.get_workflow_status("run_this_once_a")
     assert stat
     assert (
