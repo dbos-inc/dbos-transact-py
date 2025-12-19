@@ -718,9 +718,9 @@ def test_queue_recovery(dbos: DBOS) -> None:
     # There should be one handle for the workflow and another for each queued step.
     assert len(recovery_handles) == queued_steps + 1
     # Verify that both the recovered and original workflows complete correctly.
-    for h in recovery_handles:
-        if h.get_workflow_id() == wfid:
-            assert h.get_result() == [0, 1, 2, 3, 4]
+    for rh in recovery_handles:
+        if rh.get_workflow_id() == wfid:
+            assert rh.get_result() == [0, 1, 2, 3, 4]
     assert original_handle.get_result() == [0, 1, 2, 3, 4]
     # Each step should start twice, once originally and once in recovery.
     assert step_counter == 5

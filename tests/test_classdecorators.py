@@ -643,12 +643,12 @@ def test_class_queue_recovery(dbos: DBOS) -> None:
 
     # Verify that both the recovered and original workflows complete correctly.
     result = [i * multiplier for i in range(5)]
-    for h in recovery_handles:
-        status = h.get_status()
+    for rh in recovery_handles:
+        status = rh.get_status()
         assert status.class_name and "TestClass" in status.class_name
         assert status.config_name == "test_class"
-        if h.get_workflow_id() == wfid:
-            assert h.get_result() == result
+        if rh.get_workflow_id() == wfid:
+            assert rh.get_result() == result
     assert original_handle.get_result() == result
 
     # Each step should start twice, once originally and once in recovery.
@@ -711,13 +711,13 @@ def test_class_static_queue_recovery(dbos: DBOS) -> None:
     assert len(recovery_handles) == queued_steps + 1
     # Verify that both the recovered and original workflows complete correctly.
     result = [i for i in range(5)]
-    for h in recovery_handles:
-        status = h.get_status()
+    for rh in recovery_handles:
+        status = rh.get_status()
         # Class name is not recorded for static methods
         assert status.class_name == None
         assert status.config_name == None
-        if h.get_workflow_id() == wfid:
-            assert h.get_result() == result
+        if rh.get_workflow_id() == wfid:
+            assert rh.get_result() == result
     assert original_handle.get_result() == result
 
     # Each step should start twice, once originally and once in recovery.
@@ -784,13 +784,13 @@ def test_class_classmethod_queue_recovery(dbos: DBOS) -> None:
 
     # Verify that both the recovered and original workflows complete correctly.
     result = [i * multiplier for i in range(5)]
-    for h in recovery_handles:
-        status = h.get_status()
+    for rh in recovery_handles:
+        status = rh.get_status()
         # Class name is recorded for class methods
         assert status.class_name and "TestClass" in status.class_name
         assert status.config_name == None
-        if h.get_workflow_id() == wfid:
-            assert h.get_result() == result
+        if rh.get_workflow_id() == wfid:
+            assert rh.get_result() == result
     assert original_handle.get_result() == result
     # Each step should start twice, once originally and once in recovery.
     assert step_enqueues == 10
