@@ -18,7 +18,7 @@ import sqlalchemy as sa
 
 from dbos._app_db import ApplicationDatabase
 from dbos._context import MaxPriority, MinPriority
-from dbos._core import DEFAULT_POLLING_INTERVAL
+from dbos._core import DEFAULT_POLLING_INTERVAL, TEMP_SEND_WF_NAME
 from dbos._sys_db import SystemDatabase
 from dbos._utils import generate_uuid
 
@@ -295,7 +295,7 @@ class DBOSClient:
         status: WorkflowStatusInternal = {
             "workflow_uuid": f"{destination_id}-{idempotency_key}",
             "status": WorkflowStatusString.SUCCESS.value,
-            "name": "temp_workflow-send-client",
+            "name": TEMP_SEND_WF_NAME,
             "class_name": None,
             "queue_name": None,
             "config_name": None,
