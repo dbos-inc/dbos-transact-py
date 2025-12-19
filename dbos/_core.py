@@ -645,7 +645,7 @@ def start_workflow(
 
     if (
         not execute_workflow
-        or not should_execute
+        or (not dbos.debug_mode and not should_execute)
         or (
             not dbos.debug_mode
             and (
@@ -760,7 +760,7 @@ async def start_workflow_async(
 
     if (
         not execute_workflow
-        or not should_execute
+        or (not dbos.debug_mode and not should_execute)
         or (
             not dbos.debug_mode
             and (
