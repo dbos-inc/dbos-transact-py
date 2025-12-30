@@ -142,7 +142,6 @@ async def test_step_undoredo(dbos: DBOS) -> None:
     assert not CatchPlainException1.trouble
 
 
-"""
 @pytest.mark.asyncio
 async def test_step_undoredo2(dbos: DBOS) -> None:
     @DBOS.dbos_class()
@@ -153,21 +152,21 @@ async def test_step_undoredo2(dbos: DBOS) -> None:
         aborted = False
         trouble = False
 
-        @DBOS.step()
         @staticmethod
+        @DBOS.step()
         async def testStartAction() -> None:
             await asyncio.sleep(1)
             UsingFinallyClause.started = True
 
-        @DBOS.step()
         @staticmethod
+        @DBOS.step()
         async def testCompleteAction() -> None:
             assert UsingFinallyClause.started
             await asyncio.sleep(1)
             UsingFinallyClause.completed = True
 
-        @DBOS.step()
         @staticmethod
+        @DBOS.step()
         async def testCancelAction() -> None:
             UsingFinallyClause.aborted = True
             UsingFinallyClause.started = False
@@ -177,8 +176,8 @@ async def test_step_undoredo2(dbos: DBOS) -> None:
             UsingFinallyClause.trouble = True
             assert str("Trouble?") == "None!"
 
-        @DBOS.workflow()
         @staticmethod
+        @DBOS.workflow()
         async def testConcWorkflow() -> None:
             finished = False
             try:
@@ -217,6 +216,7 @@ async def test_step_undoredo2(dbos: DBOS) -> None:
     assert UsingFinallyClause.completed
     assert not UsingFinallyClause.trouble
 
+
 @pytest.mark.asyncio
 async def test_step_sequence(dbos: DBOS) -> None:
     @DBOS.dbos_class()
@@ -224,8 +224,8 @@ async def test_step_sequence(dbos: DBOS) -> None:
         curExec = 0
         curStep = 0
 
-        @DBOS.step()
         @staticmethod
+        @DBOS.step()
         async def step1() -> None:
             # This makes the step take a while ... sometimes.
             if TryConcExec2.curExec % 2 == 0:
@@ -233,13 +233,13 @@ async def test_step_sequence(dbos: DBOS) -> None:
                 await asyncio.sleep(1)
             TryConcExec2.curStep = 1
 
-        @DBOS.step()
         @staticmethod
+        @DBOS.step()
         async def step2() -> None:
             TryConcExec2.curStep = 2
 
-        @DBOS.workflow()
         @staticmethod
+        @DBOS.workflow()
         async def testConcWorkflow() -> None:
             await TryConcExec2.step1()
             await TryConcExec2.step2()
@@ -254,7 +254,6 @@ async def test_step_sequence(dbos: DBOS) -> None:
     await wfh1.get_result()
     await wfh2.get_result()
     assert TryConcExec2.curStep == 2
-"""
 
 
 @pytest.mark.asyncio
