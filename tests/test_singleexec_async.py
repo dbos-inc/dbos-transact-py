@@ -18,7 +18,6 @@ def reexecute_workflow_by_id(dbos: DBOS, wfid: str) -> "WorkflowHandle[Any]":
     return dbos._execute_workflow_id(wfid)
 
 
-"""
 @pytest.mark.asyncio
 async def test_simple_workflow(dbos: DBOS) -> None:
     @DBOS.dbos_class()
@@ -29,16 +28,16 @@ async def test_simple_workflow(dbos: DBOS) -> None:
         conc_wf = 0
         max_wf = 0
 
-        @DBOS.step()
         @staticmethod
+        @DBOS.step()
         async def testConcStep() -> None:
             TryConcExec.conc_exec += 1
             TryConcExec.max_conc = max(TryConcExec.conc_exec, TryConcExec.max_conc)
             await asyncio.sleep(1)
             TryConcExec.conc_exec -= 1
 
-        @DBOS.workflow()
         @staticmethod
+        @DBOS.workflow()
         async def testConcWorkflow() -> None:
             TryConcExec.conc_wf += 1
             TryConcExec.max_wf = max(TryConcExec.conc_wf, TryConcExec.max_wf)
@@ -67,7 +66,6 @@ async def test_simple_workflow(dbos: DBOS) -> None:
 
     assert TryConcExec.max_conc == 1
     assert TryConcExec.max_wf == 1
-"""
 
 
 @pytest.mark.asyncio

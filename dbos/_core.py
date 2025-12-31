@@ -512,6 +512,8 @@ async def _execute_workflow_async(
                     f"Exception encountered in asynchronous workflow:", exc_info=e
                 )
                 raise
+            finally:
+                inflight.release(status["workflow_uuid"])
 
 
 def execute_workflow_by_id(
@@ -801,6 +803,7 @@ async def start_workflow_async(
                 or wf_status == WorkflowStatusString.SUCCESS.value
             )
         )
+        or not inflight.acquire(status["workflow_uuid"])
     ):
         return WorkflowHandleAsyncPolling(new_wf_id, dbos)
 
