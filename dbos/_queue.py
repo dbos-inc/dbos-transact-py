@@ -98,7 +98,9 @@ class Queue:
             raise Exception("Deduplication is not supported for partitioned queues")
 
         dbos = _get_dbos_instance()
-        return start_workflow(dbos, func, self.name, False, *args, **kwargs)
+        return start_workflow(
+            dbos, func, self.name, False, False, False, *args, **kwargs
+        )
 
     async def enqueue_async(
         self,
@@ -109,7 +111,9 @@ class Queue:
         from ._dbos import _get_dbos_instance
 
         dbos = _get_dbos_instance()
-        return await start_workflow_async(dbos, func, self.name, False, *args, **kwargs)
+        return await start_workflow_async(
+            dbos, func, self.name, False, False, False, *args, **kwargs
+        )
 
 
 def queue_worker_thread(
@@ -136,13 +140,13 @@ def queue_worker_thread(
                         key,
                     )
                     for id in dequeued_workflows:
-                        execute_workflow_by_id(dbos, id)
+                        execute_workflow_by_id(dbos, id, False, True)
             else:
                 dequeued_workflows = dbos._sys_db.start_queued_workflows(
                     queue, GlobalParams.executor_id, GlobalParams.app_version, None
                 )
                 for id in dequeued_workflows:
-                    execute_workflow_by_id(dbos, id)
+                    execute_workflow_by_id(dbos, id, False, True)
         except OperationalError as e:
             if isinstance(
                 e.orig, (errors.SerializationFailure, errors.LockNotAvailable)

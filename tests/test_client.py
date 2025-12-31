@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 import uuid
-from typing import Optional, TypedDict
+from typing import Any, Optional, TypedDict
 
 import pytest
 import sqlalchemy as sa
@@ -301,6 +301,11 @@ def test_client_send_idempotent(
     assert result2 == message
 
 
+def reexecute_workflow_by_id(dbos: DBOS, wfid: str) -> "WorkflowHandle[Any]":
+    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+    return dbos._execute_workflow_id(wfid)
+
+
 def test_client_send_failure(
     dbos: DBOS, client: DBOSClient, skip_with_sqlite: None
 ) -> None:
@@ -339,7 +344,7 @@ def test_client_send_failure(
         assert len(sresult) == 1
         assert sresult[0][0] == 1
 
-    client.send(wfid, message, topic, idempotency_key)
+    reexecute_workflow_by_id(dbos, sendWFID)
 
     with dbos._sys_db.engine.connect() as conn:
         s2result = conn.execute(

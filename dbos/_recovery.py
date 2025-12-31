@@ -20,7 +20,7 @@ def _recover_workflow(
         cleared = dbos._sys_db.clear_queue_assignment(workflow.workflow_uuid)
         if cleared:
             return dbos.retrieve_workflow(workflow.workflow_uuid)
-    return execute_workflow_by_id(dbos, workflow.workflow_uuid)
+    return execute_workflow_by_id(dbos, workflow.workflow_uuid, True, False)
 
 
 def startup_recovery_thread(

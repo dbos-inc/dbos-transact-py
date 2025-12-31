@@ -594,13 +594,12 @@ def test_step_recovery(dbos: DBOS) -> None:
 
 def test_class_queue_recovery(dbos: DBOS) -> None:
     step_counter: int = 0
+    step_enqueues: int = 0
     queued_steps = 5
     multiplier = 5
 
     wfid = str(uuid.uuid4())
     queue = Queue("test_queue")
-    step_events = [threading.Event() for _ in range(queued_steps)]
-    event = threading.Event()
 
     @DBOS.dbos_class()
     class TestClass(DBOSConfiguredInstance):
@@ -610,9 +609,11 @@ def test_class_queue_recovery(dbos: DBOS) -> None:
 
         @DBOS.workflow()
         def test_workflow(self) -> list[int]:
+            nonlocal step_enqueues
             assert DBOS.workflow_id == wfid
             handles = []
             for i in range(queued_steps):
+                step_enqueues += 1
                 h = queue.enqueue(self.test_step, i)
                 handles.append(h)
             return [h.get_result() for h in handles]
@@ -621,8 +622,6 @@ def test_class_queue_recovery(dbos: DBOS) -> None:
         def test_step(self, i: int) -> int:
             nonlocal step_counter
             step_counter += 1
-            step_events[i].set()
-            event.wait()
             return self.multiply(i)
 
     inst = TestClass(multiplier)
@@ -630,37 +629,37 @@ def test_class_queue_recovery(dbos: DBOS) -> None:
     # Start the workflow. Wait for all five steps to start. Verify that they started.
     with SetWorkflowID(wfid):
         original_handle = DBOS.start_workflow(inst.test_workflow)
-    for e in step_events:
-        e.wait()
-        e.clear()
-
+    original_handle.get_result()
     assert step_counter == 5
+    assert step_enqueues == 5
 
-    # Recover the workflow, then resume it.
+    # Recover the workflow and all children
+    for h in DBOS.list_workflows(workflow_id_prefix=wfid):
+        dbos._sys_db.update_workflow_outcome(h.workflow_id, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
-    # Wait until the 2nd invocation of the workflows are dequeued and executed
-    for e in step_events:
-        e.wait()
-    event.set()
 
     # There should be one handle for the workflow and another for each queued step.
     assert len(recovery_handles) == queued_steps + 1
+
     # Verify that both the recovered and original workflows complete correctly.
     result = [i * multiplier for i in range(5)]
-    for h in recovery_handles:
-        status = h.get_status()
+    for rh in recovery_handles:
+        status = rh.get_status()
         assert status.class_name and "TestClass" in status.class_name
         assert status.config_name == "test_class"
-        if h.get_workflow_id() == wfid:
-            assert h.get_result() == result
+        if rh.get_workflow_id() == wfid:
+            assert rh.get_result() == result
     assert original_handle.get_result() == result
+
     # Each step should start twice, once originally and once in recovery.
-    assert step_counter == 10
+    assert step_enqueues == 10
+    assert step_counter == 5
 
     # Rerun the workflow. Because each step is complete, none should start again.
     with SetWorkflowID(wfid):
         assert inst.test_workflow() == result
-    assert step_counter == 10
+    assert step_enqueues == 10
+    assert step_counter == 5
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
@@ -668,21 +667,22 @@ def test_class_queue_recovery(dbos: DBOS) -> None:
 
 def test_class_static_queue_recovery(dbos: DBOS) -> None:
     step_counter: int = 0
+    step_enqueues: int = 0
     queued_steps = 5
 
     wfid = str(uuid.uuid4())
     queue = Queue("test_queue")
-    step_events = [threading.Event() for _ in range(queued_steps)]
-    event = threading.Event()
 
     @DBOS.dbos_class()
     class TestClass:
         @staticmethod
         @DBOS.workflow()
         def test_workflow() -> list[int]:
+            nonlocal step_enqueues
             assert DBOS.workflow_id == wfid
             handles = []
             for i in range(queued_steps):
+                step_enqueues += 1
                 h = queue.enqueue(TestClass.test_step, i)
                 handles.append(h)
             return [h.get_result() for h in handles]
@@ -692,45 +692,43 @@ def test_class_static_queue_recovery(dbos: DBOS) -> None:
         def test_step(i: int) -> int:
             nonlocal step_counter
             step_counter += 1
-            step_events[i].set()
-            event.wait()
             return i
 
     # Start the workflow. Wait for all five steps to start. Verify that they started.
     with SetWorkflowID(wfid):
         original_handle = DBOS.start_workflow(TestClass.test_workflow)
-    for e in step_events:
-        e.wait()
-        e.clear()
+    original_handle.get_result()
 
+    assert step_enqueues == 5
     assert step_counter == 5
 
     # Recover the workflow, then resume it.
+    for h in DBOS.list_workflows(workflow_id_prefix=wfid):
+        dbos._sys_db.update_workflow_outcome(h.workflow_id, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
-    # Wait until the 2nd invocation of the workflows are dequeued and executed
-    for e in step_events:
-        e.wait()
-    event.set()
 
     # There should be one handle for the workflow and another for each queued step.
     assert len(recovery_handles) == queued_steps + 1
     # Verify that both the recovered and original workflows complete correctly.
     result = [i for i in range(5)]
-    for h in recovery_handles:
-        status = h.get_status()
+    for rh in recovery_handles:
+        status = rh.get_status()
         # Class name is not recorded for static methods
         assert status.class_name == None
         assert status.config_name == None
-        if h.get_workflow_id() == wfid:
-            assert h.get_result() == result
+        if rh.get_workflow_id() == wfid:
+            assert rh.get_result() == result
     assert original_handle.get_result() == result
+
     # Each step should start twice, once originally and once in recovery.
-    assert step_counter == 10
+    assert step_enqueues == 10
+    assert step_counter == 5
 
     # Rerun the workflow. Because each step is complete, none should start again.
     with SetWorkflowID(wfid):
         assert TestClass.test_workflow() == result
-    assert step_counter == 10
+    assert step_enqueues == 10
+    assert step_counter == 5
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
@@ -738,13 +736,12 @@ def test_class_static_queue_recovery(dbos: DBOS) -> None:
 
 def test_class_classmethod_queue_recovery(dbos: DBOS) -> None:
     step_counter: int = 0
+    step_enqueues: int = 0
     multiplier = 5
     queued_steps = 5
 
     wfid = str(uuid.uuid4())
     queue = Queue("test_queue")
-    step_events = [threading.Event() for _ in range(queued_steps)]
-    event = threading.Event()
 
     @DBOS.dbos_class()
     class TestClass:
@@ -753,10 +750,12 @@ def test_class_classmethod_queue_recovery(dbos: DBOS) -> None:
         @classmethod
         @DBOS.workflow()
         def test_workflow(cls) -> list[int]:
+            nonlocal step_enqueues
             cls.multiply = lambda x: x * multiplier
             assert DBOS.workflow_id == wfid
             handles = []
             for i in range(queued_steps):
+                step_enqueues += 1
                 h = queue.enqueue(TestClass.test_step, i)
                 handles.append(h)
             return [h.get_result() for h in handles]
@@ -766,45 +765,42 @@ def test_class_classmethod_queue_recovery(dbos: DBOS) -> None:
         def test_step(cls, i: int) -> int:
             nonlocal step_counter
             step_counter += 1
-            step_events[i].set()
-            event.wait()
             return cls.multiply(i)
 
     # Start the workflow. Wait for all five steps to start. Verify that they started.
     with SetWorkflowID(wfid):
         original_handle = DBOS.start_workflow(TestClass.test_workflow)
-    for e in step_events:
-        e.wait()
-        e.clear()
+    original_handle.get_result()
 
     assert step_counter == 5
+    assert step_enqueues == 5
 
     # Recover the workflow, then resume it.
-    recovery_handles = DBOS._recover_pending_workflows()
-    # Wait until the 2nd invocation of the workflows are dequeued and executed
-    for e in step_events:
-        e.wait()
-    event.set()
-
     # There should be one handle for the workflow and another for each queued step.
+    for h in DBOS.list_workflows(workflow_id_prefix=wfid):
+        dbos._sys_db.update_workflow_outcome(h.workflow_id, "PENDING")
+    recovery_handles = DBOS._recover_pending_workflows()
     assert len(recovery_handles) == queued_steps + 1
+
     # Verify that both the recovered and original workflows complete correctly.
     result = [i * multiplier for i in range(5)]
-    for h in recovery_handles:
-        status = h.get_status()
+    for rh in recovery_handles:
+        status = rh.get_status()
         # Class name is recorded for class methods
         assert status.class_name and "TestClass" in status.class_name
         assert status.config_name == None
-        if h.get_workflow_id() == wfid:
-            assert h.get_result() == result
+        if rh.get_workflow_id() == wfid:
+            assert rh.get_result() == result
     assert original_handle.get_result() == result
     # Each step should start twice, once originally and once in recovery.
-    assert step_counter == 10
+    assert step_enqueues == 10
+    assert step_counter == 5
 
     # Rerun the workflow. Because each step is complete, none should start again.
     with SetWorkflowID(wfid):
         assert TestClass.test_workflow() == result
-    assert step_counter == 10
+    assert step_enqueues == 10
+    assert step_counter == 5
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)

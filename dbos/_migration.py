@@ -394,4 +394,5 @@ sqlite_migrations = [
     sqlite_migration_four,
     sqlite_migration_five,
     sqlite_migration_six,
+    sqlite_migration_seven,
 ]

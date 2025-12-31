@@ -795,7 +795,9 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
-        return start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs)
+        return start_workflow(
+            _get_dbos_instance(), func, None, True, False, False, *args, **kwargs
+        )
 
     @classmethod
     async def start_workflow_async(
@@ -807,7 +809,7 @@ class DBOS:
         """Invoke a workflow function on the event loop, returning a handle to the ongoing execution."""
         await cls._configure_asyncio_thread_pool()
         return await start_workflow_async(
-            _get_dbos_instance(), func, None, True, *args, **kwargs
+            _get_dbos_instance(), func, None, True, False, False, *args, **kwargs
         )
 
     @classmethod
@@ -1029,7 +1031,7 @@ class DBOS:
     @classmethod
     def _execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Execute a workflow by ID (for recovery)."""
-        return execute_workflow_by_id(_get_dbos_instance(), workflow_id)
+        return execute_workflow_by_id(_get_dbos_instance(), workflow_id, True, False)
 
     @classmethod
     def _recover_pending_workflows(
