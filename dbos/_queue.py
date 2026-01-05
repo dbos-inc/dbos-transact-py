@@ -136,13 +136,19 @@ def queue_worker_thread(
                         key,
                     )
                     for id in dequeued_workflows:
-                        execute_workflow_by_id(dbos, id)
+                        try:
+                            execute_workflow_by_id(dbos, id)
+                        except Exception as e:
+                            dbos.logger.error(f"Error executing workflow {id}: {e}")
             else:
                 dequeued_workflows = dbos._sys_db.start_queued_workflows(
                     queue, GlobalParams.executor_id, GlobalParams.app_version, None
                 )
                 for id in dequeued_workflows:
-                    execute_workflow_by_id(dbos, id)
+                    try:
+                        execute_workflow_by_id(dbos, id)
+                    except Exception as e:
+                        dbos.logger.error(f"Error executing workflow {id}: {e}")
         except OperationalError as e:
             if isinstance(
                 e.orig, (errors.SerializationFailure, errors.LockNotAvailable)
