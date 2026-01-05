@@ -2055,9 +2055,18 @@ def test_custom_engine(
     DBOS.launch()
     DBOS.destroy()
 
-    # Test custom engine with client
+    # Test custom engine with client and a bogus URL
     client = DBOSClient(
         system_database_url="postgresql://bogus:url@not:42/fake",
+        system_database_engine=config["system_database_engine"],
+    )
+    assert len(client.list_workflows()) == 2
+    steps = client.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 3
+    assert "setEvent" in steps[0]["function_name"]
+
+    # Test custom engine with client and no URL
+    client = DBOSClient(
         system_database_engine=config["system_database_engine"],
     )
     assert len(client.list_workflows()) == 2
