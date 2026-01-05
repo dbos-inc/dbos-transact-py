@@ -917,10 +917,13 @@ def workflow_wrapper(
                 is_dequeued_request=False,
             )
 
-            def get_recorded_result():
-                return dbos._sys_db.await_workflow_result(
-                    status["workflow_uuid"],
-                    polling_interval=DEFAULT_POLLING_INTERVAL,
+            def get_recorded_result(_func: Callable[[], R]) -> R:
+                return cast(
+                    R,
+                    dbos._sys_db.await_workflow_result(
+                        status["workflow_uuid"],
+                        polling_interval=DEFAULT_POLLING_INTERVAL,
+                    ),
                 )
 
             # TODO: maybe modify the parameters if they've been changed by `_init_workflow`
