@@ -901,7 +901,7 @@ def workflow_wrapper(
                 elif r and r["child_workflow_id"]:
                     return recorded_result(r["child_workflow_id"], dbos)
 
-            status, _should_execute = _init_workflow(
+            status, should_execute = _init_workflow(
                 dbos,
                 ctx,
                 inputs=inputs,
@@ -917,6 +917,12 @@ def workflow_wrapper(
                 is_dequeued_request=False,
             )
 
+            def get_recorded_result():
+                return dbos._sys_db.await_workflow_result(
+                    status["workflow_uuid"],
+                    polling_interval=DEFAULT_POLLING_INTERVAL,
+                )
+
             # TODO: maybe modify the parameters if they've been changed by `_init_workflow`
             dbos.logger.debug(
                 f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
@@ -930,7 +936,11 @@ def workflow_wrapper(
                     get_dbos_func_name(func),
                 )
 
-            return _get_wf_invoke_func(dbos, status)
+            return (
+                _get_wf_invoke_func(dbos, status)
+                if should_execute
+                else get_recorded_result
+            )
 
         def record_get_result(func: Callable[[], R]) -> R:
             """
