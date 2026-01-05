@@ -2049,9 +2049,15 @@ def test_custom_engine(
     assert "setEvent" in steps[0]["function_name"]
     DBOS.destroy(destroy_registry=True)
 
+    # Also verify a custom engine works with no URL
+    config["system_database_url"] = None
+    dbos = DBOS(config=config)
+    DBOS.launch()
+    DBOS.destroy()
+
     # Test custom engine with client
     client = DBOSClient(
-        system_database_url=config["system_database_url"],
+        system_database_url="postgresql://bogus:url@not:42/fake",
         system_database_engine=config["system_database_engine"],
     )
     assert len(client.list_workflows()) == 2

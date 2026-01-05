@@ -357,6 +357,20 @@ def process_config(
                 port=port,
             ).render_as_string(hide_password=False)
 
+    if (
+        data.get("system_database_engine")
+        and not data.get("system_database_url")
+        and not data.get("database_url")
+    ):
+        engine = data.get("system_database_engine")
+        assert engine is not None
+        if "sqlite" in engine.dialect.name:
+            data["system_database_url"] = (
+                "sqlite:///custom_system_database_engine.sqlite"
+            )
+        else:
+            data["system_database_url"] = "postgresql://custom:system@database/engine"
+
     # Process the system database URL, if provided
     if data.get("system_database_url"):
         # Parse the db string and check required fields
