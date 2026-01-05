@@ -939,11 +939,13 @@ def workflow_wrapper(
                     get_dbos_func_name(func),
                 )
 
-            return (
-                _get_wf_invoke_func(dbos, status)
-                if should_execute
-                else get_recorded_result
-            )
+            if should_execute:
+                return _get_wf_invoke_func(dbos, status)
+            else:
+                dbos.logger.debug(
+                    f"Workflow {status['workflow_uuid']} already run with status {status['status']}"
+                )
+                return get_recorded_result
 
         def record_get_result(func: Callable[[], R]) -> R:
             """
