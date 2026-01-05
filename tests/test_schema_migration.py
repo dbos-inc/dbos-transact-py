@@ -137,7 +137,6 @@ def test_sqlite_systemdb_migration() -> None:
             schema=None,
             executor_id=None,
             serializer=DefaultSerializer(),
-            debug_mode=False,
         )
 
         # Run migrations
