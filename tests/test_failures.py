@@ -203,7 +203,6 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
 
     # Verify that retries of a completed workflow do not raise the DLQ exception
     for _ in range(max_recovery_attempts * 2):
-        dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
         with SetWorkflowID(wfid):
             dead_letter_workflow()
 
