@@ -395,7 +395,12 @@ def _get_wf_invoke_func(
         try:
             owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
             if owned or dbos.debug_mode:
-                output = func()
+                if inspect.iscoroutinefunction(func):
+                    output = dbos._background_event_loop.submit_coroutine(
+                        cast(Coroutine[Any, Any, R], func)
+                    )
+                else:
+                    output = func()
             else:
                 # Await the workflow result
                 output = dbos._sys_db.await_workflow_result(
@@ -478,17 +483,9 @@ def _execute_workflow_wthread(
     with DBOSContextSwap(ctx):
         with EnterDBOSWorkflow(attributes):
             try:
-                result = (
-                    Outcome[R]
-                    .make(functools.partial(func, *args, **kwargs))
-                    .then(_get_wf_invoke_func(dbos, status))
+                return _get_wf_invoke_func(dbos, status)(
+                    functools.partial(func, *args, **kwargs)
                 )
-                if isinstance(result, Immediate):
-                    return cast(Immediate[R], result)()
-                else:
-                    return dbos._background_event_loop.submit_coroutine(
-                        cast(Pending[R], result)()
-                    )
             except Exception as e:
                 dbos.logger.error(
                     f"Exception encountered in asynchronous workflow:", exc_info=e
