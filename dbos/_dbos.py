@@ -40,6 +40,7 @@ from ._core import (
     DEBOUNCER_WORKFLOW_NAME,
     DEFAULT_POLLING_INTERVAL,
     TEMP_SEND_WF_NAME,
+    ActiveWorkflowById,
     WorkflowHandleAsyncPolling,
     WorkflowHandlePolling,
     decorate_step,
@@ -345,7 +346,7 @@ class DBOS:
         self.enable_patching = config.get("enable_patching") == True
         self.conductor_websocket: Optional[ConductorWebsocket] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
-        self._active_workflows_set: set[str] = set()
+        self._active_workflows_set: ActiveWorkflowById = ActiveWorkflowById()
         serializer = config.get("serializer")
         self._serializer: Serializer = serializer if serializer else DefaultSerializer()
 
@@ -622,10 +623,10 @@ class DBOS:
             deadline = time.time() + workflow_completion_timeout_sec
             while time.time() < deadline:
                 time.sleep(1)
-                active_workflows = len(self._active_workflows_set)
+                active_workflows = len(self._active_workflows_set.activeList())
                 if active_workflows > 0:
                     dbos_logger.info(
-                        f"Attempting to shut down DBOS. {active_workflows} workflows remain active. IDs: {self._active_workflows_set}"
+                        f"Attempting to shut down DBOS. {active_workflows} workflows remain active. IDs: {self._active_workflows_set.activeList()}"
                     )
                 else:
                     break

@@ -14,6 +14,7 @@ from typing import (
     Callable,
     Coroutine,
     Generic,
+    List,
     Optional,
     ParamSpec,
     TypeVar,
@@ -392,8 +393,16 @@ def _get_wf_invoke_func(
             )
             return recorded_result
         try:
-            dbos._active_workflows_set.add(status["workflow_uuid"])
-            output = func()
+            owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
+            if owned or dbos.debug_mode:
+                output = func()
+            else:
+                # Await the workflow result
+                output = dbos._sys_db.await_workflow_result(
+                    status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL
+                )
+                return output
+
             if not dbos.debug_mode:
                 dbos._sys_db.update_workflow_outcome(
                     status["workflow_uuid"],
@@ -418,12 +427,13 @@ def _get_wf_invoke_func(
                 )
             raise
         finally:
-            dbos._active_workflows_set.discard(status["workflow_uuid"])
+            if owned:
+                dbos._active_workflows_set.release(status["workflow_uuid"])
 
     return persist
 
 
-class InFlightById:
+class ActiveWorkflowById:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._m: dict[str, bool] = {}
@@ -449,8 +459,8 @@ class InFlightById:
         with self._lock:
             del self._m[key]
 
-
-inflight = InFlightById()
+    def activeList(self) -> List[str]:
+        return list(self._m.keys())
 
 
 def _execute_workflow_wthread(
@@ -484,8 +494,6 @@ def _execute_workflow_wthread(
                     f"Exception encountered in asynchronous workflow:", exc_info=e
                 )
                 raise
-            finally:
-                inflight.release(status["workflow_uuid"])
 
 
 async def _execute_workflow_async(
@@ -512,8 +520,6 @@ async def _execute_workflow_async(
                     f"Exception encountered in asynchronous workflow:", exc_info=e
                 )
                 raise
-            finally:
-                inflight.release(status["workflow_uuid"])
 
 
 def execute_workflow_by_id(
@@ -687,7 +693,6 @@ def start_workflow(
                 or wf_status == WorkflowStatusString.SUCCESS.value
             )
         )
-        or not inflight.acquire(status["workflow_uuid"])
     ):
         return WorkflowHandlePolling(new_wf_id, dbos)
 
@@ -803,7 +808,6 @@ async def start_workflow_async(
                 or wf_status == WorkflowStatusString.SUCCESS.value
             )
         )
-        or not inflight.acquire(status["workflow_uuid"])
     ):
         return WorkflowHandleAsyncPolling(new_wf_id, dbos)
 

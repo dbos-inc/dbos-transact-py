@@ -1,4 +1,5 @@
 import uuid
+from concurrent.futures import ThreadPoolExecutor, wait
 from time import sleep
 from typing import TYPE_CHECKING, Any
 
@@ -60,6 +61,22 @@ def test_simple_workflow(dbos: DBOS) -> None:
     wfh2r: WorkflowHandle[str] = reexecute_workflow_by_id(dbos, wfid)
     wfh1r.get_result()
     wfh2r.get_result()
+
+    assert TryConcExec.max_conc == 1
+    assert TryConcExec.max_wf == 1
+
+    # Direct exec part
+    def run(wfid: str) -> None:
+        with SetWorkflowID(wfid):
+            TryConcExec.testConcWorkflow()
+
+    wfid2 = str(uuid.uuid4())
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(run, wfid2),
+            executor.submit(run, wfid2),
+        ]
+        wait(futures)
 
     assert TryConcExec.max_conc == 1
     assert TryConcExec.max_wf == 1

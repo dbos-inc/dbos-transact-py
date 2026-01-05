@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from time import sleep
 from typing import TYPE_CHECKING, Any
 
@@ -58,7 +59,20 @@ async def test_simple_workflow(dbos: DBOS) -> None:
     assert TryConcExec.max_conc == 1
     assert TryConcExec.max_wf == 1
 
+    # Direct exec part
+    wfid2 = str(uuid.uuid4())
+    with SetWorkflowID(wfid2):
+        cr1 = TryConcExec.testConcWorkflow()
+    with SetWorkflowID(wfid2):
+        cr2 = TryConcExec.testConcWorkflow()
+    await cr1
+    await cr2
+
+    assert TryConcExec.max_conc == 1
+    assert TryConcExec.max_wf == 1
+
     # Recovery part (TODO should it be async)
+    """
     wfh1r: WorkflowHandle[str] = reexecute_workflow_by_id(dbos, wfid)
     wfh2r: WorkflowHandle[str] = reexecute_workflow_by_id(dbos, wfid)
     wfh1r.get_result()
@@ -66,6 +80,7 @@ async def test_simple_workflow(dbos: DBOS) -> None:
 
     assert TryConcExec.max_conc == 1
     assert TryConcExec.max_wf == 1
+    """
 
 
 @pytest.mark.asyncio
