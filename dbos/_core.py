@@ -397,7 +397,7 @@ def _get_wf_invoke_func(
             if owned or dbos.debug_mode:
                 if inspect.iscoroutinefunction(func):
                     output = dbos._background_event_loop.submit_coroutine(
-                        cast(Coroutine[Any, Any, R], func)
+                        cast(Coroutine[Any, Any, R], func())
                     )
                 else:
                     output = func()
