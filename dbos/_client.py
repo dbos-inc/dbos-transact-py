@@ -17,7 +17,7 @@ from typing import (
 import sqlalchemy as sa
 
 from dbos._context import MaxPriority, MinPriority
-from dbos._core import DEFAULT_POLLING_INTERVAL
+from dbos._core import DEFAULT_POLLING_INTERVAL, TEMP_SEND_WF_NAME
 from dbos._sys_db import SystemDatabase
 from dbos._utils import generate_uuid
 
@@ -234,11 +234,15 @@ class DBOSClient:
             "inputs": self._serializer.serialize(inputs),
             "queue_partition_key": enqueue_options_internal["queue_partition_key"],
             "forked_from": None,
+            "owner_xid": None,
         }
 
         self._sys_db.init_workflow(
             status,
             max_recovery_attempts=None,
+            owner_xid=None,
+            is_dequeued_request=False,
+            is_recovery_request=False,
         )
         return workflow_id
 
@@ -279,7 +283,7 @@ class DBOSClient:
         status: WorkflowStatusInternal = {
             "workflow_uuid": f"{destination_id}-{idempotency_key}",
             "status": WorkflowStatusString.SUCCESS.value,
-            "name": "temp_workflow-send-client",
+            "name": TEMP_SEND_WF_NAME,
             "class_name": None,
             "queue_name": None,
             "config_name": None,
@@ -301,10 +305,16 @@ class DBOSClient:
             "inputs": self._serializer.serialize({"args": (), "kwargs": {}}),
             "queue_partition_key": None,
             "forked_from": None,
+            "owner_xid": None,
         }
         with self._sys_db.engine.begin() as conn:
             self._sys_db._insert_workflow_status(
-                status, conn, max_recovery_attempts=None
+                status,
+                conn,
+                max_recovery_attempts=None,
+                owner_xid=None,
+                is_dequeued_request=False,
+                is_recovery_request=False,
             )
         self._sys_db.send(status["workflow_uuid"], 0, destination_id, message, topic)
 

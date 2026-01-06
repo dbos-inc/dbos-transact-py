@@ -40,6 +40,7 @@ from ._core import (
     DEBOUNCER_WORKFLOW_NAME,
     DEFAULT_POLLING_INTERVAL,
     TEMP_SEND_WF_NAME,
+    ActiveWorkflowById,
     WorkflowHandleAsyncPolling,
     WorkflowHandlePolling,
     decorate_step,
@@ -344,7 +345,7 @@ class DBOS:
         self.enable_patching = config.get("enable_patching") == True
         self.conductor_websocket: Optional[ConductorWebsocket] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
-        self._active_workflows_set: set[str] = set()
+        self._active_workflows_set: ActiveWorkflowById = ActiveWorkflowById()
         serializer = config.get("serializer")
         self._serializer: Serializer = serializer if serializer else DefaultSerializer()
 
@@ -611,10 +612,10 @@ class DBOS:
             deadline = time.time() + workflow_completion_timeout_sec
             while time.time() < deadline:
                 time.sleep(1)
-                active_workflows = len(self._active_workflows_set)
+                active_workflows = len(self._active_workflows_set.activeList())
                 if active_workflows > 0:
                     dbos_logger.info(
-                        f"Attempting to shut down DBOS. {active_workflows} workflows remain active. IDs: {self._active_workflows_set}"
+                        f"Attempting to shut down DBOS. {active_workflows} workflows remain active. IDs: {self._active_workflows_set.activeList()}"
                     )
                 else:
                     break
@@ -784,7 +785,7 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
-        return start_workflow(_get_dbos_instance(), func, None, True, *args, **kwargs)
+        return start_workflow(_get_dbos_instance(), func, args, kwargs)
 
     @classmethod
     async def start_workflow_async(
@@ -795,9 +796,7 @@ class DBOS:
     ) -> WorkflowHandleAsync[R]:
         """Invoke a workflow function on the event loop, returning a handle to the ongoing execution."""
         await cls._configure_asyncio_thread_pool()
-        return await start_workflow_async(
-            _get_dbos_instance(), func, None, True, *args, **kwargs
-        )
+        return await start_workflow_async(_get_dbos_instance(), func, args, kwargs)
 
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
@@ -1018,7 +1017,7 @@ class DBOS:
     @classmethod
     def _execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Execute a workflow by ID (for recovery)."""
-        return execute_workflow_by_id(_get_dbos_instance(), workflow_id)
+        return execute_workflow_by_id(_get_dbos_instance(), workflow_id, True, False)
 
     @classmethod
     def _recover_pending_workflows(

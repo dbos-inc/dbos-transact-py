@@ -98,7 +98,9 @@ class Queue:
             raise Exception("Deduplication is not supported for partitioned queues")
 
         dbos = _get_dbos_instance()
-        return start_workflow(dbos, func, self.name, False, *args, **kwargs)
+        return start_workflow(
+            dbos, func, args, kwargs, queue_name=self.name, execute_workflow=False
+        )
 
     async def enqueue_async(
         self,
@@ -109,7 +111,9 @@ class Queue:
         from ._dbos import _get_dbos_instance
 
         dbos = _get_dbos_instance()
-        return await start_workflow_async(dbos, func, self.name, False, *args, **kwargs)
+        return await start_workflow_async(
+            dbos, func, args, kwargs, queue_name=self.name, execute_workflow=False
+        )
 
 
 def queue_worker_thread(
@@ -137,7 +141,7 @@ def queue_worker_thread(
                     )
                     for id in dequeued_workflows:
                         try:
-                            execute_workflow_by_id(dbos, id)
+                            execute_workflow_by_id(dbos, id, False, True)
                         except Exception as e:
                             dbos.logger.error(f"Error executing workflow {id}: {e}")
             else:
@@ -146,7 +150,7 @@ def queue_worker_thread(
                 )
                 for id in dequeued_workflows:
                     try:
-                        execute_workflow_by_id(dbos, id)
+                        execute_workflow_by_id(dbos, id, False, True)
                     except Exception as e:
                         dbos.logger.error(f"Error executing workflow {id}: {e}")
         except OperationalError as e:
