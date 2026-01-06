@@ -292,36 +292,6 @@ def test_process_config_sqlite():
     assert configFile["system_database_url"] == config["system_database_url"]
 
 
-def test_debug_override_database_url(mocker: pytest_mock.MockFixture):
-    mocker.patch.dict(
-        os.environ,
-        {
-            "DBOS_DBHOST": "fakehost",
-            "DBOS_DBPORT": "1234",
-            "DBOS_DBUSER": "fakeuser",
-            "DBOS_DBPASSWORD": "fakepassword",
-        },
-    )
-    config: ConfigFile = {
-        "name": "some-app",
-        "database_url": "postgres://user:password@localhost:7777/dbn?connect_timeout=1&sslmode=require&sslrootcert=ca.pem",
-    }
-    processed_config = process_config(data=config)
-    assert (
-        processed_config["database_url"]
-        == "postgres://fakeuser:fakepassword@fakehost:1234/dbn?connect_timeout=1&sslmode=require&sslrootcert=ca.pem"
-    )
-    assert processed_config["name"] == "some-app"
-    assert (
-        processed_config["system_database_url"]
-        == f"postgres://fakeuser:fakepassword@fakehost:1234/dbn{SystemSchema.sysdb_suffix}?connect_timeout=1&sslmode=require&sslrootcert=ca.pem"
-    )
-    assert processed_config["database"]["db_engine_kwargs"] is not None
-    assert processed_config["database"]["sys_db_engine_kwargs"] is not None
-    assert processed_config["runtimeConfig"]["run_admin_server"] == True
-    assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
-
-
 def test_process_config_load_defaults():
     config: ConfigFile = {
         "name": "some-app",

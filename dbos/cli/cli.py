@@ -12,7 +12,6 @@ import sqlalchemy as sa
 import typer
 
 from dbos._context import SetWorkflowID
-from dbos._debug import debug_workflow, parse_start_command
 from dbos.cli.migration import run_dbos_database_migrations
 
 from .._client import DBOSClient
@@ -366,22 +365,6 @@ def reset(
     except Exception as e:
         typer.echo(f"Error resetting system database: {str(e)}")
         return
-
-
-@app.command(help="Replay Debug a DBOS workflow")
-def debug(
-    workflow_id: Annotated[str, typer.Argument(help="Workflow ID to debug")],
-) -> None:
-    config = load_config(silent=True)
-    start = config["runtimeConfig"]["start"]
-    if not start:
-        typer.echo("No start commands found in 'dbos-config.yaml'")
-        raise typer.Exit(code=1)
-    if len(start) > 1:
-        typer.echo("Multiple start commands found in 'dbos-config.yaml'")
-        raise typer.Exit(code=1)
-    entrypoint = parse_start_command(start[0])
-    debug_workflow(workflow_id, entrypoint)
 
 
 @workflow.command(help="List workflows for your application")

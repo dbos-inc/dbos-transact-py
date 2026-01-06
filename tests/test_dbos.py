@@ -1312,35 +1312,6 @@ def test_debug_logging(
     assert result4 == result2
     caplog.clear()
 
-    # Debug mode run
-    DBOS.destroy()
-    DBOS(config=config)
-    logging.getLogger("dbos").propagate = True
-    caplog.set_level(logging.DEBUG, "dbos")
-    DBOS.launch(debug_mode=True)
-
-    with SetWorkflowID(dest_wfid):
-        dest_handle_2 = dbos.start_workflow(test_workflow_dest)
-
-    with SetWorkflowID(wfid):
-        result3 = test_workflow()
-
-    assert result3 == result1
-    assert (
-        "Replaying step" in caplog.text
-        and f"name: {step_function.__qualname__}" in caplog.text
-    )
-    assert (
-        "Replaying transaction" in caplog.text
-        and f"name: {transaction_function.__qualname__}" in caplog.text in caplog.text
-    )
-    assert "Replaying sleep" in caplog.text
-    assert "Replaying set_event" in caplog.text
-    assert "Replaying send" in caplog.text
-
-    result4 = dest_handle_2.get_result()
-    assert result4 == result2
-
     # Reset logging
     logging.getLogger("dbos").propagate = original_propagate
 

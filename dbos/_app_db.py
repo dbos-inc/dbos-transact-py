@@ -40,7 +40,6 @@ class ApplicationDatabase(ABC):
         engine_kwargs: Dict[str, Any],
         schema: Optional[str],
         serializer: Serializer,
-        debug_mode: bool = False,
     ) -> "ApplicationDatabase":
         """Factory method to create the appropriate ApplicationDatabase implementation based on URL."""
         if database_url.startswith("sqlite"):
@@ -49,7 +48,6 @@ class ApplicationDatabase(ABC):
                 engine_kwargs=engine_kwargs,
                 schema=schema,
                 serializer=serializer,
-                debug_mode=debug_mode,
             )
         else:
             # Default to PostgreSQL for postgresql://, postgres://, or other URLs
@@ -58,7 +56,6 @@ class ApplicationDatabase(ABC):
                 engine_kwargs=engine_kwargs,
                 schema=schema,
                 serializer=serializer,
-                debug_mode=debug_mode,
             )
 
     def __init__(
@@ -68,7 +65,6 @@ class ApplicationDatabase(ABC):
         engine_kwargs: Dict[str, Any],
         serializer: Serializer,
         schema: Optional[str],
-        debug_mode: bool = False,
     ):
         # Log application database connection information
         printable_url = sa.make_url(database_url).render_as_string(hide_password=True)
@@ -89,7 +85,6 @@ class ApplicationDatabase(ABC):
         self.engine = self._create_engine(database_url, engine_kwargs)
         self._engine_kwargs = engine_kwargs
         self.sessionmaker = sessionmaker(bind=self.engine)
-        self.debug_mode = debug_mode
         self.serializer = serializer
 
     @abstractmethod
@@ -131,8 +126,6 @@ class ApplicationDatabase(ABC):
             raise
 
     def record_transaction_error(self, output: TransactionResultInternal) -> None:
-        if self.debug_mode:
-            raise Exception("called record_transaction_error in debug mode")
         try:
             with self.engine.begin() as conn:
                 conn.execute(
@@ -231,11 +224,6 @@ class PostgresApplicationDatabase(ApplicationDatabase):
         )
 
     def run_migrations(self) -> None:
-        if self.debug_mode:
-            dbos_logger.warning(
-                "Application database migrations are skipped in debug mode."
-            )
-            return
         # Check if the database exists
         app_db_url = self.engine.url
         try:
@@ -319,12 +307,6 @@ class SQLiteApplicationDatabase(ApplicationDatabase):
         return sa.create_engine(database_url)
 
     def run_migrations(self) -> None:
-        if self.debug_mode:
-            dbos_logger.warning(
-                "Application database migrations are skipped in debug mode."
-            )
-            return
-
         with self.engine.begin() as conn:
             # Check if table exists
             result = conn.execute(
