@@ -369,7 +369,6 @@ class SystemDatabase(ABC):
         serializer: Serializer,
         executor_id: Optional[str],
         use_listen_notify: bool = True,
-        debug_mode: bool = False,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
         if system_database_url.startswith("sqlite"):
@@ -383,7 +382,6 @@ class SystemDatabase(ABC):
                 serializer=serializer,
                 executor_id=executor_id,
                 use_listen_notify=use_listen_notify,
-                debug_mode=debug_mode,
             )
         else:
             from ._sys_db_postgres import PostgresSystemDatabase
@@ -396,7 +394,6 @@ class SystemDatabase(ABC):
                 serializer=serializer,
                 executor_id=executor_id,
                 use_listen_notify=use_listen_notify,
-                debug_mode=debug_mode,
             )
 
     def __init__(
@@ -409,7 +406,6 @@ class SystemDatabase(ABC):
         serializer: Serializer,
         executor_id: Optional[str],
         use_listen_notify: bool = True,
-        debug_mode: bool = False,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
@@ -460,7 +456,6 @@ class SystemDatabase(ABC):
 
         # Now we can run background processes
         self._run_background_processes = True
-        self._debug_mode = debug_mode
 
     @abstractmethod
     def _create_engine(
@@ -496,8 +491,6 @@ class SystemDatabase(ABC):
         is_dequeued_request: Optional[bool],
     ) -> tuple[WorkflowStatuses, Optional[int], bool]:
         """Insert or update workflow status using PostgreSQL upsert operations."""
-        if self._debug_mode:
-            raise Exception("called insert_workflow_status in debug mode")
         wf_status: WorkflowStatuses = status["status"]
         workflow_deadline_epoch_ms: Optional[int] = status["workflow_deadline_epoch_ms"]
         force_execute = is_recovery_request or is_dequeued_request
@@ -652,8 +645,6 @@ class SystemDatabase(ABC):
         output: Optional[str] = None,
         error: Optional[str] = None,
     ) -> None:
-        if self._debug_mode:
-            raise Exception("called update_workflow_status in debug mode")
         with self.engine.begin() as c:
             c.execute(
                 sa.update(SystemSchema.workflow_status)
@@ -672,8 +663,6 @@ class SystemDatabase(ABC):
         self,
         workflow_id: str,
     ) -> None:
-        if self._debug_mode:
-            raise Exception("called cancel_workflow in debug mode")
         with self.engine.begin() as c:
             # Check the status of the workflow. If it is complete, do nothing.
             row = c.execute(
@@ -700,8 +689,6 @@ class SystemDatabase(ABC):
             )
 
     def resume_workflow(self, workflow_id: str) -> None:
-        if self._debug_mode:
-            raise Exception("called resume_workflow in debug mode")
         with self.engine.begin() as c:
             # Execute with snapshot isolation in case of concurrent calls on the same workflow
             if self.engine.dialect.name == "postgresql":
@@ -1224,8 +1211,6 @@ class SystemDatabase(ABC):
         completed_at_epoch_ms: int,
         conn: sa.Connection,
     ) -> None:
-        if self._debug_mode:
-            raise Exception("called record_operation_result in debug mode")
         error = result["error"]
         output = result["output"]
         assert error is None or output is None, "Only one of error or output can be set"
@@ -1332,9 +1317,6 @@ class SystemDatabase(ABC):
         functionID: int,
         functionName: str,
     ) -> None:
-        if self._debug_mode:
-            raise Exception("called record_child_workflow in debug mode")
-
         sql = sa.insert(SystemSchema.operation_outputs).values(
             workflow_uuid=parentUUID,
             function_id=functionID,
@@ -1453,11 +1435,6 @@ class SystemDatabase(ABC):
             recorded_output = self._check_operation_execution_txn(
                 workflow_uuid, function_id, function_name, conn=c
             )
-            if self._debug_mode and recorded_output is None:
-                raise Exception(
-                    "called send in debug mode without a previous execution"
-                )
-
             if recorded_output is not None:
                 dbos_logger.debug(
                     f"Replaying send, id: {function_id}, destination_uuid: {destination_uuid}, topic: {topic}"
@@ -1507,8 +1484,6 @@ class SystemDatabase(ABC):
         recorded_output = self.check_operation_execution(
             workflow_uuid, function_id, function_name
         )
-        if self._debug_mode and recorded_output is None:
-            raise Exception("called recv in debug mode without a previous execution")
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying recv, id: {function_id}, topic: {topic}")
             if recorded_output["output"] is not None:
@@ -1688,9 +1663,6 @@ class SystemDatabase(ABC):
             workflow_uuid, function_id, function_name
         )
         end_time: float
-        if self._debug_mode and recorded_output is None:
-            raise Exception("called sleep in debug mode without a previous execution")
-
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying sleep, id: {function_id}, seconds: {seconds}")
             assert recorded_output["output"] is not None, "no recorded end time"
@@ -1730,10 +1702,6 @@ class SystemDatabase(ABC):
             recorded_output = self._check_operation_execution_txn(
                 workflow_uuid, function_id, function_name, conn=c
             )
-            if self._debug_mode and recorded_output is None:
-                raise Exception(
-                    "called set_event in debug mode without a previous execution"
-                )
             if recorded_output is not None:
                 dbos_logger.debug(f"Replaying set_event, id: {function_id}, key: {key}")
                 return  # Already sent before
@@ -1854,10 +1822,6 @@ class SystemDatabase(ABC):
             recorded_output = self.check_operation_execution(
                 caller_ctx["workflow_uuid"], caller_ctx["function_id"], function_name
             )
-            if self._debug_mode and recorded_output is None:
-                raise Exception(
-                    "called get_event in debug mode without a previous execution"
-                )
             if recorded_output is not None:
                 dbos_logger.debug(
                     f"Replaying get_event, id: {caller_ctx['function_id']}, key: {key}"
@@ -1962,9 +1926,6 @@ class SystemDatabase(ABC):
         app_version: str,
         queue_partition_key: Optional[str],
     ) -> List[str]:
-        if self._debug_mode:
-            return []
-
         start_time_ms = int(time.time() * 1000)
         if queue.limiter is not None:
             limiter_period_ms = int(queue.limiter["period"] * 1000)
@@ -2138,9 +2099,6 @@ class SystemDatabase(ABC):
             return ret_ids
 
     def clear_queue_assignment(self, workflow_id: str) -> bool:
-        if self._debug_mode:
-            raise Exception("called clear_queue_assignment in debug mode")
-
         with self.engine.begin() as c:
             # Reset the status of the task to "ENQUEUED"
             res = c.execute(
@@ -2238,9 +2196,6 @@ class SystemDatabase(ABC):
         """
         Write a key-value pair to the stream at the first unused offset.
         """
-        if self._debug_mode:
-            raise Exception("called write_stream in debug mode")
-
         with self.engine.begin() as c:
             # Find the maximum offset for this workflow_uuid and key combination
             max_offset_result = c.execute(
@@ -2290,10 +2245,6 @@ class SystemDatabase(ABC):
             recorded_output = self._check_operation_execution_txn(
                 workflow_uuid, function_id, function_name, conn=c
             )
-            if self._debug_mode and recorded_output is None:
-                raise Exception(
-                    "called writeStream in debug mode without a previous execution"
-                )
             if recorded_output is not None:
                 dbos_logger.debug(
                     f"Replaying writeStream, id: {function_id}, key: {key}"

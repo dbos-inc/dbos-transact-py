@@ -256,13 +256,6 @@ def _init_workflow(
         else ctx.id_assigned_for_next_workflow
     )
 
-    # In debug mode, just return the existing status
-    if dbos.debug_mode:
-        get_status_result = dbos._sys_db.get_workflow_status(wfid)
-        if get_status_result is None:
-            raise DBOSNonExistentWorkflowError(wfid)
-        return get_status_result, False
-
     # If we have a class name, the first arg is the instance and do not serialize
     if class_name is not None:
         inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
@@ -380,7 +373,7 @@ def _get_wf_invoke_func(
     status: WorkflowStatusInternal,
 ) -> Callable[[Callable[[], R]], R]:
     def persist(func: Callable[[], R]) -> R:
-        if not dbos.debug_mode and (
+        if (
             status["status"] == WorkflowStatusString.ERROR.value
             or status["status"] == WorkflowStatusString.SUCCESS.value
         ):
@@ -394,7 +387,7 @@ def _get_wf_invoke_func(
             return recorded_result
         try:
             owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
-            if owned or dbos.debug_mode:
+            if owned:
                 if inspect.iscoroutinefunction(func):
                     output = dbos._background_event_loop.submit_coroutine(
                         cast(Coroutine[Any, Any, R], func())
@@ -408,12 +401,11 @@ def _get_wf_invoke_func(
                 )
                 return output
 
-            if not dbos.debug_mode:
-                dbos._sys_db.update_workflow_outcome(
-                    status["workflow_uuid"],
-                    "SUCCESS",
-                    output=dbos._serializer.serialize(output),
-                )
+            dbos._sys_db.update_workflow_outcome(
+                status["workflow_uuid"],
+                "SUCCESS",
+                output=dbos._serializer.serialize(output),
+            )
             return output
         except DBOSWorkflowConflictIDError:
             # Await the workflow result
@@ -424,12 +416,11 @@ def _get_wf_invoke_func(
         except DBOSWorkflowCancelledError as error:
             raise DBOSAwaitedWorkflowCancelledError(status["workflow_uuid"])
         except Exception as error:
-            if not dbos.debug_mode:
-                dbos._sys_db.update_workflow_outcome(
-                    status["workflow_uuid"],
-                    "ERROR",
-                    error=dbos._serializer.serialize(error),
-                )
+            dbos._sys_db.update_workflow_outcome(
+                status["workflow_uuid"],
+                "ERROR",
+                error=dbos._serializer.serialize(error),
+            )
             raise
         finally:
             if owned:
@@ -682,14 +673,9 @@ def start_workflow(
 
     if (
         not execute_workflow
-        or (not dbos.debug_mode and not should_execute)
-        or (
-            not dbos.debug_mode
-            and (
-                wf_status == WorkflowStatusString.ERROR.value
-                or wf_status == WorkflowStatusString.SUCCESS.value
-            )
-        )
+        or not should_execute
+        or wf_status == WorkflowStatusString.ERROR.value
+        or wf_status == WorkflowStatusString.SUCCESS.value
     ):
         return WorkflowHandlePolling(new_wf_id, dbos)
 
@@ -797,14 +783,9 @@ async def start_workflow_async(
 
     if (
         not execute_workflow
-        or (not dbos.debug_mode and not should_execute)
-        or (
-            not dbos.debug_mode
-            and (
-                wf_status == WorkflowStatusString.ERROR.value
-                or wf_status == WorkflowStatusString.SUCCESS.value
-            )
-        )
+        or not should_execute
+        or wf_status == WorkflowStatusString.ERROR.value
+        or wf_status == WorkflowStatusString.SUCCESS.value
     ):
         return WorkflowHandleAsyncPolling(new_wf_id, dbos)
 
@@ -1074,10 +1055,6 @@ def decorate_transaction(
                                         transaction_name,
                                     )
                                 )
-                                if dbos.debug_mode and recorded_output is None:
-                                    raise DBOSException(
-                                        "Transaction output not found in debug mode"
-                                    )
                                 if recorded_output:
                                     dbos.logger.debug(
                                         f"Replaying transaction, id: {ctx.function_id}, name: {attributes['name']}"
@@ -1287,8 +1264,6 @@ def decorate_step(
                 recorded_output = dbos._sys_db.check_operation_execution(
                     ctx.workflow_id, ctx.function_id, step_name
                 )
-                if dbos.debug_mode and recorded_output is None:
-                    raise DBOSException("Step output not found in debug mode")
                 if recorded_output:
                     dbos.logger.debug(
                         f"Replaying step, id: {ctx.function_id}, name: {attributes['name']}"

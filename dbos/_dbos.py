@@ -322,7 +322,6 @@ class DBOS:
         self._initialized: bool = True
 
         self._launched: bool = False
-        self._debug_mode: bool = False
         self._sys_db_field: Optional[SystemDatabase] = None
         self._app_db_field: Optional[ApplicationDatabase] = None
         self._registry: DBOSRegistry = _get_or_create_dbos_registry()
@@ -432,22 +431,17 @@ class DBOS:
         rv: AdminServer = self._admin_server_field
         return rv
 
-    @property
-    def debug_mode(self) -> bool:
-        return self._debug_mode
-
     @classmethod
-    def launch(cls, *, debug_mode: bool = False) -> None:
+    def launch(cls) -> None:
         if _dbos_global_instance is not None:
-            _dbos_global_instance._launch(debug_mode=debug_mode)
+            _dbos_global_instance._launch()
 
-    def _launch(self, *, debug_mode: bool = False) -> None:
+    def _launch(self) -> None:
         try:
             if self._launched:
                 dbos_logger.warning(f"DBOS was already launched")
                 return
             self._launched = True
-            self._debug_mode = debug_mode
             if GlobalParams.app_version == "":
                 GlobalParams.app_version = self._registry.compute_app_version()
             if self.conductor_key is not None:
@@ -464,7 +458,6 @@ class DBOS:
                 system_database_url=get_system_database_url(self._config),
                 engine_kwargs=self._config["database"]["sys_db_engine_kwargs"],
                 engine=self._config["system_database_engine"],
-                debug_mode=debug_mode,
                 schema=schema,
                 serializer=self._serializer,
                 use_listen_notify=self._config["use_listen_notify"],
@@ -476,13 +469,9 @@ class DBOS:
                 self._app_db_field = ApplicationDatabase.create(
                     database_url=self._config["database_url"],
                     engine_kwargs=self._config["database"]["db_engine_kwargs"],
-                    debug_mode=debug_mode,
                     schema=schema,
                     serializer=self._serializer,
                 )
-
-            if debug_mode:
-                return
 
             # Run migrations for the system and application databases
             dbos_logger.debug("Running system database migrations")

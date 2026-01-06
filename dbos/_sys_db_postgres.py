@@ -24,9 +24,6 @@ class PostgresSystemDatabase(SystemDatabase):
 
     def run_migrations(self) -> None:
         """Run PostgreSQL-specific migrations."""
-        if self._debug_mode:
-            dbos_logger.warning("System database migrations are skipped in debug mode.")
-            return
         system_db_url = self.engine.url
         sysdb_name = system_db_url.database
         # Unless we were provided an engine, if the system database does not already exist, create it

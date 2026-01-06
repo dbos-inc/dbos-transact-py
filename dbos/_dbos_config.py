@@ -289,8 +289,6 @@ def process_config(
 
     Also build SQL Alchemy "kwargs" base on user input + defaults.
     Specifically, db_engine_kwargs takes precedence over app_db_pool_size
-
-    In debug mode, apply overrides from DBOS_DBHOST, DBOS_DBPORT, DBOS_DBUSER, and DBOS_DBPASSWORD.
     """
 
     if "name" not in data:
@@ -318,8 +316,6 @@ def process_config(
     elif "run_admin_server" not in data["runtimeConfig"]:
         data["runtimeConfig"]["run_admin_server"] = True
 
-    isDebugMode = os.getenv("DBOS_DBHOST") is not None
-
     # Ensure database dict exists
     data.setdefault("database", {})
     connect_timeout = None
@@ -340,22 +336,6 @@ def process_config(
             ), "connect_timeout must be a string and defined once in the URL"
             if connect_timeout_str.isdigit():
                 connect_timeout = int(connect_timeout_str)
-
-        # In debug mode perform env vars overrides
-        if isDebugMode:
-            # Override the username, password, host, and port
-            port_str = os.getenv("DBOS_DBPORT")
-            port = (
-                int(port_str)
-                if port_str is not None and port_str.isdigit()
-                else url.port
-            )
-            data["database_url"] = url.set(
-                username=os.getenv("DBOS_DBUSER", url.username),
-                password=os.getenv("DBOS_DBPASSWORD", url.password),
-                host=os.getenv("DBOS_DBHOST", url.host),
-                port=port,
-            ).render_as_string(hide_password=False)
 
     if (
         data.get("system_database_engine")
@@ -387,22 +367,6 @@ def process_config(
             ), "connect_timeout must be a string and defined once in the URL"
             if connect_timeout_str.isdigit():
                 connect_timeout = int(connect_timeout_str)
-
-        # In debug mode perform env vars overrides
-        if isDebugMode:
-            # Override the username, password, host, and port
-            port_str = os.getenv("DBOS_DBPORT")
-            port = (
-                int(port_str)
-                if port_str is not None and port_str.isdigit()
-                else url.port
-            )
-            data["system_database_url"] = url.set(
-                username=os.getenv("DBOS_DBUSER", url.username),
-                password=os.getenv("DBOS_DBPASSWORD", url.password),
-                host=os.getenv("DBOS_DBHOST", url.host),
-                port=port,
-            ).render_as_string(hide_password=False)
 
     # If an application database URL is provided but not the system database URL,
     # construct the system database URL.

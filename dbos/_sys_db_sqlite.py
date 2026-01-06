@@ -22,10 +22,6 @@ class SQLiteSystemDatabase(SystemDatabase):
 
     def run_migrations(self) -> None:
         """Run SQLite-specific migrations."""
-        if self._debug_mode:
-            dbos_logger.warning("System database migrations are skipped in debug mode.")
-            return
-
         with self.engine.begin() as conn:
             # Enable foreign keys for SQLite
             conn.execute(sa.text("PRAGMA foreign_keys = ON"))
