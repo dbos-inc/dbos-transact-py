@@ -5,6 +5,7 @@ import json
 import sys
 import threading
 import time
+import uuid
 from concurrent.futures import Future
 from functools import wraps
 from typing import (
@@ -13,6 +14,7 @@ from typing import (
     Callable,
     Coroutine,
     Generic,
+    List,
     Optional,
     ParamSpec,
     TypeVar,
@@ -245,7 +247,9 @@ def _init_workflow(
     workflow_deadline_epoch_ms: Optional[int],
     max_recovery_attempts: Optional[int],
     enqueue_options: Optional[EnqueueOptionsInternal],
-) -> WorkflowStatusInternal:
+    is_recovery_request: Optional[bool],
+    is_dequeued_request: Optional[bool],
+) -> tuple[WorkflowStatusInternal, bool]:
     wfid = (
         ctx.workflow_id
         if len(ctx.workflow_id) > 0
@@ -307,13 +311,19 @@ def _init_workflow(
             else None
         ),
         "forked_from": None,
+        "owner_xid": None,
     }
 
     # Synchronously record the status and inputs for workflows
     try:
-        wf_status, workflow_deadline_epoch_ms = dbos._sys_db.init_workflow(
-            status,
-            max_recovery_attempts=max_recovery_attempts,
+        wf_status, workflow_deadline_epoch_ms, should_execute = (
+            dbos._sys_db.init_workflow(
+                status,
+                max_recovery_attempts=max_recovery_attempts,
+                is_dequeued_request=is_dequeued_request,
+                is_recovery_request=is_recovery_request,
+                owner_xid=str(uuid.uuid4()),
+            )
         )
     except DBOSQueueDeduplicatedError as e:
         if ctx.has_parent():
@@ -328,7 +338,7 @@ def _init_workflow(
             dbos._sys_db.record_operation_result(result)
         raise
 
-    if workflow_deadline_epoch_ms is not None:
+    if should_execute and workflow_deadline_epoch_ms is not None:
         evt = threading.Event()
         dbos.background_thread_stop_events.append(evt)
 
@@ -355,7 +365,7 @@ def _init_workflow(
     ctx.workflow_deadline_epoch_ms = workflow_deadline_epoch_ms
     status["workflow_deadline_epoch_ms"] = workflow_deadline_epoch_ms
     status["status"] = wf_status
-    return status
+    return status, should_execute
 
 
 def _get_wf_invoke_func(
@@ -376,8 +386,21 @@ def _get_wf_invoke_func(
             )
             return recorded_result
         try:
-            dbos._active_workflows_set.add(status["workflow_uuid"])
-            output = func()
+            owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
+            if owned:
+                if inspect.iscoroutinefunction(func):
+                    output = dbos._background_event_loop.submit_coroutine(
+                        cast(Coroutine[Any, Any, R], func())
+                    )
+                else:
+                    output = func()
+            else:
+                # Await the workflow result
+                output = dbos._sys_db.await_workflow_result(
+                    status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL
+                )
+                return output
+
             dbos._sys_db.update_workflow_outcome(
                 status["workflow_uuid"],
                 "SUCCESS",
@@ -400,9 +423,40 @@ def _get_wf_invoke_func(
             )
             raise
         finally:
-            dbos._active_workflows_set.discard(status["workflow_uuid"])
+            if owned:
+                dbos._active_workflows_set.release(status["workflow_uuid"])
 
     return persist
+
+
+class ActiveWorkflowById:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._m: dict[str, bool] = {}
+
+    def acquire(self, key: str) -> bool:
+        """
+        Returns is_owner
+        """
+        with self._lock:
+            entry = self._m.get(key)
+            if entry is None:
+                self._m[key] = True
+                return True
+            return False
+
+    def release(
+        self,
+        key: str,
+    ) -> None:
+        """
+        Removes the key when work done
+        """
+        with self._lock:
+            del self._m[key]
+
+    def activeList(self) -> List[str]:
+        return list(self._m.keys())
 
 
 def _execute_workflow_wthread(
@@ -410,8 +464,8 @@ def _execute_workflow_wthread(
     status: WorkflowStatusInternal,
     func: "Callable[P, R]",
     ctx: DBOSContext,
-    *args: Any,
-    **kwargs: Any,
+    args: tuple[Any],
+    kwargs: dict[str, Any],
 ) -> R:
     attributes: TracedAttributes = {
         "name": get_dbos_func_name(func),
@@ -420,17 +474,9 @@ def _execute_workflow_wthread(
     with DBOSContextSwap(ctx):
         with EnterDBOSWorkflow(attributes):
             try:
-                result = (
-                    Outcome[R]
-                    .make(functools.partial(func, *args, **kwargs))
-                    .then(_get_wf_invoke_func(dbos, status))
+                return _get_wf_invoke_func(dbos, status)(
+                    functools.partial(func, *args, **kwargs)
                 )
-                if isinstance(result, Immediate):
-                    return cast(Immediate[R], result)()
-                else:
-                    return dbos._background_event_loop.submit_coroutine(
-                        cast(Pending[R], result)()
-                    )
             except Exception as e:
                 dbos.logger.error(
                     f"Exception encountered in asynchronous workflow:", exc_info=e
@@ -443,8 +489,8 @@ async def _execute_workflow_async(
     status: WorkflowStatusInternal,
     func: "Callable[P, Coroutine[Any, Any, R]]",
     ctx: DBOSContext,
-    *args: Any,
-    **kwargs: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
 ) -> R:
     attributes: TracedAttributes = {
         "name": get_dbos_func_name(func),
@@ -464,7 +510,9 @@ async def _execute_workflow_async(
                 raise
 
 
-def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]":
+def execute_workflow_by_id(
+    dbos: "DBOS", workflow_id: str, is_recovery: bool, is_dequeue: bool
+) -> "WorkflowHandle[Any]":
     status = dbos._sys_db.get_workflow_status(workflow_id)
     if not status:
         raise DBOSRecoveryError(workflow_id, "Workflow status not found")
@@ -503,10 +551,12 @@ def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[An
             return start_workflow(
                 dbos,
                 wf_func,
-                status["queue_name"],
-                True,
-                *inputs["args"],
-                **inputs["kwargs"],
+                inputs["args"],
+                inputs["kwargs"],
+                queue_name=status["queue_name"],
+                execute_workflow=True,
+                is_recovery=is_recovery,
+                is_dequeued=is_dequeue,
             )
 
 
@@ -538,10 +588,12 @@ def _get_new_wf() -> tuple[str, DBOSContext]:
 def start_workflow(
     dbos: "DBOS",
     func: "Callable[P, Union[R, Coroutine[Any, Any, R]]]",
-    queue_name: Optional[str],
-    execute_workflow: bool,
-    *args: P.args,
-    **kwargs: P.kwargs,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    queue_name: Optional[str] = None,
+    execute_workflow: bool = True,
+    is_recovery: bool = False,
+    is_dequeued: bool = False,
 ) -> "WorkflowHandle[R]":
 
     # If the function has a class, add the class object as its first argument
@@ -549,7 +601,7 @@ def start_workflow(
     if hasattr(func, "__self__"):
         fself = func.__self__
     if fself is not None:
-        args = (fself,) + args  # type: ignore
+        args = (fself,) + args
 
     fi = get_func_info(func)
     if fi is None:
@@ -594,7 +646,7 @@ def start_workflow(
         elif recorded_result and recorded_result["child_workflow_id"]:
             return WorkflowHandlePolling(recorded_result["child_workflow_id"], dbos)
 
-    status = _init_workflow(
+    status, should_execute = _init_workflow(
         dbos,
         new_wf_ctx,
         inputs=inputs,
@@ -606,6 +658,8 @@ def start_workflow(
         workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
         max_recovery_attempts=fi.max_recovery_attempts,
         enqueue_options=enqueue_options,
+        is_recovery_request=is_recovery,
+        is_dequeued_request=is_dequeued,
     )
 
     wf_status = status["status"]
@@ -617,8 +671,10 @@ def start_workflow(
             get_dbos_func_name(func),
         )
 
-    if not execute_workflow or (
-        wf_status == WorkflowStatusString.ERROR.value
+    if (
+        not execute_workflow
+        or not should_execute
+        or wf_status == WorkflowStatusString.ERROR.value
         or wf_status == WorkflowStatusString.SUCCESS.value
     ):
         return WorkflowHandlePolling(new_wf_id, dbos)
@@ -629,8 +685,8 @@ def start_workflow(
         status,
         func,
         new_wf_ctx,
-        *args,
-        **kwargs,
+        args,
+        kwargs,
     )
     return WorkflowHandleFuture(new_wf_id, future, dbos)
 
@@ -638,17 +694,19 @@ def start_workflow(
 async def start_workflow_async(
     dbos: "DBOS",
     func: "Callable[P, Coroutine[Any, Any, R]]",
-    queue_name: Optional[str],
-    execute_workflow: bool,
-    *args: P.args,
-    **kwargs: P.kwargs,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    queue_name: Optional[str] = None,
+    execute_workflow: bool = True,
+    is_recovery_request: bool = False,
+    is_dequeued_request: bool = False,
 ) -> "WorkflowHandleAsync[R]":
     # If the function has a class, add the class object as its first argument
     fself: Optional[object] = None
     if hasattr(func, "__self__"):
         fself = func.__self__
     if fself is not None:
-        args = (fself,) + args  # type: ignore
+        args = (fself,) + args
 
     fi = get_func_info(func)
     if fi is None:
@@ -695,7 +753,7 @@ async def start_workflow_async(
                 recorded_result["child_workflow_id"], dbos
             )
 
-    status = await asyncio.to_thread(
+    status, should_execute = await asyncio.to_thread(
         _init_workflow,
         dbos,
         new_wf_ctx,
@@ -708,6 +766,8 @@ async def start_workflow_async(
         workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
         max_recovery_attempts=fi.max_recovery_attempts,
         enqueue_options=enqueue_options,
+        is_recovery_request=is_recovery_request,
+        is_dequeued_request=is_dequeued_request,
     )
 
     if ctx.has_parent():
@@ -721,13 +781,15 @@ async def start_workflow_async(
 
     wf_status = status["status"]
 
-    if not execute_workflow or (
-        wf_status == WorkflowStatusString.ERROR.value
+    if (
+        not execute_workflow
+        or not should_execute
+        or wf_status == WorkflowStatusString.ERROR.value
         or wf_status == WorkflowStatusString.SUCCESS.value
     ):
         return WorkflowHandleAsyncPolling(new_wf_id, dbos)
 
-    coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, *args, **kwargs)
+    coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, args, kwargs)
     # Shield the workflow task from cancellation
     task = asyncio.shield(asyncio.create_task(coro))
     return WorkflowHandleAsyncTask(new_wf_id, task, dbos)
@@ -820,7 +882,7 @@ def workflow_wrapper(
                 elif r and r["child_workflow_id"]:
                     return recorded_result(r["child_workflow_id"], dbos)
 
-            status = _init_workflow(
+            status, should_execute = _init_workflow(
                 dbos,
                 ctx,
                 inputs=inputs,
@@ -832,7 +894,18 @@ def workflow_wrapper(
                 workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
                 max_recovery_attempts=max_recovery_attempts,
                 enqueue_options=None,
+                is_recovery_request=False,
+                is_dequeued_request=False,
             )
+
+            def get_recorded_result(_func: Callable[[], R]) -> R:
+                return cast(
+                    R,
+                    dbos._sys_db.await_workflow_result(
+                        status["workflow_uuid"],
+                        polling_interval=DEFAULT_POLLING_INTERVAL,
+                    ),
+                )
 
             # TODO: maybe modify the parameters if they've been changed by `_init_workflow`
             dbos.logger.debug(
@@ -847,7 +920,13 @@ def workflow_wrapper(
                     get_dbos_func_name(func),
                 )
 
-            return _get_wf_invoke_func(dbos, status)
+            if should_execute:
+                return _get_wf_invoke_func(dbos, status)
+            else:
+                dbos.logger.debug(
+                    f"Workflow {status['workflow_uuid']} already run with status {status['status']}"
+                )
+                return get_recorded_result
 
         def record_get_result(func: Callable[[], R]) -> R:
             """

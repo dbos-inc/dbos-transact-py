@@ -30,7 +30,6 @@ def test_debouncer(dbos: DBOS) -> None:
         return str(uuid.uuid4())
 
     def debouncer_test() -> None:
-
         debounce_period = 2
 
         debouncer = Debouncer.create(workflow)
@@ -66,10 +65,9 @@ def test_debouncer(dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         debouncer_test_workflow()
 
-    # Rerun the workflow, verify it still works
+    # Rerun the workflow, verify it looks up by name and still works
     dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
-    with SetWorkflowID(wfid):
-        debouncer_test_workflow()
+    dbos._execute_workflow_id(wfid).get_result()
 
 
 def test_debouncer_timeout(dbos: DBOS) -> None:

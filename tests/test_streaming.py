@@ -263,8 +263,7 @@ def test_stream_workflow_recovery(dbos: DBOS) -> None:
 
     # Reset call count and run the same workflow ID again (should replay)
     dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
-    with SetWorkflowID(wfid):
-        recovery_test_workflow()
+    dbos._execute_workflow_id(wfid).get_result()
 
     # The workflow should have been called again
     assert workflow_call_count == 2

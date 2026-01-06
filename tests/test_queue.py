@@ -26,7 +26,11 @@ from dbos import (
 )
 from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandleAsync
-from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSQueueDeduplicatedError
+from dbos._error import (
+    DBOSAwaitedWorkflowCancelledError,
+    DBOSQueueDeduplicatedError,
+    MaxRecoveryAttemptsExceededError,
+)
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
@@ -677,18 +681,19 @@ def test_duplicate_workflow_id(dbos: DBOS) -> None:
 
 def test_queue_recovery(dbos: DBOS) -> None:
     step_counter: int = 0
+    step_enqueued: int = 0
     queued_steps = 5
 
     wfid = str(uuid.uuid4())
     queue = Queue("test_queue")
-    step_events = [threading.Event() for _ in range(queued_steps)]
-    event = threading.Event()
 
     @DBOS.workflow()
     def test_workflow() -> list[int]:
+        nonlocal step_enqueued
         assert DBOS.workflow_id == wfid
         handles = []
         for i in range(queued_steps):
+            step_enqueued += 1
             h = queue.enqueue(test_step, i)
             handles.append(h)
         return [h.get_result() for h in handles]
@@ -697,40 +702,35 @@ def test_queue_recovery(dbos: DBOS) -> None:
     def test_step(i: int) -> int:
         nonlocal step_counter
         step_counter += 1
-        step_events[i].set()
-        event.wait()
         return i
 
     # Start the workflow. Wait for all five steps to start. Verify that they started.
     with SetWorkflowID(wfid):
         original_handle = DBOS.start_workflow(test_workflow)
-    for e in step_events:
-        e.wait()
-        e.clear()
+    original_handle.get_result()
 
     assert step_counter == 5
 
     # Recover the workflow, then resume it.
+    for h in DBOS.list_workflows(workflow_id_prefix=wfid):
+        dbos._sys_db.update_workflow_outcome(h.workflow_id, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
-    # Wait until the 2nd invocation of the workflows are dequeued and executed
-    for e in step_events:
-        e.wait()
-    event.set()
-
     # There should be one handle for the workflow and another for each queued step.
     assert len(recovery_handles) == queued_steps + 1
     # Verify that both the recovered and original workflows complete correctly.
-    for h in recovery_handles:
-        if h.get_workflow_id() == wfid:
-            assert h.get_result() == [0, 1, 2, 3, 4]
+    for rh in recovery_handles:
+        if rh.get_workflow_id() == wfid:
+            assert rh.get_result() == [0, 1, 2, 3, 4]
     assert original_handle.get_result() == [0, 1, 2, 3, 4]
     # Each step should start twice, once originally and once in recovery.
-    assert step_counter == 10
+    assert step_counter == 5
+    assert step_enqueued == 10
 
     # Rerun the workflow. Because each step is complete, none should start again.
     with SetWorkflowID(wfid):
         assert test_workflow() == [0, 1, 2, 3, 4]
-    assert step_counter == 10
+    assert step_counter == 5
+    assert step_enqueued == 10
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
@@ -797,11 +797,8 @@ def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
             handle1.get_workflow_id(),
             handle2.get_workflow_id(),
         ]
-    for e in wf_events:
-        e.wait()
-    assert counter == 4
-    assert handle1.get_status().status == WorkflowStatusString.PENDING.value
-    assert handle2.get_status().status == WorkflowStatusString.PENDING.value
+    assert counter == 2  # These will not run, they are already running
+
     # Because tasks are re-enqueued in order, the 3rd task is head of line blocked
     assert handle3.get_status().status == WorkflowStatusString.ENQUEUED.value
 
@@ -1074,48 +1071,41 @@ def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
     start_event.wait()
     assert blocked_handle.get_status().status == WorkflowStatusString.PENDING.value
     assert regular_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
+    blocking_event.set()
+    assert blocked_handle.get_result() == None
 
     # Attempt to recover the blocked workflow the maximum number of times
     for i in range(max_recovery_attempts):
         start_event.clear()
-        DBOS._recover_pending_workflows()
+        dbos._sys_db.update_workflow_outcome(blocked_handle.workflow_id, "PENDING")
+        rh = DBOS._recover_pending_workflows()
         start_event.wait()
         assert recovery_count == i + 2
+        recovery_attempts = blocked_handle.get_status().recovery_attempts
+        assert recovery_attempts == i + 2
+        rh[0].get_result()
 
     # Verify an additional recovery throws puts the workflow in the DLQ status.
+    dbos._sys_db.update_workflow_outcome(blocked_handle.workflow_id, "PENDING")
     DBOS._recover_pending_workflows()
-    # we can't start_event.wait() here because the workflow will never execute
     time.sleep(2)
+
+    with dbos._sys_db.engine.begin() as c:
+        query = sa.select(SystemSchema.workflow_status.c.recovery_attempts).where(
+            SystemSchema.workflow_status.c.workflow_uuid
+            == blocked_handle.get_workflow_id()
+        )
+        result = c.execute(query)
+        row = result.fetchone()
+        assert row is not None
+        assert row[0] == max_recovery_attempts + 2
     assert (
         blocked_handle.get_status().status
         == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
     )
-    with dbos._sys_db.engine.begin() as c:
-        query = sa.select(SystemSchema.workflow_status.c.recovery_attempts).where(
-            SystemSchema.workflow_status.c.workflow_uuid
-            == blocked_handle.get_workflow_id()
-        )
-        result = c.execute(query)
-        row = result.fetchone()
-        assert row is not None
-        assert row[0] == max_recovery_attempts + 2
 
     # Verify the blocked workflow entering the DLQ lets the regular workflow run
     assert regular_handle.get_result() == None
-
-    # Complete the blocked workflow
-    blocking_event.set()
-    assert blocked_handle.get_result() == None
-    assert blocked_handle.get_status().status == WorkflowStatusString.SUCCESS.value
-    with dbos._sys_db.engine.begin() as c:
-        query = sa.select(SystemSchema.workflow_status.c.recovery_attempts).where(
-            SystemSchema.workflow_status.c.workflow_uuid
-            == blocked_handle.get_workflow_id()
-        )
-        result = c.execute(query)
-        row = result.fetchone()
-        assert row is not None
-        assert row[0] == max_recovery_attempts + 2
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
@@ -1247,8 +1237,7 @@ def test_queue_deduplication_recovery(dbos: DBOS) -> None:
     assert isinstance(steps[1]["error"], DBOSQueueDeduplicatedError)
 
     dbos._sys_db.update_workflow_outcome(parent_id, "PENDING")
-    with SetWorkflowID(parent_id):
-        assert test_workflow() == child_id
+    assert dbos._execute_workflow_id(parent_id).get_result() == child_id
 
     assert queue_entries_are_cleaned_up(dbos)
 
@@ -1476,12 +1465,13 @@ def test_timeout_queue_recovery(dbos: DBOS) -> None:
         original_status.workflow_deadline_epoch_ms is not None
         and original_status.workflow_deadline_epoch_ms > enqueue_time * 1000
     )
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        original_handle.get_result()
 
     # Recover the workflow. Verify its deadline remains the same
-    evt.clear()
+    dbos._sys_db.update_workflow_outcome(original_handle.workflow_id, "PENDING")
     handles = DBOS._recover_pending_workflows()
     assert len(handles) == 1
-    evt.wait()
     recovered_handle = handles[0]
     recovered_status = recovered_handle.get_status()
     assert recovered_status.workflow_timeout_ms == timeout * 1000
@@ -1489,9 +1479,6 @@ def test_timeout_queue_recovery(dbos: DBOS) -> None:
         recovered_status.workflow_deadline_epoch_ms
         == original_status.workflow_deadline_epoch_ms
     )
-
-    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
-        original_handle.get_result()
 
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         recovered_handle.get_result()
