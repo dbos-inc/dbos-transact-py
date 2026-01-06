@@ -16,7 +16,6 @@ from typing import (
 
 import sqlalchemy as sa
 
-from dbos._app_db import ApplicationDatabase
 from dbos._context import MaxPriority, MinPriority
 from dbos._core import DEFAULT_POLLING_INTERVAL
 from dbos._sys_db import SystemDatabase
@@ -126,8 +125,6 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
 
 class DBOSClient:
 
-    _app_db: ApplicationDatabase | None = None
-
     def __init__(
         self,
         database_url: Optional[str] = None,  # DEPRECATED
@@ -139,18 +136,22 @@ class DBOSClient:
         serializer: Serializer = DefaultSerializer(),
     ):
         self._serializer = serializer
-        application_database_url = (
-            database_url if database_url else application_database_url
-        )
-        system_database_url = get_system_database_url(
-            {
-                "system_database_url": system_database_url,
-                "database_url": application_database_url,
-            }
-        )
-        assert is_valid_database_url(system_database_url)
-        if application_database_url:
-            assert is_valid_database_url(application_database_url)
+        if system_database_engine:
+            if "sqlite" in system_database_engine.dialect.name:
+                system_database_url = "sqlite:///custom_system_database_engine.sqlite"
+            else:
+                system_database_url = "postgresql://custom:system@database/engine"
+        else:
+            application_database_url = (
+                database_url if database_url else application_database_url
+            )
+            system_database_url = get_system_database_url(
+                {
+                    "system_database_url": system_database_url,
+                    "database_url": application_database_url,
+                }
+            )
+            assert is_valid_database_url(system_database_url)
         # We only create database connections but do not run migrations
         self._sys_db = SystemDatabase.create(
             system_database_url=system_database_url,
@@ -167,19 +168,6 @@ class DBOSClient:
             executor_id=None,
         )
         self._sys_db.check_connection()
-        if application_database_url:
-            self._app_db = ApplicationDatabase.create(
-                database_url=application_database_url,
-                engine_kwargs={
-                    "connect_args": {"application_name": "dbos_transact_client"},
-                    "pool_timeout": 30,
-                    "max_overflow": 0,
-                    "pool_size": 2,
-                    "pool_pre_ping": True,
-                },
-                schema=dbos_system_schema,
-                serializer=serializer,
-            )
 
     def destroy(self) -> None:
         self._sys_db.destroy()
