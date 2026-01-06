@@ -305,3 +305,20 @@ def test_commit_hiccup(dbos: DBOS) -> None:
         ),
     )
     assert TryDbGlitch.testWorkflow() == "Yay!"
+
+
+def test_status_wf(dbos: DBOS) -> None:
+    """Test use of name `status`."""
+
+    @DBOS.step()
+    def stepf(s: str) -> None:
+        print(s)
+
+    @DBOS.workflow()
+    def status_workflow(status: str = "None") -> None:
+        stepf(status)
+
+    status_workflow()
+    status_workflow(status="Starting")
+    DBOS.start_workflow(status_workflow).get_result()
+    DBOS.start_workflow(status_workflow, status="Ending").get_result()
