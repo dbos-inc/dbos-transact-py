@@ -1,4 +1,5 @@
 import base64
+import gzip
 import pickle
 import socket
 import threading
@@ -442,7 +443,7 @@ class ConductorWebsocket(threading.Thread):
                                     export_message.workflow_id
                                 )
                                 serialized_workflow = base64.b64encode(
-                                    pickle.dumps(exported)
+                                    gzip.compress(pickle.dumps(exported))
                                 ).decode("utf-8")
                             except Exception:
                                 error_message = f"Exception encountered when exporting workflow {export_message.workflow_id}: {traceback.format_exc()}"
@@ -460,7 +461,11 @@ class ConductorWebsocket(threading.Thread):
                             success = True
                             try:
                                 workflow = pickle.loads(
-                                    base64.b64decode(import_message.serialized_workflow)
+                                    gzip.decompress(
+                                        base64.b64decode(
+                                            import_message.serialized_workflow
+                                        )
+                                    )
                                 )
                                 self.dbos._sys_db.import_workflow(workflow)
                             except Exception:
