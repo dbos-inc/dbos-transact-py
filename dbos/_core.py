@@ -473,8 +473,8 @@ def _execute_workflow_wthread(
     status: WorkflowStatusInternal,
     func: "Callable[P, R]",
     ctx: DBOSContext,
-    *args: Any,
-    **kwargs: Any,
+    args: tuple[Any],
+    kwargs: dict[str, Any],
 ) -> R:
     attributes: TracedAttributes = {
         "name": get_dbos_func_name(func),
@@ -498,8 +498,8 @@ async def _execute_workflow_async(
     status: WorkflowStatusInternal,
     func: "Callable[P, Coroutine[Any, Any, R]]",
     ctx: DBOSContext,
-    *args: Any,
-    **kwargs: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
 ) -> R:
     attributes: TracedAttributes = {
         "name": get_dbos_func_name(func),
@@ -699,8 +699,8 @@ def start_workflow(
         status,
         func,
         new_wf_ctx,
-        *args,
-        **kwargs,
+        args,
+        kwargs,
     )
     return WorkflowHandleFuture(new_wf_id, future, dbos)
 
@@ -808,7 +808,7 @@ async def start_workflow_async(
     ):
         return WorkflowHandleAsyncPolling(new_wf_id, dbos)
 
-    coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, *args, **kwargs)
+    coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, args, kwargs)
     # Shield the workflow task from cancellation
     task = asyncio.shield(asyncio.create_task(coro))
     return WorkflowHandleAsyncTask(new_wf_id, task, dbos)
