@@ -51,4 +51,9 @@ def test_workflow_export(dbos: DBOS, config: DBOSConfig) -> None:
     for imported_step, original_step in zip(imported_steps, original_steps):
         assert imported_step == original_step
 
+    # The imported workflow can be forked
+    forked_workflow = DBOS.fork_workflow(workflow_id, len(imported_steps))
+    assert forked_workflow.get_result() == forked_workflow.workflow_id
+    assert DBOS.get_event(forked_workflow.workflow_id, key) == value
+
     DBOS.destroy(destroy_registry=True)
