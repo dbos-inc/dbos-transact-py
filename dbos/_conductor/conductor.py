@@ -94,6 +94,7 @@ class ConductorWebsocket(threading.Thread):
                     open_timeout=5,
                     close_timeout=5,
                     logger=self.dbos.logger,
+                    max_size=None,
                 ) as websocket:
                     self.websocket = websocket
                     if use_keepalive and self.keepalive_thread is None:
