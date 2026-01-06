@@ -1,3 +1,5 @@
+import base64
+import pickle
 import socket
 import threading
 import time
@@ -432,6 +434,47 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(get_metrics_response.to_json())
+                        elif msg_type == p.MessageType.EXPORT_WORKFLOW:
+                            export_message = p.ExportWorkflowRequest.from_json(message)
+                            serialized_workflow = None
+                            try:
+                                exported = self.dbos._sys_db.export_workflow(
+                                    export_message.workflow_id
+                                )
+                                serialized_workflow = base64.b64encode(
+                                    pickle.dumps(exported)
+                                ).decode("utf-8")
+                            except Exception:
+                                error_message = f"Exception encountered when exporting workflow {export_message.workflow_id}: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+
+                            export_response = p.ExportWorkflowResponse(
+                                type=p.MessageType.EXPORT_WORKFLOW,
+                                request_id=base_message.request_id,
+                                serialized_workflow=serialized_workflow,
+                                error_message=error_message,
+                            )
+                            websocket.send(export_response.to_json())
+                        elif msg_type == p.MessageType.IMPORT_WORKFLOW:
+                            import_message = p.ImportWorkflowRequest.from_json(message)
+                            success = True
+                            try:
+                                workflow = pickle.loads(
+                                    base64.b64decode(import_message.serialized_workflow)
+                                )
+                                self.dbos._sys_db.import_workflow(workflow)
+                            except Exception:
+                                error_message = f"Exception encountered when importing workflow: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                                success = False
+
+                            import_response = p.ImportWorkflowResponse(
+                                type=p.MessageType.IMPORT_WORKFLOW,
+                                request_id=base_message.request_id,
+                                success=success,
+                                error_message=error_message,
+                            )
+                            websocket.send(import_response.to_json())
                         else:
                             self.dbos.logger.warning(
                                 f"Unexpected message type: {msg_type}"
