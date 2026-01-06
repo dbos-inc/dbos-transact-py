@@ -201,6 +201,14 @@ class GetEventWorkflowContext(TypedDict):
     timeout_function_id: int
 
 
+class ExportedWorkflow(TypedDict):
+    workflow_status: dict[str, Any]
+    operation_outputs: list[dict[str, Any]]
+    workflow_events: list[dict[str, Any]]
+    workflow_events_history: list[dict[str, Any]]
+    streams: list[dict[str, Any]]
+
+
 class GetWorkflowsInput:
     """
     Structure for argument to `get_workflows` function.
@@ -2427,3 +2435,9 @@ class SystemDatabase(ABC):
                 )
             ).scalar()
             return checkpoint_name == patch_name
+
+    def export_workflow(self, workflow_id: str) -> ExportedWorkflow:
+        pass
+
+    def import_workflow(self, workflow: ExportedWorkflow) -> None:
+        pass
