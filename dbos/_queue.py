@@ -99,7 +99,7 @@ class Queue:
 
         dbos = _get_dbos_instance()
         return start_workflow(
-            dbos, func, self.name, False, False, False, *args, **kwargs
+            dbos, func, args, kwargs, queue_name=self.name, execute_workflow=False
         )
 
     async def enqueue_async(
@@ -112,7 +112,7 @@ class Queue:
 
         dbos = _get_dbos_instance()
         return await start_workflow_async(
-            dbos, func, self.name, False, False, False, *args, **kwargs
+            dbos, func, args, kwargs, queue_name=self.name, execute_workflow=False
         )
 
 

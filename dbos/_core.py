@@ -560,12 +560,12 @@ def execute_workflow_by_id(
             return start_workflow(
                 dbos,
                 wf_func,
-                status["queue_name"],
-                True,
-                is_recovery,
-                is_dequeue,
-                *inputs["args"],
-                **inputs["kwargs"],
+                inputs["args"],
+                inputs["kwargs"],
+                queue_name=status["queue_name"],
+                execute_workflow=True,
+                is_recovery=is_recovery,
+                is_dequeued=is_dequeue,
             )
 
 
@@ -597,12 +597,12 @@ def _get_new_wf() -> tuple[str, DBOSContext]:
 def start_workflow(
     dbos: "DBOS",
     func: "Callable[P, Union[R, Coroutine[Any, Any, R]]]",
-    queue_name: Optional[str],
-    execute_workflow: bool,
-    is_recovery: bool,
-    is_dequeued: bool,
-    *args: P.args,
-    **kwargs: P.kwargs,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    queue_name: Optional[str] = None,
+    execute_workflow: bool = True,
+    is_recovery: bool = False,
+    is_dequeued: bool = False,
 ) -> "WorkflowHandle[R]":
 
     # If the function has a class, add the class object as its first argument
@@ -610,7 +610,7 @@ def start_workflow(
     if hasattr(func, "__self__"):
         fself = func.__self__
     if fself is not None:
-        args = (fself,) + args  # type: ignore
+        args = (fself,) + args
 
     fi = get_func_info(func)
     if fi is None:
@@ -708,19 +708,19 @@ def start_workflow(
 async def start_workflow_async(
     dbos: "DBOS",
     func: "Callable[P, Coroutine[Any, Any, R]]",
-    queue_name: Optional[str],
-    execute_workflow: bool,
-    is_recovery_request: bool,
-    is_dequeued_request: bool,
-    *args: P.args,
-    **kwargs: P.kwargs,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    queue_name: Optional[str] = None,
+    execute_workflow: bool = True,
+    is_recovery_request: bool = False,
+    is_dequeued_request: bool = False,
 ) -> "WorkflowHandleAsync[R]":
     # If the function has a class, add the class object as its first argument
     fself: Optional[object] = None
     if hasattr(func, "__self__"):
         fself = func.__self__
     if fself is not None:
-        args = (fself,) + args  # type: ignore
+        args = (fself,) + args
 
     fi = get_func_info(func)
     if fi is None:

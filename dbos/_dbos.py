@@ -796,9 +796,7 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
-        return start_workflow(
-            _get_dbos_instance(), func, None, True, False, False, *args, **kwargs
-        )
+        return start_workflow(_get_dbos_instance(), func, args, kwargs)
 
     @classmethod
     async def start_workflow_async(
@@ -809,9 +807,7 @@ class DBOS:
     ) -> WorkflowHandleAsync[R]:
         """Invoke a workflow function on the event loop, returning a handle to the ongoing execution."""
         await cls._configure_asyncio_thread_pool()
-        return await start_workflow_async(
-            _get_dbos_instance(), func, None, True, False, False, *args, **kwargs
-        )
+        return await start_workflow_async(_get_dbos_instance(), func, args, kwargs)
 
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
