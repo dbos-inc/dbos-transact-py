@@ -1225,7 +1225,7 @@ def decorate_transaction(
 
 def invoke_step(
     dbos: "DBOS",
-    func: Callable[P, R] | Callable[P, Coroutine[Any, Any, R]],
+    func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     *,
@@ -1234,7 +1234,7 @@ def invoke_step(
     interval_seconds: float,
     max_attempts: int,
     backoff_rate: float,
-) -> Any:
+) -> R:
     attributes: TracedAttributes = {
         "name": step_name,
         "operationType": OperationType.STEP.value,
@@ -1321,12 +1321,14 @@ def invoke_step(
         .intercept(check_existing_result, dbos=dbos)
         .also(EnterDBOSStep(attributes))
     )
-    return outcome()
-
+    if inspect.iscoroutinefunction(func):
+        return dbos._background_event_loop.submit_coroutine(outcome())
+    else:
+        return cast(R, outcome())
 
 def run_step(
     dbos: "DBOS",
-    func: Callable[P, R],
+    func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
     options: StepOptions,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
@@ -1335,9 +1337,7 @@ def run_step(
     # Otherwise, run it as a normal function.
     ctx = get_local_dbos_context()
     if ctx and ctx.is_workflow():
-        return cast(
-            R,
-            invoke_step(
+        return invoke_step(
                 dbos,
                 func,
                 args,
@@ -1347,11 +1347,14 @@ def run_step(
                 interval_seconds=options.interval_seconds,
                 max_attempts=options.max_attempts,
                 backoff_rate=options.backoff_rate,
-            ),
-        )
+            )
     else:
-        return func(*args, **kwargs)
-
+        if inspect.iscoroutinefunction(func):
+            async def runfunc() -> R:
+                return cast(R, await func(*args, **kwargs))
+            return dbos._background_event_loop.submit_coroutine(runfunc())
+        else:
+            return cast(R, func(*args, **kwargs))
 
 def decorate_step(
     dbosreg: "DBOSRegistry",

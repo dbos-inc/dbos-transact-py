@@ -13,6 +13,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Awaitable,
     Callable,
     Coroutine,
     Dict,
@@ -26,6 +27,7 @@ from typing import (
     Type,
     TypeVar,
     Union,
+    overload,
 )
 
 from dbos._conductor.conductor import ConductorWebsocket
@@ -801,10 +803,30 @@ class DBOS:
         return await start_workflow_async(_get_dbos_instance(), func, args, kwargs)
 
     @classmethod
+    @overload
+    def run_step(
+        cls,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, Coroutine[Any, Any, R]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    @classmethod
+    @overload
     def run_step(
         cls,
         dbos_step_options: Optional[StepOptions],
         func: Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    @classmethod
+    def run_step(
+        cls,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, R] | Callable[P, Coroutine[Any, Any, R]],
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> R:
@@ -817,7 +839,7 @@ class DBOS:
     async def run_step_async(
         cls,
         dbos_step_options: Optional[StepOptions],
-        func: Callable[P, R],
+        func: Callable[P, R] | Callable[P, Coroutine[Any, Any, R]],
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> R:

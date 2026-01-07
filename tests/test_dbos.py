@@ -2181,9 +2181,9 @@ def test_custom_serializer(
 def test_run_step(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_workflow(var: str, var2: str) -> str:
-        res2 = DBOS.run_step(None, test_step, var, 1)
+        res1 = DBOS.run_step(None, test_step, var, 1)
         res2 = DBOS.run_step(StepOptions(name='test_step'), test_step, var2, 2)
-        return res2
+        return res1+res2
 
     def test_step(var: str, sn: int) -> str:
         assert DBOS.step_id == sn
@@ -2194,9 +2194,15 @@ def test_run_step(dbos: DBOS) -> None:
         assert step_status.max_attempts is None
         return var
 
+    def test_step_nwf(var: str) -> str:
+        assert DBOS.step_status is None
+        return var
+
+    assert DBOS.run_step(None, test_step_nwf, "ha") == "ha"
+
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        assert test_workflow("bob", "bob") == "bob"
+        assert test_workflow("bob", "bob") == "bobbob"
     steps = DBOS.list_workflow_steps(wfid)
     assert len(steps) == 2
     assert (
@@ -2206,3 +2212,35 @@ def test_run_step(dbos: DBOS) -> None:
         steps[1]["function_name"] == "test_step"
     )
 
+    @DBOS.workflow()
+    def test_workflow_sca(var: str, var2: str) -> str:
+        res1: str = DBOS.run_step(None, test_step_async, var, 1)
+        res2: str = DBOS.run_step(StepOptions(name='test_step'), test_step_async, var2, 2)
+        return res1+res2
+
+    async def test_step_async(var: str, sn: int) -> str:
+        assert DBOS.step_id == sn
+        step_status = DBOS.step_status
+        assert step_status is not None
+        assert step_status.step_id == sn
+        assert step_status.current_attempt is None
+        assert step_status.max_attempts is None
+        return var
+    
+    async def test_step_async_nwf(var: str) -> str:
+        assert DBOS.step_status == None
+        return var
+
+    assert DBOS.run_step(None, test_step_async_nwf, "ha") == "ha"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert test_workflow_sca("joe", "joe") == "joejoe"
+    steps = DBOS.list_workflow_steps(wfid)
+    assert len(steps) == 2
+    assert (
+        steps[0]["function_name"] == "test_run_step.<locals>.test_step_async"
+    )
+    assert (
+        steps[1]["function_name"] == "test_step"
+    )
