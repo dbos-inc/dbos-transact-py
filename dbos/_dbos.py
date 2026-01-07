@@ -620,12 +620,6 @@ class DBOS:
                 else:
                     break
         self._background_event_loop.stop()
-        if self._sys_db_field is not None:
-            self._sys_db_field.destroy()
-            self._sys_db_field = None
-        if self._app_db_field is not None:
-            self._app_db_field.destroy()
-            self._app_db_field = None
         if self._admin_server_field is not None:
             self._admin_server_field.stop()
             self._admin_server_field = None
@@ -637,8 +631,20 @@ class DBOS:
         if self._executor_field is not None:
             self._executor_field.shutdown(wait=False, cancel_futures=True)
             self._executor_field = None
+        if self._sys_db_field is not None:
+            self._sys_db_field._run_background_processes = False
         for bg_thread in self._background_threads:
-            bg_thread.join()
+            bg_thread.join(timeout=10.0)
+            if bg_thread.is_alive():
+                dbos_logger.warning(
+                    f"Background thread {bg_thread.name} did not exit within timeout"
+                )
+        if self._sys_db_field is not None:
+            self._sys_db_field.destroy()
+            self._sys_db_field = None
+        if self._app_db_field is not None:
+            self._app_db_field.destroy()
+            self._app_db_field = None
 
     @classmethod
     def register_instance(cls, inst: object) -> None:
