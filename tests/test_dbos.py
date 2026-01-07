@@ -22,6 +22,7 @@ from dbos import (
     Serializer,
     SetWorkflowID,
     SetWorkflowTimeout,
+    StepOptions,
     WorkflowHandle,
     WorkflowStatusString,
 )
@@ -2176,3 +2177,32 @@ def test_custom_serializer(
     assert workflows[0].output == json.dumps(val)
 
     DBOS.destroy(destroy_registry=True)
+
+def test_run_step(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def test_workflow(var: str, var2: str) -> str:
+        res2 = DBOS.run_step(None, test_step, var, 1)
+        res2 = DBOS.run_step(StepOptions(name='test_step'), test_step, var2, 2)
+        return res2
+
+    def test_step(var: str, sn: int) -> str:
+        assert DBOS.step_id == sn
+        step_status = DBOS.step_status
+        assert step_status is not None
+        assert step_status.step_id == sn
+        assert step_status.current_attempt is None
+        assert step_status.max_attempts is None
+        return var
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert test_workflow("bob", "bob") == "bob"
+    steps = DBOS.list_workflow_steps(wfid)
+    assert len(steps) == 2
+    assert (
+        steps[0]["function_name"] == "test_run_step.<locals>.test_step"
+    )
+    assert (
+        steps[1]["function_name"] == "test_step"
+    )
+
