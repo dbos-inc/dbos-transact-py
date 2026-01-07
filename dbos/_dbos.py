@@ -826,7 +826,7 @@ class DBOS:
     def run_step(
         cls,
         dbos_step_options: Optional[StepOptions],
-        func: Callable[P, R] | Callable[P, Coroutine[Any, Any, R]],
+        func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> R:
@@ -836,10 +836,30 @@ class DBOS:
         )
 
     @classmethod
+    @overload
     async def run_step_async(
         cls,
         dbos_step_options: Optional[StepOptions],
-        func: Callable[P, R] | Callable[P, Coroutine[Any, Any, R]],
+        func: Callable[P, Coroutine[Any, Any, R]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    @classmethod
+    @overload
+    async def run_step_async(
+        cls,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    @classmethod
+    async def run_step_async(
+        cls,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> R:

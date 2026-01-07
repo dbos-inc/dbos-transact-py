@@ -1322,7 +1322,7 @@ def invoke_step(
         .also(EnterDBOSStep(attributes))
     )
     if inspect.iscoroutinefunction(func):
-        return dbos._background_event_loop.submit_coroutine(outcome())
+        return dbos._background_event_loop.submit_coroutine(cast(Coroutine[Any, Any, R], outcome()))
     else:
         return cast(R, outcome())
 

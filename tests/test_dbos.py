@@ -2244,3 +2244,71 @@ def test_run_step(dbos: DBOS) -> None:
     assert (
         steps[1]["function_name"] == "test_step"
     )
+
+@pytest.mark.asyncio
+async def test_run_step_async(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def test_workflow_acs(var: str, var2: str) -> str:
+        res1 = await DBOS.run_step_async(None, test_step, var, 1)
+        res2 = await DBOS.run_step_async(StepOptions(name='test_step'), test_step, var2, 2)
+        return res1+res2
+
+    def test_step(var: str, sn: int) -> str:
+        assert DBOS.step_id == sn
+        step_status = DBOS.step_status
+        assert step_status is not None
+        assert step_status.step_id == sn
+        assert step_status.current_attempt is None
+        assert step_status.max_attempts is None
+        return var
+
+    def test_step_nwf(var: str) -> str:
+        assert DBOS.step_status is None
+        return var
+
+    assert (await DBOS.run_step_async(None, test_step_nwf, "ha")) == "ha"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert (await test_workflow_acs("bob", "bob")) == "bobbob"
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    assert len(steps) == 2
+    assert (
+        steps[0]["function_name"] == "test_run_step_async.<locals>.test_step"
+    )
+    assert (
+        steps[1]["function_name"] == "test_step"
+    )
+
+    @DBOS.workflow()
+    async def test_workflow(var: str, var2: str) -> str:
+        res1: str = await DBOS.run_step_async(None, test_step_async, var, 1)
+        res2: str = await DBOS.run_step_async(StepOptions(name='test_step'), test_step_async, var2, 2)
+        return res1+res2
+
+    async def test_step_async(var: str, sn: int) -> str:
+        assert DBOS.step_id == sn
+        step_status = DBOS.step_status
+        assert step_status is not None
+        assert step_status.step_id == sn
+        assert step_status.current_attempt is None
+        assert step_status.max_attempts is None
+        return var
+    
+    async def test_step_async_nwf(var: str) -> str:
+        assert DBOS.step_status == None
+        return var
+
+    assert (await DBOS.run_step_async(None, test_step_async_nwf, "ha")) == "ha"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert (await test_workflow("joe", "joe")) == "joejoe"
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    assert len(steps) == 2
+    assert (
+        steps[0]["function_name"] == "test_run_step_async.<locals>.test_step_async"
+    )
+    assert (
+        steps[1]["function_name"] == "test_step"
+    )
