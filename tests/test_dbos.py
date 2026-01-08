@@ -2212,6 +2212,8 @@ def test_run_step(dbos: DBOS) -> None:
         steps[1]["function_name"] == "test_step"
     )
 
+    assert DBOS.start_workflow(test_workflow, "bob", "bob").get_result() == "bobbob"
+
     @DBOS.workflow()
     def test_workflow_sca(var: str, var2: str) -> str:
         res1: str = DBOS.run_step(None, test_step_async, var, 1)
@@ -2244,6 +2246,8 @@ def test_run_step(dbos: DBOS) -> None:
     assert (
         steps[1]["function_name"] == "test_step"
     )
+
+    assert DBOS.start_workflow(test_workflow_sca, "joe", "joe").get_result() == "joejoe"
 
 @pytest.mark.asyncio
 async def test_run_step_async(dbos: DBOS) -> None:
@@ -2282,6 +2286,8 @@ async def test_run_step_async(dbos: DBOS) -> None:
         steps[1]["function_name"] == "test_step"
     )
 
+    assert await (await DBOS.start_workflow_async(test_workflow_acs, "bob", "bob")).get_result() == "bobbob"
+
     @DBOS.workflow()
     async def test_workflow(var: str, var2: str) -> str:
         res1: str = await DBOS.run_step_async(None, test_step_async, var, 1)
@@ -2314,3 +2320,5 @@ async def test_run_step_async(dbos: DBOS) -> None:
     assert (
         steps[1]["function_name"] == "test_step"
     )
+
+    assert await (await DBOS.start_workflow_async(test_workflow, "joe", "joe")).get_result() == "joejoe"
