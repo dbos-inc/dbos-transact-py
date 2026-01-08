@@ -1352,10 +1352,42 @@ def run_step(
     else:
         if inspect.iscoroutinefunction(func):
             async def runfunc() -> R:
-                return cast(R, await func(*args, **kwargs))
+                return await cast(Callable[P, Coroutine[Any, Any, R]], func)(*args, **kwargs)
             return dbos._background_event_loop.submit_coroutine(runfunc())
         else:
-            return cast(R, func(*args, **kwargs))
+            return cast (Callable[P, R], func)(*args, **kwargs)
+
+async def run_step_async(
+    dbos: "DBOS",
+    func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
+    options: StepOptions,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> R:
+    # If the step is called from a workflow, run it as a step.
+    # Otherwise, run it as a normal function.
+    ctx = get_local_dbos_context()
+    if ctx and ctx.is_workflow():
+        outcome = invoke_step(
+                dbos,
+                func,
+                args,
+                kwargs,
+                step_name=options.name if options.name else func.__qualname__,
+                retries_allowed=options.retries_allowed,
+                interval_seconds=options.interval_seconds,
+                max_attempts=options.max_attempts,
+                backoff_rate=options.backoff_rate,
+            )
+        if inspect.iscoroutinefunction(func):
+            return await cast(Coroutine[Any, Any, R], outcome)
+        else:
+            return cast(R, outcome)
+    else:
+        if inspect.iscoroutinefunction(func):
+            return await (cast(Callable[P, Coroutine[Any, Any, R]], func))(*args, **kwargs)
+        else:
+            return await asyncio.to_thread(lambda: cast (Callable[P, R], func)(*args, **kwargs))
 
 def decorate_step(
     dbosreg: "DBOSRegistry",

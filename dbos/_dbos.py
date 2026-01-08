@@ -53,6 +53,7 @@ from ._core import (
     get_event,
     recv,
     run_step,
+    run_step_async,
     send,
     set_event,
     start_workflow,
@@ -885,9 +886,7 @@ class DBOS:
             pass
 
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(
-            run_step,
-            _get_dbos_instance(),
+        return await run_step_async(_get_dbos_instance(),
             func,
             dbos_step_options or StepOptions(),
             args,
