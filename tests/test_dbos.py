@@ -2267,6 +2267,8 @@ async def test_run_step_async(dbos: DBOS) -> None:
         return var
 
     assert (await DBOS.run_step_async(None, test_step_nwf, "ha")) == "ha"
+    with pytest.raises(RuntimeError) as exc_info:
+        DBOS.run_step(None, test_step_nwf, "ha")
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):

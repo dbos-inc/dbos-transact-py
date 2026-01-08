@@ -1234,7 +1234,7 @@ def invoke_step(
     interval_seconds: float,
     max_attempts: int,
     backoff_rate: float,
-) -> R:
+) -> R | Coroutine[Any, Any, R]:
     attributes: TracedAttributes = {
         "name": step_name,
         "operationType": OperationType.STEP.value,
@@ -1321,10 +1321,7 @@ def invoke_step(
         .intercept(check_existing_result, dbos=dbos)
         .also(EnterDBOSStep(attributes))
     )
-    if inspect.iscoroutinefunction(func):
-        return dbos._background_event_loop.submit_coroutine(cast(Coroutine[Any, Any, R], outcome()))
-    else:
-        return cast(R, outcome())
+    return outcome()
 
 def run_step(
     dbos: "DBOS",
@@ -1337,7 +1334,7 @@ def run_step(
     # Otherwise, run it as a normal function.
     ctx = get_local_dbos_context()
     if ctx and ctx.is_workflow():
-        return invoke_step(
+        outcome = invoke_step(
                 dbos,
                 func,
                 args,
@@ -1348,6 +1345,10 @@ def run_step(
                 max_attempts=options.max_attempts,
                 backoff_rate=options.backoff_rate,
             )
+        if inspect.iscoroutinefunction(func):
+            return dbos._background_event_loop.submit_coroutine(cast(Coroutine[Any, Any, R], outcome))
+        else:
+            return cast(R, outcome)
     else:
         if inspect.iscoroutinefunction(func):
             async def runfunc() -> R:

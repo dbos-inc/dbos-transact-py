@@ -831,6 +831,16 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> R:
         """Invoke a step function and checkpoint its result."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError(
+                "run_step() was called while an event loop is running. "
+                "Use await run_step_async(...) instead."
+            )
+
         return run_step(
             _get_dbos_instance(), func, dbos_step_options or StepOptions(), args, kwargs
         )
@@ -864,6 +874,16 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> R:
         """Invoke a step function on the event loop and checkpoint its result."""
+        try:
+            asyncio.get_running_loop()
+        except:
+            raise RuntimeError(
+                "run_step_async() was called while an event loop is not running. "
+                "Use run_step(...) instead."
+            )
+        else:
+            pass
+
         await cls._configure_asyncio_thread_pool()
         return await asyncio.to_thread(
             run_step,
