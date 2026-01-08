@@ -234,9 +234,10 @@ class WorkflowHandleAsyncPolling(Generic[R]):
             raise DBOSNonExistentWorkflowError(self.workflow_id)
         return stat
 
+from typing import TypedDict, Optional
 
-@dataclass(frozen=True)
-class StepOptions:
+
+class StepOptions(TypedDict, total=False):
     """
     Configuration options for steps.
 
@@ -260,12 +261,22 @@ class StepOptions:
             each failed attempt (e.g. 2.0 = exponential backoff).
     """
 
-    name: Optional[str] = None
-    retries_allowed: bool = False
-    interval_seconds: float = 1.0
-    max_attempts: int = 3
-    backoff_rate: float = 2.0
+    name: Optional[str]
+    retries_allowed: bool
+    interval_seconds: float
+    max_attempts: int
+    backoff_rate: float
 
+DEFAULT_STEP_OPTIONS: StepOptions = {
+    "name": None,
+    "retries_allowed": False,
+    "interval_seconds": 1.0,
+    "max_attempts": 3,
+    "backoff_rate": 2.0,
+}
+
+def normalize_step_options(opts: Optional[StepOptions]) -> StepOptions:
+    return {**DEFAULT_STEP_OPTIONS, **(opts or {})}
 
 def _init_workflow(
     dbos: "DBOS",
@@ -1330,6 +1341,7 @@ def run_step(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> R:
+    options = normalize_step_options(options)
     # If the step is called from a workflow, run it as a step.
     # Otherwise, run it as a normal function.
     ctx = get_local_dbos_context()
@@ -1339,11 +1351,11 @@ def run_step(
                 func,
                 args,
                 kwargs,
-                step_name=options.name if options.name else func.__qualname__,
-                retries_allowed=options.retries_allowed,
-                interval_seconds=options.interval_seconds,
-                max_attempts=options.max_attempts,
-                backoff_rate=options.backoff_rate,
+                step_name=options["name"] if options["name"] else func.__qualname__,
+                retries_allowed=options["retries_allowed"],
+                interval_seconds=options["interval_seconds"],
+                max_attempts=options["max_attempts"],
+                backoff_rate=options["backoff_rate"],
             )
         if inspect.iscoroutinefunction(func):
             return dbos._background_event_loop.submit_coroutine(cast(Coroutine[Any, Any, R], outcome))
@@ -1367,17 +1379,18 @@ async def run_step_async(
     # If the step is called from a workflow, run it as a step.
     # Otherwise, run it as a normal function.
     ctx = get_local_dbos_context()
+    options = normalize_step_options(options)
     if ctx and ctx.is_workflow():
         outcome = invoke_step(
                 dbos,
                 func,
                 args,
                 kwargs,
-                step_name=options.name if options.name else func.__qualname__,
-                retries_allowed=options.retries_allowed,
-                interval_seconds=options.interval_seconds,
-                max_attempts=options.max_attempts,
-                backoff_rate=options.backoff_rate,
+                step_name=options["name"] if options["name"] else func.__qualname__,
+                retries_allowed=options["retries_allowed"],
+                interval_seconds=options["interval_seconds"],
+                max_attempts=options["max_attempts"],
+                backoff_rate=options["backoff_rate"],
             )
         if inspect.iscoroutinefunction(func):
             return await cast(Coroutine[Any, Any, R], outcome)

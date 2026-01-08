@@ -22,7 +22,6 @@ from dbos import (
     Serializer,
     SetWorkflowID,
     SetWorkflowTimeout,
-    StepOptions,
     WorkflowHandle,
     WorkflowStatusString,
 )
@@ -2182,7 +2181,7 @@ def test_run_step(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_workflow(var: str, var2: str) -> str:
         res1 = DBOS.run_step(None, test_step, var, 1)
-        res2 = DBOS.run_step(StepOptions(name='test_step'), test_step, var2, 2)
+        res2 = DBOS.run_step({"name": 'test_step'}, test_step, var2, 2)
         return res1+res2
 
     def test_step(var: str, sn: int) -> str:
@@ -2197,8 +2196,28 @@ def test_run_step(dbos: DBOS) -> None:
     def test_step_nwf(var: str) -> str:
         assert DBOS.step_status is None
         return var
+    
+    n_thrown_errors = 0
+    def test_step_error() -> None:
+        nonlocal n_thrown_errors
+        n_thrown_errors += 1
+        raise Exception()
+    async def test_step_error_async() -> None:
+        nonlocal n_thrown_errors
+        n_thrown_errors += 1
+        raise Exception()
 
     assert DBOS.run_step(None, test_step_nwf, "ha") == "ha"
+
+    with pytest.raises(Exception) as exc_info:
+        DBOS.run_step({"retries_allowed": True, "max_attempts": 2, "interval_seconds": .1, "backoff_rate": 1}, test_step_error)
+    #assert n_thrown_errors == 2
+    with pytest.raises(Exception) as exc_info:
+        DBOS.run_step({"retries_allowed": True, "max_attempts": 2, "interval_seconds": .1, "backoff_rate": 1}, test_step_error_async)
+    #assert n_thrown_errors == 4
+    with pytest.raises(Exception) as exc_info:
+        DBOS.run_step({"retries_allowed": False, "max_attempts": 2, "interval_seconds": .1, "backoff_rate": 1}, test_step_error_async)
+    #assert n_thrown_errors == 5
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
@@ -2217,7 +2236,7 @@ def test_run_step(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_workflow_sca(var: str, var2: str) -> str:
         res1: str = DBOS.run_step(None, test_step_async, var, 1)
-        res2: str = DBOS.run_step(StepOptions(name='test_step'), test_step_async, var2, 2)
+        res2: str = DBOS.run_step({"name": 'test_step'}, test_step_async, var2, 2)
         return res1+res2
 
     async def test_step_async(var: str, sn: int) -> str:
@@ -2249,12 +2268,29 @@ def test_run_step(dbos: DBOS) -> None:
 
     assert DBOS.start_workflow(test_workflow_sca, "joe", "joe").get_result() == "joejoe"
 
+    @DBOS.workflow()
+    async def test_workflow_acs(var: str, var2: str) -> str:
+        res1 = await DBOS.run_step_async(None, test_step, var, 1)
+        res2 = await DBOS.run_step_async({"name":'test_step'}, test_step, var2, 2)
+        return res1+res2
+
+    def test_step(var: str, sn: int) -> str:
+        assert DBOS.step_id == sn
+        step_status = DBOS.step_status
+        assert step_status is not None
+        assert step_status.step_id == sn
+        assert step_status.current_attempt is None
+        assert step_status.max_attempts is None
+        return var
+
+    assert DBOS.start_workflow(test_workflow_acs, "bob", "bob").get_result() == "bobbob" #type: ignore
+
 @pytest.mark.asyncio
 async def test_run_step_async(dbos: DBOS) -> None:
     @DBOS.workflow()
     async def test_workflow_acs(var: str, var2: str) -> str:
         res1 = await DBOS.run_step_async(None, test_step, var, 1)
-        res2 = await DBOS.run_step_async(StepOptions(name='test_step'), test_step, var2, 2)
+        res2 = await DBOS.run_step_async({"name":'test_step'}, test_step, var2, 2)
         return res1+res2
 
     def test_step(var: str, sn: int) -> str:
@@ -2291,7 +2327,7 @@ async def test_run_step_async(dbos: DBOS) -> None:
     @DBOS.workflow()
     async def test_workflow(var: str, var2: str) -> str:
         res1: str = await DBOS.run_step_async(None, test_step_async, var, 1)
-        res2: str = await DBOS.run_step_async(StepOptions(name='test_step'), test_step_async, var2, 2)
+        res2: str = await DBOS.run_step_async({"name": 'test_step'}, test_step_async, var2, 2)
         return res1+res2
 
     async def test_step_async(var: str, sn: int) -> str:

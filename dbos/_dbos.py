@@ -843,7 +843,7 @@ class DBOS:
             )
 
         return run_step(
-            _get_dbos_instance(), func, dbos_step_options or StepOptions(), args, kwargs
+            _get_dbos_instance(), func, dbos_step_options or {}, args, kwargs
         )
 
     @classmethod
@@ -888,7 +888,7 @@ class DBOS:
         await cls._configure_asyncio_thread_pool()
         return await run_step_async(_get_dbos_instance(),
             func,
-            dbos_step_options or StepOptions(),
+            dbos_step_options or {},
             args,
             kwargs,
         )
