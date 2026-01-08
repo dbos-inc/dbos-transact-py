@@ -42,13 +42,14 @@ def test_sqlite_filters_postgres_connect_args() -> None:
     SQLite doesn't support `application_name` or `connect_timeout` which are
     PostgreSQL-specific. These must be filtered out or SQLite will error.
     """
+    connect_args = {
+        "application_name": "dbos_transact",
+        "connect_timeout": 10,
+        "check_same_thread": False,
+    }
     engine_kwargs = {
         "echo": True,
-        "connect_args": {
-            "application_name": "dbos_transact",
-            "connect_timeout": 10,
-            "check_same_thread": False,
-        },
+        "connect_args": connect_args,
     }
 
     sys_db = SQLiteSystemDatabase.__new__(SQLiteSystemDatabase)
@@ -58,7 +59,7 @@ def test_sqlite_filters_postgres_connect_args() -> None:
     assert engine.echo is True
 
     # Original kwargs should not be mutated
-    assert "application_name" in engine_kwargs["connect_args"]
+    assert "application_name" in connect_args
 
     engine.dispose()
 
