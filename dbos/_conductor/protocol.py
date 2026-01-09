@@ -369,6 +369,7 @@ class GetMetricsResponse(BaseMessage):
 @dataclass
 class ExportWorkflowRequest(BaseMessage):
     workflow_id: str
+    export_children: bool
 
 
 @dataclass

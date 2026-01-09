@@ -14,7 +14,16 @@ def test_workflow_export(dbos: DBOS, config: DBOSConfig) -> None:
         return
 
     @DBOS.workflow()
+    def child_workflow() -> None:
+        return grandchild_workflow()
+
+    @DBOS.workflow()
+    def grandchild_workflow() -> None:
+        return
+
+    @DBOS.workflow()
     def workflow() -> str:
+        child_workflow()
         for _ in range(10):
             step()
         DBOS.set_event(key, value)
@@ -24,7 +33,7 @@ def test_workflow_export(dbos: DBOS, config: DBOSConfig) -> None:
 
     workflow_id = workflow()
 
-    exported_workflow = dbos._sys_db.export_workflow(workflow_id)
+    exported_workflow = dbos._sys_db.export_workflow(workflow_id, export_children=True)
     original_steps = DBOS.list_workflow_steps(workflow_id)
     # Importing the workflow into an existing database fails with a
     # primary key conflict
@@ -50,6 +59,9 @@ def test_workflow_export(dbos: DBOS, config: DBOSConfig) -> None:
     assert len(imported_steps) == len(original_steps)
     for imported_step, original_step in zip(imported_steps, original_steps):
         assert imported_step == original_step
+
+    # The child workflows are also copied over
+    assert len(DBOS.list_workflows()) == 3
 
     # The imported workflow can be forked
     forked_workflow = DBOS.fork_workflow(workflow_id, len(imported_steps))

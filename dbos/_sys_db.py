@@ -2492,178 +2492,226 @@ class SystemDatabase(ABC):
             ).scalar()
             return checkpoint_name == patch_name
 
-    def export_workflow(self, workflow_id: str) -> list[ExportedWorkflow]:
+    def get_workflow_children(self, workflow_id: str) -> list[str]:
+        """
+        Recursively get all child workflow IDs for a workflow.
+
+        Args:
+            workflow_id: The workflow UUID to get children for
+
+        Returns:
+            A list of all child (and grandchild, etc.) workflow IDs
+        """
+        children: set[str] = set()
+        to_process: list[str] = [workflow_id]
+
+        with self.engine.begin() as c:
+            while to_process:
+                current_id = to_process.pop()
+                # Find all child workflows for the current workflow
+                child_rows = c.execute(
+                    sa.select(SystemSchema.operation_outputs.c.child_workflow_id).where(
+                        (SystemSchema.operation_outputs.c.workflow_uuid == current_id)
+                        & (
+                            SystemSchema.operation_outputs.c.child_workflow_id.isnot(
+                                None
+                            )
+                        )
+                    )
+                ).fetchall()
+
+                for row in child_rows:
+                    child_id = row[0]
+                    if child_id not in children:
+                        children.add(child_id)
+                        to_process.append(child_id)
+
+        return list(children)
+
+    def export_workflow(
+        self, workflow_id: str, *, export_children: bool
+    ) -> list[ExportedWorkflow]:
         """
         Export all entries for a workflow in a portable format.
 
         Args:
             workflow_id: The workflow UUID to export
+            export_children: If True, also export all child workflows recursively
 
         Returns:
             A list of ExportedWorkflow containing all workflow data
         """
+        workflow_ids = [workflow_id]
+        if export_children:
+            workflow_ids.extend(self.get_workflow_children(workflow_id))
+
+        exported_workflows: list[ExportedWorkflow] = []
+
         with self.engine.begin() as c:
-            # Export workflow_status
-            status_row = c.execute(
-                sa.select(
-                    SystemSchema.workflow_status.c.workflow_uuid,
-                    SystemSchema.workflow_status.c.status,
-                    SystemSchema.workflow_status.c.name,
-                    SystemSchema.workflow_status.c.authenticated_user,
-                    SystemSchema.workflow_status.c.assumed_role,
-                    SystemSchema.workflow_status.c.authenticated_roles,
-                    SystemSchema.workflow_status.c.output,
-                    SystemSchema.workflow_status.c.error,
-                    SystemSchema.workflow_status.c.executor_id,
-                    SystemSchema.workflow_status.c.created_at,
-                    SystemSchema.workflow_status.c.updated_at,
-                    SystemSchema.workflow_status.c.application_version,
-                    SystemSchema.workflow_status.c.application_id,
-                    SystemSchema.workflow_status.c.class_name,
-                    SystemSchema.workflow_status.c.config_name,
-                    SystemSchema.workflow_status.c.recovery_attempts,
-                    SystemSchema.workflow_status.c.queue_name,
-                    SystemSchema.workflow_status.c.workflow_timeout_ms,
-                    SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
-                    SystemSchema.workflow_status.c.started_at_epoch_ms,
-                    SystemSchema.workflow_status.c.deduplication_id,
-                    SystemSchema.workflow_status.c.inputs,
-                    SystemSchema.workflow_status.c.priority,
-                    SystemSchema.workflow_status.c.queue_partition_key,
-                    SystemSchema.workflow_status.c.forked_from,
-                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-            ).fetchone()
+            for wf_id in workflow_ids:
+                # Export workflow_status
+                status_row = c.execute(
+                    sa.select(
+                        SystemSchema.workflow_status.c.workflow_uuid,
+                        SystemSchema.workflow_status.c.status,
+                        SystemSchema.workflow_status.c.name,
+                        SystemSchema.workflow_status.c.authenticated_user,
+                        SystemSchema.workflow_status.c.assumed_role,
+                        SystemSchema.workflow_status.c.authenticated_roles,
+                        SystemSchema.workflow_status.c.output,
+                        SystemSchema.workflow_status.c.error,
+                        SystemSchema.workflow_status.c.executor_id,
+                        SystemSchema.workflow_status.c.created_at,
+                        SystemSchema.workflow_status.c.updated_at,
+                        SystemSchema.workflow_status.c.application_version,
+                        SystemSchema.workflow_status.c.application_id,
+                        SystemSchema.workflow_status.c.class_name,
+                        SystemSchema.workflow_status.c.config_name,
+                        SystemSchema.workflow_status.c.recovery_attempts,
+                        SystemSchema.workflow_status.c.queue_name,
+                        SystemSchema.workflow_status.c.workflow_timeout_ms,
+                        SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
+                        SystemSchema.workflow_status.c.started_at_epoch_ms,
+                        SystemSchema.workflow_status.c.deduplication_id,
+                        SystemSchema.workflow_status.c.inputs,
+                        SystemSchema.workflow_status.c.priority,
+                        SystemSchema.workflow_status.c.queue_partition_key,
+                        SystemSchema.workflow_status.c.forked_from,
+                    ).where(SystemSchema.workflow_status.c.workflow_uuid == wf_id)
+                ).fetchone()
 
-            if status_row is None:
-                raise DBOSNonExistentWorkflowError(workflow_id)
+                if status_row is None:
+                    raise DBOSNonExistentWorkflowError(wf_id)
 
-            workflow_status: dict[str, Any] = {
-                "workflow_uuid": status_row[0],
-                "status": status_row[1],
-                "name": status_row[2],
-                "authenticated_user": status_row[3],
-                "assumed_role": status_row[4],
-                "authenticated_roles": status_row[5],
-                "output": status_row[6],
-                "error": status_row[7],
-                "executor_id": status_row[8],
-                "created_at": status_row[9],
-                "updated_at": status_row[10],
-                "application_version": status_row[11],
-                "application_id": status_row[12],
-                "class_name": status_row[13],
-                "config_name": status_row[14],
-                "recovery_attempts": status_row[15],
-                "queue_name": status_row[16],
-                "workflow_timeout_ms": status_row[17],
-                "workflow_deadline_epoch_ms": status_row[18],
-                "started_at_epoch_ms": status_row[19],
-                "deduplication_id": status_row[20],
-                "inputs": status_row[21],
-                "priority": status_row[22],
-                "queue_partition_key": status_row[23],
-                "forked_from": status_row[24],
-            }
-
-            # Export operation_outputs
-            output_rows = c.execute(
-                sa.select(
-                    SystemSchema.operation_outputs.c.workflow_uuid,
-                    SystemSchema.operation_outputs.c.function_id,
-                    SystemSchema.operation_outputs.c.function_name,
-                    SystemSchema.operation_outputs.c.output,
-                    SystemSchema.operation_outputs.c.error,
-                    SystemSchema.operation_outputs.c.child_workflow_id,
-                    SystemSchema.operation_outputs.c.started_at_epoch_ms,
-                    SystemSchema.operation_outputs.c.completed_at_epoch_ms,
-                ).where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
-            ).fetchall()
-
-            operation_outputs: list[dict[str, Any]] = [
-                {
-                    "workflow_uuid": row[0],
-                    "function_id": row[1],
-                    "function_name": row[2],
-                    "output": row[3],
-                    "error": row[4],
-                    "child_workflow_id": row[5],
-                    "started_at_epoch_ms": row[6],
-                    "completed_at_epoch_ms": row[7],
+                workflow_status: dict[str, Any] = {
+                    "workflow_uuid": status_row[0],
+                    "status": status_row[1],
+                    "name": status_row[2],
+                    "authenticated_user": status_row[3],
+                    "assumed_role": status_row[4],
+                    "authenticated_roles": status_row[5],
+                    "output": status_row[6],
+                    "error": status_row[7],
+                    "executor_id": status_row[8],
+                    "created_at": status_row[9],
+                    "updated_at": status_row[10],
+                    "application_version": status_row[11],
+                    "application_id": status_row[12],
+                    "class_name": status_row[13],
+                    "config_name": status_row[14],
+                    "recovery_attempts": status_row[15],
+                    "queue_name": status_row[16],
+                    "workflow_timeout_ms": status_row[17],
+                    "workflow_deadline_epoch_ms": status_row[18],
+                    "started_at_epoch_ms": status_row[19],
+                    "deduplication_id": status_row[20],
+                    "inputs": status_row[21],
+                    "priority": status_row[22],
+                    "queue_partition_key": status_row[23],
+                    "forked_from": status_row[24],
                 }
-                for row in output_rows
-            ]
 
-            # Export workflow_events
-            event_rows = c.execute(
-                sa.select(
-                    SystemSchema.workflow_events.c.workflow_uuid,
-                    SystemSchema.workflow_events.c.key,
-                    SystemSchema.workflow_events.c.value,
-                ).where(SystemSchema.workflow_events.c.workflow_uuid == workflow_id)
-            ).fetchall()
+                # Export operation_outputs
+                output_rows = c.execute(
+                    sa.select(
+                        SystemSchema.operation_outputs.c.workflow_uuid,
+                        SystemSchema.operation_outputs.c.function_id,
+                        SystemSchema.operation_outputs.c.function_name,
+                        SystemSchema.operation_outputs.c.output,
+                        SystemSchema.operation_outputs.c.error,
+                        SystemSchema.operation_outputs.c.child_workflow_id,
+                        SystemSchema.operation_outputs.c.started_at_epoch_ms,
+                        SystemSchema.operation_outputs.c.completed_at_epoch_ms,
+                    ).where(SystemSchema.operation_outputs.c.workflow_uuid == wf_id)
+                ).fetchall()
 
-            workflow_events: list[dict[str, Any]] = [
-                {
-                    "workflow_uuid": row[0],
-                    "key": row[1],
-                    "value": row[2],
-                }
-                for row in event_rows
-            ]
+                operation_outputs: list[dict[str, Any]] = [
+                    {
+                        "workflow_uuid": row[0],
+                        "function_id": row[1],
+                        "function_name": row[2],
+                        "output": row[3],
+                        "error": row[4],
+                        "child_workflow_id": row[5],
+                        "started_at_epoch_ms": row[6],
+                        "completed_at_epoch_ms": row[7],
+                    }
+                    for row in output_rows
+                ]
 
-            # Export workflow_events_history
-            history_rows = c.execute(
-                sa.select(
-                    SystemSchema.workflow_events_history.c.workflow_uuid,
-                    SystemSchema.workflow_events_history.c.key,
-                    SystemSchema.workflow_events_history.c.value,
-                    SystemSchema.workflow_events_history.c.function_id,
-                ).where(
-                    SystemSchema.workflow_events_history.c.workflow_uuid == workflow_id
+                # Export workflow_events
+                event_rows = c.execute(
+                    sa.select(
+                        SystemSchema.workflow_events.c.workflow_uuid,
+                        SystemSchema.workflow_events.c.key,
+                        SystemSchema.workflow_events.c.value,
+                    ).where(SystemSchema.workflow_events.c.workflow_uuid == wf_id)
+                ).fetchall()
+
+                workflow_events: list[dict[str, Any]] = [
+                    {
+                        "workflow_uuid": row[0],
+                        "key": row[1],
+                        "value": row[2],
+                    }
+                    for row in event_rows
+                ]
+
+                # Export workflow_events_history
+                history_rows = c.execute(
+                    sa.select(
+                        SystemSchema.workflow_events_history.c.workflow_uuid,
+                        SystemSchema.workflow_events_history.c.key,
+                        SystemSchema.workflow_events_history.c.value,
+                        SystemSchema.workflow_events_history.c.function_id,
+                    ).where(
+                        SystemSchema.workflow_events_history.c.workflow_uuid == wf_id
+                    )
+                ).fetchall()
+
+                workflow_events_history: list[dict[str, Any]] = [
+                    {
+                        "workflow_uuid": row[0],
+                        "key": row[1],
+                        "value": row[2],
+                        "function_id": row[3],
+                    }
+                    for row in history_rows
+                ]
+
+                # Export streams
+                stream_rows = c.execute(
+                    sa.select(
+                        SystemSchema.streams.c.workflow_uuid,
+                        SystemSchema.streams.c.key,
+                        SystemSchema.streams.c.value,
+                        SystemSchema.streams.c.offset,
+                        SystemSchema.streams.c.function_id,
+                    ).where(SystemSchema.streams.c.workflow_uuid == wf_id)
+                ).fetchall()
+
+                streams: list[dict[str, Any]] = [
+                    {
+                        "workflow_uuid": row[0],
+                        "key": row[1],
+                        "value": row[2],
+                        "offset": row[3],
+                        "function_id": row[4],
+                    }
+                    for row in stream_rows
+                ]
+
+                exported_workflows.append(
+                    ExportedWorkflow(
+                        workflow_status=workflow_status,
+                        operation_outputs=operation_outputs,
+                        workflow_events=workflow_events,
+                        workflow_events_history=workflow_events_history,
+                        streams=streams,
+                    )
                 )
-            ).fetchall()
 
-            workflow_events_history: list[dict[str, Any]] = [
-                {
-                    "workflow_uuid": row[0],
-                    "key": row[1],
-                    "value": row[2],
-                    "function_id": row[3],
-                }
-                for row in history_rows
-            ]
-
-            # Export streams
-            stream_rows = c.execute(
-                sa.select(
-                    SystemSchema.streams.c.workflow_uuid,
-                    SystemSchema.streams.c.key,
-                    SystemSchema.streams.c.value,
-                    SystemSchema.streams.c.offset,
-                    SystemSchema.streams.c.function_id,
-                ).where(SystemSchema.streams.c.workflow_uuid == workflow_id)
-            ).fetchall()
-
-            streams: list[dict[str, Any]] = [
-                {
-                    "workflow_uuid": row[0],
-                    "key": row[1],
-                    "value": row[2],
-                    "offset": row[3],
-                    "function_id": row[4],
-                }
-                for row in stream_rows
-            ]
-
-            return [
-                ExportedWorkflow(
-                    workflow_status=workflow_status,
-                    operation_outputs=operation_outputs,
-                    workflow_events=workflow_events,
-                    workflow_events_history=workflow_events_history,
-                    streams=streams,
-                )
-            ]
+        return exported_workflows
 
     def import_workflow(self, workflows: list[ExportedWorkflow]) -> None:
         """

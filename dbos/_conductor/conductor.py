@@ -441,7 +441,8 @@ class ConductorWebsocket(threading.Thread):
                             serialized_workflow = None
                             try:
                                 exported = self.dbos._sys_db.export_workflow(
-                                    export_message.workflow_id
+                                    export_message.workflow_id,
+                                    export_children=export_message.export_children,
                                 )
                                 serialized_workflow = base64.b64encode(
                                     gzip.compress(pickle.dumps(exported))
