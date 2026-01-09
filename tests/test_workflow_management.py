@@ -68,6 +68,62 @@ def test_cancel_resume(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def test_delete_workflow(dbos: DBOS) -> None:
+    @DBOS.step()
+    def step(x: int) -> int:
+        return x
+
+    @DBOS.transaction()
+    def txn(x: int) -> int:
+        DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        return x
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        step(x)
+        txn(x)
+        return x
+
+    # Run a workflow
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert workflow(5) == 5
+
+    # Verify the workflow exists
+    status = DBOS.get_workflow_status(wfid)
+    assert status is not None
+    assert status.workflow_id == wfid
+
+    # Verify transaction outputs exist
+    assert dbos._app_db
+    with dbos._app_db.engine.begin() as c:
+        rows = c.execute(
+            sa.select(ApplicationSchema.transaction_outputs.c.workflow_uuid).where(
+                ApplicationSchema.transaction_outputs.c.workflow_uuid == wfid
+            )
+        ).all()
+        assert len(rows) == 1
+
+    # Delete the workflow
+    DBOS.delete_workflow(wfid)
+
+    # Verify the workflow no longer exists
+    status = DBOS.get_workflow_status(wfid)
+    assert status is None
+
+    # Verify transaction outputs are deleted
+    with dbos._app_db.engine.begin() as c:
+        rows = c.execute(
+            sa.select(ApplicationSchema.transaction_outputs.c.workflow_uuid).where(
+                ApplicationSchema.transaction_outputs.c.workflow_uuid == wfid
+            )
+        ).all()
+        assert len(rows) == 0
+
+    # Verify deleting a non-existent workflow doesn't error
+    DBOS.delete_workflow(wfid)
+
+
 def test_cancel_resume_txn(dbos: DBOS) -> None:
     txn_completed = 0
     workflow_event = threading.Event()

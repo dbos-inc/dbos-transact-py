@@ -721,6 +721,14 @@ class SystemDatabase(ABC):
                 )
             )
 
+    def delete_workflow(self, workflow_id: str) -> None:
+        with self.engine.begin() as c:
+            c.execute(
+                sa.delete(SystemSchema.workflow_status).where(
+                    SystemSchema.workflow_status.c.workflow_uuid == workflow_id
+                )
+            )
+
     def fork_workflow(
         self,
         original_workflow_id: str,

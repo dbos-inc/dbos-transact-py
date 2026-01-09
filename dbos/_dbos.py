@@ -118,7 +118,7 @@ from ._logger import (
     dbos_logger,
     init_logger,
 )
-from ._workflow_commands import get_workflow
+from ._workflow_commands import delete_workflow, get_workflow
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
@@ -886,7 +886,8 @@ class DBOS:
             pass
 
         await cls._configure_asyncio_thread_pool()
-        return await run_step_async(_get_dbos_instance(),
+        return await run_step_async(
+            _get_dbos_instance(),
             func,
             dbos_step_options or {},
             args,
@@ -1138,6 +1139,24 @@ class DBOS:
         """Cancel a workflow by ID."""
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(cls.cancel_workflow, workflow_id)
+
+    @classmethod
+    def delete_workflow(cls, workflow_id: str) -> None:
+        """Delete a workflow and all its associated data by ID."""
+
+        def fn() -> None:
+            dbos_logger.info(f"Deleting workflow: {workflow_id}")
+            delete_workflow(_get_dbos_instance(), workflow_id)
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.deleteWorkflow"
+        )
+
+    @classmethod
+    async def delete_workflow_async(cls, workflow_id: str) -> None:
+        """Delete a workflow and all its associated data by ID."""
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(cls.delete_workflow, workflow_id)
 
     @classmethod
     async def _configure_asyncio_thread_pool(cls) -> None:
