@@ -196,6 +196,7 @@ class ApplicationDatabase(ABC):
             c.execute(delete_query)
 
     def delete_transaction_outputs(self, workflow_ids: list[str]) -> None:
+        """Delete transaction outputs for the specified workflows."""
         with self.engine.begin() as c:
             c.execute(
                 sa.delete(ApplicationSchema.transaction_outputs).where(

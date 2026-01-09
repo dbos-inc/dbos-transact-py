@@ -1144,7 +1144,10 @@ class DBOS:
     def delete_workflow(
         cls, workflow_id: str, *, delete_children: bool = False
     ) -> None:
-        """Delete a workflow and all its associated data by ID."""
+        """Delete a workflow and all its associated data by ID.
+
+        If delete_children is True, also deletes all child workflows recursively.
+        """
 
         def fn() -> None:
             dbos_logger.info(f"Deleting workflow: {workflow_id}")
@@ -1160,7 +1163,10 @@ class DBOS:
     async def delete_workflow_async(
         cls, workflow_id: str, *, delete_children: bool = False
     ) -> None:
-        """Delete a workflow and all its associated data by ID."""
+        """Delete a workflow and all its associated data by ID.
+
+        If delete_children is True, also deletes all child workflows recursively.
+        """
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(
             lambda: cls.delete_workflow(workflow_id, delete_children=delete_children)
