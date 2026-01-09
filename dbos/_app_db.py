@@ -195,11 +195,13 @@ class ApplicationDatabase(ABC):
 
             c.execute(delete_query)
 
-    def delete_transaction_outputs(self, workflow_id: str) -> None:
+    def delete_transaction_outputs(self, workflow_ids: list[str]) -> None:
         with self.engine.begin() as c:
             c.execute(
                 sa.delete(ApplicationSchema.transaction_outputs).where(
-                    ApplicationSchema.transaction_outputs.c.workflow_uuid == workflow_id
+                    ApplicationSchema.transaction_outputs.c.workflow_uuid.in_(
+                        workflow_ids
+                    )
                 )
             )
 

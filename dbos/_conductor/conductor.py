@@ -164,7 +164,11 @@ class ConductorWebsocket(threading.Thread):
                             delete_message = p.DeleteRequest.from_json(message)
                             success = True
                             try:
-                                delete_workflow(self.dbos, delete_message.workflow_id)
+                                delete_workflow(
+                                    self.dbos,
+                                    delete_message.workflow_id,
+                                    delete_children=delete_message.delete_children,
+                                )
                             except Exception as e:
                                 error_message = f"Exception encountered when deleting workflow {delete_message.workflow_id}: {traceback.format_exc()}"
                                 self.dbos.logger.error(error_message)

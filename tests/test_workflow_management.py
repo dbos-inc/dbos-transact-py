@@ -69,59 +69,81 @@ def test_cancel_resume(dbos: DBOS) -> None:
 
 
 def test_delete_workflow(dbos: DBOS) -> None:
-    @DBOS.step()
-    def step(x: int) -> int:
-        return x
-
     @DBOS.transaction()
     def txn(x: int) -> int:
         DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
         return x
 
     @DBOS.workflow()
-    def workflow(x: int) -> int:
-        step(x)
+    def child_workflow(x: int) -> int:
         txn(x)
-        return x
+        return x * 2
 
-    # Run a workflow
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        assert workflow(5) == 5
+    @DBOS.workflow()
+    def parent_workflow(x: int) -> int:
+        child_handle = DBOS.start_workflow(child_workflow, x)
+        return child_handle.get_result()
 
-    # Verify the workflow exists
-    status = DBOS.get_workflow_status(wfid)
-    assert status is not None
-    assert status.workflow_id == wfid
+    # Run the parent workflow which starts a child workflow
+    parent_wfid = str(uuid.uuid4())
+    with SetWorkflowID(parent_wfid):
+        result = parent_workflow(5)
+    assert result == 10
 
-    # Verify transaction outputs exist
+    # Get the child workflow ID
+    children = dbos._sys_db.get_workflow_children(parent_wfid)
+    assert len(children) == 1
+    child_wfid = children[0]
+
+    # Verify both workflows exist
+    assert DBOS.get_workflow_status(parent_wfid) is not None
+    assert DBOS.get_workflow_status(child_wfid) is not None
+
+    # Verify transaction outputs exist for the child workflow
     assert dbos._app_db
     with dbos._app_db.engine.begin() as c:
         rows = c.execute(
             sa.select(ApplicationSchema.transaction_outputs.c.workflow_uuid).where(
-                ApplicationSchema.transaction_outputs.c.workflow_uuid == wfid
+                ApplicationSchema.transaction_outputs.c.workflow_uuid == child_wfid
             )
         ).all()
         assert len(rows) == 1
 
-    # Delete the workflow
-    DBOS.delete_workflow(wfid)
+    # Delete without delete_children - only parent should be deleted
+    DBOS.delete_workflow(parent_wfid, delete_children=False)
+    assert DBOS.get_workflow_status(parent_wfid) is None
+    assert DBOS.get_workflow_status(child_wfid) is not None
 
-    # Verify the workflow no longer exists
-    status = DBOS.get_workflow_status(wfid)
-    assert status is None
+    # Run again to test delete_children=True
+    parent_wfid2 = str(uuid.uuid4())
+    with SetWorkflowID(parent_wfid2):
+        result = parent_workflow(7)
+    assert result == 14
 
-    # Verify transaction outputs are deleted
+    children2 = dbos._sys_db.get_workflow_children(parent_wfid2)
+    assert len(children2) == 1
+    child_wfid2 = children2[0]
+
+    # Verify both workflows exist
+    assert DBOS.get_workflow_status(parent_wfid2) is not None
+    assert DBOS.get_workflow_status(child_wfid2) is not None
+
+    # Delete with delete_children=True - both should be deleted
+    DBOS.delete_workflow(parent_wfid2, delete_children=True)
+    assert DBOS.get_workflow_status(parent_wfid2) is None
+    assert DBOS.get_workflow_status(child_wfid2) is None
+
+    # Verify transaction outputs are deleted for child
     with dbos._app_db.engine.begin() as c:
         rows = c.execute(
             sa.select(ApplicationSchema.transaction_outputs.c.workflow_uuid).where(
-                ApplicationSchema.transaction_outputs.c.workflow_uuid == wfid
+                ApplicationSchema.transaction_outputs.c.workflow_uuid == child_wfid2
             )
         ).all()
         assert len(rows) == 0
 
     # Verify deleting a non-existent workflow doesn't error
-    DBOS.delete_workflow(wfid)
+    DBOS.delete_workflow(parent_wfid2, delete_children=False)
 
 
 def test_cancel_resume_txn(dbos: DBOS) -> None:

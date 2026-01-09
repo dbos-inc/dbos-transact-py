@@ -97,6 +97,7 @@ class CancelResponse(BaseMessage):
 @dataclass
 class DeleteRequest(BaseMessage):
     workflow_id: str
+    delete_children: bool
 
 
 @dataclass

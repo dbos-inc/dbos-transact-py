@@ -1141,22 +1141,30 @@ class DBOS:
         await asyncio.to_thread(cls.cancel_workflow, workflow_id)
 
     @classmethod
-    def delete_workflow(cls, workflow_id: str) -> None:
+    def delete_workflow(
+        cls, workflow_id: str, *, delete_children: bool = False
+    ) -> None:
         """Delete a workflow and all its associated data by ID."""
 
         def fn() -> None:
             dbos_logger.info(f"Deleting workflow: {workflow_id}")
-            delete_workflow(_get_dbos_instance(), workflow_id)
+            delete_workflow(
+                _get_dbos_instance(), workflow_id, delete_children=delete_children
+            )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
             fn, "DBOS.deleteWorkflow"
         )
 
     @classmethod
-    async def delete_workflow_async(cls, workflow_id: str) -> None:
+    async def delete_workflow_async(
+        cls, workflow_id: str, *, delete_children: bool = False
+    ) -> None:
         """Delete a workflow and all its associated data by ID."""
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(cls.delete_workflow, workflow_id)
+        await asyncio.to_thread(
+            lambda: cls.delete_workflow(workflow_id, delete_children=delete_children)
+        )
 
     @classmethod
     async def _configure_asyncio_thread_pool(cls) -> None:
