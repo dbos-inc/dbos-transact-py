@@ -2492,7 +2492,7 @@ class SystemDatabase(ABC):
             ).scalar()
             return checkpoint_name == patch_name
 
-    def export_workflow(self, workflow_id: str) -> ExportedWorkflow:
+    def export_workflow(self, workflow_id: str) -> list[ExportedWorkflow]:
         """
         Export all entries for a workflow in a portable format.
 
@@ -2500,7 +2500,7 @@ class SystemDatabase(ABC):
             workflow_id: The workflow UUID to export
 
         Returns:
-            An ExportedWorkflow containing all workflow data
+            A list of ExportedWorkflow containing all workflow data
         """
         with self.engine.begin() as c:
             # Export workflow_status
@@ -2655,99 +2655,102 @@ class SystemDatabase(ABC):
                 for row in stream_rows
             ]
 
-            return ExportedWorkflow(
-                workflow_status=workflow_status,
-                operation_outputs=operation_outputs,
-                workflow_events=workflow_events,
-                workflow_events_history=workflow_events_history,
-                streams=streams,
-            )
+            return [
+                ExportedWorkflow(
+                    workflow_status=workflow_status,
+                    operation_outputs=operation_outputs,
+                    workflow_events=workflow_events,
+                    workflow_events_history=workflow_events_history,
+                    streams=streams,
+                )
+            ]
 
-    def import_workflow(self, workflow: ExportedWorkflow) -> None:
+    def import_workflow(self, workflows: list[ExportedWorkflow]) -> None:
         """
-        Import a workflow from an exported format.
+        Import workflows from an exported format.
 
         Args:
-            workflow: The exported workflow data to import
+            workflows: The list of exported workflow data to import
         """
         with self.engine.begin() as c:
-            status = workflow["workflow_status"]
+            for workflow in workflows:
+                status = workflow["workflow_status"]
 
-            # Import workflow_status
-            c.execute(
-                sa.insert(SystemSchema.workflow_status).values(
-                    workflow_uuid=status["workflow_uuid"],
-                    status=status["status"],
-                    name=status["name"],
-                    authenticated_user=status["authenticated_user"],
-                    assumed_role=status["assumed_role"],
-                    authenticated_roles=status["authenticated_roles"],
-                    output=status["output"],
-                    error=status["error"],
-                    executor_id=status["executor_id"],
-                    created_at=status["created_at"],
-                    updated_at=status["updated_at"],
-                    application_version=status["application_version"],
-                    application_id=status["application_id"],
-                    class_name=status["class_name"],
-                    config_name=status["config_name"],
-                    recovery_attempts=status["recovery_attempts"],
-                    queue_name=status["queue_name"],
-                    workflow_timeout_ms=status["workflow_timeout_ms"],
-                    workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
-                    started_at_epoch_ms=status["started_at_epoch_ms"],
-                    deduplication_id=status["deduplication_id"],
-                    inputs=status["inputs"],
-                    priority=status["priority"],
-                    queue_partition_key=status["queue_partition_key"],
-                    forked_from=status["forked_from"],
-                )
-            )
-
-            # Import operation_outputs
-            for output in workflow["operation_outputs"]:
+                # Import workflow_status
                 c.execute(
-                    sa.insert(SystemSchema.operation_outputs).values(
-                        workflow_uuid=output["workflow_uuid"],
-                        function_id=output["function_id"],
-                        function_name=output["function_name"],
-                        output=output["output"],
-                        error=output["error"],
-                        child_workflow_id=output["child_workflow_id"],
-                        started_at_epoch_ms=output["started_at_epoch_ms"],
-                        completed_at_epoch_ms=output["completed_at_epoch_ms"],
+                    sa.insert(SystemSchema.workflow_status).values(
+                        workflow_uuid=status["workflow_uuid"],
+                        status=status["status"],
+                        name=status["name"],
+                        authenticated_user=status["authenticated_user"],
+                        assumed_role=status["assumed_role"],
+                        authenticated_roles=status["authenticated_roles"],
+                        output=status["output"],
+                        error=status["error"],
+                        executor_id=status["executor_id"],
+                        created_at=status["created_at"],
+                        updated_at=status["updated_at"],
+                        application_version=status["application_version"],
+                        application_id=status["application_id"],
+                        class_name=status["class_name"],
+                        config_name=status["config_name"],
+                        recovery_attempts=status["recovery_attempts"],
+                        queue_name=status["queue_name"],
+                        workflow_timeout_ms=status["workflow_timeout_ms"],
+                        workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
+                        started_at_epoch_ms=status["started_at_epoch_ms"],
+                        deduplication_id=status["deduplication_id"],
+                        inputs=status["inputs"],
+                        priority=status["priority"],
+                        queue_partition_key=status["queue_partition_key"],
+                        forked_from=status["forked_from"],
                     )
                 )
 
-            # Import workflow_events
-            for event in workflow["workflow_events"]:
-                c.execute(
-                    sa.insert(SystemSchema.workflow_events).values(
-                        workflow_uuid=event["workflow_uuid"],
-                        key=event["key"],
-                        value=event["value"],
+                # Import operation_outputs
+                for output in workflow["operation_outputs"]:
+                    c.execute(
+                        sa.insert(SystemSchema.operation_outputs).values(
+                            workflow_uuid=output["workflow_uuid"],
+                            function_id=output["function_id"],
+                            function_name=output["function_name"],
+                            output=output["output"],
+                            error=output["error"],
+                            child_workflow_id=output["child_workflow_id"],
+                            started_at_epoch_ms=output["started_at_epoch_ms"],
+                            completed_at_epoch_ms=output["completed_at_epoch_ms"],
+                        )
                     )
-                )
 
-            # Import workflow_events_history
-            for history in workflow["workflow_events_history"]:
-                c.execute(
-                    sa.insert(SystemSchema.workflow_events_history).values(
-                        workflow_uuid=history["workflow_uuid"],
-                        key=history["key"],
-                        value=history["value"],
-                        function_id=history["function_id"],
+                # Import workflow_events
+                for event in workflow["workflow_events"]:
+                    c.execute(
+                        sa.insert(SystemSchema.workflow_events).values(
+                            workflow_uuid=event["workflow_uuid"],
+                            key=event["key"],
+                            value=event["value"],
+                        )
                     )
-                )
 
-            # Import streams
-            for stream in workflow["streams"]:
-                c.execute(
-                    sa.insert(SystemSchema.streams).values(
-                        workflow_uuid=stream["workflow_uuid"],
-                        key=stream["key"],
-                        value=stream["value"],
-                        offset=stream["offset"],
-                        function_id=stream["function_id"],
+                # Import workflow_events_history
+                for history in workflow["workflow_events_history"]:
+                    c.execute(
+                        sa.insert(SystemSchema.workflow_events_history).values(
+                            workflow_uuid=history["workflow_uuid"],
+                            key=history["key"],
+                            value=history["value"],
+                            function_id=history["function_id"],
+                        )
                     )
-                )
+
+                # Import streams
+                for stream in workflow["streams"]:
+                    c.execute(
+                        sa.insert(SystemSchema.streams).values(
+                            workflow_uuid=stream["workflow_uuid"],
+                            key=stream["key"],
+                            value=stream["value"],
+                            offset=stream["offset"],
+                            function_id=stream["function_id"],
+                        )
+                    )
