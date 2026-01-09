@@ -7,6 +7,7 @@ from ._context import (
     SetWorkflowID,
     SetWorkflowTimeout,
 )
+from ._core import StepOptions
 from ._dbos import DBOS, DBOSConfiguredInstance, WorkflowHandle, WorkflowHandleAsync
 from ._dbos_config import DBOSConfig
 from ._debouncer import Debouncer, DebouncerClient
@@ -29,6 +30,7 @@ __all__ = [
     "SetWorkflowID",
     "SetWorkflowTimeout",
     "SetEnqueueOptions",
+    "StepOptions",
     "WorkflowHandle",
     "WorkflowHandleAsync",
     "WorkflowStatus",
