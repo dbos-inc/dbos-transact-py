@@ -633,6 +633,7 @@ class DBOS:
             self._executor_field = None
         if self._sys_db_field is not None:
             self._sys_db_field._run_background_processes = False
+            self._sys_db_field._cleanup_connections()
         for bg_thread in self._background_threads:
             bg_thread.join(timeout=10.0)
             if bg_thread.is_alive():
