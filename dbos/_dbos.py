@@ -13,6 +13,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Awaitable,
     Callable,
     Coroutine,
     Dict,
@@ -26,6 +27,7 @@ from typing import (
     Type,
     TypeVar,
     Union,
+    overload,
 )
 
 from dbos._conductor.conductor import ConductorWebsocket
@@ -41,6 +43,7 @@ from ._core import (
     DEFAULT_POLLING_INTERVAL,
     TEMP_SEND_WF_NAME,
     ActiveWorkflowById,
+    StepOptions,
     WorkflowHandleAsyncPolling,
     WorkflowHandlePolling,
     decorate_step,
@@ -49,6 +52,8 @@ from ._core import (
     execute_workflow_by_id,
     get_event,
     recv,
+    run_step,
+    run_step_async,
     send,
     set_event,
     start_workflow,
@@ -804,6 +809,96 @@ class DBOS:
         """Invoke a workflow function on the event loop, returning a handle to the ongoing execution."""
         await cls._configure_asyncio_thread_pool()
         return await start_workflow_async(_get_dbos_instance(), func, args, kwargs)
+
+    @classmethod
+    @overload
+    def run_step(
+        cls,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, Coroutine[Any, Any, R]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    @classmethod
+    @overload
+    def run_step(
+        cls,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    @classmethod
+    def run_step(
+        cls,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R:
+        """Invoke a step function and checkpoint its result."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError(
+                "run_step() was called while an event loop is running. "
+                "Use await run_step_async(...) instead."
+            )
+
+        return run_step(
+            _get_dbos_instance(), func, dbos_step_options or {}, args, kwargs
+        )
+
+    @classmethod
+    @overload
+    async def run_step_async(
+        cls,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, Coroutine[Any, Any, R]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    @classmethod
+    @overload
+    async def run_step_async(
+        cls,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    @classmethod
+    async def run_step_async(
+        cls,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R:
+        """Invoke a step function on the event loop and checkpoint its result."""
+        try:
+            asyncio.get_running_loop()
+        except:
+            raise RuntimeError(
+                "run_step_async() was called while an event loop is not running. "
+                "Use run_step(...) instead."
+            )
+        else:
+            pass
+
+        await cls._configure_asyncio_thread_pool()
+        return await run_step_async(_get_dbos_instance(),
+            func,
+            dbos_step_options or {},
+            args,
+            kwargs,
+        )
 
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:

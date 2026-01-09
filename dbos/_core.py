@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future
+from dataclasses import dataclass
 from functools import wraps
 from typing import (
     TYPE_CHECKING,
@@ -22,7 +23,7 @@ from typing import (
     cast,
 )
 
-from dbos._outcome import Immediate, NoResult, Outcome, Pending
+from dbos._outcome import NoResult, Outcome, Pending
 from dbos._utils import GlobalParams, retriable_postgres_exception
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
@@ -233,6 +234,49 @@ class WorkflowHandleAsyncPolling(Generic[R]):
             raise DBOSNonExistentWorkflowError(self.workflow_id)
         return stat
 
+from typing import TypedDict, Optional
+
+
+class StepOptions(TypedDict, total=False):
+    """
+    Configuration options for steps.
+
+    Attributes:
+        name:
+            Optional name for the step.
+            If not provided, the function's name will be used.
+
+        retries_allowed:
+            Whether the step should be retried on failure.
+
+        interval_seconds:
+            Initial delay (in seconds) between retry attempts.
+
+        max_attempts:
+            Maximum number of attempts before the step is
+            considered failed.
+
+        backoff_rate:
+            Multiplier applied to `interval_seconds` after
+            each failed attempt (e.g. 2.0 = exponential backoff).
+    """
+
+    name: Optional[str]
+    retries_allowed: bool
+    interval_seconds: float
+    max_attempts: int
+    backoff_rate: float
+
+DEFAULT_STEP_OPTIONS: StepOptions = {
+    "name": None,
+    "retries_allowed": False,
+    "interval_seconds": 1.0,
+    "max_attempts": 3,
+    "backoff_rate": 2.0,
+}
+
+def normalize_step_options(opts: Optional[StepOptions]) -> StepOptions:
+    return {**DEFAULT_STEP_OPTIONS, **(opts or {})}
 
 def _init_workflow(
     dbos: "DBOS",
@@ -1190,6 +1234,174 @@ def decorate_transaction(
     return decorator
 
 
+def invoke_step(
+    dbos: "DBOS",
+    func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    step_name: str,
+    retries_allowed: bool,
+    interval_seconds: float,
+    max_attempts: int,
+    backoff_rate: float,
+) -> R | Coroutine[Any, Any, R]:
+    attributes: TracedAttributes = {
+        "name": step_name,
+        "operationType": OperationType.STEP.value,
+    }
+
+    attempts = max_attempts if retries_allowed else 1
+    max_retry_interval_seconds: float = 3600  # 1 Hour
+
+    def on_exception(attempt: int, error: BaseException) -> float:
+        dbos.logger.warning(
+            f"Step being automatically retried (attempt {attempt + 1} of {attempts})",
+            exc_info=error,
+        )
+        ctx = assert_current_dbos_context()
+        span = ctx.get_current_dbos_span()
+        if span:
+            span.add_event(
+                f"Step attempt {attempt} failed",
+                {
+                    "error": str(error),
+                    "retryIntervalSeconds": interval_seconds,
+                },
+            )
+        return min(
+            interval_seconds * (backoff_rate**attempt),
+            max_retry_interval_seconds,
+        )
+
+    def record_step_result(func: Callable[[], R]) -> R:
+        ctx = assert_current_dbos_context()
+        step_output: OperationResultInternal = {
+            "workflow_uuid": ctx.workflow_id,
+            "function_id": ctx.function_id,
+            "function_name": step_name,
+            "output": None,
+            "error": None,
+            "started_at_epoch_ms": int(time.time() * 1000),
+        }
+
+        try:
+            output = func()
+        except Exception as error:
+            step_output["error"] = dbos._serializer.serialize(error)
+            dbos._sys_db.record_operation_result(step_output)
+            raise
+        step_output["output"] = dbos._serializer.serialize(output)
+        dbos._sys_db.record_operation_result(step_output)
+        return output
+
+    def check_existing_result() -> Union[NoResult, R]:
+        ctx = assert_current_dbos_context()
+        recorded_output = dbos._sys_db.check_operation_execution(
+            ctx.workflow_id, ctx.function_id, step_name
+        )
+        if recorded_output:
+            dbos.logger.debug(
+                f"Replaying step, id: {ctx.function_id}, name: {attributes['name']}"
+            )
+            if recorded_output["error"] is not None:
+                deserialized_error: Exception = dbos._serializer.deserialize(
+                    recorded_output["error"]
+                )
+                raise deserialized_error
+            elif recorded_output["output"] is not None:
+                return cast(R, dbos._serializer.deserialize(recorded_output["output"]))
+            else:
+                raise Exception("Output and error are both None")
+        else:
+            dbos.logger.debug(
+                f"Running step, id: {ctx.function_id}, name: {attributes['name']}"
+            )
+            return NoResult()
+
+    stepOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
+    if retries_allowed:
+        stepOutcome = stepOutcome.retry(
+            max_attempts,
+            on_exception,
+            lambda i, e: DBOSMaxStepRetriesExceeded(step_name, i, e),
+        )
+
+    outcome = (
+        stepOutcome.then(record_step_result)
+        .intercept(check_existing_result, dbos=dbos)
+        .also(EnterDBOSStep(attributes))
+    )
+    return outcome()
+
+def run_step(
+    dbos: "DBOS",
+    func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
+    options: StepOptions,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> R:
+    options = normalize_step_options(options)
+    # If the step is called from a workflow, run it as a step.
+    # Otherwise, run it as a normal function.
+    ctx = get_local_dbos_context()
+    if ctx and ctx.is_workflow():
+        outcome = invoke_step(
+                dbos,
+                func,
+                args,
+                kwargs,
+                step_name=options["name"] if options["name"] else func.__qualname__,
+                retries_allowed=options["retries_allowed"],
+                interval_seconds=options["interval_seconds"],
+                max_attempts=options["max_attempts"],
+                backoff_rate=options["backoff_rate"],
+            )
+        if inspect.iscoroutinefunction(func):
+            return dbos._background_event_loop.submit_coroutine(cast(Coroutine[Any, Any, R], outcome))
+        else:
+            return cast(R, outcome)
+    else:
+        if inspect.iscoroutinefunction(func):
+            async def runfunc() -> R:
+                return await cast(Callable[P, Coroutine[Any, Any, R]], func)(*args, **kwargs)
+            return dbos._background_event_loop.submit_coroutine(runfunc())
+        else:
+            return cast (Callable[P, R], func)(*args, **kwargs)
+
+async def run_step_async(
+    dbos: "DBOS",
+    func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
+    options: StepOptions,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> R:
+    # If the step is called from a workflow, run it as a step.
+    # Otherwise, run it as a normal function.
+    ctx = get_local_dbos_context()
+    options = normalize_step_options(options)
+    if ctx and ctx.is_workflow():
+        outcome = invoke_step(
+                dbos,
+                func,
+                args,
+                kwargs,
+                step_name=options["name"] if options["name"] else func.__qualname__,
+                retries_allowed=options["retries_allowed"],
+                interval_seconds=options["interval_seconds"],
+                max_attempts=options["max_attempts"],
+                backoff_rate=options["backoff_rate"],
+            )
+        if inspect.iscoroutinefunction(func):
+            return await cast(Coroutine[Any, Any, R], outcome)
+        else:
+            return cast(R, outcome)
+    else:
+        if inspect.iscoroutinefunction(func):
+            return await (cast(Callable[P, Coroutine[Any, Any, R]], func))(*args, **kwargs)
+        else:
+            return await asyncio.to_thread(lambda: cast (Callable[P, R], func)(*args, **kwargs))
+
 def decorate_step(
     dbosreg: "DBOSRegistry",
     *,
@@ -1203,103 +1415,6 @@ def decorate_step(
 
         step_name = name if name is not None else func.__qualname__
 
-        def invoke_step(*args: Any, **kwargs: Any) -> Any:
-            if dbosreg.dbos is None:
-                raise DBOSException(
-                    f"Function {step_name} invoked before DBOS initialized"
-                )
-            dbos = dbosreg.dbos
-
-            attributes: TracedAttributes = {
-                "name": step_name,
-                "operationType": OperationType.STEP.value,
-            }
-
-            attempts = max_attempts if retries_allowed else 1
-            max_retry_interval_seconds: float = 3600  # 1 Hour
-
-            def on_exception(attempt: int, error: BaseException) -> float:
-                dbos.logger.warning(
-                    f"Step being automatically retried (attempt {attempt + 1} of {attempts})",
-                    exc_info=error,
-                )
-                ctx = assert_current_dbos_context()
-                span = ctx.get_current_dbos_span()
-                if span:
-                    span.add_event(
-                        f"Step attempt {attempt} failed",
-                        {
-                            "error": str(error),
-                            "retryIntervalSeconds": interval_seconds,
-                        },
-                    )
-                return min(
-                    interval_seconds * (backoff_rate**attempt),
-                    max_retry_interval_seconds,
-                )
-
-            def record_step_result(func: Callable[[], R]) -> R:
-                ctx = assert_current_dbos_context()
-                step_output: OperationResultInternal = {
-                    "workflow_uuid": ctx.workflow_id,
-                    "function_id": ctx.function_id,
-                    "function_name": step_name,
-                    "output": None,
-                    "error": None,
-                    "started_at_epoch_ms": int(time.time() * 1000),
-                }
-
-                try:
-                    output = func()
-                except Exception as error:
-                    step_output["error"] = dbos._serializer.serialize(error)
-                    dbos._sys_db.record_operation_result(step_output)
-                    raise
-                step_output["output"] = dbos._serializer.serialize(output)
-                dbos._sys_db.record_operation_result(step_output)
-                return output
-
-            def check_existing_result() -> Union[NoResult, R]:
-                ctx = assert_current_dbos_context()
-                recorded_output = dbos._sys_db.check_operation_execution(
-                    ctx.workflow_id, ctx.function_id, step_name
-                )
-                if recorded_output:
-                    dbos.logger.debug(
-                        f"Replaying step, id: {ctx.function_id}, name: {attributes['name']}"
-                    )
-                    if recorded_output["error"] is not None:
-                        deserialized_error: Exception = dbos._serializer.deserialize(
-                            recorded_output["error"]
-                        )
-                        raise deserialized_error
-                    elif recorded_output["output"] is not None:
-                        return cast(
-                            R, dbos._serializer.deserialize(recorded_output["output"])
-                        )
-                    else:
-                        raise Exception("Output and error are both None")
-                else:
-                    dbos.logger.debug(
-                        f"Running step, id: {ctx.function_id}, name: {attributes['name']}"
-                    )
-                    return NoResult()
-
-            stepOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
-            if retries_allowed:
-                stepOutcome = stepOutcome.retry(
-                    max_attempts,
-                    on_exception,
-                    lambda i, e: DBOSMaxStepRetriesExceeded(step_name, i, e),
-                )
-
-            outcome = (
-                stepOutcome.then(record_step_result)
-                .intercept(check_existing_result, dbos=dbos)
-                .also(EnterDBOSStep(attributes))
-            )
-            return outcome()
-
         fi = get_or_create_func_info(func)
 
         @wraps(func)
@@ -1308,9 +1423,23 @@ def decorate_step(
             # Otherwise, run it as a normal function.
             ctx = get_local_dbos_context()
             if ctx and ctx.is_workflow():
+                if dbosreg.dbos is None:
+                    raise DBOSException(
+                        f"Function {step_name} invoked before DBOS initialized"
+                    )
                 rr: Optional[str] = check_required_roles(func, fi)
                 with DBOSAssumeRole(rr):
-                    return invoke_step(*args, **kwargs)
+                    return invoke_step(
+                        dbosreg.dbos,
+                        func,
+                        args,
+                        kwargs,
+                        step_name=step_name,
+                        retries_allowed=retries_allowed,
+                        interval_seconds=interval_seconds,
+                        max_attempts=max_attempts,
+                        backoff_rate=backoff_rate,
+                    )
             else:
                 return func(*args, **kwargs)
 
