@@ -2197,27 +2197,7 @@ def test_run_step(dbos: DBOS) -> None:
         assert DBOS.step_status is None
         return var
     
-    n_thrown_errors = 0
-    def test_step_error() -> None:
-        nonlocal n_thrown_errors
-        n_thrown_errors += 1
-        raise Exception()
-    async def test_step_error_async() -> None:
-        nonlocal n_thrown_errors
-        n_thrown_errors += 1
-        raise Exception()
-
     assert DBOS.run_step(None, test_step_nwf, "ha") == "ha"
-
-    with pytest.raises(Exception) as exc_info:
-        DBOS.run_step({"retries_allowed": True, "max_attempts": 2, "interval_seconds": .1, "backoff_rate": 1}, test_step_error)
-    #assert n_thrown_errors == 2
-    with pytest.raises(Exception) as exc_info:
-        DBOS.run_step({"retries_allowed": True, "max_attempts": 2, "interval_seconds": .1, "backoff_rate": 1}, test_step_error_async)
-    #assert n_thrown_errors == 4
-    with pytest.raises(Exception) as exc_info:
-        DBOS.run_step({"retries_allowed": False, "max_attempts": 2, "interval_seconds": .1, "backoff_rate": 1}, test_step_error_async)
-    #assert n_thrown_errors == 5
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
@@ -2284,6 +2264,30 @@ def test_run_step(dbos: DBOS) -> None:
         return var
 
     assert DBOS.start_workflow(test_workflow_acs, "bob", "bob").get_result() == "bobbob" #type: ignore
+
+    @DBOS.workflow()
+    def test_errors_wf() -> None:
+        n_thrown_errors = 0
+        def test_step_error() -> None:
+            nonlocal n_thrown_errors
+            n_thrown_errors += 1
+            raise Exception()
+        async def test_step_error_async() -> None:
+            nonlocal n_thrown_errors
+            n_thrown_errors += 1
+            raise Exception()
+
+        with pytest.raises(Exception) as exc_info:
+            DBOS.run_step({"retries_allowed": True, "max_attempts": 2, "interval_seconds": .1, "backoff_rate": 1}, test_step_error)
+        assert n_thrown_errors == 2
+        with pytest.raises(Exception) as exc_info:
+            DBOS.run_step({"retries_allowed": True, "max_attempts": 2, "interval_seconds": .1, "backoff_rate": 1}, test_step_error_async)
+        assert n_thrown_errors == 4
+        with pytest.raises(Exception) as exc_info:
+            DBOS.run_step({"retries_allowed": False, "max_attempts": 2, "interval_seconds": .1, "backoff_rate": 1}, test_step_error_async)
+        assert n_thrown_errors == 5
+
+    test_errors_wf()
 
 @pytest.mark.asyncio
 async def test_run_step_async(dbos: DBOS) -> None:
@@ -2358,3 +2362,28 @@ async def test_run_step_async(dbos: DBOS) -> None:
     )
 
     assert await (await DBOS.start_workflow_async(test_workflow, "joe", "joe")).get_result() == "joejoe"
+
+
+    @DBOS.workflow()
+    async def test_errors_wf_async() -> None:
+        n_thrown_errors = 0
+        async def test_step_error() -> None:
+            nonlocal n_thrown_errors
+            n_thrown_errors += 1
+            raise Exception()
+        async def test_step_error_async() -> None:
+            nonlocal n_thrown_errors
+            n_thrown_errors += 1
+            raise Exception()
+
+        with pytest.raises(Exception) as exc_info:
+            await DBOS.run_step_async({"retries_allowed": True, "max_attempts": 2, "interval_seconds": .1, "backoff_rate": 1}, test_step_error)
+        assert n_thrown_errors == 2
+        with pytest.raises(Exception) as exc_info:
+            await DBOS.run_step_async({"retries_allowed": True, "max_attempts": 2, "interval_seconds": .1, "backoff_rate": 1}, test_step_error_async)
+        assert n_thrown_errors == 4
+        with pytest.raises(Exception) as exc_info:
+            await DBOS.run_step_async({"retries_allowed": False, "max_attempts": 2, "interval_seconds": .1, "backoff_rate": 1}, test_step_error_async)
+        assert n_thrown_errors == 5
+
+    await test_errors_wf_async()
