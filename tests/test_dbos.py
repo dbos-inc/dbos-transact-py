@@ -2182,7 +2182,8 @@ def test_run_step(dbos: DBOS) -> None:
     def test_workflow(var: str, var2: str) -> str:
         res1 = DBOS.run_step(None, test_step, var, 1)
         res2 = DBOS.run_step({"name": 'test_step'}, test_step, var2, 2)
-        return res1+res2
+        res3 = DBOS.run_step({"name": "concat"}, lambda: res1+res2)
+        return res1+res2+res3
 
     def test_step(var: str, sn: int) -> str:
         assert DBOS.step_id == sn
@@ -2201,17 +2202,20 @@ def test_run_step(dbos: DBOS) -> None:
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        assert test_workflow("bob", "bob") == "bobbob"
+        assert test_workflow("bob", "bob") == "bobbobbobbob"
     steps = DBOS.list_workflow_steps(wfid)
-    assert len(steps) == 2
+    assert len(steps) == 3
     assert (
         steps[0]["function_name"] == "test_run_step.<locals>.test_step"
     )
     assert (
         steps[1]["function_name"] == "test_step"
     )
+    assert (
+        steps[2]["function_name"] == "concat"
+    )
 
-    assert DBOS.start_workflow(test_workflow, "bob", "bob").get_result() == "bobbob"
+    assert DBOS.start_workflow(test_workflow, "bob", "bob").get_result() == "bobbobbobbob"
 
     @DBOS.workflow()
     def test_workflow_sca(var: str, var2: str) -> str:
