@@ -195,6 +195,14 @@ class ApplicationDatabase(ABC):
 
             c.execute(delete_query)
 
+    def delete_transaction_outputs(self, workflow_id: str) -> None:
+        with self.engine.begin() as c:
+            c.execute(
+                sa.delete(ApplicationSchema.transaction_outputs).where(
+                    ApplicationSchema.transaction_outputs.c.workflow_uuid == workflow_id
+                )
+            )
+
     @abstractmethod
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation."""

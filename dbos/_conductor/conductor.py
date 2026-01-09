@@ -15,6 +15,7 @@ from websockets.sync.connection import Connection
 from dbos._context import SetWorkflowID
 from dbos._utils import GlobalParams, generate_uuid
 from dbos._workflow_commands import (
+    delete_workflow,
     garbage_collect,
     get_workflow,
     global_timeout,
@@ -159,6 +160,22 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(cancel_response.to_json())
+                        elif msg_type == p.MessageType.DELETE:
+                            delete_message = p.DeleteRequest.from_json(message)
+                            success = True
+                            try:
+                                delete_workflow(self.dbos, delete_message.workflow_id)
+                            except Exception as e:
+                                error_message = f"Exception encountered when deleting workflow {delete_message.workflow_id}: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                                success = False
+                            delete_response = p.DeleteResponse(
+                                type=p.MessageType.DELETE,
+                                request_id=base_message.request_id,
+                                success=success,
+                                error_message=error_message,
+                            )
+                            websocket.send(delete_response.to_json())
                         elif msg_type == p.MessageType.RESUME:
                             resume_message = p.ResumeRequest.from_json(message)
                             success = True

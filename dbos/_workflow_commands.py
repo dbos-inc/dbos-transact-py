@@ -126,6 +126,12 @@ def fork_workflow(
     return forked_workflow_id
 
 
+def delete_workflow(dbos: "DBOS", workflow_id: str) -> None:
+    dbos._sys_db.delete_workflow(workflow_id)
+    if dbos._app_db:
+        dbos._app_db.delete_transaction_outputs(workflow_id)
+
+
 def garbage_collect(
     dbos: "DBOS",
     cutoff_epoch_timestamp_ms: Optional[int],
