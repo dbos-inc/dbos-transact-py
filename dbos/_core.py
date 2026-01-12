@@ -234,7 +234,8 @@ class WorkflowHandleAsyncPolling(Generic[R]):
             raise DBOSNonExistentWorkflowError(self.workflow_id)
         return stat
 
-from typing import TypedDict, Optional
+
+from typing import Optional, TypedDict
 
 
 class StepOptions(TypedDict, total=False):
@@ -267,6 +268,7 @@ class StepOptions(TypedDict, total=False):
     max_attempts: int
     backoff_rate: float
 
+
 DEFAULT_STEP_OPTIONS: StepOptions = {
     "name": None,
     "retries_allowed": False,
@@ -275,8 +277,10 @@ DEFAULT_STEP_OPTIONS: StepOptions = {
     "backoff_rate": 2.0,
 }
 
+
 def normalize_step_options(opts: Optional[StepOptions]) -> StepOptions:
     return {**DEFAULT_STEP_OPTIONS, **(opts or {})}
+
 
 def _init_workflow(
     dbos: "DBOS",
@@ -1251,6 +1255,7 @@ def invoke_step(
         "operationType": OperationType.STEP.value,
     }
 
+    step_start_time = int(time.time() * 1000)
     attempts = max_attempts if retries_allowed else 1
     max_retry_interval_seconds: float = 3600  # 1 Hour
 
@@ -1282,7 +1287,7 @@ def invoke_step(
             "function_name": step_name,
             "output": None,
             "error": None,
-            "started_at_epoch_ms": int(time.time() * 1000),
+            "started_at_epoch_ms": step_start_time,
         }
 
         try:
@@ -1334,6 +1339,7 @@ def invoke_step(
     )
     return outcome()
 
+
 def run_step(
     dbos: "DBOS",
     func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
@@ -1347,27 +1353,34 @@ def run_step(
     ctx = get_local_dbos_context()
     if ctx and ctx.is_workflow():
         outcome = invoke_step(
-                dbos,
-                func,
-                args,
-                kwargs,
-                step_name=options["name"] if options["name"] else func.__qualname__,
-                retries_allowed=options["retries_allowed"],
-                interval_seconds=options["interval_seconds"],
-                max_attempts=options["max_attempts"],
-                backoff_rate=options["backoff_rate"],
-            )
+            dbos,
+            func,
+            args,
+            kwargs,
+            step_name=options["name"] if options["name"] else func.__qualname__,
+            retries_allowed=options["retries_allowed"],
+            interval_seconds=options["interval_seconds"],
+            max_attempts=options["max_attempts"],
+            backoff_rate=options["backoff_rate"],
+        )
         if inspect.iscoroutinefunction(func):
-            return dbos._background_event_loop.submit_coroutine(cast(Coroutine[Any, Any, R], outcome))
+            return dbos._background_event_loop.submit_coroutine(
+                cast(Coroutine[Any, Any, R], outcome)
+            )
         else:
             return cast(R, outcome)
     else:
         if inspect.iscoroutinefunction(func):
+
             async def runfunc() -> R:
-                return await cast(Callable[P, Coroutine[Any, Any, R]], func)(*args, **kwargs)
+                return await cast(Callable[P, Coroutine[Any, Any, R]], func)(
+                    *args, **kwargs
+                )
+
             return dbos._background_event_loop.submit_coroutine(runfunc())
         else:
-            return cast (Callable[P, R], func)(*args, **kwargs)
+            return cast(Callable[P, R], func)(*args, **kwargs)
+
 
 async def run_step_async(
     dbos: "DBOS",
@@ -1382,25 +1395,30 @@ async def run_step_async(
     options = normalize_step_options(options)
     if ctx and ctx.is_workflow():
         outcome = invoke_step(
-                dbos,
-                func,
-                args,
-                kwargs,
-                step_name=options["name"] if options["name"] else func.__qualname__,
-                retries_allowed=options["retries_allowed"],
-                interval_seconds=options["interval_seconds"],
-                max_attempts=options["max_attempts"],
-                backoff_rate=options["backoff_rate"],
-            )
+            dbos,
+            func,
+            args,
+            kwargs,
+            step_name=options["name"] if options["name"] else func.__qualname__,
+            retries_allowed=options["retries_allowed"],
+            interval_seconds=options["interval_seconds"],
+            max_attempts=options["max_attempts"],
+            backoff_rate=options["backoff_rate"],
+        )
         if inspect.iscoroutinefunction(func):
             return await cast(Coroutine[Any, Any, R], outcome)
         else:
             return cast(R, outcome)
     else:
         if inspect.iscoroutinefunction(func):
-            return await (cast(Callable[P, Coroutine[Any, Any, R]], func))(*args, **kwargs)
+            return await cast(Callable[P, Coroutine[Any, Any, R]], func)(
+                *args, **kwargs
+            )
         else:
-            return await asyncio.to_thread(lambda: cast (Callable[P, R], func)(*args, **kwargs))
+            return await asyncio.to_thread(
+                lambda: cast(Callable[P, R], func)(*args, **kwargs)
+            )
+
 
 def decorate_step(
     dbosreg: "DBOSRegistry",
