@@ -18,7 +18,23 @@ class SQLiteSystemDatabase(SystemDatabase):
         self, system_database_url: str, engine_kwargs: Dict[str, Any]
     ) -> sa.Engine:
         """Create a SQLite engine."""
-        return sa.create_engine(system_database_url)
+        sqlite_kwargs = engine_kwargs.copy()
+        connect_args = sqlite_kwargs.get("connect_args", {})
+        if connect_args:
+            filtered_keys = [
+                k for k in connect_args if k in ("application_name", "connect_timeout")
+            ]
+            if filtered_keys:
+                dbos_logger.debug(
+                    f"Ignoring PostgreSQL-specific connect_args for SQLite: {filtered_keys}"
+                )
+            sqlite_connect_args = {
+                k: v
+                for k, v in connect_args.items()
+                if k not in ("application_name", "connect_timeout")
+            }
+            sqlite_kwargs["connect_args"] = sqlite_connect_args
+        return sa.create_engine(system_database_url, **sqlite_kwargs)
 
     def run_migrations(self) -> None:
         """Run SQLite-specific migrations."""
