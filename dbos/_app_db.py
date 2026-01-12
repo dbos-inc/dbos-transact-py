@@ -315,7 +315,23 @@ class SQLiteApplicationDatabase(ApplicationDatabase):
         """Create a SQLite engine."""
         # TODO: Make the schema dynamic so this isn't needed
         ApplicationSchema.transaction_outputs.schema = None
-        return sa.create_engine(database_url)
+        sqlite_kwargs = engine_kwargs.copy()
+        connect_args = sqlite_kwargs.get("connect_args", {})
+        if connect_args:
+            filtered_keys = [
+                k for k in connect_args if k in ("application_name", "connect_timeout")
+            ]
+            if filtered_keys:
+                dbos_logger.debug(
+                    f"Ignoring PostgreSQL-specific connect_args for SQLite: {filtered_keys}"
+                )
+            sqlite_connect_args = {
+                k: v
+                for k, v in connect_args.items()
+                if k not in ("application_name", "connect_timeout")
+            }
+            sqlite_kwargs["connect_args"] = sqlite_connect_args
+        return sa.create_engine(database_url, **sqlite_kwargs)
 
     def run_migrations(self) -> None:
         with self.engine.begin() as conn:
