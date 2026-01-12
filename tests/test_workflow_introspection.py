@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import time
 import uuid
@@ -1142,6 +1143,35 @@ def test_step_timing(dbos: DBOS) -> None:
     handle.get_result()
 
     steps = DBOS.list_workflow_steps(handle.workflow_id)
+    for s in steps:
+        assert s["started_at_epoch_ms"] and s["completed_at_epoch_ms"]
+        assert s["started_at_epoch_ms"] >= start_time
+        assert s["completed_at_epoch_ms"] >= s["started_at_epoch_ms"]
+        if s["function_id"] < num_steps:
+            assert s["completed_at_epoch_ms"] - s["started_at_epoch_ms"] >= 100
+
+
+@pytest.mark.asyncio
+async def test_async_step_timing(dbos: DBOS) -> None:
+    num_steps = 5
+    start_time = int(time.time() * 1000)
+
+    @DBOS.step()
+    async def step() -> None:
+        await asyncio.sleep(0.1)
+
+    @DBOS.workflow()
+    async def workflow() -> None:
+        for _ in range(num_steps):
+            await step()
+        await DBOS.set_event_async("key", "value")
+        await DBOS.list_workflows_async()
+        await DBOS.recv_async(timeout_seconds=0)
+
+    handle = await DBOS.start_workflow_async(workflow)
+    await handle.get_result()
+
+    steps = await DBOS.list_workflow_steps_async(handle.workflow_id)
     for s in steps:
         assert s["started_at_epoch_ms"] and s["completed_at_epoch_ms"]
         assert s["started_at_epoch_ms"] >= start_time
