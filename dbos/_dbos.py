@@ -886,7 +886,8 @@ class DBOS:
             pass
 
         await cls._configure_asyncio_thread_pool()
-        return await run_step_async(_get_dbos_instance(),
+        return await run_step_async(
+            _get_dbos_instance(),
             func,
             dbos_step_options or {},
             args,
