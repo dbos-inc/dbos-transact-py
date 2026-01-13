@@ -1702,7 +1702,7 @@ class DBOS:
         cls, func: Callable[[str, str, Dict[str, str]], None]
     ) -> Callable[[str, str, Dict[str, str]], None]:
         """
-        Decorate a function to handle alerts received from the Conductor.
+        Decorate a function to handle alerts received from Conductor.
 
         The handler function will be called with three arguments:
         - name: The alert name
