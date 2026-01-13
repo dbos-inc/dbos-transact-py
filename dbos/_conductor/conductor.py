@@ -436,9 +436,16 @@ class ConductorWebsocket(threading.Thread):
                             alert_message = p.AlertRequest.from_json(message)
                             success = True
                             try:
-                                print(f"Alert: {alert_message.name}")
-                                print(f"Message: {alert_message.message}")
-                                print(f"Metadata: {alert_message.metadata}")
+                                if self.dbos._alert_handler is not None:
+                                    self.dbos._alert_handler(
+                                        alert_message.name,
+                                        alert_message.message,
+                                        alert_message.metadata,
+                                    )
+                                else:
+                                    self.dbos.logger.info(
+                                        f"Alert: {alert_message.name} | Message: {alert_message.message} | Metadata: {alert_message.metadata}"
+                                    )
                             except Exception as e:
                                 error_message = f"Exception encountered when processing alert: {traceback.format_exc()}"
                                 self.dbos.logger.error(error_message)

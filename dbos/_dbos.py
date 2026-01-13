@@ -351,6 +351,7 @@ class DBOS:
         self.conductor_websocket: Optional[ConductorWebsocket] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
         self._active_workflows_set: ActiveWorkflowById = ActiveWorkflowById()
+        self._alert_handler: Optional[Callable[[str, str, Dict[str, str]], None]] = None
         serializer = config.get("serializer")
         self._serializer: Serializer = serializer if serializer else DefaultSerializer()
 
@@ -1695,6 +1696,33 @@ class DBOS:
         if dbos._listening_queues is not None:
             raise DBOSException("listen_queues called more than once")
         dbos._listening_queues = queues
+
+    @classmethod
+    def alert_handler(
+        cls, func: Callable[[str, str, Dict[str, str]], None]
+    ) -> Callable[[str, str, Dict[str, str]], None]:
+        """
+        Decorate a function to handle alerts received from the Conductor.
+
+        The handler function will be called with three arguments:
+        - name: The alert name
+        - message: The alert message
+        - metadata: A dictionary of string key-value pairs with additional alert information
+
+        Example:
+
+            @DBOS.alert_handler
+            def my_handler(name: str, message: str, metadata: Dict[str, str]) -> None:
+                print(f"Received alert: {name}")
+
+        Args:
+            func: The handler function to register
+        """
+        dbos = _get_dbos_instance()
+        if dbos._launched:
+            raise DBOSException("alert_handler must be defined before DBOS is launched")
+        dbos._alert_handler = func
+        return func
 
 
 class WorkflowHandle(Generic[R], Protocol):
