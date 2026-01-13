@@ -1,7 +1,7 @@
 import json
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import List, Optional, Type, TypedDict, TypeVar
+from typing import Dict, List, Optional, Type, TypedDict, TypeVar
 
 from dbos._sys_db import StepInfo, WorkflowStatus
 
@@ -20,6 +20,7 @@ class MessageType(str, Enum):
     FORK_WORKFLOW = "fork_workflow"
     RETENTION = "retention"
     GET_METRICS = "get_metrics"
+    ALERT = "alert"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -361,4 +362,17 @@ class MetricData:
 @dataclass
 class GetMetricsResponse(BaseMessage):
     metrics: List[MetricData]
+    error_message: Optional[str] = None
+
+
+@dataclass
+class AlertRequest(BaseMessage):
+    name: str
+    message: str
+    metadata: Dict[str, str]
+
+
+@dataclass
+class AlertResponse(BaseMessage):
+    success: bool
     error_message: Optional[str] = None

@@ -432,6 +432,24 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(get_metrics_response.to_json())
+                        elif msg_type == p.MessageType.ALERT:
+                            alert_message = p.AlertRequest.from_json(message)
+                            success = True
+                            try:
+                                print(f"Alert: {alert_message.name}")
+                                print(f"Message: {alert_message.message}")
+                                print(f"Metadata: {alert_message.metadata}")
+                            except Exception as e:
+                                error_message = f"Exception encountered when processing alert: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                                success = False
+                            alert_response = p.AlertResponse(
+                                type=p.MessageType.ALERT,
+                                request_id=base_message.request_id,
+                                success=success,
+                                error_message=error_message,
+                            )
+                            websocket.send(alert_response.to_json())
                         else:
                             self.dbos.logger.warning(
                                 f"Unexpected message type: {msg_type}"
