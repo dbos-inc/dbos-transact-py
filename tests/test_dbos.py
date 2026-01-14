@@ -35,7 +35,6 @@ from dbos._error import (
     DBOSException,
 )
 from dbos._schemas.system_database import SystemSchema
-from dbos._sys_db import GetWorkflowsInput
 from dbos._utils import GlobalParams
 from tests.conftest import using_sqlite
 
@@ -363,10 +362,6 @@ def test_temp_workflow_errors(dbos: DBOS) -> None:
     txn_counter: int = 0
     step_counter: int = 0
     retried_step_counter: int = 0
-
-    cur_time: str = datetime.datetime.now().isoformat()
-    gwi: GetWorkflowsInput = GetWorkflowsInput()
-    gwi.start_time = cur_time
 
     @DBOS.transaction()
     def test_transaction(var2: str) -> str:
@@ -951,7 +946,6 @@ def test_send_recv(dbos: DBOS, config: DBOSConfig) -> None:
 
 def test_send_recv_temp_wf(dbos: DBOS) -> None:
     recv_counter: int = 0
-    gwi: GetWorkflowsInput = GetWorkflowsInput()
 
     @DBOS.workflow()
     def test_send_recv_workflow(topic: str) -> str:
@@ -970,7 +964,7 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     dbos.send(dest_uuid, "testsend1", "testtopic")
     assert handle.get_result() == "testsend1"
 
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = dbos._sys_db.list_workflows()
     assert len(wfs) == 2
     assert wfs[0].workflow_id == dest_uuid
     assert wfs[1].workflow_id != dest_uuid
@@ -982,17 +976,13 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     assert recv_counter == 1
 
     # Test substring search
-    gwi.start_time = None
-    gwi.workflow_id_prefix = dest_uuid
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = dbos._sys_db.list_workflows(workflow_id_prefix=dest_uuid)
     assert wfs[0].workflow_id == dest_uuid
 
-    gwi.workflow_id_prefix = dest_uuid[0:10]
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = dbos._sys_db.list_workflows(workflow_id_prefix=dest_uuid[0:10])
     assert dest_uuid in [w.workflow_id for w in wfs]
 
-    gwi.workflow_id_prefix = dest_uuid[0:10]
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = dbos._sys_db.list_workflows(workflow_id_prefix=dest_uuid[0:10])
     assert dest_uuid in [w.workflow_id for w in wfs]
 
     x = dbos.list_workflows(
