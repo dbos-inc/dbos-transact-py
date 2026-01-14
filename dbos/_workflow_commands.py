@@ -32,7 +32,7 @@ def list_workflows(
 ) -> List[WorkflowStatus]:
     return sys_db.list_workflows(
         workflow_ids=workflow_ids,
-        status=status if status is None or isinstance(status, list) else [status],
+        status=status,
         start_time=start_time,
         end_time=end_time,
         name=name,
@@ -66,7 +66,7 @@ def list_queued_workflows(
     executor_id: Optional[str] = None,
 ) -> List[WorkflowStatus]:
     return sys_db.list_workflows(
-        status=status if status is None or isinstance(status, list) else [status],
+        status=status,
         start_time=start_time,
         end_time=end_time,
         forked_from=forked_from,

@@ -18,6 +18,7 @@ from typing import (
     Tuple,
     TypedDict,
     TypeVar,
+    Union,
     cast,
 )
 
@@ -996,7 +997,7 @@ class SystemDatabase(ABC):
         self,
         *,
         workflow_ids: Optional[List[str]] = None,
-        status: Optional[List[str]] = None,
+        status: Optional[Union[str, List[str]]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         name: Optional[str] = None,
@@ -1017,6 +1018,11 @@ class SystemDatabase(ABC):
         Retrieve a list of workflows based on the search criteria.
         Returns a list of WorkflowStatus objects.
         """
+        # Normalize status to a list
+        status_list: Optional[List[str]] = (
+            status if status is None or isinstance(status, list) else [status]
+        )
+
         load_columns = [
             SystemSchema.workflow_status.c.workflow_uuid,
             SystemSchema.workflow_status.c.status,
@@ -1050,7 +1056,7 @@ class SystemDatabase(ABC):
             query = sa.select(*load_columns).where(
                 SystemSchema.workflow_status.c.queue_name.isnot(None),
             )
-            if not status:
+            if not status_list:
                 query = query.where(
                     SystemSchema.workflow_status.c.status.in_(["ENQUEUED", "PENDING"])
                 )
@@ -1076,8 +1082,8 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_status.c.created_at
                 <= datetime.datetime.fromisoformat(end_time).timestamp() * 1000
             )
-        if status:
-            query = query.where(SystemSchema.workflow_status.c.status.in_(status))
+        if status_list:
+            query = query.where(SystemSchema.workflow_status.c.status.in_(status_list))
         if app_version:
             query = query.where(
                 SystemSchema.workflow_status.c.application_version == app_version
