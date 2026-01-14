@@ -38,12 +38,7 @@ from dbos._sys_db import (
     _dbos_stream_closed_sentinel,
     workflow_is_active,
 )
-from dbos._workflow_commands import (
-    fork_workflow,
-    get_workflow,
-    list_queued_workflows,
-    list_workflows,
-)
+from dbos._workflow_commands import fork_workflow, get_workflow
 
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
@@ -373,8 +368,7 @@ class DBOSClient:
         load_output: bool = True,
         executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
-        return list_workflows(
-            self._sys_db,
+        return self._sys_db.list_workflows(
             workflow_ids=workflow_ids,
             status=status,
             start_time=start_time,
@@ -441,18 +435,18 @@ class DBOSClient:
         load_input: bool = True,
         executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
-        return list_queued_workflows(
-            self._sys_db,
-            queue_name=queue_name,
+        return self._sys_db.list_workflows(
             status=status,
             start_time=start_time,
             end_time=end_time,
             name=name,
+            queue_name=queue_name,
             limit=limit,
             offset=offset,
             sort_desc=sort_desc,
             load_input=load_input,
             executor_id=executor_id,
+            queues_only=True,
         )
 
     async def list_queued_workflows_async(

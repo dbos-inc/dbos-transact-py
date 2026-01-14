@@ -35,7 +35,7 @@ from dbos._debouncer import debouncer_workflow
 from dbos._serialization import DefaultSerializer, Serializer
 from dbos._sys_db import SystemDatabase, WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, generate_uuid
-from dbos._workflow_commands import fork_workflow, list_queued_workflows, list_workflows
+from dbos._workflow_commands import fork_workflow
 
 from ._classproperty import classproperty
 from ._core import (
@@ -1238,8 +1238,7 @@ class DBOS:
         executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         def fn() -> List[WorkflowStatus]:
-            return list_workflows(
-                _get_dbos_instance()._sys_db,
+            return _get_dbos_instance()._sys_db.list_workflows(
                 workflow_ids=workflow_ids,
                 status=status,
                 start_time=start_time,
@@ -1248,13 +1247,13 @@ class DBOS:
                 app_version=app_version,
                 forked_from=forked_from,
                 user=user,
+                queue_name=queue_name,
                 limit=limit,
                 offset=offset,
                 sort_desc=sort_desc,
                 workflow_id_prefix=workflow_id_prefix,
                 load_input=load_input,
                 load_output=load_output,
-                queue_name=queue_name,
                 executor_id=executor_id,
             )
 
@@ -1319,19 +1318,19 @@ class DBOS:
         executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         def fn() -> List[WorkflowStatus]:
-            return list_queued_workflows(
-                _get_dbos_instance()._sys_db,
-                queue_name=queue_name,
+            return _get_dbos_instance()._sys_db.list_workflows(
                 status=status,
-                forked_from=forked_from,
                 start_time=start_time,
                 end_time=end_time,
+                forked_from=forked_from,
                 name=name,
+                queue_name=queue_name,
                 limit=limit,
                 offset=offset,
                 sort_desc=sort_desc,
                 load_input=load_input,
                 executor_id=executor_id,
+                queues_only=True,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(

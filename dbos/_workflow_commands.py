@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import TYPE_CHECKING, Optional
 
 from dbos._context import get_local_dbos_context
 from dbos._utils import generate_uuid
@@ -8,78 +8,6 @@ from ._sys_db import SystemDatabase, WorkflowStatus, WorkflowStatusString
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
-
-
-def list_workflows(
-    sys_db: SystemDatabase,
-    *,
-    workflow_ids: Optional[List[str]] = None,
-    status: Optional[Union[str, List[str]]] = None,
-    start_time: Optional[str] = None,
-    end_time: Optional[str] = None,
-    name: Optional[str] = None,
-    app_version: Optional[str] = None,
-    forked_from: Optional[str] = None,
-    user: Optional[str] = None,
-    queue_name: Optional[str] = None,
-    limit: Optional[int] = None,
-    offset: Optional[int] = None,
-    sort_desc: bool = False,
-    workflow_id_prefix: Optional[str] = None,
-    load_input: bool = True,
-    load_output: bool = True,
-    executor_id: Optional[str] = None,
-) -> List[WorkflowStatus]:
-    return sys_db.list_workflows(
-        workflow_ids=workflow_ids,
-        status=status,
-        start_time=start_time,
-        end_time=end_time,
-        name=name,
-        app_version=app_version,
-        forked_from=forked_from,
-        user=user,
-        queue_name=queue_name,
-        limit=limit,
-        offset=offset,
-        sort_desc=sort_desc,
-        workflow_id_prefix=workflow_id_prefix,
-        load_input=load_input,
-        load_output=load_output,
-        executor_id=executor_id,
-    )
-
-
-def list_queued_workflows(
-    sys_db: SystemDatabase,
-    *,
-    queue_name: Optional[str] = None,
-    status: Optional[Union[str, List[str]]] = None,
-    forked_from: Optional[str] = None,
-    start_time: Optional[str] = None,
-    end_time: Optional[str] = None,
-    name: Optional[str] = None,
-    limit: Optional[int] = None,
-    offset: Optional[int] = None,
-    sort_desc: bool = False,
-    load_input: bool = True,
-    executor_id: Optional[str] = None,
-) -> List[WorkflowStatus]:
-    return sys_db.list_workflows(
-        status=status,
-        start_time=start_time,
-        end_time=end_time,
-        forked_from=forked_from,
-        name=name,
-        queue_name=queue_name,
-        limit=limit,
-        offset=offset,
-        sort_desc=sort_desc,
-        load_input=load_input,
-        load_output=False,
-        executor_id=executor_id,
-        queues_only=True,
-    )
 
 
 def get_workflow(sys_db: SystemDatabase, workflow_id: str) -> Optional[WorkflowStatus]:

@@ -204,46 +204,6 @@ class GetEventWorkflowContext(TypedDict):
     timeout_function_id: int
 
 
-class GetWorkflowsInput:
-    """
-    Structure for argument to `get_workflows` function.
-
-    This specifies the search criteria for workflow retrieval by `get_workflows`.
-    """
-
-    def __init__(self) -> None:
-        # Search only in these workflow IDs
-        self.workflow_ids: Optional[List[str]] = None
-        # The name of the workflow function
-        self.name: Optional[str] = None
-        # The user who ran the workflow.
-        self.authenticated_user: Optional[str] = None
-        # Timestamp in ISO 8601 format
-        self.start_time: Optional[str] = None
-        # Timestamp in ISO 8601 format
-        self.end_time: Optional[str] = None
-        # Get workflows with one of these statuses
-        self.status: Optional[List[str]] = None
-        # The application version that ran this workflow.
-        self.application_version: Optional[str] = None
-        # Get workflows forked from this workflow ID.
-        self.forked_from: Optional[str] = None
-        # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
-        self.limit: Optional[int] = None
-        # Offset into the matching records for pagination
-        self.offset: Optional[int] = None
-        # If true, sort by created_at in DESC order. Default false (in ASC order).
-        self.sort_desc: bool = False
-        # Search only for workflow IDs starting with this string
-        self.workflow_id_prefix: Optional[str] = None
-        # Search only for workflows enqueued on this queue
-        self.queue_name: Optional[str] = None
-        # Search only currently enqueued workflows
-        self.queues_only: bool = False
-        # Search only for workflows run by this executor
-        self.executor_id: Optional[str] = None
-
-
 class GetPendingWorkflowsOutput:
     def __init__(self, *, workflow_uuid: str, queue_name: Optional[str] = None):
         self.workflow_uuid: str = workflow_uuid
