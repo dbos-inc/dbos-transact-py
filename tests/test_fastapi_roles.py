@@ -127,7 +127,7 @@ def test_simple_endpoint(
     assert span.attributes["authenticatedUserRoles"] == '["user", "engineer"]'
 
     # Verify that there is one workflow for this user.
-    wfl = dbos._sys_db.list_workflows(user="user1")
+    wfl = DBOS.list_workflows(user="user1")
     assert len(wfl) == 1
     wfs = DBOS.get_workflow_status(wfl[0].workflow_id)
     assert wfs
@@ -136,7 +136,7 @@ def test_simple_endpoint(
     assert wfs.authenticated_roles == ["user", "engineer"]
 
     # Make sure predicate is actually applied
-    wfl = dbos._sys_db.list_workflows(user="user2")
+    wfl = DBOS.list_workflows(user="user2")
     assert len(wfl) == 0
 
     response = client.get("/error")

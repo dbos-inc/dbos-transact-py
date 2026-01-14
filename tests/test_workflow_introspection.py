@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 # Public API
-from dbos import DBOS, Queue, SetWorkflowID, WorkflowStatusString, _workflow_commands
+from dbos import DBOS, Queue, SetWorkflowID, WorkflowStatusString
 from dbos._utils import GlobalParams
 
 
@@ -270,7 +270,7 @@ def test_get_workflow(dbos: DBOS) -> None:
 
     wfUuid = output[0].workflow_id
 
-    info = _workflow_commands.get_workflow(dbos._sys_db, wfUuid)
+    info = DBOS.get_workflow_status(wfUuid)
     assert info is not None, "Expected output to be not None"
 
     if info is not None:

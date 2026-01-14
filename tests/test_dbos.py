@@ -964,41 +964,41 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     dbos.send(dest_uuid, "testsend1", "testtopic")
     assert handle.get_result() == "testsend1"
 
-    wfs = dbos._sys_db.list_workflows()
+    wfs = DBOS.list_workflows()
     assert len(wfs) == 2
     assert wfs[0].workflow_id == dest_uuid
     assert wfs[1].workflow_id != dest_uuid
 
-    wfi = dbos._sys_db.get_workflow_status(wfs[1].workflow_id)
+    wfi = DBOS.get_workflow_status(wfs[1].workflow_id)
     assert wfi
-    assert wfi["name"] == "<temp>.temp_send_workflow"
+    assert wfi.name == "<temp>.temp_send_workflow"
 
     assert recv_counter == 1
 
     # Test substring search
-    wfs = dbos._sys_db.list_workflows(workflow_id_prefix=dest_uuid)
+    wfs = DBOS.list_workflows(workflow_id_prefix=dest_uuid)
     assert wfs[0].workflow_id == dest_uuid
 
-    wfs = dbos._sys_db.list_workflows(workflow_id_prefix=dest_uuid[0:10])
+    wfs = DBOS.list_workflows(workflow_id_prefix=dest_uuid[0:10])
     assert dest_uuid in [w.workflow_id for w in wfs]
 
-    wfs = dbos._sys_db.list_workflows(workflow_id_prefix=dest_uuid[0:10])
+    wfs = DBOS.list_workflows(workflow_id_prefix=dest_uuid[0:10])
     assert dest_uuid in [w.workflow_id for w in wfs]
 
-    x = dbos.list_workflows(
+    x = DBOS.list_workflows(
         start_time=datetime.datetime.now().isoformat(),
         workflow_id_prefix=dest_uuid[0:10],
     )
     assert len(x) == 0
 
-    x = dbos.list_workflows(workflow_id_prefix=dest_uuid[0:10])
+    x = DBOS.list_workflows(workflow_id_prefix=dest_uuid[0:10])
     assert len(x) >= 1
     assert dest_uuid in [w.workflow_id for w in x]
 
-    x = dbos.list_workflows(workflow_id_prefix=dest_uuid + "thisdoesnotexist")
+    x = DBOS.list_workflows(workflow_id_prefix=dest_uuid + "thisdoesnotexist")
     assert len(x) == 0
 
-    x = dbos.list_workflows(workflow_id_prefix="1" + dest_uuid)
+    x = DBOS.list_workflows(workflow_id_prefix="1" + dest_uuid)
     assert len(x) == 0
 
 
