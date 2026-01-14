@@ -314,21 +314,14 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         self._end_headers()
 
     def _handle_steps(self, workflow_id: str) -> None:
-        steps = self.dbos.list_workflow_steps(workflow_id)
-
-        updated_steps = [
-            {
-                **step,
-                "output": str(step["output"]) if step["output"] is not None else None,
-                "error": str(step["error"]) if step["error"] is not None else None,
-            }
-            for step in steps
+        step_infos = self.dbos.list_workflow_steps(workflow_id)
+        workflow_steps = [
+            conductor_protocol.WorkflowSteps.from_step_info(s) for s in step_infos
         ]
-
-        json_steps = json.dumps(updated_steps).encode("utf-8")
+        response_body = json.dumps([s.__dict__ for s in workflow_steps]).encode("utf-8")
         self.send_response(200)
         self._end_headers()
-        self.wfile.write(json_steps)
+        self.wfile.write(response_body)
 
     def _handle_workflows(self, filters: Dict[str, Any]) -> None:
         workflows = self.dbos.list_workflows(
