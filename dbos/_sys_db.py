@@ -1103,9 +1103,12 @@ class SystemDatabase(ABC):
             info.queue_partition_key = row[19]
             info.forked_from = row[20]
 
-            raw_input = row[21] if load_input else None
-            raw_output = row[22] if load_output else None
-            raw_error = row[23] if load_output else None
+            idx = 21
+            raw_input = row[idx] if load_input else None
+            if load_input:
+                idx += 1
+            raw_output = row[idx] if load_output else None
+            raw_error = row[idx + 1] if load_output else None
             inputs, output, exception = safe_deserialize(
                 self.serializer,
                 info.workflow_id,
