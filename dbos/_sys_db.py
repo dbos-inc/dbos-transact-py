@@ -1455,7 +1455,7 @@ class SystemDatabase(ABC):
                 )
             except DBAPIError as dbapi_error:
                 if self._is_foreign_key_violation(dbapi_error):
-                    raise DBOSNonExistentWorkflowError(destination_uuid)
+                    raise DBOSNonExistentWorkflowError("`send` destination", destination_uuid)
                 raise
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,

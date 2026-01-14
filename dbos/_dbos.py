@@ -927,7 +927,7 @@ class DBOS:
         if existing_workflow:
             stat = dbos.get_workflow_status(workflow_id)
             if stat is None:
-                raise DBOSNonExistentWorkflowError(workflow_id)
+                raise DBOSNonExistentWorkflowError("target", workflow_id)
         return WorkflowHandlePolling(workflow_id, dbos)
 
     @classmethod
@@ -940,7 +940,7 @@ class DBOS:
         if existing_workflow:
             stat = await dbos.get_workflow_status_async(workflow_id)
             if stat is None:
-                raise DBOSNonExistentWorkflowError(workflow_id)
+                raise DBOSNonExistentWorkflowError("target", workflow_id)
         return WorkflowHandleAsyncPolling(workflow_id, dbos)
 
     @classmethod
