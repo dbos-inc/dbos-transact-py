@@ -1,3 +1,6 @@
+import base64
+import gzip
+import pickle
 import socket
 import threading
 import time
@@ -12,6 +15,7 @@ from websockets.sync.connection import Connection
 from dbos._context import SetWorkflowID
 from dbos._utils import GlobalParams, generate_uuid
 from dbos._workflow_commands import (
+    delete_workflow,
     garbage_collect,
     get_workflow,
     global_timeout,
@@ -91,6 +95,7 @@ class ConductorWebsocket(threading.Thread):
                     open_timeout=5,
                     close_timeout=5,
                     logger=self.dbos.logger,
+                    max_size=None,
                 ) as websocket:
                     self.websocket = websocket
                     if use_keepalive and self.keepalive_thread is None:
@@ -155,6 +160,26 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(cancel_response.to_json())
+                        elif msg_type == p.MessageType.DELETE:
+                            delete_message = p.DeleteRequest.from_json(message)
+                            success = True
+                            try:
+                                delete_workflow(
+                                    self.dbos,
+                                    delete_message.workflow_id,
+                                    delete_children=delete_message.delete_children,
+                                )
+                            except Exception as e:
+                                error_message = f"Exception encountered when deleting workflow {delete_message.workflow_id}: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                                success = False
+                            delete_response = p.DeleteResponse(
+                                type=p.MessageType.DELETE,
+                                request_id=base_message.request_id,
+                                success=success,
+                                error_message=error_message,
+                            )
+                            websocket.send(delete_response.to_json())
                         elif msg_type == p.MessageType.RESUME:
                             resume_message = p.ResumeRequest.from_json(message)
                             success = True
@@ -457,6 +482,52 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(alert_response.to_json())
+                        elif msg_type == p.MessageType.EXPORT_WORKFLOW:
+                            export_message = p.ExportWorkflowRequest.from_json(message)
+                            serialized_workflow = None
+                            try:
+                                exported = self.dbos._sys_db.export_workflow(
+                                    export_message.workflow_id,
+                                    export_children=export_message.export_children,
+                                )
+                                serialized_workflow = base64.b64encode(
+                                    gzip.compress(pickle.dumps(exported))
+                                ).decode("utf-8")
+                            except Exception:
+                                error_message = f"Exception encountered when exporting workflow {export_message.workflow_id}: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+
+                            export_response = p.ExportWorkflowResponse(
+                                type=p.MessageType.EXPORT_WORKFLOW,
+                                request_id=base_message.request_id,
+                                serialized_workflow=serialized_workflow,
+                                error_message=error_message,
+                            )
+                            websocket.send(export_response.to_json())
+                        elif msg_type == p.MessageType.IMPORT_WORKFLOW:
+                            import_message = p.ImportWorkflowRequest.from_json(message)
+                            success = True
+                            try:
+                                workflow = pickle.loads(
+                                    gzip.decompress(
+                                        base64.b64decode(
+                                            import_message.serialized_workflow
+                                        )
+                                    )
+                                )
+                                self.dbos._sys_db.import_workflow(workflow)
+                            except Exception:
+                                error_message = f"Exception encountered when importing workflow: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                                success = False
+
+                            import_response = p.ImportWorkflowResponse(
+                                type=p.MessageType.IMPORT_WORKFLOW,
+                                request_id=base_message.request_id,
+                                success=success,
+                                error_message=error_message,
+                            )
+                            websocket.send(import_response.to_json())
                         else:
                             self.dbos.logger.warning(
                                 f"Unexpected message type: {msg_type}"

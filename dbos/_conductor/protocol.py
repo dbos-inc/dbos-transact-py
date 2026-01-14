@@ -10,6 +10,7 @@ class MessageType(str, Enum):
     EXECUTOR_INFO = "executor_info"
     RECOVERY = "recovery"
     CANCEL = "cancel"
+    DELETE = "delete"
     LIST_WORKFLOWS = "list_workflows"
     LIST_QUEUED_WORKFLOWS = "list_queued_workflows"
     RESUME = "resume"
@@ -21,6 +22,8 @@ class MessageType(str, Enum):
     RETENTION = "retention"
     GET_METRICS = "get_metrics"
     ALERT = "alert"
+    EXPORT_WORKFLOW = "export_workflow"
+    IMPORT_WORKFLOW = "import_workflow"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -88,6 +91,18 @@ class CancelRequest(BaseMessage):
 
 @dataclass
 class CancelResponse(BaseMessage):
+    success: bool
+    error_message: Optional[str] = None
+
+
+@dataclass
+class DeleteRequest(BaseMessage):
+    workflow_id: str
+    delete_children: bool
+
+
+@dataclass
+class DeleteResponse(BaseMessage):
     success: bool
     error_message: Optional[str] = None
 
@@ -374,5 +389,28 @@ class AlertRequest(BaseMessage):
 
 @dataclass
 class AlertResponse(BaseMessage):
+    success: bool
+    error_message: Optional[str] = None
+
+
+@dataclass
+class ExportWorkflowRequest(BaseMessage):
+    workflow_id: str
+    export_children: bool
+
+
+@dataclass
+class ExportWorkflowResponse(BaseMessage):
+    serialized_workflow: Optional[str]
+    error_message: Optional[str] = None
+
+
+@dataclass
+class ImportWorkflowRequest(BaseMessage):
+    serialized_workflow: str
+
+
+@dataclass
+class ImportWorkflowResponse(BaseMessage):
     success: bool
     error_message: Optional[str] = None
