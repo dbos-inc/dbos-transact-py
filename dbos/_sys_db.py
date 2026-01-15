@@ -1450,7 +1450,9 @@ class SystemDatabase(ABC):
                 )
             except DBAPIError as dbapi_error:
                 if self._is_foreign_key_violation(dbapi_error):
-                    raise DBOSNonExistentWorkflowError(destination_uuid)
+                    raise DBOSNonExistentWorkflowError(
+                        "`send` destination", destination_uuid
+                    )
                 raise
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,
@@ -2568,7 +2570,7 @@ class SystemDatabase(ABC):
                 ).fetchone()
 
                 if status_row is None:
-                    raise DBOSNonExistentWorkflowError(wf_id)
+                    raise DBOSNonExistentWorkflowError("export", wf_id)
 
                 workflow_status: dict[str, Any] = {
                     "workflow_uuid": status_row[0],

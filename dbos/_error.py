@@ -114,9 +114,9 @@ class DBOSWorkflowFunctionNotFoundError(DBOSException):
 class DBOSNonExistentWorkflowError(DBOSException):
     """Exception raised when a workflow database record does not exist for a given ID."""
 
-    def __init__(self, destination_id: str):
+    def __init__(self, destination: str, destination_id: str):
         super().__init__(
-            f"Sent to non-existent destination workflow ID: {destination_id}",
+            f"Non-existent {destination} workflow ID: {destination_id}",
             dbos_error_code=DBOSErrorCode.NonExistentWorkflowError.value,
         )
 
