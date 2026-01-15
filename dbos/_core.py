@@ -123,7 +123,7 @@ class WorkflowHandleFuture(Generic[R]):
     def get_status(self) -> WorkflowStatus:
         stat = self.dbos.get_workflow_status(self.workflow_id)
         if stat is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_id)
+            raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return stat
 
 
@@ -154,7 +154,7 @@ class WorkflowHandlePolling(Generic[R]):
     def get_status(self) -> WorkflowStatus:
         stat = self.dbos.get_workflow_status(self.workflow_id)
         if stat is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_id)
+            raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return stat
 
 
@@ -191,7 +191,7 @@ class WorkflowHandleAsyncTask(Generic[R]):
     async def get_status(self) -> WorkflowStatus:
         stat = await asyncio.to_thread(self.dbos.get_workflow_status, self.workflow_id)
         if stat is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_id)
+            raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return stat
 
 
@@ -231,7 +231,7 @@ class WorkflowHandleAsyncPolling(Generic[R]):
     async def get_status(self) -> WorkflowStatus:
         stat = await asyncio.to_thread(self.dbos.get_workflow_status, self.workflow_id)
         if stat is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_id)
+            raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return stat
 
 

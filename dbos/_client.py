@@ -95,7 +95,7 @@ class WorkflowHandleClientPolling(Generic[R]):
     def get_status(self) -> WorkflowStatus:
         status = get_workflow(self._sys_db, self.workflow_id)
         if status is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_id)
+            raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return status
 
 
@@ -119,7 +119,7 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
     async def get_status(self) -> WorkflowStatus:
         status = await asyncio.to_thread(get_workflow, self._sys_db, self.workflow_id)
         if status is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_id)
+            raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return status
 
 
@@ -261,7 +261,7 @@ class DBOSClient:
     def retrieve_workflow(self, workflow_id: str) -> "WorkflowHandle[R]":
         status = get_workflow(self._sys_db, workflow_id)
         if status is None:
-            raise DBOSNonExistentWorkflowError(workflow_id)
+            raise DBOSNonExistentWorkflowError("target", workflow_id)
         return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
 
     async def retrieve_workflow_async(
@@ -269,7 +269,7 @@ class DBOSClient:
     ) -> "WorkflowHandleAsync[R]":
         status = await asyncio.to_thread(get_workflow, self._sys_db, workflow_id)
         if status is None:
-            raise DBOSNonExistentWorkflowError(workflow_id)
+            raise DBOSNonExistentWorkflowError("target", workflow_id)
         return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
 
     def send(

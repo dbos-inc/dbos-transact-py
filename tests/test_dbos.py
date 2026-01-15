@@ -696,7 +696,7 @@ def test_retrieve_workflow(dbos: DBOS) -> None:
     dest_uuid = "aaaa"
     with pytest.raises(Exception) as exc_info:
         dbos.retrieve_workflow(dest_uuid)
-    pattern = f"Sent to non-existent destination workflow ID: {dest_uuid}"
+    pattern = f"Non-existent target workflow ID: {dest_uuid}"
     assert pattern in str(exc_info.value)
 
     # These return
@@ -884,7 +884,7 @@ def test_send_recv(dbos: DBOS, config: DBOSConfig) -> None:
         # Send to non-existent uuid should fail
         with pytest.raises(Exception) as exc_info:
             test_send_workflow(dest_uuid, "testtopic")
-        assert f"Sent to non-existent destination workflow ID: {dest_uuid}" in str(
+        assert f"Non-existent `send` destination workflow ID: {dest_uuid}" in str(
             exc_info.value
         )
 
