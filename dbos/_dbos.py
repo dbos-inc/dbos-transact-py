@@ -1000,8 +1000,7 @@ class DBOS:
             attributes: TracedAttributes = {
                 "name": "sleep",
             }
-            with EnterDBOSStep(attributes):
-                ctx = assert_current_dbos_context()
+            with EnterDBOSStep(attributes) as ctx:
                 _get_dbos_instance()._sys_db.sleep(
                     ctx.workflow_id, ctx.curr_step_function_id, seconds
                 )
@@ -1516,8 +1515,7 @@ class DBOS:
                 attributes: TracedAttributes = {
                     "name": "write_stream",
                 }
-                with EnterDBOSStep(attributes):
-                    ctx = assert_current_dbos_context()
+                with EnterDBOSStep(attributes) as ctx:
                     _get_dbos_instance()._sys_db.write_stream_from_workflow(
                         ctx.workflow_id, ctx.function_id, key, value
                     )
@@ -1551,8 +1549,7 @@ class DBOS:
                 attributes: TracedAttributes = {
                     "name": "close_stream",
                 }
-                with EnterDBOSStep(attributes):
-                    ctx = assert_current_dbos_context()
+                with EnterDBOSStep(attributes) as ctx:
                     _get_dbos_instance()._sys_db.close_stream(
                         ctx.workflow_id, ctx.function_id, key
                     )

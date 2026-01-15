@@ -378,6 +378,7 @@ async def test_gather_manysteps(dbos: DBOS) -> None:
             Thing(func=t_step_str_3, expected="3"),
             Thing(func=t_run_step_retry3, expected="ranStep"),
             Thing(func=t_step_retry_4, expected="4"),
+            # TODO: Add some sync steps?
         ]
 
         await run_things_serial_or_conc(conc, things)

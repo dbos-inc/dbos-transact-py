@@ -1496,8 +1496,7 @@ def send(
         attributes: TracedAttributes = {
             "name": "send",
         }
-        with EnterDBOSStep(attributes):
-            ctx = assert_current_dbos_context()
+        with EnterDBOSStep(attributes) as ctx:
             dbos._sys_db.send(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
@@ -1524,8 +1523,7 @@ def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60)
         attributes: TracedAttributes = {
             "name": "recv",
         }
-        with EnterDBOSStep(attributes):
-            ctx = assert_current_dbos_context()
+        with EnterDBOSStep(attributes) as ctx:
             ctx.function_id += 1  # Reserve for the sleep
             timeout_function_id = ctx.function_id
             return dbos._sys_db.recv(
@@ -1548,8 +1546,7 @@ def set_event(dbos: "DBOS", key: str, value: Any) -> None:
             attributes: TracedAttributes = {
                 "name": "set_event",
             }
-            with EnterDBOSStep(attributes):
-                ctx = assert_current_dbos_context()
+            with EnterDBOSStep(attributes) as ctx:
                 dbos._sys_db.set_event_from_workflow(
                     ctx.workflow_id, ctx.curr_step_function_id, key, value
                 )
@@ -1577,8 +1574,7 @@ def get_event(
         attributes: TracedAttributes = {
             "name": "get_event",
         }
-        with EnterDBOSStep(attributes):
-            ctx = assert_current_dbos_context()
+        with EnterDBOSStep(attributes) as ctx:
             ctx.function_id += 1
             timeout_function_id = ctx.function_id
             caller_ctx: GetEventWorkflowContext = {
