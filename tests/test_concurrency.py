@@ -213,10 +213,6 @@ def compare_wf_runs(wfsteps_serial: List[StepInfo], wfsteps_concurrent: List[Ste
         i += 1
         iconc += 1
 
-async def clean_db() -> None:
-    # placeholder
-    pass
-
 @pytest.mark.asyncio
 async def test_gather_manythings(dbos: DBOS) -> None:
     @DBOS.workflow()
@@ -253,12 +249,6 @@ async def test_gather_manythings(dbos: DBOS) -> None:
 
         async def t_tx_test_read_write_function() -> str:
             return str(await ConcurrTestClass.test_read_write_function(2))
-
-        # async def t_now_first_digit() -> str:
-        #    return str(await DBOS.now())[0]
-
-        #async def t_uuid_len() -> str:
-        #    return str(len(await DBOS.random_uuid()))
 
         async def t_set_event() -> str:
             await DBOS.set_event_async("eventkey", "eval")
@@ -314,8 +304,6 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             Thing(func=t_run_step2, expected="ranStep"),
             Thing(func=t_run_step_retry, expected="ranStep"),
             #Thing(func=t_tx_test_read_write_function, expected="2"),
-            #Thing(func=t_now_first_digit, expected="1"),
-            #Thing(func=t_uuid_len, expected="36"),
             Thing(func=t_set_event, expected="set"),
             Thing(func=t_get_event, expected="eval"),
             #Thing(func=t_send_msg, expected="sent"),
@@ -333,12 +321,10 @@ async def test_gather_manythings(dbos: DBOS) -> None:
     wfid_serial = str(uuid.uuid4())
     wfid_concurrent = str(uuid.uuid4())
 
-    await clean_db()
     with SetWorkflowID(wfid_serial):
         await run_a_lot_of_things_at_once(conc=False)  # from earlier translation
 
     """
-    await clean_db()
     with SetWorkflowID(wfid_concurrent):
         await run_a_lot_of_things_at_once(conc=True)
 
@@ -349,7 +335,6 @@ async def test_gather_manythings(dbos: DBOS) -> None:
     assert wfsteps_concurrent is not None
     compare_wf_runs(wfsteps_serial, wfsteps_concurrent)
 
-    await clean_db()
     await run_a_lot_of_things_at_once(conc=True)
     """
 
