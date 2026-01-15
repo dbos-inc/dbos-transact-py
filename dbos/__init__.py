@@ -14,7 +14,7 @@ from ._debouncer import Debouncer, DebouncerClient
 from ._kafka_message import KafkaMessage
 from ._queue import Queue
 from ._serialization import Serializer
-from ._sys_db import GetWorkflowsInput, StepInfo, WorkflowStatus, WorkflowStatusString
+from ._sys_db import StepInfo, WorkflowStatus, WorkflowStatusString
 from .cli.migration import run_dbos_database_migrations
 
 __all__ = [
@@ -25,7 +25,6 @@ __all__ = [
     "DBOSContextEnsure",
     "DBOSContextSetAuth",
     "EnqueueOptions",
-    "GetWorkflowsInput",
     "KafkaMessage",
     "SetWorkflowID",
     "SetWorkflowTimeout",
