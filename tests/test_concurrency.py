@@ -128,21 +128,6 @@ class ConcurrTestClass:
         ConcurrTestClass.cnt += 1
         return id
 
-    #@staticmethod
-    #@DBOS.workflow()
-    #async def test_ds_read_write_function(id: int) -> int:
-    #    return await ConcurrTestClass.test_ds_read_write(id)
-
-    #@staticmethod
-    #@knexds.transaction()
-    #async def test_ds_read_write(id: int) -> int:
-    #    await knexds.client.raw(
-    #        f"INSERT INTO {test_table_name}(id, value) VALUES (?, ?)",  # noqa: F821
-    #        [id, 1],
-    #    )
-    #    ConcurrTestClass.cnt += 1
-    #    return id
-
     @staticmethod
     @DBOS.step()
     async def test_step(id: int) -> int:
@@ -269,21 +254,8 @@ async def test_gather_manythings(dbos: DBOS) -> None:
         async def t_tx_test_read_write_function() -> str:
             return str(await ConcurrTestClass.test_read_write_function(2))
 
-        #async def t_tx_test_ds_read_write() -> str:
-        #    return str(await ConcurrTestClass.test_ds_read_write(1))
-
-        #async def t_run_tx() -> str:
-        #    async def txn_body() -> str:
-        #        return "A"
-
-        #    # `knexds.runTransaction` analogue
-        #    return str(await knexds.run_transaction(txn_body, name="runTx"))
-
         # async def t_now_first_digit() -> str:
         #    return str(await DBOS.now())[0]
-
-        #async def t_reg_ds_tx() -> str:
-        #    return await reg_ds_tx(7)
 
         #async def t_uuid_len() -> str:
         #    return str(len(await DBOS.random_uuid()))
@@ -342,10 +314,7 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             Thing(func=t_run_step2, expected="ranStep"),
             Thing(func=t_run_step_retry, expected="ranStep"),
             #Thing(func=t_tx_test_read_write_function, expected="2"),
-            #Thing(func=t_tx_test_ds_read_write, expected="1"),
-            #Thing(func=t_run_tx, expected="A"),
             #Thing(func=t_now_first_digit, expected="1"),
-            #Thing(func=t_reg_ds_tx, expected="tx done"),
             #Thing(func=t_uuid_len, expected="36"),
             Thing(func=t_set_event, expected="set"),
             Thing(func=t_get_event, expected="eval"),
