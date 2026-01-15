@@ -64,98 +64,6 @@ def test_concurrent_getevent(dbos: DBOS) -> None:
 
 # Async concurrency tests
 
-@DBOS.dbos_class()
-class ConcurrTestClass:
-    cnt: ClassVar[int] = 0
-    wf_cnt: ClassVar[int] = 0
-
-    _fut1: ClassVar[Optional[asyncio.Future[None]]] = None
-    _fut2: ClassVar[Optional[asyncio.Future[None]]] = None
-    _fut3: ClassVar[Optional[asyncio.Future[None]]] = None
-
-    @classmethod
-    def _ensure_futures(cls) -> None:
-        loop = asyncio.get_running_loop()
-        if cls._fut1 is None:
-            cls._fut1 = loop.create_future()
-        if cls._fut2 is None:
-            cls._fut2 = loop.create_future()
-        if cls._fut3 is None:
-            cls._fut3 = loop.create_future()
-
-    @classmethod
-    def resolve(cls) -> None:
-        cls._ensure_futures()
-        assert cls._fut1 is not None
-        if not cls._fut1.done():
-            cls._fut1.set_result(None)
-
-    @classmethod
-    async def promise(cls) -> None:
-        cls._ensure_futures()
-        assert cls._fut1 is not None
-        await cls._fut1
-
-    @classmethod
-    def resolve2(cls) -> None:
-        cls._ensure_futures()
-        assert cls._fut2 is not None
-        if not cls._fut2.done():
-            cls._fut2.set_result(None)
-
-    @classmethod
-    async def promise2(cls) -> None:
-        cls._ensure_futures()
-        assert cls._fut2 is not None
-        await cls._fut2
-
-    @classmethod
-    def resolve3(cls) -> None:
-        cls._ensure_futures()
-        assert cls._fut3 is not None
-        if not cls._fut3.done():
-            cls._fut3.set_result(None)
-
-    @classmethod
-    async def promise3(cls) -> None:
-        cls._ensure_futures()
-        assert cls._fut3 is not None
-        await cls._fut3
-
-    @staticmethod
-    @DBOS.step()
-    async def test_read_write_function(id: int) -> int:
-        ConcurrTestClass.cnt += 1
-        return id
-
-    @staticmethod
-    @DBOS.step()
-    async def test_step(id: int) -> int:
-        ConcurrTestClass.cnt += 1
-        return id
-
-    @staticmethod
-    @DBOS.step()
-    async def test_step_str(id: str) -> str:
-        return id
-
-    @staticmethod
-    @DBOS.step(retries_allowed=True, max_attempts=5, interval_seconds=0.01, backoff_rate=1)
-    async def test_step_retry(id: str) -> str:
-        ss = DBOS.step_status
-        assert ss is not None
-        assert ss.current_attempt is not None
-        if ss.current_attempt <= 2:
-            raise Exception("Not yet")
-        return id
-
-    @staticmethod
-    @DBOS.workflow()
-    async def receive_workflow(topic: str, timeout: int) -> Any:
-        # if your recv is awaitable, await it; if it returns directly, remove await.
-        return await DBOS.recv_async(topic, timeout)
-
-
 @dataclass(frozen=True)
 class Thing:
     func: Callable[[], Coroutine[Any, Any, str]]
@@ -215,6 +123,46 @@ def compare_wf_runs(wfsteps_serial: List[StepInfo], wfsteps_concurrent: List[Ste
 
 @pytest.mark.asyncio
 async def test_gather_manythings(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def simple_wf() -> str:
+        return "WF Ran"
+
+    @DBOS.dbos_class()
+    class ConcurrTestClass:
+        cnt: ClassVar[int] = 0
+
+        @staticmethod
+        @DBOS.step()
+        async def test_read_write_function(id: int) -> int:
+            ConcurrTestClass.cnt += 1
+            return id
+
+        @staticmethod
+        @DBOS.step()
+        async def test_step(id: int) -> int:
+            ConcurrTestClass.cnt += 1
+            return id
+
+        @staticmethod
+        @DBOS.step()
+        async def test_step_str(id: str) -> str:
+            return id
+
+        @staticmethod
+        @DBOS.step(retries_allowed=True, max_attempts=5, interval_seconds=0.01, backoff_rate=1)
+        async def test_step_retry(id: str) -> str:
+            ss = DBOS.step_status
+            assert ss is not None
+            assert ss.current_attempt is not None
+            if ss.current_attempt <= 2:
+                raise Exception("Not yet")
+            return id
+
+        @staticmethod
+        @DBOS.workflow()
+        async def receive_workflow(topic: str, timeout: int) -> Any:
+            return await DBOS.recv_async(topic, timeout)
+
     @DBOS.workflow()
     async def run_a_lot_of_things_at_once(conc: bool) -> None:
         async def t_sleep() -> str:
@@ -280,6 +228,11 @@ async def test_gather_manythings(dbos: DBOS) -> None:
         async def t_step_retry_4() -> str:
             return await ConcurrTestClass.test_step_retry("4")
 
+        async def t_start_child() -> str:
+            with SetWorkflowID(f"{DBOS.workflow_id}-cwf"):
+                await DBOS.start_workflow_async(simple_wf)
+            return 'started'
+
         async def t_get_child_result() -> str:
             wfh = await DBOS.retrieve_workflow_async(f"{DBOS.workflow_id}-cwf")  # type: ignore
             res = await wfh.get_result()
@@ -295,25 +248,26 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             assert wfid is not None
             ait = DBOS.read_stream_async(wfid, "stream")
             item = await ait.__anext__()
-            value = item["value"] if isinstance(item, dict) else item[0]
-            return cast(str, value)
+            return cast(str, item)
 
         things: List[Thing] = [
             Thing(func=t_sleep, expected="slept"),
             Thing(func=t_run_step1, expected="ranStep"),
             Thing(func=t_run_step2, expected="ranStep"),
             Thing(func=t_run_step_retry, expected="ranStep"),
-            #Thing(func=t_tx_test_read_write_function, expected="2"),
+            Thing(func=t_tx_test_read_write_function, expected="2"),
             Thing(func=t_set_event, expected="set"),
             Thing(func=t_get_event, expected="eval"),
-            #Thing(func=t_send_msg, expected="sent"),
-            #Thing(func=t_step_str_3, expected="3"),
-            #Thing(func=t_recv_msg, expected="msg"),
+            Thing(func=t_send_msg, expected="sent"),
+            Thing(func=t_step_str_3, expected="3"),
+            Thing(func=t_recv_msg, expected="msg"),
             Thing(func=t_get_workflow_status_nosuch, expected="Nope"),
-            #Thing(func=t_step_retry_4, expected="4"),
-            #Thing(func=t_get_child_result, expected="WF Ran"),
+            Thing(func=t_step_retry_4, expected="4"),
+            Thing(func=simple_wf, expected="WF Ran"),
+            Thing(func=t_start_child, expected="started"),
+            Thing(func=t_get_child_result, expected="WF Ran"),
             Thing(func=t_write_stream, expected="wrote"),
-            #Thing(func=t_read_stream, expected="val"),
+            Thing(func=t_read_stream, expected="val"),
         ]
 
         await run_things_serial_or_conc(conc, things)
@@ -341,6 +295,23 @@ async def test_gather_manythings(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_gather_manysteps(dbos: DBOS) -> None:
+    @DBOS.dbos_class()
+    class ConcurrTestClass:
+        @staticmethod
+        @DBOS.step()
+        async def test_step_str(id: str) -> str:
+            return id
+
+        @staticmethod
+        @DBOS.step(retries_allowed=True, max_attempts=5, interval_seconds=0.01, backoff_rate=1)
+        async def test_step_retry(id: str) -> str:
+            ss = DBOS.step_status
+            assert ss is not None
+            assert ss.current_attempt is not None
+            if ss.current_attempt <= 2:
+                raise Exception("Not yet")
+            return id
+
     @DBOS.workflow()
     async def run_a_lot_of_steps_at_once(conc: bool) -> None:
         async def t_run_step1a() -> str:
@@ -404,9 +375,9 @@ async def test_gather_manysteps(dbos: DBOS) -> None:
             Thing(func=t_run_step_retry1, expected="ranStep"),
             Thing(func=t_run_step_retry2, expected="ranStep"),
             Thing(func=t_run_step2, expected="ranStep"),
-            #Thing(func=t_step_str_3, expected="3"),
+            Thing(func=t_step_str_3, expected="3"),
             Thing(func=t_run_step_retry3, expected="ranStep"),
-            #Thing(func=t_step_retry_4, expected="4"),
+            Thing(func=t_step_retry_4, expected="4"),
         ]
 
         await run_things_serial_or_conc(conc, things)
