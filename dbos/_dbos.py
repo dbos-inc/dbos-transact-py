@@ -947,9 +947,12 @@ class DBOS:
     ) -> WorkflowHandleAsync[R]:
         """Return a `WorkflowHandle` for a workflow execution."""
         dbos = _get_dbos_instance()
-        await cls._configure_asyncio_thread_pool()
         if existing_workflow:
-            stat = await dbos.get_workflow_status_async(workflow_id)
+            step_ctx = snapshot_step_context(reserve_sleep_id=False)
+            await cls._configure_asyncio_thread_pool()
+            def fn() -> Optional[WorkflowStatus]:
+                return get_workflow(_get_dbos_instance()._sys_db, workflow_id)
+            stat = await _get_dbos_instance()._sys_db.call_function_as_step_from_async(fn, "DBOS.getStatus", step_ctx)
             if stat is None:
                 raise DBOSNonExistentWorkflowError("target", workflow_id)
         return WorkflowHandleAsyncPolling(workflow_id, dbos)
@@ -1127,8 +1130,12 @@ class DBOS:
         Returns:
             A dictionary mapping event keys to their deserialized values
         """
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(cls.get_all_events, workflow_id)
+        def fn() -> Dict[str, Any]:
+            return _get_dbos_instance()._sys_db.get_all_events(workflow_id)
+        return await _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.get_events", step_ctx)
 
     @classmethod
     def _execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
@@ -1158,8 +1165,15 @@ class DBOS:
     @classmethod
     async def cancel_workflow_async(cls, workflow_id: str) -> None:
         """Cancel a workflow by ID."""
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(cls.cancel_workflow, workflow_id)
+        def fn() -> None:
+            dbos_logger.info(f"Cancelling workflow: {workflow_id}")
+            _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
+        return await _get_dbos_instance()._sys_db.call_function_as_step_from_async(
+            fn, "DBOS.cancelWorkflow",
+            snapshot_step_context(reserve_sleep_id=False)
+        )
 
     @classmethod
     def delete_workflow(
