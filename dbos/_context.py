@@ -122,11 +122,12 @@ class DBOSContext:
         # If the workflow is enqueued on a partitioned queue, its partition key
         self.queue_partition_key: Optional[str] = None
 
-    def create_child(self) -> DBOSContext:
+    def create_child(self, is_for_workflow: bool = True) -> DBOSContext:
         rv = DBOSContext()
         rv.logger = self.logger
-        rv.id_assigned_for_next_workflow = self.id_assigned_for_next_workflow
-        self.id_assigned_for_next_workflow = ""
+        if is_for_workflow:
+            rv.id_assigned_for_next_workflow = self.id_assigned_for_next_workflow
+            self.id_assigned_for_next_workflow = ""
         rv.is_within_set_workflow_id_block = self.is_within_set_workflow_id_block
         rv.parent_workflow_id = self.workflow_id
         rv.parent_workflow_fid = self.function_id
@@ -140,7 +141,7 @@ class DBOSContext:
         return rv
     
     def snapshot_step_ctx(self, reserve_sleep_id: bool = False) -> DBOSContext:
-        rv = self.create_child()
+        rv = self.create_child(is_for_workflow=False)
         rv.executor_id = self.executor_id
         rv.app_id = self.app_id
         rv.app_version = self.app_version
