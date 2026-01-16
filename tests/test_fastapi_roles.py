@@ -17,7 +17,6 @@ from dbos import DBOS, DBOSContextSetAuth
 # Private API because this is a unit test
 from dbos._context import assert_current_dbos_context
 from dbos._error import DBOSInitializationError, DBOSNotAuthorizedError
-from dbos._sys_db import GetWorkflowsInput
 from tests.conftest import TestOtelType
 
 
@@ -128,9 +127,7 @@ def test_simple_endpoint(
     assert span.attributes["authenticatedUserRoles"] == '["user", "engineer"]'
 
     # Verify that there is one workflow for this user.
-    gwi = GetWorkflowsInput()
-    gwi.authenticated_user = "user1"
-    wfl = dbos._sys_db.get_workflows(gwi)
+    wfl = DBOS.list_workflows(user="user1")
     assert len(wfl) == 1
     wfs = DBOS.get_workflow_status(wfl[0].workflow_id)
     assert wfs
@@ -139,8 +136,7 @@ def test_simple_endpoint(
     assert wfs.authenticated_roles == ["user", "engineer"]
 
     # Make sure predicate is actually applied
-    gwi.authenticated_user = "user2"
-    wfl = dbos._sys_db.get_workflows(gwi)
+    wfl = DBOS.list_workflows(user="user2")
     assert len(wfl) == 0
 
     response = client.get("/error")

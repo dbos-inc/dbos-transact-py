@@ -18,6 +18,7 @@ from typing import (
     Tuple,
     TypedDict,
     TypeVar,
+    Union,
     cast,
 )
 
@@ -209,46 +210,6 @@ class ExportedWorkflow(TypedDict):
     workflow_events: list[dict[str, Any]]
     workflow_events_history: list[dict[str, Any]]
     streams: list[dict[str, Any]]
-
-
-class GetWorkflowsInput:
-    """
-    Structure for argument to `get_workflows` function.
-
-    This specifies the search criteria for workflow retrieval by `get_workflows`.
-    """
-
-    def __init__(self) -> None:
-        # Search only in these workflow IDs
-        self.workflow_ids: Optional[List[str]] = None
-        # The name of the workflow function
-        self.name: Optional[str] = None
-        # The user who ran the workflow.
-        self.authenticated_user: Optional[str] = None
-        # Timestamp in ISO 8601 format
-        self.start_time: Optional[str] = None
-        # Timestamp in ISO 8601 format
-        self.end_time: Optional[str] = None
-        # Get workflows with one of these statuses
-        self.status: Optional[List[str]] = None
-        # The application version that ran this workflow.
-        self.application_version: Optional[str] = None
-        # Get workflows forked from this workflow ID.
-        self.forked_from: Optional[str] = None
-        # Return up to this many workflows IDs. IDs are ordered by workflow creation time.
-        self.limit: Optional[int] = None
-        # Offset into the matching records for pagination
-        self.offset: Optional[int] = None
-        # If true, sort by created_at in DESC order. Default false (in ASC order).
-        self.sort_desc: bool = False
-        # Search only for workflow IDs starting with this string
-        self.workflow_id_prefix: Optional[str] = None
-        # Search only for workflows enqueued on this queue
-        self.queue_name: Optional[str] = None
-        # Search only currently enqueued workflows
-        self.queues_only: bool = False
-        # Search only for workflows run by this executor
-        self.executor_id: Optional[str] = None
 
 
 class GetPendingWorkflowsOutput:
@@ -1009,16 +970,36 @@ class SystemDatabase(ABC):
                     pass  # CB: I guess we're assuming the WF will show up eventually.
             time.sleep(polling_interval)
 
-    def get_workflows(
+    def list_workflows(
         self,
-        input: GetWorkflowsInput,
         *,
+        workflow_ids: Optional[List[str]] = None,
+        status: Optional[Union[str, List[str]]] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        name: Optional[str] = None,
+        app_version: Optional[str] = None,
+        forked_from: Optional[str] = None,
+        user: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        sort_desc: bool = False,
+        workflow_id_prefix: Optional[str] = None,
         load_input: bool = True,
         load_output: bool = True,
+        executor_id: Optional[str] = None,
+        queues_only: bool = False,
     ) -> List[WorkflowStatus]:
         """
-        Retrieve a list of workflows result and inputs based on the input criteria. The result is a list of external-facing workflow status objects.
+        Retrieve a list of workflows based on the search criteria.
+        Returns a list of WorkflowStatus objects.
         """
+        # Normalize status to a list
+        status_list: Optional[List[str]] = (
+            status if status is None or isinstance(status, list) else [status]
+        )
+
         load_columns = [
             SystemSchema.workflow_status.c.workflow_uuid,
             SystemSchema.workflow_status.c.status,
@@ -1048,76 +1029,71 @@ class SystemDatabase(ABC):
             load_columns.append(SystemSchema.workflow_status.c.output)
             load_columns.append(SystemSchema.workflow_status.c.error)
 
-        if input.queues_only:
+        if queues_only:
             query = sa.select(*load_columns).where(
                 SystemSchema.workflow_status.c.queue_name.isnot(None),
             )
-            if not input.status:
+            if not status_list:
                 query = query.where(
                     SystemSchema.workflow_status.c.status.in_(["ENQUEUED", "PENDING"])
                 )
         else:
             query = sa.select(*load_columns)
-        if input.sort_desc:
+        if sort_desc:
             query = query.order_by(SystemSchema.workflow_status.c.created_at.desc())
         else:
             query = query.order_by(SystemSchema.workflow_status.c.created_at.asc())
-        if input.name:
-            query = query.where(SystemSchema.workflow_status.c.name == input.name)
-        if input.authenticated_user:
+        if name:
+            query = query.where(SystemSchema.workflow_status.c.name == name)
+        if user:
             query = query.where(
-                SystemSchema.workflow_status.c.authenticated_user
-                == input.authenticated_user
+                SystemSchema.workflow_status.c.authenticated_user == user
             )
-        if input.start_time:
-            query = query.where(
-                SystemSchema.workflow_status.c.created_at
-                >= datetime.datetime.fromisoformat(input.start_time).timestamp() * 1000
-            )
-        if input.end_time:
+        if start_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                <= datetime.datetime.fromisoformat(input.end_time).timestamp() * 1000
+                >= datetime.datetime.fromisoformat(start_time).timestamp() * 1000
             )
-        if input.status:
-            query = query.where(SystemSchema.workflow_status.c.status.in_(input.status))
-        if input.application_version:
+        if end_time:
             query = query.where(
-                SystemSchema.workflow_status.c.application_version
-                == input.application_version
+                SystemSchema.workflow_status.c.created_at
+                <= datetime.datetime.fromisoformat(end_time).timestamp() * 1000
             )
-        if input.forked_from:
+        if status_list:
+            query = query.where(SystemSchema.workflow_status.c.status.in_(status_list))
+        if app_version:
             query = query.where(
-                SystemSchema.workflow_status.c.forked_from == input.forked_from
+                SystemSchema.workflow_status.c.application_version == app_version
             )
-        if input.workflow_ids:
+        if forked_from:
             query = query.where(
-                SystemSchema.workflow_status.c.workflow_uuid.in_(input.workflow_ids)
+                SystemSchema.workflow_status.c.forked_from == forked_from
             )
-        if input.workflow_id_prefix:
+        if workflow_ids:
+            query = query.where(
+                SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids)
+            )
+        if workflow_id_prefix:
             query = query.where(
                 SystemSchema.workflow_status.c.workflow_uuid.startswith(
-                    input.workflow_id_prefix, autoescape=True
+                    workflow_id_prefix, autoescape=True
                 )
             )
-        if input.queue_name:
+        if queue_name:
+            query = query.where(SystemSchema.workflow_status.c.queue_name == queue_name)
+        if executor_id:
             query = query.where(
-                SystemSchema.workflow_status.c.queue_name == input.queue_name
+                SystemSchema.workflow_status.c.executor_id == executor_id
             )
-        if input.executor_id:
-            query = query.where(
-                SystemSchema.workflow_status.c.executor_id == input.executor_id
-            )
-        if input.limit:
-            query = query.limit(input.limit)
-        if input.offset:
-            query = query.offset(input.offset)
+        if limit:
+            query = query.limit(limit)
+        if offset:
+            query = query.offset(offset)
 
         with self.engine.begin() as c:
             rows = c.execute(query).fetchall()
 
         infos: List[WorkflowStatus] = []
-        workflow_ids: List[str] = []
         for row in rows:
             info = WorkflowStatus()
             info.workflow_id = row[0]
@@ -1144,9 +1120,12 @@ class SystemDatabase(ABC):
             info.queue_partition_key = row[19]
             info.forked_from = row[20]
 
-            raw_input = row[21] if load_input else None
-            raw_output = row[22] if load_output else None
-            raw_error = row[23] if load_output else None
+            idx = 21
+            raw_input = row[idx] if load_input else None
+            if load_input:
+                idx += 1
+            raw_output = row[idx] if load_output else None
+            raw_error = row[idx + 1] if load_output else None
             inputs, output, exception = safe_deserialize(
                 self.serializer,
                 info.workflow_id,
@@ -1158,7 +1137,6 @@ class SystemDatabase(ABC):
             info.output = output
             info.error = exception
 
-            workflow_ids.append(info.workflow_id)
             infos.append(info)
         return infos
 
@@ -1472,7 +1450,9 @@ class SystemDatabase(ABC):
                 )
             except DBAPIError as dbapi_error:
                 if self._is_foreign_key_violation(dbapi_error):
-                    raise DBOSNonExistentWorkflowError("`send` destination", destination_uuid)
+                    raise DBOSNonExistentWorkflowError(
+                        "`send` destination", destination_uuid
+                    )
                 raise
             output: OperationResultInternal = {
                 "workflow_uuid": workflow_uuid,

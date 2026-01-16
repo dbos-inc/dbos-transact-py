@@ -160,8 +160,9 @@ async def test_send_recv_async(dbos: DBOS) -> None:
     # Send to non-existent uuid should fail
     with pytest.raises(Exception) as exc_info:
         await test_send_workflow(dest_uuid, "testtopic")
-    assert f"DBOS Error 5: Non-existent `send` destination workflow ID: {dest_uuid}" in str(
-        exc_info.value
+    assert (
+        f"DBOS Error 5: Non-existent `send` destination workflow ID: {dest_uuid}"
+        in str(exc_info.value)
     )
 
     with SetWorkflowID(dest_uuid):

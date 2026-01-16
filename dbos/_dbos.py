@@ -35,7 +35,7 @@ from dbos._debouncer import debouncer_workflow
 from dbos._serialization import DefaultSerializer, Serializer
 from dbos._sys_db import SystemDatabase, WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, generate_uuid
-from dbos._workflow_commands import fork_workflow, list_queued_workflows, list_workflows
+from dbos._workflow_commands import fork_workflow
 
 from ._classproperty import classproperty
 from ._core import (
@@ -1274,10 +1274,10 @@ class DBOS:
         load_input: bool = True,
         load_output: bool = True,
         executor_id: Optional[str] = None,
+        queues_only: bool = False,
     ) -> List[WorkflowStatus]:
         def fn() -> List[WorkflowStatus]:
-            return list_workflows(
-                _get_dbos_instance()._sys_db,
+            return _get_dbos_instance()._sys_db.list_workflows(
                 workflow_ids=workflow_ids,
                 status=status,
                 start_time=start_time,
@@ -1286,14 +1286,15 @@ class DBOS:
                 app_version=app_version,
                 forked_from=forked_from,
                 user=user,
+                queue_name=queue_name,
                 limit=limit,
                 offset=offset,
                 sort_desc=sort_desc,
                 workflow_id_prefix=workflow_id_prefix,
                 load_input=load_input,
                 load_output=load_output,
-                queue_name=queue_name,
                 executor_id=executor_id,
+                queues_only=queues_only,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -1312,6 +1313,7 @@ class DBOS:
         app_version: Optional[str] = None,
         forked_from: Optional[str] = None,
         user: Optional[str] = None,
+        queue_name: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
@@ -1319,6 +1321,7 @@ class DBOS:
         load_input: bool = True,
         load_output: bool = True,
         executor_id: Optional[str] = None,
+        queues_only: bool = False,
     ) -> List[WorkflowStatus]:
         await cls._configure_asyncio_thread_pool()
         return await asyncio.to_thread(
@@ -1331,6 +1334,7 @@ class DBOS:
             app_version=app_version,
             forked_from=forked_from,
             user=user,
+            queue_name=queue_name,
             limit=limit,
             offset=offset,
             sort_desc=sort_desc,
@@ -1338,38 +1342,49 @@ class DBOS:
             load_input=load_input,
             load_output=load_output,
             executor_id=executor_id,
+            queues_only=queues_only,
         )
 
     @classmethod
     def list_queued_workflows(
         cls,
         *,
-        queue_name: Optional[str] = None,
+        workflow_ids: Optional[List[str]] = None,
         status: Optional[Union[str, List[str]]] = None,
-        forked_from: Optional[str] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         name: Optional[str] = None,
+        app_version: Optional[str] = None,
+        forked_from: Optional[str] = None,
+        user: Optional[str] = None,
+        queue_name: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
+        workflow_id_prefix: Optional[str] = None,
         load_input: bool = True,
+        load_output: bool = True,
         executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         def fn() -> List[WorkflowStatus]:
-            return list_queued_workflows(
-                _get_dbos_instance()._sys_db,
-                queue_name=queue_name,
+            return _get_dbos_instance()._sys_db.list_workflows(
+                workflow_ids=workflow_ids,
                 status=status,
-                forked_from=forked_from,
                 start_time=start_time,
                 end_time=end_time,
                 name=name,
+                app_version=app_version,
+                forked_from=forked_from,
+                user=user,
+                queue_name=queue_name,
                 limit=limit,
                 offset=offset,
                 sort_desc=sort_desc,
+                workflow_id_prefix=workflow_id_prefix,
                 load_input=load_input,
+                load_output=load_output,
                 executor_id=executor_id,
+                queues_only=True,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -1380,31 +1395,41 @@ class DBOS:
     async def list_queued_workflows_async(
         cls,
         *,
-        queue_name: Optional[str] = None,
+        workflow_ids: Optional[List[str]] = None,
         status: Optional[Union[str, List[str]]] = None,
-        forked_from: Optional[str] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         name: Optional[str] = None,
+        app_version: Optional[str] = None,
+        forked_from: Optional[str] = None,
+        user: Optional[str] = None,
+        queue_name: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
+        workflow_id_prefix: Optional[str] = None,
         load_input: bool = True,
+        load_output: bool = True,
         executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         await cls._configure_asyncio_thread_pool()
         return await asyncio.to_thread(
             cls.list_queued_workflows,
-            queue_name=queue_name,
+            workflow_ids=workflow_ids,
             status=status,
-            forked_from=forked_from,
             start_time=start_time,
             end_time=end_time,
             name=name,
+            app_version=app_version,
+            forked_from=forked_from,
+            user=user,
+            queue_name=queue_name,
             limit=limit,
             offset=offset,
             sort_desc=sort_desc,
+            workflow_id_prefix=workflow_id_prefix,
             load_input=load_input,
+            load_output=load_output,
             executor_id=executor_id,
         )
 
