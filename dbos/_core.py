@@ -608,7 +608,7 @@ def execute_workflow_by_id(
             )
 
 
-def _get_new_wf() -> tuple[str, DBOSContext]:
+def _get_new_wf(cur_ctx: Optional["DBOSContext"]) -> tuple[str, DBOSContext]:
     # Sequence of events for starting a workflow:
     #   First - is there a WF already running?
     #      (and not in step as that is an error)
@@ -617,7 +617,6 @@ def _get_new_wf() -> tuple[str, DBOSContext]:
     #      If this is a child workflow, assign parent wf id with call# suffix
     #   Make a (system) DB record for the workflow
     #   Pass the new context to a worker thread that will run the wf function
-    cur_ctx = get_local_dbos_context()
     if cur_ctx is not None and cur_ctx.is_within_workflow():
         assert cur_ctx.is_workflow()  # Not in a step
         cur_ctx.function_id += 1
@@ -680,13 +679,12 @@ def start_workflow(
             local_ctx.queue_partition_key if local_ctx is not None else None
         ),
     )
-    new_wf_id, new_wf_ctx = _get_new_wf()
+    new_wf_id, new_wf_ctx = _get_new_wf(local_ctx)
 
-    ctx = new_wf_ctx
-    new_child_workflow_id = ctx.id_assigned_for_next_workflow
-    if ctx.has_parent():
+    new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
+    if new_wf_ctx.has_parent():
         recorded_result = dbos._sys_db.check_operation_execution(
-            ctx.parent_workflow_id, ctx.parent_workflow_fid, get_dbos_func_name(func)
+            new_wf_ctx.parent_workflow_id, new_wf_ctx.parent_workflow_fid, get_dbos_func_name(func)
         )
         if recorded_result and recorded_result["error"]:
             e: Exception = dbos._sys_db.serializer.deserialize(recorded_result["error"])
@@ -711,11 +709,11 @@ def start_workflow(
     )
 
     wf_status = status["status"]
-    if ctx.has_parent():
+    if new_wf_ctx.has_parent():
         dbos._sys_db.record_child_workflow(
-            ctx.parent_workflow_id,
+            new_wf_ctx.parent_workflow_id,
             new_child_workflow_id,
-            ctx.parent_workflow_fid,
+            new_wf_ctx.parent_workflow_fid,
             get_dbos_func_name(func),
         )
 
@@ -782,7 +780,7 @@ async def start_workflow_async(
             local_ctx.queue_partition_key if local_ctx is not None else None
         ),
     )
-    new_wf_id, new_wf_ctx = _get_new_wf()
+    new_wf_id, new_wf_ctx = _get_new_wf(local_ctx)
 
     ctx = new_wf_ctx
     new_child_workflow_id = ctx.id_assigned_for_next_workflow
