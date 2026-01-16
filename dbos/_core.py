@@ -1592,6 +1592,59 @@ def get_event(
         # Directly call it outside of a workflow
         return dbos._sys_db.get_event(workflow_id, key, timeout_seconds)
 
+def write_stream(
+    dbos: "DBOS",
+    step_ctx: Optional["DBOSContext"],
+    key: str,
+    value: Any
+) -> None:
+    if step_ctx is not None:
+        # Must call it within a workflow
+        if step_ctx.is_workflow():
+            attributes: TracedAttributes = {
+                "name": "write_stream",
+            }
+            with EnterDBOSStepCtx(attributes, step_ctx) as ctx:
+                dbos._sys_db.write_stream_from_workflow(
+                    ctx.workflow_id, ctx.function_id, key, value
+                )
+        elif step_ctx.is_step():
+            dbos._sys_db.write_stream_from_step(
+                step_ctx.workflow_id, step_ctx.function_id, key, value
+            )
+        else:
+            raise DBOSException(
+                "write_stream() must be called from within a workflow or step"
+            )
+    else:
+        # Cannot call it from outside of a workflow
+        raise DBOSException(
+            "write_stream() must be called from within a workflow or step"
+        )
+
+def close_stream(
+    dbos: "DBOS",
+    step_ctx: Optional["DBOSContext"],
+    key: str
+) -> None:
+    if step_ctx is not None:
+        # Must call it within a workflow
+        if step_ctx.is_workflow():
+            attributes: TracedAttributes = {
+                "name": "close_stream",
+            }
+            with EnterDBOSStepCtx(attributes, step_ctx) as ctx:
+                dbos._sys_db.close_stream(
+                    ctx.workflow_id, ctx.function_id, key
+                )
+        else:
+            raise DBOSException(
+                "close_stream() must be called from within a workflow"
+            )
+    else:
+        # Cannot call it from outside of a workflow
+        raise DBOSException("close_stream() must be called from within a workflow")
+
 
 def _get_timeout_deadline(
     ctx: Optional[DBOSContext], queue: Optional[str]

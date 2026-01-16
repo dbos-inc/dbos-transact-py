@@ -46,6 +46,7 @@ from ._core import (
     StepOptions,
     WorkflowHandleAsyncPolling,
     WorkflowHandlePolling,
+    close_stream,
     decorate_step,
     decorate_transaction,
     decorate_workflow,
@@ -58,6 +59,7 @@ from ._core import (
     set_event,
     start_workflow,
     start_workflow_async,
+    write_stream,
 )
 from ._queue import Queue, queue_thread
 from ._recovery import recover_pending_workflows, startup_recovery_thread
@@ -1618,30 +1620,8 @@ class DBOS:
             value(Any): A serializable value to write to the stream
 
         """
-        ctx = get_local_dbos_context()
-        if ctx is not None:
-            # Must call it within a workflow
-            if ctx.is_workflow():
-                attributes: TracedAttributes = {
-                    "name": "write_stream",
-                }
-                with EnterDBOSStep(attributes) as ctx:
-                    _get_dbos_instance()._sys_db.write_stream_from_workflow(
-                        ctx.workflow_id, ctx.function_id, key, value
-                    )
-            elif ctx.is_step():
-                _get_dbos_instance()._sys_db.write_stream_from_step(
-                    ctx.workflow_id, ctx.function_id, key, value
-                )
-            else:
-                raise DBOSException(
-                    "write_stream() must be called from within a workflow or step"
-                )
-        else:
-            # Cannot call it from outside of a workflow
-            raise DBOSException(
-                "write_stream() must be called from within a workflow or step"
-            )
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        write_stream(_get_dbos_instance(), ctx, key, value)
 
     @classmethod
     def close_stream(cls, key: str) -> None:
@@ -1652,24 +1632,8 @@ class DBOS:
             key(str): The stream key / name within the workflow
 
         """
-        ctx = get_local_dbos_context()
-        if ctx is not None:
-            # Must call it within a workflow
-            if ctx.is_workflow():
-                attributes: TracedAttributes = {
-                    "name": "close_stream",
-                }
-                with EnterDBOSStep(attributes) as ctx:
-                    _get_dbos_instance()._sys_db.close_stream(
-                        ctx.workflow_id, ctx.function_id, key
-                    )
-            else:
-                raise DBOSException(
-                    "close_stream() must be called from within a workflow"
-                )
-        else:
-            # Cannot call it from outside of a workflow
-            raise DBOSException("close_stream() must be called from within a workflow")
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        close_stream(_get_dbos_instance(), ctx, key)
 
     @classmethod
     def read_stream(cls, workflow_id: str, key: str) -> Generator[Any, Any, None]:
@@ -1715,8 +1679,9 @@ class DBOS:
             value(Any): A serializable value to write to the stream
 
         """
+        ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(lambda: DBOS.write_stream(key, value))
+        await asyncio.to_thread(lambda: write_stream(_get_dbos_instance(), ctx, key, value))
 
     @classmethod
     async def close_stream_async(cls, key: str) -> None:
@@ -1727,8 +1692,9 @@ class DBOS:
             key(str): The stream key / name within the workflow
 
         """
+        ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(lambda: DBOS.close_stream(key))
+        await asyncio.to_thread(lambda: close_stream(_get_dbos_instance(), ctx, key))
 
     @classmethod
     async def read_stream_async(

@@ -288,8 +288,8 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             #Thing(func=simple_wf, expected="WF Ran"),
             #Thing(func=t_start_child, expected="started"),
             #Thing(func=t_get_child_result, expected="WF Ran"),
-            #Thing(func=t_write_stream, expected="wrote"),
-            #Thing(func=t_read_stream, expected="val"),
+            Thing(func=t_write_stream, expected="wrote"),
+            Thing(func=t_read_stream, expected="val"),
             Thing(func=t_liststeps, expected="0"),
         ]
 
