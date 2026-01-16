@@ -12,6 +12,7 @@ import pytest
 
 # Public API
 from dbos import DBOS, SetWorkflowID, StepInfo
+from dbos._error import DBOSNonExistentWorkflowError
 from tests.conftest import using_sqlite
 
 
@@ -225,6 +226,12 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             st = await DBOS.get_workflow_status_async("nosuchwv")
             return st.status if st is not None else "Nope"
 
+        async def t_retrieve_workflow_nosuch() -> str:
+            with pytest.raises(DBOSNonExistentWorkflowError):
+                await DBOS.retrieve_workflow_async("nosuchwv", existing_workflow=True)
+                return "Yep"
+            return "Nope"
+
         async def t_step_retry_4() -> str:
             return await ConcurrTestClass.test_step_retry("4")
 
@@ -262,6 +269,7 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             Thing(func=t_step_str_3, expected="3"),
             #Thing(func=t_recv_msg, expected="msg"),
             Thing(func=t_get_workflow_status_nosuch, expected="Nope"),
+            Thing(func=t_retrieve_workflow_nosuch, expected="Nope"),
             Thing(func=t_step_retry_4, expected="4"),
             #Thing(func=simple_wf, expected="WF Ran"),
             #Thing(func=t_start_child, expected="started"),

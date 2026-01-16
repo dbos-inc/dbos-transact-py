@@ -1134,7 +1134,7 @@ class DBOS:
         await cls._configure_asyncio_thread_pool()
         def fn() -> Dict[str, Any]:
             return _get_dbos_instance()._sys_db.get_all_events(workflow_id)
-        return await _get_dbos_instance()._sys_db.call_function_as_step(
+        return await _get_dbos_instance()._sys_db.call_function_as_step_from_async(
             fn, "DBOS.get_events", step_ctx)
 
     @classmethod
