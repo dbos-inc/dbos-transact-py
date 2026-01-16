@@ -690,7 +690,7 @@ class EnterDBOSStepCtx:
         assert ctx.is_workflow()
         self.prev_ctx = ctx
         _set_local_dbos_context(self.use_ctx)
-        self.use_ctx.start_step(ctx.function_id, attributes=self.attributes)
+        self.use_ctx.start_step(self.use_ctx.function_id, attributes=self.attributes)
         return self.use_ctx
 
     def __exit__(

@@ -33,7 +33,6 @@ from ._context import (
     DBOSContextEnsure,
     DBOSContextSwap,
     EnterDBOSChildWorkflow,
-    EnterDBOSStep,
     EnterDBOSStepCtx,
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
@@ -1519,17 +1518,15 @@ def send(
         assert wffn
         wffn(destination_id, message, topic)
 
-def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
-    cur_ctx = get_local_dbos_context()
+def recv(dbos: "DBOS", cur_ctx: Optional["DBOSContext"], topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
     if cur_ctx is not None:
         # Must call it within a workflow
         assert cur_ctx.is_workflow(), "recv() must be called from within a workflow"
         attributes: TracedAttributes = {
             "name": "recv",
         }
-        with EnterDBOSStep(attributes) as ctx:
-            ctx.function_id += 1  # Reserve for the sleep
-            timeout_function_id = ctx.function_id
+        with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
+            timeout_function_id = ctx.curr_step_function_id + 1
             return dbos._sys_db.recv(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
@@ -1566,9 +1563,8 @@ def set_event(dbos: "DBOS", cur_ctx: Optional["DBOSContext"], key: str, value: A
 
 
 def get_event(
-    dbos: "DBOS", workflow_id: str, key: str, timeout_seconds: float = 60
+    dbos: "DBOS", cur_ctx: Optional[DBOSContext], workflow_id: str, key: str, timeout_seconds: float = 60
 ) -> Any:
-    cur_ctx = get_local_dbos_context()
     if cur_ctx is not None and cur_ctx.is_within_workflow():
         # Call it within a workflow
         assert (
@@ -1577,9 +1573,8 @@ def get_event(
         attributes: TracedAttributes = {
             "name": "get_event",
         }
-        with EnterDBOSStep(attributes) as ctx:
-            ctx.function_id += 1
-            timeout_function_id = ctx.function_id
+        with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
+            timeout_function_id = ctx.curr_step_function_id + 1
             caller_ctx: GetEventWorkflowContext = {
                 "workflow_uuid": ctx.workflow_id,
                 "function_id": ctx.curr_step_function_id,

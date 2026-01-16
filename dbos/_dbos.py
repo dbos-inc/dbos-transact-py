@@ -983,7 +983,7 @@ class DBOS:
         This function is to be called from within a workflow.
         `recv` will return the message sent on `topic`, waiting if necessary.
         """
-        return recv(_get_dbos_instance(), topic, timeout_seconds)
+        return recv(_get_dbos_instance(), snapshot_step_context(reserve_sleep_id=True), topic, timeout_seconds)
 
     @classmethod
     async def recv_async(
@@ -995,8 +995,9 @@ class DBOS:
         This function is to be called from within a workflow.
         `recv_async` will return the message sent on `topic`, asyncronously waiting if necessary.
         """
+        ctx = snapshot_step_context(reserve_sleep_id=True)
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(lambda: DBOS.recv(topic, timeout_seconds))
+        return await asyncio.to_thread(recv, _get_dbos_instance(), ctx, topic, timeout_seconds)
 
     @classmethod
     def sleep(cls, seconds: float) -> None:
@@ -1085,7 +1086,7 @@ class DBOS:
             timeout_seconds(float): The amount of time to wait, in case `set_event` has not yet been called byt the workflow
 
         """
-        return get_event(_get_dbos_instance(), workflow_id, key, timeout_seconds)
+        return get_event(_get_dbos_instance(), snapshot_step_context(reserve_sleep_id=True), workflow_id, key, timeout_seconds)
 
     @classmethod
     async def get_event_async(
@@ -1102,9 +1103,10 @@ class DBOS:
             timeout_seconds(float): The amount of time to wait, in case `set_event` has not yet been called byt the workflow
 
         """
+        ctx = snapshot_step_context(reserve_sleep_id=True)
         await cls._configure_asyncio_thread_pool()
         return await asyncio.to_thread(
-            lambda: DBOS.get_event(workflow_id, key, timeout_seconds)
+            get_event, _get_dbos_instance(), ctx, workflow_id, key, timeout_seconds
         )
 
     @classmethod
