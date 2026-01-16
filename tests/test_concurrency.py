@@ -196,7 +196,7 @@ async def test_gather_manythings(dbos: DBOS) -> None:
                 body,
             )
 
-        async def t_tx_test_read_write_function() -> str:
+        async def t_function_calls_function() -> str:
             return str(await ConcurrTestClass.test_read_write_function(2))
 
         async def t_set_event() -> str:
@@ -275,10 +275,10 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             Thing(func=t_run_step2, expected="ranStep"),
             Thing(func=t_listqwfs, expected="0"),
             Thing(func=t_run_step_retry, expected="ranStep"),
-            #Thing(func=t_tx_test_read_write_function, expected="2"),
-            #Thing(func=t_set_event, expected="set"),
+            Thing(func=t_function_calls_function, expected="2"),
+            Thing(func=t_set_event, expected="set"),
             #Thing(func=t_get_event, expected="eval"),
-            #Thing(func=t_send_msg, expected="sent"),
+            Thing(func=t_send_msg, expected="sent"),
             Thing(func=t_step_str_3, expected="3"),
             #Thing(func=t_recv_msg, expected="msg"),
             Thing(func=t_get_workflow_status_nosuch, expected="Nope"),

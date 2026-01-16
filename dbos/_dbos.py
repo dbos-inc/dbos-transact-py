@@ -964,15 +964,16 @@ class DBOS:
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
         """Send a message to a workflow execution."""
-        return send(_get_dbos_instance(), destination_id, message, topic)
+        return send(_get_dbos_instance(), snapshot_step_context(), destination_id, message, topic)
 
     @classmethod
     async def send_async(
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
         """Send a message to a workflow execution."""
+        ctx = snapshot_step_context()
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(lambda: DBOS.send(destination_id, message, topic))
+        await asyncio.to_thread(send, _get_dbos_instance(), ctx, destination_id, message, topic)
 
     @classmethod
     def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
@@ -1050,7 +1051,7 @@ class DBOS:
             value(Any): A serializable value to associate with the key
 
         """
-        return set_event(_get_dbos_instance(), key, value)
+        return set_event(_get_dbos_instance(), snapshot_step_context(), key, value)
 
     @classmethod
     async def set_event_async(cls, key: str, value: Any) -> None:
@@ -1067,8 +1068,9 @@ class DBOS:
             value(Any): A serializable value to associate with the key
 
         """
+        ctx = snapshot_step_context()
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(lambda: DBOS.set_event(key, value))
+        await asyncio.to_thread(set_event, _get_dbos_instance(), ctx, key, value)
 
     @classmethod
     def get_event(cls, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:

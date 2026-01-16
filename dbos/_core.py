@@ -1495,13 +1495,14 @@ def decorate_step(
 
 
 def send(
-    dbos: "DBOS", destination_id: str, message: Any, topic: Optional[str] = None
+    dbos: "DBOS", cur_ctx: Optional["DBOSContext"], destination_id: str, message: Any, topic: Optional[str] = None
 ) -> None:
     def do_send(destination_id: str, message: Any, topic: Optional[str]) -> None:
+        assert cur_ctx is not None
         attributes: TracedAttributes = {
             "name": "send",
         }
-        with EnterDBOSStep(attributes) as ctx:
+        with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
             dbos._sys_db.send(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
@@ -1510,15 +1511,13 @@ def send(
                 topic,
             )
 
-    ctx = get_local_dbos_context()
-    if ctx and ctx.is_within_workflow():
-        assert ctx.is_workflow(), "send() must be called from within a workflow"
+    if cur_ctx and cur_ctx.is_within_workflow():
+        assert cur_ctx.is_workflow(), "send() must be called from within a workflow"
         return do_send(destination_id, message, topic)
     else:
         wffn = dbos._registry.workflow_info_map.get(TEMP_SEND_WF_NAME)
         assert wffn
         wffn(destination_id, message, topic)
-
 
 def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
     cur_ctx = get_local_dbos_context()
@@ -1543,15 +1542,14 @@ def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60)
         raise DBOSException("recv() must be called from within a workflow")
 
 
-def set_event(dbos: "DBOS", key: str, value: Any) -> None:
-    cur_ctx = get_local_dbos_context()
+def set_event(dbos: "DBOS", cur_ctx: Optional["DBOSContext"], key: str, value: Any) -> None:
     if cur_ctx is not None:
         if cur_ctx.is_workflow():
             # If called from a workflow function, run as a step
             attributes: TracedAttributes = {
                 "name": "set_event",
             }
-            with EnterDBOSStep(attributes) as ctx:
+            with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
                 dbos._sys_db.set_event_from_workflow(
                     ctx.workflow_id, ctx.curr_step_function_id, key, value
                 )
