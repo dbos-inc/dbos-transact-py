@@ -330,6 +330,13 @@ def assert_current_dbos_context() -> DBOSContext:
     assert rv, "No DBOS context found"
     return rv
 
+def snapshot_step_context(reserve_sleep_id: bool = False) -> Optional[DBOSContext]:
+    step_ctx: Optional[DBOSContext] = None
+    ctx = get_local_dbos_context()
+    if ctx:
+        step_ctx = ctx.snapshot_step_ctx(reserve_sleep_id)
+    return step_ctx
+
 
 ##############################################################
 ##### High-level context management  (using contextlib)

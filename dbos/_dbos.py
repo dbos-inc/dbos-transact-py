@@ -97,6 +97,7 @@ from ._context import (
     TracedAttributes,
     assert_current_dbos_context,
     get_local_dbos_context,
+    snapshot_step_context,
 )
 from ._dbos_config import (
     ConfigFile,
@@ -893,11 +894,7 @@ class DBOS:
         else:
             pass
 
-        step_ctx: Optional[DBOSContext] = None
-        ctx = get_local_dbos_context()
-        if ctx:
-            step_ctx = ctx.snapshot_step_ctx()
-
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
         return await run_step_async(
             _get_dbos_instance(),
@@ -915,15 +912,22 @@ class DBOS:
         def fn() -> Optional[WorkflowStatus]:
             return get_workflow(_get_dbos_instance()._sys_db, workflow_id)
 
-        return _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.getStatus")
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.getStatus",
+            snapshot_step_context(reserve_sleep_id=False)
+        )
 
     @classmethod
     async def get_workflow_status_async(
         cls, workflow_id: str
     ) -> Optional[WorkflowStatus]:
-        await cls._configure_asyncio_thread_pool()
         """Return the status of a workflow execution."""
-        return await asyncio.to_thread(cls.get_workflow_status, workflow_id)
+
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
+        await cls._configure_asyncio_thread_pool()
+        def fn() -> Optional[WorkflowStatus]:
+            return get_workflow(_get_dbos_instance()._sys_db, workflow_id)
+        return await _get_dbos_instance()._sys_db.call_function_as_step_from_async(fn, "DBOS.getStatus", step_ctx)
 
     @classmethod
     def retrieve_workflow(
@@ -1109,7 +1113,10 @@ class DBOS:
         def fn() -> Dict[str, Any]:
             return _get_dbos_instance()._sys_db.get_all_events(workflow_id)
 
-        return _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.get_events")
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.get_events",
+            snapshot_step_context(reserve_sleep_id=False)
+        )
 
     @classmethod
     async def get_all_events_async(cls, workflow_id: str) -> Dict[str, Any]:
@@ -1144,7 +1151,8 @@ class DBOS:
             _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
-            fn, "DBOS.cancelWorkflow"
+            fn, "DBOS.cancelWorkflow",
+            snapshot_step_context(reserve_sleep_id=False)
         )
 
     @classmethod
@@ -1169,7 +1177,8 @@ class DBOS:
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
-            fn, "DBOS.deleteWorkflow"
+            fn, "DBOS.deleteWorkflow",
+            snapshot_step_context(reserve_sleep_id=False)
         )
 
     @classmethod
@@ -1203,7 +1212,7 @@ class DBOS:
             dbos_logger.info(f"Resuming workflow: {workflow_id}")
             _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
 
-        _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.resumeWorkflow")
+        _get_dbos_instance()._sys_db.call_function_as_step(fn, "DBOS.resumeWorkflow", snapshot_step_context(reserve_sleep_id=False))
         return cls.retrieve_workflow(workflow_id)
 
     @classmethod
@@ -1233,7 +1242,8 @@ class DBOS:
             )
 
         new_id = _get_dbos_instance()._sys_db.call_function_as_step(
-            fn, "DBOS.forkWorkflow"
+            fn, "DBOS.forkWorkflow",
+            snapshot_step_context(reserve_sleep_id=False)
         )
         return cls.retrieve_workflow(new_id)
 
@@ -1298,7 +1308,8 @@ class DBOS:
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
-            fn, "DBOS.listWorkflows"
+            fn, "DBOS.listWorkflows",
+            snapshot_step_context(reserve_sleep_id=False)
         )
 
     @classmethod
@@ -1388,7 +1399,8 @@ class DBOS:
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
-            fn, "DBOS.listQueuedWorkflows"
+            fn, "DBOS.listQueuedWorkflows",
+            snapshot_step_context(reserve_sleep_id=False)
         )
 
     @classmethod
@@ -1439,7 +1451,8 @@ class DBOS:
             return _get_dbos_instance()._sys_db.list_workflow_steps(workflow_id)
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
-            fn, "DBOS.listWorkflowSteps"
+            fn, "DBOS.listWorkflowSteps",
+            snapshot_step_context(reserve_sleep_id=False)
         )
 
     @classmethod

@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import functools
 import json
@@ -33,7 +34,7 @@ from dbos._utils import (
     retriable_sqlite_exception,
 )
 
-from ._context import get_local_dbos_context
+from ._context import DBOSContext, get_local_dbos_context
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSConflictingWorkflowError,
@@ -2115,13 +2116,11 @@ class SystemDatabase(ABC):
 
     T = TypeVar("T")
 
-    def call_function_as_step(self, fn: Callable[[], T], function_name: str) -> T:
-        ctx = get_local_dbos_context()
+    def call_function_as_step(self, fn: Callable[[], T], function_name: str, ctx: Optional[DBOSContext]) -> T:
         start_time = int(time.time() * 1000)
         if ctx and ctx.is_transaction():
             raise Exception(f"Invalid call to `{function_name}` inside a transaction")
         if ctx and ctx.is_workflow():
-            ctx.function_id += 1
             res = self.check_operation_execution(
                 ctx.workflow_id, ctx.function_id, function_name
             )
@@ -2151,6 +2150,9 @@ class SystemDatabase(ABC):
                 }
             )
         return result
+
+    async def call_function_as_step_from_async(self, fn: Callable[[], T], function_name: str, ctx: Optional[DBOSContext]) -> T:
+        return await asyncio.to_thread(self.call_function_as_step, fn, function_name, ctx)
 
     @db_retry()
     def init_workflow(
