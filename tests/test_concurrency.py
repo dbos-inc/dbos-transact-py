@@ -232,6 +232,18 @@ async def test_gather_manythings(dbos: DBOS) -> None:
                 return "Yep"
             return "Nope"
 
+        async def t_liststeps() -> str:
+            steps = await DBOS.list_workflow_steps_async("nosuchwv")
+            return f"{len(steps)}"
+
+        async def t_listwfs() -> str:
+            wfs = await DBOS.list_workflows_async(workflow_id_prefix='aaaa')
+            return f"{len(wfs)}"
+
+        async def t_listqwfs() -> str:
+            wfs = await DBOS.list_queued_workflows_async(workflow_id_prefix='aaaa')
+            return f"{len(wfs)}"
+
         async def t_step_retry_4() -> str:
             return await ConcurrTestClass.test_step_retry("4")
 
@@ -261,6 +273,7 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             #Thing(func=t_sleep, expected="slept"),
             Thing(func=t_run_step1, expected="ranStep"),
             Thing(func=t_run_step2, expected="ranStep"),
+            Thing(func=t_listqwfs, expected="0"),
             Thing(func=t_run_step_retry, expected="ranStep"),
             #Thing(func=t_tx_test_read_write_function, expected="2"),
             #Thing(func=t_set_event, expected="set"),
@@ -269,6 +282,7 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             Thing(func=t_step_str_3, expected="3"),
             #Thing(func=t_recv_msg, expected="msg"),
             Thing(func=t_get_workflow_status_nosuch, expected="Nope"),
+            Thing(func=t_listwfs, expected="0"),
             Thing(func=t_retrieve_workflow_nosuch, expected="Nope"),
             Thing(func=t_step_retry_4, expected="4"),
             #Thing(func=simple_wf, expected="WF Ran"),
@@ -276,6 +290,7 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             #Thing(func=t_get_child_result, expected="WF Ran"),
             #Thing(func=t_write_stream, expected="wrote"),
             #Thing(func=t_read_stream, expected="val"),
+            Thing(func=t_liststeps, expected="0"),
         ]
 
         await run_things_serial_or_conc(conc, things)
