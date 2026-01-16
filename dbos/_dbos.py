@@ -1171,8 +1171,7 @@ class DBOS:
             dbos_logger.info(f"Cancelling workflow: {workflow_id}")
             _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
         return await _get_dbos_instance()._sys_db.call_function_as_step_from_async(
-            fn, "DBOS.cancelWorkflow",
-            snapshot_step_context(reserve_sleep_id=False)
+            fn, "DBOS.cancelWorkflow", step_ctx
         )
 
     @classmethod
@@ -1203,9 +1202,15 @@ class DBOS:
 
         If delete_children is True, also deletes all child workflows recursively.
         """
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(
-            lambda: cls.delete_workflow(workflow_id, delete_children=delete_children)
+        def fn() -> None:
+            dbos_logger.info(f"Deleting workflow: {workflow_id}")
+            delete_workflow(
+                _get_dbos_instance(), workflow_id, delete_children=delete_children
+            )
+        return await _get_dbos_instance()._sys_db.call_function_as_step_from_async(
+            fn, "DBOS.deleteWorkflow", step_ctx
         )
 
     @classmethod
@@ -1232,9 +1237,22 @@ class DBOS:
     @classmethod
     async def resume_workflow_async(cls, workflow_id: str) -> WorkflowHandleAsync[Any]:
         """Resume a workflow by ID."""
+        step_ctx_res = snapshot_step_context(reserve_sleep_id=False)
+        step_ctx_ret = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(cls.resume_workflow, workflow_id)
-        return await cls.retrieve_workflow_async(workflow_id)
+
+        def fnres() -> None:
+            dbos_logger.info(f"Resuming workflow: {workflow_id}")
+            _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
+
+        await _get_dbos_instance()._sys_db.call_function_as_step_from_async(fnres, "DBOS.resumeWorkflow", step_ctx_res)
+
+        def fnret() -> Optional[WorkflowStatus]:
+            return get_workflow(_get_dbos_instance()._sys_db, workflow_id)
+        stat = await _get_dbos_instance()._sys_db.call_function_as_step_from_async(fnret, "DBOS.getStatus", step_ctx_ret)
+        if stat is None:
+            raise DBOSNonExistentWorkflowError("target", workflow_id)
+        return WorkflowHandleAsyncPolling(workflow_id, _get_dbos_instance())
 
     @classmethod
     def fork_workflow(
@@ -1270,13 +1288,29 @@ class DBOS:
         application_version: Optional[str] = None,
     ) -> WorkflowHandleAsync[Any]:
         """Restart a workflow with a new workflow ID from a specific step"""
+        step_ctx_res = snapshot_step_context(reserve_sleep_id=False)
+        step_ctx_ret = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        new_id = await asyncio.to_thread(
-            lambda: cls.fork_workflow(
-                workflow_id, start_step, application_version=application_version
-            ).get_workflow_id()
+
+        def fn() -> str:
+            dbos_logger.info(f"Forking workflow: {workflow_id} from step {start_step}")
+            return fork_workflow(
+                _get_dbos_instance()._sys_db,
+                workflow_id,
+                start_step,
+                application_version=application_version,
+            )
+
+        new_id = await _get_dbos_instance()._sys_db.call_function_as_step_from_async(
+            fn, "DBOS.forkWorkflow", step_ctx_res
         )
-        return await cls.retrieve_workflow_async(new_id)
+
+        def fnret() -> Optional[WorkflowStatus]:
+            return get_workflow(_get_dbos_instance()._sys_db, new_id)
+        stat = await _get_dbos_instance()._sys_db.call_function_as_step_from_async(fnret, "DBOS.getStatus", step_ctx_ret)
+        if stat is None:
+            raise DBOSNonExistentWorkflowError("target", new_id)
+        return WorkflowHandleAsyncPolling(new_id, _get_dbos_instance())
 
     @classmethod
     def list_workflows(
@@ -1348,26 +1382,31 @@ class DBOS:
         executor_id: Optional[str] = None,
         queues_only: bool = False,
     ) -> List[WorkflowStatus]:
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(
-            cls.list_workflows,
-            workflow_ids=workflow_ids,
-            status=status,
-            start_time=start_time,
-            end_time=end_time,
-            name=name,
-            app_version=app_version,
-            forked_from=forked_from,
-            user=user,
-            queue_name=queue_name,
-            limit=limit,
-            offset=offset,
-            sort_desc=sort_desc,
-            workflow_id_prefix=workflow_id_prefix,
-            load_input=load_input,
-            load_output=load_output,
-            executor_id=executor_id,
-            queues_only=queues_only,
+        def fn() -> List[WorkflowStatus]:
+            return _get_dbos_instance()._sys_db.list_workflows(
+                workflow_ids=workflow_ids,
+                status=status,
+                start_time=start_time,
+                end_time=end_time,
+                name=name,
+                app_version=app_version,
+                forked_from=forked_from,
+                user=user,
+                queue_name=queue_name,
+                limit=limit,
+                offset=offset,
+                sort_desc=sort_desc,
+                workflow_id_prefix=workflow_id_prefix,
+                load_input=load_input,
+                load_output=load_output,
+                executor_id=executor_id,
+                queues_only=queues_only,
+            )
+
+        return await _get_dbos_instance()._sys_db.call_function_as_step_from_async(
+            fn, "DBOS.listWorkflows", step_ctx
         )
 
     @classmethod
@@ -1438,25 +1477,31 @@ class DBOS:
         load_output: bool = True,
         executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(
-            cls.list_queued_workflows,
-            workflow_ids=workflow_ids,
-            status=status,
-            start_time=start_time,
-            end_time=end_time,
-            name=name,
-            app_version=app_version,
-            forked_from=forked_from,
-            user=user,
-            queue_name=queue_name,
-            limit=limit,
-            offset=offset,
-            sort_desc=sort_desc,
-            workflow_id_prefix=workflow_id_prefix,
-            load_input=load_input,
-            load_output=load_output,
-            executor_id=executor_id,
+        def fn() -> List[WorkflowStatus]:
+            return _get_dbos_instance()._sys_db.list_workflows(
+                workflow_ids=workflow_ids,
+                status=status,
+                start_time=start_time,
+                end_time=end_time,
+                name=name,
+                app_version=app_version,
+                forked_from=forked_from,
+                user=user,
+                queue_name=queue_name,
+                limit=limit,
+                offset=offset,
+                sort_desc=sort_desc,
+                workflow_id_prefix=workflow_id_prefix,
+                load_input=load_input,
+                load_output=load_output,
+                executor_id=executor_id,
+                queues_only=True,
+            )
+
+        return await _get_dbos_instance()._sys_db.call_function_as_step_from_async(
+            fn, "DBOS.listQueuedWorkflows", step_ctx
         )
 
     @classmethod
@@ -1471,8 +1516,14 @@ class DBOS:
 
     @classmethod
     async def list_workflow_steps_async(cls, workflow_id: str) -> List[StepInfo]:
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(cls.list_workflow_steps, workflow_id)
+        def fn() -> List[StepInfo]:
+            return _get_dbos_instance()._sys_db.list_workflow_steps(workflow_id)
+
+        return await _get_dbos_instance()._sys_db.call_function_as_step_from_async(
+            fn, "DBOS.listWorkflowSteps", step_ctx
+        )
 
     @classproperty
     def application_version(cls) -> str:
