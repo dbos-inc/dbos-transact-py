@@ -91,6 +91,7 @@ from sqlalchemy.orm import Session
 from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
 from ._context import (
+    DBOSContext,
     EnterDBOSStep,
     StepStatus,
     TracedAttributes,
@@ -892,9 +893,15 @@ class DBOS:
         else:
             pass
 
+        step_ctx: Optional[DBOSContext] = None
+        ctx = get_local_dbos_context()
+        if ctx:
+            step_ctx = ctx.snapshot_step_ctx()
+
         await cls._configure_asyncio_thread_pool()
         return await run_step_async(
             _get_dbos_instance(),
+            step_ctx,
             func,
             dbos_step_options or {},
             args,

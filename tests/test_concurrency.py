@@ -389,7 +389,6 @@ async def test_gather_manysteps(dbos: DBOS) -> None:
     with SetWorkflowID(wfid_serial):
         await run_a_lot_of_steps_at_once(conc=False)
 
-    """
     with SetWorkflowID(wfid_concurrent):
         await run_a_lot_of_steps_at_once(conc=True)
 
@@ -408,4 +407,3 @@ async def test_gather_manysteps(dbos: DBOS) -> None:
 
     fwf3 = await DBOS.fork_workflow_async(wfid_concurrent, 7)
     await fwf3.get_result()
-    """

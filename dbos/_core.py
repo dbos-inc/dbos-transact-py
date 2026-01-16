@@ -34,6 +34,7 @@ from ._context import (
     DBOSContextSwap,
     EnterDBOSChildWorkflow,
     EnterDBOSStep,
+    EnterDBOSStepCtx,
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
     OperationType,
@@ -1240,6 +1241,7 @@ def decorate_transaction(
 
 def invoke_step(
     dbos: "DBOS",
+    step_ctx: DBOSContext,
     func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
@@ -1335,7 +1337,7 @@ def invoke_step(
     outcome = (
         stepOutcome.then(record_step_result)
         .intercept(check_existing_result, dbos=dbos)
-        .also(EnterDBOSStep(attributes))
+        .also(EnterDBOSStepCtx(attributes, step_ctx))
     )
     return outcome()
 
@@ -1354,6 +1356,7 @@ def run_step(
     if ctx and ctx.is_workflow():
         outcome = invoke_step(
             dbos,
+            ctx.snapshot_step_ctx(),
             func,
             args,
             kwargs,
@@ -1384,6 +1387,7 @@ def run_step(
 
 async def run_step_async(
     dbos: "DBOS",
+    step_ctx: Optional[DBOSContext],
     func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
     options: StepOptions,
     args: tuple[Any, ...],
@@ -1391,11 +1395,11 @@ async def run_step_async(
 ) -> R:
     # If the step is called from a workflow, run it as a step.
     # Otherwise, run it as a normal function.
-    ctx = get_local_dbos_context()
     options = normalize_step_options(options)
-    if ctx and ctx.is_workflow():
+    if step_ctx and step_ctx.is_workflow():
         outcome = invoke_step(
             dbos,
+            step_ctx,
             func,
             args,
             kwargs,
@@ -1449,6 +1453,7 @@ def decorate_step(
                 with DBOSAssumeRole(rr):
                     return invoke_step(
                         dbosreg.dbos,
+                        ctx.snapshot_step_ctx(),
                         func,
                         args,
                         kwargs,

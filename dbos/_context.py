@@ -138,6 +138,23 @@ class DBOSContext:
         )
         rv.assumed_role = self.assumed_role
         return rv
+    
+    def snapshot_step_ctx(self, reserve_sleep_id: bool = False) -> DBOSContext:
+        rv = self.create_child()
+        rv.executor_id = self.executor_id
+        rv.app_id = self.app_id
+        rv.app_version = self.app_version
+        rv.workflow_id = self.workflow_id
+        rv.workflow_deadline_epoch_ms = self.workflow_deadline_epoch_ms
+        rv.workflow_timeout_ms = self.workflow_timeout_ms
+        rv.deduplication_id = self.deduplication_id
+        rv.priority = self.priority
+        rv.queue_partition_key = self.queue_partition_key
+        self.function_id += 1
+        rv.function_id = self.function_id
+        if reserve_sleep_id:
+            self.function_id += 1
+        return rv
 
     def has_parent(self) -> bool:
         return len(self.parent_workflow_id) > 0
@@ -649,6 +666,35 @@ class EnterDBOSStep:
         ctx.end_step(exc_value)
         return False  # Did not handle
 
+class EnterDBOSStepCtx:
+    def __init__(
+        self,
+        attributes: TracedAttributes,
+        ctx: DBOSContext
+    ) -> None:
+        self.attributes = attributes
+        self.prev_ctx: Optional[DBOSContext] = None
+        self.use_ctx = ctx
+
+    def __enter__(self) -> DBOSContext:
+        ctx = assert_current_dbos_context()
+        assert ctx.is_workflow()
+        self.prev_ctx = ctx
+        _set_local_dbos_context(self.use_ctx)
+        self.use_ctx.start_step(ctx.function_id, attributes=self.attributes)
+        return self.use_ctx
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        ctx = assert_current_dbos_context()
+        assert ctx.is_step()
+        ctx.end_step(exc_value)
+        _set_local_dbos_context(self.prev_ctx)
+        return False  # Did not handle
 
 class EnterDBOSStepRetry:
     def __init__(self, current_attempt: int, max_attempts: int) -> None:
