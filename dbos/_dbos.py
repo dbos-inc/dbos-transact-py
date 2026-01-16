@@ -50,6 +50,7 @@ from ._core import (
     decorate_step,
     decorate_transaction,
     decorate_workflow,
+    durable_sleep,
     execute_workflow_by_id,
     get_event,
     recv,
@@ -93,10 +94,7 @@ from sqlalchemy.orm import Session
 from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
 from ._context import (
-    DBOSContext,
-    EnterDBOSStep,
     StepStatus,
-    TracedAttributes,
     assert_current_dbos_context,
     get_local_dbos_context,
     snapshot_step_context,
@@ -1009,22 +1007,8 @@ class DBOS:
         """
         if seconds <= 0:
             return
-        cur_ctx = get_local_dbos_context()
-        if cur_ctx is not None:
-            # Must call it within a workflow
-            assert (
-                cur_ctx.is_workflow()
-            ), "sleep() must be called from within a workflow"
-            attributes: TracedAttributes = {
-                "name": "sleep",
-            }
-            with EnterDBOSStep(attributes) as ctx:
-                _get_dbos_instance()._sys_db.sleep(
-                    ctx.workflow_id, ctx.curr_step_function_id, seconds
-                )
-        else:
-            # Cannot call it from outside of a workflow
-            raise DBOSException("sleep() must be called from within a workflow")
+        cur_ctx = snapshot_step_context()
+        durable_sleep(_get_dbos_instance(), cur_ctx, seconds)
 
     @classmethod
     async def sleep_async(cls, seconds: float) -> None:
@@ -1034,8 +1018,11 @@ class DBOS:
         It is important to use `DBOS.sleep` or `DBOS.sleep_async` (as opposed to any other sleep) within workflows,
         as the DBOS sleep methods are durable and completed sleeps will be skipped during recovery.
         """
+        if seconds <= 0:
+            return
+        cur_ctx = snapshot_step_context()
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(lambda: DBOS.sleep(seconds))
+        await asyncio.to_thread(durable_sleep, _get_dbos_instance(), cur_ctx, seconds)
 
     @classmethod
     def set_event(cls, key: str, value: Any) -> None:

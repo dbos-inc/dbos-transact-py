@@ -649,32 +649,6 @@ class EnterDBOSChildWorkflow(AbstractContextManager[DBOSContext, Literal[False]]
         _set_local_dbos_context(self.parent_ctx)
         return False  # Did not handle
 
-
-class EnterDBOSStep:
-    def __init__(
-        self,
-        attributes: TracedAttributes,
-    ) -> None:
-        self.attributes = attributes
-
-    def __enter__(self) -> DBOSContext:
-        ctx = assert_current_dbos_context()
-        assert ctx.is_workflow()
-        ctx.function_id += 1
-        ctx.start_step(ctx.function_id, attributes=self.attributes)
-        return ctx
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> Literal[False]:
-        ctx = assert_current_dbos_context()
-        assert ctx.is_step()
-        ctx.end_step(exc_value)
-        return False  # Did not handle
-
 class EnterDBOSStepCtx:
     def __init__(
         self,

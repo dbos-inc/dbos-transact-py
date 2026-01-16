@@ -257,7 +257,7 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             res = await wfh.get_result()
             assert res is not None
             return cast(str, res)
-
+        
         async def t_write_stream() -> str:
             await DBOS.write_stream_async("stream", "val")
             return "wrote"
@@ -270,7 +270,7 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             return cast(str, item)
 
         things: List[Thing] = [
-            #Thing(func=t_sleep, expected="slept"),
+            Thing(func=t_sleep, expected="slept"),
             Thing(func=t_run_step1, expected="ranStep"),
             Thing(func=t_run_step2, expected="ranStep"),
             Thing(func=t_listqwfs, expected="0"),
