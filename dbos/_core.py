@@ -782,13 +782,12 @@ async def start_workflow_async(
     )
     new_wf_id, new_wf_ctx = _get_new_wf(local_ctx)
 
-    ctx = new_wf_ctx
-    new_child_workflow_id = ctx.id_assigned_for_next_workflow
-    if ctx.has_parent():
+    new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
+    if new_wf_ctx.has_parent():
         recorded_result = await asyncio.to_thread(
             dbos._sys_db.check_operation_execution,
-            ctx.parent_workflow_id,
-            ctx.parent_workflow_fid,
+            new_wf_ctx.parent_workflow_id,
+            new_wf_ctx.parent_workflow_fid,
             get_dbos_func_name(func),
         )
         if recorded_result and recorded_result["error"]:
@@ -816,12 +815,12 @@ async def start_workflow_async(
         is_dequeued_request=is_dequeued_request,
     )
 
-    if ctx.has_parent():
+    if new_wf_ctx.has_parent():
         await asyncio.to_thread(
             dbos._sys_db.record_child_workflow,
-            ctx.parent_workflow_id,
+            new_wf_ctx.parent_workflow_id,
             new_child_workflow_id,
-            ctx.parent_workflow_fid,
+            new_wf_ctx.parent_workflow_fid,
             get_dbos_func_name(func),
         )
 
