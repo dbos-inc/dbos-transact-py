@@ -608,7 +608,7 @@ def execute_workflow_by_id(
             )
 
 
-def _get_new_wf(cur_ctx: Optional["DBOSContext"]) -> tuple[str, DBOSContext]:
+def _get_new_wf(cur_ctx: Optional["DBOSContext"]) -> DBOSContext:
     # Sequence of events for starting a workflow:
     #   First - is there a WF already running?
     #      (and not in step as that is an error)
@@ -625,11 +625,11 @@ def _get_new_wf(cur_ctx: Optional["DBOSContext"]) -> tuple[str, DBOSContext]:
                 cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
             )
 
-    new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
+    new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child(is_for_workflow=True)
     new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
     new_wf_id = new_wf_ctx.id_assigned_for_next_workflow
 
-    return (new_wf_id, new_wf_ctx)
+    return new_wf_ctx
 
 
 def start_workflow(
@@ -679,9 +679,9 @@ def start_workflow(
             local_ctx.queue_partition_key if local_ctx is not None else None
         ),
     )
-    new_wf_id, new_wf_ctx = _get_new_wf(local_ctx)
-
+    new_wf_ctx = _get_new_wf(local_ctx)
     new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
+
     if new_wf_ctx.has_parent():
         recorded_result = dbos._sys_db.check_operation_execution(
             new_wf_ctx.parent_workflow_id, new_wf_ctx.parent_workflow_fid, get_dbos_func_name(func)
@@ -723,7 +723,7 @@ def start_workflow(
         or wf_status == WorkflowStatusString.ERROR.value
         or wf_status == WorkflowStatusString.SUCCESS.value
     ):
-        return WorkflowHandlePolling(new_wf_id, dbos)
+        return WorkflowHandlePolling(new_child_workflow_id, dbos)
 
     future = dbos._executor.submit(
         cast(Callable[..., R], _execute_workflow_wthread),
@@ -734,7 +734,7 @@ def start_workflow(
         args,
         kwargs,
     )
-    return WorkflowHandleFuture(new_wf_id, future, dbos)
+    return WorkflowHandleFuture(new_child_workflow_id, future, dbos)
 
 
 async def start_workflow_async(
@@ -780,9 +780,9 @@ async def start_workflow_async(
             local_ctx.queue_partition_key if local_ctx is not None else None
         ),
     )
-    new_wf_id, new_wf_ctx = _get_new_wf(local_ctx)
-
+    new_wf_ctx = _get_new_wf(local_ctx)
     new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
+
     if new_wf_ctx.has_parent():
         recorded_result = await asyncio.to_thread(
             dbos._sys_db.check_operation_execution,
@@ -832,12 +832,12 @@ async def start_workflow_async(
         or wf_status == WorkflowStatusString.ERROR.value
         or wf_status == WorkflowStatusString.SUCCESS.value
     ):
-        return WorkflowHandleAsyncPolling(new_wf_id, dbos)
+        return WorkflowHandleAsyncPolling(new_child_workflow_id, dbos)
 
     coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, args, kwargs)
     # Shield the workflow task from cancellation
     task = asyncio.shield(asyncio.create_task(coro))
-    return WorkflowHandleAsyncTask(new_wf_id, task, dbos)
+    return WorkflowHandleAsyncTask(new_child_workflow_id, task, dbos)
 
 
 if sys.version_info < (3, 12):

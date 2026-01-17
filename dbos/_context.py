@@ -630,7 +630,7 @@ class EnterDBOSChildWorkflow(AbstractContextManager[DBOSContext, Literal[False]]
             ctx.id_assigned_for_next_workflow = (
                 ctx.workflow_id + "-" + str(ctx.function_id)
             )
-        self.child_ctx = ctx.create_child()
+        self.child_ctx = ctx.create_child(is_for_workflow=True)
         _set_local_dbos_context(self.child_ctx)
         self.child_ctx.start_workflow(None, attributes=self.attributes)
         return self.child_ctx
