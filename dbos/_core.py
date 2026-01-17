@@ -714,6 +714,8 @@ def start_workflow(
 
 async def start_workflow_async(
     dbos: "DBOS",
+    local_ctx: Optional[DBOSContext],
+    new_wf_ctx: DBOSContext,
     func: "Callable[P, Coroutine[Any, Any, R]]",
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
@@ -743,7 +745,6 @@ async def start_workflow_async(
         "kwargs": kwargs,
     }
 
-    local_ctx = get_local_dbos_context()
     workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
         local_ctx, queue_name
     )
@@ -755,7 +756,6 @@ async def start_workflow_async(
             local_ctx.queue_partition_key if local_ctx is not None else None
         ),
     )
-    new_wf_ctx = DBOSContext.create_start_workflow_child(local_ctx)
     new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
 
     if new_wf_ctx.has_parent():

@@ -1,3 +1,4 @@
+import copy
 import random
 import threading
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, TypedDict
@@ -5,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, TypedDict
 from psycopg import errors
 from sqlalchemy.exc import OperationalError
 
-from dbos._context import get_local_dbos_context
+from dbos._context import DBOSContext, get_local_dbos_context
 from dbos._logger import dbos_logger
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
@@ -111,8 +112,11 @@ class Queue:
         from ._dbos import _get_dbos_instance
 
         dbos = _get_dbos_instance()
+        ctx = get_local_dbos_context()
+        parent_ctx_copy = copy.copy(ctx)
+        child_ctx = DBOSContext.create_start_workflow_child(ctx)
         return await start_workflow_async(
-            dbos, func, args, kwargs, queue_name=self.name, execute_workflow=False
+            dbos, parent_ctx_copy, child_ctx, func, args, kwargs, queue_name=self.name, execute_workflow=False
         )
 
 

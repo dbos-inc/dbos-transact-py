@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import inspect
 import os
@@ -94,6 +95,7 @@ from sqlalchemy.orm import Session
 from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
 from ._context import (
+    DBOSContext,
     StepStatus,
     assert_current_dbos_context,
     get_local_dbos_context,
@@ -809,8 +811,11 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandleAsync[R]:
         """Invoke a workflow function on the event loop, returning a handle to the ongoing execution."""
+        ctx = get_local_dbos_context()
+        parent_ctx_copy = copy.copy(ctx)
+        child_ctx = DBOSContext.create_start_workflow_child(ctx)
         await cls._configure_asyncio_thread_pool()
-        return await start_workflow_async(_get_dbos_instance(), func, args, kwargs)
+        return await start_workflow_async(_get_dbos_instance(), parent_ctx_copy, child_ctx, func, args, kwargs)
 
     @classmethod
     @overload

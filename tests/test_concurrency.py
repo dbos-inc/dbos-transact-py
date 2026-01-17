@@ -253,7 +253,8 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             return 'started'
 
         async def t_get_child_result() -> str:
-            wfh = await DBOS.retrieve_workflow_async(f"{DBOS.workflow_id}-cwf")  # type: ignore
+            # Python doesn't have DBOS.get_result and 2 parts are not deterministic... this won't work
+            wfh = await DBOS.retrieve_workflow_async(f"{DBOS.workflow_id}-cwf", False)  # type: ignore
             res = await wfh.get_result()
             assert res is not None
             return cast(str, res)
@@ -286,8 +287,8 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             Thing(func=t_retrieve_workflow_nosuch, expected="Nope"),
             Thing(func=t_step_retry_4, expected="4"),
             #Thing(func=simple_wf, expected="WF Ran"),
-            #Thing(func=t_start_child, expected="started"),
-            #Thing(func=t_get_child_result, expected="WF Ran"),
+            Thing(func=t_start_child, expected="started"),
+            #Thing(func=t_get_child_result, expected="WF Ran"), # TODO Add DBOS.get_result
             Thing(func=t_write_stream, expected="wrote"),
             Thing(func=t_read_stream, expected="val"),
             Thing(func=t_liststeps, expected="0"),
