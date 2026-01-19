@@ -70,7 +70,7 @@ async def test_async_workflow(dbos: DBOS) -> None:
 
     # Test DBOS.start_workflow. Not recommended for async workflows,
     # but needed for backwards compatibility.
-    def fn():
+    def fn() -> None:
         sync_handle = DBOS.start_workflow(test_workflow, "alice", "bob")
         assert sync_handle.get_result() == "alicetxn31bobstep3"  # type: ignore
 
