@@ -70,8 +70,11 @@ async def test_async_workflow(dbos: DBOS) -> None:
 
     # Test DBOS.start_workflow. Not recommended for async workflows,
     # but needed for backwards compatibility.
-    sync_handle = DBOS.start_workflow(test_workflow, "alice", "bob")
-    assert sync_handle.get_result() == "alicetxn31bobstep3"  # type: ignore
+    def fn():
+        sync_handle = DBOS.start_workflow(test_workflow, "alice", "bob")
+        assert sync_handle.get_result() == "alicetxn31bobstep3"  # type: ignore
+
+    await asyncio.to_thread(fn)
 
     # Test DBOS.start_workflow_async on steps
     handle = await DBOS.start_workflow_async(test_step, "alice")
@@ -467,7 +470,7 @@ async def test_workflow_timeout_async(dbos: DBOS) -> None:
     async def blocked_workflow() -> None:
         assert assert_current_dbos_context().workflow_timeout_ms is None
         while True:
-            DBOS.sleep(0.1)
+            await DBOS.sleep_async(0.1)
 
     with SetWorkflowTimeout(0.1):
         with pytest.raises(DBOSAwaitedWorkflowCancelledError):

@@ -1751,7 +1751,7 @@ async def test_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
     assert await asyncio.to_thread(step, 5) == 5
     assert await async_step(5) == 5
 
-    assert len(DBOS.list_workflows()) == 0
+    assert len(await DBOS.list_workflows_async()) == 0
 
 
 def test_nested_steps(dbos: DBOS) -> None:

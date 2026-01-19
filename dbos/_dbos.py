@@ -159,6 +159,17 @@ def _get_or_create_dbos_registry() -> DBOSRegistry:
         _dbos_global_registry = DBOSRegistry()
     return _dbos_global_registry
 
+def check_async(fn: str) -> None:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError(
+            f"{fn}() was called while an event loop is running. "
+            f"Use await {fn}_async(...) instead."
+        )
+
 
 RegisteredJob = Tuple[
     threading.Event, Callable[..., Any], Tuple[Any, ...], dict[str, Any]
@@ -801,6 +812,7 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
+        check_async("start_workflow")
         return start_workflow(_get_dbos_instance(), func, args, kwargs)
 
     @classmethod
@@ -846,15 +858,7 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> R:
         """Invoke a step function and checkpoint its result."""
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            pass
-        else:
-            raise RuntimeError(
-                "run_step() was called while an event loop is running. "
-                "Use await run_step_async(...) instead."
-            )
+        check_async("run_step")
 
         return run_step(
             _get_dbos_instance(), func, dbos_step_options or {}, args, kwargs
@@ -913,6 +917,7 @@ class DBOS:
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> Optional[WorkflowStatus]:
         """Return the status of a workflow execution."""
+        check_async("get_workflow_status")
 
         def fn() -> Optional[WorkflowStatus]:
             return get_workflow(_get_dbos_instance()._sys_db, workflow_id)
@@ -937,6 +942,7 @@ class DBOS:
     @classmethod
     def get_result(cls, workflow_id: str) -> Optional[Any]:
         """Await and return the result of a workflow execution."""
+        check_async("get_result")
 
         def fn() -> Optional[Any]:
             return _get_dbos_instance()._sys_db.await_workflow_result(workflow_id, DEFAULT_POLLING_INTERVAL)
@@ -964,6 +970,7 @@ class DBOS:
         cls, workflow_id: str, existing_workflow: bool = True
     ) -> WorkflowHandle[R]:
         """Return a `WorkflowHandle` for a workflow execution."""
+        check_async("retrieve_workflow")
         dbos = _get_dbos_instance()
         if existing_workflow:
             stat = dbos.get_workflow_status(workflow_id)
@@ -992,6 +999,7 @@ class DBOS:
         cls, destination_id: str, message: Any, topic: Optional[str] = None
     ) -> None:
         """Send a message to a workflow execution."""
+        check_async("send")
         return send(_get_dbos_instance(), snapshot_step_context(), destination_id, message, topic)
 
     @classmethod
@@ -1011,6 +1019,7 @@ class DBOS:
         This function is to be called from within a workflow.
         `recv` will return the message sent on `topic`, waiting if necessary.
         """
+        check_async("recv")
         return recv(_get_dbos_instance(), snapshot_step_context(reserve_sleep_id=True), topic, timeout_seconds)
 
     @classmethod
@@ -1035,6 +1044,7 @@ class DBOS:
         It is important to use `DBOS.sleep` or `DBOS.sleep_async` (as opposed to any other sleep) within workflows,
         as the DBOS sleep methods are durable and completed sleeps will be skipped during recovery.
         """
+        check_async("sleep")
         if seconds <= 0:
             return
         cur_ctx = snapshot_step_context()
@@ -1069,6 +1079,7 @@ class DBOS:
             value(Any): A serializable value to associate with the key
 
         """
+        check_async("set_event")
         return set_event(_get_dbos_instance(), snapshot_step_context(), key, value)
 
     @classmethod
@@ -1103,6 +1114,7 @@ class DBOS:
             timeout_seconds(float): The amount of time to wait, in case `set_event` has not yet been called byt the workflow
 
         """
+        check_async("get_event")
         return get_event(_get_dbos_instance(), snapshot_step_context(reserve_sleep_id=True), workflow_id, key, timeout_seconds)
 
     @classmethod
@@ -1135,6 +1147,7 @@ class DBOS:
         Returns:
             A dictionary mapping event keys to their deserialized values
         """
+        check_async("get_all_events")
 
         def fn() -> Dict[str, Any]:
             return _get_dbos_instance()._sys_db.get_all_events(workflow_id)
@@ -1175,6 +1188,7 @@ class DBOS:
     @classmethod
     def cancel_workflow(cls, workflow_id: str) -> None:
         """Cancel a workflow by ID."""
+        check_async("cancel_workflow")
 
         def fn() -> None:
             dbos_logger.info(f"Cancelling workflow: {workflow_id}")
@@ -1205,6 +1219,7 @@ class DBOS:
 
         If delete_children is True, also deletes all child workflows recursively.
         """
+        check_async("delete_workflow")
 
         def fn() -> None:
             dbos_logger.info(f"Deleting workflow: {workflow_id}")
@@ -1249,6 +1264,7 @@ class DBOS:
     @classmethod
     def resume_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
         """Resume a workflow by ID."""
+        check_async("resume_workflow")
 
         def fn() -> None:
             dbos_logger.info(f"Resuming workflow: {workflow_id}")
@@ -1286,6 +1302,7 @@ class DBOS:
         application_version: Optional[str] = None,
     ) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID from a specific step"""
+        check_async("fork_workflow")
 
         def fn() -> str:
             dbos_logger.info(f"Forking workflow: {workflow_id} from step {start_step}")
@@ -1357,6 +1374,7 @@ class DBOS:
         executor_id: Optional[str] = None,
         queues_only: bool = False,
     ) -> List[WorkflowStatus]:
+        check_async("list_workflows")
         def fn() -> List[WorkflowStatus]:
             return _get_dbos_instance()._sys_db.list_workflows(
                 workflow_ids=workflow_ids,
@@ -1453,6 +1471,7 @@ class DBOS:
         load_output: bool = True,
         executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
+        check_async("list_queued_workflows")
         def fn() -> List[WorkflowStatus]:
             return _get_dbos_instance()._sys_db.list_workflows(
                 workflow_ids=workflow_ids,
@@ -1529,6 +1548,7 @@ class DBOS:
 
     @classmethod
     def list_workflow_steps(cls, workflow_id: str) -> List[StepInfo]:
+        check_async("list_workflow_steps")
         def fn() -> List[StepInfo]:
             return _get_dbos_instance()._sys_db.list_workflow_steps(workflow_id)
 
@@ -1641,6 +1661,7 @@ class DBOS:
             value(Any): A serializable value to write to the stream
 
         """
+        check_async("write_stream")
         ctx = snapshot_step_context(reserve_sleep_id=False)
         write_stream(_get_dbos_instance(), ctx, key, value)
 
@@ -1653,6 +1674,7 @@ class DBOS:
             key(str): The stream key / name within the workflow
 
         """
+        check_async("close_stream")
         ctx = snapshot_step_context(reserve_sleep_id=False)
         close_stream(_get_dbos_instance(), ctx, key)
 
@@ -1672,6 +1694,7 @@ class DBOS:
             Any: Each value in the stream until the stream is closed
 
         """
+        check_async("read_stream")
         offset = 0
         sys_db = _get_dbos_instance()._sys_db
 
@@ -1760,6 +1783,7 @@ class DBOS:
 
     @classmethod
     def patch(cls, patch_name: str) -> bool:
+        check_async("patch")
         if not _get_dbos_instance().enable_patching:
             raise DBOSException("enable_patching must be True in DBOS configuration")
         ctx = get_local_dbos_context()
@@ -1782,6 +1806,7 @@ class DBOS:
 
     @classmethod
     def deprecate_patch(cls, patch_name: str) -> bool:
+        check_async("deprecate_patch")
         if not _get_dbos_instance().enable_patching:
             raise DBOSException("enable_patching must be True in DBOS configuration")
         ctx = get_local_dbos_context()
