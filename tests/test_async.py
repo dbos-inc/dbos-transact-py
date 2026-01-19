@@ -1,7 +1,7 @@
 import asyncio
 import time
 import uuid
-from typing import List, Optional
+from typing import List, Optional, cast
 
 import pytest
 import sqlalchemy as sa
@@ -369,7 +369,7 @@ async def test_start_workflow_async(dbos: DBOS) -> None:
         handle = await DBOS.start_workflow_async(test_workflow, "alice", "bob")
 
     assert handle.get_workflow_id() == wfuuid
-    result = await DBOS.get_result_async(wfuuid)
+    result = cast(str, await DBOS.get_result_async(wfuuid))
     assert result == "alicebobstep1"
 
     assert wf_counter == 1
