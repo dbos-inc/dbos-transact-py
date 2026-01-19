@@ -1687,6 +1687,7 @@ def test_custom_names(dbos: DBOS) -> None:
     handle = queue.enqueue(workflow)
     assert handle.get_status().name == workflow_name
     assert handle.get_result() == handle.workflow_id
+    assert DBOS.get_result(handle.workflow_id) == handle.workflow_id
 
     @DBOS.step(name=step_name)
     def step() -> str:

@@ -935,6 +935,31 @@ class DBOS:
         return await _get_dbos_instance()._sys_db.call_function_as_step_from_async(fn, "DBOS.getStatus", step_ctx)
 
     @classmethod
+    def get_result(cls, workflow_id: str) -> Optional[Any]:
+        """Await and return the result of a workflow execution."""
+
+        def fn() -> Optional[Any]:
+            return _get_dbos_instance()._sys_db.await_workflow_result(workflow_id, DEFAULT_POLLING_INTERVAL)
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.getResult",
+            snapshot_step_context(reserve_sleep_id=False)
+        )
+
+    @classmethod
+    async def get_result_async(
+        cls, workflow_id: str
+    ) -> Optional[Any]:
+        """Await and return the result of a workflow execution."""
+
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
+        await cls._configure_asyncio_thread_pool()
+        def fn() -> Optional[Any]:
+            return _get_dbos_instance()._sys_db.await_workflow_result(workflow_id, DEFAULT_POLLING_INTERVAL)
+
+        return await _get_dbos_instance()._sys_db.call_function_as_step_from_async(fn, "DBOS.getResult", step_ctx)
+
+    @classmethod
     def retrieve_workflow(
         cls, workflow_id: str, existing_workflow: bool = True
     ) -> WorkflowHandle[R]:
