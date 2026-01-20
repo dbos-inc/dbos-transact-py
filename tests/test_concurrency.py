@@ -284,7 +284,7 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             Thing(func=t_listwfs, expected="0"),
             Thing(func=t_retrieve_workflow_nosuch, expected="Nope"),
             Thing(func=t_step_retry_4, expected="4"),
-            #Thing(func=simple_wf, expected="WF Ran"),
+            Thing(func=simple_wf, expected="WF Ran"),
             Thing(func=t_start_child, expected="started"),
             Thing(func=t_get_child_result, expected="WF Ran"),
             Thing(func=t_write_stream, expected="wrote"),

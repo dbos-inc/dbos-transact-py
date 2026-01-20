@@ -1281,13 +1281,14 @@ class SystemDatabase(ABC):
 
     @db_retry()
     def record_get_result(
-        self, result_workflow_id: str, output: Optional[str], error: Optional[str]
+        self, result_workflow_id: str, output: Optional[str], error: Optional[str], ctx: Optional["DBOSContext"] = None
     ) -> None:
-        ctx = get_local_dbos_context()
-        # Only record get_result called in workflow functions
-        if ctx is None or not ctx.is_workflow():
-            return
-        ctx.function_id += 1  # Record the get_result as a step
+        if ctx is None:
+            ctx = get_local_dbos_context()
+            # Only record get_result called in workflow functions
+            if ctx is None or not ctx.is_workflow():
+                return
+            ctx.function_id += 1  # Record the get_result as a step
         # Because there's no corresponding check, we do nothing on conflict
         # and do not raise a DBOSWorkflowConflictIDError
         sql = (

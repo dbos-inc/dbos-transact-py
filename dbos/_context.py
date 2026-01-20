@@ -616,34 +616,6 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         _set_local_dbos_context(self.prev_ctx)
         return False  # Did not handle
 
-class EnterDBOSChildWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
-    def __init__(self, attributes: TracedAttributes, pctx: Optional[DBOSContext]) -> None:
-        assert pctx is not None
-        self.parent_ctx = pctx
-        self.child_ctx: Optional[DBOSContext] = None
-        self.attributes = attributes
-
-    def __enter__(self) -> DBOSContext:
-        assert self.parent_ctx.is_workflow()  # Is in a workflow and not in a step
-        self.child_ctx = DBOSContext.create_start_workflow_child(self.parent_ctx)
-        _set_local_dbos_context(self.child_ctx)
-        self.child_ctx.start_workflow(None, attributes=self.attributes)
-        return self.child_ctx
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> Literal[False]:
-        ctx = assert_current_dbos_context()
-        assert ctx == self.child_ctx
-        assert ctx.is_within_workflow()
-        ctx.end_workflow(exc_value)
-        # Return to prev ctx
-        _set_local_dbos_context(self.parent_ctx)
-        return False  # Did not handle
-
 class EnterDBOSStepCtx:
     def __init__(
         self,

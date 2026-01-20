@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import functools
 import inspect
 import json
@@ -31,7 +32,6 @@ from ._context import (
     DBOSAssumeRole,
     DBOSContext,
     DBOSContextEnsure,
-    EnterDBOSChildWorkflow,
     EnterDBOSStepCtx,
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
@@ -857,13 +857,13 @@ def workflow_wrapper(
             "args": args,
             "kwargs": kwargs,
         }
-        ctx = get_local_dbos_context()
+        cctx = get_local_dbos_context()
+        newwfctx = DBOSContext.create_start_workflow_child(cctx)
+        resctx: Optional[DBOSContext] = None
+        if cctx is not None and cctx.is_workflow():
+            resctx = cctx.snapshot_step_ctx(reserve_sleep_id=False)
         workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
-            ctx, queue=None
-        )
-
-        enterWorkflowCtxMgr = (
-            EnterDBOSChildWorkflow if ctx and ctx.is_workflow() else EnterDBOSWorkflow
+            cctx, queue=None
         )
 
         wfOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
@@ -883,14 +883,13 @@ def workflow_wrapper(
 
                 return recorded_result_inner
 
-            ctx = assert_current_dbos_context()  # Now the child ctx
             nonlocal workflow_id
-            workflow_id = ctx.workflow_id
+            workflow_id = newwfctx.workflow_id
 
-            if ctx.has_parent():
+            if newwfctx.has_parent():
                 r = dbos._sys_db.check_operation_execution(
-                    ctx.parent_workflow_id,
-                    ctx.parent_workflow_fid,
+                    newwfctx.parent_workflow_id,
+                    newwfctx.parent_workflow_fid,
                     get_dbos_func_name(func),
                 )
                 if r and r["error"]:
@@ -901,7 +900,7 @@ def workflow_wrapper(
 
             status, should_execute = _init_workflow(
                 dbos,
-                ctx,
+                newwfctx,
                 inputs=inputs,
                 wf_name=get_dbos_func_name(func),
                 class_name=get_dbos_class_name(fi, func, args),
@@ -926,14 +925,14 @@ def workflow_wrapper(
 
             # TODO: maybe modify the parameters if they've been changed by `_init_workflow`
             dbos.logger.debug(
-                f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
+                f"Running workflow, id: {newwfctx.workflow_id}, name: {get_dbos_func_name(func)}"
             )
 
-            if ctx.has_parent():
+            if newwfctx.has_parent():
                 dbos._sys_db.record_child_workflow(
-                    ctx.parent_workflow_id,
-                    ctx.workflow_id,
-                    ctx.parent_workflow_fid,
+                    newwfctx.parent_workflow_id,
+                    newwfctx.workflow_id,
+                    newwfctx.parent_workflow_fid,
                     get_dbos_func_name(func),
                 )
 
@@ -955,17 +954,17 @@ def workflow_wrapper(
             except Exception as e:
                 serialized_e = dbos._serializer.serialize(e)
                 assert workflow_id is not None
-                dbos._sys_db.record_get_result(workflow_id, None, serialized_e)
+                dbos._sys_db.record_get_result(workflow_id, None, serialized_e, resctx)
                 raise
             serialized_r = dbos._serializer.serialize(r)
             assert workflow_id is not None
-            dbos._sys_db.record_get_result(workflow_id, serialized_r, None)
+            dbos._sys_db.record_get_result(workflow_id, serialized_r, None, resctx)
             return r
 
         outcome = (
             wfOutcome.wrap(init_wf, dbos=dbos)
             .also(DBOSAssumeRole(rr))
-            .also(enterWorkflowCtxMgr(attributes, ctx))
+            .also(EnterDBOSWorkflow(attributes, newwfctx))
             .then(record_get_result, dbos=dbos)
         )
         return outcome()  # type: ignore
