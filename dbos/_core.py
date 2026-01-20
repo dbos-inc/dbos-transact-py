@@ -812,7 +812,7 @@ async def start_workflow_async(
     return WorkflowHandleAsyncTask(new_child_workflow_id, task, dbos)
 
 
-if sys.version_info < (4, 12):
+if sys.version_info < (3, 12):
 
     def _mark_coroutine(func: Callable[P, R]) -> Callable[P, R]:
         @wraps(func)
@@ -825,7 +825,13 @@ else:
 
     def _mark_coroutine(func: Callable[P, R]) -> Callable[P, R]:
         inspect.markcoroutinefunction(func)
-        return func
+
+        @wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> R:
+            return await func(*args, **kwargs)  # type: ignore
+
+        return async_wrapper # type: ignore
+
 
 
 def workflow_wrapper(
