@@ -391,28 +391,6 @@ class DBOSContextEnsure:
             _clear_local_dbos_context()
         return False  # Did not handle
 
-
-class DBOSContextSwap:
-    def __init__(self, ctx: DBOSContext) -> None:
-        self.next_ctx = ctx
-        self.prev_ctx: Optional[DBOSContext] = None
-
-    def __enter__(self) -> DBOSContextSwap:
-        self.prev_ctx = get_local_dbos_context()
-        _set_local_dbos_context(self.next_ctx)
-        return self
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> Literal[False]:
-        assert get_local_dbos_context() == self.next_ctx
-        _set_local_dbos_context(self.prev_ctx)
-        return False  # Did not handle
-
-
 class SetWorkflowID:
     """
     Set the workflow ID to be used for the enclosed workflow invocation. Note: Only the first workflow will be started with the specified workflow ID within a `with SetWorkflowID` block.
@@ -580,21 +558,22 @@ class SetEnqueueOptions:
 
 
 class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
-    def __init__(self, attributes: TracedAttributes) -> None:
-        self.created_ctx = False
+    def __init__(self, attributes: TracedAttributes, ctx:Optional[DBOSContext]) -> None:
         self.attributes = attributes
         self.saved_workflow_timeout: Optional[int] = None
         self.saved_deduplication_id: Optional[str] = None
         self.saved_priority: Optional[int] = None
         self.saved_is_within_set_workflow_id_block: bool = False
+        self.use_ctx = ctx
+        self.prev_ctx: Optional[DBOSContext] = None
 
     def __enter__(self) -> DBOSContext:
-        # Code to create a basic context
-        ctx = get_local_dbos_context()
-        if ctx is None:
-            self.created_ctx = True
-            ctx = DBOSContext()
-            _set_local_dbos_context(ctx)
+        self.prev_ctx = get_local_dbos_context()
+        # Create a basic context if none exists
+        if self.use_ctx is None:
+            self.use_ctx = DBOSContext()
+        _set_local_dbos_context(self.use_ctx)
+        ctx = self.use_ctx
         assert not ctx.is_within_workflow()
         # Unset is_within_set_workflow_id_block as the workflow is not within a block
         self.saved_is_within_set_workflow_id_block = ctx.is_within_set_workflow_id_block
@@ -621,6 +600,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
         ctx = assert_current_dbos_context()
+        assert ctx == self.use_ctx
         assert ctx.is_within_workflow()
         ctx.end_workflow(exc_value)
         # Restore is_within_set_workflow_id_block
@@ -633,21 +613,19 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         ctx.priority = self.saved_priority
         ctx.deduplication_id = self.saved_deduplication_id
         # Code to clean up the basic context if we created it
-        if self.created_ctx:
-            _clear_local_dbos_context()
+        _set_local_dbos_context(self.prev_ctx)
         return False  # Did not handle
 
 class EnterDBOSChildWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
-    def __init__(self, attributes: TracedAttributes) -> None:
-        self.parent_ctx: Optional[DBOSContext] = None
+    def __init__(self, attributes: TracedAttributes, pctx: Optional[DBOSContext]) -> None:
+        assert pctx is not None
+        self.parent_ctx = pctx
         self.child_ctx: Optional[DBOSContext] = None
         self.attributes = attributes
 
     def __enter__(self) -> DBOSContext:
-        ctx = assert_current_dbos_context()
-        self.parent_ctx = ctx
-        assert ctx.is_workflow()  # Is in a workflow and not in a step
-        self.child_ctx = DBOSContext.create_start_workflow_child(ctx)
+        assert self.parent_ctx.is_workflow()  # Is in a workflow and not in a step
+        self.child_ctx = DBOSContext.create_start_workflow_child(self.parent_ctx)
         _set_local_dbos_context(self.child_ctx)
         self.child_ctx.start_workflow(None, attributes=self.attributes)
         return self.child_ctx
@@ -659,10 +637,10 @@ class EnterDBOSChildWorkflow(AbstractContextManager[DBOSContext, Literal[False]]
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
         ctx = assert_current_dbos_context()
+        assert ctx == self.child_ctx
         assert ctx.is_within_workflow()
         ctx.end_workflow(exc_value)
-        # Return to parent ctx
-        assert self.parent_ctx
+        # Return to prev ctx
         _set_local_dbos_context(self.parent_ctx)
         return False  # Did not handle
 

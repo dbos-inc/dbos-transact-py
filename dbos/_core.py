@@ -31,7 +31,6 @@ from ._context import (
     DBOSAssumeRole,
     DBOSContext,
     DBOSContextEnsure,
-    DBOSContextSwap,
     EnterDBOSChildWorkflow,
     EnterDBOSStepCtx,
     EnterDBOSTransaction,
@@ -519,17 +518,16 @@ def _execute_workflow_wthread(
         "name": get_dbos_func_name(func),
         "operationType": OperationType.WORKFLOW.value,
     }
-    with DBOSContextSwap(ctx):
-        with EnterDBOSWorkflow(attributes):
-            try:
-                return _get_wf_invoke_func(dbos, status)(
-                    functools.partial(func, *args, **kwargs)
-                )
-            except Exception as e:
-                dbos.logger.error(
-                    f"Exception encountered in asynchronous workflow:", exc_info=e
-                )
-                raise
+    with EnterDBOSWorkflow(attributes, ctx):
+        try:
+            return _get_wf_invoke_func(dbos, status)(
+                functools.partial(func, *args, **kwargs)
+            )
+        except Exception as e:
+            dbos.logger.error(
+                f"Exception encountered in asynchronous workflow:", exc_info=e
+            )
+            raise
 
 
 async def _execute_workflow_async(
@@ -544,18 +542,17 @@ async def _execute_workflow_async(
         "name": get_dbos_func_name(func),
         "operationType": OperationType.WORKFLOW.value,
     }
-    with DBOSContextSwap(ctx):
-        with EnterDBOSWorkflow(attributes):
-            try:
-                result = Pending[R](functools.partial(func, *args, **kwargs)).then(
-                    _get_wf_invoke_func(dbos, status)
-                )
-                return await result()
-            except Exception as e:
-                dbos.logger.error(
-                    f"Exception encountered in asynchronous workflow:", exc_info=e
-                )
-                raise
+    with EnterDBOSWorkflow(attributes, ctx):
+        try:
+            result = Pending[R](functools.partial(func, *args, **kwargs)).then(
+                _get_wf_invoke_func(dbos, status)
+            )
+            return await result()
+        except Exception as e:
+            dbos.logger.error(
+                f"Exception encountered in asynchronous workflow:", exc_info=e
+            )
+            raise
 
 
 def execute_workflow_by_id(
@@ -968,7 +965,7 @@ def workflow_wrapper(
         outcome = (
             wfOutcome.wrap(init_wf, dbos=dbos)
             .also(DBOSAssumeRole(rr))
-            .also(enterWorkflowCtxMgr(attributes))
+            .also(enterWorkflowCtxMgr(attributes, ctx))
             .then(record_get_result, dbos=dbos)
         )
         return outcome()  # type: ignore
