@@ -812,7 +812,7 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Invoke a workflow function in the background, returning a handle to the ongoing execution."""
-        check_async("start_workflow")
+        # check_async("start_workflow") # This should be avoided, because it blocks event loop briefly
         return start_workflow(_get_dbos_instance(), func, args, kwargs)
 
     @classmethod
