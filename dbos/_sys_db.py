@@ -655,6 +655,7 @@ class SystemDatabase(ABC):
                     queue_name=None,
                     deduplication_id=None,
                     started_at_epoch_ms=None,
+                    updated_at=func.extract("epoch", func.now()) * 1000,
                 )
             )
 
@@ -688,6 +689,7 @@ class SystemDatabase(ABC):
                     workflow_deadline_epoch_ms=None,
                     deduplication_id=None,
                     started_at_epoch_ms=None,
+                    updated_at=func.extract("epoch", func.now()) * 1000,
                 )
             )
 
