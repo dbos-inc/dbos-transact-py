@@ -85,7 +85,7 @@ class WorkflowStatus:
     # The workflow ID
     workflow_id: str
     # The workflow status. Must be one of ENQUEUED, PENDING, SUCCESS, ERROR, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED
-    status: str
+    status: WorkflowStatuses
     # The name of the workflow function
     name: str
     # The name of the workflow's class, if any
@@ -655,6 +655,7 @@ class SystemDatabase(ABC):
                     queue_name=None,
                     deduplication_id=None,
                     started_at_epoch_ms=None,
+                    updated_at=func.extract("epoch", func.now()) * 1000,
                 )
             )
 
@@ -688,6 +689,7 @@ class SystemDatabase(ABC):
                     workflow_deadline_epoch_ms=None,
                     deduplication_id=None,
                     started_at_epoch_ms=None,
+                    updated_at=func.extract("epoch", func.now()) * 1000,
                 )
             )
 
