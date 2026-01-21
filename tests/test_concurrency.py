@@ -127,6 +127,10 @@ async def test_gather_manythings(dbos: DBOS) -> None:
     @DBOS.workflow()
     async def simple_wf() -> str:
         return "WF Ran"
+    
+    @DBOS.step()
+    async def simple_step() -> str:
+        return "Step Ran"
 
     @DBOS.dbos_class()
     class ConcurrTestClass:
@@ -287,6 +291,7 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             Thing(func=simple_wf, expected="WF Ran"),
             Thing(func=t_start_child, expected="started"),
             Thing(func=t_get_child_result, expected="WF Ran"),
+            Thing(func=simple_step, expected="Step Ran"),
             Thing(func=t_write_stream, expected="wrote"),
             Thing(func=t_read_stream, expected="val"),
             Thing(func=t_liststeps, expected="0"),
