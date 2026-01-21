@@ -82,7 +82,7 @@ async def test_resume_workflow_async(dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(simple_workflow, input_val)
     main_thread_event.wait()
-    DBOS.cancel_workflow(wfid)
+    await DBOS.cancel_workflow_async(wfid)
     workflow_event.set()
 
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
