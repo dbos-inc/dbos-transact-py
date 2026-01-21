@@ -85,7 +85,7 @@ class WorkflowStatus:
     # The workflow ID
     workflow_id: str
     # The workflow status. Must be one of ENQUEUED, PENDING, SUCCESS, ERROR, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED
-    status: str
+    status: WorkflowStatuses
     # The name of the workflow function
     name: str
     # The name of the workflow's class, if any
