@@ -1,25 +1,24 @@
+import asyncio
 import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import (
     Any,
-    Coroutine,
-    Tuple,
-    cast,
-    Optional,
-    ClassVar,
     Awaitable,
     Callable,
+    ClassVar,
+    Coroutine,
     List,
+    Optional,
+    Tuple,
     Union,
+    cast,
 )
 
-from sqlalchemy import text
-
-import asyncio
-from dataclasses import dataclass
 import pytest
+from sqlalchemy import text
 
 # Public API
 from dbos import DBOS, SetWorkflowID, StepInfo

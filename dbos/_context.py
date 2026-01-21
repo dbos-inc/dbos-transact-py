@@ -122,7 +122,7 @@ class DBOSContext:
         # If the workflow is enqueued on a partitioned queue, its partition key
         self.queue_partition_key: Optional[str] = None
 
-    def create_child(self, is_for_workflow: bool = True) -> DBOSContext:
+    def create_child(self, *, is_for_workflow: bool) -> DBOSContext:
         rv = DBOSContext()
         rv.logger = self.logger
         if is_for_workflow:
