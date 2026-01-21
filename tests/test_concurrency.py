@@ -2,7 +2,18 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, Coroutine, Tuple, cast, Optional, ClassVar, Awaitable, Callable, List, Union
+from typing import (
+    Any,
+    Coroutine,
+    Tuple,
+    cast,
+    Optional,
+    ClassVar,
+    Awaitable,
+    Callable,
+    List,
+    Union,
+)
 
 from sqlalchemy import text
 
@@ -63,12 +74,15 @@ def test_concurrent_getevent(dbos: DBOS) -> None:
         # Make sure the event map is empty
         assert not dbos._sys_db.workflow_events_map._dict
 
+
 # Async concurrency tests
+
 
 @dataclass(frozen=True)
 class Thing:
     func: Callable[[], Coroutine[Any, Any, str]]
     expected: str
+
 
 async def run_things_serial_or_conc(conc: bool, things: List[Thing]) -> None:
     if conc:
@@ -84,15 +98,24 @@ async def run_things_serial_or_conc(conc: bool, things: List[Thing]) -> None:
         for i, (thing, result) in enumerate(zip(things, results)):
             if isinstance(result, BaseException):
                 # Make failures loud
-                raise AssertionError(f"Thing[{i}] raised {type(result).__name__}: {result}") from result
-            assert result == thing.expected, f"Thing[{i}] expected {thing.expected!r}, got {result!r}"
+                raise AssertionError(
+                    f"Thing[{i}] raised {type(result).__name__}: {result}"
+                ) from result
+            assert (
+                result == thing.expected
+            ), f"Thing[{i}] expected {thing.expected!r}, got {result!r}"
 
     else:
         for i, thing in enumerate(things):
             result = await thing.func()
-            assert result == thing.expected, f"Thing[{i}] expected {thing.expected!r}, got {result!r}"
+            assert (
+                result == thing.expected
+            ), f"Thing[{i}] expected {thing.expected!r}, got {result!r}"
 
-def compare_wf_runs(wfsteps_serial: List[StepInfo], wfsteps_concurrent: List[StepInfo]) -> None:
+
+def compare_wf_runs(
+    wfsteps_serial: List[StepInfo], wfsteps_concurrent: List[StepInfo]
+) -> None:
     iconc = 0
     i = 0
     while i < len(wfsteps_serial):
@@ -105,29 +128,30 @@ def compare_wf_runs(wfsteps_serial: List[StepInfo], wfsteps_concurrent: List[Ste
         )
 
         # Allow extra DBOS.sleep in concurrent run that may interleave
-        if c['function_id'] < s['function_id'] and c['function_name'] == "DBOS.sleep":
+        if c["function_id"] < s["function_id"] and c["function_name"] == "DBOS.sleep":
             iconc += 1
             continue
 
-        assert c['function_id'] == s['function_id']
-        assert c['function_name'] == s['function_name']
-        assert c['error'] == s['error']
+        assert c["function_id"] == s["function_id"]
+        assert c["function_name"] == s["function_name"]
+        assert c["error"] == s["error"]
 
-        if c['function_name'] in {"DBOS.now", "DBOS.randomUUID", "DBOS.sleep"}:
+        if c["function_name"] in {"DBOS.now", "DBOS.randomUUID", "DBOS.sleep"}:
             # output may differ
             pass
         else:
-            assert c['output'] == s['output']
+            assert c["output"] == s["output"]
 
         i += 1
         iconc += 1
+
 
 @pytest.mark.asyncio
 async def test_gather_manythings(dbos: DBOS) -> None:
     @DBOS.workflow()
     async def simple_wf() -> str:
         return "WF Ran"
-    
+
     @DBOS.step()
     async def simple_step() -> str:
         return "Step Ran"
@@ -154,7 +178,9 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             return id
 
         @staticmethod
-        @DBOS.step(retries_allowed=True, max_attempts=5, interval_seconds=0.01, backoff_rate=1)
+        @DBOS.step(
+            retries_allowed=True, max_attempts=5, interval_seconds=0.01, backoff_rate=1
+        )
         async def test_step_retry(id: str) -> str:
             ss = DBOS.step_status
             assert ss is not None
@@ -171,7 +197,7 @@ async def test_gather_manythings(dbos: DBOS) -> None:
     @DBOS.workflow()
     async def run_a_lot_of_things_at_once(conc: bool) -> None:
         async def t_sleep() -> str:
-            await DBOS.sleep_async(.5)
+            await DBOS.sleep_async(0.5)
             return "slept"
 
         async def t_run_step1() -> str:
@@ -241,11 +267,11 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             return f"{len(steps)}"
 
         async def t_listwfs() -> str:
-            wfs = await DBOS.list_workflows_async(workflow_id_prefix='aaaa')
+            wfs = await DBOS.list_workflows_async(workflow_id_prefix="aaaa")
             return f"{len(wfs)}"
 
         async def t_listqwfs() -> str:
-            wfs = await DBOS.list_queued_workflows_async(workflow_id_prefix='aaaa')
+            wfs = await DBOS.list_queued_workflows_async(workflow_id_prefix="aaaa")
             return f"{len(wfs)}"
 
         async def t_step_retry_4() -> str:
@@ -254,13 +280,13 @@ async def test_gather_manythings(dbos: DBOS) -> None:
         async def t_start_child() -> str:
             with SetWorkflowID(f"{DBOS.workflow_id}-cwf"):
                 await DBOS.start_workflow_async(simple_wf)
-            return 'started'
+            return "started"
 
         async def t_get_child_result() -> str:
             res = await DBOS.get_result_async(f"{DBOS.workflow_id}-cwf")
             assert res is not None
             return cast(str, res)
-        
+
         async def t_write_stream() -> str:
             await DBOS.write_stream_async("stream", "val")
             return "wrote"
@@ -328,7 +354,9 @@ async def test_gather_manysteps(dbos: DBOS) -> None:
             return id
 
         @staticmethod
-        @DBOS.step(retries_allowed=True, max_attempts=5, interval_seconds=0.01, backoff_rate=1)
+        @DBOS.step(
+            retries_allowed=True, max_attempts=5, interval_seconds=0.01, backoff_rate=1
+        )
         async def test_step_retry(id: str) -> str:
             ss = DBOS.step_status
             assert ss is not None
@@ -340,7 +368,7 @@ async def test_gather_manysteps(dbos: DBOS) -> None:
     @DBOS.workflow()
     async def run_a_lot_of_steps_at_once(conc: bool) -> None:
         async def t_run_step1a() -> str:
-            return await DBOS.run_step_async({'name': "runStep1a"}, lambda: "ranStep")
+            return await DBOS.run_step_async({"name": "runStep1a"}, lambda: "ranStep")
 
         async def _retry_body() -> str:
             ss = DBOS.step_status
@@ -375,7 +403,7 @@ async def test_gather_manysteps(dbos: DBOS) -> None:
             )
 
         async def t_run_step2() -> str:
-            return await DBOS.run_step_async({"name":"runStep2"}, lambda: "ranStep")
+            return await DBOS.run_step_async({"name": "runStep2"}, lambda: "ranStep")
 
         async def t_step_str_3() -> str:
             return await ConcurrTestClass.test_step_str("3")

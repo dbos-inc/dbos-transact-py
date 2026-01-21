@@ -604,6 +604,7 @@ def execute_workflow_by_id(
                 is_dequeued=is_dequeue,
             )
 
+
 def start_workflow(
     dbos: "DBOS",
     func: "Callable[P, Union[R, Coroutine[Any, Any, R]]]",
@@ -656,7 +657,9 @@ def start_workflow(
 
     if new_wf_ctx.has_parent():
         recorded_result = dbos._sys_db.check_operation_execution(
-            new_wf_ctx.parent_workflow_id, new_wf_ctx.parent_workflow_fid, get_dbos_func_name(func)
+            new_wf_ctx.parent_workflow_id,
+            new_wf_ctx.parent_workflow_fid,
+            get_dbos_func_name(func),
         )
         if recorded_result and recorded_result["error"]:
             e: Exception = dbos._sys_db.serializer.deserialize(recorded_result["error"])
@@ -830,8 +833,7 @@ else:
         async def async_wrapper(*args: Any, **kwargs: Any) -> R:
             return await func(*args, **kwargs)  # type: ignore
 
-        return async_wrapper # type: ignore
-
+        return async_wrapper  # type: ignore
 
 
 def workflow_wrapper(
@@ -1468,7 +1470,11 @@ def decorate_step(
 
 
 def send(
-    dbos: "DBOS", cur_ctx: Optional["DBOSContext"], destination_id: str, message: Any, topic: Optional[str] = None
+    dbos: "DBOS",
+    cur_ctx: Optional["DBOSContext"],
+    destination_id: str,
+    message: Any,
+    topic: Optional[str] = None,
 ) -> None:
     def do_send(destination_id: str, message: Any, topic: Optional[str]) -> None:
         assert cur_ctx is not None
@@ -1492,7 +1498,13 @@ def send(
         assert wffn
         wffn(destination_id, message, topic)
 
-def recv(dbos: "DBOS", cur_ctx: Optional["DBOSContext"], topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
+
+def recv(
+    dbos: "DBOS",
+    cur_ctx: Optional["DBOSContext"],
+    topic: Optional[str] = None,
+    timeout_seconds: float = 60,
+) -> Any:
     if cur_ctx is not None:
         # Must call it within a workflow
         assert cur_ctx.is_workflow(), "recv() must be called from within a workflow"
@@ -1513,7 +1525,9 @@ def recv(dbos: "DBOS", cur_ctx: Optional["DBOSContext"], topic: Optional[str] = 
         raise DBOSException("recv() must be called from within a workflow")
 
 
-def set_event(dbos: "DBOS", cur_ctx: Optional["DBOSContext"], key: str, value: Any) -> None:
+def set_event(
+    dbos: "DBOS", cur_ctx: Optional["DBOSContext"], key: str, value: Any
+) -> None:
     if cur_ctx is not None:
         if cur_ctx.is_workflow():
             # If called from a workflow function, run as a step
@@ -1537,7 +1551,11 @@ def set_event(dbos: "DBOS", cur_ctx: Optional["DBOSContext"], key: str, value: A
 
 
 def get_event(
-    dbos: "DBOS", cur_ctx: Optional[DBOSContext], workflow_id: str, key: str, timeout_seconds: float = 60
+    dbos: "DBOS",
+    cur_ctx: Optional[DBOSContext],
+    workflow_id: str,
+    key: str,
+    timeout_seconds: float = 60,
 ) -> Any:
     if cur_ctx is not None and cur_ctx.is_within_workflow():
         # Call it within a workflow
@@ -1559,28 +1577,25 @@ def get_event(
         # Directly call it outside of a workflow
         return dbos._sys_db.get_event(workflow_id, key, timeout_seconds)
 
-def durable_sleep(dbos: "DBOS", cur_ctx: Optional["DBOSContext"], seconds: float) -> None:
+
+def durable_sleep(
+    dbos: "DBOS", cur_ctx: Optional["DBOSContext"], seconds: float
+) -> None:
     if cur_ctx is not None:
         # Must call it within a workflow
-        assert (
-            cur_ctx.is_workflow()
-        ), "sleep() must be called from within a workflow"
+        assert cur_ctx.is_workflow(), "sleep() must be called from within a workflow"
         attributes: TracedAttributes = {
             "name": "sleep",
         }
         with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
-            dbos._sys_db.sleep(
-                ctx.workflow_id, ctx.curr_step_function_id, seconds
-            )
+            dbos._sys_db.sleep(ctx.workflow_id, ctx.curr_step_function_id, seconds)
     else:
         # Cannot call it from outside of a workflow
         raise DBOSException("sleep() must be called from within a workflow")
 
+
 def write_stream(
-    dbos: "DBOS",
-    step_ctx: Optional["DBOSContext"],
-    key: str,
-    value: Any
+    dbos: "DBOS", step_ctx: Optional["DBOSContext"], key: str, value: Any
 ) -> None:
     if step_ctx is not None:
         # Must call it within a workflow
@@ -1606,11 +1621,8 @@ def write_stream(
             "write_stream() must be called from within a workflow or step"
         )
 
-def close_stream(
-    dbos: "DBOS",
-    step_ctx: Optional["DBOSContext"],
-    key: str
-) -> None:
+
+def close_stream(dbos: "DBOS", step_ctx: Optional["DBOSContext"], key: str) -> None:
     if step_ctx is not None:
         # Must call it within a workflow
         if step_ctx.is_workflow():
@@ -1618,13 +1630,9 @@ def close_stream(
                 "name": "close_stream",
             }
             with EnterDBOSStepCtx(attributes, step_ctx) as ctx:
-                dbos._sys_db.close_stream(
-                    ctx.workflow_id, ctx.function_id, key
-                )
+                dbos._sys_db.close_stream(ctx.workflow_id, ctx.function_id, key)
         else:
-            raise DBOSException(
-                "close_stream() must be called from within a workflow"
-            )
+            raise DBOSException("close_stream() must be called from within a workflow")
     else:
         # Cannot call it from outside of a workflow
         raise DBOSException("close_stream() must be called from within a workflow")

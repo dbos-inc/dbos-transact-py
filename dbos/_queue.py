@@ -116,7 +116,14 @@ class Queue:
         parent_ctx_copy = copy.copy(ctx)
         child_ctx = DBOSContext.create_start_workflow_child(ctx)
         return await start_workflow_async(
-            dbos, parent_ctx_copy, child_ctx, func, args, kwargs, queue_name=self.name, execute_workflow=False
+            dbos,
+            parent_ctx_copy,
+            child_ctx,
+            func,
+            args,
+            kwargs,
+            queue_name=self.name,
+            execute_workflow=False,
         )
 
 

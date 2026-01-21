@@ -1281,7 +1281,11 @@ class SystemDatabase(ABC):
 
     @db_retry()
     def record_get_result(
-        self, result_workflow_id: str, output: Optional[str], error: Optional[str], ctx: Optional["DBOSContext"] = None
+        self,
+        result_workflow_id: str,
+        output: Optional[str],
+        error: Optional[str],
+        ctx: Optional["DBOSContext"] = None,
     ) -> None:
         if ctx is None:
             ctx = get_local_dbos_context()
@@ -2117,7 +2121,9 @@ class SystemDatabase(ABC):
 
     T = TypeVar("T")
 
-    def call_function_as_step(self, fn: Callable[[], T], function_name: str, ctx: Optional[DBOSContext]) -> T:
+    def call_function_as_step(
+        self, fn: Callable[[], T], function_name: str, ctx: Optional[DBOSContext]
+    ) -> T:
         start_time = int(time.time() * 1000)
         if ctx and ctx.is_transaction():
             raise Exception(f"Invalid call to `{function_name}` inside a transaction")
@@ -2152,8 +2158,12 @@ class SystemDatabase(ABC):
             )
         return result
 
-    async def call_function_as_step_from_async(self, fn: Callable[[], T], function_name: str, ctx: Optional[DBOSContext]) -> T:
-        return await asyncio.to_thread(self.call_function_as_step, fn, function_name, ctx)
+    async def call_function_as_step_from_async(
+        self, fn: Callable[[], T], function_name: str, ctx: Optional[DBOSContext]
+    ) -> T:
+        return await asyncio.to_thread(
+            self.call_function_as_step, fn, function_name, ctx
+        )
 
     @db_retry()
     def init_workflow(

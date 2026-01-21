@@ -139,7 +139,7 @@ class DBOSContext:
         )
         rv.assumed_role = self.assumed_role
         return rv
-    
+
     def snapshot_step_ctx(self, reserve_sleep_id: bool = False) -> DBOSContext:
         rv = self.create_child(is_for_workflow=False)
         rv.executor_id = self.executor_id
@@ -175,7 +175,11 @@ class DBOSContext:
                     cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
                 )
 
-        new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child(is_for_workflow=True)
+        new_wf_ctx = (
+            DBOSContext()
+            if cur_ctx is None
+            else cur_ctx.create_child(is_for_workflow=True)
+        )
         new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
 
         return new_wf_ctx
@@ -354,6 +358,7 @@ def assert_current_dbos_context() -> DBOSContext:
     assert rv, "No DBOS context found"
     return rv
 
+
 def snapshot_step_context(reserve_sleep_id: bool = False) -> Optional[DBOSContext]:
     ctx = get_local_dbos_context()
     if ctx is None:
@@ -390,6 +395,7 @@ class DBOSContextEnsure:
         if self.created_ctx:
             _clear_local_dbos_context()
         return False  # Did not handle
+
 
 class SetWorkflowID:
     """
@@ -558,7 +564,9 @@ class SetEnqueueOptions:
 
 
 class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
-    def __init__(self, attributes: TracedAttributes, ctx:Optional[DBOSContext]) -> None:
+    def __init__(
+        self, attributes: TracedAttributes, ctx: Optional[DBOSContext]
+    ) -> None:
         self.attributes = attributes
         self.saved_workflow_timeout: Optional[int] = None
         self.saved_deduplication_id: Optional[str] = None
@@ -616,12 +624,9 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         _set_local_dbos_context(self.prev_ctx)
         return False  # Did not handle
 
+
 class EnterDBOSStepCtx:
-    def __init__(
-        self,
-        attributes: TracedAttributes,
-        ctx: DBOSContext
-    ) -> None:
+    def __init__(self, attributes: TracedAttributes, ctx: DBOSContext) -> None:
         self.attributes = attributes
         self.prev_ctx: Optional[DBOSContext] = None
         self.use_ctx = ctx
@@ -645,6 +650,7 @@ class EnterDBOSStepCtx:
         ctx.end_step(exc_value)
         _set_local_dbos_context(self.prev_ctx)
         return False  # Did not handle
+
 
 class EnterDBOSStepRetry:
     def __init__(self, current_attempt: int, max_attempts: int) -> None:
