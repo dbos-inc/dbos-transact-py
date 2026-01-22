@@ -1927,11 +1927,11 @@ class DBOS:
         dbos = _get_dbos_instance()
         if dbos._launched:
             raise DBOSException("alert_handler must be defined before DBOS is launched")
-        dbos._alert_handler = func
         if dbos._alert_handler is not None:
             raise DBOSException(
                 "An alert_handler is already defined. You can only declare one alert_handler."
             )
+        dbos._alert_handler = func
         return func
 
 
