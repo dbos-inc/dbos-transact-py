@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 # Public API
-from dbos import DBOS, Queue, SetWorkflowID, WorkflowStatusString, _workflow_commands
+from dbos import DBOS, Queue, SetWorkflowID, WorkflowStatusString
 from dbos._utils import GlobalParams
 
 
@@ -270,7 +270,7 @@ def test_get_workflow(dbos: DBOS) -> None:
 
     wfUuid = output[0].workflow_id
 
-    info = _workflow_commands.get_workflow(dbos._sys_db, wfUuid)
+    info = DBOS.get_workflow_status(wfUuid)
     assert info is not None, "Expected output to be not None"
 
     if info is not None:
@@ -589,7 +589,7 @@ async def test_callchild_direct_asyncio(dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         child_id = await parentWorkflow()
 
-    wfsteps = DBOS.list_workflow_steps(wfid)
+    wfsteps = await DBOS.list_workflow_steps_async(wfid)
     assert len(wfsteps) == 4
     assert wfsteps[0]["function_name"] == child_workflow.__qualname__
     assert wfsteps[0]["child_workflow_id"] == child_id
@@ -763,7 +763,7 @@ async def test_list_steps_errors_async(dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         with pytest.raises(Exception):
             await call_step()
-    wfsteps = DBOS.list_workflow_steps(wfid)
+    wfsteps = await DBOS.list_workflow_steps_async(wfid)
     assert len(wfsteps) == 1
     assert wfsteps[0]["function_name"] == failing_step.__qualname__
     assert wfsteps[0]["child_workflow_id"] == None
@@ -775,7 +775,7 @@ async def test_list_steps_errors_async(dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         with pytest.raises(Exception):
             await start_step()
-    wfsteps = DBOS.list_workflow_steps(wfid)
+    wfsteps = await DBOS.list_workflow_steps_async(wfid)
     assert len(wfsteps) == 2
     assert wfsteps[0]["function_name"] == f"<temp>.{failing_step.__qualname__}"
     assert wfsteps[0]["child_workflow_id"] == f"{wfid}-1"
@@ -791,7 +791,7 @@ async def test_list_steps_errors_async(dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         with pytest.raises(Exception):
             await enqueue_step()
-    wfsteps = DBOS.list_workflow_steps(wfid)
+    wfsteps = await DBOS.list_workflow_steps_async(wfid)
     assert len(wfsteps) == 2
     assert wfsteps[0]["function_name"] == f"<temp>.{failing_step.__qualname__}"
     assert wfsteps[0]["child_workflow_id"] == f"{wfid}-1"
@@ -887,7 +887,7 @@ async def test_callchild_first_asyncio(dbos: DBOS) -> None:
         handle = await dbos.start_workflow_async(parentWorkflow)
         child_id = await handle.get_result()
 
-    wfsteps = DBOS.list_workflow_steps(wfid)
+    wfsteps = await DBOS.list_workflow_steps_async(wfid)
     assert len(wfsteps) == 4
     assert wfsteps[0]["function_name"] == child_workflow.__qualname__
     assert wfsteps[0]["child_workflow_id"] == child_id

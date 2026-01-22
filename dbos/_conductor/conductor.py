@@ -19,8 +19,6 @@ from dbos._workflow_commands import (
     garbage_collect,
     get_workflow,
     global_timeout,
-    list_queued_workflows,
-    list_workflows,
 )
 
 from . import protocol as p
@@ -248,8 +246,7 @@ class ConductorWebsocket(threading.Thread):
                             body = list_workflows_message.body
                             infos = []
                             try:
-                                infos = list_workflows(
-                                    self.dbos._sys_db,
+                                infos = self.dbos._sys_db.list_workflows(
                                     workflow_ids=body.get("workflow_uuids", None),
                                     user=body.get("authenticated_user", None),
                                     start_time=body.get("start_time", None),
@@ -258,11 +255,17 @@ class ConductorWebsocket(threading.Thread):
                                     app_version=body.get("application_version", None),
                                     forked_from=body.get("forked_from", None),
                                     name=body.get("workflow_name", None),
+                                    queue_name=body.get("queue_name", None),
                                     limit=body.get("limit", None),
                                     offset=body.get("offset", None),
                                     sort_desc=body.get("sort_desc", False),
+                                    workflow_id_prefix=body.get(
+                                        "workflow_id_prefix", None
+                                    ),
                                     load_input=body.get("load_input", False),
                                     load_output=body.get("load_output", False),
+                                    executor_id=body.get("executor_id", None),
+                                    queues_only=body.get("queues_only", False),
                                 )
                             except Exception as e:
                                 error_message = f"Exception encountered when listing workflows: {traceback.format_exc()}"
@@ -285,18 +288,26 @@ class ConductorWebsocket(threading.Thread):
                             q_body = list_queued_workflows_message.body
                             infos = []
                             try:
-                                infos = list_queued_workflows(
-                                    self.dbos._sys_db,
+                                infos = self.dbos._sys_db.list_workflows(
+                                    workflow_ids=q_body.get("workflow_uuids", None),
+                                    user=q_body.get("authenticated_user", None),
                                     start_time=q_body.get("start_time", None),
                                     end_time=q_body.get("end_time", None),
                                     status=q_body.get("status", None),
+                                    app_version=q_body.get("application_version", None),
                                     forked_from=q_body.get("forked_from", None),
                                     name=q_body.get("workflow_name", None),
+                                    queue_name=q_body.get("queue_name", None),
                                     limit=q_body.get("limit", None),
                                     offset=q_body.get("offset", None),
-                                    queue_name=q_body.get("queue_name", None),
                                     sort_desc=q_body.get("sort_desc", False),
+                                    workflow_id_prefix=q_body.get(
+                                        "workflow_id_prefix", None
+                                    ),
                                     load_input=q_body.get("load_input", False),
+                                    load_output=q_body.get("load_output", False),
+                                    executor_id=q_body.get("executor_id", None),
+                                    queues_only=True,
                                 )
                             except Exception as e:
                                 error_message = f"Exception encountered when listing queued workflows: {traceback.format_exc()}"

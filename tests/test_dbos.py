@@ -35,7 +35,6 @@ from dbos._error import (
     DBOSException,
 )
 from dbos._schemas.system_database import SystemSchema
-from dbos._sys_db import GetWorkflowsInput
 from dbos._utils import GlobalParams
 from tests.conftest import using_sqlite
 
@@ -363,10 +362,6 @@ def test_temp_workflow_errors(dbos: DBOS) -> None:
     txn_counter: int = 0
     step_counter: int = 0
     retried_step_counter: int = 0
-
-    cur_time: str = datetime.datetime.now().isoformat()
-    gwi: GetWorkflowsInput = GetWorkflowsInput()
-    gwi.start_time = cur_time
 
     @DBOS.transaction()
     def test_transaction(var2: str) -> str:
@@ -696,7 +691,7 @@ def test_retrieve_workflow(dbos: DBOS) -> None:
     dest_uuid = "aaaa"
     with pytest.raises(Exception) as exc_info:
         dbos.retrieve_workflow(dest_uuid)
-    pattern = f"Sent to non-existent destination workflow ID: {dest_uuid}"
+    pattern = f"Non-existent target workflow ID: {dest_uuid}"
     assert pattern in str(exc_info.value)
 
     # These return
@@ -884,7 +879,7 @@ def test_send_recv(dbos: DBOS, config: DBOSConfig) -> None:
         # Send to non-existent uuid should fail
         with pytest.raises(Exception) as exc_info:
             test_send_workflow(dest_uuid, "testtopic")
-        assert f"Sent to non-existent destination workflow ID: {dest_uuid}" in str(
+        assert f"Non-existent `send` destination workflow ID: {dest_uuid}" in str(
             exc_info.value
         )
 
@@ -951,7 +946,6 @@ def test_send_recv(dbos: DBOS, config: DBOSConfig) -> None:
 
 def test_send_recv_temp_wf(dbos: DBOS) -> None:
     recv_counter: int = 0
-    gwi: GetWorkflowsInput = GetWorkflowsInput()
 
     @DBOS.workflow()
     def test_send_recv_workflow(topic: str) -> str:
@@ -970,45 +964,41 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     dbos.send(dest_uuid, "testsend1", "testtopic")
     assert handle.get_result() == "testsend1"
 
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = DBOS.list_workflows()
     assert len(wfs) == 2
     assert wfs[0].workflow_id == dest_uuid
     assert wfs[1].workflow_id != dest_uuid
 
-    wfi = dbos._sys_db.get_workflow_status(wfs[1].workflow_id)
+    wfi = DBOS.get_workflow_status(wfs[1].workflow_id)
     assert wfi
-    assert wfi["name"] == "<temp>.temp_send_workflow"
+    assert wfi.name == "<temp>.temp_send_workflow"
 
     assert recv_counter == 1
 
     # Test substring search
-    gwi.start_time = None
-    gwi.workflow_id_prefix = dest_uuid
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = DBOS.list_workflows(workflow_id_prefix=dest_uuid)
     assert wfs[0].workflow_id == dest_uuid
 
-    gwi.workflow_id_prefix = dest_uuid[0:10]
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = DBOS.list_workflows(workflow_id_prefix=dest_uuid[0:10])
     assert dest_uuid in [w.workflow_id for w in wfs]
 
-    gwi.workflow_id_prefix = dest_uuid[0:10]
-    wfs = dbos._sys_db.get_workflows(gwi)
+    wfs = DBOS.list_workflows(workflow_id_prefix=dest_uuid[0:10])
     assert dest_uuid in [w.workflow_id for w in wfs]
 
-    x = dbos.list_workflows(
+    x = DBOS.list_workflows(
         start_time=datetime.datetime.now().isoformat(),
         workflow_id_prefix=dest_uuid[0:10],
     )
     assert len(x) == 0
 
-    x = dbos.list_workflows(workflow_id_prefix=dest_uuid[0:10])
+    x = DBOS.list_workflows(workflow_id_prefix=dest_uuid[0:10])
     assert len(x) >= 1
     assert dest_uuid in [w.workflow_id for w in x]
 
-    x = dbos.list_workflows(workflow_id_prefix=dest_uuid + "thisdoesnotexist")
+    x = DBOS.list_workflows(workflow_id_prefix=dest_uuid + "thisdoesnotexist")
     assert len(x) == 0
 
-    x = dbos.list_workflows(workflow_id_prefix="1" + dest_uuid)
+    x = DBOS.list_workflows(workflow_id_prefix="1" + dest_uuid)
     assert len(x) == 0
 
 
@@ -1697,6 +1687,7 @@ def test_custom_names(dbos: DBOS) -> None:
     handle = queue.enqueue(workflow)
     assert handle.get_status().name == workflow_name
     assert handle.get_result() == handle.workflow_id
+    assert DBOS.get_result(handle.workflow_id) == handle.workflow_id
 
     @DBOS.step(name=step_name)
     def step() -> str:
@@ -1760,7 +1751,7 @@ async def test_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
     assert await asyncio.to_thread(step, 5) == 5
     assert await async_step(5) == 5
 
-    assert len(DBOS.list_workflows()) == 0
+    assert len(await DBOS.list_workflows_async()) == 0
 
 
 def test_nested_steps(dbos: DBOS) -> None:

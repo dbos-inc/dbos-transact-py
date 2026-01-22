@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import functools
 import inspect
 import json
@@ -31,9 +32,7 @@ from ._context import (
     DBOSAssumeRole,
     DBOSContext,
     DBOSContextEnsure,
-    DBOSContextSwap,
-    EnterDBOSChildWorkflow,
-    EnterDBOSStep,
+    EnterDBOSStepCtx,
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
     OperationType,
@@ -123,7 +122,7 @@ class WorkflowHandleFuture(Generic[R]):
     def get_status(self) -> WorkflowStatus:
         stat = self.dbos.get_workflow_status(self.workflow_id)
         if stat is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_id)
+            raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return stat
 
 
@@ -154,7 +153,7 @@ class WorkflowHandlePolling(Generic[R]):
     def get_status(self) -> WorkflowStatus:
         stat = self.dbos.get_workflow_status(self.workflow_id)
         if stat is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_id)
+            raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return stat
 
 
@@ -191,7 +190,7 @@ class WorkflowHandleAsyncTask(Generic[R]):
     async def get_status(self) -> WorkflowStatus:
         stat = await asyncio.to_thread(self.dbos.get_workflow_status, self.workflow_id)
         if stat is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_id)
+            raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return stat
 
 
@@ -231,7 +230,7 @@ class WorkflowHandleAsyncPolling(Generic[R]):
     async def get_status(self) -> WorkflowStatus:
         stat = await asyncio.to_thread(self.dbos.get_workflow_status, self.workflow_id)
         if stat is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_id)
+            raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return stat
 
 
@@ -519,17 +518,16 @@ def _execute_workflow_wthread(
         "name": get_dbos_func_name(func),
         "operationType": OperationType.WORKFLOW.value,
     }
-    with DBOSContextSwap(ctx):
-        with EnterDBOSWorkflow(attributes):
-            try:
-                return _get_wf_invoke_func(dbos, status)(
-                    functools.partial(func, *args, **kwargs)
-                )
-            except Exception as e:
-                dbos.logger.error(
-                    f"Exception encountered in asynchronous workflow:", exc_info=e
-                )
-                raise
+    with EnterDBOSWorkflow(attributes, ctx):
+        try:
+            return _get_wf_invoke_func(dbos, status)(
+                functools.partial(func, *args, **kwargs)
+            )
+        except Exception as e:
+            dbos.logger.error(
+                f"Exception encountered in asynchronous workflow:", exc_info=e
+            )
+            raise
 
 
 async def _execute_workflow_async(
@@ -544,18 +542,17 @@ async def _execute_workflow_async(
         "name": get_dbos_func_name(func),
         "operationType": OperationType.WORKFLOW.value,
     }
-    with DBOSContextSwap(ctx):
-        with EnterDBOSWorkflow(attributes):
-            try:
-                result = Pending[R](functools.partial(func, *args, **kwargs)).then(
-                    _get_wf_invoke_func(dbos, status)
-                )
-                return await result()
-            except Exception as e:
-                dbos.logger.error(
-                    f"Exception encountered in asynchronous workflow:", exc_info=e
-                )
-                raise
+    with EnterDBOSWorkflow(attributes, ctx):
+        try:
+            result = Pending[R](functools.partial(func, *args, **kwargs)).then(
+                _get_wf_invoke_func(dbos, status)
+            )
+            return await result()
+        except Exception as e:
+            dbos.logger.error(
+                f"Exception encountered in asynchronous workflow:", exc_info=e
+            )
+            raise
 
 
 def execute_workflow_by_id(
@@ -608,31 +605,6 @@ def execute_workflow_by_id(
             )
 
 
-def _get_new_wf() -> tuple[str, DBOSContext]:
-    # Sequence of events for starting a workflow:
-    #   First - is there a WF already running?
-    #      (and not in step as that is an error)
-    #   Assign an ID to the workflow, if it doesn't have an app-assigned one
-    #      If this is a root workflow, assign a new ID
-    #      If this is a child workflow, assign parent wf id with call# suffix
-    #   Make a (system) DB record for the workflow
-    #   Pass the new context to a worker thread that will run the wf function
-    cur_ctx = get_local_dbos_context()
-    if cur_ctx is not None and cur_ctx.is_within_workflow():
-        assert cur_ctx.is_workflow()  # Not in a step
-        cur_ctx.function_id += 1
-        if len(cur_ctx.id_assigned_for_next_workflow) == 0:
-            cur_ctx.id_assigned_for_next_workflow = (
-                cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
-            )
-
-    new_wf_ctx = DBOSContext() if cur_ctx is None else cur_ctx.create_child()
-    new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
-    new_wf_id = new_wf_ctx.id_assigned_for_next_workflow
-
-    return (new_wf_id, new_wf_ctx)
-
-
 def start_workflow(
     dbos: "DBOS",
     func: "Callable[P, Union[R, Coroutine[Any, Any, R]]]",
@@ -680,13 +652,14 @@ def start_workflow(
             local_ctx.queue_partition_key if local_ctx is not None else None
         ),
     )
-    new_wf_id, new_wf_ctx = _get_new_wf()
+    new_wf_ctx = DBOSContext.create_start_workflow_child(local_ctx)
+    new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
 
-    ctx = new_wf_ctx
-    new_child_workflow_id = ctx.id_assigned_for_next_workflow
-    if ctx.has_parent():
+    if new_wf_ctx.has_parent():
         recorded_result = dbos._sys_db.check_operation_execution(
-            ctx.parent_workflow_id, ctx.parent_workflow_fid, get_dbos_func_name(func)
+            new_wf_ctx.parent_workflow_id,
+            new_wf_ctx.parent_workflow_fid,
+            get_dbos_func_name(func),
         )
         if recorded_result and recorded_result["error"]:
             e: Exception = dbos._sys_db.serializer.deserialize(recorded_result["error"])
@@ -711,11 +684,11 @@ def start_workflow(
     )
 
     wf_status = status["status"]
-    if ctx.has_parent():
+    if new_wf_ctx.has_parent():
         dbos._sys_db.record_child_workflow(
-            ctx.parent_workflow_id,
+            new_wf_ctx.parent_workflow_id,
             new_child_workflow_id,
-            ctx.parent_workflow_fid,
+            new_wf_ctx.parent_workflow_fid,
             get_dbos_func_name(func),
         )
 
@@ -725,7 +698,7 @@ def start_workflow(
         or wf_status == WorkflowStatusString.ERROR.value
         or wf_status == WorkflowStatusString.SUCCESS.value
     ):
-        return WorkflowHandlePolling(new_wf_id, dbos)
+        return WorkflowHandlePolling(new_child_workflow_id, dbos)
 
     future = dbos._executor.submit(
         cast(Callable[..., R], _execute_workflow_wthread),
@@ -736,11 +709,13 @@ def start_workflow(
         args,
         kwargs,
     )
-    return WorkflowHandleFuture(new_wf_id, future, dbos)
+    return WorkflowHandleFuture(new_child_workflow_id, future, dbos)
 
 
 async def start_workflow_async(
     dbos: "DBOS",
+    local_ctx: Optional[DBOSContext],
+    new_wf_ctx: DBOSContext,
     func: "Callable[P, Coroutine[Any, Any, R]]",
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
@@ -770,7 +745,6 @@ async def start_workflow_async(
         "kwargs": kwargs,
     }
 
-    local_ctx = get_local_dbos_context()
     workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
         local_ctx, queue_name
     )
@@ -782,15 +756,13 @@ async def start_workflow_async(
             local_ctx.queue_partition_key if local_ctx is not None else None
         ),
     )
-    new_wf_id, new_wf_ctx = _get_new_wf()
+    new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
 
-    ctx = new_wf_ctx
-    new_child_workflow_id = ctx.id_assigned_for_next_workflow
-    if ctx.has_parent():
+    if new_wf_ctx.has_parent():
         recorded_result = await asyncio.to_thread(
             dbos._sys_db.check_operation_execution,
-            ctx.parent_workflow_id,
-            ctx.parent_workflow_fid,
+            new_wf_ctx.parent_workflow_id,
+            new_wf_ctx.parent_workflow_fid,
             get_dbos_func_name(func),
         )
         if recorded_result and recorded_result["error"]:
@@ -818,12 +790,12 @@ async def start_workflow_async(
         is_dequeued_request=is_dequeued_request,
     )
 
-    if ctx.has_parent():
+    if new_wf_ctx.has_parent():
         await asyncio.to_thread(
             dbos._sys_db.record_child_workflow,
-            ctx.parent_workflow_id,
+            new_wf_ctx.parent_workflow_id,
             new_child_workflow_id,
-            ctx.parent_workflow_fid,
+            new_wf_ctx.parent_workflow_fid,
             get_dbos_func_name(func),
         )
 
@@ -835,12 +807,12 @@ async def start_workflow_async(
         or wf_status == WorkflowStatusString.ERROR.value
         or wf_status == WorkflowStatusString.SUCCESS.value
     ):
-        return WorkflowHandleAsyncPolling(new_wf_id, dbos)
+        return WorkflowHandleAsyncPolling(new_child_workflow_id, dbos)
 
     coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, args, kwargs)
     # Shield the workflow task from cancellation
     task = asyncio.shield(asyncio.create_task(coro))
-    return WorkflowHandleAsyncTask(new_wf_id, task, dbos)
+    return WorkflowHandleAsyncTask(new_child_workflow_id, task, dbos)
 
 
 if sys.version_info < (3, 12):
@@ -856,7 +828,12 @@ else:
 
     def _mark_coroutine(func: Callable[P, R]) -> Callable[P, R]:
         inspect.markcoroutinefunction(func)
-        return func
+
+        @wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> R:
+            return await func(*args, **kwargs)  # type: ignore
+
+        return async_wrapper  # type: ignore
 
 
 def workflow_wrapper(
@@ -888,13 +865,13 @@ def workflow_wrapper(
             "args": args,
             "kwargs": kwargs,
         }
-        ctx = get_local_dbos_context()
+        cctx = get_local_dbos_context()
+        newwfctx = DBOSContext.create_start_workflow_child(cctx)
+        resctx: Optional[DBOSContext] = None
+        if cctx is not None and cctx.is_workflow():
+            resctx = cctx.snapshot_step_ctx(reserve_sleep_id=False)
         workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
-            ctx, queue=None
-        )
-
-        enterWorkflowCtxMgr = (
-            EnterDBOSChildWorkflow if ctx and ctx.is_workflow() else EnterDBOSWorkflow
+            cctx, queue=None
         )
 
         wfOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
@@ -914,14 +891,13 @@ def workflow_wrapper(
 
                 return recorded_result_inner
 
-            ctx = assert_current_dbos_context()  # Now the child ctx
             nonlocal workflow_id
-            workflow_id = ctx.workflow_id
+            workflow_id = newwfctx.workflow_id
 
-            if ctx.has_parent():
+            if newwfctx.has_parent():
                 r = dbos._sys_db.check_operation_execution(
-                    ctx.parent_workflow_id,
-                    ctx.parent_workflow_fid,
+                    newwfctx.parent_workflow_id,
+                    newwfctx.parent_workflow_fid,
                     get_dbos_func_name(func),
                 )
                 if r and r["error"]:
@@ -932,7 +908,7 @@ def workflow_wrapper(
 
             status, should_execute = _init_workflow(
                 dbos,
-                ctx,
+                newwfctx,
                 inputs=inputs,
                 wf_name=get_dbos_func_name(func),
                 class_name=get_dbos_class_name(fi, func, args),
@@ -957,14 +933,14 @@ def workflow_wrapper(
 
             # TODO: maybe modify the parameters if they've been changed by `_init_workflow`
             dbos.logger.debug(
-                f"Running workflow, id: {ctx.workflow_id}, name: {get_dbos_func_name(func)}"
+                f"Running workflow, id: {newwfctx.workflow_id}, name: {get_dbos_func_name(func)}"
             )
 
-            if ctx.has_parent():
+            if newwfctx.has_parent():
                 dbos._sys_db.record_child_workflow(
-                    ctx.parent_workflow_id,
-                    ctx.workflow_id,
-                    ctx.parent_workflow_fid,
+                    newwfctx.parent_workflow_id,
+                    newwfctx.workflow_id,
+                    newwfctx.parent_workflow_fid,
                     get_dbos_func_name(func),
                 )
 
@@ -986,17 +962,17 @@ def workflow_wrapper(
             except Exception as e:
                 serialized_e = dbos._serializer.serialize(e)
                 assert workflow_id is not None
-                dbos._sys_db.record_get_result(workflow_id, None, serialized_e)
+                dbos._sys_db.record_get_result(workflow_id, None, serialized_e, resctx)
                 raise
             serialized_r = dbos._serializer.serialize(r)
             assert workflow_id is not None
-            dbos._sys_db.record_get_result(workflow_id, serialized_r, None)
+            dbos._sys_db.record_get_result(workflow_id, serialized_r, None, resctx)
             return r
 
         outcome = (
             wfOutcome.wrap(init_wf, dbos=dbos)
             .also(DBOSAssumeRole(rr))
-            .also(enterWorkflowCtxMgr(attributes))
+            .also(EnterDBOSWorkflow(attributes, newwfctx))
             .then(record_get_result, dbos=dbos)
         )
         return outcome()  # type: ignore
@@ -1240,6 +1216,7 @@ def decorate_transaction(
 
 def invoke_step(
     dbos: "DBOS",
+    step_ctx: DBOSContext,
     func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
@@ -1335,7 +1312,7 @@ def invoke_step(
     outcome = (
         stepOutcome.then(record_step_result)
         .intercept(check_existing_result, dbos=dbos)
-        .also(EnterDBOSStep(attributes))
+        .also(EnterDBOSStepCtx(attributes, step_ctx))
     )
     return outcome()
 
@@ -1354,6 +1331,7 @@ def run_step(
     if ctx and ctx.is_workflow():
         outcome = invoke_step(
             dbos,
+            ctx.snapshot_step_ctx(),
             func,
             args,
             kwargs,
@@ -1384,6 +1362,7 @@ def run_step(
 
 async def run_step_async(
     dbos: "DBOS",
+    step_ctx: Optional[DBOSContext],
     func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
     options: StepOptions,
     args: tuple[Any, ...],
@@ -1391,11 +1370,11 @@ async def run_step_async(
 ) -> R:
     # If the step is called from a workflow, run it as a step.
     # Otherwise, run it as a normal function.
-    ctx = get_local_dbos_context()
     options = normalize_step_options(options)
-    if ctx and ctx.is_workflow():
+    if step_ctx and step_ctx.is_workflow():
         outcome = invoke_step(
             dbos,
+            step_ctx,
             func,
             args,
             kwargs,
@@ -1449,6 +1428,7 @@ def decorate_step(
                 with DBOSAssumeRole(rr):
                     return invoke_step(
                         dbosreg.dbos,
+                        ctx.snapshot_step_ctx(),
                         func,
                         args,
                         kwargs,
@@ -1490,14 +1470,18 @@ def decorate_step(
 
 
 def send(
-    dbos: "DBOS", destination_id: str, message: Any, topic: Optional[str] = None
+    dbos: "DBOS",
+    cur_ctx: Optional["DBOSContext"],
+    destination_id: str,
+    message: Any,
+    topic: Optional[str] = None,
 ) -> None:
     def do_send(destination_id: str, message: Any, topic: Optional[str]) -> None:
+        assert cur_ctx is not None
         attributes: TracedAttributes = {
             "name": "send",
         }
-        with EnterDBOSStep(attributes):
-            ctx = assert_current_dbos_context()
+        with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
             dbos._sys_db.send(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
@@ -1506,9 +1490,8 @@ def send(
                 topic,
             )
 
-    ctx = get_local_dbos_context()
-    if ctx and ctx.is_within_workflow():
-        assert ctx.is_workflow(), "send() must be called from within a workflow"
+    if cur_ctx and cur_ctx.is_within_workflow():
+        assert cur_ctx.is_workflow(), "send() must be called from within a workflow"
         return do_send(destination_id, message, topic)
     else:
         wffn = dbos._registry.workflow_info_map.get(TEMP_SEND_WF_NAME)
@@ -1516,18 +1499,20 @@ def send(
         wffn(destination_id, message, topic)
 
 
-def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
-    cur_ctx = get_local_dbos_context()
+def recv(
+    dbos: "DBOS",
+    cur_ctx: Optional["DBOSContext"],
+    topic: Optional[str] = None,
+    timeout_seconds: float = 60,
+) -> Any:
     if cur_ctx is not None:
         # Must call it within a workflow
         assert cur_ctx.is_workflow(), "recv() must be called from within a workflow"
         attributes: TracedAttributes = {
             "name": "recv",
         }
-        with EnterDBOSStep(attributes):
-            ctx = assert_current_dbos_context()
-            ctx.function_id += 1  # Reserve for the sleep
-            timeout_function_id = ctx.function_id
+        with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
+            timeout_function_id = ctx.curr_step_function_id + 1
             return dbos._sys_db.recv(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
@@ -1540,16 +1525,16 @@ def recv(dbos: "DBOS", topic: Optional[str] = None, timeout_seconds: float = 60)
         raise DBOSException("recv() must be called from within a workflow")
 
 
-def set_event(dbos: "DBOS", key: str, value: Any) -> None:
-    cur_ctx = get_local_dbos_context()
+def set_event(
+    dbos: "DBOS", cur_ctx: Optional["DBOSContext"], key: str, value: Any
+) -> None:
     if cur_ctx is not None:
         if cur_ctx.is_workflow():
             # If called from a workflow function, run as a step
             attributes: TracedAttributes = {
                 "name": "set_event",
             }
-            with EnterDBOSStep(attributes):
-                ctx = assert_current_dbos_context()
+            with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
                 dbos._sys_db.set_event_from_workflow(
                     ctx.workflow_id, ctx.curr_step_function_id, key, value
                 )
@@ -1566,9 +1551,12 @@ def set_event(dbos: "DBOS", key: str, value: Any) -> None:
 
 
 def get_event(
-    dbos: "DBOS", workflow_id: str, key: str, timeout_seconds: float = 60
+    dbos: "DBOS",
+    cur_ctx: Optional[DBOSContext],
+    workflow_id: str,
+    key: str,
+    timeout_seconds: float = 60,
 ) -> Any:
-    cur_ctx = get_local_dbos_context()
     if cur_ctx is not None and cur_ctx.is_within_workflow():
         # Call it within a workflow
         assert (
@@ -1577,10 +1565,8 @@ def get_event(
         attributes: TracedAttributes = {
             "name": "get_event",
         }
-        with EnterDBOSStep(attributes):
-            ctx = assert_current_dbos_context()
-            ctx.function_id += 1
-            timeout_function_id = ctx.function_id
+        with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
+            timeout_function_id = ctx.curr_step_function_id + 1
             caller_ctx: GetEventWorkflowContext = {
                 "workflow_uuid": ctx.workflow_id,
                 "function_id": ctx.curr_step_function_id,
@@ -1590,6 +1576,66 @@ def get_event(
     else:
         # Directly call it outside of a workflow
         return dbos._sys_db.get_event(workflow_id, key, timeout_seconds)
+
+
+def durable_sleep(
+    dbos: "DBOS", cur_ctx: Optional["DBOSContext"], seconds: float
+) -> None:
+    if cur_ctx is not None:
+        # Must call it within a workflow
+        assert cur_ctx.is_workflow(), "sleep() must be called from within a workflow"
+        attributes: TracedAttributes = {
+            "name": "sleep",
+        }
+        with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
+            dbos._sys_db.sleep(ctx.workflow_id, ctx.curr_step_function_id, seconds)
+    else:
+        # Cannot call it from outside of a workflow
+        raise DBOSException("sleep() must be called from within a workflow")
+
+
+def write_stream(
+    dbos: "DBOS", step_ctx: Optional["DBOSContext"], key: str, value: Any
+) -> None:
+    if step_ctx is not None:
+        # Must call it within a workflow
+        if step_ctx.is_workflow():
+            attributes: TracedAttributes = {
+                "name": "write_stream",
+            }
+            with EnterDBOSStepCtx(attributes, step_ctx) as ctx:
+                dbos._sys_db.write_stream_from_workflow(
+                    ctx.workflow_id, ctx.function_id, key, value
+                )
+        elif step_ctx.is_step():
+            dbos._sys_db.write_stream_from_step(
+                step_ctx.workflow_id, step_ctx.function_id, key, value
+            )
+        else:
+            raise DBOSException(
+                "write_stream() must be called from within a workflow or step"
+            )
+    else:
+        # Cannot call it from outside of a workflow
+        raise DBOSException(
+            "write_stream() must be called from within a workflow or step"
+        )
+
+
+def close_stream(dbos: "DBOS", step_ctx: Optional["DBOSContext"], key: str) -> None:
+    if step_ctx is not None:
+        # Must call it within a workflow
+        if step_ctx.is_workflow():
+            attributes: TracedAttributes = {
+                "name": "close_stream",
+            }
+            with EnterDBOSStepCtx(attributes, step_ctx) as ctx:
+                dbos._sys_db.close_stream(ctx.workflow_id, ctx.function_id, key)
+        else:
+            raise DBOSException("close_stream() must be called from within a workflow")
+    else:
+        # Cannot call it from outside of a workflow
+        raise DBOSException("close_stream() must be called from within a workflow")
 
 
 def _get_timeout_deadline(

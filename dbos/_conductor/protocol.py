@@ -138,11 +138,15 @@ class ListWorkflowsBody(TypedDict, total=False):
     status: Optional[str]
     application_version: Optional[str]
     forked_from: Optional[str]
+    queue_name: Optional[str]
     limit: Optional[int]
     offset: Optional[int]
     sort_desc: bool
+    workflow_id_prefix: Optional[str]
     load_input: bool
     load_output: bool
+    executor_id: Optional[str]
+    queues_only: bool
 
 
 @dataclass
@@ -268,16 +272,22 @@ class ListWorkflowsResponse(BaseMessage):
 
 
 class ListQueuedWorkflowsBody(TypedDict, total=False):
+    workflow_uuids: List[str]
     workflow_name: Optional[str]
+    authenticated_user: Optional[str]
     start_time: Optional[str]
     end_time: Optional[str]
     status: Optional[str]
+    application_version: Optional[str]
     forked_from: Optional[str]
     queue_name: Optional[str]
     limit: Optional[int]
     offset: Optional[int]
     sort_desc: bool
+    workflow_id_prefix: Optional[str]
     load_input: bool
+    load_output: bool
+    executor_id: Optional[str]
 
 
 @dataclass

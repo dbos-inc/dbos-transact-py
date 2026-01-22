@@ -3,6 +3,7 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 import sqlalchemy as sa
+from sqlalchemy import event
 from sqlalchemy.exc import DBAPIError
 
 from dbos._migration import sqlite_migrations
@@ -34,7 +35,14 @@ class SQLiteSystemDatabase(SystemDatabase):
                 if k not in ("application_name", "connect_timeout")
             }
             sqlite_kwargs["connect_args"] = sqlite_connect_args
-        return sa.create_engine(system_database_url, **sqlite_kwargs)
+        engine = sa.create_engine(system_database_url, **sqlite_kwargs)
+
+        # Use IMMEDIATE transactions to serialize writers and prevent race conditions
+        @event.listens_for(engine, "connect")
+        def set_sqlite_immediate(dbapi_conn: Any, connection_record: Any) -> None:
+            dbapi_conn.isolation_level = "IMMEDIATE"
+
+        return engine
 
     def run_migrations(self) -> None:
         """Run SQLite-specific migrations."""

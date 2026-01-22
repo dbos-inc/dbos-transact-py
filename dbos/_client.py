@@ -38,12 +38,7 @@ from dbos._sys_db import (
     _dbos_stream_closed_sentinel,
     workflow_is_active,
 )
-from dbos._workflow_commands import (
-    fork_workflow,
-    get_workflow,
-    list_queued_workflows,
-    list_workflows,
-)
+from dbos._workflow_commands import fork_workflow, get_workflow
 
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
@@ -95,7 +90,7 @@ class WorkflowHandleClientPolling(Generic[R]):
     def get_status(self) -> WorkflowStatus:
         status = get_workflow(self._sys_db, self.workflow_id)
         if status is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_id)
+            raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return status
 
 
@@ -119,7 +114,7 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
     async def get_status(self) -> WorkflowStatus:
         status = await asyncio.to_thread(get_workflow, self._sys_db, self.workflow_id)
         if status is None:
-            raise DBOSNonExistentWorkflowError(self.workflow_id)
+            raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return status
 
 
@@ -261,7 +256,7 @@ class DBOSClient:
     def retrieve_workflow(self, workflow_id: str) -> "WorkflowHandle[R]":
         status = get_workflow(self._sys_db, workflow_id)
         if status is None:
-            raise DBOSNonExistentWorkflowError(workflow_id)
+            raise DBOSNonExistentWorkflowError("target", workflow_id)
         return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
 
     async def retrieve_workflow_async(
@@ -269,7 +264,7 @@ class DBOSClient:
     ) -> "WorkflowHandleAsync[R]":
         status = await asyncio.to_thread(get_workflow, self._sys_db, workflow_id)
         if status is None:
-            raise DBOSNonExistentWorkflowError(workflow_id)
+            raise DBOSNonExistentWorkflowError("target", workflow_id)
         return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
 
     def send(
@@ -364,7 +359,9 @@ class DBOSClient:
         end_time: Optional[str] = None,
         name: Optional[str] = None,
         app_version: Optional[str] = None,
+        forked_from: Optional[str] = None,
         user: Optional[str] = None,
+        queue_name: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
@@ -372,16 +369,18 @@ class DBOSClient:
         load_input: bool = True,
         load_output: bool = True,
         executor_id: Optional[str] = None,
+        queues_only: bool = False,
     ) -> List[WorkflowStatus]:
-        return list_workflows(
-            self._sys_db,
+        return self._sys_db.list_workflows(
             workflow_ids=workflow_ids,
             status=status,
             start_time=start_time,
             end_time=end_time,
             name=name,
             app_version=app_version,
+            forked_from=forked_from,
             user=user,
+            queue_name=queue_name,
             limit=limit,
             offset=offset,
             sort_desc=sort_desc,
@@ -389,6 +388,7 @@ class DBOSClient:
             load_input=load_input,
             load_output=load_output,
             executor_id=executor_id,
+            queues_only=queues_only,
         )
 
     async def list_workflows_async(
@@ -400,7 +400,9 @@ class DBOSClient:
         end_time: Optional[str] = None,
         name: Optional[str] = None,
         app_version: Optional[str] = None,
+        forked_from: Optional[str] = None,
         user: Optional[str] = None,
+        queue_name: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
@@ -408,6 +410,7 @@ class DBOSClient:
         load_input: bool = True,
         load_output: bool = True,
         executor_id: Optional[str] = None,
+        queues_only: bool = False,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_workflows,
@@ -417,7 +420,9 @@ class DBOSClient:
             end_time=end_time,
             name=name,
             app_version=app_version,
+            forked_from=forked_from,
             user=user,
+            queue_name=queue_name,
             limit=limit,
             offset=offset,
             sort_desc=sort_desc,
@@ -425,61 +430,86 @@ class DBOSClient:
             load_input=load_input,
             load_output=load_output,
             executor_id=executor_id,
+            queues_only=queues_only,
         )
 
     def list_queued_workflows(
         self,
         *,
-        queue_name: Optional[str] = None,
+        workflow_ids: Optional[List[str]] = None,
         status: Optional[Union[str, List[str]]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         name: Optional[str] = None,
+        app_version: Optional[str] = None,
+        forked_from: Optional[str] = None,
+        user: Optional[str] = None,
+        queue_name: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
+        workflow_id_prefix: Optional[str] = None,
         load_input: bool = True,
+        load_output: bool = True,
         executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
-        return list_queued_workflows(
-            self._sys_db,
-            queue_name=queue_name,
+        return self._sys_db.list_workflows(
+            workflow_ids=workflow_ids,
             status=status,
             start_time=start_time,
             end_time=end_time,
             name=name,
+            app_version=app_version,
+            forked_from=forked_from,
+            user=user,
+            queue_name=queue_name,
             limit=limit,
             offset=offset,
             sort_desc=sort_desc,
+            workflow_id_prefix=workflow_id_prefix,
             load_input=load_input,
+            load_output=load_output,
             executor_id=executor_id,
+            queues_only=True,
         )
 
     async def list_queued_workflows_async(
         self,
         *,
-        queue_name: Optional[str] = None,
+        workflow_ids: Optional[List[str]] = None,
         status: Optional[Union[str, List[str]]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         name: Optional[str] = None,
+        app_version: Optional[str] = None,
+        forked_from: Optional[str] = None,
+        user: Optional[str] = None,
+        queue_name: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
+        workflow_id_prefix: Optional[str] = None,
         load_input: bool = True,
+        load_output: bool = True,
         executor_id: Optional[str] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_queued_workflows,
-            queue_name=queue_name,
+            workflow_ids=workflow_ids,
             status=status,
             start_time=start_time,
             end_time=end_time,
             name=name,
+            app_version=app_version,
+            forked_from=forked_from,
+            user=user,
+            queue_name=queue_name,
             limit=limit,
             offset=offset,
             sort_desc=sort_desc,
+            workflow_id_prefix=workflow_id_prefix,
             load_input=load_input,
+            load_output=load_output,
             executor_id=executor_id,
         )
 

@@ -28,6 +28,7 @@ from dbos._context import (
     SetWorkflowID,
     SetWorkflowTimeout,
     assert_current_dbos_context,
+    snapshot_step_context,
 )
 from dbos._core import (
     DEBOUNCER_WORKFLOW_NAME,
@@ -97,7 +98,9 @@ def debouncer_workflow(
         )
 
     debounce_deadline_epoch_sec = dbos._sys_db.call_function_as_step(
-        get_debounce_deadline_epoch_sec, "get_debounce_deadline_epoch_sec"
+        get_debounce_deadline_epoch_sec,
+        "get_debounce_deadline_epoch_sec",
+        snapshot_step_context(reserve_sleep_id=False),
     )
     debounce_period_sec = initial_debounce_period_sec
     while time.time() < debounce_deadline_epoch_sec:
@@ -211,7 +214,9 @@ class Debouncer(Generic[P, R]):
                 return generate_uuid(), ctx.assign_workflow_id()
 
             message_id, user_workflow_id = dbos._sys_db.call_function_as_step(
-                assign_debounce_ids, "DBOS.assign_debounce_ids"
+                assign_debounce_ids,
+                "DBOS.assign_debounce_ids",
+                snapshot_step_context(reserve_sleep_id=False),
             )
             ctx.id_assigned_for_next_workflow = ""
             ctx.is_within_set_workflow_id_block = False
@@ -251,7 +256,9 @@ class Debouncer(Generic[P, R]):
                     )
 
                 dedup_wfid = dbos._sys_db.call_function_as_step(
-                    get_deduplicated_workflow, "DBOS.get_deduplicated_workflow"
+                    get_deduplicated_workflow,
+                    "DBOS.get_deduplicated_workflow",
+                    snapshot_step_context(reserve_sleep_id=False),
                 )
                 if dedup_wfid is None:
                     continue
