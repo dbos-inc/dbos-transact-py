@@ -5,7 +5,6 @@ import copy
 import hashlib
 import inspect
 import os
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -471,10 +470,9 @@ class DBOS:
             dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
 
-            max_workers = self._config.get("runtimeConfig", {}).get("max_workflow_threads") or sys.maxsize
-            dbos_logger.info(f"ThreadPoolExecutor max_workers set to {max_workers}")
-
-            self._executor_field = ThreadPoolExecutor(max_workers=max_workers)
+            max_executor_threads = self._config.get("runtimeConfig", {}).get("max_executor_threads", None)
+            self._executor_field = ThreadPoolExecutor(max_workers=max_executor_threads)
+            
             self._background_event_loop.start()
             assert self._config["database"]["sys_db_engine_kwargs"] is not None
             # Get the schema configuration, use "dbos" as default
