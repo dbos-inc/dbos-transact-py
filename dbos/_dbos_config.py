@@ -66,6 +66,7 @@ class DBOSConfig(TypedDict, total=False):
     serializer: Optional[Serializer]
     enable_patching: Optional[bool]
     use_listen_notify: Optional[bool]
+    max_workflow_threads: Optional[int]
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -73,6 +74,7 @@ class RuntimeConfig(TypedDict, total=False):
     setup: Optional[List[str]]
     admin_port: Optional[int]
     run_admin_server: Optional[bool]
+    max_workflow_threads: Optional[int]
 
 
 class DatabaseConfig(TypedDict, total=False):
@@ -153,6 +155,10 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         translated_config["runtimeConfig"]["run_admin_server"] = config[
             "run_admin_server"
         ]
+    if "max_workflow_threads" in config:
+        translated_config["runtimeConfig"]["max_workflow_threads"] = config.get(
+            "max_workflow_threads"
+        )
 
     # Telemetry config
     enable_otlp = config.get("enable_otlp", None)
