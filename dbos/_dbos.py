@@ -470,7 +470,10 @@ class DBOS:
                 GlobalParams.executor_id = generate_uuid()
             dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
-            self._executor_field = ThreadPoolExecutor(max_workers=sys.maxsize)
+
+            max_executor_threads = self._config.get("runtimeConfig", {}).get("max_executor_threads") or sys.maxsize
+            self._executor_field = ThreadPoolExecutor(max_workers=max_executor_threads)
+            
             self._background_event_loop.start()
             assert self._config["database"]["sys_db_engine_kwargs"] is not None
             # Get the schema configuration, use "dbos" as default

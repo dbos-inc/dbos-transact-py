@@ -66,6 +66,7 @@ class DBOSConfig(TypedDict, total=False):
     serializer: Optional[Serializer]
     enable_patching: Optional[bool]
     use_listen_notify: Optional[bool]
+    max_executor_threads: Optional[int]
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -73,6 +74,7 @@ class RuntimeConfig(TypedDict, total=False):
     setup: Optional[List[str]]
     admin_port: Optional[int]
     run_admin_server: Optional[bool]
+    max_executor_threads: Optional[int]
 
 
 class DatabaseConfig(TypedDict, total=False):
@@ -152,6 +154,10 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     if "run_admin_server" in config:
         translated_config["runtimeConfig"]["run_admin_server"] = config[
             "run_admin_server"
+        ]
+    if "max_executor_threads" in config:
+        translated_config["runtimeConfig"]["max_executor_threads"] = config[
+            "max_executor_threads"
         ]
 
     # Telemetry config
