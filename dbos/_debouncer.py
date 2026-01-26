@@ -103,8 +103,15 @@ def debouncer_workflow(
         snapshot_step_context(reserve_sleep_id=False),
     )
     debounce_period_sec = initial_debounce_period_sec
-    while time.time() < debounce_deadline_epoch_sec:
-        time_until_deadline = max(debounce_deadline_epoch_sec - time.time(), 0)
+    while (
+        DBOS.run_step({"name": "get_time"}, lambda: time.time())
+        < debounce_deadline_epoch_sec
+    ):
+        time_until_deadline = max(
+            debounce_deadline_epoch_sec
+            - DBOS.run_step({"name": "get_time"}, lambda: time.time()),
+            0,
+        )
         timeout = min(debounce_period_sec, time_until_deadline)
         message: DebouncerMessage = DBOS.recv(_DEBOUNCER_TOPIC, timeout_seconds=timeout)
         if message is None:
