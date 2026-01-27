@@ -126,6 +126,8 @@ class WorkflowStatus:
     queue_partition_key: Optional[str]
     # If this workflow was forked from another, that workflow's ID.
     forked_from: Optional[str]
+    # If this workflow was started as a child of another workflow, that workflow's ID.
+    parent_workflow_id: Optional[str]
 
     # INTERNAL FIELDS
 
@@ -160,6 +162,7 @@ class WorkflowStatusInternal(TypedDict):
     inputs: str
     queue_partition_key: Optional[str]
     forked_from: Optional[str]
+    parent_workflow_id: Optional[str]
     owner_xid: Optional[str]
 
 
@@ -509,6 +512,7 @@ class SystemDatabase(ABC):
                 priority=status["priority"],
                 inputs=status["inputs"],
                 queue_partition_key=status["queue_partition_key"],
+                parent_workflow_id=status["parent_workflow_id"],
                 owner_xid=owner_xid,
             )
             .on_conflict_do_update(
@@ -885,6 +889,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.inputs,
                     SystemSchema.workflow_status.c.queue_partition_key,
                     SystemSchema.workflow_status.c.forked_from,
+                    SystemSchema.workflow_status.c.parent_workflow_id,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -914,6 +919,7 @@ class SystemDatabase(ABC):
                 "inputs": row[18],
                 "queue_partition_key": row[19],
                 "forked_from": row[20],
+                "parent_workflow_id": row[21],
                 "owner_xid": None,
             }
             return status
@@ -1025,6 +1031,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.priority,
             SystemSchema.workflow_status.c.queue_partition_key,
             SystemSchema.workflow_status.c.forked_from,
+            SystemSchema.workflow_status.c.parent_workflow_id,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -1122,8 +1129,9 @@ class SystemDatabase(ABC):
             info.priority = row[18]
             info.queue_partition_key = row[19]
             info.forked_from = row[20]
+            info.parent_workflow_id = row[21]
 
-            idx = 21
+            idx = 22
             raw_input = row[idx] if load_input else None
             if load_input:
                 idx += 1

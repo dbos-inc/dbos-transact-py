@@ -229,6 +229,7 @@ class DBOSClient:
             "inputs": self._serializer.serialize(inputs),
             "queue_partition_key": enqueue_options_internal["queue_partition_key"],
             "forked_from": None,
+            "parent_workflow_id": None,
             "owner_xid": None,
         }
 
@@ -300,6 +301,7 @@ class DBOSClient:
             "inputs": self._serializer.serialize({"args": (), "kwargs": {}}),
             "queue_partition_key": None,
             "forked_from": None,
+            "parent_workflow_id": None,
             "owner_xid": None,
         }
         with self._sys_db.engine.begin() as conn:
