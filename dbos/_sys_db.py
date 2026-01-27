@@ -2601,6 +2601,7 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.priority,
                         SystemSchema.workflow_status.c.queue_partition_key,
                         SystemSchema.workflow_status.c.forked_from,
+                        SystemSchema.workflow_status.c.parent_workflow_id,
                     ).where(SystemSchema.workflow_status.c.workflow_uuid == wf_id)
                 ).fetchone()
 
@@ -2633,6 +2634,7 @@ class SystemDatabase(ABC):
                     "priority": status_row[22],
                     "queue_partition_key": status_row[23],
                     "forked_from": status_row[24],
+                    "parent_workflow_id": status_row[25],
                 }
 
                 # Export operation_outputs
@@ -2776,6 +2778,7 @@ class SystemDatabase(ABC):
                         priority=status["priority"],
                         queue_partition_key=status["queue_partition_key"],
                         forked_from=status["forked_from"],
+                        parent_workflow_id=status.get("parent_workflow_id"),
                     )
                 )
 
