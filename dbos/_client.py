@@ -230,6 +230,7 @@ class DBOSClient:
             "queue_partition_key": enqueue_options_internal["queue_partition_key"],
             "forked_from": None,
             "parent_workflow_id": None,
+            "started_at_epoch_ms": None,
             "owner_xid": None,
         }
 
@@ -302,6 +303,7 @@ class DBOSClient:
             "queue_partition_key": None,
             "forked_from": None,
             "parent_workflow_id": None,
+            "started_at_epoch_ms": None,
             "owner_xid": None,
         }
         with self._sys_db.engine.begin() as conn:

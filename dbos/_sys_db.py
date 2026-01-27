@@ -128,6 +128,8 @@ class WorkflowStatus:
     forked_from: Optional[str]
     # If this workflow was started as a child of another workflow, that workflow's ID.
     parent_workflow_id: Optional[str]
+    # The UNIX epoch timestamp at which the workflow was last dequeued, if it had been enqueued
+    dequeued_at: Optional[int]
 
     # INTERNAL FIELDS
 
@@ -163,6 +165,7 @@ class WorkflowStatusInternal(TypedDict):
     queue_partition_key: Optional[str]
     forked_from: Optional[str]
     parent_workflow_id: Optional[str]
+    started_at_epoch_ms: Optional[int]
     owner_xid: Optional[str]
 
 
@@ -890,6 +893,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.queue_partition_key,
                     SystemSchema.workflow_status.c.forked_from,
                     SystemSchema.workflow_status.c.parent_workflow_id,
+                    SystemSchema.workflow_status.c.started_at_epoch_ms,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -920,6 +924,7 @@ class SystemDatabase(ABC):
                 "queue_partition_key": row[19],
                 "forked_from": row[20],
                 "parent_workflow_id": row[21],
+                "started_at_epoch_ms": row[22],
                 "owner_xid": None,
             }
             return status
@@ -1033,6 +1038,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.queue_partition_key,
             SystemSchema.workflow_status.c.forked_from,
             SystemSchema.workflow_status.c.parent_workflow_id,
+            SystemSchema.workflow_status.c.started_at_epoch_ms,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -1135,8 +1141,9 @@ class SystemDatabase(ABC):
             info.queue_partition_key = row[19]
             info.forked_from = row[20]
             info.parent_workflow_id = row[21]
+            info.dequeued_at = row[22]
 
-            idx = 22
+            idx = 23
             raw_input = row[idx] if load_input else None
             if load_input:
                 idx += 1
