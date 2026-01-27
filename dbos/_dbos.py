@@ -471,9 +471,12 @@ class DBOS:
             dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
 
-            max_executor_threads = self._config.get("runtimeConfig", {}).get("max_executor_threads") or sys.maxsize
+            max_executor_threads = (
+                self._config.get("runtimeConfig", {}).get("max_executor_threads")
+                or sys.maxsize
+            )
             self._executor_field = ThreadPoolExecutor(max_workers=max_executor_threads)
-            
+
             self._background_event_loop.start()
             assert self._config["database"]["sys_db_engine_kwargs"] is not None
             # Get the schema configuration, use "dbos" as default
@@ -1415,6 +1418,7 @@ class DBOS:
         name: Optional[str] = None,
         app_version: Optional[str] = None,
         forked_from: Optional[str] = None,
+        parent_workflow_id: Optional[str] = None,
         user: Optional[str] = None,
         queue_name: Optional[str] = None,
         limit: Optional[int] = None,
@@ -1437,6 +1441,7 @@ class DBOS:
                 name=name,
                 app_version=app_version,
                 forked_from=forked_from,
+                parent_workflow_id=parent_workflow_id,
                 user=user,
                 queue_name=queue_name,
                 limit=limit,
@@ -1464,6 +1469,7 @@ class DBOS:
         name: Optional[str] = None,
         app_version: Optional[str] = None,
         forked_from: Optional[str] = None,
+        parent_workflow_id: Optional[str] = None,
         user: Optional[str] = None,
         queue_name: Optional[str] = None,
         limit: Optional[int] = None,
@@ -1487,6 +1493,7 @@ class DBOS:
                 name=name,
                 app_version=app_version,
                 forked_from=forked_from,
+                parent_workflow_id=parent_workflow_id,
                 user=user,
                 queue_name=queue_name,
                 limit=limit,
@@ -1514,6 +1521,7 @@ class DBOS:
         name: Optional[str] = None,
         app_version: Optional[str] = None,
         forked_from: Optional[str] = None,
+        parent_workflow_id: Optional[str] = None,
         user: Optional[str] = None,
         queue_name: Optional[str] = None,
         limit: Optional[int] = None,
@@ -1535,6 +1543,7 @@ class DBOS:
                 name=name,
                 app_version=app_version,
                 forked_from=forked_from,
+                parent_workflow_id=parent_workflow_id,
                 user=user,
                 queue_name=queue_name,
                 limit=limit,
@@ -1564,6 +1573,7 @@ class DBOS:
         name: Optional[str] = None,
         app_version: Optional[str] = None,
         forked_from: Optional[str] = None,
+        parent_workflow_id: Optional[str] = None,
         user: Optional[str] = None,
         queue_name: Optional[str] = None,
         limit: Optional[int] = None,
@@ -1586,6 +1596,7 @@ class DBOS:
                 name=name,
                 app_version=app_version,
                 forked_from=forked_from,
+                parent_workflow_id=parent_workflow_id,
                 user=user,
                 queue_name=queue_name,
                 limit=limit,

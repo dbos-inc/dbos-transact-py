@@ -989,6 +989,7 @@ class SystemDatabase(ABC):
         name: Optional[str] = None,
         app_version: Optional[str] = None,
         forked_from: Optional[str] = None,
+        parent_workflow_id: Optional[str] = None,
         user: Optional[str] = None,
         queue_name: Optional[str] = None,
         limit: Optional[int] = None,
@@ -1078,6 +1079,10 @@ class SystemDatabase(ABC):
         if forked_from:
             query = query.where(
                 SystemSchema.workflow_status.c.forked_from == forked_from
+            )
+        if parent_workflow_id:
+            query = query.where(
+                SystemSchema.workflow_status.c.parent_workflow_id == parent_workflow_id
             )
         if workflow_ids:
             query = query.where(
