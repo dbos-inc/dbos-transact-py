@@ -569,7 +569,7 @@ class ConductorWebsocket(threading.Thread):
             except InvalidStatus as e:
                 # This happens when it cannot open a connection to the conductor. E.g., the conductor rejects the request
                 json_data = e.response.body.decode("utf-8")
-                self.dbos.logger.warning(
+                self.dbos.logger.error(
                     f"Failed to connect to conductor. Retrying: {str(e) }. Details: {json_data}"
                 )
                 time.sleep(1)
