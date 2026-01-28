@@ -575,7 +575,7 @@ class ConductorWebsocket(threading.Thread):
                 time.sleep(1)
                 continue
             except Exception as e:
-                self.dbos.logger.error(
+                self.dbos.logger.warning(
                     f"Unexpected exception in connection to conductor. Reconnecting: {e}"
                 )
                 time.sleep(1)
