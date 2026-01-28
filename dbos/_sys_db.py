@@ -126,6 +126,10 @@ class WorkflowStatus:
     queue_partition_key: Optional[str]
     # If this workflow was forked from another, that workflow's ID.
     forked_from: Optional[str]
+    # If this workflow was started as a child of another workflow, that workflow's ID.
+    parent_workflow_id: Optional[str]
+    # The UNIX epoch timestamp at which the workflow was last dequeued, if it had been enqueued
+    dequeued_at: Optional[int]
 
     # INTERNAL FIELDS
 
@@ -160,6 +164,8 @@ class WorkflowStatusInternal(TypedDict):
     inputs: str
     queue_partition_key: Optional[str]
     forked_from: Optional[str]
+    parent_workflow_id: Optional[str]
+    started_at_epoch_ms: Optional[int]
     owner_xid: Optional[str]
 
 
@@ -509,6 +515,7 @@ class SystemDatabase(ABC):
                 priority=status["priority"],
                 inputs=status["inputs"],
                 queue_partition_key=status["queue_partition_key"],
+                parent_workflow_id=status["parent_workflow_id"],
                 owner_xid=owner_xid,
             )
             .on_conflict_do_update(
@@ -885,6 +892,8 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.inputs,
                     SystemSchema.workflow_status.c.queue_partition_key,
                     SystemSchema.workflow_status.c.forked_from,
+                    SystemSchema.workflow_status.c.parent_workflow_id,
+                    SystemSchema.workflow_status.c.started_at_epoch_ms,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -914,6 +923,8 @@ class SystemDatabase(ABC):
                 "inputs": row[18],
                 "queue_partition_key": row[19],
                 "forked_from": row[20],
+                "parent_workflow_id": row[21],
+                "started_at_epoch_ms": row[22],
                 "owner_xid": None,
             }
             return status
@@ -983,6 +994,7 @@ class SystemDatabase(ABC):
         name: Optional[str] = None,
         app_version: Optional[str] = None,
         forked_from: Optional[str] = None,
+        parent_workflow_id: Optional[str] = None,
         user: Optional[str] = None,
         queue_name: Optional[str] = None,
         limit: Optional[int] = None,
@@ -1025,6 +1037,8 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.priority,
             SystemSchema.workflow_status.c.queue_partition_key,
             SystemSchema.workflow_status.c.forked_from,
+            SystemSchema.workflow_status.c.parent_workflow_id,
+            SystemSchema.workflow_status.c.started_at_epoch_ms,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -1071,6 +1085,10 @@ class SystemDatabase(ABC):
         if forked_from:
             query = query.where(
                 SystemSchema.workflow_status.c.forked_from == forked_from
+            )
+        if parent_workflow_id:
+            query = query.where(
+                SystemSchema.workflow_status.c.parent_workflow_id == parent_workflow_id
             )
         if workflow_ids:
             query = query.where(
@@ -1122,8 +1140,10 @@ class SystemDatabase(ABC):
             info.priority = row[18]
             info.queue_partition_key = row[19]
             info.forked_from = row[20]
+            info.parent_workflow_id = row[21]
+            info.dequeued_at = row[22]
 
-            idx = 21
+            idx = 23
             raw_input = row[idx] if load_input else None
             if load_input:
                 idx += 1
@@ -2581,6 +2601,7 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.priority,
                         SystemSchema.workflow_status.c.queue_partition_key,
                         SystemSchema.workflow_status.c.forked_from,
+                        SystemSchema.workflow_status.c.parent_workflow_id,
                     ).where(SystemSchema.workflow_status.c.workflow_uuid == wf_id)
                 ).fetchone()
 
@@ -2613,6 +2634,7 @@ class SystemDatabase(ABC):
                     "priority": status_row[22],
                     "queue_partition_key": status_row[23],
                     "forked_from": status_row[24],
+                    "parent_workflow_id": status_row[25],
                 }
 
                 # Export operation_outputs
@@ -2756,6 +2778,7 @@ class SystemDatabase(ABC):
                         priority=status["priority"],
                         queue_partition_key=status["queue_partition_key"],
                         forked_from=status["forked_from"],
+                        parent_workflow_id=status.get("parent_workflow_id"),
                     )
                 )
 

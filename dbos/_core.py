@@ -358,6 +358,10 @@ def _init_workflow(
             else None
         ),
         "forked_from": None,
+        "parent_workflow_id": (
+            ctx.parent_workflow_id if len(ctx.parent_workflow_id) > 0 else None
+        ),
+        "started_at_epoch_ms": None,
         "owner_xid": None,
     }
 

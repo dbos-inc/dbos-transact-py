@@ -14,24 +14,31 @@ def test_workflow_export(dbos: DBOS, config: DBOSConfig) -> None:
         return
 
     @DBOS.workflow()
-    def child_workflow() -> None:
-        return grandchild_workflow()
+    def child_workflow() -> str:
+        wfid = DBOS.workflow_id
+        assert wfid is not None
+        grandchild_workflow()
+        return wfid
 
     @DBOS.workflow()
-    def grandchild_workflow() -> None:
-        return
+    def grandchild_workflow() -> str:
+        wfid = DBOS.workflow_id
+        assert wfid is not None
+        return wfid
 
     @DBOS.workflow()
-    def workflow() -> str:
-        child_workflow()
+    def workflow() -> tuple[str, str]:
+        assert DBOS.workflow_id
+        child_id = child_workflow()
         for _ in range(10):
             step()
         DBOS.set_event(key, value)
         DBOS.write_stream(key, value)
-        assert DBOS.workflow_id
-        return DBOS.workflow_id
+        return DBOS.workflow_id, child_id
 
-    workflow_id = workflow()
+    workflow_id, child_id = workflow()
+    # Child workflow ID follows pattern: parent_id-function_id
+    grandchild_id = f"{child_id}-1"
 
     exported_workflow = dbos._sys_db.export_workflow(workflow_id, export_children=True)
     original_steps = DBOS.list_workflow_steps(workflow_id)
@@ -63,9 +70,22 @@ def test_workflow_export(dbos: DBOS, config: DBOSConfig) -> None:
     # The child workflows are also copied over
     assert len(DBOS.list_workflows()) == 3
 
+    # Verify parent relationships are preserved after import
+    imported_parent_status = DBOS.get_workflow_status(workflow_id)
+    assert imported_parent_status is not None
+    assert imported_parent_status.parent_workflow_id is None
+
+    imported_child_status = DBOS.get_workflow_status(child_id)
+    assert imported_child_status is not None
+    assert imported_child_status.parent_workflow_id == workflow_id
+
+    imported_grandchild_status = DBOS.get_workflow_status(grandchild_id)
+    assert imported_grandchild_status is not None
+    assert imported_grandchild_status.parent_workflow_id == child_id
+
     # The imported workflow can be forked
     forked_workflow = DBOS.fork_workflow(workflow_id, len(imported_steps))
-    assert forked_workflow.get_result() == forked_workflow.workflow_id
+    assert forked_workflow.get_result()[0] == forked_workflow.workflow_id
     assert DBOS.get_event(forked_workflow.workflow_id, key) == value
 
     DBOS.destroy(destroy_registry=True)
