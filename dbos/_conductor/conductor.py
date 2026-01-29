@@ -254,6 +254,9 @@ class ConductorWebsocket(threading.Thread):
                                     status=body.get("status", None),
                                     app_version=body.get("application_version", None),
                                     forked_from=body.get("forked_from", None),
+                                    parent_workflow_id=body.get(
+                                        "parent_workflow_id", None
+                                    ),
                                     name=body.get("workflow_name", None),
                                     queue_name=body.get("queue_name", None),
                                     limit=body.get("limit", None),
@@ -296,6 +299,9 @@ class ConductorWebsocket(threading.Thread):
                                     status=q_body.get("status", None),
                                     app_version=q_body.get("application_version", None),
                                     forked_from=q_body.get("forked_from", None),
+                                    parent_workflow_id=q_body.get(
+                                        "parent_workflow_id", None
+                                    ),
                                     name=q_body.get("workflow_name", None),
                                     queue_name=q_body.get("queue_name", None),
                                     limit=q_body.get("limit", None),
