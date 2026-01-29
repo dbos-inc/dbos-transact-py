@@ -1284,7 +1284,7 @@ from unittest.mock import MagicMock
 from opentelemetry.sdk._logs.export import LogExportResult
 
 
-def test_foo(monkeypatch):
+def test_log_config(monkeypatch):
     DBOS.destroy()
     EXPORTER_PATH = (
         "opentelemetry.exporter.otlp.proto.http._log_exporter.OTLPLogExporter"
@@ -1312,16 +1312,16 @@ def test_foo(monkeypatch):
         monkeypatch.setattr(dbos.logger.handlers[1], "emit", mock_otel_emit)
 
         dbos.logger.error("foo")
-        # Console logger should see this
+        # Console logger should emit this
         assert mock_console_emit.call_count == 1
         assert mock_console_emit.call_args[0][0].msg == "foo"
-        # Otel logger should also see this
+        # Otel logger should also emit this
         assert mock_otel_emit.call_count == 1
         assert mock_otel_emit.call_args[0][0].msg == "foo"
 
         dbos.logger.info("bar")
-        # Console logger should not see this
+        # Console logger should not emit this
         assert mock_console_emit.call_count == 1
-        # Otel logger should see this
+        # Otel logger should emit this
         assert mock_otel_emit.call_count == 2
         assert mock_otel_emit.call_args[0][0].msg == "bar"
