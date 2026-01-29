@@ -28,6 +28,8 @@ class DBOSConfig(TypedDict, total=False):
         sys_db_pool_size (int): System database pool size
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs (See https://docs.sqlalchemy.org/en/20/core/engines.html#sqlalchemy.create_engine)
         log_level (str): Log level
+        otlp_log_level: Optional[str]: log level specficially for OTLP logging (if enabled); must be no less severe than log_level
+        console_log_level: Optional[str]: log level specficially for console logging; must be no less severe than log_level
         otlp_traces_endpoints: List[str]: OTLP traces endpoints
         otlp_logs_endpoints: List[str]: OTLP logs endpoints
         admin_port (int): Admin port
@@ -51,6 +53,8 @@ class DBOSConfig(TypedDict, total=False):
     sys_db_pool_size: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
     log_level: Optional[str]
+    otlp_log_level: Optional[str]
+    console_log_level: Optional[str]
     otlp_traces_endpoints: Optional[List[str]]
     otlp_logs_endpoints: Optional[List[str]]
     admin_port: Optional[int]
@@ -91,6 +95,8 @@ class OTLPExporterConfig(TypedDict, total=False):
 
 class LoggerConfig(TypedDict, total=False):
     logLevel: Optional[str]
+    consoleLogLevel: Optional[str]
+    otlpLogLevel: Optional[str]
 
 
 class TelemetryConfig(TypedDict, total=False):
@@ -182,8 +188,14 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
 
     # Default to INFO -- the logging seems to default to WARN otherwise.
     log_level = config.get("log_level", "INFO")
+    otlp_log_level = config.get("otlp_log_level", log_level)
+    console_log_level = config.get("console_log_level", log_level)
     if log_level:
-        telemetry["logs"] = {"logLevel": log_level}
+        telemetry["logs"] = LoggerConfig(
+            logLevel=log_level,
+            consoleLogLevel=cast(str, console_log_level),
+            otlpLogLevel=cast(str, otlp_log_level),
+        )
     if telemetry:
         translated_config["telemetry"] = telemetry
 

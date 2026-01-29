@@ -48,6 +48,7 @@ def init_logger() -> None:
     if not dbos_logger.handlers:
         dbos_logger.propagate = False
         console_handler = logging.StreamHandler()
+        console_handler.name = "__dbos_console_log_handler__"
         console_formatter = logging.Formatter(
             "%(asctime)s [%(levelname)8s] (%(name)s:%(filename)s:%(lineno)s) %(message)s",
             datefmt="%H:%M:%S",
@@ -61,6 +62,13 @@ def config_logger(config: "ConfigFile") -> None:
     log_level = config.get("telemetry", {}).get("logs", {}).get("logLevel")  # type: ignore
     if log_level is not None:
         dbos_logger.setLevel(log_level)
+
+    # Find and update the console handler if there's a separate level for it
+    console_log_level = config.get("telemetry", {}).get("logs", {}).get("consoleLogLevel")  # type: ignore
+    if console_log_level is not None:
+        for handler in dbos_logger.handlers:
+            if handler.name == "__dbos_console_log_handler__":
+                handler.setLevel(console_log_level)
 
     # Log to the OTLP endpoint if provided
     otlp_logs_endpoints = (
@@ -109,6 +117,10 @@ def config_logger(config: "ConfigFile") -> None:
                 )
             else:
                 _otlp_handler = LoggingHandler(logger_provider=log_provider)
+                otlp_log_level = config.get("telemetry", {}).get("logs", {}).get("otlpLogLevel")  # type: ignore
+                if otlp_log_level is not None:
+                    _otlp_handler.setLevel(otlp_log_level)
+
                 # Direct DBOS logs to OTLP
                 dbos_logger.addHandler(_otlp_handler)
 

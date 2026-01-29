@@ -1,7 +1,7 @@
 # type: ignore
 
 import os
-from unittest.mock import mock_open
+from unittest.mock import mock_open, patch
 from urllib.parse import quote
 
 import pytest
@@ -1277,3 +1277,56 @@ def test_pool_connection_times_out_by_default():
 
     assert "timeout" in str(exc_info.value).lower()
     dbos.destroy()
+
+
+from unittest.mock import MagicMock
+
+from opentelemetry.sdk._logs.export import LogExportResult
+
+
+def test_log_config(monkeypatch):
+    DBOS.destroy()
+    EXPORTER_PATH = (
+        "opentelemetry.exporter.otlp.proto.http._log_exporter.OTLPLogExporter"
+    )
+    with patch(f"{EXPORTER_PATH}.export") as mock_export:
+        mock_export.return_value = LogExportResult.SUCCESS
+        config: DBOSConfig = {
+            "name": "test-app",
+            "log_level": "DEBUG",
+            "console_log_level": "ERROR",
+            "otlp_log_level": "INFO",
+            "enable_otlp": True,
+            "otlp_logs_endpoints": ["http://fake-endpoint"],
+        }
+        dbos = DBOS(config=config)
+        dbos.launch()
+        assert len(dbos.logger.handlers) == 2
+        assert dbos.logger.handlers[0].level == 40  # console handler at ERROR
+        assert dbos.logger.handlers[1].level == 20  # otlp handler at INFO
+
+        mock_console_emit = MagicMock()
+        mock_otel_emit = MagicMock()
+
+        monkeypatch.setattr(dbos.logger.handlers[0], "emit", mock_console_emit)
+        monkeypatch.setattr(dbos.logger.handlers[1], "emit", mock_otel_emit)
+
+        dbos.logger.debug("hello")
+        # Neither logger should emit this
+        assert mock_console_emit.call_count == 0
+        assert mock_otel_emit.call_count == 0
+
+        dbos.logger.error("foo")
+        # Console logger should emit this
+        assert mock_console_emit.call_count == 1
+        assert mock_console_emit.call_args[0][0].msg == "foo"
+        # Otel logger should also emit this
+        assert mock_otel_emit.call_count == 1
+        assert mock_otel_emit.call_args[0][0].msg == "foo"
+
+        dbos.logger.info("bar")
+        # Console logger should not emit this
+        assert mock_console_emit.call_count == 1
+        # Otel logger should emit this
+        assert mock_otel_emit.call_count == 2
+        assert mock_otel_emit.call_args[0][0].msg == "bar"
