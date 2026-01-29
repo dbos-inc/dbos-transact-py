@@ -117,9 +117,9 @@ def config_logger(config: "ConfigFile") -> None:
                 )
             else:
                 _otlp_handler = LoggingHandler(logger_provider=log_provider)
-                otel_log_level = config.get("telemetry", {}).get("logs", {}).get("otelLogLevel")  # type: ignore
-                if otel_log_level is not None:
-                    _otlp_handler.setLevel(otel_log_level)
+                otlp_log_level = config.get("telemetry", {}).get("logs", {}).get("otlpLogLevel")  # type: ignore
+                if otlp_log_level is not None:
+                    _otlp_handler.setLevel(otlp_log_level)
 
                 # Direct DBOS logs to OTLP
                 dbos_logger.addHandler(_otlp_handler)

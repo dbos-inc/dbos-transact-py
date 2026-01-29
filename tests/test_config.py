@@ -1295,7 +1295,7 @@ def test_log_config(monkeypatch):
             "name": "test-app",
             "log_level": "DEBUG",
             "console_log_level": "ERROR",
-            "otel_log_level": "INFO",
+            "otlp_log_level": "INFO",
             "enable_otlp": True,
             "otlp_logs_endpoints": ["http://fake-endpoint"],
         }
@@ -1310,6 +1310,11 @@ def test_log_config(monkeypatch):
 
         monkeypatch.setattr(dbos.logger.handlers[0], "emit", mock_console_emit)
         monkeypatch.setattr(dbos.logger.handlers[1], "emit", mock_otel_emit)
+
+        dbos.logger.debug("hello")
+        # Neither logger should emit this
+        assert mock_console_emit.call_count == 0
+        assert mock_otel_emit.call_count == 0
 
         dbos.logger.error("foo")
         # Console logger should emit this
