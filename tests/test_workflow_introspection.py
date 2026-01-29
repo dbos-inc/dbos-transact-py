@@ -1178,3 +1178,62 @@ async def test_async_step_timing(dbos: DBOS) -> None:
         assert s["completed_at_epoch_ms"] >= s["started_at_epoch_ms"]
         if s["function_id"] < num_steps:
             assert s["completed_at_epoch_ms"] - s["started_at_epoch_ms"] >= 100
+
+
+def test_list_workflows_by_parent(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def child_workflow(name: str) -> str:
+        return f"child_{name}"
+
+    @DBOS.workflow()
+    def parent_workflow() -> tuple[str, str, str]:
+        parent_id = DBOS.workflow_id
+        assert parent_id is not None
+        # Start multiple child workflows
+        child_workflow("sync")
+        handle1 = dbos.start_workflow(child_workflow, "async1")
+        handle2 = dbos.start_workflow(child_workflow, "async2")
+        handle1.get_result()
+        handle2.get_result()
+        return parent_id, handle1.workflow_id, handle2.workflow_id
+
+    # Run the parent workflow
+    parent_id = str(uuid.uuid4())
+    with SetWorkflowID(parent_id):
+        _, async_child1_id, async_child2_id = parent_workflow()
+
+    # The sync child workflow ID follows the pattern: parent_id-function_id
+    sync_child_id = f"{parent_id}-1"
+
+    # Verify each child handle has correct parent_workflow_id
+    sync_child_status = DBOS.get_workflow_status(sync_child_id)
+    assert sync_child_status is not None
+    assert sync_child_status.parent_workflow_id == parent_id
+
+    async_child1_status = DBOS.get_workflow_status(async_child1_id)
+    assert async_child1_status is not None
+    assert async_child1_status.parent_workflow_id == parent_id
+
+    async_child2_status = DBOS.get_workflow_status(async_child2_id)
+    assert async_child2_status is not None
+    assert async_child2_status.parent_workflow_id == parent_id
+
+    # List all workflows - should have parent + 3 children
+    all_workflows = DBOS.list_workflows()
+    assert len(all_workflows) == 4
+
+    # List workflows by parent_workflow_id - should only return the 3 children
+    children = DBOS.list_workflows(parent_workflow_id=parent_id)
+    assert len(children) == 3
+    for child in children:
+        assert child.parent_workflow_id == parent_id
+        assert child.name == child_workflow.__qualname__
+
+    # Verify parent workflow has no parent
+    parent_status = DBOS.get_workflow_status(parent_id)
+    assert parent_status is not None
+    assert parent_status.parent_workflow_id is None
+
+    # Filter with non-existent parent ID returns nothing
+    no_children = DBOS.list_workflows(parent_workflow_id="nonexistent")
+    assert len(no_children) == 0

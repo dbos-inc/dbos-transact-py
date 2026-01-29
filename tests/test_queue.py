@@ -7,7 +7,6 @@ import threading
 import time
 import uuid
 from typing import Any, List
-from urllib.parse import quote
 
 import pytest
 import sqlalchemy as sa
@@ -26,11 +25,7 @@ from dbos import (
 )
 from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandleAsync
-from dbos._error import (
-    DBOSAwaitedWorkflowCancelledError,
-    DBOSQueueDeduplicatedError,
-    MaxRecoveryAttemptsExceededError,
-)
+from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSQueueDeduplicatedError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
@@ -70,6 +65,11 @@ def test_simple_queue(dbos: DBOS) -> None:
         assert test_workflow("abc", "123") == "abcd123"
     assert wf_counter == 1
     assert step_counter == 1
+
+    # Verify started_at_epoch_ms is set correctly
+    status = handle.get_status()
+    assert status.dequeued_at and status.created_at
+    assert status.dequeued_at > status.created_at
 
 
 def test_one_at_a_time(dbos: DBOS) -> None:

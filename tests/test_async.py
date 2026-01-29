@@ -650,3 +650,41 @@ async def test_get_events_async(dbos: DBOS) -> None:
     # Should return empty dict for workflow with no events
     events2 = await DBOS.get_all_events_async(handle2.workflow_id)
     assert events2 == {}
+
+
+@pytest.mark.asyncio
+async def test_child_workflow_async(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def child_workflow(var: str) -> str:
+        return var + "_child"
+
+    @DBOS.workflow()
+    async def parent_workflow() -> tuple[str, str, str]:
+        parent_id = DBOS.workflow_id
+        assert parent_id is not None
+        result = await child_workflow("test")
+        child_handle = await dbos.start_workflow_async(child_workflow, "async")
+        child_result = await child_handle.get_result()
+        return parent_id, child_handle.workflow_id, result + child_result
+
+    # Run the parent workflow and get its ID
+    handle = await dbos.start_workflow_async(parent_workflow)
+    parent_id, async_child_id, result = await handle.get_result()
+
+    assert result == "test_childasync_child"
+
+    # Verify parent workflow has no parent
+    parent_status = await DBOS.get_workflow_status_async(parent_id)
+    assert parent_status is not None
+    assert parent_status.parent_workflow_id is None
+
+    # The synchronous child workflow ID follows the pattern: parent_id-function_id
+    sync_child_id = f"{parent_id}-1"
+    sync_child_status = await DBOS.get_workflow_status_async(sync_child_id)
+    assert sync_child_status is not None
+    assert sync_child_status.parent_workflow_id == parent_id
+
+    # The async child workflow should also have the parent ID set
+    async_child_status = await DBOS.get_workflow_status_async(async_child_id)
+    assert async_child_status is not None
+    assert async_child_status.parent_workflow_id == parent_id

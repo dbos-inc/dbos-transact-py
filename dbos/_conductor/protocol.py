@@ -138,6 +138,7 @@ class ListWorkflowsBody(TypedDict, total=False):
     status: Optional[str]
     application_version: Optional[str]
     forked_from: Optional[str]
+    parent_workflow_id: Optional[str]
     queue_name: Optional[str]
     limit: Optional[int]
     offset: Optional[int]
@@ -173,6 +174,8 @@ class WorkflowsOutput:
     Priority: Optional[str]
     QueuePartitionKey: Optional[str]
     ForkedFrom: Optional[str]
+    ParentWorkflowID: Optional[str]
+    DequeuedAt: Optional[str]
 
     @classmethod
     def from_workflow_information(cls, info: WorkflowStatus) -> "WorkflowsOutput":
@@ -198,6 +201,9 @@ class WorkflowsOutput:
             else None
         )
         priority_str = str(info.priority) if info.priority is not None else None
+        dequeued_at_str = (
+            str(info.dequeued_at) if info.dequeued_at is not None else None
+        )
 
         return cls(
             WorkflowUUID=info.workflow_id,
@@ -222,6 +228,8 @@ class WorkflowsOutput:
             Priority=priority_str,
             QueuePartitionKey=info.queue_partition_key,
             ForkedFrom=info.forked_from,
+            ParentWorkflowID=info.parent_workflow_id,
+            DequeuedAt=dequeued_at_str,
         )
 
 
@@ -280,6 +288,7 @@ class ListQueuedWorkflowsBody(TypedDict, total=False):
     status: Optional[str]
     application_version: Optional[str]
     forked_from: Optional[str]
+    parent_workflow_id: Optional[str]
     queue_name: Optional[str]
     limit: Optional[int]
     offset: Optional[int]
