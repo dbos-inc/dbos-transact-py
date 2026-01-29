@@ -91,6 +91,8 @@ class OTLPExporterConfig(TypedDict, total=False):
 
 class LoggerConfig(TypedDict, total=False):
     logLevel: Optional[str]
+    consoleLogLevel: Optional[str]
+    otelLogLevel: Optional[str]
 
 
 class TelemetryConfig(TypedDict, total=False):
@@ -182,8 +184,14 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
 
     # Default to INFO -- the logging seems to default to WARN otherwise.
     log_level = config.get("log_level", "INFO")
+    otel_log_level = config.get("otel_log_level", log_level)
+    console_log_level = config.get("console_log_level", log_level)
     if log_level:
-        telemetry["logs"] = {"logLevel": log_level}
+        telemetry["logs"] = LoggerConfig(
+            logLevel=log_level,
+            consoleLogLevel=cast(str, console_log_level),
+            otelLogLevel=cast(str, otel_log_level),
+        )
     if telemetry:
         translated_config["telemetry"] = telemetry
 
