@@ -1,4 +1,7 @@
-from typing import Optional
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, List, Optional, TypeAlias, TypedDict
 
 from sqlalchemy import (
     BigInteger,
@@ -193,3 +196,64 @@ class SystemSchema:
         Column("serialization", Text()),
         PrimaryKeyConstraint("workflow_uuid", "key", "offset"),
     )
+
+
+# ---------- Canonical JSON value space for use in serialized columns ----------
+# Note the absence of datetime/date/etc.
+# Canonical Date = RFC 3339 / ISO-8601 UTC string: YYYY-MM-DDTHH:mm:ss(.sss)Z
+
+JsonPrimitive: TypeAlias = None | bool | int | float | str
+JsonArray: TypeAlias = List["JsonValue"]
+JsonObject: TypeAlias = Dict[str, "JsonValue"]
+JsonValue: TypeAlias = JsonPrimitive | JsonObject | JsonArray
+
+
+# ---------- Workflow args + result ----------
+class JsonWorkflowArgs(TypedDict, total=False):
+    positionalArgs: JsonArray
+    namedArgs: JsonObject
+
+
+JsonWorkflowResult: TypeAlias = JsonValue
+
+
+class JsonWorkflowErrorData(TypedDict, total=False):
+    """
+    Portable error payload to store in DB / exchange across languages.
+    """
+
+    name: str  # error name / type
+    message: str  # human-readable message
+    code: int | str | None  # portable app/code
+    data: JsonValue | None  # structured details (retryable, origin, etc.)
+
+
+@dataclass(eq=False)
+class PortableWorkflowError(Exception):
+    """
+    A Python exception that carries a portable, JSON-serializable payload.
+
+    Mirrors the TS:
+      new PortableWorkflowError(message, name, code?, data?)
+    """
+
+    message: str
+    name: str
+    code: int | str | None = None
+    data: JsonValue | None = None
+
+    def __str__(self) -> str:
+        return self.message
+
+    def to_error_data(self) -> JsonWorkflowErrorData:
+        out: JsonWorkflowErrorData = {"name": self.name, "message": self.message}
+        if self.code is not None:
+            out["code"] = self.code
+        if self.data is not None:
+            out["data"] = self.data
+        return out
+
+
+# --------- Notification (Message) and WF event ----------
+JsonMessage: TypeAlias = JsonValue
+JsonEvent: TypeAlias = JsonValue
