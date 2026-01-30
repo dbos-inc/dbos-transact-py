@@ -79,6 +79,7 @@ class SystemSchema:
         Column("forked_from", Text()),
         Column("owner_xid", Text()),
         Column("parent_workflow_id", Text()),
+        Column("serialization", Text()),
         Index("workflow_status_created_at_index", "created_at"),
         Index("workflow_status_executor_id_index", "executor_id"),
         Index("workflow_status_status_index", "status"),
@@ -107,6 +108,7 @@ class SystemSchema:
         Column("child_workflow_id", Text, nullable=True),
         Column("started_at_epoch_ms", BigInteger, nullable=True),
         Column("completed_at_epoch_ms", BigInteger, nullable=True),
+        Column("serialization", Text()),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
     )
 
@@ -133,6 +135,7 @@ class SystemSchema:
             Text,
             nullable=False,
         ),
+        Column("serialization", Text()),
         Index("idx_workflow_topic", "destination_uuid", "topic"),
     )
 
@@ -149,6 +152,7 @@ class SystemSchema:
         ),
         Column("key", Text, nullable=False),
         Column("value", Text, nullable=False),
+        Column("serialization", Text()),
         PrimaryKeyConstraint("workflow_uuid", "key"),
     )
 
@@ -167,6 +171,7 @@ class SystemSchema:
         Column("key", Text, nullable=False),
         Column("value", Text, nullable=False),
         Column("function_id", Integer, nullable=False),
+        Column("serialization", Text()),
         PrimaryKeyConstraint("workflow_uuid", "key", "function_id"),
     )
 
@@ -185,5 +190,6 @@ class SystemSchema:
         Column("value", Text, nullable=False),
         Column("offset", Integer, nullable=False),
         Column("function_id", Integer, nullable=False),
+        Column("serialization", Text()),
         PrimaryKeyConstraint("workflow_uuid", "key", "offset"),
     )
