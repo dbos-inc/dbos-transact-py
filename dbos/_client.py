@@ -232,6 +232,7 @@ class DBOSClient:
             "parent_workflow_id": None,
             "started_at_epoch_ms": None,
             "owner_xid": None,
+            "serialization": None,  # TODO Serialization
         }
 
         self._sys_db.init_workflow(
@@ -305,6 +306,7 @@ class DBOSClient:
             "parent_workflow_id": None,
             "started_at_epoch_ms": None,
             "owner_xid": None,
+            "serialization": None,  # TODO Serialization
         }
         with self._sys_db.engine.begin() as conn:
             self._sys_db._insert_workflow_status(

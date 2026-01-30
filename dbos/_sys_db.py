@@ -166,6 +166,7 @@ class WorkflowStatusInternal(TypedDict):
     forked_from: Optional[str]
     parent_workflow_id: Optional[str]
     started_at_epoch_ms: Optional[int]
+    serialization: Optional[str]
     owner_xid: Optional[str]
 
 
@@ -193,6 +194,7 @@ class EnqueueOptionsInternal(TypedDict):
 class RecordedResult(TypedDict):
     output: Optional[str]  # Serialized
     error: Optional[str]  # Serialized
+    serialization: Optional[str]
     child_workflow_id: Optional[str]
 
 
@@ -202,6 +204,7 @@ class OperationResultInternal(TypedDict):
     function_name: str
     output: Optional[str]  # Serialized
     error: Optional[str]  # Serialized
+    serialization: Optional[str]
     started_at_epoch_ms: int
 
 
@@ -894,6 +897,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.forked_from,
                     SystemSchema.workflow_status.c.parent_workflow_id,
                     SystemSchema.workflow_status.c.started_at_epoch_ms,
+                    SystemSchema.workflow_status.c.serialization,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -925,6 +929,7 @@ class SystemDatabase(ABC):
                 "forked_from": row[20],
                 "parent_workflow_id": row[21],
                 "started_at_epoch_ms": row[22],
+                "serialization": row[23],
                 "owner_xid": None,
             }
             return status
@@ -965,14 +970,17 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.status,
                         SystemSchema.workflow_status.c.output,
                         SystemSchema.workflow_status.c.error,
+                        SystemSchema.workflow_status.c.serialization,
                     ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
                 ).fetchone()
                 if row is not None:
                     status = row[0]
                     if status == WorkflowStatusString.SUCCESS.value:
+                        # TODO Deserialize
                         output = row[1]
                         return self.serializer.deserialize(output)
                     elif status == WorkflowStatusString.ERROR.value:
+                        # TODO Deserialize
                         error = row[2]
                         e: Exception = self.serializer.deserialize(error)
                         raise e
@@ -1045,6 +1053,8 @@ class SystemDatabase(ABC):
         if load_output:
             load_columns.append(SystemSchema.workflow_status.c.output)
             load_columns.append(SystemSchema.workflow_status.c.error)
+        if load_input or load_output:
+            load_columns.append(SystemSchema.workflow_status.c.serialization)
 
         if queues_only:
             query = sa.select(*load_columns).where(
@@ -1149,12 +1159,18 @@ class SystemDatabase(ABC):
                 idx += 1
             raw_output = row[idx] if load_output else None
             raw_error = row[idx + 1] if load_output else None
+            if load_output:
+                idx += 2
+            serialization = row[idx] if load_input or load_output else None
+            if load_input or load_output:
+                idx += 1
             inputs, output, exception = safe_deserialize(
                 self.serializer,
                 info.workflow_id,
                 serialized_input=raw_input,
                 serialized_output=raw_output,
                 serialized_exception=raw_error,
+                # TODO Serialization
             )
             info.input = inputs
             info.output = output
@@ -1198,6 +1214,7 @@ class SystemDatabase(ABC):
                     SystemSchema.operation_outputs.c.child_workflow_id,
                     SystemSchema.operation_outputs.c.started_at_epoch_ms,
                     SystemSchema.operation_outputs.c.completed_at_epoch_ms,
+                    SystemSchema.operation_outputs.c.serialization,
                 )
                 .where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
                 .order_by(SystemSchema.operation_outputs.c.function_id)
@@ -1210,6 +1227,7 @@ class SystemDatabase(ABC):
                     serialized_input=None,
                     serialized_output=row[2],
                     serialized_exception=row[3],
+                    # TODO Serialization (row[7])
                 )
                 step = StepInfo(
                     function_id=row[0],
@@ -1269,6 +1287,7 @@ class SystemDatabase(ABC):
                     completed_at_epoch_ms=completed_at_epoch_ms,
                     output=output,
                     error=error,
+                    # TODO Serialization
                 )
                 .on_conflict_do_nothing(
                     index_elements=[
@@ -1326,6 +1345,7 @@ class SystemDatabase(ABC):
                 output=output,
                 error=error,
                 child_workflow_id=result_workflow_id,
+                # TODO Serialization
             )
             .on_conflict_do_nothing()
         )
@@ -1382,6 +1402,7 @@ class SystemDatabase(ABC):
             SystemSchema.operation_outputs.c.error,
             SystemSchema.operation_outputs.c.function_name,
             SystemSchema.operation_outputs.c.child_workflow_id,
+            SystemSchema.operation_outputs.c.serialization,
         ).where(
             (SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
             & (SystemSchema.operation_outputs.c.function_id == function_id)
@@ -1410,11 +1431,12 @@ class SystemDatabase(ABC):
             return None
 
         # Extract operation output data
-        output, error, recorded_function_name, child_workflow_id = (
+        output, error, recorded_function_name, child_workflow_id, serialization = (
             operation_output_rows[0][0],
             operation_output_rows[0][1],
             operation_output_rows[0][2],
             operation_output_rows[0][3],
+            operation_output_rows[0][4],
         )
 
         # If the provided and recorded function name are different, throw an exception
@@ -1429,6 +1451,7 @@ class SystemDatabase(ABC):
         result: RecordedResult = {
             "output": output,
             "error": error,
+            "serialization": serialization,
             "child_workflow_id": child_workflow_id,
         }
         return result
@@ -1474,6 +1497,7 @@ class SystemDatabase(ABC):
                         destination_uuid=destination_uuid,
                         topic=topic,
                         message=self.serializer.serialize(message),
+                        # TODO Serialization
                     )
                 )
             except DBAPIError as dbapi_error:
@@ -1489,6 +1513,7 @@ class SystemDatabase(ABC):
                 "started_at_epoch_ms": start_time,
                 "output": None,
                 "error": None,
+                "serialization": None,
             }
             self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
 
@@ -1512,6 +1537,7 @@ class SystemDatabase(ABC):
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying recv, id: {function_id}, topic: {topic}")
             if recorded_output["output"] is not None:
+                # TODO Serialization
                 return self.serializer.deserialize(recorded_output["output"])
             else:
                 raise Exception("No output recorded in the last recv")
@@ -1574,7 +1600,10 @@ class SystemDatabase(ABC):
                         .scalar_subquery()
                     ),
                 )
-                .returning(SystemSchema.notifications.c.message)
+                .returning(
+                    SystemSchema.notifications.c.message,
+                    SystemSchema.notifications.c.serialization,
+                )
             )
             rows = c.execute(delete_stmt).fetchall()
             message: Any = None
@@ -1589,6 +1618,7 @@ class SystemDatabase(ABC):
                     "output": self.serializer.serialize(
                         message
                     ),  # None will be serialized to 'null'
+                    "serialization": None,  # TODO Serialization
                     "error": None,
                 },
                 int(time.time() * 1000),
@@ -1704,6 +1734,7 @@ class SystemDatabase(ABC):
                         "started_at_epoch_ms": start_time,
                         "output": self.serializer.serialize(end_time),
                         "error": None,
+                        "serialization": None,  # TODO Serialization
                     }
                 )
             except DBOSWorkflowConflictIDError:
@@ -1738,6 +1769,7 @@ class SystemDatabase(ABC):
                     workflow_uuid=workflow_uuid,
                     key=key,
                     value=self.serializer.serialize(message),
+                    # TODO Serialization
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key"],
@@ -1751,6 +1783,7 @@ class SystemDatabase(ABC):
                     function_id=function_id,
                     key=key,
                     value=self.serializer.serialize(message),
+                    # TODO Serialization
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key", "function_id"],
@@ -1764,6 +1797,7 @@ class SystemDatabase(ABC):
                 "started_at_epoch_ms": start_time,
                 "output": None,
                 "error": None,
+                "serialization": None,
             }
             self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
 
@@ -1781,6 +1815,7 @@ class SystemDatabase(ABC):
                     workflow_uuid=workflow_uuid,
                     key=key,
                     value=self.serializer.serialize(message),
+                    # TODO Serialization
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key"],
@@ -1794,6 +1829,7 @@ class SystemDatabase(ABC):
                     function_id=function_id,
                     key=key,
                     value=self.serializer.serialize(message),
+                    # TODO Serialization
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key", "function_id"],
@@ -1821,6 +1857,7 @@ class SystemDatabase(ABC):
             events: Dict[str, Any] = {}
             for row in rows:
                 key = row[0]
+                # TODO Serialization
                 value = self.serializer.deserialize(row[1])
                 events[key] = value
 
@@ -1838,6 +1875,7 @@ class SystemDatabase(ABC):
         start_time = int(time.time() * 1000)
         get_sql = sa.select(
             SystemSchema.workflow_events.c.value,
+            # TODO Serialization
         ).where(
             SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
             SystemSchema.workflow_events.c.key == key,
@@ -1877,6 +1915,7 @@ class SystemDatabase(ABC):
 
         value: Any = None
         if len(init_recv) > 0:
+            # TODO Serializer
             value = self.serializer.deserialize(init_recv[0][0])
         else:
             # Wait for the notification
@@ -1895,6 +1934,7 @@ class SystemDatabase(ABC):
             with self.engine.begin() as c:
                 final_recv = c.execute(get_sql).fetchall()
                 if len(final_recv) > 0:
+                    # TODO Deserialize
                     value = self.serializer.deserialize(final_recv[0][0])
         condition.release()
         self.workflow_events_map.pop(payload)
@@ -1910,6 +1950,7 @@ class SystemDatabase(ABC):
                     "output": self.serializer.serialize(
                         value
                     ),  # None will be serialized to 'null'
+                    "serialization": None,  # TODO Serialization
                     "error": None,
                 }
             )
@@ -2154,6 +2195,7 @@ class SystemDatabase(ABC):
                 ctx.workflow_id, ctx.function_id, function_name
             )
             if res is not None:
+                # TODO Serialization
                 if res["output"] is not None:
                     resstat: SystemDatabase.T = self.serializer.deserialize(
                         res["output"]
@@ -2174,6 +2216,7 @@ class SystemDatabase(ABC):
                     "function_id": ctx.function_id,
                     "function_name": function_name,
                     "started_at_epoch_ms": start_time,
+                    "serialization": None,  # TODO Serialization
                     "output": self.serializer.serialize(result),
                     "error": None,
                 }
@@ -2198,7 +2241,7 @@ class SystemDatabase(ABC):
         is_dequeued_request: Optional[bool],
     ) -> tuple[WorkflowStatuses, Optional[int], bool]:
         """
-        Synchronously record the status and inputs for workflows in a single transaction
+        Record the initial status and inputs for a workflow, and indicate if this is a new record
         """
         with self.engine.begin() as conn:
             wf_status, workflow_deadline_epoch_ms, should_execute = (
@@ -2245,6 +2288,7 @@ class SystemDatabase(ABC):
             )
 
             # Serialize the value before storing
+            # TODO Serialization
             serialized_value = self.serializer.serialize(value)
 
             # Insert the new stream entry
@@ -2298,6 +2342,7 @@ class SystemDatabase(ABC):
             )
 
             # Serialize the value before storing
+            # TODO Serialization
             serialized_value = self.serializer.serialize(value)
 
             # Insert the new stream entry
@@ -2317,6 +2362,7 @@ class SystemDatabase(ABC):
                 "started_at_epoch_ms": start_time,
                 "output": None,
                 "error": None,
+                "serialization": None,  # TODO Serialization
             }
             self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
 
@@ -2345,6 +2391,7 @@ class SystemDatabase(ABC):
                 )
 
             # Deserialize the value before returning
+            # TODO Serialization
             return self.serializer.deserialize(result[0])
 
     def garbage_collect(
@@ -2496,6 +2543,7 @@ class SystemDatabase(ABC):
                     "output": None,
                     "error": None,
                     "started_at_epoch_ms": int(time.time() * 1000),
+                    "serialization": None,
                 }
                 self._record_operation_result_txn(result, int(time.time() * 1000), c)
                 return True
@@ -2602,6 +2650,7 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.queue_partition_key,
                         SystemSchema.workflow_status.c.forked_from,
                         SystemSchema.workflow_status.c.parent_workflow_id,
+                        SystemSchema.workflow_status.c.serialization,
                     ).where(SystemSchema.workflow_status.c.workflow_uuid == wf_id)
                 ).fetchone()
 
@@ -2635,6 +2684,7 @@ class SystemDatabase(ABC):
                     "queue_partition_key": status_row[23],
                     "forked_from": status_row[24],
                     "parent_workflow_id": status_row[25],
+                    "serialization": status_row[26],
                 }
 
                 # Export operation_outputs
@@ -2648,6 +2698,7 @@ class SystemDatabase(ABC):
                         SystemSchema.operation_outputs.c.child_workflow_id,
                         SystemSchema.operation_outputs.c.started_at_epoch_ms,
                         SystemSchema.operation_outputs.c.completed_at_epoch_ms,
+                        SystemSchema.operation_outputs.c.serialization,
                     ).where(SystemSchema.operation_outputs.c.workflow_uuid == wf_id)
                 ).fetchall()
 
@@ -2661,6 +2712,7 @@ class SystemDatabase(ABC):
                         "child_workflow_id": row[5],
                         "started_at_epoch_ms": row[6],
                         "completed_at_epoch_ms": row[7],
+                        "serialization": row[8],
                     }
                     for row in output_rows
                 ]
@@ -2671,6 +2723,7 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_events.c.workflow_uuid,
                         SystemSchema.workflow_events.c.key,
                         SystemSchema.workflow_events.c.value,
+                        SystemSchema.workflow_events.c.serialization,
                     ).where(SystemSchema.workflow_events.c.workflow_uuid == wf_id)
                 ).fetchall()
 
@@ -2679,6 +2732,7 @@ class SystemDatabase(ABC):
                         "workflow_uuid": row[0],
                         "key": row[1],
                         "value": row[2],
+                        "serialization": row[3],
                     }
                     for row in event_rows
                 ]
@@ -2690,6 +2744,7 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_events_history.c.key,
                         SystemSchema.workflow_events_history.c.value,
                         SystemSchema.workflow_events_history.c.function_id,
+                        SystemSchema.workflow_events_history.c.serialization,
                     ).where(
                         SystemSchema.workflow_events_history.c.workflow_uuid == wf_id
                     )
@@ -2701,6 +2756,7 @@ class SystemDatabase(ABC):
                         "key": row[1],
                         "value": row[2],
                         "function_id": row[3],
+                        "serialization": row[4],
                     }
                     for row in history_rows
                 ]
@@ -2713,6 +2769,7 @@ class SystemDatabase(ABC):
                         SystemSchema.streams.c.value,
                         SystemSchema.streams.c.offset,
                         SystemSchema.streams.c.function_id,
+                        SystemSchema.streams.c.serialization,
                     ).where(SystemSchema.streams.c.workflow_uuid == wf_id)
                 ).fetchall()
 
@@ -2723,6 +2780,7 @@ class SystemDatabase(ABC):
                         "value": row[2],
                         "offset": row[3],
                         "function_id": row[4],
+                        "serialization": row[5],
                     }
                     for row in stream_rows
                 ]
@@ -2779,6 +2837,7 @@ class SystemDatabase(ABC):
                         queue_partition_key=status["queue_partition_key"],
                         forked_from=status["forked_from"],
                         parent_workflow_id=status.get("parent_workflow_id"),
+                        serialization=status.get("serialization"),
                     )
                 )
 
@@ -2794,6 +2853,7 @@ class SystemDatabase(ABC):
                             child_workflow_id=output["child_workflow_id"],
                             started_at_epoch_ms=output["started_at_epoch_ms"],
                             completed_at_epoch_ms=output["completed_at_epoch_ms"],
+                            serialization=output["serialization"],
                         )
                     )
 
@@ -2804,6 +2864,7 @@ class SystemDatabase(ABC):
                             workflow_uuid=event["workflow_uuid"],
                             key=event["key"],
                             value=event["value"],
+                            serialization=event["serialization"],
                         )
                     )
 
@@ -2815,6 +2876,7 @@ class SystemDatabase(ABC):
                             key=history["key"],
                             value=history["value"],
                             function_id=history["function_id"],
+                            serialization=history["serialization"],
                         )
                     )
 
@@ -2827,5 +2889,6 @@ class SystemDatabase(ABC):
                             value=stream["value"],
                             offset=stream["offset"],
                             function_id=stream["function_id"],
+                            serialization=stream["serialization"],
                         )
                     )
