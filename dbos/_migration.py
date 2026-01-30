@@ -411,6 +411,15 @@ ALTER TABLE workflow_status ADD COLUMN "parent_workflow_id" TEXT DEFAULT NULL;
 CREATE INDEX "idx_workflow_status_parent_workflow_id" ON "workflow_status" ("parent_workflow_id");
 """
 
+sqlite_migration_nine = """
+ALTER TABLE "workflow_status" ADD COLUMN "serialization" TEXT DEFAULT NULL;
+ALTER TABLE "notifications" ADD COLUMN "serialization" TEXT DEFAULT NULL;
+ALTER TABLE "workflow_events" ADD COLUMN "serialization" TEXT DEFAULT NULL;
+ALTER TABLE "workflow_events_history" ADD COLUMN "serialization" TEXT DEFAULT NULL;
+ALTER TABLE "operation_outputs" ADD COLUMN "serialization" TEXT DEFAULT NULL;
+ALTER TABLE "streams" ADD COLUMN "serialization" TEXT DEFAULT NULL;
+"""
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -420,4 +429,5 @@ sqlite_migrations = [
     sqlite_migration_six,
     sqlite_migration_seven,
     sqlite_migration_eight,
+    sqlite_migration_nine,
 ]
