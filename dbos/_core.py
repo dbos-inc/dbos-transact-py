@@ -363,6 +363,7 @@ def _init_workflow(
         ),
         "started_at_epoch_ms": None,
         "owner_xid": None,
+        "serialization": None,  # TODO Serialization
     }
 
     # Synchronously record the status and inputs for workflows
@@ -384,6 +385,7 @@ def _init_workflow(
                 "function_name": wf_name,
                 "output": None,
                 "error": dbos._serializer.serialize(e),
+                "serialization": None,  # TODO Serialization
                 "started_at_epoch_ms": int(time.time() * 1000),
             }
             dbos._sys_db.record_operation_result(result)
@@ -1047,6 +1049,7 @@ def decorate_transaction(
                         "function_id": ctx.function_id,
                         "output": None,
                         "error": None,
+                        "serialization": None,
                         "txn_snapshot": "",  # TODO: add actual snapshot
                         "executor_id": None,
                         "txn_id": None,
@@ -1058,6 +1061,7 @@ def decorate_transaction(
                         "function_name": transaction_name,
                         "output": None,
                         "error": None,
+                        "serialization": None,
                         "started_at_epoch_ms": int(time.time() * 1000),
                     }
                     retry_wait_seconds = 0.001
@@ -1095,6 +1099,9 @@ def decorate_transaction(
                                         )
                                         has_recorded_error = True
                                         step_output["error"] = recorded_output["error"]
+                                        step_output["serialization"] = recorded_output[
+                                            "serialization"
+                                        ]
                                         dbos._sys_db.record_operation_result(
                                             step_output
                                         )
@@ -1102,6 +1109,9 @@ def decorate_transaction(
                                     elif recorded_output["output"]:
                                         step_output["output"] = recorded_output[
                                             "output"
+                                        ]
+                                        step_output["serialization"] = recorded_output[
+                                            "serialization"
                                         ]
                                         dbos._sys_db.record_operation_result(
                                             step_output
@@ -1119,6 +1129,7 @@ def decorate_transaction(
                                     )
 
                                 output = func(*args, **kwargs)
+                                # TODO: Serialization
                                 txn_output["output"] = dbos._serializer.serialize(
                                     output
                                 )
@@ -1268,15 +1279,18 @@ def invoke_step(
             "function_name": step_name,
             "output": None,
             "error": None,
+            "serialization": None,
             "started_at_epoch_ms": step_start_time,
         }
 
         try:
             output = func()
         except Exception as error:
+            # TODO: Serialization
             step_output["error"] = dbos._serializer.serialize(error)
             dbos._sys_db.record_operation_result(step_output)
             raise
+        # TODO: Serialization
         step_output["output"] = dbos._serializer.serialize(output)
         dbos._sys_db.record_operation_result(step_output)
         return output
