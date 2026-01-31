@@ -996,32 +996,44 @@ class SystemDatabase(ABC):
         self,
         *,
         workflow_ids: Optional[List[str]] = None,
-        status: Optional[Union[str, List[str]]] = None,
+        status: Optional[str | list[str]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
-        name: Optional[str] = None,
-        app_version: Optional[str] = None,
-        forked_from: Optional[str] = None,
-        parent_workflow_id: Optional[str] = None,
-        user: Optional[str] = None,
-        queue_name: Optional[str] = None,
+        name: Optional[str | list[str]] = None,
+        app_version: Optional[str | list[str]] = None,
+        forked_from: Optional[str | list[str]] = None,
+        parent_workflow_id: Optional[str | list[str]] = None,
+        user: Optional[str | list[str]] = None,
+        queue_name: Optional[str | list[str]] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         sort_desc: bool = False,
-        workflow_id_prefix: Optional[str] = None,
+        workflow_id_prefix: Optional[str | list[str]] = None,
         load_input: bool = True,
         load_output: bool = True,
-        executor_id: Optional[str] = None,
+        executor_id: Optional[str | list[str]] = None,
         queues_only: bool = False,
     ) -> List[WorkflowStatus]:
         """
         Retrieve a list of workflows based on the search criteria.
         Returns a list of WorkflowStatus objects.
         """
-        # Normalize status to a list
-        status_list: Optional[List[str]] = (
-            status if status is None or isinstance(status, list) else [status]
-        )
+
+        # Normalize string-or-list parameters to lists
+        def _to_list(val: Optional[str | list[str]]) -> Optional[list[str]]:
+            if val is None:
+                return None
+            return val if isinstance(val, list) else [val]
+
+        status_list = _to_list(status)
+        name_list = _to_list(name)
+        app_version_list = _to_list(app_version)
+        forked_from_list = _to_list(forked_from)
+        parent_workflow_id_list = _to_list(parent_workflow_id)
+        user_list = _to_list(user)
+        queue_name_list = _to_list(queue_name)
+        executor_id_list = _to_list(executor_id)
+        prefix_list = _to_list(workflow_id_prefix)
 
         load_columns = [
             SystemSchema.workflow_status.c.workflow_uuid,
@@ -1070,11 +1082,11 @@ class SystemDatabase(ABC):
             query = query.order_by(SystemSchema.workflow_status.c.created_at.desc())
         else:
             query = query.order_by(SystemSchema.workflow_status.c.created_at.asc())
-        if name:
-            query = query.where(SystemSchema.workflow_status.c.name == name)
-        if user:
+        if name_list:
+            query = query.where(SystemSchema.workflow_status.c.name.in_(name_list))
+        if user_list:
             query = query.where(
-                SystemSchema.workflow_status.c.authenticated_user == user
+                SystemSchema.workflow_status.c.authenticated_user.in_(user_list)
             )
         if start_time:
             query = query.where(
@@ -1088,33 +1100,42 @@ class SystemDatabase(ABC):
             )
         if status_list:
             query = query.where(SystemSchema.workflow_status.c.status.in_(status_list))
-        if app_version:
+        if app_version_list:
             query = query.where(
-                SystemSchema.workflow_status.c.application_version == app_version
+                SystemSchema.workflow_status.c.application_version.in_(app_version_list)
             )
-        if forked_from:
+        if forked_from_list:
             query = query.where(
-                SystemSchema.workflow_status.c.forked_from == forked_from
+                SystemSchema.workflow_status.c.forked_from.in_(forked_from_list)
             )
-        if parent_workflow_id:
+        if parent_workflow_id_list:
             query = query.where(
-                SystemSchema.workflow_status.c.parent_workflow_id == parent_workflow_id
+                SystemSchema.workflow_status.c.parent_workflow_id.in_(
+                    parent_workflow_id_list
+                )
             )
         if workflow_ids:
             query = query.where(
                 SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids)
             )
-        if workflow_id_prefix:
+        if prefix_list:
             query = query.where(
-                SystemSchema.workflow_status.c.workflow_uuid.startswith(
-                    workflow_id_prefix, autoescape=True
+                sa.or_(
+                    *[
+                        SystemSchema.workflow_status.c.workflow_uuid.startswith(
+                            p, autoescape=True
+                        )
+                        for p in prefix_list
+                    ]
                 )
             )
-        if queue_name:
-            query = query.where(SystemSchema.workflow_status.c.queue_name == queue_name)
-        if executor_id:
+        if queue_name_list:
             query = query.where(
-                SystemSchema.workflow_status.c.executor_id == executor_id
+                SystemSchema.workflow_status.c.queue_name.in_(queue_name_list)
+            )
+        if executor_id_list:
+            query = query.where(
+                SystemSchema.workflow_status.c.executor_id.in_(executor_id_list)
             )
         if limit:
             query = query.limit(limit)
