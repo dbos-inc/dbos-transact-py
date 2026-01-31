@@ -1,7 +1,7 @@
 import json
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Type, TypedDict, TypeVar
+from typing import Dict, List, Optional, Type, TypedDict, TypeVar, Union
 
 from dbos._sys_db import StepInfo, WorkflowStatus
 
@@ -131,22 +131,22 @@ class RestartResponse(BaseMessage):
 
 class ListWorkflowsBody(TypedDict, total=False):
     workflow_uuids: List[str]
-    workflow_name: Optional[str]
-    authenticated_user: Optional[str]
+    workflow_name: Optional[Union[str, List[str]]]
+    authenticated_user: Optional[Union[str, List[str]]]
     start_time: Optional[str]
     end_time: Optional[str]
-    status: Optional[str]
-    application_version: Optional[str]
-    forked_from: Optional[str]
-    parent_workflow_id: Optional[str]
-    queue_name: Optional[str]
+    status: Optional[Union[str, List[str]]]
+    application_version: Optional[Union[str, List[str]]]
+    forked_from: Optional[Union[str, List[str]]]
+    parent_workflow_id: Optional[Union[str, List[str]]]
+    queue_name: Optional[Union[str, List[str]]]
     limit: Optional[int]
     offset: Optional[int]
     sort_desc: bool
-    workflow_id_prefix: Optional[str]
+    workflow_id_prefix: Optional[Union[str, List[str]]]
     load_input: bool
     load_output: bool
-    executor_id: Optional[str]
+    executor_id: Optional[Union[str, List[str]]]
     queues_only: bool
 
 
@@ -281,22 +281,22 @@ class ListWorkflowsResponse(BaseMessage):
 
 class ListQueuedWorkflowsBody(TypedDict, total=False):
     workflow_uuids: List[str]
-    workflow_name: Optional[str]
-    authenticated_user: Optional[str]
+    workflow_name: Optional[Union[str, List[str]]]
+    authenticated_user: Optional[Union[str, List[str]]]
     start_time: Optional[str]
     end_time: Optional[str]
-    status: Optional[str]
-    application_version: Optional[str]
-    forked_from: Optional[str]
-    parent_workflow_id: Optional[str]
-    queue_name: Optional[str]
+    status: Optional[Union[str, List[str]]]
+    application_version: Optional[Union[str, List[str]]]
+    forked_from: Optional[Union[str, List[str]]]
+    parent_workflow_id: Optional[Union[str, List[str]]]
+    queue_name: Optional[Union[str, List[str]]]
     limit: Optional[int]
     offset: Optional[int]
     sort_desc: bool
-    workflow_id_prefix: Optional[str]
+    workflow_id_prefix: Optional[Union[str, List[str]]]
     load_input: bool
     load_output: bool
-    executor_id: Optional[str]
+    executor_id: Optional[Union[str, List[str]]]
 
 
 @dataclass
