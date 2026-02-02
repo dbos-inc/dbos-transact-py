@@ -1187,11 +1187,11 @@ class SystemDatabase(ABC):
                 idx += 1
             inputs, output, exception = safe_deserialize(
                 self.serializer,
+                serialization,
                 info.workflow_id,
                 serialized_input=raw_input,
                 serialized_output=raw_output,
                 serialized_exception=raw_error,
-                # TODO Serialization
             )
             info.input = inputs
             info.output = output
@@ -1244,11 +1244,11 @@ class SystemDatabase(ABC):
             for row in rows:
                 _, output, exception = safe_deserialize(
                     self.serializer,
+                    row[7],
                     workflow_id,
                     serialized_input=None,
                     serialized_output=row[2],
                     serialized_exception=row[3],
-                    # TODO Serialization (row[7])
                 )
                 step = StepInfo(
                     function_id=row[0],
