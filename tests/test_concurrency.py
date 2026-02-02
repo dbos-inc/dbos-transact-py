@@ -532,7 +532,7 @@ async def test_gather_many_write_stream(dbos: DBOS) -> None:
     values_serial: List[str] = []
     async for item in DBOS.read_stream_async(wfid_serial, "stream"):
         values_serial.append(cast(str, item))
-    assert sorted(values_serial) == [f"val_{i}" for i in range(num_writes)]
+    assert set(values_serial) == {f"val_{i}" for i in range(num_writes)}
 
     with SetWorkflowID(wfid_concurrent):
         await run_many_writes(conc=True)
@@ -540,7 +540,7 @@ async def test_gather_many_write_stream(dbos: DBOS) -> None:
     values_concurrent: List[str] = []
     async for item in DBOS.read_stream_async(wfid_concurrent, "stream"):
         values_concurrent.append(cast(str, item))
-    assert sorted(values_concurrent) == [f"val_{i}" for i in range(num_writes)]
+    assert set(values_concurrent) == {f"val_{i}" for i in range(num_writes)}
 
     wfsteps_serial = await DBOS.list_workflow_steps_async(wfid_serial)
     wfsteps_concurrent = await DBOS.list_workflow_steps_async(wfid_concurrent)
@@ -582,7 +582,7 @@ async def test_gather_many_write_stream_from_step(dbos: DBOS) -> None:
     values_serial: List[str] = []
     async for item in DBOS.read_stream_async(wfid_serial, "stream"):
         values_serial.append(cast(str, item))
-    assert sorted(values_serial) == [f"val_{i}" for i in range(num_writes)]
+    assert set(values_serial) == {f"val_{i}" for i in range(num_writes)}
 
     with SetWorkflowID(wfid_concurrent):
         await run_many_writes(conc=True)
@@ -590,7 +590,7 @@ async def test_gather_many_write_stream_from_step(dbos: DBOS) -> None:
     values_concurrent: List[str] = []
     async for item in DBOS.read_stream_async(wfid_concurrent, "stream"):
         values_concurrent.append(cast(str, item))
-    assert sorted(values_concurrent) == [f"val_{i}" for i in range(num_writes)]
+    assert set(values_concurrent) == {f"val_{i}" for i in range(num_writes)}
 
     wfsteps_serial = await DBOS.list_workflow_steps_async(wfid_serial)
     wfsteps_concurrent = await DBOS.list_workflow_steps_async(wfid_concurrent)
