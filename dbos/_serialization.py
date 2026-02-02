@@ -130,6 +130,20 @@ DBOSPortableJSON: Serializer = DBOSPortableJSONSerializer()
 DBOSDefaultSerializer: Serializer = DefaultSerializer()
 
 
+def serialize_value(
+    value: Optional[Any],
+    serialization: Optional[str],
+    serializer: Serializer,
+) -> Optional[str]:
+    if serialization == DBOSPortableJSON.name():
+        return DBOSPortableJSON.serialize(value)
+    if serialization == DBOSDefaultSerializer.name():
+        return DBOSDefaultSerializer.serialize(value)
+    if serialization is not None and serialization != serializer.name():
+        raise TypeError(f"Serialization {serialization} is not available")
+    return serializer.serialize(value)
+
+
 def deserialize_value(
     serialized_value: Optional[str],
     serialization: Optional[str],
@@ -153,9 +167,9 @@ def deserialize_args(
         return None
     if serialization == DBOSPortableJSON.name():
         args: JsonWorkflowArgs = DBOSPortableJSON.deserialize(serialized_value)
-        if args["positionalArgs"] is None:
+        if (not "positionalArgs" in args) or args["positionalArgs"] is None:
             args["positionalArgs"] = []
-        if args["namedArgs"] is None:
+        if (not "namedArgs" in args) or args["namedArgs"] is None:
             args["namedArgs"] = {}
         return {"args": tuple(args["positionalArgs"]), "kwargs": args["namedArgs"]}
     if serialization == DBOSDefaultSerializer.name():

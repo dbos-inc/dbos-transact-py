@@ -71,6 +71,7 @@ from ._serialization import (
     deserialize_args,
     deserialize_exception,
     deserialize_value,
+    serialize_value,
 )
 from ._sys_db import (
     EnqueueOptionsInternal,
@@ -390,7 +391,7 @@ def _init_workflow(
                 "function_name": wf_name,
                 "output": None,
                 "error": dbos._serializer.serialize(e),
-                "serialization": None,  # TODO Serialization
+                "serialization": dbos._serializer.name(),  # TODO Serialization
                 "started_at_epoch_ms": int(time.time() * 1000),
             }
             dbos._sys_db.record_operation_result(result)
@@ -462,9 +463,9 @@ def _get_wf_invoke_func(
             dbos._sys_db.update_workflow_outcome(
                 status["workflow_uuid"],
                 "SUCCESS",
-                output=dbos._serializer.serialize(
-                    output
-                ),  # TODO Follow existing serialization
+                output=serialize_value(
+                    output, status["serialization"], dbos._serializer
+                ),
             )
             return output
         except DBOSWorkflowConflictIDError:

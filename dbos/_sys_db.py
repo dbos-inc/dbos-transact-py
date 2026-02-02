@@ -542,6 +542,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.config_name,
             SystemSchema.workflow_status.c.queue_name,
             SystemSchema.workflow_status.c.owner_xid,
+            SystemSchema.workflow_status.c.serialization,
         )
 
         try:
@@ -560,6 +561,7 @@ class SystemDatabase(ABC):
                 raise
 
         row = results.fetchone()
+
         if row is not None:
             # Check the started workflow matches the expected name, class_name, config_name, and queue_name
             # A mismatch indicates a workflow starting with the same UUID but different functions, which would throw an exception.
@@ -619,6 +621,8 @@ class SystemDatabase(ABC):
                 and not is_recovery_request
             ):
                 should_execute = False
+
+            status["serialization"] = row[8]
 
         return wf_status, workflow_deadline_epoch_ms, should_execute
 
