@@ -463,7 +463,7 @@ async def test_gather_manysteps(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_gather_many_send_async(dbos: DBOS) -> None:
-    num_messages = 10
+    num_messages = 100
 
     @DBOS.workflow()
     async def run_many_sends(conc: bool) -> None:
@@ -506,7 +506,7 @@ async def test_gather_many_send_async(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_gather_many_write_stream(dbos: DBOS) -> None:
-    num_writes = 10
+    num_writes = 100
 
     @DBOS.workflow()
     async def run_many_writes(conc: bool) -> None:
@@ -552,7 +552,7 @@ async def test_gather_many_write_stream(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_gather_many_write_stream_from_step(dbos: DBOS) -> None:
-    num_writes = 10
+    num_writes = 100
 
     @DBOS.step()
     async def write_stream_step(val: str) -> str:
@@ -602,7 +602,7 @@ async def test_gather_many_write_stream_from_step(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_gather_many_set_event(dbos: DBOS) -> None:
-    num_events = 10
+    num_events = 100
 
     @DBOS.workflow()
     async def run_many_set_events(conc: bool) -> None:

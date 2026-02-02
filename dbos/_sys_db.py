@@ -2285,6 +2285,9 @@ class SystemDatabase(ABC):
                     c.execute(stmt)
                 return
             except sa.exc.IntegrityError:
+                dbos_logger.warning(
+                    f"Stream offset conflict for workflow {workflow_uuid}, key {key}; retrying"
+                )
                 continue
 
     @db_retry()
@@ -2318,6 +2321,9 @@ class SystemDatabase(ABC):
                 try:
                     c.execute(stmt)
                 except sa.exc.IntegrityError:
+                    dbos_logger.warning(
+                        f"Stream offset conflict for workflow {workflow_uuid}, key {key}; retrying"
+                    )
                     continue
 
                 output: OperationResultInternal = {
