@@ -62,7 +62,7 @@ def default_config() -> DBOSConfig:
             else f"postgresql+psycopg://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy_dbos_sys"
         ),
         "enable_otlp": False,
-        "internal_polling_interval_sec": 0.01,
+        "notification_listener_polling_interval_sec": 0.01,
     }
 
 

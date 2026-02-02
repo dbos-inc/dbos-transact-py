@@ -345,7 +345,7 @@ class SystemDatabase(ABC):
         serializer: Serializer,
         executor_id: Optional[str],
         use_listen_notify: bool = True,
-        internal_polling_interval_sec: float = 1.0,
+        notification_listener_polling_interval_sec: float = 1.0,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
         if system_database_url.startswith("sqlite"):
@@ -359,7 +359,7 @@ class SystemDatabase(ABC):
                 serializer=serializer,
                 executor_id=executor_id,
                 use_listen_notify=use_listen_notify,
-                internal_polling_interval_sec=internal_polling_interval_sec,
+                notification_listener_polling_interval_sec=notification_listener_polling_interval_sec,
             )
         else:
             from ._sys_db_postgres import PostgresSystemDatabase
@@ -372,7 +372,7 @@ class SystemDatabase(ABC):
                 serializer=serializer,
                 executor_id=executor_id,
                 use_listen_notify=use_listen_notify,
-                internal_polling_interval_sec=internal_polling_interval_sec,
+                notification_listener_polling_interval_sec=notification_listener_polling_interval_sec,
             )
 
     def __init__(
@@ -385,7 +385,7 @@ class SystemDatabase(ABC):
         serializer: Serializer,
         executor_id: Optional[str],
         use_listen_notify: bool = True,
-        internal_polling_interval_sec: float = 1.0,
+        notification_listener_polling_interval_sec: float = 1.0,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
@@ -431,7 +431,9 @@ class SystemDatabase(ABC):
         self.notifications_map = ThreadSafeConditionDict()
         self.workflow_events_map = ThreadSafeConditionDict()
         self.executor_id = executor_id
-        self._internal_polling_interval_sec = internal_polling_interval_sec
+        self._notification_listener_polling_interval_sec = (
+            notification_listener_polling_interval_sec
+        )
 
         self._listener_thread_lock = threading.Lock()
 
@@ -1649,7 +1651,7 @@ class SystemDatabase(ABC):
         while self._run_background_processes:
             try:
                 # Poll at the configured interval
-                time.sleep(self._internal_polling_interval_sec)
+                time.sleep(self._notification_listener_polling_interval_sec)
 
                 # Check all payloads in the notifications_map
                 for payload in list(self.notifications_map._dict.keys()):
@@ -1686,7 +1688,7 @@ class SystemDatabase(ABC):
             except Exception as e:
                 if self._run_background_processes:
                     dbos_logger.warning(f"Notification poller error: {e}")
-                    time.sleep(self._internal_polling_interval_sec)
+                    time.sleep(self._notification_listener_polling_interval_sec)
 
     @staticmethod
     def reset_system_database(database_url: str) -> None:

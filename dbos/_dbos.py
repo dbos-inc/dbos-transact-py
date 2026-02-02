@@ -482,9 +482,9 @@ class DBOS:
             # Get the schema configuration, use "dbos" as default
             schema = self._config.get("dbos_system_schema", "dbos")
             dbos_logger.debug("Creating system database")
-            self._internal_polling_interval_sec = (
+            self._notification_listener_polling_interval_sec = (
                 self._config.get("runtimeConfig", {}).get(
-                    "internal_polling_interval_sec"
+                    "notification_listener_polling_interval_sec"
                 )
                 or 1.0
             )
@@ -496,7 +496,7 @@ class DBOS:
                 serializer=self._serializer,
                 use_listen_notify=self._config["use_listen_notify"],
                 executor_id=GlobalParams.executor_id,
-                internal_polling_interval_sec=self._internal_polling_interval_sec,
+                notification_listener_polling_interval_sec=self._notification_listener_polling_interval_sec,
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
             if self._config["database_url"]:
@@ -1819,7 +1819,7 @@ class DBOS:
 
     @classmethod
     async def read_stream_async(
-        cls, workflow_id: str, key: str
+        cls, workflow_id: str, key: str, *, polling_interval_sec: Optional[float] = None
     ) -> AsyncGenerator[Any, None]:
         """
         Read values from a stream as an async generator.
@@ -1830,6 +1830,8 @@ class DBOS:
         Args:
             workflow_id(str): The workflow instance ID that owns the stream
             key(str): The stream key / name within the workflow
+            polling_interval_sec(float, optional): Polling interval in seconds when waiting for new values.
+                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
 
         Yields:
             Any: Each value in the stream until the stream is closed
@@ -1839,7 +1841,11 @@ class DBOS:
         offset = 0
         dbos_instance = _get_dbos_instance()
         sys_db = dbos_instance._sys_db
-        polling_interval = dbos_instance._internal_polling_interval_sec
+        polling_interval = (
+            polling_interval_sec
+            if polling_interval_sec is not None
+            else dbos_instance._notification_listener_polling_interval_sec
+        )
 
         while True:
             try:
