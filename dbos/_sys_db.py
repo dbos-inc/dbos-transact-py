@@ -2243,41 +2243,49 @@ class SystemDatabase(ABC):
             dbos_logger.error(f"Error connecting to the DBOS system database: {e}")
             raise
 
+    def _stream_insert_stmt(
+        self, workflow_uuid: str, function_id: int, key: str, serialized_value: str
+    ) -> sa.Insert:
+        """Build an atomic INSERT...SELECT that computes the next stream offset."""
+        return sa.insert(SystemSchema.streams).from_select(
+            ["workflow_uuid", "function_id", "key", "value", "offset"],
+            sa.select(
+                sa.literal(workflow_uuid).label("workflow_uuid"),
+                sa.literal(function_id).label("function_id"),
+                sa.literal(key).label("key"),
+                sa.literal(serialized_value).label("value"),
+                (
+                    sa.func.coalesce(
+                        sa.select(sa.func.max(SystemSchema.streams.c.offset))
+                        .where(
+                            SystemSchema.streams.c.workflow_uuid == workflow_uuid,
+                            SystemSchema.streams.c.key == key,
+                        )
+                        .correlate(None)
+                        .scalar_subquery(),
+                        -1,
+                    )
+                    + 1
+                ).label("offset"),
+            ),
+        )
+
     def write_stream_from_step(
         self, workflow_uuid: str, function_id: int, key: str, value: Any
     ) -> None:
         """
         Write a key-value pair to the stream at the first unused offset.
         """
-        with self.engine.begin() as c:
-            # Find the maximum offset for this workflow_uuid and key combination
-            max_offset_result = c.execute(
-                sa.select(sa.func.max(SystemSchema.streams.c.offset)).where(
-                    SystemSchema.streams.c.workflow_uuid == workflow_uuid,
-                    SystemSchema.streams.c.key == key,
-                )
-            ).fetchone()
-
-            # Next offset is max + 1, or 0 if no records exist
-            next_offset = (
-                (max_offset_result[0] + 1)
-                if max_offset_result is not None and max_offset_result[0] is not None
-                else 0
-            )
-
-            # Serialize the value before storing
-            serialized_value = self.serializer.serialize(value)
-
-            # Insert the new stream entry
-            c.execute(
-                sa.insert(SystemSchema.streams).values(
-                    workflow_uuid=workflow_uuid,
-                    function_id=function_id,
-                    key=key,
-                    value=serialized_value,
-                    offset=next_offset,
-                )
-            )
+        stmt = self._stream_insert_stmt(
+            workflow_uuid, function_id, key, self.serializer.serialize(value)
+        )
+        while True:
+            try:
+                with self.engine.begin() as c:
+                    c.execute(stmt)
+                return
+            except sa.exc.IntegrityError:
+                continue
 
     @db_retry()
     def write_stream_from_workflow(
@@ -2292,54 +2300,38 @@ class SystemDatabase(ABC):
             else "DBOS.writeStream"
         )
         start_time = int(time.time() * 1000)
+        stmt = self._stream_insert_stmt(
+            workflow_uuid, function_id, key, self.serializer.serialize(value)
+        )
+        while True:
+            with self.engine.begin() as c:
 
-        with self.engine.begin() as c:
-
-            recorded_output = self._check_operation_execution_txn(
-                workflow_uuid, function_id, function_name, conn=c
-            )
-            if recorded_output is not None:
-                dbos_logger.debug(
-                    f"Replaying writeStream, id: {function_id}, key: {key}"
+                recorded_output = self._check_operation_execution_txn(
+                    workflow_uuid, function_id, function_name, conn=c
                 )
-                return
-            # Find the maximum offset for this workflow_uuid and key combination
-            max_offset_result = c.execute(
-                sa.select(sa.func.max(SystemSchema.streams.c.offset)).where(
-                    SystemSchema.streams.c.workflow_uuid == workflow_uuid,
-                    SystemSchema.streams.c.key == key,
+                if recorded_output is not None:
+                    dbos_logger.debug(
+                        f"Replaying writeStream, id: {function_id}, key: {key}"
+                    )
+                    return
+
+                try:
+                    c.execute(stmt)
+                except sa.exc.IntegrityError:
+                    continue
+
+                output: OperationResultInternal = {
+                    "workflow_uuid": workflow_uuid,
+                    "function_id": function_id,
+                    "function_name": function_name,
+                    "started_at_epoch_ms": start_time,
+                    "output": None,
+                    "error": None,
+                }
+                self._record_operation_result_txn(
+                    output, int(time.time() * 1000), conn=c
                 )
-            ).fetchone()
-
-            # Next offset is max + 1, or 0 if no records exist
-            next_offset = (
-                (max_offset_result[0] + 1)
-                if max_offset_result is not None and max_offset_result[0] is not None
-                else 0
-            )
-
-            # Serialize the value before storing
-            serialized_value = self.serializer.serialize(value)
-
-            # Insert the new stream entry
-            c.execute(
-                sa.insert(SystemSchema.streams).values(
-                    workflow_uuid=workflow_uuid,
-                    function_id=function_id,
-                    key=key,
-                    value=serialized_value,
-                    offset=next_offset,
-                )
-            )
-            output: OperationResultInternal = {
-                "workflow_uuid": workflow_uuid,
-                "function_id": function_id,
-                "function_name": function_name,
-                "started_at_epoch_ms": start_time,
-                "output": None,
-                "error": None,
-            }
-            self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
+            return
 
     def close_stream(self, workflow_uuid: str, function_id: int, key: str) -> None:
         """Write a sentinel value to the stream at the first unused offset to mark it as closed."""
