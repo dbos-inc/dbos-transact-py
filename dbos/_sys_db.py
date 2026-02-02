@@ -2288,6 +2288,7 @@ class SystemDatabase(ABC):
                 dbos_logger.warning(
                     f"Stream offset conflict for workflow {workflow_uuid}, key {key}; retrying"
                 )
+                time.sleep(0.1)
                 continue
 
     @db_retry()
@@ -2324,6 +2325,7 @@ class SystemDatabase(ABC):
                     dbos_logger.warning(
                         f"Stream offset conflict for workflow {workflow_uuid}, key {key}; retrying"
                     )
+                    time.sleep(0.1)
                     continue
 
                 output: OperationResultInternal = {
