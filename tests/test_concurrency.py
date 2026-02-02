@@ -551,6 +551,56 @@ async def test_gather_many_write_stream(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
+async def test_gather_many_write_stream_from_step(dbos: DBOS) -> None:
+    num_writes = 10
+
+    @DBOS.step()
+    async def write_stream_step(val: str) -> str:
+        await DBOS.write_stream_async("stream", val)
+        return "wrote"
+
+    @DBOS.workflow()
+    async def run_many_writes(conc: bool) -> None:
+        things: List[Thing] = []
+
+        for i in range(num_writes):
+            val = f"val_{i}"
+
+            async def t_write(v: str = val) -> str:
+                return await write_stream_step(v)
+
+            things.append(Thing(func=t_write, expected="wrote"))
+
+        await run_things_serial_or_conc(conc, things)
+
+    wfid_serial = str(uuid.uuid4())
+    wfid_concurrent = str(uuid.uuid4())
+
+    with SetWorkflowID(wfid_serial):
+        await run_many_writes(conc=False)
+
+    values_serial: List[str] = []
+    async for item in DBOS.read_stream_async(wfid_serial, "stream"):
+        values_serial.append(cast(str, item))
+    assert sorted(values_serial) == [f"val_{i}" for i in range(num_writes)]
+
+    with SetWorkflowID(wfid_concurrent):
+        await run_many_writes(conc=True)
+
+    values_concurrent: List[str] = []
+    async for item in DBOS.read_stream_async(wfid_concurrent, "stream"):
+        values_concurrent.append(cast(str, item))
+    assert sorted(values_concurrent) == [f"val_{i}" for i in range(num_writes)]
+
+    wfsteps_serial = await DBOS.list_workflow_steps_async(wfid_serial)
+    wfsteps_concurrent = await DBOS.list_workflow_steps_async(wfid_concurrent)
+
+    assert wfsteps_serial is not None
+    assert wfsteps_concurrent is not None
+    compare_wf_runs(wfsteps_serial, wfsteps_concurrent)
+
+
+@pytest.mark.asyncio
 async def test_gather_many_set_event(dbos: DBOS) -> None:
     num_events = 10
 
