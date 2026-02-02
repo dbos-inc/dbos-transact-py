@@ -19,7 +19,6 @@ from typing import (
     Tuple,
     TypedDict,
     TypeVar,
-    Union,
     cast,
 )
 
@@ -47,7 +46,14 @@ from ._error import (
 )
 from ._logger import dbos_logger
 from ._schemas.system_database import SystemSchema
-from ._serialization import Serializer, WorkflowInputs, safe_deserialize
+from ._serialization import (
+    DBOSPortableJSON,
+    Serializer,
+    WorkflowInputs,
+    deserialize_exception,
+    deserialize_value,
+    safe_deserialize,
+)
 
 if TYPE_CHECKING:
     from ._queue import Queue
@@ -976,13 +982,13 @@ class SystemDatabase(ABC):
                 if row is not None:
                     status = row[0]
                     if status == WorkflowStatusString.SUCCESS.value:
-                        # TODO Deserialize
                         output = row[1]
-                        return self.serializer.deserialize(output)
+                        return deserialize_value(output, row[3], self.serializer)
                     elif status == WorkflowStatusString.ERROR.value:
-                        # TODO Deserialize
                         error = row[2]
-                        e: Exception = self.serializer.deserialize(error)
+                        e: Exception = deserialize_exception(
+                            error, row[3], self.serializer
+                        )
                         raise e
                     elif status == WorkflowStatusString.CANCELLED.value:
                         # Raise AwaitedWorkflowCancelledError here, not the cancellation exception
@@ -1308,7 +1314,7 @@ class SystemDatabase(ABC):
                     completed_at_epoch_ms=completed_at_epoch_ms,
                     output=output,
                     error=error,
-                    # TODO Serialization
+                    serialization=result["serialization"],
                 )
                 .on_conflict_do_nothing(
                     index_elements=[
@@ -1518,7 +1524,7 @@ class SystemDatabase(ABC):
                         destination_uuid=destination_uuid,
                         topic=topic,
                         message=self.serializer.serialize(message),
-                        # TODO Serialization
+                        serialization=self.serializer.name(),  # TODO Serialization
                     )
                 )
             except DBAPIError as dbapi_error:
@@ -1558,8 +1564,11 @@ class SystemDatabase(ABC):
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying recv, id: {function_id}, topic: {topic}")
             if recorded_output["output"] is not None:
-                # TODO Serialization
-                return self.serializer.deserialize(recorded_output["output"])
+                return deserialize_value(
+                    recorded_output["output"],
+                    recorded_output["serialization"],
+                    self.serializer,
+                )
             else:
                 raise Exception("No output recorded in the last recv")
         else:
@@ -1628,18 +1637,20 @@ class SystemDatabase(ABC):
             )
             rows = c.execute(delete_stmt).fetchall()
             message: Any = None
+            serialization: Optional[str] = None
+            sermsg: Optional[str] = None
             if len(rows) > 0:
-                message = self.serializer.deserialize(rows[0][0])
+                message = deserialize_value(rows[0][0], rows[0][1], self.serializer)
+                serialization = rows[0][1]
+                sermsg = rows[0][0]
             self._record_operation_result_txn(
                 {
                     "workflow_uuid": workflow_uuid,
                     "function_id": function_id,
                     "function_name": function_name,
                     "started_at_epoch_ms": start_time,
-                    "output": self.serializer.serialize(
-                        message
-                    ),  # None will be serialized to 'null'
-                    "serialization": None,  # TODO Serialization
+                    "output": sermsg,
+                    "serialization": serialization,
                     "error": None,
                 },
                 int(time.time() * 1000),
@@ -1742,7 +1753,14 @@ class SystemDatabase(ABC):
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying sleep, id: {function_id}, seconds: {seconds}")
             assert recorded_output["output"] is not None, "no recorded end time"
-            end_time = self.serializer.deserialize(recorded_output["output"])
+            end_time = cast(
+                float,
+                deserialize_value(
+                    recorded_output["output"],
+                    recorded_output["serialization"],
+                    self.serializer,
+                ),
+            )
         else:
             dbos_logger.debug(f"Running sleep, id: {function_id}, seconds: {seconds}")
             end_time = time.time() + seconds
@@ -1753,9 +1771,9 @@ class SystemDatabase(ABC):
                         "function_id": function_id,
                         "function_name": function_name,
                         "started_at_epoch_ms": start_time,
-                        "output": self.serializer.serialize(end_time),
+                        "output": DBOSPortableJSON.serialize(end_time),
                         "error": None,
-                        "serialization": None,  # TODO Serialization
+                        "serialization": DBOSPortableJSON.name(),
                     }
                 )
             except DBOSWorkflowConflictIDError:
@@ -1790,11 +1808,13 @@ class SystemDatabase(ABC):
                     workflow_uuid=workflow_uuid,
                     key=key,
                     value=self.serializer.serialize(message),
-                    # TODO Serialization
+                    serialization=self.serializer.name(),  # TODO Serialization
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key"],
-                    set_={"value": self.serializer.serialize(message)},
+                    set_={
+                        "value": self.serializer.serialize(message)
+                    },  # TODO Serialization
                 )
             )
             c.execute(
@@ -1804,11 +1824,13 @@ class SystemDatabase(ABC):
                     function_id=function_id,
                     key=key,
                     value=self.serializer.serialize(message),
-                    # TODO Serialization
+                    serialization=self.serializer.name(),  # TODO Serialization
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key", "function_id"],
-                    set_={"value": self.serializer.serialize(message)},
+                    set_={
+                        "value": self.serializer.serialize(message)
+                    },  # TODO Serialization
                 )
             )
             output: OperationResultInternal = {
@@ -1836,11 +1858,13 @@ class SystemDatabase(ABC):
                     workflow_uuid=workflow_uuid,
                     key=key,
                     value=self.serializer.serialize(message),
-                    # TODO Serialization
+                    serialization=self.serializer.name(),  # TODO Serialization
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key"],
-                    set_={"value": self.serializer.serialize(message)},
+                    set_={
+                        "value": self.serializer.serialize(message)
+                    },  # TODO Serialization
                 )
             )
             c.execute(
@@ -1850,11 +1874,13 @@ class SystemDatabase(ABC):
                     function_id=function_id,
                     key=key,
                     value=self.serializer.serialize(message),
-                    # TODO Serialization
+                    serialization=self.serializer.name(),  # TODO Serialization
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key", "function_id"],
-                    set_={"value": self.serializer.serialize(message)},
+                    set_={
+                        "value": self.serializer.serialize(message)
+                    },  # TODO Serialization
                 )
             )
 
@@ -1873,13 +1899,13 @@ class SystemDatabase(ABC):
                 sa.select(
                     SystemSchema.workflow_events.c.key,
                     SystemSchema.workflow_events.c.value,
+                    SystemSchema.workflow_events.c.serialization,
                 ).where(SystemSchema.workflow_events.c.workflow_uuid == workflow_id)
             ).fetchall()
             events: Dict[str, Any] = {}
             for row in rows:
                 key = row[0]
-                # TODO Serialization
-                value = self.serializer.deserialize(row[1])
+                value = deserialize_value(row[1], row[2], self.serializer)
                 events[key] = value
 
             return events
@@ -1896,7 +1922,7 @@ class SystemDatabase(ABC):
         start_time = int(time.time() * 1000)
         get_sql = sa.select(
             SystemSchema.workflow_events.c.value,
-            # TODO Serialization
+            SystemSchema.workflow_events.c.serialization,
         ).where(
             SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
             SystemSchema.workflow_events.c.key == key,
@@ -1911,7 +1937,11 @@ class SystemDatabase(ABC):
                     f"Replaying get_event, id: {caller_ctx['function_id']}, key: {key}"
                 )
                 if recorded_output["output"] is not None:
-                    return self.serializer.deserialize(recorded_output["output"])
+                    return deserialize_value(
+                        recorded_output["output"],
+                        recorded_output["serialization"],
+                        self.serializer,
+                    )
                 else:
                     raise Exception("No output recorded in the last get_event")
             else:
@@ -1936,8 +1966,7 @@ class SystemDatabase(ABC):
 
         value: Any = None
         if len(init_recv) > 0:
-            # TODO Serializer
-            value = self.serializer.deserialize(init_recv[0][0])
+            value = deserialize_value(init_recv[0][0], init_recv[0][1], self.serializer)
         else:
             # Wait for the notification
             actual_timeout = timeout_seconds
@@ -1955,8 +1984,9 @@ class SystemDatabase(ABC):
             with self.engine.begin() as c:
                 final_recv = c.execute(get_sql).fetchall()
                 if len(final_recv) > 0:
-                    # TODO Deserialize
-                    value = self.serializer.deserialize(final_recv[0][0])
+                    value = deserialize_value(
+                        final_recv[0][0], final_recv[0][1], self.serializer
+                    )
         condition.release()
         self.workflow_events_map.pop(payload)
 
@@ -1971,7 +2001,7 @@ class SystemDatabase(ABC):
                     "output": self.serializer.serialize(
                         value
                     ),  # None will be serialized to 'null'
-                    "serialization": None,  # TODO Serialization
+                    "serialization": self.serializer.name(),  # TODO Serialization
                     "error": None,
                 }
             )
@@ -2218,12 +2248,19 @@ class SystemDatabase(ABC):
             if res is not None:
                 # TODO Serialization
                 if res["output"] is not None:
-                    resstat: SystemDatabase.T = self.serializer.deserialize(
-                        res["output"]
+                    resstat: SystemDatabase.T = cast(
+                        SystemDatabase.T,
+                        deserialize_value(
+                            res["output"],
+                            res["serialization"],
+                            self.serializer,
+                        ),
                     )
                     return resstat
                 elif res["error"] is not None:
-                    e: Exception = self.serializer.deserialize(res["error"])
+                    e: Exception = deserialize_exception(
+                        res["error"], res["serialization"], self.serializer
+                    )
                     raise e
                 else:
                     raise Exception(
@@ -2237,8 +2274,8 @@ class SystemDatabase(ABC):
                     "function_id": ctx.function_id,
                     "function_name": function_name,
                     "started_at_epoch_ms": start_time,
-                    "serialization": None,  # TODO Serialization
                     "output": self.serializer.serialize(result),
+                    "serialization": self.serializer.name(),  # TODO Serialization
                     "error": None,
                 }
             )
@@ -2311,6 +2348,7 @@ class SystemDatabase(ABC):
             # Serialize the value before storing
             # TODO Serialization
             serialized_value = self.serializer.serialize(value)
+            serialization = self.serializer.name()
 
             # Insert the new stream entry
             c.execute(
@@ -2319,6 +2357,7 @@ class SystemDatabase(ABC):
                     function_id=function_id,
                     key=key,
                     value=serialized_value,
+                    serialization=serialization,
                     offset=next_offset,
                 )
             )
@@ -2365,6 +2404,7 @@ class SystemDatabase(ABC):
             # Serialize the value before storing
             # TODO Serialization
             serialized_value = self.serializer.serialize(value)
+            serialization = self.serializer.name()
 
             # Insert the new stream entry
             c.execute(
@@ -2373,6 +2413,7 @@ class SystemDatabase(ABC):
                     function_id=function_id,
                     key=key,
                     value=serialized_value,
+                    serialization=serialization,
                     offset=next_offset,
                 )
             )
@@ -2383,7 +2424,7 @@ class SystemDatabase(ABC):
                 "started_at_epoch_ms": start_time,
                 "output": None,
                 "error": None,
-                "serialization": None,  # TODO Serialization
+                "serialization": None,
             }
             self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
 
@@ -2399,7 +2440,9 @@ class SystemDatabase(ABC):
 
         with self.engine.begin() as c:
             result = c.execute(
-                sa.select(SystemSchema.streams.c.value).where(
+                sa.select(
+                    SystemSchema.streams.c.value, SystemSchema.streams.c.serialization
+                ).where(
                     SystemSchema.streams.c.workflow_uuid == workflow_uuid,
                     SystemSchema.streams.c.key == key,
                     SystemSchema.streams.c.offset == offset,
@@ -2412,8 +2455,7 @@ class SystemDatabase(ABC):
                 )
 
             # Deserialize the value before returning
-            # TODO Serialization
-            return self.serializer.deserialize(result[0])
+            return deserialize_value(result[0], result[1], self.serializer)
 
     def garbage_collect(
         self, cutoff_epoch_timestamp_ms: Optional[int], rows_threshold: Optional[int]
@@ -2563,8 +2605,8 @@ class SystemDatabase(ABC):
                     "function_name": patch_name,
                     "output": None,
                     "error": None,
-                    "started_at_epoch_ms": int(time.time() * 1000),
                     "serialization": None,
+                    "started_at_epoch_ms": int(time.time() * 1000),
                 }
                 self._record_operation_result_txn(result, int(time.time() * 1000), c)
                 return True
