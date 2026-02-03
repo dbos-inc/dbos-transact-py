@@ -116,7 +116,7 @@ def test_directinsert_workflows(dbos: DBOS) -> None:
 def test_nodejs_invoke(dbos: DBOS) -> None:
     dburl = dbos._config["system_database_url"]
     assert dburl is not None
-    if dburl.find("postgres") < 0:
+    if not dburl.startswith("postgres"):
         DBOS.logger.warning(
             "Not a Postgres database - skipping TypeScript enqueue test"
         )
