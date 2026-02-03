@@ -36,6 +36,10 @@ def workflow_func(
 
 
 def test_directinsert_workflows(dbos: DBOS) -> None:
+    dburl = dbos._config["system_database_url"]
+    assert dburl is not None
+    schema = "dbos." if dburl.startswith("postgres") else ""
+
     @DBOS.dbos_class("workflows")
     class WFTest:
         @classmethod
@@ -56,8 +60,8 @@ def test_directinsert_workflows(dbos: DBOS) -> None:
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.text(
-                """
-            INSERT INTO dbos.workflow_status(
+                f"""
+            INSERT INTO {schema}workflow_status(
               workflow_uuid,
               name,
               class_name,
@@ -88,8 +92,8 @@ def test_directinsert_workflows(dbos: DBOS) -> None:
 
         c.execute(
             sa.text(
-                """
-            INSERT INTO dbos.notifications(
+                f"""
+            INSERT INTO {schema}notifications(
               destination_uuid,
               topic,
               message,
