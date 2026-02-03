@@ -114,6 +114,14 @@ def test_directinsert_workflows(dbos: DBOS) -> None:
 
 
 def test_nodejs_invoke(dbos: DBOS) -> None:
+    dburl = dbos._config["system_database_url"]
+    assert dburl is not None
+    if dburl.find("postgres") < 0:
+        DBOS.logger.warning(
+            "Not a Postgres database - skipping TypeScript enqueue test"
+        )
+        return
+
     @DBOS.dbos_class("workflows")
     class WFTest:
         @classmethod
@@ -129,9 +137,6 @@ def test_nodejs_invoke(dbos: DBOS) -> None:
             return workflow_func(s, x, o, wfid)
 
     queue = Queue("testq")
-
-    dburl = dbos._config["system_database_url"]
-    assert dburl is not None
 
     script_path = os.path.join(
         os.path.dirname(__file__), "ts_client", "bundles", "portableinvoke.cjs"
