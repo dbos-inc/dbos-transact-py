@@ -303,6 +303,13 @@ def test_wf_fastapi(
     log_processor.force_flush(timeout_millis=5000)
     logs = log_exporter.get_finished_logs()
 
+    if len(logs) != 2:
+        DBOS.logger.warning("Expection on number of logs not met")
+        for log in logs:
+            DBOS.logger.info(
+                f"  {log.log_record.event_name} - {log.log_record.body} - {log.log_record.severity_text}"
+            )
+
     assert len(logs) == 2
     assert logs[0].log_record.attributes is not None
     assert (
