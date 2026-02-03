@@ -130,10 +130,13 @@ def test_nodejs_invoke(dbos: DBOS) -> None:
 
     queue = Queue("testq")
 
+    dburl = dbos._config["system_database_url"]
+    assert dburl is not None
+
     script_path = os.path.join(
         os.path.dirname(__file__), "ts_client", "bundles", "portableinvoke.cjs"
     )
-    args = ["node", script_path, dbos._config["system_database_url"]]
+    args = ["node", script_path, dburl]
 
     env = os.environ.copy()
     result = subprocess.run(args, env=env, capture_output=True, text=True)
