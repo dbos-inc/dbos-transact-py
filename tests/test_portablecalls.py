@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import time
 import uuid
 from typing import Any, Dict, Optional
@@ -109,3 +111,31 @@ def test_directinsert_workflows(dbos: DBOS) -> None:
     wfh: WorkflowHandle[str] = DBOS.retrieve_workflow(id)
     res = wfh.get_result()
     assert res == 's-1-k:v@"M"'
+
+
+def test_nodejs_invoke(dbos: DBOS) -> None:
+    @DBOS.dbos_class("workflows")
+    class WFTest:
+        @classmethod
+        @DBOS.workflow(name="workflowPortable")
+        def defSerPortable(
+            cls,
+            s: str,
+            x: int,
+            o: Dict[str, Any],
+            wfid: Optional[str] = None,
+        ) -> str:
+            DBOS.logger.info("defSerPortable was called...")
+            return workflow_func(s, x, o, wfid)
+
+    queue = Queue("testq")
+
+    script_path = os.path.join(
+        os.path.dirname(__file__), "ts_client", "bundles", "portableinvoke.cjs"
+    )
+    args = ["node", script_path, dbos._config["system_database_url"]]
+
+    env = os.environ.copy()
+    result = subprocess.run(args, env=env, capture_output=True, text=True)
+    assert result.returncode == 0, f"Worker failed with error: {result.stderr}"
+    DBOS.logger.info(result.stdout)

@@ -2,7 +2,7 @@ import esbuild from "esbuild";
 
 await esbuild.build({
   entryPoints: ["portableinvoke.ts"],
-  outfile: "dist/portableinvoke.cjs",
+  outfile: "bundles/portableinvoke.cjs",
   bundle: true,
   platform: "node",
   target: "node20",
