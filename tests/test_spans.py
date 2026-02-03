@@ -307,7 +307,7 @@ def test_wf_fastapi(
         DBOS.logger.warning("Expection on number of logs not met")
         for log in logs:
             DBOS.logger.info(
-                f"  {log.log_record.event_name} - {log.log_record.body} - {log.log_record.severity_text}"
+                f"  {log.log_record.event_name} - {str(log.log_record.body)} - {log.log_record.severity_text}"
             )
 
     assert len(logs) == 2
