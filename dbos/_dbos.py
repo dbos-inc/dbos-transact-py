@@ -482,6 +482,12 @@ class DBOS:
             # Get the schema configuration, use "dbos" as default
             schema = self._config.get("dbos_system_schema", "dbos")
             dbos_logger.debug("Creating system database")
+            self._notification_listener_polling_interval_sec = (
+                self._config.get("runtimeConfig", {}).get(
+                    "notification_listener_polling_interval_sec"
+                )
+                or 1.0
+            )
             self._sys_db_field = SystemDatabase.create(
                 system_database_url=get_system_database_url(self._config),
                 engine_kwargs=self._config["database"]["sys_db_engine_kwargs"],
@@ -490,6 +496,7 @@ class DBOS:
                 serializer=self._serializer,
                 use_listen_notify=self._config["use_listen_notify"],
                 executor_id=GlobalParams.executor_id,
+                notification_listener_polling_interval_sec=self._notification_listener_polling_interval_sec,
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
             if self._config["database_url"]:
@@ -1812,7 +1819,7 @@ class DBOS:
 
     @classmethod
     async def read_stream_async(
-        cls, workflow_id: str, key: str
+        cls, workflow_id: str, key: str, *, polling_interval_sec: Optional[float] = None
     ) -> AsyncGenerator[Any, None]:
         """
         Read values from a stream as an async generator.
@@ -1823,6 +1830,8 @@ class DBOS:
         Args:
             workflow_id(str): The workflow instance ID that owns the stream
             key(str): The stream key / name within the workflow
+            polling_interval_sec(float, optional): Polling interval in seconds when waiting for new values.
+                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
 
         Yields:
             Any: Each value in the stream until the stream is closed
@@ -1830,7 +1839,13 @@ class DBOS:
         """
         await cls._configure_asyncio_thread_pool()
         offset = 0
-        sys_db = _get_dbos_instance()._sys_db
+        dbos_instance = _get_dbos_instance()
+        sys_db = dbos_instance._sys_db
+        polling_interval = (
+            polling_interval_sec
+            if polling_interval_sec is not None
+            else dbos_instance._notification_listener_polling_interval_sec
+        )
 
         while True:
             try:
@@ -1848,7 +1863,7 @@ class DBOS:
                 ).status
                 if not workflow_is_active(status):
                     break
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(polling_interval)
                 continue
 
     @classmethod

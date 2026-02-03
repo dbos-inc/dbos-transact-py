@@ -170,5 +170,8 @@ cython_debug/
 .vscode/
 .idea/
 
+# Agents
+.claude/settings.local.json
+
 # Sqlite
 *.sqlite

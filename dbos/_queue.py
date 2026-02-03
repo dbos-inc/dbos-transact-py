@@ -194,7 +194,8 @@ def queue_worker_thread(
 def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     """Main queue manager thread that spawns and monitors worker threads for each queue."""
     queue_threads: dict[str, threading.Thread] = {}
-    check_interval = 1.0  # Check for new queues every second
+    # Check interval for monitoring queue registration changes
+    check_interval = 1.0
 
     if dbos._listening_queues is not None:
         listening_queues = dbos._listening_queues
