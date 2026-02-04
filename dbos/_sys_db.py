@@ -648,22 +648,19 @@ class SystemDatabase(ABC):
         workflow_id: str,
     ) -> None:
         with self.engine.begin() as c:
-            # Check the status of the workflow. If it is complete, do nothing.
-            row = c.execute(
-                sa.select(
-                    SystemSchema.workflow_status.c.status,
-                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-            ).fetchone()
-            if (
-                row is None
-                or row[0] == WorkflowStatusString.SUCCESS.value
-                or row[0] == WorkflowStatusString.ERROR.value
-            ):
-                return
-            # Set the workflow's status to CANCELLED and remove it from any queue it is on
+            # Set the workflow's status to CANCELLED and remove it from any queue it is on,
+            # but only if the workflow is not already complete.
             c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .where(
+                    SystemSchema.workflow_status.c.status.notin_(
+                        [
+                            WorkflowStatusString.SUCCESS.value,
+                            WorkflowStatusString.ERROR.value,
+                        ]
+                    )
+                )
                 .values(
                     status=WorkflowStatusString.CANCELLED.value,
                     queue_name=None,
