@@ -1131,7 +1131,13 @@ class DBOS:
         await asyncio.to_thread(durable_sleep, _get_dbos_instance(), cur_ctx, seconds)
 
     @classmethod
-    def set_event(cls, key: str, value: Any) -> None:
+    def set_event(
+        cls,
+        key: str,
+        value: Any,
+        *,
+        serialization_type: WorkflowSerializationFormat = WorkflowSerializationFormat.DEFAULT,
+    ) -> None:
         """
         Set a workflow event.
 
@@ -1146,10 +1152,22 @@ class DBOS:
 
         """
         check_async("set_event")
-        return set_event(_get_dbos_instance(), snapshot_step_context(), key, value)
+        return set_event(
+            _get_dbos_instance(),
+            snapshot_step_context(),
+            key,
+            value,
+            serialization_type=serialization_type,
+        )
 
     @classmethod
-    async def set_event_async(cls, key: str, value: Any) -> None:
+    async def set_event_async(
+        cls,
+        key: str,
+        value: Any,
+        *,
+        serialization_type: WorkflowSerializationFormat = WorkflowSerializationFormat.DEFAULT,
+    ) -> None:
         """
         Set a workflow event.
 
@@ -1165,7 +1183,14 @@ class DBOS:
         """
         ctx = snapshot_step_context()
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(set_event, _get_dbos_instance(), ctx, key, value)
+        await asyncio.to_thread(
+            set_event,
+            _get_dbos_instance(),
+            ctx,
+            key,
+            value,
+            serialization_type=serialization_type,
+        )
 
     @classmethod
     def get_event(cls, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:

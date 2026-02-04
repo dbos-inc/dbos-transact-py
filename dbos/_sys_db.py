@@ -1821,7 +1821,14 @@ class SystemDatabase(ABC):
         function_id: int,
         key: str,
         message: Any,
+        *,
+        serialization_type: WorkflowSerializationFormat,
     ) -> None:
+        serval, serialization = serialize_value(
+            message,
+            serialization_for_type(serialization_type, self.serializer),
+            self.serializer,
+        )
         function_name = "DBOS.setEvent"
         start_time = int(time.time() * 1000)
         with self.engine.begin() as c:
@@ -1838,14 +1845,15 @@ class SystemDatabase(ABC):
                 .values(
                     workflow_uuid=workflow_uuid,
                     key=key,
-                    value=self.serializer.serialize(message),
-                    serialization=self.serializer.name(),  # TODO Serialization
+                    value=serval,
+                    serialization=serialization,
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key"],
                     set_={
-                        "value": self.serializer.serialize(message)
-                    },  # TODO Serialization
+                        "value": serval,
+                        "serialization": serialization,
+                    },
                 )
             )
             c.execute(
@@ -1854,14 +1862,15 @@ class SystemDatabase(ABC):
                     workflow_uuid=workflow_uuid,
                     function_id=function_id,
                     key=key,
-                    value=self.serializer.serialize(message),
-                    serialization=self.serializer.name(),  # TODO Serialization
+                    value=serval,
+                    serialization=serialization,
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key", "function_id"],
                     set_={
-                        "value": self.serializer.serialize(message)
-                    },  # TODO Serialization
+                        "value": serval,
+                        "serialization": serialization,
+                    },
                 )
             )
             output: OperationResultInternal = {
@@ -1881,21 +1890,30 @@ class SystemDatabase(ABC):
         function_id: int,
         key: str,
         message: Any,
+        *,
+        serialization_type: WorkflowSerializationFormat,
     ) -> None:
+        serval, serialization = serialize_value(
+            message,
+            serialization_for_type(serialization_type, self.serializer),
+            self.serializer,
+        )
+
         with self.engine.begin() as c:
             c.execute(
                 self.dialect.insert(SystemSchema.workflow_events)
                 .values(
                     workflow_uuid=workflow_uuid,
                     key=key,
-                    value=self.serializer.serialize(message),
-                    serialization=self.serializer.name(),  # TODO Serialization
+                    value=serval,
+                    serialization=serialization,
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key"],
                     set_={
-                        "value": self.serializer.serialize(message)
-                    },  # TODO Serialization
+                        "value": serval,
+                        "serialization": serialization,
+                    },
                 )
             )
             c.execute(
@@ -1904,14 +1922,15 @@ class SystemDatabase(ABC):
                     workflow_uuid=workflow_uuid,
                     function_id=function_id,
                     key=key,
-                    value=self.serializer.serialize(message),
-                    serialization=self.serializer.name(),  # TODO Serialization
+                    value=serval,
+                    serialization=serialization,
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid", "key", "function_id"],
                     set_={
-                        "value": self.serializer.serialize(message)
-                    },  # TODO Serialization
+                        "value": serval,
+                        "serialization": serialization,
+                    },
                 )
             )
 

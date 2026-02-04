@@ -1607,7 +1607,12 @@ def recv(
 
 
 def set_event(
-    dbos: "DBOS", cur_ctx: Optional["DBOSContext"], key: str, value: Any
+    dbos: "DBOS",
+    cur_ctx: Optional["DBOSContext"],
+    key: str,
+    value: Any,
+    *,
+    serialization_type: WorkflowSerializationFormat,
 ) -> None:
     if cur_ctx is not None:
         if cur_ctx.is_workflow():
@@ -1617,11 +1622,19 @@ def set_event(
             }
             with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
                 dbos._sys_db.set_event_from_workflow(
-                    ctx.workflow_id, ctx.curr_step_function_id, key, value
+                    ctx.workflow_id,
+                    ctx.curr_step_function_id,
+                    key,
+                    value,
+                    serialization_type=serialization_type,
                 )
         elif cur_ctx.is_step():
             dbos._sys_db.set_event_from_step(
-                cur_ctx.workflow_id, cur_ctx.curr_step_function_id, key, value
+                cur_ctx.workflow_id,
+                cur_ctx.curr_step_function_id,
+                key,
+                value,
+                serialization_type=serialization_type,
             )
         else:
             raise DBOSException(
