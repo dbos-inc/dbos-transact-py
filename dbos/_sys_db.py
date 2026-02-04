@@ -2354,7 +2354,7 @@ class SystemDatabase(ABC):
     ) -> sa.Insert:
         """Build an atomic INSERT...SELECT that computes the next stream offset."""
         return sa.insert(SystemSchema.streams).from_select(
-            ["workflow_uuid", "function_id", "key", "value", "offset", "serialization"],
+            ["workflow_uuid", "function_id", "key", "value", "serialization", "offset"],
             sa.select(
                 sa.literal(workflow_uuid).label("workflow_uuid"),
                 sa.literal(function_id).label("function_id"),
