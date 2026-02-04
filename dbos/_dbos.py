@@ -1750,7 +1750,13 @@ class DBOS:
         ctx.authenticated_roles = authenticated_roles
 
     @classmethod
-    def write_stream(cls, key: str, value: Any) -> None:
+    def write_stream(
+        cls,
+        key: str,
+        value: Any,
+        *,
+        serialization_type: WorkflowSerializationFormat = WorkflowSerializationFormat.DEFAULT,
+    ) -> None:
         """
         Write a value to a stream.
 
@@ -1761,7 +1767,9 @@ class DBOS:
         """
         check_async("write_stream")
         ctx = snapshot_step_context(reserve_sleep_id=False)
-        write_stream(_get_dbos_instance(), ctx, key, value)
+        write_stream(
+            _get_dbos_instance(), ctx, key, value, serialization_type=serialization_type
+        )
 
     @classmethod
     def close_stream(cls, key: str) -> None:
@@ -1812,7 +1820,13 @@ class DBOS:
                 continue
 
     @classmethod
-    async def write_stream_async(cls, key: str, value: Any) -> None:
+    async def write_stream_async(
+        cls,
+        key: str,
+        value: Any,
+        *,
+        serialization_type: WorkflowSerializationFormat = WorkflowSerializationFormat.DEFAULT,
+    ) -> None:
         """
         Write a value to a stream asynchronously.
 
@@ -1824,7 +1838,13 @@ class DBOS:
         ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(
-            lambda: write_stream(_get_dbos_instance(), ctx, key, value)
+            lambda: write_stream(
+                _get_dbos_instance(),
+                ctx,
+                key,
+                value,
+                serialization_type=serialization_type,
+            )
         )
 
     @classmethod

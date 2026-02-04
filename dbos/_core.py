@@ -1658,7 +1658,12 @@ def durable_sleep(
 
 
 def write_stream(
-    dbos: "DBOS", step_ctx: Optional["DBOSContext"], key: str, value: Any
+    dbos: "DBOS",
+    step_ctx: Optional["DBOSContext"],
+    key: str,
+    value: Any,
+    *,
+    serialization_type: WorkflowSerializationFormat,
 ) -> None:
     if step_ctx is not None:
         # Must call it within a workflow
@@ -1668,11 +1673,19 @@ def write_stream(
             }
             with EnterDBOSStepCtx(attributes, step_ctx) as ctx:
                 dbos._sys_db.write_stream_from_workflow(
-                    ctx.workflow_id, ctx.function_id, key, value
+                    ctx.workflow_id,
+                    ctx.function_id,
+                    key,
+                    value,
+                    serialization_type=serialization_type,
                 )
         elif step_ctx.is_step():
             dbos._sys_db.write_stream_from_step(
-                step_ctx.workflow_id, step_ctx.function_id, key, value
+                step_ctx.workflow_id,
+                step_ctx.function_id,
+                key,
+                value,
+                serialization_type=serialization_type,
             )
         else:
             raise DBOSException(

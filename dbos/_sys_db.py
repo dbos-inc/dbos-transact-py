@@ -2349,7 +2349,7 @@ class SystemDatabase(ABC):
         workflow_uuid: str,
         function_id: int,
         key: str,
-        serialized_value: str,
+        serialized_value: Optional[str],
         serialization: Optional[str],
     ) -> sa.Insert:
         """Build an atomic INSERT...SELECT that computes the next stream offset."""
@@ -2378,15 +2378,23 @@ class SystemDatabase(ABC):
         )
 
     def write_stream_from_step(
-        self, workflow_uuid: str, function_id: int, key: str, value: Any
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        key: str,
+        value: Any,
+        *,
+        serialization_type: WorkflowSerializationFormat,
     ) -> None:
         """
         Write a key-value pair to the stream at the first unused offset.
         """
         # Serialize the value before storing
-        # TODO Serialization
-        serialized_value = self.serializer.serialize(value)
-        serialization = self.serializer.name()
+        serialized_value, serialization = serialize_value(
+            value,
+            serialization_for_type(serialization_type, self.serializer),
+            self.serializer,
+        )
 
         stmt = self._stream_insert_stmt(
             workflow_uuid, function_id, key, serialized_value, serialization
@@ -2406,11 +2414,19 @@ class SystemDatabase(ABC):
 
     @db_retry()
     def write_stream_from_workflow(
-        self, workflow_uuid: str, function_id: int, key: str, value: Any
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        key: str,
+        value: Any,
+        *,
+        serialization_type: WorkflowSerializationFormat,
     ) -> None:
-        # TODO Serialization
-        serialized_value = self.serializer.serialize(value)
-        serialization = self.serializer.name()
+        serialized_value, serialization = serialize_value(
+            value,
+            serialization_for_type(serialization_type, self.serializer),
+            self.serializer,
+        )
 
         """
         Write a key-value pair to the stream at the first unused offset.
@@ -2466,7 +2482,11 @@ class SystemDatabase(ABC):
     def close_stream(self, workflow_uuid: str, function_id: int, key: str) -> None:
         """Write a sentinel value to the stream at the first unused offset to mark it as closed."""
         self.write_stream_from_workflow(
-            workflow_uuid, function_id, key, _dbos_stream_closed_sentinel
+            workflow_uuid,
+            function_id,
+            key,
+            _dbos_stream_closed_sentinel,
+            serialization_type=WorkflowSerializationFormat.PORTABLE,
         )
 
     @db_retry()
