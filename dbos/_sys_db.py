@@ -759,9 +759,10 @@ class SystemDatabase(ABC):
                     application_id=status["app_id"],
                     authenticated_user=status["authenticated_user"],
                     authenticated_roles=status["authenticated_roles"],
-                    assumed_role=status["assumed_role"],
+                    serialization=status["serialization"],
                     queue_name=INTERNAL_QUEUE_NAME,
                     inputs=status["inputs"],
+                    assumed_role=status["assumed_role"],
                     forked_from=original_workflow_id,
                 )
             )
@@ -775,6 +776,7 @@ class SystemDatabase(ABC):
                             "function_id",
                             "output",
                             "error",
+                            "serialization",
                             "function_name",
                             "child_workflow_id",
                             "started_at_epoch_ms",
@@ -785,6 +787,7 @@ class SystemDatabase(ABC):
                             SystemSchema.operation_outputs.c.function_id,
                             SystemSchema.operation_outputs.c.output,
                             SystemSchema.operation_outputs.c.error,
+                            SystemSchema.operation_outputs.c.serialization,
                             SystemSchema.operation_outputs.c.function_name,
                             SystemSchema.operation_outputs.c.child_workflow_id,
                             SystemSchema.operation_outputs.c.started_at_epoch_ms,
@@ -809,12 +812,14 @@ class SystemDatabase(ABC):
                             "function_id",
                             "key",
                             "value",
+                            "serialization",
                         ],
                         sa.select(
                             sa.literal(forked_workflow_id).label("workflow_uuid"),
                             SystemSchema.workflow_events_history.c.function_id,
                             SystemSchema.workflow_events_history.c.key,
                             SystemSchema.workflow_events_history.c.value,
+                            SystemSchema.workflow_events_history.c.serialization,
                         ).where(
                             (
                                 SystemSchema.workflow_events_history.c.workflow_uuid
@@ -848,11 +853,13 @@ class SystemDatabase(ABC):
                             "workflow_uuid",
                             "key",
                             "value",
+                            "serialization",
                         ],
                         sa.select(
                             sa.literal(forked_workflow_id).label("workflow_uuid"),
                             weh1.c.key,
                             weh1.c.value,
+                            weh1.c.serialization,
                         ).where(
                             (weh1.c.workflow_uuid == original_workflow_id)
                             & (weh1.c.function_id == max_function_id_subquery)
@@ -867,6 +874,7 @@ class SystemDatabase(ABC):
                             "function_id",
                             "key",
                             "value",
+                            "serialization",
                             "offset",
                         ],
                         sa.select(
@@ -874,6 +882,7 @@ class SystemDatabase(ABC):
                             SystemSchema.streams.c.function_id,
                             SystemSchema.streams.c.key,
                             SystemSchema.streams.c.value,
+                            SystemSchema.streams.c.serialization,
                             SystemSchema.streams.c.offset,
                         ).where(
                             (
@@ -1367,6 +1376,7 @@ class SystemDatabase(ABC):
         result_workflow_id: str,
         output: Optional[str],
         error: Optional[str],
+        serialization: Optional[str],
         ctx: Optional["DBOSContext"] = None,
     ) -> None:
         if ctx is None:
@@ -1386,7 +1396,7 @@ class SystemDatabase(ABC):
                 output=output,
                 error=error,
                 child_workflow_id=result_workflow_id,
-                # TODO Serialization
+                serialization=serialization,
             )
             .on_conflict_do_nothing()
         )

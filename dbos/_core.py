@@ -120,10 +120,12 @@ class WorkflowHandleFuture(Generic[R]):
             r = self.future.result()
         except Exception as e:
             serialized_e = self.dbos._serializer.serialize(e)  # TODO Serialization
-            self.dbos._sys_db.record_get_result(self.workflow_id, None, serialized_e)
+            self.dbos._sys_db.record_get_result(
+                self.workflow_id, None, serialized_e, None
+            )
             raise
         serialized_r = self.dbos._serializer.serialize(r)  # TODO Serialization
-        self.dbos._sys_db.record_get_result(self.workflow_id, serialized_r, None)
+        self.dbos._sys_db.record_get_result(self.workflow_id, serialized_r, None, None)
         return r
 
     def get_status(self) -> WorkflowStatus:
@@ -151,10 +153,12 @@ class WorkflowHandlePolling(Generic[R]):
             )
         except Exception as e:
             serialized_e = self.dbos._serializer.serialize(e)  # TODO Serializer
-            self.dbos._sys_db.record_get_result(self.workflow_id, None, serialized_e)
+            self.dbos._sys_db.record_get_result(
+                self.workflow_id, None, serialized_e, None
+            )
             raise
         serialized_r = self.dbos._serializer.serialize(r)  # TODO Serializer
-        self.dbos._sys_db.record_get_result(self.workflow_id, serialized_r, None)
+        self.dbos._sys_db.record_get_result(self.workflow_id, serialized_r, None, None)
         return r
 
     def get_status(self) -> WorkflowStatus:
@@ -186,11 +190,16 @@ class WorkflowHandleAsyncTask(Generic[R]):
                 self.workflow_id,
                 None,
                 serialized_e,
+                None,
             )
             raise
         serialized_r = self.dbos._serializer.serialize(r)  # TODO Serializer
         await asyncio.to_thread(
-            self.dbos._sys_db.record_get_result, self.workflow_id, serialized_r, None
+            self.dbos._sys_db.record_get_result,
+            self.workflow_id,
+            serialized_r,
+            None,
+            None,
         )
         return r
 
@@ -226,11 +235,16 @@ class WorkflowHandleAsyncPolling(Generic[R]):
                 self.workflow_id,
                 None,
                 serialized_e,
+                None,
             )
             raise
         serialized_r = self.dbos._serializer.serialize(r)  # TODO Serializer
         await asyncio.to_thread(
-            self.dbos._sys_db.record_get_result, self.workflow_id, serialized_r, None
+            self.dbos._sys_db.record_get_result,
+            self.workflow_id,
+            serialized_r,
+            None,
+            None,
         )
         return r
 
@@ -989,11 +1003,15 @@ def workflow_wrapper(
             except Exception as e:
                 serialized_e = dbos._serializer.serialize(e)  # TODO Serialization
                 assert workflow_id is not None
-                dbos._sys_db.record_get_result(workflow_id, None, serialized_e, resctx)
+                dbos._sys_db.record_get_result(
+                    workflow_id, None, serialized_e, None, resctx
+                )
                 raise
             serialized_r = dbos._serializer.serialize(r)  # TODO Serialization
             assert workflow_id is not None
-            dbos._sys_db.record_get_result(workflow_id, serialized_r, None, resctx)
+            dbos._sys_db.record_get_result(
+                workflow_id, serialized_r, None, None, resctx
+            )
             return r
 
         outcome = (
