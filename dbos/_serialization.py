@@ -4,6 +4,7 @@ import pickle
 from abc import ABC, abstractmethod
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from enum import Enum
 from typing import Any, Dict, Mapping, Optional, Tuple, TypedDict, cast
 
 from dbos._schemas.system_database import JsonValue, JsonWorkflowArgs
@@ -130,18 +131,34 @@ DBOSPortableJSON: Serializer = DBOSPortableJSONSerializer()
 DBOSDefaultSerializer: Serializer = DefaultSerializer()
 
 
+class WorkflowSerializationFormat(str, Enum):
+    PORTABLE = "portable"
+    NATIVE = "native"
+    DEFAULT = None
+
+
+def serialization_for_type(
+    serialization_type: Optional[WorkflowSerializationFormat], serializer: Serializer
+) -> str:
+    if serialization_type == WorkflowSerializationFormat.PORTABLE:
+        return DBOSPortableJSON.name()
+    if serialization_type == WorkflowSerializationFormat.NATIVE:
+        return DBOSDefaultSerializer.name()
+    return serializer.name()
+
+
 def serialize_value(
     value: Optional[Any],
     serialization: Optional[str],
     serializer: Serializer,
-) -> Optional[str]:
+) -> tuple[Optional[str], str]:
     if serialization == DBOSPortableJSON.name():
-        return DBOSPortableJSON.serialize(value)
+        return DBOSPortableJSON.serialize(value), DBOSPortableJSON.name()
     if serialization == DBOSDefaultSerializer.name():
-        return DBOSDefaultSerializer.serialize(value)
+        return DBOSDefaultSerializer.serialize(value), DBOSDefaultSerializer.name()
     if serialization is not None and serialization != serializer.name():
         raise TypeError(f"Serialization {serialization} is not available")
-    return serializer.serialize(value)
+    return serializer.serialize(value), serializer.name()
 
 
 def deserialize_value(

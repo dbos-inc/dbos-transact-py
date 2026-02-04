@@ -14,7 +14,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
-    Awaitable,
     Callable,
     Coroutine,
     Dict,
@@ -27,13 +26,16 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
-    Union,
     overload,
 )
 
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._debouncer import debouncer_workflow
-from dbos._serialization import DefaultSerializer, Serializer
+from dbos._serialization import (
+    DefaultSerializer,
+    Serializer,
+    WorkflowSerializationFormat,
+)
 from dbos._sys_db import SystemDatabase, WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, generate_uuid
 from dbos._workflow_commands import fork_workflow
@@ -1024,7 +1026,14 @@ class DBOS:
 
     @classmethod
     def send(
-        cls, destination_id: str, message: Any, topic: Optional[str] = None
+        cls,
+        destination_id: str,
+        message: Any,
+        topic: Optional[str] = None,
+        *,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
     ) -> None:
         """Send a message to a workflow execution."""
         check_async("send")
@@ -1034,17 +1043,31 @@ class DBOS:
             destination_id,
             message,
             topic,
+            serialization_type=serialization_type,
         )
 
     @classmethod
     async def send_async(
-        cls, destination_id: str, message: Any, topic: Optional[str] = None
+        cls,
+        destination_id: str,
+        message: Any,
+        topic: Optional[str] = None,
+        *,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
     ) -> None:
         """Send a message to a workflow execution."""
         ctx = snapshot_step_context()
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(
-            send, _get_dbos_instance(), ctx, destination_id, message, topic
+            send,
+            _get_dbos_instance(),
+            ctx,
+            destination_id,
+            message,
+            topic,
+            serialization_type=serialization_type,
         )
 
     @classmethod

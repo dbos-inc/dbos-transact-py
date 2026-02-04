@@ -8,7 +8,6 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future
-from dataclasses import dataclass
 from functools import wraps
 from typing import (
     TYPE_CHECKING,
@@ -19,6 +18,7 @@ from typing import (
     List,
     Optional,
     ParamSpec,
+    TypedDict,
     TypeVar,
     Union,
     cast,
@@ -68,6 +68,7 @@ from ._registrations import (
 from ._roles import check_required_roles
 from ._serialization import (
     WorkflowInputs,
+    WorkflowSerializationFormat,
     deserialize_args,
     deserialize_exception,
     deserialize_value,
@@ -238,9 +239,6 @@ class WorkflowHandleAsyncPolling(Generic[R]):
         if stat is None:
             raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return stat
-
-
-from typing import Optional, TypedDict
 
 
 class StepOptions(TypedDict, total=False):
@@ -460,12 +458,13 @@ def _get_wf_invoke_func(
                 )
                 return output
 
+            serval, _serialization = serialize_value(
+                output, status["serialization"], dbos._serializer
+            )
             dbos._sys_db.update_workflow_outcome(
                 status["workflow_uuid"],
                 "SUCCESS",
-                output=serialize_value(
-                    output, status["serialization"], dbos._serializer
-                ),
+                output=serval,
             )
             return output
         except DBOSWorkflowConflictIDError:
@@ -1536,6 +1535,8 @@ def send(
     destination_id: str,
     message: Any,
     topic: Optional[str] = None,
+    *,
+    serialization_type: Optional[WorkflowSerializationFormat],
 ) -> None:
     def do_send(destination_id: str, message: Any, topic: Optional[str]) -> None:
         assert cur_ctx is not None
@@ -1549,6 +1550,7 @@ def send(
                 destination_id,
                 message,
                 topic,
+                serialization_type=serialization_type,
             )
 
     if cur_ctx and cur_ctx.is_within_workflow():

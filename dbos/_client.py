@@ -27,7 +27,12 @@ if TYPE_CHECKING:
 from dbos._dbos_config import get_system_database_url, is_valid_database_url
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
-from dbos._serialization import DefaultSerializer, Serializer, WorkflowInputs
+from dbos._serialization import (
+    DefaultSerializer,
+    Serializer,
+    WorkflowInputs,
+    WorkflowSerializationFormat,
+)
 from dbos._sys_db import (
     EnqueueOptionsInternal,
     StepInfo,
@@ -276,6 +281,10 @@ class DBOSClient:
         message: Any,
         topic: Optional[str] = None,
         idempotency_key: Optional[str] = None,
+        *,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
     ) -> None:
         idempotency_key = idempotency_key if idempotency_key else generate_uuid()
         status: WorkflowStatusInternal = {
@@ -317,7 +326,14 @@ class DBOSClient:
                 is_dequeued_request=False,
                 is_recovery_request=False,
             )
-        self._sys_db.send(status["workflow_uuid"], 0, destination_id, message, topic)
+        self._sys_db.send(
+            status["workflow_uuid"],
+            0,
+            destination_id,
+            message,
+            topic,
+            serialization_type=serialization_type,
+        )
 
     async def send_async(
         self,

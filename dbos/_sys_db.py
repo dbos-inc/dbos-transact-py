@@ -50,9 +50,12 @@ from ._serialization import (
     DBOSPortableJSON,
     Serializer,
     WorkflowInputs,
+    WorkflowSerializationFormat,
     deserialize_exception,
     deserialize_value,
     safe_deserialize,
+    serialization_for_type,
+    serialize_value,
 )
 
 if TYPE_CHECKING:
@@ -1511,10 +1514,17 @@ class SystemDatabase(ABC):
         destination_uuid: str,
         message: Any,
         topic: Optional[str] = None,
+        *,
+        serialization_type: Optional["WorkflowSerializationFormat"],
     ) -> None:
         function_name = "DBOS.send"
         start_time = int(time.time() * 1000)
         topic = topic if topic is not None else _dbos_null_topic
+        serval, serialization = serialize_value(
+            message,
+            serialization_for_type(serialization_type, self.serializer),
+            self.serializer,
+        )
         with self.engine.begin() as c:
             recorded_output = self._check_operation_execution_txn(
                 workflow_uuid, function_id, function_name, conn=c
@@ -1534,8 +1544,8 @@ class SystemDatabase(ABC):
                     sa.insert(SystemSchema.notifications).values(
                         destination_uuid=destination_uuid,
                         topic=topic,
-                        message=self.serializer.serialize(message),
-                        serialization=self.serializer.name(),  # TODO Serialization
+                        message=serval,
+                        serialization=serialization,
                     )
                 )
             except DBAPIError as dbapi_error:
