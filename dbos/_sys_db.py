@@ -2015,8 +2015,12 @@ class SystemDatabase(ABC):
             init_recv = c.execute(get_sql).fetchall()
 
         value: Any = None
+        serval: Optional[str] = None
+        serialization: Optional[str] = None
         if len(init_recv) > 0:
-            value = deserialize_value(init_recv[0][0], init_recv[0][1], self.serializer)
+            serval = init_recv[0][0]
+            serialization = init_recv[0][1]
+            value = deserialize_value(serval, serialization, self.serializer)
         else:
             # Wait for the notification
             actual_timeout = timeout_seconds
@@ -2034,9 +2038,9 @@ class SystemDatabase(ABC):
             with self.engine.begin() as c:
                 final_recv = c.execute(get_sql).fetchall()
                 if len(final_recv) > 0:
-                    value = deserialize_value(
-                        final_recv[0][0], final_recv[0][1], self.serializer
-                    )
+                    serval = final_recv[0][0]
+                    serialization = final_recv[0][1]
+                    value = deserialize_value(serval, serialization, self.serializer)
         condition.release()
         self.workflow_events_map.pop(payload)
 
@@ -2048,10 +2052,8 @@ class SystemDatabase(ABC):
                     "function_id": caller_ctx["function_id"],
                     "function_name": function_name,
                     "started_at_epoch_ms": start_time,
-                    "output": self.serializer.serialize(
-                        value
-                    ),  # None will be serialized to 'null'
-                    "serialization": self.serializer.name(),  # TODO Serialization
+                    "output": serval,
+                    "serialization": serialization,
                     "error": None,
                 }
             )
@@ -2318,14 +2320,15 @@ class SystemDatabase(ABC):
                     )
         result = fn()
         if ctx and ctx.is_workflow():
+            serval, serialization = serialize_value(result, None, self.serializer)
             self.record_operation_result(
                 {
                     "workflow_uuid": ctx.workflow_id,
                     "function_id": ctx.function_id,
                     "function_name": function_name,
                     "started_at_epoch_ms": start_time,
-                    "output": self.serializer.serialize(result),
-                    "serialization": self.serializer.name(),  # TODO Serialization
+                    "output": serval,
+                    "serialization": serialization,
                     "error": None,
                 }
             )
