@@ -14,7 +14,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
-    Awaitable,
     Callable,
     Coroutine,
     Dict,
@@ -27,13 +26,16 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
-    Union,
     overload,
 )
 
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._debouncer import debouncer_workflow
-from dbos._serialization import DefaultSerializer, Serializer
+from dbos._serialization import (
+    DefaultSerializer,
+    Serializer,
+    WorkflowSerializationFormat,
+)
 from dbos._sys_db import SystemDatabase, WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, generate_uuid
 from dbos._workflow_commands import fork_workflow
@@ -1024,7 +1026,14 @@ class DBOS:
 
     @classmethod
     def send(
-        cls, destination_id: str, message: Any, topic: Optional[str] = None
+        cls,
+        destination_id: str,
+        message: Any,
+        topic: Optional[str] = None,
+        *,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
     ) -> None:
         """Send a message to a workflow execution."""
         check_async("send")
@@ -1034,17 +1043,31 @@ class DBOS:
             destination_id,
             message,
             topic,
+            serialization_type=serialization_type,
         )
 
     @classmethod
     async def send_async(
-        cls, destination_id: str, message: Any, topic: Optional[str] = None
+        cls,
+        destination_id: str,
+        message: Any,
+        topic: Optional[str] = None,
+        *,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
     ) -> None:
         """Send a message to a workflow execution."""
         ctx = snapshot_step_context()
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(
-            send, _get_dbos_instance(), ctx, destination_id, message, topic
+            send,
+            _get_dbos_instance(),
+            ctx,
+            destination_id,
+            message,
+            topic,
+            serialization_type=serialization_type,
         )
 
     @classmethod
@@ -1108,7 +1131,13 @@ class DBOS:
         await asyncio.to_thread(durable_sleep, _get_dbos_instance(), cur_ctx, seconds)
 
     @classmethod
-    def set_event(cls, key: str, value: Any) -> None:
+    def set_event(
+        cls,
+        key: str,
+        value: Any,
+        *,
+        serialization_type: WorkflowSerializationFormat = WorkflowSerializationFormat.DEFAULT,
+    ) -> None:
         """
         Set a workflow event.
 
@@ -1123,10 +1152,22 @@ class DBOS:
 
         """
         check_async("set_event")
-        return set_event(_get_dbos_instance(), snapshot_step_context(), key, value)
+        return set_event(
+            _get_dbos_instance(),
+            snapshot_step_context(),
+            key,
+            value,
+            serialization_type=serialization_type,
+        )
 
     @classmethod
-    async def set_event_async(cls, key: str, value: Any) -> None:
+    async def set_event_async(
+        cls,
+        key: str,
+        value: Any,
+        *,
+        serialization_type: WorkflowSerializationFormat = WorkflowSerializationFormat.DEFAULT,
+    ) -> None:
         """
         Set a workflow event.
 
@@ -1142,7 +1183,14 @@ class DBOS:
         """
         ctx = snapshot_step_context()
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(set_event, _get_dbos_instance(), ctx, key, value)
+        await asyncio.to_thread(
+            set_event,
+            _get_dbos_instance(),
+            ctx,
+            key,
+            value,
+            serialization_type=serialization_type,
+        )
 
     @classmethod
     def get_event(cls, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:
@@ -1727,7 +1775,13 @@ class DBOS:
         ctx.authenticated_roles = authenticated_roles
 
     @classmethod
-    def write_stream(cls, key: str, value: Any) -> None:
+    def write_stream(
+        cls,
+        key: str,
+        value: Any,
+        *,
+        serialization_type: WorkflowSerializationFormat = WorkflowSerializationFormat.DEFAULT,
+    ) -> None:
         """
         Write a value to a stream.
 
@@ -1738,7 +1792,9 @@ class DBOS:
         """
         check_async("write_stream")
         ctx = snapshot_step_context(reserve_sleep_id=False)
-        write_stream(_get_dbos_instance(), ctx, key, value)
+        write_stream(
+            _get_dbos_instance(), ctx, key, value, serialization_type=serialization_type
+        )
 
     @classmethod
     def close_stream(cls, key: str) -> None:
@@ -1789,7 +1845,13 @@ class DBOS:
                 continue
 
     @classmethod
-    async def write_stream_async(cls, key: str, value: Any) -> None:
+    async def write_stream_async(
+        cls,
+        key: str,
+        value: Any,
+        *,
+        serialization_type: WorkflowSerializationFormat = WorkflowSerializationFormat.DEFAULT,
+    ) -> None:
         """
         Write a value to a stream asynchronously.
 
@@ -1801,7 +1863,13 @@ class DBOS:
         ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(
-            lambda: write_stream(_get_dbos_instance(), ctx, key, value)
+            lambda: write_stream(
+                _get_dbos_instance(),
+                ctx,
+                key,
+                value,
+                serialization_type=serialization_type,
+            )
         )
 
     @classmethod

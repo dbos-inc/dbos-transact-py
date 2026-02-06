@@ -1,7 +1,13 @@
 import base64
+import json
 import pickle
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Tuple, TypedDict
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from enum import Enum
+from typing import Any, Dict, Mapping, Optional, Tuple, TypedDict, cast
+
+from dbos._schemas.system_database import JsonValue, JsonWorkflowArgs
 
 from ._logger import dbos_logger
 
@@ -21,6 +27,10 @@ class Serializer(ABC):
     def deserialize(cls, serialized_data: str) -> Any:
         pass
 
+    @abstractmethod
+    def name(self) -> str:
+        pass
+
 
 class DefaultSerializer(Serializer):
 
@@ -37,9 +47,192 @@ class DefaultSerializer(Serializer):
         pickled_data: bytes = base64.b64decode(serialized_data)
         return pickle.loads(pickled_data)
 
+    def name(self) -> str:
+        return "py_pickle"
+
+
+############# Portable JSON ###################
+
+
+# ---------- Portable JSON conversions ----------
+def _to_rfc3339_utc(dt: datetime) -> str:
+    """
+    Canonical timestamp string: UTC RFC3339.
+    - Always emits Z, with milliseconds when present.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+
+    # Python emits "+00:00"; canonicalize to "Z".
+    s = dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return s
+
+
+def _portableify(value: Any) -> JsonValue:
+    """
+    Convert common Python objects into plain JSON-serializable structures
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+
+    if isinstance(value, datetime):
+        return _to_rfc3339_utc(value)
+
+    if isinstance(value, date):
+        return value.isoformat()
+
+    if isinstance(value, Decimal):
+        return format(value, "f")
+
+    if isinstance(value, (list, tuple)):
+        return [_portableify(v) for v in value]
+
+    if isinstance(value, set):
+        return [_portableify(v) for v in value]
+
+    if isinstance(value, Mapping):
+        out: dict[str, JsonValue] = {}
+        for k, v in value.items():
+            if not isinstance(k, str):
+                raise TypeError(
+                    "Attempt to do portable JSON serialization of a map with non-string keys"
+                )
+            out[k] = _portableify(v)
+        return out
+
+    raise TypeError(
+        f"Object of type {type(value).__name__} is not portable JSON serializable"
+    )
+
+
+# ---------- DBOS Portable JSON serializer ----------
+class DBOSPortableJSONSerializer(Serializer):
+    """
+    DBOS Portable JSON serializer:
+      - parse: json.loads
+      - stringify: portableify + json.dumps
+    """
+
+    def name(self) -> str:
+        return "portable_json"
+
+    def deserialize(self, text: str | None) -> Any:
+        return None if text is None else json.loads(text)
+
+    def serialize(self, value: Any) -> str:
+        portable = _portableify(value)
+        # separators -> compact encoding like JS default-ish
+        return json.dumps(portable, separators=(",", ":"), ensure_ascii=False)
+
+
+DBOSPortableJSON: Serializer = DBOSPortableJSONSerializer()
+DBOSDefaultSerializer: Serializer = DefaultSerializer()
+
+
+class WorkflowSerializationFormat(str, Enum):
+    PORTABLE = "portable"
+    NATIVE = "native"
+    DEFAULT = None
+
+
+def serialization_for_type(
+    serialization_type: Optional[WorkflowSerializationFormat], serializer: Serializer
+) -> str:
+    if serialization_type == WorkflowSerializationFormat.PORTABLE:
+        return DBOSPortableJSON.name()
+    if serialization_type == WorkflowSerializationFormat.NATIVE:
+        return DBOSDefaultSerializer.name()
+    return serializer.name()
+
+
+def serialize_value(
+    value: Optional[Any],
+    serialization: Optional[str],
+    serializer: Serializer,
+) -> tuple[Optional[str], str]:
+    if serialization == DBOSPortableJSON.name():
+        return DBOSPortableJSON.serialize(value), DBOSPortableJSON.name()
+    if serialization == DBOSDefaultSerializer.name():
+        return DBOSDefaultSerializer.serialize(value), DBOSDefaultSerializer.name()
+    if serialization is not None and serialization != serializer.name():
+        raise TypeError(f"Serialization {serialization} is not available")
+    return serializer.serialize(value), serializer.name()
+
+
+def deserialize_value(
+    serialized_value: Optional[str],
+    serialization: Optional[str],
+    serializer: Serializer,
+) -> Optional[Any]:
+    if serialized_value is None:
+        return None
+    if serialization == DBOSPortableJSON.name():
+        return DBOSPortableJSON.deserialize(serialized_value)
+    if serialization == DBOSDefaultSerializer.name():
+        return DBOSDefaultSerializer.deserialize(serialized_value)
+    if serialization is not None and serialization != serializer.name():
+        raise TypeError(f"Serialization {serialization} is not available")
+    return serializer.deserialize(serialized_value)
+
+
+def serialize_args(
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+    serialization: Optional[str],
+    serializer: Serializer,
+) -> tuple[str, str]:
+    if serialization == DBOSPortableJSON.name():
+        a: JsonWorkflowArgs = {"namedArgs": kwargs, "positionalArgs": list(args)}
+        serval = DBOSPortableJSON.serialize(a)
+        return serval, DBOSPortableJSON.name()
+    i: WorkflowInputs = {"args": args, "kwargs": kwargs}
+    if serialization == DBOSDefaultSerializer.name():
+        return DBOSDefaultSerializer.serialize(i), DBOSDefaultSerializer.name()
+    if serialization is not None and serialization != serializer.name():
+        raise TypeError(f"Serialization {serialization} is not available")
+    return serializer.serialize(i), serializer.name()
+
+
+def deserialize_args(
+    serialized_value: str, serialization: Optional[str], serializer: Serializer
+) -> WorkflowInputs:
+    if serialized_value is None:
+        return None
+    if serialization == DBOSPortableJSON.name():
+        args: JsonWorkflowArgs = DBOSPortableJSON.deserialize(serialized_value)
+        if (not "positionalArgs" in args) or args["positionalArgs"] is None:
+            args["positionalArgs"] = []
+        if (not "namedArgs" in args) or args["namedArgs"] is None:
+            args["namedArgs"] = {}
+        return {"args": tuple(args["positionalArgs"]), "kwargs": args["namedArgs"]}
+    if serialization == DBOSDefaultSerializer.name():
+        return cast(WorkflowInputs, DBOSDefaultSerializer.deserialize(serialized_value))
+    if serialization is not None and serialization != serializer.name():
+        raise TypeError(f"Serialization {serialization} is not available")
+    return cast(WorkflowInputs, serializer.deserialize(serialized_value))
+
+
+def deserialize_exception(
+    serialized_value: str, serialization: Optional[str], serializer: Serializer
+) -> Exception:
+    if serialized_value is None:
+        return None
+    if serialization == DBOSPortableJSON.name():
+        return cast(Exception, DBOSPortableJSON.deserialize(serialized_value))
+    if serialization == DBOSDefaultSerializer.name():
+        return cast(
+            Exception, DBOSDefaultSerializer.deserialize(serialized_value)
+        )  # TODO Portable
+    if serialization is not None and serialization != serializer.name():
+        raise TypeError(f"Serialization {serialization} is not available")
+    return cast(Exception, serializer.deserialize(serialized_value))
+
 
 def safe_deserialize(
     serializer: Serializer,
+    serialization: Optional[str],
     workflow_id: str,
     *,
     serialized_input: Optional[str],
@@ -56,7 +249,7 @@ def safe_deserialize(
     input: Optional[WorkflowInputs]
     try:
         input = (
-            serializer.deserialize(serialized_input)
+            deserialize_args(serialized_input, serialization, serializer)
             if serialized_input is not None
             else None
         )
@@ -68,7 +261,7 @@ def safe_deserialize(
     output: Optional[Any]
     try:
         output = (
-            serializer.deserialize(serialized_output)
+            deserialize_value(serialized_output, serialization, serializer)
             if serialized_output is not None
             else None
         )
@@ -80,7 +273,7 @@ def safe_deserialize(
     exception: Optional[Exception]
     try:
         exception = (
-            serializer.deserialize(serialized_exception)
+            deserialize_exception(serialized_exception, serialization, serializer)
             if serialized_exception is not None
             else None
         )
