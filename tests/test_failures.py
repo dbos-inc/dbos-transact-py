@@ -14,6 +14,7 @@ from dbos._dbos import WorkflowHandle
 from dbos._dbos_config import DBOSConfig
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
+    DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSMaxStepRetriesExceeded,
     DBOSNotAuthorizedError,
     DBOSQueueDeduplicatedError,
@@ -560,9 +561,8 @@ def test_recovery_attempts(dbos: DBOS, config: DBOSConfig) -> None:
     def child_workflow() -> None:
         event.wait()
 
-    @DBOS.workflow(max_recovery_attempts=1)
+    @DBOS.workflow(max_recovery_attempts=2)
     def parent_workflow() -> None:
-        print("PARENT START")
         with SetWorkflowID(child_id):
             child_workflow()
         event.wait()
@@ -600,6 +600,11 @@ def test_recovery_attempts(dbos: DBOS, config: DBOSConfig) -> None:
         assert (
             child_handle.get_status().status
             == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
+        )
+        assert parent_handle.get_status().status == WorkflowStatusString.ERROR.value
+        assert isinstance(
+            parent_handle.get_status().error,
+            DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
         )
 
     retry_until_success(check_attempt_3)

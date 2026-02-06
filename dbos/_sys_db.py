@@ -37,6 +37,7 @@ from dbos._utils import (
 from ._context import DBOSContext, get_local_dbos_context
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
+    DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSConflictingWorkflowError,
     DBOSNonExistentWorkflowError,
     DBOSQueueDeduplicatedError,
@@ -976,6 +977,13 @@ class SystemDatabase(ABC):
                         # Raise AwaitedWorkflowCancelledError here, not the cancellation exception
                         # because the awaiting workflow is not being cancelled.
                         raise DBOSAwaitedWorkflowCancelledError(workflow_id)
+                    elif (
+                        status
+                        == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
+                    ):
+                        raise DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(
+                            workflow_id
+                        )
                 else:
                     pass  # CB: I guess we're assuming the WF will show up eventually.
             time.sleep(polling_interval)

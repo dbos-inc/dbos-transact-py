@@ -63,6 +63,7 @@ class DBOSErrorCode(Enum):
     UnexpectedStep = 11
     QueueDeduplicated = 12
     AwaitedWorkflowCancelled = 13
+    AwaitedWorkflowMaxRecoveryAttemptsExceeded = 14
     ConflictingRegistrationError = 25
 
 
@@ -224,6 +225,19 @@ class DBOSAwaitedWorkflowCancelledError(DBOSException):
         super().__init__(
             f"Awaited workflow {workflow_id} was cancelled",
             dbos_error_code=DBOSErrorCode.AwaitedWorkflowCancelled.value,
+        )
+
+    def __reduce__(self) -> Any:
+        # Tell pickle how to reconstruct this object
+        return (self.__class__, (self.workflow_id,))
+
+
+class DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(DBOSException):
+    def __init__(self, workflow_id: str):
+        self.workflow_id = workflow_id
+        super().__init__(
+            f"Awaited workflow {workflow_id} exceeded its maximum recovery attempts",
+            dbos_error_code=DBOSErrorCode.AwaitedWorkflowMaxRecoveryAttemptsExceeded.value,
         )
 
     def __reduce__(self) -> Any:
