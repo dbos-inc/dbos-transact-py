@@ -207,7 +207,7 @@ class DBOSClient:
         inputs, serialization = serialize_args(
             args,
             kwargs,
-            serialization_for_type(options["serialization_type"], self._serializer),
+            serialization_for_type(options.get("serialization_type"), self._serializer),
             self._serializer,
         )
 
@@ -215,10 +215,10 @@ class DBOSClient:
             "workflow_uuid": workflow_id,
             "status": WorkflowStatusString.ENQUEUED.value,
             "name": workflow_name,
-            "class_name": options["class_name"],
+            "class_name": options.get("class_name"),
             "queue_name": queue_name,
             "app_version": enqueue_options_internal["app_version"],
-            "config_name": options["instance_name"],
+            "config_name": options.get("instance_name"),
             "authenticated_user": authenticated_user,
             "assumed_role": None,
             "authenticated_roles": authenticated_roles,
