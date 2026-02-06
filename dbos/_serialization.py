@@ -177,6 +177,24 @@ def deserialize_value(
     return serializer.deserialize(serialized_value)
 
 
+def serialize_args(
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+    serialization: Optional[str],
+    serializer: Serializer,
+) -> tuple[str, str]:
+    if serialization == DBOSPortableJSON.name():
+        a: JsonWorkflowArgs = {"namedArgs": kwargs, "positionalArgs": list(args)}
+        serval = DBOSPortableJSON.serialize(a)
+        return serval, DBOSPortableJSON.name()
+    i: WorkflowInputs = {"args": args, "kwargs": kwargs}
+    if serialization == DBOSDefaultSerializer.name():
+        return DBOSDefaultSerializer.serialize(i), DBOSDefaultSerializer.name()
+    if serialization is not None and serialization != serializer.name():
+        raise TypeError(f"Serialization {serialization} is not available")
+    return serializer.serialize(i), serializer.name()
+
+
 def deserialize_args(
     serialized_value: str, serialization: Optional[str], serializer: Serializer
 ) -> WorkflowInputs:
