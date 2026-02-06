@@ -477,7 +477,7 @@ def _get_wf_invoke_func(
             )
             dbos._sys_db.update_workflow_outcome(
                 status["workflow_uuid"],
-                "SUCCESS",
+                WorkflowStatusString.SUCCESS.value,
                 output=serval,
             )
             return output
@@ -492,7 +492,7 @@ def _get_wf_invoke_func(
         except Exception as error:
             dbos._sys_db.update_workflow_outcome(
                 status["workflow_uuid"],
-                "ERROR",
+                WorkflowStatusString.ERROR.value,
                 error=dbos._serializer.serialize(
                     error
                 ),  # TODO Follow existing serialization
