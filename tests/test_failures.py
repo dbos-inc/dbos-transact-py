@@ -25,7 +25,7 @@ from dbos._serialization import DefaultSerializer, safe_deserialize
 from dbos._sys_db import WorkflowStatusString
 from dbos._sys_db_postgres import PostgresSystemDatabase
 
-from .conftest import queue_entries_are_cleaned_up
+from .conftest import queue_entries_are_cleaned_up, retry_until_success
 
 
 def test_transaction_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
@@ -542,3 +542,49 @@ def test_nonserializable_return(dbos: DBOS) -> None:
 
     with pytest.raises(TypeError):
         workflow()
+
+
+def test_recovery_attempts(dbos: DBOS, config: DBOSConfig) -> None:
+
+    config["application_version"] = "0.0.1"
+    DBOS.destroy()
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    event = threading.Event()
+
+    @DBOS.workflow(max_recovery_attempts=1)
+    def workflow() -> None:
+        event.wait()
+
+    queue = Queue("test_queue", polling_interval_sec=0.1)
+
+    handle = queue.enqueue(workflow)
+
+    def check_attempt_1() -> None:
+        assert handle.get_status().recovery_attempts == 1
+
+    retry_until_success(check_attempt_1)
+
+    DBOS.destroy()
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    def check_attempt_2() -> None:
+        assert handle.get_status().recovery_attempts == 2
+
+    retry_until_success(check_attempt_2)
+
+    DBOS.destroy()
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    def check_attempt_3() -> None:
+        assert handle.get_status().recovery_attempts == 3
+        assert (
+            handle.get_status().status
+            == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
+        )
+
+    retry_until_success(check_attempt_3)
+    event.set()
