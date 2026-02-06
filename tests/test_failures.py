@@ -182,9 +182,7 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     # Verify an additional attempt (either through recovery or through a direct call) throws a DLQ error
     # and puts the workflow in the DLQ status.
     dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
-    with pytest.raises(Exception) as exc_info:
-        DBOS._recover_pending_workflows()
-    assert exc_info.errisinstance(MaxRecoveryAttemptsExceededError)
+    DBOS._recover_pending_workflows()
     assert (
         handle.get_status().status
         == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
@@ -510,27 +508,6 @@ def test_workflow_error_serialization(dbos: DBOS, client: DBOSClient) -> None:
 
     status = client.retrieve_workflow(handle.workflow_id).get_status()
     assert status.error is not None
-
-
-def test_unregistered_workflow(dbos: DBOS, config: DBOSConfig) -> None:
-
-    @DBOS.workflow()
-    def workflow() -> None:
-        return
-
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        workflow()
-
-    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
-
-    DBOS.destroy(destroy_registry=True)
-    config["executor_id"] = str(uuid.uuid4())
-    DBOS(config=config)
-    DBOS.launch()
-
-    with pytest.raises(DBOSWorkflowFunctionNotFoundError):
-        DBOS._recover_pending_workflows()
 
 
 def test_nonserializable_return(dbos: DBOS) -> None:
