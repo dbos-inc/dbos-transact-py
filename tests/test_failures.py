@@ -609,3 +609,4 @@ def test_recovery_attempts(dbos: DBOS, config: DBOSConfig) -> None:
 
     retry_until_success(check_attempt_3)
     event.set()
+    DBOS.destroy(destroy_registry=True)
