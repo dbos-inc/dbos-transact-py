@@ -220,8 +220,8 @@ class ExportedWorkflow(TypedDict):
 
 
 class GetPendingWorkflowsOutput:
-    def __init__(self, *, workflow_uuid: str, queue_name: Optional[str] = None):
-        self.workflow_uuid: str = workflow_uuid
+    def __init__(self, *, workflow_id: str, queue_name: Optional[str] = None):
+        self.workflow_id: str = workflow_id
         self.queue_name: Optional[str] = queue_name
 
 
@@ -1198,7 +1198,7 @@ class SystemDatabase(ABC):
 
             return [
                 GetPendingWorkflowsOutput(
-                    workflow_uuid=row.workflow_uuid,
+                    workflow_id=row.workflow_uuid,
                     queue_name=row.queue_name,
                 )
                 for row in rows

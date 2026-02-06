@@ -10,6 +10,7 @@ from sqlalchemy.exc import InvalidRequestError, OperationalError
 
 from dbos import DBOS, Queue, SetWorkflowID
 from dbos._client import DBOSClient
+from dbos._dbos import WorkflowHandle
 from dbos._dbos_config import DBOSConfig
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
@@ -553,16 +554,29 @@ def test_recovery_attempts(dbos: DBOS, config: DBOSConfig) -> None:
 
     event = threading.Event()
 
+    child_id = str(uuid.uuid4())
+
     @DBOS.workflow(max_recovery_attempts=1)
-    def workflow() -> None:
+    def child_workflow() -> None:
+        event.wait()
+
+    @DBOS.workflow(max_recovery_attempts=1)
+    def parent_workflow() -> None:
+        print("PARENT START")
+        with SetWorkflowID(child_id):
+            child_workflow()
         event.wait()
 
     queue = Queue("test_queue", polling_interval_sec=0.1)
 
-    handle = queue.enqueue(workflow)
+    parent_handle = queue.enqueue(parent_workflow)
+    child_handle: WorkflowHandle[None] = DBOS.retrieve_workflow(
+        child_id, existing_workflow=False
+    )
 
     def check_attempt_1() -> None:
-        assert handle.get_status().recovery_attempts == 1
+        assert parent_handle.get_status().recovery_attempts == 1
+        assert child_handle.get_status().recovery_attempts == 1
 
     retry_until_success(check_attempt_1)
 
@@ -571,7 +585,8 @@ def test_recovery_attempts(dbos: DBOS, config: DBOSConfig) -> None:
     DBOS.launch()
 
     def check_attempt_2() -> None:
-        assert handle.get_status().recovery_attempts == 2
+        assert parent_handle.get_status().recovery_attempts == 2
+        assert child_handle.get_status().recovery_attempts == 2
 
     retry_until_success(check_attempt_2)
 
@@ -580,9 +595,10 @@ def test_recovery_attempts(dbos: DBOS, config: DBOSConfig) -> None:
     DBOS.launch()
 
     def check_attempt_3() -> None:
-        assert handle.get_status().recovery_attempts == 3
+        assert parent_handle.get_status().recovery_attempts == 3
+        assert child_handle.get_status().recovery_attempts == 3
         assert (
-            handle.get_status().status
+            child_handle.get_status().status
             == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
         )
 
