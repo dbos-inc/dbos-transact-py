@@ -3,7 +3,9 @@ import os
 import subprocess
 import sys
 import time
-from typing import Any, Generator, Tuple
+from typing import Any, Callable, Generator, Optional, Tuple, TypeVar
+
+T = TypeVar("T")
 from urllib.parse import quote
 
 import pytest
@@ -254,6 +256,21 @@ def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
                 break
         time.sleep(1)
     return success
+
+
+def retry_until_success(
+    func: Callable[[], T], interval: float = 1, max_attempts: int = 5
+) -> T:
+    error: Optional[Exception] = None
+    for _ in range(max_attempts):
+        try:
+            return func()
+        except Exception as e:
+            error = e
+            time.sleep(interval)
+    if error is not None:
+        raise error
+    raise RuntimeError("retry_until_success failed without an exception")
 
 
 # Force exit after test success or failure with appropriate error code

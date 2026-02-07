@@ -37,6 +37,7 @@ from dbos._utils import (
 from ._context import DBOSContext, get_local_dbos_context
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
+    DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSConflictingWorkflowError,
     DBOSNonExistentWorkflowError,
     DBOSQueueDeduplicatedError,
@@ -220,8 +221,8 @@ class ExportedWorkflow(TypedDict):
 
 
 class GetPendingWorkflowsOutput:
-    def __init__(self, *, workflow_uuid: str, queue_name: Optional[str] = None):
-        self.workflow_uuid: str = workflow_uuid
+    def __init__(self, *, workflow_id: str, queue_name: Optional[str] = None):
+        self.workflow_id: str = workflow_id
         self.queue_name: Optional[str] = queue_name
 
 
@@ -976,6 +977,13 @@ class SystemDatabase(ABC):
                         # Raise AwaitedWorkflowCancelledError here, not the cancellation exception
                         # because the awaiting workflow is not being cancelled.
                         raise DBOSAwaitedWorkflowCancelledError(workflow_id)
+                    elif (
+                        status
+                        == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
+                    ):
+                        raise DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(
+                            workflow_id
+                        )
                 else:
                     pass  # CB: I guess we're assuming the WF will show up eventually.
             time.sleep(polling_interval)
@@ -1198,7 +1206,7 @@ class SystemDatabase(ABC):
 
             return [
                 GetPendingWorkflowsOutput(
-                    workflow_uuid=row.workflow_uuid,
+                    workflow_id=row.workflow_uuid,
                     queue_name=row.queue_name,
                 )
                 for row in rows

@@ -17,10 +17,10 @@ def _recover_workflow(
     dbos: "DBOS", workflow: GetPendingWorkflowsOutput
 ) -> "WorkflowHandle[Any]":
     if workflow.queue_name:
-        cleared = dbos._sys_db.clear_queue_assignment(workflow.workflow_uuid)
+        cleared = dbos._sys_db.clear_queue_assignment(workflow.workflow_id)
         if cleared:
-            return dbos.retrieve_workflow(workflow.workflow_uuid)
-    return execute_workflow_by_id(dbos, workflow.workflow_uuid, True, False)
+            return dbos.retrieve_workflow(workflow.workflow_id)
+    return execute_workflow_by_id(dbos, workflow.workflow_id, True, False)
 
 
 def startup_recovery_thread(
@@ -37,12 +37,12 @@ def startup_recovery_thread(
             except DBOSWorkflowFunctionNotFoundError:
                 time.sleep(1)
             except Exception as e:
-                with UseLogAttributes(workflow_id=pending_workflow.workflow_uuid):
+                with UseLogAttributes(workflow_id=pending_workflow.workflow_id):
                     dbos.logger.error(
-                        f"Exception encountered when recovering workflow {pending_workflow.workflow_uuid}:",
+                        f"Exception encountered when recovering workflow {pending_workflow.workflow_id}:",
                         exc_info=e,
                     )
-                raise
+                pending_workflows.remove(pending_workflow)
 
 
 def recover_pending_workflows(
@@ -59,12 +59,11 @@ def recover_pending_workflows(
                 handle = _recover_workflow(dbos, pending_workflow)
                 workflow_handles.append(handle)
             except Exception as e:
-                with UseLogAttributes(workflow_id=pending_workflow.workflow_uuid):
+                with UseLogAttributes(workflow_id=pending_workflow.workflow_id):
                     dbos.logger.error(
-                        f"Exception encountered when recovering workflow {pending_workflow.workflow_uuid}:",
+                        f"Exception encountered when recovering workflow {pending_workflow.workflow_id}:",
                         exc_info=e,
                     )
-                raise
         dbos.logger.info(
             f"Recovering {len(pending_workflows)} workflows for executor {executor_id} from version {GlobalParams.app_version}"
         )

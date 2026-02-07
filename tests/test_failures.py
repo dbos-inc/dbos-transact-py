@@ -10,9 +10,11 @@ from sqlalchemy.exc import InvalidRequestError, OperationalError
 
 from dbos import DBOS, Queue, SetWorkflowID
 from dbos._client import DBOSClient
+from dbos._dbos import WorkflowHandle
 from dbos._dbos_config import DBOSConfig
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
+    DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSMaxStepRetriesExceeded,
     DBOSNotAuthorizedError,
     DBOSQueueDeduplicatedError,
@@ -25,7 +27,7 @@ from dbos._serialization import DefaultSerializer, safe_deserialize
 from dbos._sys_db import WorkflowStatusString
 from dbos._sys_db_postgres import PostgresSystemDatabase
 
-from .conftest import queue_entries_are_cleaned_up
+from .conftest import queue_entries_are_cleaned_up, retry_until_success
 
 
 def test_transaction_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
@@ -180,9 +182,7 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     # Verify an additional attempt (either through recovery or through a direct call) throws a DLQ error
     # and puts the workflow in the DLQ status.
     dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
-    with pytest.raises(Exception) as exc_info:
-        DBOS._recover_pending_workflows()
-    assert exc_info.errisinstance(MaxRecoveryAttemptsExceededError)
+    DBOS._recover_pending_workflows()
     assert (
         handle.get_status().status
         == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
@@ -510,27 +510,6 @@ def test_workflow_error_serialization(dbos: DBOS, client: DBOSClient) -> None:
     assert status.error is not None
 
 
-def test_unregistered_workflow(dbos: DBOS, config: DBOSConfig) -> None:
-
-    @DBOS.workflow()
-    def workflow() -> None:
-        return
-
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        workflow()
-
-    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
-
-    DBOS.destroy(destroy_registry=True)
-    config["executor_id"] = str(uuid.uuid4())
-    DBOS(config=config)
-    DBOS.launch()
-
-    with pytest.raises(DBOSWorkflowFunctionNotFoundError):
-        DBOS._recover_pending_workflows()
-
-
 def test_nonserializable_return(dbos: DBOS) -> None:
     @DBOS.step()
     def step() -> Generator[str, Any, None]:
@@ -542,3 +521,69 @@ def test_nonserializable_return(dbos: DBOS) -> None:
 
     with pytest.raises(TypeError):
         workflow()
+
+
+def test_recovery_attempts(dbos: DBOS, config: DBOSConfig) -> None:
+
+    config["application_version"] = "0.0.1"
+    DBOS.destroy()
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    event = threading.Event()
+
+    child_id = str(uuid.uuid4())
+
+    @DBOS.workflow(max_recovery_attempts=1)
+    def child_workflow() -> None:
+        event.wait()
+
+    @DBOS.workflow(max_recovery_attempts=2)
+    def parent_workflow() -> None:
+        with SetWorkflowID(child_id):
+            child_workflow()
+        event.wait()
+
+    queue = Queue("test_queue", polling_interval_sec=0.1)
+
+    parent_handle = queue.enqueue(parent_workflow)
+    child_handle: WorkflowHandle[None] = DBOS.retrieve_workflow(
+        child_id, existing_workflow=False
+    )
+
+    def check_attempt_1() -> None:
+        assert parent_handle.get_status().recovery_attempts == 1
+        assert child_handle.get_status().recovery_attempts == 1
+
+    retry_until_success(check_attempt_1)
+
+    DBOS.destroy()
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    def check_attempt_2() -> None:
+        assert parent_handle.get_status().recovery_attempts == 2
+        assert child_handle.get_status().recovery_attempts == 2
+
+    retry_until_success(check_attempt_2)
+
+    DBOS.destroy()
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    def check_attempt_3() -> None:
+        assert parent_handle.get_status().recovery_attempts == 3
+        assert child_handle.get_status().recovery_attempts == 3
+        assert (
+            child_handle.get_status().status
+            == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
+        )
+        assert parent_handle.get_status().status == WorkflowStatusString.ERROR.value
+        assert isinstance(
+            parent_handle.get_status().error,
+            DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
+        )
+
+    retry_until_success(check_attempt_3)
+    event.set()
+    DBOS.destroy(destroy_registry=True)
