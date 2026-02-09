@@ -2950,6 +2950,7 @@ class SystemDatabase(ABC):
             with self.engine.begin() as c:
                 _do(c)
 
+    @db_retry()
     def call_txn_as_step(
         self,
         workflow_uuid: str,
