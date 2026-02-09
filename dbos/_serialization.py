@@ -7,7 +7,12 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Dict, Mapping, Optional, Tuple, TypedDict, cast
 
-from dbos._schemas.system_database import JsonValue, JsonWorkflowArgs
+from dbos._schemas.system_database import (
+    JsonValue,
+    JsonWorkflowArgs,
+    JsonWorkflowErrorData,
+    PortableWorkflowError,
+)
 
 from ._logger import dbos_logger
 
@@ -214,17 +219,97 @@ def deserialize_args(
     return cast(WorkflowInputs, serializer.deserialize(serialized_value))
 
 
+def _safe_str(x: Any) -> str:
+    try:
+        return str(x)
+    except Exception:
+        try:
+            return repr(x)
+        except Exception:
+            return "<unprintable>"
+
+
+def _extract_code(err: Any) -> int | str | None:
+    """
+    Best-effort extraction of an app-specific error code.
+    """
+    for attr in ("code", "error_code", "errno", "status", "status_code"):
+        try:
+            v = getattr(err, attr)
+        except Exception:
+            continue
+        if isinstance(v, (int, str)) or v is None:
+            return v
+
+    return None
+
+
+def exception_to_workflow_error_data(
+    err: Any,
+) -> JsonWorkflowErrorData:
+    """
+    Best-effort conversion of an arbitrary exception/error-like object into JsonWorkflowErrorData.
+
+    - name: class/type name if possible, else "Error"
+    - message: str(err) best effort
+    - code: tries common attributes (code/error_code/errno/status/status_code) + args heuristics
+    - data: optional structured extras (cause/context/origin/traceback) converted to JSON-ish values
+    """
+    try:
+        name = type(err).__name__
+    except Exception:
+        name = "Error"
+
+    message = _safe_str(err)
+
+    code = _extract_code(err)
+
+    out: JsonWorkflowErrorData = {"name": name, "message": message}
+
+    out["code"] = code
+
+    for attr in ("data", "details", "payload", "extra", "meta", "metadata"):
+        try:
+            v = getattr(err, attr)
+        except Exception:
+            continue
+        if callable(v):
+            continue
+        out["data"] = v
+        break
+
+    return out
+
+
+def serialize_exception(
+    value: Exception,
+    serialization: Optional[str],
+    serializer: Serializer,
+) -> tuple[Optional[str], str]:
+    if serialization == DBOSPortableJSON.name():
+        return (
+            DBOSPortableJSON.serialize(exception_to_workflow_error_data(value)),
+            DBOSPortableJSON.name(),
+        )
+    if serialization == DBOSDefaultSerializer.name():
+        return DBOSDefaultSerializer.serialize(value), DBOSDefaultSerializer.name()
+    if serialization is not None and serialization != serializer.name():
+        raise TypeError(f"Serialization {serialization} is not available")
+    return serializer.serialize(value), serializer.name()
+
+
 def deserialize_exception(
     serialized_value: str, serialization: Optional[str], serializer: Serializer
 ) -> Exception:
     if serialized_value is None:
         return None
     if serialization == DBOSPortableJSON.name():
-        return cast(Exception, DBOSPortableJSON.deserialize(serialized_value))
+        errdata: JsonWorkflowErrorData = DBOSPortableJSON.deserialize(serialized_value)
+        return PortableWorkflowError(
+            errdata["message"], errdata["name"], errdata["code"], errdata["data"]
+        )
     if serialization == DBOSDefaultSerializer.name():
-        return cast(
-            Exception, DBOSDefaultSerializer.deserialize(serialized_value)
-        )  # TODO Portable
+        return cast(Exception, DBOSDefaultSerializer.deserialize(serialized_value))
     if serialization is not None and serialization != serializer.name():
         raise TypeError(f"Serialization {serialization} is not available")
     return cast(Exception, serializer.deserialize(serialized_value))
