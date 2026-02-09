@@ -9,31 +9,78 @@ from ._logger import dbos_logger
 from ._sys_db import WorkflowSchedule
 
 
-def _run_scheduled_workflow(
-    schedule: WorkflowSchedule,
-    next_exec_time: datetime,
-) -> None:
-    from ._dbos import _get_dbos_instance
+class _ScheduleThread:
+    """Manages a dedicated thread for a single cron schedule."""
 
-    dbos = _get_dbos_instance()
-    workflow_name = schedule["workflow_name"]
-    func = dbos._registry.workflow_info_map.get(workflow_name)
-    if func is None:
-        dbos_logger.warning(
-            f"Scheduled workflow '{workflow_name}' is not registered, skipping"
+    def __init__(self, schedule: WorkflowSchedule):
+        self.schedule_name: str = schedule["schedule_name"]
+        self.workflow_name: str = schedule["workflow_name"]
+        self.cron: str = schedule["schedule"]
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def _loop(self) -> None:
+        from ._dbos import _get_dbos_instance
+
+        dbos = _get_dbos_instance()
+        func = dbos._registry.workflow_info_map.get(self.workflow_name)
+        if func is None:
+            dbos_logger.warning(
+                f"Scheduled workflow '{self.workflow_name}' is not registered, skipping"
+            )
+            return
+        scheduler_queue = dbos._registry.get_internal_queue()
+        try:
+            it = croniter(
+                self.cron, datetime.now(timezone.utc), second_at_beginning=True
+            )
+        except Exception:
+            dbos_logger.error(
+                f"Cannot run schedule '{self.schedule_name}'. "
+                f'Invalid crontab "{self.cron}"'
+            )
+            return
+        while not self._stop_event.is_set():
+            next_exec_time = it.get_next(datetime)
+            sleep_time = (next_exec_time - datetime.now(timezone.utc)).total_seconds()
+            sleep_time = max(0, sleep_time)
+            max_jitter = min(sleep_time / 10, 10)
+            jitter = random.uniform(0, max_jitter)
+            if self._stop_event.wait(timeout=sleep_time + jitter):
+                return
+            try:
+                workflow_id = f"sched-{self.schedule_name}-{next_exec_time.isoformat()}"
+                if not dbos._sys_db.get_workflow_status(workflow_id):
+                    with SetWorkflowID(workflow_id):
+                        scheduler_queue.enqueue(
+                            func, next_exec_time, datetime.now(timezone.utc)
+                        )
+            except Exception:
+                dbos_logger.warning(
+                    f"Exception in schedule '{self.schedule_name}': "
+                    f"{traceback.format_exc()}"
+                )
+
+    def changed(self, schedule: WorkflowSchedule) -> bool:
+        return (
+            self.workflow_name != schedule["workflow_name"]
+            or self.cron != schedule["schedule"]
         )
-        return
-    scheduler_queue = dbos._registry.get_internal_queue()
-    workflow_id = f"sched-{schedule["schedule_name"]}-{next_exec_time.isoformat()}"
-    if not dbos._sys_db.get_workflow_status(workflow_id):
-        with SetWorkflowID(workflow_id):
-            scheduler_queue.enqueue(func, next_exec_time, datetime.now(timezone.utc))
+
+    def stop(self, join: bool = False) -> None:
+        self._stop_event.set()
+        if join:
+            self._thread.join(timeout=5.0)
 
 
 def dynamic_scheduler_loop(stop_event: threading.Event) -> None:
     from ._dbos import _get_dbos_instance
 
     dbos = _get_dbos_instance()
+
+    # Active schedule threads keyed by schedule_id
+    active: dict[str, _ScheduleThread] = {}
 
     while not stop_event.is_set():
         try:
@@ -43,38 +90,30 @@ def dynamic_scheduler_loop(stop_event: threading.Event) -> None:
                 f"Exception polling schedules: {traceback.format_exc()}"
             )
             if stop_event.wait(timeout=1.0):
-                return
+                break
             continue
 
-        now = datetime.now(timezone.utc)
-        earliest_wait: float = 60.0  # default poll interval
+        current_ids = {s["schedule_id"] for s in schedules}
 
+        # Stop threads for deleted schedules
+        for schedule_id in list(active.keys()):
+            if schedule_id not in current_ids:
+                active[schedule_id].stop()
+                del active[schedule_id]
+
+        # Start or restart threads for new/changed schedules
         for schedule in schedules:
-            cron_expr = schedule["schedule"]
-            try:
-                it = croniter(cron_expr, now, second_at_beginning=True)
-            except Exception:
-                dbos_logger.warning(
-                    f"Invalid cron expression '{cron_expr}' for schedule "
-                    f"'{schedule['schedule_name']}', skipping"
-                )
-                continue
+            schedule_id = schedule["schedule_id"]
+            existing = active.get(schedule_id)
+            if existing is None:
+                active[schedule_id] = _ScheduleThread(schedule)
+            elif existing.changed(schedule):
+                existing.stop()
+                active[schedule_id] = _ScheduleThread(schedule)
 
-            next_exec_time: datetime = it.get_next(datetime)
-            wait = (next_exec_time - now).total_seconds()
-            if wait <= 0:
-                try:
-                    _run_scheduled_workflow(schedule, next_exec_time)
-                except Exception:
-                    dbos_logger.warning(
-                        f"Exception running scheduled workflow "
-                        f"'{schedule['schedule_name']}': {traceback.format_exc()}"
-                    )
-            else:
-                earliest_wait = min(earliest_wait, wait)
+        if stop_event.wait(timeout=1.0):
+            break
 
-        # Sleep until the earliest upcoming execution (with jitter)
-        max_jitter = min(earliest_wait / 10, 10)
-        jitter = random.uniform(0, max_jitter)
-        if stop_event.wait(timeout=earliest_wait + jitter):
-            return
+    # Clean up all threads on shutdown
+    for st in active.values():
+        st.stop(join=True)
