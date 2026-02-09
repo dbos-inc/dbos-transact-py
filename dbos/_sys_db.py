@@ -536,6 +536,7 @@ class SystemDatabase(ABC):
                 deduplication_id=status["deduplication_id"],
                 priority=status["priority"],
                 inputs=status["inputs"],
+                serialization=status["serialization"],
                 queue_partition_key=status["queue_partition_key"],
                 parent_workflow_id=status["parent_workflow_id"],
                 owner_xid=owner_xid,

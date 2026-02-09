@@ -9,7 +9,12 @@ import pytest
 import sqlalchemy as sa
 
 from dbos import DBOS, Queue, WorkflowHandle
-from dbos._serialization import WorkflowSerializationFormat
+from dbos._schemas.system_database import SystemSchema
+from dbos._serialization import (
+    DBOSDefaultSerializer,
+    DBOSPortableJSON,
+    WorkflowSerializationFormat,
+)
 
 
 def workflow_func(
@@ -60,6 +65,118 @@ def workflow_func(
     r = DBOS.recv("incoming")
 
     return f"{s}-{x}-{o['k']}:{','.join(o['v'])}@{json.dumps(r)}"
+
+
+def test_portable_ser(dbos: DBOS) -> None:
+    @DBOS.dbos_class("workflows")
+    class WFTest:
+        @staticmethod
+        @DBOS.workflow(name="workflowDefault")
+        def defSerPortable(
+            s: str,
+            x: int,
+            o: Dict[str, Any],
+            wfid: Optional[str] = None,
+        ) -> str:
+            DBOS.logger.info("defSerPortable was called...")
+            return workflow_func(s, x, o, wfid)
+
+        @classmethod
+        @DBOS.workflow(name="simpleRecv")
+        def recv(cls, topic: str) -> Any:
+            return DBOS.recv(topic)
+
+    queue = Queue("testq")
+
+    def check_wf_ser(wfid: str, ser: str) -> None:
+        with dbos._sys_db.engine.connect() as c:
+            result = c.execute(
+                sa.select(SystemSchema.workflow_status.c.serialization).where(
+                    SystemSchema.workflow_status.c.workflow_uuid == wfid,
+                )
+            )
+            row = result.fetchone()
+            assert row is not None
+            assert row.serialization == ser
+
+    def check_msg_ser(dstdid: str, topic: str, ser: str) -> None:
+        with dbos._sys_db.engine.connect() as c:
+            result = c.execute(
+                sa.select(SystemSchema.notifications.c.serialization).where(
+                    SystemSchema.notifications.c.destination_uuid == dstdid,
+                    SystemSchema.notifications.c.topic == topic,
+                )
+            )
+            row = result.fetchone()
+            assert row is not None
+            assert row.serialization == ser
+
+    def check_evt_ser(wfid: str, key: str, ser: str) -> None:
+        with dbos._sys_db.engine.connect() as c:
+            result = c.execute(
+                sa.select(SystemSchema.workflow_events.c.serialization).where(
+                    SystemSchema.workflow_events.c.workflow_uuid == wfid,
+                    SystemSchema.workflow_events.c.key == key,
+                )
+            )
+            row = result.fetchone()
+
+            assert row is not None
+
+            assert row.serialization == ser
+
+    def check_stream_ser(wfid: str, key: str, ser: str) -> None:
+        with dbos._sys_db.engine.connect() as c:
+            result = c.execute(
+                sa.select(SystemSchema.streams.c.serialization).where(
+                    SystemSchema.streams.c.workflow_uuid == wfid,
+                    SystemSchema.streams.c.key == key,
+                )
+            )
+            row = result.fetchone()
+
+            assert row is not None
+
+            assert row.serialization == ser
+
+    # Run WF with default serialization
+    # But first, receivers
+    drpwfh = DBOS.start_workflow(WFTest.recv, "native")
+    wfhd = DBOS.start_workflow(
+        WFTest.defSerPortable, "s", 1, {"k": "k", "v": ["v"]}, drpwfh.workflow_id
+    )
+    DBOS.send(wfhd.workflow_id, "m", "incoming")
+    assert DBOS.get_event(wfhd.workflow_id, "defstat") == {"status": "Happy"}
+    assert DBOS.get_event(wfhd.workflow_id, "nstat") == {"status": "Happy"}
+    assert DBOS.get_event(wfhd.workflow_id, "pstat") == {"status": "Happy"}
+    ddread = list(DBOS.read_stream(wfhd.workflow_id, "defstream"))
+    assert ddread == [{"stream": "OhYeah"}]
+    dnread = list(DBOS.read_stream(wfhd.workflow_id, "nstream"))
+    assert dnread == [{"stream": "OhYeah"}]
+    dpread = list(DBOS.read_stream(wfhd.workflow_id, "pstream"))
+    assert dpread == [{"stream": "OhYeah"}]
+
+    rvd = wfhd.get_result()
+    assert rvd == 's-1-k:v@"m"'
+    assert drpwfh.get_result() == {"message": "Hello!"}
+
+    # Snoop the DB to make sure serialization format is correct
+    # WF
+    check_wf_ser(wfhd.workflow_id, DBOSDefaultSerializer.name())
+    # Messages
+    check_msg_ser(drpwfh.workflow_id, "default", DBOSDefaultSerializer.name())
+    # check_msg_ser(drpwfh.workflow_id, 'native', DBOSDefaultSerializer.name()) # This got deleted
+    check_msg_ser(drpwfh.workflow_id, "portable", DBOSPortableJSON.name())
+
+    # Events
+    check_evt_ser(wfhd.workflow_id, "defstat", DBOSDefaultSerializer.name())
+    check_evt_ser(wfhd.workflow_id, "nstat", DBOSDefaultSerializer.name())
+    check_evt_ser(wfhd.workflow_id, "pstat", DBOSPortableJSON.name())
+
+    # Streams
+    check_stream_ser(wfhd.workflow_id, "defstream", DBOSDefaultSerializer.name())
+    check_stream_ser(wfhd.workflow_id, "nstream", DBOSDefaultSerializer.name())
+    check_stream_ser(wfhd.workflow_id, "pstream", DBOSPortableJSON.name())
 
 
 def test_directinsert_workflows(dbos: DBOS) -> None:
