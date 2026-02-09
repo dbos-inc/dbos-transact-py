@@ -74,6 +74,7 @@ from ._registrations import (
     get_or_create_class_info,
 )
 from ._roles import default_required_roles, required_roles
+from ._scheduler import dynamic_scheduler_loop
 from ._scheduler_decorator import DecoratedScheduledWorkflow, scheduled
 from ._sys_db import (
     StepInfo,
@@ -596,6 +597,17 @@ class DBOS:
                 poller_thread.start()
                 self._background_threads.append(poller_thread)
             self._registry.pollers = []
+
+            # Start the dynamic scheduler thread
+            scheduler_evt = threading.Event()
+            self.poller_stop_events.append(scheduler_evt)
+            scheduler_thread = threading.Thread(
+                target=dynamic_scheduler_loop,
+                args=(scheduler_evt,),
+                daemon=True,
+            )
+            scheduler_thread.start()
+            self._background_threads.append(scheduler_thread)
 
             dbos_logger.info("DBOS launched!")
 
