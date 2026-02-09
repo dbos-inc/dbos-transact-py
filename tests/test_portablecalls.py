@@ -9,6 +9,7 @@ import pytest
 import sqlalchemy as sa
 
 from dbos import DBOS, Queue, WorkflowHandle
+from dbos._serialization import WorkflowSerializationFormat
 
 
 def workflow_func(
@@ -18,17 +19,43 @@ def workflow_func(
     wfid: Optional[str] = None,
 ) -> str:
     DBOS.set_event("defstat", {"status": "Happy"})
-    DBOS.set_event("nstat", {"status": "Happy"})  # TODO Ser
-    DBOS.set_event("pstat", {"status": "Happy"})  # TODO Ser
+    DBOS.set_event(
+        "nstat",
+        {"status": "Happy"},
+        serialization_type=WorkflowSerializationFormat.NATIVE,
+    )
+    DBOS.set_event(
+        "pstat",
+        {"status": "Happy"},
+        serialization_type=WorkflowSerializationFormat.PORTABLE,
+    )
 
     DBOS.write_stream("defstream", {"stream": "OhYeah"})
-    DBOS.write_stream("nstream", {"stream": "OhYeah"})  # TODO Ser
-    DBOS.write_stream("pstream", {"stream": "OhYeah"})  # TODO Ser
+    DBOS.write_stream(
+        "nstream",
+        {"stream": "OhYeah"},
+        serialization_type=WorkflowSerializationFormat.NATIVE,
+    )
+    DBOS.write_stream(
+        "pstream",
+        {"stream": "OhYeah"},
+        serialization_type=WorkflowSerializationFormat.PORTABLE,
+    )
 
     if wfid is not None:
         DBOS.send(wfid, {"message": "Hello!"}, "default")
-        DBOS.send(wfid, {"message": "Hello!"}, "native")  # TODO: Ser
-        DBOS.send(wfid, {"message": "Hello!"}, "portable")  # TODO: Ser
+        DBOS.send(
+            wfid,
+            {"message": "Hello!"},
+            "native",
+            serialization_type=WorkflowSerializationFormat.NATIVE,
+        )
+        DBOS.send(
+            wfid,
+            {"message": "Hello!"},
+            "portable",
+            serialization_type=WorkflowSerializationFormat.PORTABLE,
+        )
 
     r = DBOS.recv("incoming")
 
