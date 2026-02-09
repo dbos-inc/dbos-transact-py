@@ -190,12 +190,6 @@ class DBOSClient:
         if workflow_id is None:
             workflow_id = generate_uuid()
         workflow_timeout = options.get("workflow_timeout", None)
-        enqueue_options_internal: EnqueueOptionsInternal = {
-            "deduplication_id": options.get("deduplication_id"),
-            "priority": options.get("priority"),
-            "app_version": options.get("app_version"),
-            "queue_partition_key": options.get("queue_partition_key"),
-        }
 
         authenticated_user = options.get("authenticated_user")
         authenticated_roles = (
@@ -217,7 +211,7 @@ class DBOSClient:
             "name": workflow_name,
             "class_name": options.get("class_name"),
             "queue_name": queue_name,
-            "app_version": enqueue_options_internal["app_version"],
+            "app_version": options.get("app_version"),
             "config_name": options.get("instance_name"),
             "authenticated_user": authenticated_user,
             "assumed_role": None,
@@ -233,15 +227,15 @@ class DBOSClient:
                 int(workflow_timeout * 1000) if workflow_timeout is not None else None
             ),
             "workflow_deadline_epoch_ms": None,
-            "deduplication_id": enqueue_options_internal["deduplication_id"],
+            "deduplication_id": options.get("deduplication_id", None),
             "priority": (
-                enqueue_options_internal["priority"]
-                if enqueue_options_internal["priority"] is not None
+                options.get("priority", 0)
+                if options.get("priority", None) is not None
                 else 0
             ),
             "inputs": inputs,
             "serialization": serialization,
-            "queue_partition_key": enqueue_options_internal["queue_partition_key"],
+            "queue_partition_key": options.get("queue_partition_key", None),
             "forked_from": None,
             "parent_workflow_id": None,
             "started_at_epoch_ms": None,

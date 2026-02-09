@@ -285,7 +285,7 @@ def serialize_exception(
     value: Exception,
     serialization: Optional[str],
     serializer: Serializer,
-) -> tuple[Optional[str], str]:
+) -> tuple[str, str]:
     if serialization == DBOSPortableJSON.name():
         return (
             DBOSPortableJSON.serialize(exception_to_workflow_error_data(value)),
