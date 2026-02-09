@@ -2297,7 +2297,6 @@ class SystemDatabase(ABC):
                 ctx.workflow_id, ctx.function_id, function_name
             )
             if res is not None:
-                # TODO Serialization
                 if res["output"] is not None:
                     resstat: SystemDatabase.T = cast(
                         SystemDatabase.T,
