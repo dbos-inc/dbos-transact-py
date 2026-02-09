@@ -73,7 +73,7 @@ from ._registrations import (
     get_or_create_class_info,
 )
 from ._roles import default_required_roles, required_roles
-from ._scheduler import ScheduledWorkflow, scheduled
+from ._scheduler_decorator import DecoratedScheduledWorkflow, scheduled
 from ._sys_db import (
     StepInfo,
     SystemDatabase,
@@ -797,7 +797,9 @@ class DBOS:
         return required_roles(roles)
 
     @classmethod
-    def scheduled(cls, cron: str) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
+    def scheduled(
+        cls, cron: str
+    ) -> Callable[[DecoratedScheduledWorkflow], DecoratedScheduledWorkflow]:
         """Decorate a workflow function with its invocation schedule."""
 
         return scheduled(_get_or_create_dbos_registry(), cron)

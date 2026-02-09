@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
 from ._logger import dbos_logger
-from ._queue import Queue
 
 if TYPE_CHECKING:
     from ._dbos import DBOSRegistry
@@ -14,14 +13,14 @@ from ._context import SetWorkflowID
 from ._croniter import croniter  # type: ignore
 from ._registrations import get_dbos_func_name
 
-ScheduledWorkflow = (
+DecoratedScheduledWorkflow = (
     Callable[[datetime, datetime], None]
     | Callable[[datetime, datetime], Coroutine[Any, Any, None]]
 )
 
 
-def scheduler_loop(
-    func: ScheduledWorkflow, cron: str, stop_event: threading.Event
+def decorator_scheduler_loop(
+    func: DecoratedScheduledWorkflow, cron: str, stop_event: threading.Event
 ) -> None:
     from dbos._dbos import _get_dbos_instance
 
@@ -61,8 +60,8 @@ def scheduler_loop(
 
 def scheduled(
     dbosreg: "DBOSRegistry", cron: str
-) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
-    def decorator(func: ScheduledWorkflow) -> ScheduledWorkflow:
+) -> Callable[[DecoratedScheduledWorkflow], DecoratedScheduledWorkflow]:
+    def decorator(func: DecoratedScheduledWorkflow) -> DecoratedScheduledWorkflow:
         try:
             croniter(cron, datetime.now(timezone.utc), second_at_beginning=True)
         except Exception:
@@ -70,7 +69,9 @@ def scheduled(
                 f'Invalid crontab "{cron}" for scheduled function function {get_dbos_func_name(func)}.'
             )
         stop_event = threading.Event()
-        dbosreg.register_poller(stop_event, scheduler_loop, func, cron, stop_event)
+        dbosreg.register_poller(
+            stop_event, decorator_scheduler_loop, func, cron, stop_event
+        )
         return func
 
     return decorator
