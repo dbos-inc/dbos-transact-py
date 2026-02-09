@@ -1656,11 +1656,7 @@ class DBOS:
         workflow_fn: Callable[..., Any],
         schedule: str,
     ) -> None:
-        """Create a new workflow schedule.
-
-        Verifies the workflow function is registered, then inserts a schedule
-        using the function's registered name.
-        """
+        """Create a new workflow schedule."""
         if not croniter.is_valid(schedule, second_at_beginning=True):
             raise DBOSException(f"Invalid cron schedule: '{schedule}'")
         dbos = _get_dbos_instance()
