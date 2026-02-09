@@ -1,4 +1,7 @@
+import pytest
+
 from dbos import DBOS
+from dbos._error import DBOSException
 
 
 def test_schedule_crud(dbos: DBOS) -> None:
@@ -30,6 +33,14 @@ def test_schedule_crud(dbos: DBOS) -> None:
 
     # Get nonexistent schedule
     assert DBOS.get_schedule("nonexistent") is None
+
+    # Reject invalid cron expression
+    with pytest.raises(DBOSException, match="Invalid cron schedule"):
+        DBOS.create_schedule(
+            schedule_name="bad-schedule",
+            workflow_fn=my_workflow,
+            schedule="not a cron",
+        )
 
     # Delete schedule
     DBOS.delete_schedule("test-schedule")

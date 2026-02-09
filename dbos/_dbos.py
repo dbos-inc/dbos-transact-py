@@ -63,6 +63,7 @@ from ._core import (
     start_workflow_async,
     write_stream,
 )
+from ._croniter import croniter  # type: ignore
 from ._queue import Queue, queue_thread
 from ._recovery import recover_pending_workflows, startup_recovery_thread
 from ._registrations import (
@@ -1660,6 +1661,8 @@ class DBOS:
         Verifies the workflow function is registered, then inserts a schedule
         using the function's registered name.
         """
+        if not croniter.is_valid(schedule, second_at_beginning=True):
+            raise DBOSException(f"Invalid cron schedule: '{schedule}'")
         dbos = _get_dbos_instance()
         workflow_name = get_dbos_func_name(workflow_fn)
         if workflow_name not in dbos._registry.workflow_info_map:
