@@ -53,6 +53,50 @@ def test_schedule_crud(dbos: DBOS) -> None:
     assert len(DBOS.list_schedules()) == 0
 
 
+def test_schedule_crud_from_workflow(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def target_workflow() -> None:
+        pass
+
+    @DBOS.workflow()
+    def crud_workflow() -> None:
+        DBOS.create_schedule(
+            schedule_name="wf-schedule",
+            workflow_fn=target_workflow,
+            schedule="* * * * *",
+        )
+
+        schedules = DBOS.list_schedules()
+        assert len(schedules) == 1
+        assert schedules[0]["schedule_name"] == "wf-schedule"
+
+        sched = DBOS.get_schedule("wf-schedule")
+        assert sched is not None
+        assert sched["schedule_name"] == "wf-schedule"
+
+        DBOS.delete_schedule("wf-schedule")
+        assert DBOS.get_schedule("wf-schedule") is None
+
+    handle = DBOS.start_workflow(crud_workflow)
+    handle.get_result()
+
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    step_names = [s["function_name"] for s in steps]
+    assert step_names == [
+        "DBOS.createSchedule",
+        "DBOS.listSchedules",
+        "DBOS.getSchedule",
+        "DBOS.deleteSchedule",
+        "DBOS.getSchedule",
+    ]
+
+    forked_handle = DBOS.fork_workflow(handle.workflow_id, len(steps))
+    forked_handle.get_result()
+    assert [
+        s["function_name"] for s in DBOS.list_workflow_steps(forked_handle.workflow_id)
+    ] == step_names
+
+
 def test_dynamic_scheduler_fires(dbos: DBOS) -> None:
     wf_counter: int = 0
 

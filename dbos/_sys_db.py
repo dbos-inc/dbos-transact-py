@@ -2974,9 +2974,7 @@ class SystemDatabase(ABC):
                 "function_id": function_id,
                 "function_name": function_name,
                 "started_at_epoch_ms": start_time,
-                "output": (
-                    self.serializer.serialize(result) if result is not None else None
-                ),
+                "output": (self.serializer.serialize(result)),
                 "error": None,
             }
             self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
