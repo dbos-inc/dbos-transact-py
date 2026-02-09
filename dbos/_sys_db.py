@@ -2862,9 +2862,12 @@ class SystemDatabase(ABC):
                         )
                     )
 
-    def create_schedule(self, schedule: WorkflowSchedule) -> None:
-        """Insert a new workflow schedule."""
-        with self.engine.begin() as c:
+    # ── Schedule CRUD ─────────────────────────────────────────────
+
+    def create_schedule(
+        self, schedule: WorkflowSchedule, conn: Optional[sa.Connection] = None
+    ) -> None:
+        def _do(c: sa.Connection) -> None:
             c.execute(
                 sa.insert(SystemSchema.workflow_schedules).values(
                     schedule_id=schedule["schedule_id"],
@@ -2874,9 +2877,16 @@ class SystemDatabase(ABC):
                 )
             )
 
-    def list_schedules(self) -> List[WorkflowSchedule]:
-        """List all workflow schedules."""
-        with self.engine.begin() as c:
+        if conn is not None:
+            _do(conn)
+        else:
+            with self.engine.begin() as c:
+                _do(c)
+
+    def list_schedules(
+        self, conn: Optional[sa.Connection] = None
+    ) -> List[WorkflowSchedule]:
+        def _do(c: sa.Connection) -> List[WorkflowSchedule]:
             rows = c.execute(
                 sa.select(
                     SystemSchema.workflow_schedules.c.schedule_id,
@@ -2895,9 +2905,15 @@ class SystemDatabase(ABC):
                 for row in rows
             ]
 
-    def get_schedule(self, name: str) -> Optional[WorkflowSchedule]:
-        """Get a workflow schedule by name."""
+        if conn is not None:
+            return _do(conn)
         with self.engine.begin() as c:
+            return _do(c)
+
+    def get_schedule(
+        self, name: str, conn: Optional[sa.Connection] = None
+    ) -> Optional[WorkflowSchedule]:
+        def _do(c: sa.Connection) -> Optional[WorkflowSchedule]:
             row = c.execute(
                 sa.select(
                     SystemSchema.workflow_schedules.c.schedule_id,
@@ -2915,11 +2931,53 @@ class SystemDatabase(ABC):
                 schedule=row[3],
             )
 
-    def delete_schedule(self, name: str) -> None:
-        """Delete a workflow schedule by name."""
+        if conn is not None:
+            return _do(conn)
         with self.engine.begin() as c:
+            return _do(c)
+
+    def delete_schedule(self, name: str, conn: Optional[sa.Connection] = None) -> None:
+        def _do(c: sa.Connection) -> None:
             c.execute(
                 sa.delete(SystemSchema.workflow_schedules).where(
                     SystemSchema.workflow_schedules.c.schedule_name == name
                 )
             )
+
+        if conn is not None:
+            _do(conn)
+        else:
+            with self.engine.begin() as c:
+                _do(c)
+
+    def call_txn_as_step(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        function_name: str,
+        op: Callable[[sa.Connection], T],
+    ) -> T:
+        start_time = int(time.time() * 1000)
+        with self.engine.begin() as c:
+            recorded = self._check_operation_execution_txn(
+                workflow_uuid, function_id, function_name, conn=c
+            )
+            if recorded is not None:
+                assert recorded["output"] is not None
+                recorded_output: SystemDatabase.T = self.serializer.deserialize(
+                    recorded["output"]
+                )
+                return recorded_output
+            result = op(c)
+            output: OperationResultInternal = {
+                "workflow_uuid": workflow_uuid,
+                "function_id": function_id,
+                "function_name": function_name,
+                "started_at_epoch_ms": start_time,
+                "output": (
+                    self.serializer.serialize(result) if result is not None else None
+                ),
+                "error": None,
+            }
+            self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
+            return result

@@ -100,6 +100,7 @@ from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
 from ._context import (
     DBOSContext,
+    EnterDBOSStepCtx,
     StepStatus,
     assert_current_dbos_context,
     get_local_dbos_context,
@@ -1677,29 +1678,69 @@ class DBOS:
             raise DBOSException(
                 f"Workflow function '{workflow_name}' is not registered"
             )
-        dbos._sys_db.create_schedule(
-            WorkflowSchedule(
-                schedule_id=generate_uuid(),
-                schedule_name=schedule_name,
-                workflow_name=workflow_name,
-                schedule=schedule,
-            )
+        sched = WorkflowSchedule(
+            schedule_id=generate_uuid(),
+            schedule_name=schedule_name,
+            workflow_name=workflow_name,
+            schedule=schedule,
         )
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "createSchedule"}, ctx) as step:
+                dbos._sys_db.call_txn_as_step(
+                    step.workflow_id,
+                    step.curr_step_function_id,
+                    "DBOS.createSchedule",
+                    lambda c: dbos._sys_db.create_schedule(sched, conn=c),
+                )
+        else:
+            dbos._sys_db.create_schedule(sched)
 
     @classmethod
     def list_schedules(cls) -> List["WorkflowSchedule"]:
         """List all workflow schedules."""
-        return _get_dbos_instance()._sys_db.list_schedules()
+        dbos = _get_dbos_instance()
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "listSchedules"}, ctx) as step:
+                return dbos._sys_db.call_txn_as_step(
+                    step.workflow_id,
+                    step.curr_step_function_id,
+                    "DBOS.listSchedules",
+                    lambda c: dbos._sys_db.list_schedules(conn=c),
+                )
+        return dbos._sys_db.list_schedules()
 
     @classmethod
     def get_schedule(cls, name: str) -> Optional["WorkflowSchedule"]:
         """Get a workflow schedule by name."""
-        return _get_dbos_instance()._sys_db.get_schedule(name)
+        dbos = _get_dbos_instance()
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "getSchedule"}, ctx) as step:
+                return dbos._sys_db.call_txn_as_step(
+                    step.workflow_id,
+                    step.curr_step_function_id,
+                    "DBOS.getSchedule",
+                    lambda c: dbos._sys_db.get_schedule(name, conn=c),
+                )
+        return dbos._sys_db.get_schedule(name)
 
     @classmethod
     def delete_schedule(cls, name: str) -> None:
         """Delete a workflow schedule by name."""
-        _get_dbos_instance()._sys_db.delete_schedule(name)
+        dbos = _get_dbos_instance()
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "deleteSchedule"}, ctx) as step:
+                dbos._sys_db.call_txn_as_step(
+                    step.workflow_id,
+                    step.curr_step_function_id,
+                    "DBOS.deleteSchedule",
+                    lambda c: dbos._sys_db.delete_schedule(name, conn=c),
+                )
+        else:
+            dbos._sys_db.delete_schedule(name)
 
     @classproperty
     def application_version(cls) -> str:
