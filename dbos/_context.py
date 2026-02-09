@@ -9,6 +9,8 @@ from enum import Enum
 from types import TracebackType
 from typing import TYPE_CHECKING, List, Literal, Optional, Type, TypedDict
 
+from dbos._serialization import WorkflowSerializationFormat
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
@@ -109,6 +111,9 @@ class DBOSContext:
         self.step_status: Optional[StepStatus] = None
 
         self.app_version: Optional[str] = None
+        self.serialization_type: WorkflowSerializationFormat = (
+            WorkflowSerializationFormat.DEFAULT
+        )
 
         # A user-specified workflow timeout. Takes priority over a propagated deadline.
         self.workflow_timeout_ms: Optional[int] = None
@@ -138,6 +143,8 @@ class DBOSContext:
             else None
         )
         rv.assumed_role = self.assumed_role
+        if not is_for_workflow:
+            rv.serialization_type = self.serialization_type
         return rv
 
     def snapshot_step_ctx(self, reserve_sleep_id: bool = False) -> DBOSContext:

@@ -18,7 +18,7 @@ async function doTest() {
     await client.send(wfhs.workflowID, 'm', 'incoming', undefined, { serializationType: 'portable' });
 
     let deserializationErrs = 0;
-    // TODO console.assert(JSON.stringify(await client.getEvent(wfhs.workflowID, 'defstat', 2)) === JSON.stringify({ status: 'Happy' }));
+    console.assert(JSON.stringify(await client.getEvent(wfhs.workflowID, 'defstat', 2)) === JSON.stringify({ status: 'Happy' }));
     try {
       console.assert(JSON.stringify(await client.getEvent(wfhs.workflowID, 'nstat', 2)) === JSON.stringify({ status: 'Happy' }));
     }
@@ -28,9 +28,8 @@ async function doTest() {
     }
     console.assert(JSON.stringify(await client.getEvent(wfhs.workflowID, 'pstat', 2)) === JSON.stringify({ status: 'Happy' }));
 
-    // TODO
-    // const { value: ddread } = await client.readStream(wfhs.workflowID, 'defstream').next();
-    // console.assert(JSON.stringify(ddread) === JSON.stringify({ stream: 'OhYeah' }));
+    const { value: ddread } = await client.readStream(wfhs.workflowID, 'defstream').next();
+    console.assert(JSON.stringify(ddread) === JSON.stringify({ stream: 'OhYeah' }));
     try {
       const { value: dnread } = await client.readStream(wfhs.workflowID, 'nstream').next();
       console.assert(JSON.stringify(dnread) === JSON.stringify({ stream: 'OYeah' }));

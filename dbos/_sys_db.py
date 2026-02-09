@@ -199,8 +199,6 @@ class EnqueueOptionsInternal(TypedDict):
     app_version: Optional[str]
     # If the workflow is enqueued on a partitioned queue, its partition key
     queue_partition_key: Optional[str]
-    # Serialization type
-    serialization_type: Optional[WorkflowSerializationFormat]
 
 
 class RecordedResult(TypedDict):

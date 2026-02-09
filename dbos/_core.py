@@ -67,6 +67,7 @@ from ._registrations import (
 )
 from ._roles import check_required_roles
 from ._serialization import (
+    DBOSPortableJSON,
     WorkflowInputs,
     WorkflowSerializationFormat,
     deserialize_args,
@@ -329,6 +330,7 @@ def _init_workflow(
     enqueue_options: Optional[EnqueueOptionsInternal],
     is_recovery_request: Optional[bool],
     is_dequeued_request: Optional[bool],
+    serialization_type: Optional[WorkflowSerializationFormat],
 ) -> tuple[WorkflowStatusInternal, bool]:
     wfid = (
         ctx.workflow_id
@@ -340,9 +342,9 @@ def _init_workflow(
     if class_name is not None and class_name != "":
         inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
 
-    sertype: WorkflowSerializationFormat | None = WorkflowSerializationFormat.DEFAULT
-    if enqueue_options is not None and "serialization_type" in enqueue_options:
-        sertype = enqueue_options["serialization_type"]
+    sertype: WorkflowSerializationFormat | None = serialization_type
+    if sertype is not None or sertype == WorkflowSerializationFormat.DEFAULT:
+        sertype = ctx.serialization_type
     serialization = serialization_for_type(sertype, dbos._serializer)
 
     # Initialize a workflow status object from the context
@@ -689,6 +691,9 @@ def start_workflow(
             "<NONE>",
             f"{func.__name__} is not a registered workflow function",
         )
+    serialization_type = fi.serialization_type
+    if serialization_type is None:
+        serialization_type = WorkflowSerializationFormat.DEFAULT
 
     func = cast("Workflow[P, R]", func.__orig_func)  # type: ignore
 
@@ -711,7 +716,6 @@ def start_workflow(
         queue_partition_key=(
             local_ctx.queue_partition_key if local_ctx is not None else None
         ),
-        serialization_type=WorkflowSerializationFormat.DEFAULT,
     )
     new_wf_ctx = DBOSContext.create_start_workflow_child(local_ctx)
     new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
@@ -746,7 +750,12 @@ def start_workflow(
         enqueue_options=enqueue_options,
         is_recovery_request=is_recovery,
         is_dequeued_request=is_dequeued,
+        serialization_type=serialization_type,
     )
+
+    if status["serialization"] == DBOSPortableJSON.name():
+        serialization_type = WorkflowSerializationFormat.PORTABLE
+    new_wf_ctx.serialization_type = serialization_type
 
     wf_status = status["status"]
     if new_wf_ctx.has_parent():
@@ -802,6 +811,9 @@ async def start_workflow_async(
             "<NONE>",
             f"{func.__name__} is not a registered workflow function",
         )
+    serialization_type = fi.serialization_type
+    if serialization_type is None:
+        serialization_type = WorkflowSerializationFormat.DEFAULT
 
     func = cast("Workflow[P, R]", func.__orig_func)  # type: ignore
 
@@ -820,7 +832,6 @@ async def start_workflow_async(
         queue_partition_key=(
             local_ctx.queue_partition_key if local_ctx is not None else None
         ),
-        serialization_type=WorkflowSerializationFormat.DEFAULT,
     )
     new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
 
@@ -858,7 +869,12 @@ async def start_workflow_async(
         enqueue_options=enqueue_options,
         is_recovery_request=is_recovery_request,
         is_dequeued_request=is_dequeued_request,
+        serialization_type=serialization_type,
     )
+
+    if status["serialization"] == DBOSPortableJSON.name():
+        serialization_type = WorkflowSerializationFormat.PORTABLE
+    new_wf_ctx.serialization_type = serialization_type
 
     if new_wf_ctx.has_parent():
         await asyncio.to_thread(
@@ -910,11 +926,14 @@ def workflow_wrapper(
     dbosreg: "DBOSRegistry",
     func: Callable[P, R],
     max_recovery_attempts: Optional[int] = DEFAULT_MAX_RECOVERY_ATTEMPTS,
+    *,
+    serialization_type: WorkflowSerializationFormat = WorkflowSerializationFormat.DEFAULT,
 ) -> Callable[P, R]:
     func.__orig_func = func  # type: ignore
 
     fi = get_or_create_func_info(func)
     fi.max_recovery_attempts = max_recovery_attempts
+    fi.serialization_type = serialization_type
 
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> R:
@@ -992,6 +1011,7 @@ def workflow_wrapper(
                 enqueue_options=None,
                 is_recovery_request=False,
                 is_dequeued_request=False,
+                serialization_type=fi.serialization_type,
             )
 
             def get_recorded_result(_func: Callable[[], R]) -> R:
@@ -1059,10 +1079,19 @@ def workflow_wrapper(
 
 
 def decorate_workflow(
-    reg: "DBOSRegistry", name: Optional[str], max_recovery_attempts: Optional[int]
+    reg: "DBOSRegistry",
+    name: Optional[str],
+    max_recovery_attempts: Optional[int],
+    *,
+    serialization_type: Optional[WorkflowSerializationFormat] = None,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    if serialization_type is None:
+        serialization_type = WorkflowSerializationFormat.DEFAULT
+
     def _workflow_decorator(func: Callable[P, R]) -> Callable[P, R]:
-        wrapped_func = workflow_wrapper(reg, func, max_recovery_attempts)
+        wrapped_func = workflow_wrapper(
+            reg, func, max_recovery_attempts, serialization_type=serialization_type
+        )
         func_name = name if name is not None else func.__qualname__
         set_dbos_func_name(func, func_name)
         set_dbos_func_name(wrapped_func, func_name)
@@ -1600,6 +1629,16 @@ def send(
     *,
     serialization_type: Optional[WorkflowSerializationFormat],
 ) -> None:
+    if (
+        serialization_type is None
+        or serialization_type == WorkflowSerializationFormat.DEFAULT
+    ):
+        serialization_type = (
+            cur_ctx.serialization_type
+            if cur_ctx is not None
+            else WorkflowSerializationFormat.DEFAULT
+        )
+
     def do_send(destination_id: str, message: Any, topic: Optional[str]) -> None:
         assert cur_ctx is not None
         attributes: TracedAttributes = {
@@ -1658,6 +1697,16 @@ def set_event(
     *,
     serialization_type: WorkflowSerializationFormat,
 ) -> None:
+    if (
+        serialization_type is None
+        or serialization_type == WorkflowSerializationFormat.DEFAULT
+    ):
+        serialization_type = (
+            cur_ctx.serialization_type
+            if cur_ctx is not None
+            else WorkflowSerializationFormat.DEFAULT
+        )
+
     if cur_ctx is not None:
         if cur_ctx.is_workflow():
             # If called from a workflow function, run as a step
@@ -1740,6 +1789,16 @@ def write_stream(
     *,
     serialization_type: WorkflowSerializationFormat,
 ) -> None:
+    if (
+        serialization_type is None
+        or serialization_type == WorkflowSerializationFormat.DEFAULT
+    ):
+        serialization_type = (
+            step_ctx.serialization_type
+            if step_ctx is not None
+            else WorkflowSerializationFormat.DEFAULT
+        )
+
     if step_ctx is not None:
         # Must call it within a workflow
         if step_ctx.is_workflow():

@@ -695,10 +695,14 @@ class DBOS:
         *,
         name: Optional[str] = None,
         max_recovery_attempts: Optional[int] = DEFAULT_MAX_RECOVERY_ATTEMPTS,
+        serialization_type: Optional[WorkflowSerializationFormat] = None,
     ) -> Callable[[Callable[P, R]], Callable[P, R]]:
         """Decorate a function for use as a DBOS workflow."""
         return decorate_workflow(
-            _get_or_create_dbos_registry(), name, max_recovery_attempts
+            _get_or_create_dbos_registry(),
+            name,
+            max_recovery_attempts,
+            serialization_type=serialization_type,
         )
 
     @classmethod
