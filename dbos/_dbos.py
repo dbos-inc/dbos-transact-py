@@ -69,6 +69,7 @@ from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
     _class_fqn,
+    get_dbos_func_name,
     get_or_create_class_info,
 )
 from ._roles import default_required_roles, required_roles
@@ -76,6 +77,7 @@ from ._scheduler import ScheduledWorkflow, scheduled
 from ._sys_db import (
     StepInfo,
     SystemDatabase,
+    WorkflowSchedule,
     WorkflowStatus,
     _dbos_stream_closed_sentinel,
     workflow_is_active,
@@ -1642,6 +1644,49 @@ class DBOS:
         return await _get_dbos_instance()._sys_db.call_function_as_step_from_async(
             fn, "DBOS.listWorkflowSteps", step_ctx
         )
+
+    @classmethod
+    def create_schedule(
+        cls,
+        *,
+        schedule_name: str,
+        workflow_fn: Callable[..., Any],
+        schedule: str,
+    ) -> None:
+        """Create a new workflow schedule.
+
+        Verifies the workflow function is registered, then inserts a schedule
+        using the function's registered name.
+        """
+        dbos = _get_dbos_instance()
+        workflow_name = get_dbos_func_name(workflow_fn)
+        if workflow_name not in dbos._registry.workflow_info_map:
+            raise DBOSException(
+                f"Workflow function '{workflow_name}' is not registered"
+            )
+        dbos._sys_db.create_schedule(
+            WorkflowSchedule(
+                schedule_id=generate_uuid(),
+                schedule_name=schedule_name,
+                workflow_name=workflow_name,
+                schedule=schedule,
+            )
+        )
+
+    @classmethod
+    def list_schedules(cls) -> List["WorkflowSchedule"]:
+        """List all workflow schedules."""
+        return _get_dbos_instance()._sys_db.list_schedules()
+
+    @classmethod
+    def get_schedule(cls, name: str) -> Optional["WorkflowSchedule"]:
+        """Get a workflow schedule by name."""
+        return _get_dbos_instance()._sys_db.get_schedule(name)
+
+    @classmethod
+    def delete_schedule(cls, name: str) -> None:
+        """Delete a workflow schedule by name."""
+        _get_dbos_instance()._sys_db.delete_schedule(name)
 
     @classproperty
     def application_version(cls) -> str:

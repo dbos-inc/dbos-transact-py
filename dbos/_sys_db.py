@@ -226,6 +226,13 @@ class GetPendingWorkflowsOutput:
         self.queue_name: Optional[str] = queue_name
 
 
+class WorkflowSchedule(TypedDict):
+    schedule_id: str
+    schedule_name: str
+    workflow_name: str
+    schedule: str
+
+
 class StepInfo(TypedDict):
     # The unique ID of the step in the workflow
     function_id: int
@@ -2854,3 +2861,65 @@ class SystemDatabase(ABC):
                             function_id=stream["function_id"],
                         )
                     )
+
+    def create_schedule(self, schedule: WorkflowSchedule) -> None:
+        """Insert a new workflow schedule."""
+        with self.engine.begin() as c:
+            c.execute(
+                sa.insert(SystemSchema.workflow_schedules).values(
+                    schedule_id=schedule["schedule_id"],
+                    schedule_name=schedule["schedule_name"],
+                    workflow_name=schedule["workflow_name"],
+                    schedule=schedule["schedule"],
+                )
+            )
+
+    def list_schedules(self) -> List[WorkflowSchedule]:
+        """List all workflow schedules."""
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.workflow_schedules.c.schedule_id,
+                    SystemSchema.workflow_schedules.c.schedule_name,
+                    SystemSchema.workflow_schedules.c.workflow_name,
+                    SystemSchema.workflow_schedules.c.schedule,
+                )
+            ).fetchall()
+            return [
+                WorkflowSchedule(
+                    schedule_id=row[0],
+                    schedule_name=row[1],
+                    workflow_name=row[2],
+                    schedule=row[3],
+                )
+                for row in rows
+            ]
+
+    def get_schedule(self, name: str) -> Optional[WorkflowSchedule]:
+        """Get a workflow schedule by name."""
+        with self.engine.begin() as c:
+            row = c.execute(
+                sa.select(
+                    SystemSchema.workflow_schedules.c.schedule_id,
+                    SystemSchema.workflow_schedules.c.schedule_name,
+                    SystemSchema.workflow_schedules.c.workflow_name,
+                    SystemSchema.workflow_schedules.c.schedule,
+                ).where(SystemSchema.workflow_schedules.c.schedule_name == name)
+            ).fetchone()
+            if row is None:
+                return None
+            return WorkflowSchedule(
+                schedule_id=row[0],
+                schedule_name=row[1],
+                workflow_name=row[2],
+                schedule=row[3],
+            )
+
+    def delete_schedule(self, name: str) -> None:
+        """Delete a workflow schedule by name."""
+        with self.engine.begin() as c:
+            c.execute(
+                sa.delete(SystemSchema.workflow_schedules).where(
+                    SystemSchema.workflow_schedules.c.schedule_name == name
+                )
+            )
