@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from logging import Logger
 from typing import (
     TYPE_CHECKING,
@@ -1666,7 +1667,7 @@ class DBOS:
         cls,
         *,
         schedule_name: str,
-        workflow_fn: Callable[..., Any],
+        workflow_fn: Callable[[datetime], None],
         schedule: str,
     ) -> None:
         """Create a new workflow schedule."""

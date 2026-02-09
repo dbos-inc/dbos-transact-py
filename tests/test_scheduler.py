@@ -11,7 +11,7 @@ from .conftest import retry_until_success
 
 def test_schedule_crud(dbos: DBOS) -> None:
     @DBOS.workflow()
-    def my_workflow() -> None:
+    def my_workflow(scheduled_at: datetime) -> None:
         pass
 
     # Create a schedule
@@ -55,7 +55,7 @@ def test_schedule_crud(dbos: DBOS) -> None:
 
 def test_schedule_crud_from_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
-    def target_workflow() -> None:
+    def target_workflow(scheduled_at: datetime) -> None:
         pass
 
     @DBOS.workflow()
@@ -101,7 +101,7 @@ def test_dynamic_scheduler_fires(dbos: DBOS) -> None:
     wf_counter: int = 0
 
     @DBOS.workflow()
-    def scheduled_workflow(scheduled_at: datetime, actual: datetime) -> None:
+    def scheduled_workflow(scheduled_at: datetime) -> None:
         nonlocal wf_counter
         wf_counter += 1
 
@@ -123,7 +123,7 @@ def test_dynamic_scheduler_delete_stops_firing(dbos: DBOS) -> None:
     wf_counter: int = 0
 
     @DBOS.workflow()
-    def scheduled_workflow(scheduled_at: datetime, actual: datetime) -> None:
+    def scheduled_workflow(scheduled_at: datetime) -> None:
         nonlocal wf_counter
         wf_counter += 1
 
@@ -150,7 +150,7 @@ def test_dynamic_scheduler_add_after_launch(dbos: DBOS) -> None:
     wf_counter: int = 0
 
     @DBOS.workflow()
-    def scheduled_workflow(scheduled_at: datetime, actual: datetime) -> None:
+    def scheduled_workflow(scheduled_at: datetime) -> None:
         nonlocal wf_counter
         wf_counter += 1
 

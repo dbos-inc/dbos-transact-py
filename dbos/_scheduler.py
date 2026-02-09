@@ -53,9 +53,7 @@ class _ScheduleThread:
                 workflow_id = f"sched-{self.schedule_name}-{next_exec_time.isoformat()}"
                 if not dbos._sys_db.get_workflow_status(workflow_id):
                     with SetWorkflowID(workflow_id):
-                        scheduler_queue.enqueue(
-                            func, next_exec_time, datetime.now(timezone.utc)
-                        )
+                        scheduler_queue.enqueue(func, next_exec_time)
             except Exception:
                 dbos_logger.warning(
                     f"Exception in schedule '{self.schedule_name}': "
