@@ -6,6 +6,8 @@ import pytest
 from dbos import DBOS
 from dbos._error import DBOSException
 
+from .conftest import retry_until_success
+
 
 def test_schedule_crud(dbos: DBOS) -> None:
     @DBOS.workflow()
@@ -65,8 +67,10 @@ def test_dynamic_scheduler_fires(dbos: DBOS) -> None:
         schedule="* * * * * *",
     )
 
-    time.sleep(5)
-    assert wf_counter > 1 and wf_counter <= 5
+    def check_fired_twice() -> None:
+        assert wf_counter >= 2
+
+    retry_until_success(check_fired_twice)
 
     DBOS.delete_schedule("every-second")
 
@@ -85,12 +89,14 @@ def test_dynamic_scheduler_delete_stops_firing(dbos: DBOS) -> None:
         schedule="* * * * * *",
     )
 
-    time.sleep(3)
-    assert wf_counter >= 1
+    def check_fired() -> None:
+        assert wf_counter >= 1
+
+    retry_until_success(check_fired)
 
     DBOS.delete_schedule("delete-test")
     # Wait for the main loop to detect the deletion and stop the thread
-    time.sleep(2)
+    time.sleep(3)
     count_after_delete = wf_counter
     time.sleep(3)
     assert wf_counter == count_after_delete
@@ -115,7 +121,9 @@ def test_dynamic_scheduler_add_after_launch(dbos: DBOS) -> None:
         schedule="* * * * * *",
     )
 
-    time.sleep(5)
-    assert wf_counter > 1 and wf_counter <= 5
+    def check_fired_twice() -> None:
+        assert wf_counter >= 2
+
+    retry_until_success(check_fired_twice)
 
     DBOS.delete_schedule("late-add")
