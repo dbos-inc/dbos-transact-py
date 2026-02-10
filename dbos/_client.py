@@ -695,6 +695,44 @@ class DBOSClient:
         """Delete the schedule with the given name. No-op if it does not exist."""
         self._sys_db.delete_schedule(name)
 
+    async def create_schedule_async(
+        self,
+        *,
+        schedule_name: str,
+        workflow_name: str,
+        schedule: str,
+    ) -> None:
+        """Async version of :meth:`create_schedule`."""
+        await asyncio.to_thread(
+            self.create_schedule,
+            schedule_name=schedule_name,
+            workflow_name=workflow_name,
+            schedule=schedule,
+        )
+
+    async def list_schedules_async(
+        self,
+        *,
+        status: Optional[Union[str, List[str]]] = None,
+        workflow_name: Optional[Union[str, List[str]]] = None,
+        schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+    ) -> List[WorkflowSchedule]:
+        """Async version of :meth:`list_schedules`."""
+        return await asyncio.to_thread(
+            self.list_schedules,
+            status=status,
+            workflow_name=workflow_name,
+            schedule_name_prefix=schedule_name_prefix,
+        )
+
+    async def get_schedule_async(self, name: str) -> Optional[WorkflowSchedule]:
+        """Async version of :meth:`get_schedule`."""
+        return await asyncio.to_thread(self.get_schedule, name)
+
+    async def delete_schedule_async(self, name: str) -> None:
+        """Async version of :meth:`delete_schedule`."""
+        await asyncio.to_thread(self.delete_schedule, name)
+
     def pause_schedule(self, name: str) -> None:
         """Pause the schedule with the given name. A paused schedule does not fire."""
         self._sys_db.pause_schedule(name)

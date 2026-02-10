@@ -641,3 +641,63 @@ def test_client_pause_resume_schedule(client: DBOSClient) -> None:
     assert sched["status"] == "ACTIVE"
 
     client.delete_schedule("client-pause")
+
+
+@pytest.mark.asyncio
+async def test_schedule_crud_async(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def my_workflow(scheduled_at: datetime) -> None:
+        pass
+
+    await DBOS.create_schedule_async(
+        schedule_name="async-schedule",
+        workflow_fn=my_workflow,
+        schedule="* * * * *",
+    )
+
+    schedules = await DBOS.list_schedules_async()
+    assert len(schedules) == 1
+    assert schedules[0]["schedule_name"] == "async-schedule"
+
+    sched = await DBOS.get_schedule_async("async-schedule")
+    assert sched is not None
+    assert sched["schedule"] == "* * * * *"
+
+    assert await DBOS.get_schedule_async("nonexistent") is None
+
+    # Filters work through async path
+    assert len(await DBOS.list_schedules_async(status="ACTIVE")) == 1
+    assert len(await DBOS.list_schedules_async(schedule_name_prefix="async-")) == 1
+    assert len(await DBOS.list_schedules_async(schedule_name_prefix="nope-")) == 0
+
+    await DBOS.delete_schedule_async("async-schedule")
+    assert await DBOS.get_schedule_async("async-schedule") is None
+    assert len(await DBOS.list_schedules_async()) == 0
+
+
+@pytest.mark.asyncio
+async def test_client_schedule_crud_async(client: DBOSClient) -> None:
+    await client.create_schedule_async(
+        schedule_name="async-client",
+        workflow_name="some.workflow",
+        schedule="0 0 * * *",
+    )
+
+    schedules = await client.list_schedules_async()
+    assert len(schedules) == 1
+    assert schedules[0]["schedule_name"] == "async-client"
+
+    sched = await client.get_schedule_async("async-client")
+    assert sched is not None
+    assert sched["workflow_name"] == "some.workflow"
+
+    assert await client.get_schedule_async("nonexistent") is None
+
+    # Filters work through async path
+    assert len(await client.list_schedules_async(status="ACTIVE")) == 1
+    assert len(await client.list_schedules_async(workflow_name="some.workflow")) == 1
+    assert len(await client.list_schedules_async(workflow_name="other")) == 0
+
+    await client.delete_schedule_async("async-client")
+    assert await client.get_schedule_async("async-client") is None
+    assert len(await client.list_schedules_async()) == 0

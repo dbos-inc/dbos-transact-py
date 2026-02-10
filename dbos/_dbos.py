@@ -1786,6 +1786,52 @@ class DBOS:
             dbos._sys_db.delete_schedule(name)
 
     @classmethod
+    async def create_schedule_async(
+        cls,
+        *,
+        schedule_name: str,
+        workflow_fn: Callable[[datetime], None],
+        schedule: str,
+    ) -> None:
+        """Async version of :meth:`create_schedule`."""
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(
+            cls.create_schedule,
+            schedule_name=schedule_name,
+            workflow_fn=workflow_fn,
+            schedule=schedule,
+        )
+
+    @classmethod
+    async def list_schedules_async(
+        cls,
+        *,
+        status: Optional[Union[str, List[str]]] = None,
+        workflow_name: Optional[Union[str, List[str]]] = None,
+        schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+    ) -> List["WorkflowSchedule"]:
+        """Async version of :meth:`list_schedules`."""
+        await cls._configure_asyncio_thread_pool()
+        return await asyncio.to_thread(
+            cls.list_schedules,
+            status=status,
+            workflow_name=workflow_name,
+            schedule_name_prefix=schedule_name_prefix,
+        )
+
+    @classmethod
+    async def get_schedule_async(cls, name: str) -> Optional["WorkflowSchedule"]:
+        """Async version of :meth:`get_schedule`."""
+        await cls._configure_asyncio_thread_pool()
+        return await asyncio.to_thread(cls.get_schedule, name)
+
+    @classmethod
+    async def delete_schedule_async(cls, name: str) -> None:
+        """Async version of :meth:`delete_schedule`."""
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(cls.delete_schedule, name)
+
+    @classmethod
     def pause_schedule(cls, name: str) -> None:
         """Pause the schedule with the given name. A paused schedule does not fire."""
         dbos = _get_dbos_instance()
