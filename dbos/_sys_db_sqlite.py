@@ -41,6 +41,7 @@ class SQLiteSystemDatabase(SystemDatabase):
         @event.listens_for(engine, "connect")
         def set_sqlite_immediate(dbapi_conn: Any, connection_record: Any) -> None:
             dbapi_conn.isolation_level = "IMMEDIATE"
+            dbapi_conn.execute("PRAGMA foreign_keys=ON")
 
         return engine
 
