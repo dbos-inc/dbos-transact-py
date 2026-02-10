@@ -343,6 +343,39 @@ def test_backfill_schedule(dbos: DBOS) -> None:
     DBOS.delete_schedule("backfill-test")
 
 
+def test_trigger_schedule(dbos: DBOS) -> None:
+    received_times: list[datetime] = []
+
+    @DBOS.workflow()
+    def trigger_workflow(scheduled_at: datetime) -> None:
+        received_times.append(scheduled_at)
+
+    DBOS.create_schedule(
+        schedule_name="trigger-test",
+        workflow_fn=trigger_workflow,
+        schedule="0 0 * * *",  # daily, won't fire during test
+    )
+
+    before = datetime.now(timezone.utc)
+    wf_id = DBOS.trigger_schedule("trigger-test")
+    after = datetime.now(timezone.utc)
+
+    assert wf_id.startswith("sched-trigger-test-trigger-")
+
+    def check_received() -> None:
+        assert len(received_times) == 1
+
+    retry_until_success(check_received)
+
+    assert before <= received_times[0] <= after
+
+    # Nonexistent schedule
+    with pytest.raises(DBOSException, match="does not exist"):
+        DBOS.trigger_schedule("no-such-schedule")
+
+    DBOS.delete_schedule("trigger-test")
+
+
 def test_client_schedule_crud(client: DBOSClient) -> None:
     # Create a schedule
     client.create_schedule(
@@ -428,7 +461,7 @@ def test_client_backfill_schedule(client: DBOSClient) -> None:
 
     client.create_schedule(
         schedule_name="client-backfill",
-        workflow_name=backfill_workflow.dbos_function_name,  # type: ignore
+        workflow_name=backfill_workflow.__qualname__,
         schedule="0 * * * *",
     )
 
@@ -446,3 +479,32 @@ def test_client_backfill_schedule(client: DBOSClient) -> None:
     assert sorted(received_times) == expected
 
     client.delete_schedule("client-backfill")
+
+
+def test_client_trigger_schedule(client: DBOSClient) -> None:
+    received_times: list[datetime] = []
+
+    @DBOS.workflow()
+    def trigger_workflow(scheduled_at: datetime) -> None:
+        received_times.append(scheduled_at)
+
+    client.create_schedule(
+        schedule_name="client-trigger",
+        workflow_name=trigger_workflow.__qualname__,
+        schedule="0 0 * * *",
+    )
+
+    before = datetime.now(timezone.utc)
+    wf_id = client.trigger_schedule("client-trigger")
+    after = datetime.now(timezone.utc)
+
+    assert wf_id.startswith("sched-client-trigger-trigger-")
+
+    def check_received() -> None:
+        assert len(received_times) == 1
+
+    retry_until_success(check_received)
+
+    assert before <= received_times[0] <= after
+
+    client.delete_schedule("client-trigger")

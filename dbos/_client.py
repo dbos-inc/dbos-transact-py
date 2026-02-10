@@ -30,7 +30,7 @@ from dbos._croniter import croniter  # type: ignore
 from dbos._dbos_config import get_system_database_url, is_valid_database_url
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
-from dbos._scheduler import backfill_schedule
+from dbos._scheduler import backfill_schedule, trigger_schedule
 from dbos._serialization import DefaultSerializer, Serializer, WorkflowInputs
 from dbos._sys_db import (
     EnqueueOptionsInternal,
@@ -734,3 +734,18 @@ class DBOSClient:
             DBOSException: If the schedule does not exist
         """
         return backfill_schedule(self._sys_db, schedule_name, start, end)
+
+    def trigger_schedule(self, schedule_name: str) -> str:
+        """
+        Immediately enqueue the scheduled workflow at the current time.
+
+        Args:
+            schedule_name: Name of an existing schedule
+
+        Returns:
+            The workflow ID of the enqueued execution.
+
+        Raises:
+            DBOSException: If the schedule does not exist
+        """
+        return trigger_schedule(self._sys_db, schedule_name)

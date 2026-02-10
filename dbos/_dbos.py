@@ -75,7 +75,7 @@ from ._registrations import (
     get_or_create_class_info,
 )
 from ._roles import default_required_roles, required_roles
-from ._scheduler import backfill_schedule, dynamic_scheduler_loop
+from ._scheduler import backfill_schedule, dynamic_scheduler_loop, trigger_schedule
 from ._scheduler_decorator import DecoratedScheduledWorkflow, scheduled
 from ._sys_db import (
     StepInfo,
@@ -1839,6 +1839,30 @@ class DBOS:
             )
         dbos = _get_dbos_instance()
         return backfill_schedule(dbos._sys_db, schedule_name, start, end)
+
+    @classmethod
+    def trigger_schedule(cls, schedule_name: str) -> str:
+        """
+        Immediately enqueue the scheduled workflow at the current time.
+
+        Must not be called from within a workflow.
+
+        Args:
+            schedule_name(str): Name of an existing schedule
+
+        Returns:
+            The workflow ID of the enqueued execution.
+
+        Raises:
+            DBOSException: If called from within a workflow or the schedule does not exist
+        """
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            raise DBOSException(
+                "DBOS.trigger_schedule cannot be called from within a workflow"
+            )
+        dbos = _get_dbos_instance()
+        return trigger_schedule(dbos._sys_db, schedule_name)
 
     @classproperty
     def application_version(cls) -> str:
