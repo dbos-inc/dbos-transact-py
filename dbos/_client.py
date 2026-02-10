@@ -5,10 +5,12 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Dict,
     Generator,
     Generic,
     List,
     Optional,
+    Tuple,
     TypedDict,
     TypeVar,
 )
@@ -671,3 +673,40 @@ class DBOSClient:
     def delete_schedule(self, name: str) -> None:
         """Delete the schedule with the given name. No-op if it does not exist."""
         self._sys_db.delete_schedule(name)
+
+    def apply_schedules(
+        self,
+        schedules: Dict[str, Optional[Tuple[str, str]]],
+    ) -> None:
+        """
+        Atomic apply a set of schedules.
+
+        Args:
+            schedules: A mapping from schedule name to either a ``(workflow_name, cron)`` tuple or ``None``. Each named schedule will be updated to the given values, or deleted if set to ``None``.
+
+        Raises:
+            DBOSException: If a cron expression is invalid
+        """
+        to_apply: List[WorkflowSchedule] = []
+        names_to_delete: List[str] = []
+        for schedule_name, entry in schedules.items():
+            if entry is None:
+                names_to_delete.append(schedule_name)
+            else:
+                workflow_name, cron = entry
+                if not croniter.is_valid(cron, second_at_beginning=True):
+                    raise DBOSException(f"Invalid cron schedule: '{cron}'")
+                to_apply.append(
+                    WorkflowSchedule(
+                        schedule_id=generate_uuid(),
+                        schedule_name=schedule_name,
+                        workflow_name=workflow_name,
+                        schedule=cron,
+                    )
+                )
+        with self._sys_db.engine.begin() as c:
+            for name in names_to_delete:
+                self._sys_db.delete_schedule(name, conn=c)
+            for sched in to_apply:
+                self._sys_db.delete_schedule(sched["schedule_name"], conn=c)
+                self._sys_db.create_schedule(sched, conn=c)

@@ -338,3 +338,41 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
     client.delete_schedule("client-schedule")
     assert client.get_schedule("client-schedule") is None
     assert len(client.list_schedules()) == 0
+
+
+def test_client_apply_schedules(client: DBOSClient) -> None:
+    # Apply two schedules at once
+    client.apply_schedules(
+        {
+            "sched-a": ("wf.a", "* * * * *"),
+            "sched-b": ("wf.b", "0 0 * * *"),
+        }
+    )
+    schedules = client.list_schedules()
+    assert len(schedules) == 2
+    by_name = {s["schedule_name"]: s for s in schedules}
+    assert by_name["sched-a"]["schedule"] == "* * * * *"
+    assert by_name["sched-b"]["workflow_name"] == "wf.b"
+
+    # Replace one, delete the other, add a new one
+    client.apply_schedules(
+        {
+            "sched-a": ("wf.a", "0 * * * *"),
+            "sched-b": None,
+            "sched-c": ("wf.c", "*/5 * * * *"),
+        }
+    )
+    schedules = client.list_schedules()
+    assert len(schedules) == 2
+    by_name = {s["schedule_name"]: s for s in schedules}
+    assert "sched-b" not in by_name
+    assert by_name["sched-a"]["schedule"] == "0 * * * *"
+    assert by_name["sched-c"]["schedule"] == "*/5 * * * *"
+
+    # Reject invalid cron
+    with pytest.raises(DBOSException, match="Invalid cron schedule"):
+        client.apply_schedules({"bad": ("wf.x", "not a cron")})
+
+    # Clean up
+    client.apply_schedules({"sched-a": None, "sched-c": None})
+    assert len(client.list_schedules()) == 0
