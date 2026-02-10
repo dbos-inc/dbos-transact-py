@@ -100,6 +100,17 @@ def test_portable_ser(dbos: DBOS) -> None:
         def recv(cls, topic: str) -> Any:
             return DBOS.recv(topic)
 
+        last_wf_id = ""
+
+        @staticmethod
+        @DBOS.workflow(
+            name="workflowPortableError",
+            serialization_type=WorkflowSerializationFormat.PORTABLE,
+        )
+        def defSerError() -> None:
+            WFTest.last_wf_id = DBOS.workflow_id
+            raise Exception("This is just a plain error")
+
     queue = Queue("testq")
 
     def check_wf_ser(wfid: str, ser: str) -> None:
@@ -214,7 +225,7 @@ def test_portable_ser(dbos: DBOS) -> None:
 
     # Snoop the DB to make sure serialization format is correct
     # WF
-    check_wf_ser(wfhd.workflow_id, DBOSDefaultSerializer.name())
+    check_wf_ser(wfhd.workflow_id, DBOSDefaultSerializer.name())  # TODO Wrong
     # Messages
     check_msg_ser(drpwfh.workflow_id, "default", DBOSPortableJSON.name())
     check_msg_ser(drpwfh.workflow_id, "native", DBOSDefaultSerializer.name())
@@ -255,6 +266,15 @@ def test_portable_ser(dbos: DBOS) -> None:
     check_stream_ser(wfhd.workflow_id, "defstream", DBOSPortableJSON.name())
     check_stream_ser(wfhd.workflow_id, "nstream", DBOSDefaultSerializer.name())
     check_stream_ser(wfhd.workflow_id, "pstream", DBOSPortableJSON.name())
+
+    # Reexecute
+    dbos._sys_db.update_workflow_outcome(wfhd.workflow_id, "PENDING")
+    wfhrex = dbos._execute_workflow_id(wfhd.workflow_id)
+    assert wfhrex.get_result() == 's-1-k:v@"m"'
+
+    # Errors
+    with pytest.raises(Exception):
+        WFTest.defSerError()
 
 
 def test_directinsert_workflows(dbos: DBOS) -> None:
