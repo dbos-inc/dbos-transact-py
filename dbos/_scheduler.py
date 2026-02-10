@@ -75,6 +75,10 @@ class _ScheduleThread:
             or self.cron != schedule["schedule"]
         )
 
+    @staticmethod
+    def is_active(schedule: WorkflowSchedule) -> bool:
+        return schedule.get("status", "ACTIVE") == "ACTIVE"
+
     def stop(self, join: bool = False) -> None:
         self._stop_event.set()
         if join:
@@ -192,11 +196,16 @@ def dynamic_scheduler_loop(
                 active_schedules[schedule_id].stop()
                 del active_schedules[schedule_id]
 
-        # Start or restart threads for new/changed schedules
+        # Start, restart, or stop threads based on schedule state
         for schedule in schedules:
             schedule_id = schedule["schedule_id"]
             existing = active_schedules.get(schedule_id)
-            if existing is None:
+            if not _ScheduleThread.is_active(schedule):
+                # Paused — stop the thread if running
+                if existing is not None:
+                    existing.stop()
+                    del active_schedules[schedule_id]
+            elif existing is None:
                 active_schedules[schedule_id] = _ScheduleThread(schedule)
             elif existing.changed(schedule):
                 existing.stop()

@@ -1703,6 +1703,7 @@ class DBOS:
             schedule_name=schedule_name,
             workflow_name=workflow_name,
             schedule=schedule,
+            status="ACTIVE",
         )
         ctx = snapshot_step_context(reserve_sleep_id=False)
         if ctx and ctx.is_workflow():
@@ -1763,6 +1764,38 @@ class DBOS:
             dbos._sys_db.delete_schedule(name)
 
     @classmethod
+    def pause_schedule(cls, name: str) -> None:
+        """Pause the schedule with the given name. A paused schedule does not fire."""
+        dbos = _get_dbos_instance()
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "pauseSchedule"}, ctx) as step:
+                dbos._sys_db.call_txn_as_step(
+                    step.workflow_id,
+                    step.curr_step_function_id,
+                    "DBOS.pauseSchedule",
+                    lambda c: dbos._sys_db.pause_schedule(name, conn=c),
+                )
+        else:
+            dbos._sys_db.pause_schedule(name)
+
+    @classmethod
+    def resume_schedule(cls, name: str) -> None:
+        """Resume a paused schedule so it begins firing again."""
+        dbos = _get_dbos_instance()
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "resumeSchedule"}, ctx) as step:
+                dbos._sys_db.call_txn_as_step(
+                    step.workflow_id,
+                    step.curr_step_function_id,
+                    "DBOS.resumeSchedule",
+                    lambda c: dbos._sys_db.resume_schedule(name, conn=c),
+                )
+        else:
+            dbos._sys_db.resume_schedule(name)
+
+    @classmethod
     def apply_schedules(
         cls,
         schedules: Dict[str, Optional[Tuple[Callable[[datetime], None], str]]],
@@ -1802,6 +1835,7 @@ class DBOS:
                         schedule_name=schedule_name,
                         workflow_name=workflow_name,
                         schedule=cron,
+                        status="ACTIVE",
                     )
                 )
         with dbos._sys_db.engine.begin() as c:

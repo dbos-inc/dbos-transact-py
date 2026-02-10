@@ -265,7 +265,8 @@ CREATE TABLE "{schema}".workflow_schedules (
     schedule_id TEXT PRIMARY KEY,
     schedule_name TEXT NOT NULL UNIQUE,
     workflow_name TEXT NOT NULL,
-    schedule TEXT NOT NULL
+    schedule TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ACTIVE'
 );
 """
 
@@ -416,7 +417,8 @@ CREATE TABLE workflow_schedules (
     schedule_id TEXT PRIMARY KEY,
     schedule_name TEXT NOT NULL UNIQUE,
     workflow_name TEXT NOT NULL,
-    schedule TEXT NOT NULL
+    schedule TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ACTIVE'
 );
 """
 

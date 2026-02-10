@@ -661,6 +661,7 @@ class DBOSClient:
                 schedule_name=schedule_name,
                 workflow_name=workflow_name,
                 schedule=schedule,
+                status="ACTIVE",
             )
         )
 
@@ -675,6 +676,14 @@ class DBOSClient:
     def delete_schedule(self, name: str) -> None:
         """Delete the schedule with the given name. No-op if it does not exist."""
         self._sys_db.delete_schedule(name)
+
+    def pause_schedule(self, name: str) -> None:
+        """Pause the schedule with the given name. A paused schedule does not fire."""
+        self._sys_db.pause_schedule(name)
+
+    def resume_schedule(self, name: str) -> None:
+        """Resume a paused schedule so it begins firing again."""
+        self._sys_db.resume_schedule(name)
 
     def apply_schedules(
         self,
@@ -704,6 +713,7 @@ class DBOSClient:
                         schedule_name=schedule_name,
                         workflow_name=workflow_name,
                         schedule=cron,
+                        status="ACTIVE",
                     )
                 )
         with self._sys_db.engine.begin() as c:

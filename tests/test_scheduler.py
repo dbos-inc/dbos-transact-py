@@ -498,3 +498,70 @@ def test_client_trigger_schedule(client: DBOSClient) -> None:
     assert before <= received_times[0] <= after
 
     client.delete_schedule("client-trigger")
+
+
+def test_pause_resume_schedule(dbos: DBOS) -> None:
+    wf_counter: int = 0
+
+    @DBOS.workflow()
+    def scheduled_workflow(scheduled_at: datetime) -> None:
+        nonlocal wf_counter
+        wf_counter += 1
+
+    DBOS.create_schedule(
+        schedule_name="pause-test",
+        workflow_fn=scheduled_workflow,
+        schedule="* * * * * *",
+    )
+
+    def check_fired() -> None:
+        assert wf_counter >= 1
+
+    retry_until_success(check_fired)
+
+    # Pause the schedule
+    DBOS.pause_schedule("pause-test")
+    sched = DBOS.get_schedule("pause-test")
+    assert sched is not None
+    assert sched["status"] == "PAUSED"
+
+    # Wait for the scheduler loop to detect the pause and stop the thread
+    time.sleep(3)
+    count_after_pause = wf_counter
+    time.sleep(3)
+    assert wf_counter == count_after_pause
+
+    # Resume the schedule
+    DBOS.resume_schedule("pause-test")
+    sched = DBOS.get_schedule("pause-test")
+    assert sched is not None
+    assert sched["status"] == "ACTIVE"
+
+    def check_fired_after_resume() -> None:
+        assert wf_counter > count_after_pause
+
+    retry_until_success(check_fired_after_resume)
+
+    DBOS.delete_schedule("pause-test")
+
+
+def test_client_pause_resume_schedule(client: DBOSClient) -> None:
+    client.create_schedule(
+        schedule_name="client-pause",
+        workflow_name="some.workflow",
+        schedule="0 0 * * *",
+    )
+
+    # Pause
+    client.pause_schedule("client-pause")
+    sched = client.get_schedule("client-pause")
+    assert sched is not None
+    assert sched["status"] == "PAUSED"
+
+    # Resume
+    client.resume_schedule("client-pause")
+    sched = client.get_schedule("client-pause")
+    assert sched is not None
+    assert sched["status"] == "ACTIVE"
+
+    client.delete_schedule("client-pause")

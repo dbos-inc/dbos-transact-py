@@ -232,6 +232,7 @@ class WorkflowSchedule(TypedDict):
     schedule_name: str
     workflow_name: str
     schedule: str
+    status: str
 
 
 class StepInfo(TypedDict):
@@ -2876,6 +2877,7 @@ class SystemDatabase(ABC):
                         schedule_name=schedule["schedule_name"],
                         workflow_name=schedule["workflow_name"],
                         schedule=schedule["schedule"],
+                        status=schedule["status"],
                     )
                 )
             except sa.exc.IntegrityError:
@@ -2899,6 +2901,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_schedules.c.schedule_name,
                     SystemSchema.workflow_schedules.c.workflow_name,
                     SystemSchema.workflow_schedules.c.schedule,
+                    SystemSchema.workflow_schedules.c.status,
                 )
             ).fetchall()
             return [
@@ -2907,6 +2910,7 @@ class SystemDatabase(ABC):
                     schedule_name=row[1],
                     workflow_name=row[2],
                     schedule=row[3],
+                    status=row[4],
                 )
                 for row in rows
             ]
@@ -2926,6 +2930,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_schedules.c.schedule_name,
                     SystemSchema.workflow_schedules.c.workflow_name,
                     SystemSchema.workflow_schedules.c.schedule,
+                    SystemSchema.workflow_schedules.c.status,
                 ).where(SystemSchema.workflow_schedules.c.schedule_name == name)
             ).fetchone()
             if row is None:
@@ -2935,12 +2940,35 @@ class SystemDatabase(ABC):
                 schedule_name=row[1],
                 workflow_name=row[2],
                 schedule=row[3],
+                status=row[4],
             )
 
         if conn is not None:
             return _do(conn)
         with self.engine.begin() as c:
             return _do(c)
+
+    def _set_schedule_status(
+        self, name: str, status: str, conn: Optional[sa.Connection] = None
+    ) -> None:
+        def _do(c: sa.Connection) -> None:
+            c.execute(
+                sa.update(SystemSchema.workflow_schedules)
+                .where(SystemSchema.workflow_schedules.c.schedule_name == name)
+                .values(status=status)
+            )
+
+        if conn is not None:
+            _do(conn)
+        else:
+            with self.engine.begin() as c:
+                _do(c)
+
+    def pause_schedule(self, name: str, conn: Optional[sa.Connection] = None) -> None:
+        self._set_schedule_status(name, "PAUSED", conn)
+
+    def resume_schedule(self, name: str, conn: Optional[sa.Connection] = None) -> None:
+        self._set_schedule_status(name, "ACTIVE", conn)
 
     def delete_schedule(self, name: str, conn: Optional[sa.Connection] = None) -> None:
         def _do(c: sa.Connection) -> None:
