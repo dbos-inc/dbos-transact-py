@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -29,6 +30,7 @@ from dbos._croniter import croniter  # type: ignore
 from dbos._dbos_config import get_system_database_url, is_valid_database_url
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
+from dbos._scheduler import backfill_schedule
 from dbos._serialization import DefaultSerializer, Serializer, WorkflowInputs
 from dbos._sys_db import (
     EnqueueOptionsInternal,
@@ -710,3 +712,25 @@ class DBOSClient:
             for sched in to_apply:
                 self._sys_db.delete_schedule(sched["schedule_name"], conn=c)
                 self._sys_db.create_schedule(sched, conn=c)
+
+    def backfill_schedule(
+        self, schedule_name: str, start: datetime, end: datetime
+    ) -> int:
+        """
+        Enqueue all executions of a schedule that would have run between ``start`` and ``end``.
+
+        Each execution uses the same deterministic workflow ID as the live scheduler,
+        so already-executed times are skipped.
+
+        Args:
+            schedule_name: Name of an existing schedule
+            start: Start of the backfill window (exclusive)
+            end: End of the backfill window (exclusive)
+
+        Returns:
+            The number of executions enqueued.
+
+        Raises:
+            DBOSException: If the schedule does not exist
+        """
+        return backfill_schedule(self._sys_db, schedule_name, start, end)

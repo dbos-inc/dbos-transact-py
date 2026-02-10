@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -302,6 +302,47 @@ def test_long_schedule_shutdown(dbos: DBOS) -> None:
     # despite a very long schedule.
 
 
+def test_backfill_schedule(dbos: DBOS) -> None:
+    received_times: list[datetime] = []
+
+    @DBOS.workflow()
+    def backfill_workflow(scheduled_at: datetime) -> None:
+        received_times.append(scheduled_at)
+
+    DBOS.create_schedule(
+        schedule_name="backfill-test",
+        workflow_fn=backfill_workflow,
+        schedule="0 * * * *",  # every hour
+    )
+
+    # Backfill from 00:30 to 03:30 — yields 01:00, 02:00, 03:00
+    start = datetime(2025, 1, 1, 0, 30, 0, tzinfo=timezone.utc)
+    end = start + timedelta(hours=3)
+    count = DBOS.backfill_schedule("backfill-test", start, end)
+    assert count == 3
+
+    # Wait for the enqueued workflows to execute
+    def check_all_received() -> None:
+        assert len(received_times) == 3
+
+    retry_until_success(check_all_received)
+
+    expected = [datetime(2025, 1, 1, h, 0, 0, tzinfo=timezone.utc) for h in range(1, 4)]
+    assert sorted(received_times) == expected
+
+    # Backfilling again should be idempotent (same workflow IDs)
+    count2 = DBOS.backfill_schedule("backfill-test", start, end)
+    assert count2 == 3
+    time.sleep(1)
+    assert len(received_times) == 3
+
+    # Nonexistent schedule
+    with pytest.raises(DBOSException, match="does not exist"):
+        DBOS.backfill_schedule("no-such-schedule", start, end)
+
+    DBOS.delete_schedule("backfill-test")
+
+
 def test_client_schedule_crud(client: DBOSClient) -> None:
     # Create a schedule
     client.create_schedule(
@@ -376,3 +417,32 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
     # Clean up
     client.apply_schedules({"sched-a": None, "sched-c": None})
     assert len(client.list_schedules()) == 0
+
+
+def test_client_backfill_schedule(client: DBOSClient) -> None:
+    received_times: list[datetime] = []
+
+    @DBOS.workflow()
+    def backfill_workflow(scheduled_at: datetime) -> None:
+        received_times.append(scheduled_at)
+
+    client.create_schedule(
+        schedule_name="client-backfill",
+        workflow_name=backfill_workflow.dbos_function_name,  # type: ignore
+        schedule="0 * * * *",
+    )
+
+    start = datetime(2025, 6, 1, 0, 30, 0, tzinfo=timezone.utc)
+    end = start + timedelta(hours=3)
+    count = client.backfill_schedule("client-backfill", start, end)
+    assert count == 3
+
+    def check_received() -> None:
+        assert len(received_times) == 3
+
+    retry_until_success(check_received)
+
+    expected = [datetime(2025, 6, 1, h, 0, 0, tzinfo=timezone.utc) for h in range(1, 4)]
+    assert sorted(received_times) == expected
+
+    client.delete_schedule("client-backfill")

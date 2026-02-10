@@ -75,7 +75,7 @@ from ._registrations import (
     get_or_create_class_info,
 )
 from ._roles import default_required_roles, required_roles
-from ._scheduler import dynamic_scheduler_loop
+from ._scheduler import backfill_schedule, dynamic_scheduler_loop
 from ._scheduler_decorator import DecoratedScheduledWorkflow, scheduled
 from ._sys_db import (
     StepInfo,
@@ -1810,6 +1810,35 @@ class DBOS:
             for sched in to_apply:
                 dbos._sys_db.delete_schedule(sched["schedule_name"], conn=c)
                 dbos._sys_db.create_schedule(sched, conn=c)
+
+    @classmethod
+    def backfill_schedule(
+        cls, schedule_name: str, start: datetime, end: datetime
+    ) -> int:
+        """
+        Enqueue all executions of a schedule that would have run between ``start`` and ``end``.
+
+        Each execution uses the same deterministic workflow ID as the live scheduler,
+        so already-executed times are skipped. Must not be called from within a workflow.
+
+        Args:
+            schedule_name(str): Name of an existing schedule
+            start(datetime): Start of the backfill window (exclusive)
+            end(datetime): End of the backfill window (exclusive)
+
+        Returns:
+            The number of executions enqueued.
+
+        Raises:
+            DBOSException: If called from within a workflow or the schedule does not exist
+        """
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            raise DBOSException(
+                "DBOS.backfill_schedule cannot be called from within a workflow"
+            )
+        dbos = _get_dbos_instance()
+        return backfill_schedule(dbos._sys_db, schedule_name, start, end)
 
     @classproperty
     def application_version(cls) -> str:

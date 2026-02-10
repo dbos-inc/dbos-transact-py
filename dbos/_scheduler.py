@@ -2,11 +2,16 @@ import random
 import threading
 import traceback
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from ._context import SetWorkflowID
 from ._croniter import croniter  # type: ignore
 from ._logger import dbos_logger
-from ._sys_db import WorkflowSchedule
+from ._sys_db import WorkflowSchedule, WorkflowStatusInternal, WorkflowStatusString
+from ._utils import INTERNAL_QUEUE_NAME
+
+if TYPE_CHECKING:
+    from ._sys_db import SystemDatabase
 
 
 class _ScheduleThread:
@@ -72,6 +77,69 @@ class _ScheduleThread:
         self._stop_event.set()
         if join:
             self._thread.join(timeout=5.0)
+
+
+def backfill_schedule(
+    sys_db: "SystemDatabase",
+    schedule_name: str,
+    start: datetime,
+    end: datetime,
+) -> int:
+    """Enqueue all scheduled executions between start and end. Returns the count enqueued."""
+    from ._error import DBOSException
+    from ._serialization import WorkflowInputs
+
+    schedule = sys_db.get_schedule(schedule_name)
+    if schedule is None:
+        raise DBOSException(f"Schedule '{schedule_name}' does not exist")
+    workflow_name = schedule["workflow_name"]
+    it = croniter(schedule["schedule"], start, second_at_beginning=True)
+    count = 0
+    while True:
+        next_time = it.get_next(datetime)
+        if next_time >= end:
+            break
+        workflow_id = f"sched-{schedule_name}-{next_time.isoformat()}"
+        if not sys_db.get_workflow_status(workflow_id):
+            inputs: WorkflowInputs = {"args": (next_time,), "kwargs": {}}
+            status: WorkflowStatusInternal = {
+                "workflow_uuid": workflow_id,
+                "status": WorkflowStatusString.ENQUEUED.value,
+                "name": workflow_name,
+                "class_name": None,
+                "queue_name": INTERNAL_QUEUE_NAME,
+                "app_version": None,
+                "config_name": None,
+                "authenticated_user": None,
+                "assumed_role": None,
+                "authenticated_roles": None,
+                "output": None,
+                "error": None,
+                "created_at": None,
+                "updated_at": None,
+                "executor_id": None,
+                "recovery_attempts": None,
+                "app_id": None,
+                "workflow_timeout_ms": None,
+                "workflow_deadline_epoch_ms": None,
+                "deduplication_id": None,
+                "priority": 0,
+                "inputs": sys_db.serializer.serialize(inputs),
+                "queue_partition_key": None,
+                "forked_from": None,
+                "parent_workflow_id": None,
+                "started_at_epoch_ms": None,
+                "owner_xid": None,
+            }
+            sys_db.init_workflow(
+                status,
+                max_recovery_attempts=None,
+                owner_xid=None,
+                is_dequeued_request=False,
+                is_recovery_request=False,
+            )
+        count += 1
+    return count
 
 
 def dynamic_scheduler_loop(
