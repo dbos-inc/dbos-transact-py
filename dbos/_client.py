@@ -685,15 +685,23 @@ class DBOSClient:
             workflow_name: Filter by workflow name or a list of names
             schedule_name_prefix: Filter by schedule name prefix or a list of prefixes
         """
-        return self._sys_db.list_schedules(
+        schedules = self._sys_db.list_schedules(
             status=status,
             workflow_name=workflow_name,
             schedule_name_prefix=schedule_name_prefix,
         )
+        for s in schedules:
+            s["context"] = self._sys_db.serializer.deserialize(s["context"])
+        return schedules
 
     def get_schedule(self, name: str) -> Optional[WorkflowSchedule]:
         """Return the schedule with the given name, or ``None`` if it does not exist."""
-        return self._sys_db.get_schedule(name)
+        schedule = self._sys_db.get_schedule(name)
+        if schedule is not None:
+            schedule["context"] = self._sys_db.serializer.deserialize(
+                schedule["context"]
+            )
+        return schedule
 
     def delete_schedule(self, name: str) -> None:
         """Delete the schedule with the given name. No-op if it does not exist."""

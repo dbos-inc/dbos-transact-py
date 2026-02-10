@@ -33,7 +33,7 @@ def test_schedule_crud(dbos: DBOS) -> None:
     assert schedules[0]["schedule_name"] == "test-schedule"
     assert schedules[0]["workflow_name"] == my_workflow.dbos_function_name  # type: ignore
     assert schedules[0]["schedule"] == "* * * * *"
-    assert schedules[0]["context"]
+    assert schedules[0]["context"] == {"env": "test"}
 
     # Get schedule by name
     sched = DBOS.get_schedule("test-schedule")
@@ -42,7 +42,7 @@ def test_schedule_crud(dbos: DBOS) -> None:
     assert sched["workflow_name"] == my_workflow.dbos_function_name  # type: ignore
     assert sched["schedule"] == "* * * * *"
     assert sched["schedule_id"] == schedules[0]["schedule_id"]
-    assert sched["context"]
+    assert sched["context"] == {"env": "test"}
 
     # Get nonexistent schedule
     assert DBOS.get_schedule("nonexistent") is None
@@ -130,7 +130,9 @@ def test_apply_schedules(dbos: DBOS) -> None:
     assert len(schedules) == 2
     by_name = {s["schedule_name"]: s for s in schedules}
     assert by_name["sched-a"]["schedule"] == "* * * * *"
+    assert by_name["sched-a"]["context"] == {"region": "us"}
     assert by_name["sched-b"]["schedule"] == "0 0 * * *"
+    assert by_name["sched-b"]["context"] is None
 
     # Replace sched-a, add sched-c
     DBOS.apply_schedules(
@@ -153,7 +155,9 @@ def test_apply_schedules(dbos: DBOS) -> None:
     assert len(schedules) == 3
     by_name = {s["schedule_name"]: s for s in schedules}
     assert by_name["sched-a"]["schedule"] == "0 * * * *"
+    assert by_name["sched-a"]["context"] is None
     assert by_name["sched-c"]["schedule"] == "*/5 * * * *"
+    assert by_name["sched-c"]["context"] == [1, 2, 3]
 
     # Reject invalid cron
     with pytest.raises(DBOSException, match="Invalid cron schedule"):
@@ -209,11 +213,12 @@ def test_schedule_crud_from_workflow(dbos: DBOS) -> None:
         schedules = DBOS.list_schedules()
         assert len(schedules) == 1
         assert schedules[0]["schedule_name"] == "wf-schedule"
-        assert schedules[0]["context"]
+        assert schedules[0]["context"] == {"from": "workflow"}
 
         sched = DBOS.get_schedule("wf-schedule")
         assert sched is not None
         assert sched["schedule_name"] == "wf-schedule"
+        assert sched["context"] == {"from": "workflow"}
 
         DBOS.delete_schedule("wf-schedule")
         assert DBOS.get_schedule("wf-schedule") is None
@@ -490,14 +495,14 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
     assert schedules[0]["schedule_name"] == "client-schedule"
     assert schedules[0]["workflow_name"] == "some.workflow"
     assert schedules[0]["schedule"] == "* * * * *"
-    assert schedules[0]["context"]
+    assert schedules[0]["context"] == {"tenant": "acme"}
 
     # Get schedule by name
     sched = client.get_schedule("client-schedule")
     assert sched is not None
     assert sched["schedule_name"] == "client-schedule"
     assert sched["schedule_id"] == schedules[0]["schedule_id"]
-    assert sched["context"]
+    assert sched["context"] == {"tenant": "acme"}
 
     # Get nonexistent schedule
     assert client.get_schedule("nonexistent") is None
@@ -579,7 +584,9 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
     assert len(schedules) == 2
     by_name = {s["schedule_name"]: s for s in schedules}
     assert by_name["sched-a"]["schedule"] == "* * * * *"
+    assert by_name["sched-a"]["context"] == {"region": "eu"}
     assert by_name["sched-b"]["workflow_name"] == "wf.b"
+    assert by_name["sched-b"]["context"] is None
 
     # Replace sched-a, add sched-c
     client.apply_schedules(
@@ -602,7 +609,9 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
     assert len(schedules) == 3
     by_name = {s["schedule_name"]: s for s in schedules}
     assert by_name["sched-a"]["schedule"] == "0 * * * *"
+    assert by_name["sched-a"]["context"] is None
     assert by_name["sched-c"]["schedule"] == "*/5 * * * *"
+    assert by_name["sched-c"]["context"] == [1, 2]
 
     # Reject invalid cron
     with pytest.raises(DBOSException, match="Invalid cron schedule"):
@@ -764,12 +773,12 @@ async def test_schedule_crud_async(dbos: DBOS) -> None:
     schedules = await DBOS.list_schedules_async()
     assert len(schedules) == 1
     assert schedules[0]["schedule_name"] == "async-schedule"
-    assert schedules[0]["context"]
+    assert schedules[0]["context"] == {"async": True}
 
     sched = await DBOS.get_schedule_async("async-schedule")
     assert sched is not None
     assert sched["schedule"] == "* * * * *"
-    assert sched["context"]
+    assert sched["context"] == {"async": True}
 
     assert await DBOS.get_schedule_async("nonexistent") is None
 
@@ -795,12 +804,12 @@ async def test_client_schedule_crud_async(client: DBOSClient) -> None:
     schedules = await client.list_schedules_async()
     assert len(schedules) == 1
     assert schedules[0]["schedule_name"] == "async-client"
-    assert schedules[0]["context"]
+    assert schedules[0]["context"] == 42
 
     sched = await client.get_schedule_async("async-client")
     assert sched is not None
     assert sched["workflow_name"] == "some.workflow"
-    assert sched["context"]
+    assert sched["context"] == 42
 
     assert await client.get_schedule_async("nonexistent") is None
 

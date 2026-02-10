@@ -1749,7 +1749,7 @@ class DBOS:
         ctx = snapshot_step_context(reserve_sleep_id=False)
         if ctx and ctx.is_workflow():
             with EnterDBOSStepCtx({"name": "listSchedules"}, ctx) as step:
-                return dbos._sys_db.call_txn_as_step(
+                schedules = dbos._sys_db.call_txn_as_step(
                     step.workflow_id,
                     step.curr_step_function_id,
                     "DBOS.listSchedules",
@@ -1760,11 +1760,15 @@ class DBOS:
                         conn=c,
                     ),
                 )
-        return dbos._sys_db.list_schedules(
-            status=status,
-            workflow_name=workflow_name,
-            schedule_name_prefix=schedule_name_prefix,
-        )
+        else:
+            schedules = dbos._sys_db.list_schedules(
+                status=status,
+                workflow_name=workflow_name,
+                schedule_name_prefix=schedule_name_prefix,
+            )
+        for s in schedules:
+            s["context"] = dbos._sys_db.serializer.deserialize(s["context"])
+        return schedules
 
     @classmethod
     def get_schedule(cls, name: str) -> Optional["WorkflowSchedule"]:
@@ -1773,13 +1777,19 @@ class DBOS:
         ctx = snapshot_step_context(reserve_sleep_id=False)
         if ctx and ctx.is_workflow():
             with EnterDBOSStepCtx({"name": "getSchedule"}, ctx) as step:
-                return dbos._sys_db.call_txn_as_step(
+                schedule = dbos._sys_db.call_txn_as_step(
                     step.workflow_id,
                     step.curr_step_function_id,
                     "DBOS.getSchedule",
                     lambda c: dbos._sys_db.get_schedule(name, conn=c),
                 )
-        return dbos._sys_db.get_schedule(name)
+        else:
+            schedule = dbos._sys_db.get_schedule(name)
+        if schedule is not None:
+            schedule["context"] = dbos._sys_db.serializer.deserialize(
+                schedule["context"]
+            )
+        return schedule
 
     @classmethod
     def delete_schedule(cls, name: str) -> None:

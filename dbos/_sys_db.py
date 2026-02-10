@@ -233,7 +233,7 @@ class WorkflowSchedule(TypedDict):
     workflow_name: str
     schedule: str
     status: str
-    context: str
+    context: Any
 
 
 class ClientScheduleInput(TypedDict):
