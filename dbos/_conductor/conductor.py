@@ -547,31 +547,6 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(import_response.to_json())
-                        elif msg_type == p.MessageType.CREATE_SCHEDULE:
-                            create_sched_msg = p.CreateScheduleRequest.from_json(
-                                message
-                            )
-                            success = True
-                            try:
-                                self.dbos.create_schedule(
-                                    schedule_name=create_sched_msg.schedule_name,
-                                    workflow_fn=self.dbos._registry.workflow_info_map[
-                                        create_sched_msg.workflow_name
-                                    ],
-                                    schedule=create_sched_msg.schedule,
-                                )
-                            except Exception:
-                                error_message = f"Exception encountered when creating schedule '{create_sched_msg.schedule_name}': {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
-                                success = False
-                            websocket.send(
-                                p.CreateScheduleResponse(
-                                    type=p.MessageType.CREATE_SCHEDULE,
-                                    request_id=base_message.request_id,
-                                    success=success,
-                                    error_message=error_message,
-                                ).to_json()
-                            )
                         elif msg_type == p.MessageType.LIST_SCHEDULES:
                             list_sched_msg = p.ListSchedulesRequest.from_json(message)
                             sched_body = list_sched_msg.body
@@ -617,25 +592,6 @@ class ConductorWebsocket(threading.Thread):
                                     type=p.MessageType.GET_SCHEDULE,
                                     request_id=base_message.request_id,
                                     output=output,
-                                    error_message=error_message,
-                                ).to_json()
-                            )
-                        elif msg_type == p.MessageType.DELETE_SCHEDULE:
-                            del_sched_msg = p.DeleteScheduleRequest.from_json(message)
-                            success = True
-                            try:
-                                self.dbos._sys_db.delete_schedule(
-                                    del_sched_msg.schedule_name
-                                )
-                            except Exception:
-                                error_message = f"Exception encountered when deleting schedule '{del_sched_msg.schedule_name}': {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
-                                success = False
-                            websocket.send(
-                                p.DeleteScheduleResponse(
-                                    type=p.MessageType.DELETE_SCHEDULE,
-                                    request_id=base_message.request_id,
-                                    success=success,
                                     error_message=error_message,
                                 ).to_json()
                             )

@@ -24,10 +24,8 @@ class MessageType(str, Enum):
     ALERT = "alert"
     EXPORT_WORKFLOW = "export_workflow"
     IMPORT_WORKFLOW = "import_workflow"
-    CREATE_SCHEDULE = "create_schedule"
     LIST_SCHEDULES = "list_schedules"
     GET_SCHEDULE = "get_schedule"
-    DELETE_SCHEDULE = "delete_schedule"
     PAUSE_SCHEDULE = "pause_schedule"
     RESUME_SCHEDULE = "resume_schedule"
     BACKFILL_SCHEDULE = "backfill_schedule"
@@ -465,19 +463,6 @@ class ScheduleOutput:
         )
 
 
-@dataclass
-class CreateScheduleRequest(BaseMessage):
-    schedule_name: str
-    workflow_name: str
-    schedule: str
-
-
-@dataclass
-class CreateScheduleResponse(BaseMessage):
-    success: bool
-    error_message: Optional[str] = None
-
-
 class ListSchedulesBody(TypedDict, total=False):
     status: Optional[Union[str, List[str]]]
     workflow_name: Optional[Union[str, List[str]]]
@@ -503,17 +488,6 @@ class GetScheduleRequest(BaseMessage):
 @dataclass
 class GetScheduleResponse(BaseMessage):
     output: Optional[ScheduleOutput]
-    error_message: Optional[str] = None
-
-
-@dataclass
-class DeleteScheduleRequest(BaseMessage):
-    schedule_name: str
-
-
-@dataclass
-class DeleteScheduleResponse(BaseMessage):
-    success: bool
     error_message: Optional[str] = None
 
 
