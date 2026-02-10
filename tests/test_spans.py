@@ -303,6 +303,12 @@ def test_wf_fastapi(
     log_processor.force_flush(timeout_millis=5000)
     logs = log_exporter.get_finished_logs()
 
+    logs = tuple(
+        log
+        for log in logs
+        if log.log_record.severity_text != "ERROR"  # Error logged from bogus exporter
+    )
+
     if len(logs) != 2:
         DBOS.logger.warning("Expection on number of logs not met")
         for log in logs:
