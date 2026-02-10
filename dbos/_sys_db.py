@@ -2892,18 +2892,48 @@ class SystemDatabase(ABC):
                 _do(c)
 
     def list_schedules(
-        self, conn: Optional[sa.Connection] = None
+        self,
+        *,
+        status: Optional[Union[str, List[str]]] = None,
+        workflow_name: Optional[Union[str, List[str]]] = None,
+        schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+        conn: Optional[sa.Connection] = None,
     ) -> List[WorkflowSchedule]:
         def _do(c: sa.Connection) -> List[WorkflowSchedule]:
-            rows = c.execute(
-                sa.select(
-                    SystemSchema.workflow_schedules.c.schedule_id,
-                    SystemSchema.workflow_schedules.c.schedule_name,
-                    SystemSchema.workflow_schedules.c.workflow_name,
-                    SystemSchema.workflow_schedules.c.schedule,
-                    SystemSchema.workflow_schedules.c.status,
+            query = sa.select(
+                SystemSchema.workflow_schedules.c.schedule_id,
+                SystemSchema.workflow_schedules.c.schedule_name,
+                SystemSchema.workflow_schedules.c.workflow_name,
+                SystemSchema.workflow_schedules.c.schedule,
+                SystemSchema.workflow_schedules.c.status,
+            )
+            if status is not None:
+                vals = [status] if isinstance(status, str) else status
+                query = query.where(SystemSchema.workflow_schedules.c.status.in_(vals))
+            if workflow_name is not None:
+                vals = (
+                    [workflow_name] if isinstance(workflow_name, str) else workflow_name
                 )
-            ).fetchall()
+                query = query.where(
+                    SystemSchema.workflow_schedules.c.workflow_name.in_(vals)
+                )
+            if schedule_name_prefix is not None:
+                prefixes = (
+                    [schedule_name_prefix]
+                    if isinstance(schedule_name_prefix, str)
+                    else schedule_name_prefix
+                )
+                query = query.where(
+                    sa.or_(
+                        *(
+                            SystemSchema.workflow_schedules.c.schedule_name.startswith(
+                                p
+                            )
+                            for p in prefixes
+                        )
+                    )
+                )
+            rows = c.execute(query).fetchall()
             return [
                 WorkflowSchedule(
                     schedule_id=row[0],

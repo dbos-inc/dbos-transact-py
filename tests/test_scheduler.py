@@ -14,6 +14,10 @@ def test_schedule_crud(dbos: DBOS) -> None:
     def my_workflow(scheduled_at: datetime) -> None:
         pass
 
+    @DBOS.workflow()
+    def other_workflow(scheduled_at: datetime) -> None:
+        pass
+
     # Create a schedule
     DBOS.create_schedule(
         schedule_name="test-schedule",
@@ -55,7 +59,38 @@ def test_schedule_crud(dbos: DBOS) -> None:
             schedule="0 0 * * *",
         )
 
-    # Delete schedule
+    # --- list_schedules filters ---
+    DBOS.create_schedule(
+        schedule_name="other-schedule",
+        workflow_fn=other_workflow,
+        schedule="0 0 * * *",
+    )
+    DBOS.pause_schedule("other-schedule")
+
+    # Filter by status
+    assert len(DBOS.list_schedules(status="ACTIVE")) == 1
+    assert DBOS.list_schedules(status="ACTIVE")[0]["schedule_name"] == "test-schedule"
+    assert len(DBOS.list_schedules(status="PAUSED")) == 1
+    assert len(DBOS.list_schedules(status=["ACTIVE", "PAUSED"])) == 2
+    assert len(DBOS.list_schedules(status="NONEXISTENT")) == 0
+
+    # Filter by workflow_name
+    assert len(DBOS.list_schedules(workflow_name=my_workflow.dbos_function_name)) == 1  # type: ignore
+    assert len(DBOS.list_schedules(workflow_name=other_workflow.dbos_function_name)) == 1  # type: ignore
+    assert len(DBOS.list_schedules(workflow_name=[my_workflow.dbos_function_name, other_workflow.dbos_function_name])) == 2  # type: ignore
+
+    # Filter by schedule_name_prefix
+    assert len(DBOS.list_schedules(schedule_name_prefix="test-")) == 1
+    assert len(DBOS.list_schedules(schedule_name_prefix="other-")) == 1
+    assert len(DBOS.list_schedules(schedule_name_prefix=["test-", "other-"])) == 2
+    assert len(DBOS.list_schedules(schedule_name_prefix="nonexistent-")) == 0
+
+    # Combine filters
+    assert len(DBOS.list_schedules(status="ACTIVE", schedule_name_prefix="test-")) == 1
+    assert len(DBOS.list_schedules(status="PAUSED", schedule_name_prefix="test-")) == 0
+
+    # Delete schedules
+    DBOS.delete_schedule("other-schedule")
     DBOS.delete_schedule("test-schedule")
     assert DBOS.get_schedule("test-schedule") is None
     assert len(DBOS.list_schedules()) == 0
@@ -403,7 +438,48 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
             schedule="not a cron",
         )
 
-    # Delete schedule
+    # --- list_schedules filters ---
+    client.create_schedule(
+        schedule_name="client-other",
+        workflow_name="other.workflow",
+        schedule="0 0 * * *",
+    )
+    client.pause_schedule("client-other")
+
+    # Filter by status
+    assert len(client.list_schedules(status="ACTIVE")) == 1
+    assert (
+        client.list_schedules(status="ACTIVE")[0]["schedule_name"] == "client-schedule"
+    )
+    assert len(client.list_schedules(status="PAUSED")) == 1
+    assert len(client.list_schedules(status=["ACTIVE", "PAUSED"])) == 2
+
+    # Filter by workflow_name
+    assert len(client.list_schedules(workflow_name="some.workflow")) == 1
+    assert len(client.list_schedules(workflow_name="other.workflow")) == 1
+    assert (
+        len(client.list_schedules(workflow_name=["some.workflow", "other.workflow"]))
+        == 2
+    )
+
+    # Filter by schedule_name_prefix
+    assert len(client.list_schedules(schedule_name_prefix="client-s")) == 1
+    assert len(client.list_schedules(schedule_name_prefix="client-o")) == 1
+    assert len(client.list_schedules(schedule_name_prefix="client-")) == 2
+    assert (
+        len(client.list_schedules(schedule_name_prefix=["client-s", "client-o"])) == 2
+    )
+
+    # Combine filters
+    assert (
+        len(client.list_schedules(status="ACTIVE", workflow_name="some.workflow")) == 1
+    )
+    assert (
+        len(client.list_schedules(status="PAUSED", workflow_name="some.workflow")) == 0
+    )
+
+    # Delete schedules
+    client.delete_schedule("client-other")
     client.delete_schedule("client-schedule")
     assert client.get_schedule("client-schedule") is None
     assert len(client.list_schedules()) == 0

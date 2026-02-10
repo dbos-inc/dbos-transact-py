@@ -1718,8 +1718,21 @@ class DBOS:
             dbos._sys_db.create_schedule(sched)
 
     @classmethod
-    def list_schedules(cls) -> List["WorkflowSchedule"]:
-        """Return all registered workflow schedules."""
+    def list_schedules(
+        cls,
+        *,
+        status: Optional[Union[str, List[str]]] = None,
+        workflow_name: Optional[Union[str, List[str]]] = None,
+        schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+    ) -> List["WorkflowSchedule"]:
+        """
+        Return all registered workflow schedules, optionally filtered.
+
+        Args:
+            status: Filter by status (e.g. ``"ACTIVE"``) or a list of statuses
+            workflow_name: Filter by workflow name or a list of names
+            schedule_name_prefix: Filter by schedule name prefix or a list of prefixes
+        """
         dbos = _get_dbos_instance()
         ctx = snapshot_step_context(reserve_sleep_id=False)
         if ctx and ctx.is_workflow():
@@ -1728,9 +1741,18 @@ class DBOS:
                     step.workflow_id,
                     step.curr_step_function_id,
                     "DBOS.listSchedules",
-                    lambda c: dbos._sys_db.list_schedules(conn=c),
+                    lambda c: dbos._sys_db.list_schedules(
+                        status=status,
+                        workflow_name=workflow_name,
+                        schedule_name_prefix=schedule_name_prefix,
+                        conn=c,
+                    ),
                 )
-        return dbos._sys_db.list_schedules()
+        return dbos._sys_db.list_schedules(
+            status=status,
+            workflow_name=workflow_name,
+            schedule_name_prefix=schedule_name_prefix,
+        )
 
     @classmethod
     def get_schedule(cls, name: str) -> Optional["WorkflowSchedule"]:

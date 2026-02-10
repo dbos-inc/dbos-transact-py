@@ -14,6 +14,7 @@ from typing import (
     Tuple,
     TypedDict,
     TypeVar,
+    Union,
 )
 
 import sqlalchemy as sa
@@ -665,9 +666,26 @@ class DBOSClient:
             )
         )
 
-    def list_schedules(self) -> List[WorkflowSchedule]:
-        """Return all registered workflow schedules."""
-        return self._sys_db.list_schedules()
+    def list_schedules(
+        self,
+        *,
+        status: Optional[Union[str, List[str]]] = None,
+        workflow_name: Optional[Union[str, List[str]]] = None,
+        schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+    ) -> List[WorkflowSchedule]:
+        """
+        Return all registered workflow schedules, optionally filtered.
+
+        Args:
+            status: Filter by status (e.g. ``"ACTIVE"``) or a list of statuses
+            workflow_name: Filter by workflow name or a list of names
+            schedule_name_prefix: Filter by schedule name prefix or a list of prefixes
+        """
+        return self._sys_db.list_schedules(
+            status=status,
+            workflow_name=workflow_name,
+            schedule_name_prefix=schedule_name_prefix,
+        )
 
     def get_schedule(self, name: str) -> Optional[WorkflowSchedule]:
         """Return the schedule with the given name, or ``None`` if it does not exist."""
