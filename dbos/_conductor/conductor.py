@@ -5,6 +5,7 @@ import socket
 import threading
 import time
 import traceback
+from datetime import datetime
 from importlib.metadata import version
 from typing import TYPE_CHECKING, Optional
 
@@ -13,6 +14,7 @@ from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
 from dbos._context import SetWorkflowID
+from dbos._scheduler import backfill_schedule, trigger_schedule
 from dbos._utils import GlobalParams, generate_uuid
 from dbos._workflow_commands import (
     delete_workflow,
@@ -545,6 +547,180 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(import_response.to_json())
+                        elif msg_type == p.MessageType.CREATE_SCHEDULE:
+                            create_sched_msg = p.CreateScheduleRequest.from_json(
+                                message
+                            )
+                            success = True
+                            try:
+                                self.dbos.create_schedule(
+                                    schedule_name=create_sched_msg.schedule_name,
+                                    workflow_fn=self.dbos._registry.workflow_info_map[
+                                        create_sched_msg.workflow_name
+                                    ],
+                                    schedule=create_sched_msg.schedule,
+                                )
+                            except Exception:
+                                error_message = f"Exception encountered when creating schedule '{create_sched_msg.schedule_name}': {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                                success = False
+                            websocket.send(
+                                p.CreateScheduleResponse(
+                                    type=p.MessageType.CREATE_SCHEDULE,
+                                    request_id=base_message.request_id,
+                                    success=success,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
+                        elif msg_type == p.MessageType.LIST_SCHEDULES:
+                            list_sched_msg = p.ListSchedulesRequest.from_json(message)
+                            sched_body = list_sched_msg.body
+                            schedules: list[p.ScheduleOutput] = []
+                            try:
+                                schedules = [
+                                    p.ScheduleOutput.from_schedule(s)
+                                    for s in self.dbos._sys_db.list_schedules(
+                                        status=sched_body.get("status", None),
+                                        workflow_name=sched_body.get(
+                                            "workflow_name", None
+                                        ),
+                                        schedule_name_prefix=sched_body.get(
+                                            "schedule_name_prefix", None
+                                        ),
+                                    )
+                                ]
+                            except Exception:
+                                error_message = f"Exception encountered when listing schedules: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                            websocket.send(
+                                p.ListSchedulesResponse(
+                                    type=p.MessageType.LIST_SCHEDULES,
+                                    request_id=base_message.request_id,
+                                    output=schedules,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
+                        elif msg_type == p.MessageType.GET_SCHEDULE:
+                            get_sched_msg = p.GetScheduleRequest.from_json(message)
+                            output: p.ScheduleOutput | None = None
+                            try:
+                                sched = self.dbos._sys_db.get_schedule(
+                                    get_sched_msg.schedule_name
+                                )
+                                if sched is not None:
+                                    output = p.ScheduleOutput.from_schedule(sched)
+                            except Exception:
+                                error_message = f"Exception encountered when getting schedule '{get_sched_msg.schedule_name}': {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                            websocket.send(
+                                p.GetScheduleResponse(
+                                    type=p.MessageType.GET_SCHEDULE,
+                                    request_id=base_message.request_id,
+                                    output=output,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
+                        elif msg_type == p.MessageType.DELETE_SCHEDULE:
+                            del_sched_msg = p.DeleteScheduleRequest.from_json(message)
+                            success = True
+                            try:
+                                self.dbos._sys_db.delete_schedule(
+                                    del_sched_msg.schedule_name
+                                )
+                            except Exception:
+                                error_message = f"Exception encountered when deleting schedule '{del_sched_msg.schedule_name}': {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                                success = False
+                            websocket.send(
+                                p.DeleteScheduleResponse(
+                                    type=p.MessageType.DELETE_SCHEDULE,
+                                    request_id=base_message.request_id,
+                                    success=success,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
+                        elif msg_type == p.MessageType.PAUSE_SCHEDULE:
+                            pause_sched_msg = p.PauseScheduleRequest.from_json(message)
+                            success = True
+                            try:
+                                self.dbos._sys_db.pause_schedule(
+                                    pause_sched_msg.schedule_name
+                                )
+                            except Exception:
+                                error_message = f"Exception encountered when pausing schedule '{pause_sched_msg.schedule_name}': {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                                success = False
+                            websocket.send(
+                                p.PauseScheduleResponse(
+                                    type=p.MessageType.PAUSE_SCHEDULE,
+                                    request_id=base_message.request_id,
+                                    success=success,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
+                        elif msg_type == p.MessageType.RESUME_SCHEDULE:
+                            resume_sched_msg = p.ResumeScheduleRequest.from_json(
+                                message
+                            )
+                            success = True
+                            try:
+                                self.dbos._sys_db.resume_schedule(
+                                    resume_sched_msg.schedule_name
+                                )
+                            except Exception:
+                                error_message = f"Exception encountered when resuming schedule '{resume_sched_msg.schedule_name}': {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                                success = False
+                            websocket.send(
+                                p.ResumeScheduleResponse(
+                                    type=p.MessageType.RESUME_SCHEDULE,
+                                    request_id=base_message.request_id,
+                                    success=success,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
+                        elif msg_type == p.MessageType.BACKFILL_SCHEDULE:
+                            backfill_msg = p.BackfillScheduleRequest.from_json(message)
+                            workflow_ids: list[str] = []
+                            try:
+                                start = datetime.fromisoformat(backfill_msg.start)
+                                end = datetime.fromisoformat(backfill_msg.end)
+                                workflow_ids = backfill_schedule(
+                                    self.dbos._sys_db,
+                                    backfill_msg.schedule_name,
+                                    start,
+                                    end,
+                                )
+                            except Exception:
+                                error_message = f"Exception encountered when backfilling schedule '{backfill_msg.schedule_name}': {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                            websocket.send(
+                                p.BackfillScheduleResponse(
+                                    type=p.MessageType.BACKFILL_SCHEDULE,
+                                    request_id=base_message.request_id,
+                                    workflow_ids=workflow_ids,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
+                        elif msg_type == p.MessageType.TRIGGER_SCHEDULE:
+                            trigger_msg = p.TriggerScheduleRequest.from_json(message)
+                            trigger_wf_id: str | None = None
+                            try:
+                                trigger_wf_id = trigger_schedule(
+                                    self.dbos._sys_db,
+                                    trigger_msg.schedule_name,
+                                )
+                            except Exception:
+                                error_message = f"Exception encountered when triggering schedule '{trigger_msg.schedule_name}': {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                            websocket.send(
+                                p.TriggerScheduleResponse(
+                                    type=p.MessageType.TRIGGER_SCHEDULE,
+                                    request_id=base_message.request_id,
+                                    workflow_id=trigger_wf_id,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
                         else:
                             self.dbos.logger.warning(
                                 f"Unexpected message type: {msg_type}"
