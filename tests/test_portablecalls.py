@@ -9,6 +9,7 @@ import pytest
 import sqlalchemy as sa
 
 from dbos import DBOS, Queue, WorkflowHandle
+from dbos._client import DBOSClient
 from dbos._schemas.system_database import PortableWorkflowError, SystemSchema
 from dbos._serialization import (
     DBOSDefaultSerializer,
@@ -67,7 +68,7 @@ def workflow_func(
     return f"{s}-{x}-{o['k']}:{','.join(o['v'])}@{json.dumps(r)}"
 
 
-def test_portable_ser(dbos: DBOS) -> None:
+def test_portable_ser(dbos: DBOS, client: DBOSClient) -> None:
     @DBOS.dbos_class("workflows")
     class WFTest:
         @staticmethod
@@ -93,6 +94,21 @@ def test_portable_ser(dbos: DBOS) -> None:
             wfid: Optional[str] = None,
         ) -> str:
             DBOS.logger.info("defSerPortable was called...")
+            return workflow_func(s, x, o, wfid)
+
+        @classmethod
+        @DBOS.workflow(
+            name="workflowPortableCls",
+            serialization_type=WorkflowSerializationFormat.PORTABLE,
+        )
+        def defSerPortableCls(
+            cls,
+            s: str,
+            x: int,
+            o: Dict[str, Any],
+            wfid: Optional[str] = None,
+        ) -> str:
+            DBOS.logger.info("defSerPortableCls was called...")
             return workflow_func(s, x, o, wfid)
 
         @classmethod
@@ -204,42 +220,74 @@ def test_portable_ser(dbos: DBOS) -> None:
     check_stream_ser(wfhd.workflow_id, "pstream", DBOSPortableJSON.name())
 
     # Run with portable serialization
-    drpwfh = DBOS.start_workflow(WFTest.recv, "portable")
-    wfhd = DBOS.start_workflow(
-        WFTest.defSerPortable, "s", 1, {"k": "k", "v": ["v"]}, drpwfh.workflow_id
-    )
-    DBOS.send(wfhd.workflow_id, "m", "incoming")
-    assert DBOS.get_event(wfhd.workflow_id, "defstat") == {"status": "Happy"}
-    assert DBOS.get_event(wfhd.workflow_id, "nstat") == {"status": "Happy"}
-    assert DBOS.get_event(wfhd.workflow_id, "pstat") == {"status": "Happy"}
-    ddread = list(DBOS.read_stream(wfhd.workflow_id, "defstream"))
-    assert ddread == [{"stream": "OhYeah"}]
-    dnread = list(DBOS.read_stream(wfhd.workflow_id, "nstream"))
-    assert dnread == [{"stream": "OhYeah"}]
-    dpread = list(DBOS.read_stream(wfhd.workflow_id, "pstream"))
-    assert dpread == [{"stream": "OhYeah"}]
+    for fmt in ["dbos", "client", "cclient"]:
+        drpwfh = DBOS.start_workflow(WFTest.recv, "portable")
+        if fmt == "client":
+            wfhd = client.enqueue(
+                {
+                    "queue_name": "testq",
+                    # "class_name": "workflows", # Static does not actually register with the class_name
+                    "workflow_name": "workflowPortable",
+                    "serialization_type": WorkflowSerializationFormat.PORTABLE,
+                },
+                "s",
+                1,
+                {"k": "k", "v": ["v"]},
+                drpwfh.workflow_id,
+            )
+        elif fmt == "cclient":
+            wfhd = client.enqueue(
+                {
+                    "queue_name": "testq",
+                    "class_name": "workflows",
+                    "workflow_name": "workflowPortableCls",
+                    "serialization_type": WorkflowSerializationFormat.PORTABLE,
+                },
+                "s",
+                1,
+                {"k": "k", "v": ["v"]},
+                drpwfh.workflow_id,
+            )
+        else:
+            wfhd = DBOS.start_workflow(
+                WFTest.defSerPortable,
+                "s",
+                1,
+                {"k": "k", "v": ["v"]},
+                drpwfh.workflow_id,
+            )
+        DBOS.send(wfhd.workflow_id, "m", "incoming")
+        assert DBOS.get_event(wfhd.workflow_id, "defstat") == {"status": "Happy"}
+        assert DBOS.get_event(wfhd.workflow_id, "nstat") == {"status": "Happy"}
+        assert DBOS.get_event(wfhd.workflow_id, "pstat") == {"status": "Happy"}
+        ddread = list(DBOS.read_stream(wfhd.workflow_id, "defstream"))
+        assert ddread == [{"stream": "OhYeah"}]
+        dnread = list(DBOS.read_stream(wfhd.workflow_id, "nstream"))
+        assert dnread == [{"stream": "OhYeah"}]
+        dpread = list(DBOS.read_stream(wfhd.workflow_id, "pstream"))
+        assert dpread == [{"stream": "OhYeah"}]
 
-    rvd = wfhd.get_result()
-    assert rvd == 's-1-k:v@"m"'
-    assert drpwfh.get_result() == {"message": "Hello!"}
+        rvd = wfhd.get_result()
+        assert rvd == 's-1-k:v@"m"'
+        assert drpwfh.get_result() == {"message": "Hello!"}
 
-    # Snoop the DB to make sure serialization format is correct
-    # WF
-    check_wf_ser(wfhd.workflow_id, DBOSPortableJSON.name())
-    # Messages
-    check_msg_ser(drpwfh.workflow_id, "default", DBOSPortableJSON.name())
-    check_msg_ser(drpwfh.workflow_id, "native", DBOSDefaultSerializer.name())
-    # check_msg_ser(drpwfh.workflow_id, "portable", DBOSPortableJSON.name()) # This got deleted
+        # Snoop the DB to make sure serialization format is correct
+        # WF
+        check_wf_ser(wfhd.workflow_id, DBOSPortableJSON.name())
+        # Messages
+        check_msg_ser(drpwfh.workflow_id, "default", DBOSPortableJSON.name())
+        check_msg_ser(drpwfh.workflow_id, "native", DBOSDefaultSerializer.name())
+        # check_msg_ser(drpwfh.workflow_id, "portable", DBOSPortableJSON.name()) # This got deleted
 
-    # Events
-    check_evt_ser(wfhd.workflow_id, "defstat", DBOSPortableJSON.name())
-    check_evt_ser(wfhd.workflow_id, "nstat", DBOSDefaultSerializer.name())
-    check_evt_ser(wfhd.workflow_id, "pstat", DBOSPortableJSON.name())
+        # Events
+        check_evt_ser(wfhd.workflow_id, "defstat", DBOSPortableJSON.name())
+        check_evt_ser(wfhd.workflow_id, "nstat", DBOSDefaultSerializer.name())
+        check_evt_ser(wfhd.workflow_id, "pstat", DBOSPortableJSON.name())
 
-    # Streams
-    check_stream_ser(wfhd.workflow_id, "defstream", DBOSPortableJSON.name())
-    check_stream_ser(wfhd.workflow_id, "nstream", DBOSDefaultSerializer.name())
-    check_stream_ser(wfhd.workflow_id, "pstream", DBOSPortableJSON.name())
+        # Streams
+        check_stream_ser(wfhd.workflow_id, "defstream", DBOSPortableJSON.name())
+        check_stream_ser(wfhd.workflow_id, "nstream", DBOSDefaultSerializer.name())
+        check_stream_ser(wfhd.workflow_id, "pstream", DBOSPortableJSON.name())
 
     # Test copy+paste workflow
     # Export w/ children

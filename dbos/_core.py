@@ -56,6 +56,7 @@ from ._error import (
 from ._logger import dbos_logger
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
+    DBOSFuncType,
     get_config_name,
     get_dbos_class_name,
     get_dbos_func_name,
@@ -630,6 +631,7 @@ def execute_workflow_by_id(
             workflow_id,
             f"{status['name']} is not a registered workflow function",
         )
+    fi = get_func_info(wf_func)
     with DBOSContextEnsure():
         # If this function belongs to a configured class, add that class instance as its first argument
         if status["config_name"] is not None:
@@ -652,7 +654,8 @@ def execute_workflow_by_id(
                     f"class '{class_name}' is not registered",
                 )
             class_object = dbos._registry.class_info_map[class_name]
-            inputs["args"] = (class_object,) + inputs["args"]
+            if fi.func_type != DBOSFuncType.Static:
+                inputs["args"] = (class_object,) + inputs["args"]
 
         with SetWorkflowID(workflow_id):
             return start_workflow(
