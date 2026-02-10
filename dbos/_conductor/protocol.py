@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Type, TypedDict, TypeVar, Union
 
+from dbos._serialization import Serializer
 from dbos._sys_db import StepInfo, WorkflowSchedule, WorkflowStatus
 
 
@@ -454,14 +455,17 @@ class ScheduleOutput:
     context: str
 
     @classmethod
-    def from_schedule(cls, s: WorkflowSchedule) -> "ScheduleOutput":
+    def from_schedule(
+        cls, s: WorkflowSchedule, serializer: Serializer
+    ) -> "ScheduleOutput":
+        context_str = str(serializer.deserialize(s["context"]))
         return cls(
             schedule_id=s["schedule_id"],
             schedule_name=s["schedule_name"],
             workflow_name=s["workflow_name"],
             schedule=s["schedule"],
             status=s["status"],
-            context=s["context"],
+            context=context_str,
         )
 
 

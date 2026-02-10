@@ -553,7 +553,9 @@ class ConductorWebsocket(threading.Thread):
                             schedules: list[p.ScheduleOutput] = []
                             try:
                                 schedules = [
-                                    p.ScheduleOutput.from_schedule(s)
+                                    p.ScheduleOutput.from_schedule(
+                                        s, self.dbos._sys_db.serializer
+                                    )
                                     for s in self.dbos._sys_db.list_schedules(
                                         status=sched_body.get("status", None),
                                         workflow_name=sched_body.get(
@@ -583,7 +585,9 @@ class ConductorWebsocket(threading.Thread):
                                     get_sched_msg.schedule_name
                                 )
                                 if sched is not None:
-                                    output = p.ScheduleOutput.from_schedule(sched)
+                                    output = p.ScheduleOutput.from_schedule(
+                                        sched, self.dbos._sys_db.serializer
+                                    )
                             except Exception:
                                 error_message = f"Exception encountered when getting schedule '{get_sched_msg.schedule_name}': {traceback.format_exc()}"
                                 self.dbos.logger.error(error_message)
