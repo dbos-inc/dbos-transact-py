@@ -298,7 +298,9 @@ def test_portable_ser(dbos: DBOS, client: DBOSClient) -> None:
     # Delete so it can be reimported
     DBOS.delete_workflow(wfhd.workflow_id, delete_children=True)
     # Verify step outputs are deleted
+    pwfs = DBOS.list_workflows(workflow_ids=[wfhd.workflow_id])
     psteps = DBOS.list_workflow_steps(wfhd.workflow_id)
+    assert 0 == len(pwfs)
     assert 0 == len(psteps)
 
     # Import after deletion
