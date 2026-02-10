@@ -173,6 +173,39 @@ def test_dynamic_scheduler_add_after_launch(dbos: DBOS) -> None:
     DBOS.delete_schedule("late-add")
 
 
+def test_dynamic_scheduler_replace_schedule(dbos: DBOS) -> None:
+    wf_counter: int = 0
+
+    @DBOS.workflow()
+    def scheduled_workflow(scheduled_at: datetime) -> None:
+        nonlocal wf_counter
+        wf_counter += 1
+
+    # Create a schedule that runs once a day — should not fire during this test
+    DBOS.create_schedule(
+        schedule_name="replaceable",
+        workflow_fn=scheduled_workflow,
+        schedule="0 0 * * *",
+    )
+    time.sleep(3)
+    assert wf_counter == 0
+
+    # Delete it and replace with one that runs every second
+    DBOS.delete_schedule("replaceable")
+    DBOS.create_schedule(
+        schedule_name="replaceable-fast",
+        workflow_fn=scheduled_workflow,
+        schedule="* * * * * *",
+    )
+
+    def check_fired_twice() -> None:
+        assert wf_counter >= 2
+
+    retry_until_success(check_fired_twice)
+
+    DBOS.delete_schedule("replaceable-fast")
+
+
 def test_client_schedule_crud(client: DBOSClient) -> None:
     # Create a schedule
     client.create_schedule(
