@@ -601,11 +601,17 @@ class DBOS:
             self._registry.pollers = []
 
             # Start the dynamic scheduler thread
+            scheduler_polling_interval_sec: float = (
+                self._config.get("runtimeConfig", {}).get(
+                    "scheduler_polling_interval_sec"
+                )
+                or 30.0
+            )
             scheduler_evt = threading.Event()
             self.poller_stop_events.append(scheduler_evt)
             scheduler_thread = threading.Thread(
                 target=dynamic_scheduler_loop,
-                args=(scheduler_evt,),
+                args=(scheduler_evt, scheduler_polling_interval_sec),
                 daemon=True,
             )
             scheduler_thread.start()

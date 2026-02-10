@@ -74,7 +74,9 @@ class _ScheduleThread:
             self._thread.join(timeout=5.0)
 
 
-def dynamic_scheduler_loop(stop_event: threading.Event) -> None:
+def dynamic_scheduler_loop(
+    stop_event: threading.Event, polling_interval_sec: float
+) -> None:
     from ._dbos import _get_dbos_instance
 
     dbos = _get_dbos_instance()
@@ -89,7 +91,7 @@ def dynamic_scheduler_loop(stop_event: threading.Event) -> None:
             dbos_logger.warning(
                 f"Exception polling schedules: {traceback.format_exc()}"
             )
-            if stop_event.wait(timeout=1.0):
+            if stop_event.wait(timeout=polling_interval_sec):
                 break
             continue
 
@@ -111,7 +113,7 @@ def dynamic_scheduler_loop(stop_event: threading.Event) -> None:
                 existing.stop()
                 active[schedule_id] = _ScheduleThread(schedule)
 
-        if stop_event.wait(timeout=1.0):
+        if stop_event.wait(timeout=polling_interval_sec):
             break
 
     # Clean up all threads on shutdown
