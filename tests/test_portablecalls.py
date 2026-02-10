@@ -292,8 +292,15 @@ def test_portable_ser(dbos: DBOS, client: DBOSClient) -> None:
     # Test copy+paste workflow
     # Export w/ children
     expwf = dbos._sys_db.export_workflow(wfhd.workflow_id, export_children=True)
+    assert 1 == len(expwf)
+    assert 10 == len(expwf[0]["operation_outputs"])
+    assert wfhd.workflow_id == expwf[0]["workflow_status"]["workflow_uuid"]
     # Delete so it can be reimported
     DBOS.delete_workflow(wfhd.workflow_id, delete_children=True)
+    # Verify step outputs are deleted
+    psteps = DBOS.list_workflow_steps(wfhd.workflow_id)
+    assert 0 == len(psteps)
+
     # Import after deletion
     dbos._sys_db.import_workflow(expwf)
 
