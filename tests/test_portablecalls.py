@@ -230,6 +230,32 @@ def test_portable_ser(dbos: DBOS) -> None:
     check_stream_ser(wfhd.workflow_id, "nstream", DBOSDefaultSerializer.name())
     check_stream_ser(wfhd.workflow_id, "pstream", DBOSPortableJSON.name())
 
+    # Test copy+paste workflow
+    # Export w/ children
+    expwf = dbos._sys_db.export_workflow(wfhd.workflow_id, export_children=True)
+    # Delete so it can be reimported
+    DBOS.delete_workflow(wfhd.workflow_id, delete_children=True)
+    # Import after deletion
+    dbos._sys_db.import_workflow(expwf)
+
+    # Check that everything is still there
+    rvd = wfhd.get_result()
+    assert rvd == 's-1-k:v@"m"'
+    # WF
+    check_wf_ser(wfhd.workflow_id, DBOSDefaultSerializer.name())
+    # Messages
+    check_msg_ser(drpwfh.workflow_id, "default", DBOSPortableJSON.name())
+    check_msg_ser(drpwfh.workflow_id, "native", DBOSDefaultSerializer.name())
+    # check_msg_ser(drpwfh.workflow_id, "portable", DBOSPortableJSON.name()) # This got deleted
+    # Events
+    check_evt_ser(wfhd.workflow_id, "defstat", DBOSPortableJSON.name())
+    check_evt_ser(wfhd.workflow_id, "nstat", DBOSDefaultSerializer.name())
+    check_evt_ser(wfhd.workflow_id, "pstat", DBOSPortableJSON.name())
+    # Streams
+    check_stream_ser(wfhd.workflow_id, "defstream", DBOSPortableJSON.name())
+    check_stream_ser(wfhd.workflow_id, "nstream", DBOSDefaultSerializer.name())
+    check_stream_ser(wfhd.workflow_id, "pstream", DBOSPortableJSON.name())
+
 
 def test_directinsert_workflows(dbos: DBOS) -> None:
     dburl = dbos._config["system_database_url"]
