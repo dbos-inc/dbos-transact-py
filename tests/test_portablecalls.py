@@ -100,7 +100,7 @@ def test_portable_ser(dbos: DBOS) -> None:
         def recv(cls, topic: str) -> Any:
             return DBOS.recv(topic)
 
-        last_wf_id = ""
+        last_wf_id: str | None = ""
 
         @staticmethod
         @DBOS.workflow(
@@ -225,7 +225,7 @@ def test_portable_ser(dbos: DBOS) -> None:
 
     # Snoop the DB to make sure serialization format is correct
     # WF
-    check_wf_ser(wfhd.workflow_id, DBOSDefaultSerializer.name())  # TODO Wrong
+    check_wf_ser(wfhd.workflow_id, DBOSPortableJSON.name())
     # Messages
     check_msg_ser(drpwfh.workflow_id, "default", DBOSPortableJSON.name())
     check_msg_ser(drpwfh.workflow_id, "native", DBOSDefaultSerializer.name())
@@ -253,7 +253,7 @@ def test_portable_ser(dbos: DBOS) -> None:
     rvd = wfhd.get_result()
     assert rvd == 's-1-k:v@"m"'
     # WF
-    check_wf_ser(wfhd.workflow_id, DBOSDefaultSerializer.name())
+    check_wf_ser(wfhd.workflow_id, DBOSPortableJSON.name())
     # Messages
     check_msg_ser(drpwfh.workflow_id, "default", DBOSPortableJSON.name())
     check_msg_ser(drpwfh.workflow_id, "native", DBOSDefaultSerializer.name())

@@ -343,7 +343,7 @@ def _init_workflow(
         inputs = {"args": inputs["args"][1:], "kwargs": inputs["kwargs"]}
 
     sertype: WorkflowSerializationFormat | None = serialization_type
-    if sertype is not None or sertype == WorkflowSerializationFormat.DEFAULT:
+    if sertype is None or sertype == WorkflowSerializationFormat.DEFAULT:
         sertype = ctx.serialization_type
     serialization = serialization_for_type(sertype, dbos._serializer)
 
