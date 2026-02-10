@@ -1688,15 +1688,15 @@ class DBOS:
         """
         Create a cron schedule that periodically invokes a workflow function.
 
-        The workflow receives the scheduled execution time and an optional context
+        The workflow receives the scheduled execution time and a context object
         as its arguments. If called from within a workflow, the operation is
         recorded as a step.
 
         Args:
-            schedule_name(str): Unique name identifying this schedule
-            workflow_fn(Callable[[datetime], None]): The workflow function to invoke
-            schedule(str): A cron expression (supports seconds with 6 fields)
-            context: An optional context object passed as the second argument to every invocation
+            schedule_name: Unique name identifying this schedule.
+            workflow_fn: The workflow function to invoke. Must accept ``(datetime, context)``.
+            schedule: A cron expression (supports seconds with 6 fields).
+            context: A context object passed as the second argument to every invocation. Defaults to ``None``.
 
         Raises:
             DBOSException: If the cron expression is invalid, the workflow is not registered, or a schedule with the same name already exists

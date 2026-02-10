@@ -649,13 +649,13 @@ class DBOSClient:
         Create a cron schedule that periodically invokes a workflow.
 
         Args:
-            schedule_name: Unique name identifying this schedule
-            workflow_name: Fully-qualified name of the workflow function to invoke
-            schedule: A cron expression (supports seconds with 6 fields)
-            context: An optional context object passed as the second argument to every invocation
+            schedule_name: Unique name identifying this schedule.
+            workflow_name: Fully-qualified name of the workflow function to invoke.
+            schedule: A cron expression (supports seconds with 6 fields).
+            context: A context object passed as the second argument to every invocation. Defaults to ``None``.
 
         Raises:
-            DBOSException: If the cron expression is invalid or a schedule with the same name already exists
+            DBOSException: If the cron expression is invalid or a schedule with the same name already exists.
         """
         if not croniter.is_valid(schedule, second_at_beginning=True):
             raise DBOSException(f"Invalid cron schedule: '{schedule}'")
