@@ -638,7 +638,17 @@ class DBOSClient:
         workflow_name: str,
         schedule: str,
     ) -> None:
-        """Create a new workflow schedule."""
+        """
+        Create a cron schedule that periodically invokes a workflow.
+
+        Args:
+            schedule_name: Unique name identifying this schedule
+            workflow_name: Fully-qualified name of the workflow function to invoke
+            schedule: A cron expression (supports seconds with 6 fields)
+
+        Raises:
+            DBOSException: If the cron expression is invalid
+        """
         if not croniter.is_valid(schedule, second_at_beginning=True):
             raise DBOSException(f"Invalid cron schedule: '{schedule}'")
         self._sys_db.create_schedule(
@@ -651,13 +661,13 @@ class DBOSClient:
         )
 
     def list_schedules(self) -> List[WorkflowSchedule]:
-        """List all workflow schedules."""
+        """Return all registered workflow schedules."""
         return self._sys_db.list_schedules()
 
     def get_schedule(self, name: str) -> Optional[WorkflowSchedule]:
-        """Get a workflow schedule by name."""
+        """Return the schedule with the given name, or ``None`` if it does not exist."""
         return self._sys_db.get_schedule(name)
 
     def delete_schedule(self, name: str) -> None:
-        """Delete a workflow schedule by name."""
+        """Delete the schedule with the given name. No-op if it does not exist."""
         self._sys_db.delete_schedule(name)

@@ -1676,7 +1676,20 @@ class DBOS:
         workflow_fn: Callable[[datetime], None],
         schedule: str,
     ) -> None:
-        """Create a new workflow schedule."""
+        """
+        Create a cron schedule that periodically invokes a workflow function.
+
+        The workflow receives the scheduled execution time as its argument.
+        If called from within a workflow, the operation is recorded as a step.
+
+        Args:
+            schedule_name(str): Unique name identifying this schedule
+            workflow_fn(Callable[[datetime], None]): The workflow function to invoke
+            schedule(str): A cron expression (supports seconds with 6 fields)
+
+        Raises:
+            DBOSException: If the cron expression is invalid or the workflow is not registered
+        """
         if not croniter.is_valid(schedule, second_at_beginning=True):
             raise DBOSException(f"Invalid cron schedule: '{schedule}'")
         dbos = _get_dbos_instance()
@@ -1705,7 +1718,7 @@ class DBOS:
 
     @classmethod
     def list_schedules(cls) -> List["WorkflowSchedule"]:
-        """List all workflow schedules."""
+        """Return all registered workflow schedules."""
         dbos = _get_dbos_instance()
         ctx = snapshot_step_context(reserve_sleep_id=False)
         if ctx and ctx.is_workflow():
@@ -1720,7 +1733,7 @@ class DBOS:
 
     @classmethod
     def get_schedule(cls, name: str) -> Optional["WorkflowSchedule"]:
-        """Get a workflow schedule by name."""
+        """Return the schedule with the given name, or ``None`` if it does not exist."""
         dbos = _get_dbos_instance()
         ctx = snapshot_step_context(reserve_sleep_id=False)
         if ctx and ctx.is_workflow():
@@ -1735,7 +1748,7 @@ class DBOS:
 
     @classmethod
     def delete_schedule(cls, name: str) -> None:
-        """Delete a workflow schedule by name."""
+        """Delete the schedule with the given name. No-op if it does not exist."""
         dbos = _get_dbos_instance()
         ctx = snapshot_step_context(reserve_sleep_id=False)
         if ctx and ctx.is_workflow():
