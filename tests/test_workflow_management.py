@@ -133,6 +133,10 @@ def test_delete_workflow(dbos: DBOS) -> None:
     assert DBOS.get_workflow_status(parent_wfid2) is None
     assert DBOS.get_workflow_status(child_wfid2) is None
 
+    # Verify step outputs are deleted
+    psteps = DBOS.list_workflow_steps(parent_wfid)
+    assert 0 == len(psteps)
+
     # Verify transaction outputs are deleted for child
     with dbos._app_db.engine.begin() as c:
         rows = c.execute(
