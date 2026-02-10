@@ -9,7 +9,7 @@ import pytest
 import sqlalchemy as sa
 
 from dbos import DBOS, Queue, WorkflowHandle
-from dbos._schemas.system_database import SystemSchema
+from dbos._schemas.system_database import PortableWorkflowError, SystemSchema
 from dbos._serialization import (
     DBOSDefaultSerializer,
     DBOSPortableJSON,
@@ -275,6 +275,13 @@ def test_portable_ser(dbos: DBOS) -> None:
     # Errors
     with pytest.raises(Exception):
         WFTest.defSerError()
+    lwfid = WFTest.last_wf_id
+    assert lwfid is not None
+    check_wf_ser(lwfid, DBOSPortableJSON.name())
+    with pytest.raises(PortableWorkflowError) as ex_info:
+        DBOS.retrieve_workflow(lwfid).get_result()
+    assert ex_info.value.name == "Exception"
+    assert ex_info.value.message == "This is just a plain error"
 
 
 def test_directinsert_workflows(dbos: DBOS) -> None:

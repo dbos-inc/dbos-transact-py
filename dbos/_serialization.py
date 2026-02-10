@@ -306,7 +306,10 @@ def deserialize_exception(
     if serialization == DBOSPortableJSON.name():
         errdata: JsonWorkflowErrorData = DBOSPortableJSON.deserialize(serialized_value)
         return PortableWorkflowError(
-            errdata["message"], errdata["name"], errdata["code"], errdata["data"]
+            errdata["message"],
+            errdata["name"],
+            errdata.get("code"),
+            errdata.get("data"),
         )
     if serialization == DBOSDefaultSerializer.name():
         return cast(Exception, DBOSDefaultSerializer.deserialize(serialized_value))
