@@ -44,6 +44,8 @@ class _ScheduleThread:
         while not self._stop_event.is_set():
             next_exec_time = it.get_next(datetime)
             sleep_time = (next_exec_time - datetime.now(timezone.utc)).total_seconds()
+            # To prevent a "thundering herd" problem in a distributed setting,
+            # apply jitter of up to 10% the sleep time, capped at 10 seconds
             sleep_time = max(0, sleep_time)
             max_jitter = min(sleep_time / 10, 10)
             jitter = random.uniform(0, max_jitter)
