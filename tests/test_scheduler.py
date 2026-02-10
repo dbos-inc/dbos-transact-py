@@ -47,6 +47,14 @@ def test_schedule_crud(dbos: DBOS) -> None:
             schedule="not a cron",
         )
 
+    # Reject duplicate schedule name
+    with pytest.raises(DBOSException, match="already exists"):
+        DBOS.create_schedule(
+            schedule_name="test-schedule",
+            workflow_fn=my_workflow,
+            schedule="0 0 * * *",
+        )
+
     # Delete schedule
     DBOS.delete_schedule("test-schedule")
     assert DBOS.get_schedule("test-schedule") is None

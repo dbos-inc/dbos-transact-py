@@ -647,7 +647,7 @@ class DBOSClient:
             schedule: A cron expression (supports seconds with 6 fields)
 
         Raises:
-            DBOSException: If the cron expression is invalid
+            DBOSException: If the cron expression is invalid or a schedule with the same name already exists
         """
         if not croniter.is_valid(schedule, second_at_beginning=True):
             raise DBOSException(f"Invalid cron schedule: '{schedule}'")

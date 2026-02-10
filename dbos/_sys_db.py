@@ -39,6 +39,7 @@ from ._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSConflictingWorkflowError,
+    DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
@@ -2868,14 +2869,19 @@ class SystemDatabase(ABC):
         self, schedule: WorkflowSchedule, conn: Optional[sa.Connection] = None
     ) -> None:
         def _do(c: sa.Connection) -> None:
-            c.execute(
-                sa.insert(SystemSchema.workflow_schedules).values(
-                    schedule_id=schedule["schedule_id"],
-                    schedule_name=schedule["schedule_name"],
-                    workflow_name=schedule["workflow_name"],
-                    schedule=schedule["schedule"],
+            try:
+                c.execute(
+                    sa.insert(SystemSchema.workflow_schedules).values(
+                        schedule_id=schedule["schedule_id"],
+                        schedule_name=schedule["schedule_name"],
+                        workflow_name=schedule["workflow_name"],
+                        schedule=schedule["schedule"],
+                    )
                 )
-            )
+            except sa.exc.IntegrityError:
+                raise DBOSException(
+                    f"Schedule '{schedule['schedule_name']}' already exists"
+                )
 
         if conn is not None:
             _do(conn)
