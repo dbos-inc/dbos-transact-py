@@ -132,13 +132,13 @@ def backfill_schedule(
     schedule_name: str,
     start: datetime,
     end: datetime,
-) -> int:
-    """Enqueue all scheduled executions between start and end. Returns the count enqueued."""
+) -> list[str]:
+    """Enqueue all scheduled executions between start and end. Returns workflow IDs."""
     schedule = sys_db.get_schedule(schedule_name)
     if schedule is None:
         raise DBOSException(f"Schedule '{schedule_name}' does not exist")
     it = croniter(schedule["schedule"], start, second_at_beginning=True)
-    count = 0
+    workflow_ids: list[str] = []
     while True:
         next_time = it.get_next(datetime)
         if next_time >= end:
@@ -148,8 +148,8 @@ def backfill_schedule(
             _enqueue_scheduled_workflow(
                 sys_db, schedule["workflow_name"], next_time, workflow_id
             )
-        count += 1
-    return count
+        workflow_ids.append(workflow_id)
+    return workflow_ids
 
 
 def trigger_schedule(sys_db: "SystemDatabase", schedule_name: str) -> str:

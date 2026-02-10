@@ -715,7 +715,7 @@ class DBOSClient:
 
     def backfill_schedule(
         self, schedule_name: str, start: datetime, end: datetime
-    ) -> int:
+    ) -> List["WorkflowHandle[None]"]:
         """
         Enqueue all executions of a schedule that would have run between ``start`` and ``end``.
 
@@ -728,14 +728,18 @@ class DBOSClient:
             end: End of the backfill window (exclusive)
 
         Returns:
-            The number of executions enqueued.
+            A list of workflow handles for each enqueued execution.
 
         Raises:
             DBOSException: If the schedule does not exist
         """
-        return backfill_schedule(self._sys_db, schedule_name, start, end)
+        workflow_ids = backfill_schedule(self._sys_db, schedule_name, start, end)
+        return [
+            WorkflowHandleClientPolling[None](wf_id, self._sys_db)
+            for wf_id in workflow_ids
+        ]
 
-    def trigger_schedule(self, schedule_name: str) -> str:
+    def trigger_schedule(self, schedule_name: str) -> "WorkflowHandle[None]":
         """
         Immediately enqueue the scheduled workflow at the current time.
 
@@ -743,9 +747,10 @@ class DBOSClient:
             schedule_name: Name of an existing schedule
 
         Returns:
-            The workflow ID of the enqueued execution.
+            A workflow handle for the enqueued execution.
 
         Raises:
             DBOSException: If the schedule does not exist
         """
-        return trigger_schedule(self._sys_db, schedule_name)
+        workflow_id = trigger_schedule(self._sys_db, schedule_name)
+        return WorkflowHandleClientPolling[None](workflow_id, self._sys_db)

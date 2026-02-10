@@ -1814,7 +1814,7 @@ class DBOS:
     @classmethod
     def backfill_schedule(
         cls, schedule_name: str, start: datetime, end: datetime
-    ) -> int:
+    ) -> List[WorkflowHandle[None]]:
         """
         Enqueue all executions of a schedule that would have run between ``start`` and ``end``.
 
@@ -1827,7 +1827,7 @@ class DBOS:
             end(datetime): End of the backfill window (exclusive)
 
         Returns:
-            The number of executions enqueued.
+            A list of workflow handles for each enqueued execution.
 
         Raises:
             DBOSException: If called from within a workflow or the schedule does not exist
@@ -1838,10 +1838,11 @@ class DBOS:
                 "DBOS.backfill_schedule cannot be called from within a workflow"
             )
         dbos = _get_dbos_instance()
-        return backfill_schedule(dbos._sys_db, schedule_name, start, end)
+        workflow_ids = backfill_schedule(dbos._sys_db, schedule_name, start, end)
+        return [WorkflowHandlePolling(wf_id, dbos) for wf_id in workflow_ids]
 
     @classmethod
-    def trigger_schedule(cls, schedule_name: str) -> str:
+    def trigger_schedule(cls, schedule_name: str) -> WorkflowHandle[None]:
         """
         Immediately enqueue the scheduled workflow at the current time.
 
@@ -1851,7 +1852,7 @@ class DBOS:
             schedule_name(str): Name of an existing schedule
 
         Returns:
-            The workflow ID of the enqueued execution.
+            A workflow handle for the enqueued execution.
 
         Raises:
             DBOSException: If called from within a workflow or the schedule does not exist
@@ -1862,7 +1863,8 @@ class DBOS:
                 "DBOS.trigger_schedule cannot be called from within a workflow"
             )
         dbos = _get_dbos_instance()
-        return trigger_schedule(dbos._sys_db, schedule_name)
+        workflow_id = trigger_schedule(dbos._sys_db, schedule_name)
+        return WorkflowHandlePolling(workflow_id, dbos)
 
     @classproperty
     def application_version(cls) -> str:

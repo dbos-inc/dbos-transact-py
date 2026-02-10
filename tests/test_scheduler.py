@@ -318,21 +318,19 @@ def test_backfill_schedule(dbos: DBOS) -> None:
     # Backfill from 00:30 to 03:30 — yields 01:00, 02:00, 03:00
     start = datetime(2025, 1, 1, 0, 30, 0, tzinfo=timezone.utc)
     end = start + timedelta(hours=3)
-    count = DBOS.backfill_schedule("backfill-test", start, end)
-    assert count == 3
+    handles = DBOS.backfill_schedule("backfill-test", start, end)
+    assert len(handles) == 3
 
     # Wait for the enqueued workflows to execute
-    def check_all_received() -> None:
-        assert len(received_times) == 3
-
-    retry_until_success(check_all_received)
+    for h in handles:
+        h.get_result()
 
     expected = [datetime(2025, 1, 1, h, 0, 0, tzinfo=timezone.utc) for h in range(1, 4)]
     assert sorted(received_times) == expected
 
     # Backfilling again should be idempotent (same workflow IDs)
-    count2 = DBOS.backfill_schedule("backfill-test", start, end)
-    assert count2 == 3
+    handles2 = DBOS.backfill_schedule("backfill-test", start, end)
+    assert len(handles2) == 3
     time.sleep(1)
     assert len(received_times) == 3
 
@@ -357,16 +355,13 @@ def test_trigger_schedule(dbos: DBOS) -> None:
     )
 
     before = datetime.now(timezone.utc)
-    wf_id = DBOS.trigger_schedule("trigger-test")
+    handle = DBOS.trigger_schedule("trigger-test")
     after = datetime.now(timezone.utc)
 
-    assert wf_id.startswith("sched-trigger-test-trigger-")
+    assert handle.workflow_id.startswith("sched-trigger-test-trigger-")
+    handle.get_result()
 
-    def check_received() -> None:
-        assert len(received_times) == 1
-
-    retry_until_success(check_received)
-
+    assert len(received_times) == 1
     assert before <= received_times[0] <= after
 
     # Nonexistent schedule
@@ -467,13 +462,11 @@ def test_client_backfill_schedule(client: DBOSClient) -> None:
 
     start = datetime(2025, 6, 1, 0, 30, 0, tzinfo=timezone.utc)
     end = start + timedelta(hours=3)
-    count = client.backfill_schedule("client-backfill", start, end)
-    assert count == 3
+    handles = client.backfill_schedule("client-backfill", start, end)
+    assert len(handles) == 3
 
-    def check_received() -> None:
-        assert len(received_times) == 3
-
-    retry_until_success(check_received)
+    for h in handles:
+        h.get_result()
 
     expected = [datetime(2025, 6, 1, h, 0, 0, tzinfo=timezone.utc) for h in range(1, 4)]
     assert sorted(received_times) == expected
@@ -495,16 +488,13 @@ def test_client_trigger_schedule(client: DBOSClient) -> None:
     )
 
     before = datetime.now(timezone.utc)
-    wf_id = client.trigger_schedule("client-trigger")
+    handle = client.trigger_schedule("client-trigger")
     after = datetime.now(timezone.utc)
 
-    assert wf_id.startswith("sched-client-trigger-trigger-")
+    assert handle.workflow_id.startswith("sched-client-trigger-trigger-")
+    handle.get_result()
 
-    def check_received() -> None:
-        assert len(received_times) == 1
-
-    retry_until_success(check_received)
-
+    assert len(received_times) == 1
     assert before <= received_times[0] <= after
 
     client.delete_schedule("client-trigger")
