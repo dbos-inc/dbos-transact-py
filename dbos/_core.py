@@ -632,6 +632,11 @@ def execute_workflow_by_id(
             f"{status['name']} is not a registered workflow function",
         )
     fi = get_func_info(wf_func)
+    if fi is None:
+        raise DBOSWorkflowFunctionNotFoundError(
+            "<NONE>",
+            f"{wf_func.__name__} is not a registered workflow function",
+        )
     with DBOSContextEnsure():
         # If this function belongs to a configured class, add that class instance as its first argument
         if status["config_name"] is not None:
