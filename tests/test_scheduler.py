@@ -98,25 +98,38 @@ def test_schedule_crud_from_workflow(dbos: DBOS) -> None:
 
 
 def test_dynamic_scheduler_fires(dbos: DBOS) -> None:
-    wf_counter: int = 0
+    counter_a: int = 0
+    counter_b: int = 0
 
     @DBOS.workflow()
-    def scheduled_workflow(scheduled_at: datetime) -> None:
-        nonlocal wf_counter
-        wf_counter += 1
+    def workflow_a(scheduled_at: datetime) -> None:
+        nonlocal counter_a
+        counter_a += 1
+
+    @DBOS.workflow()
+    def workflow_b(scheduled_at: datetime) -> None:
+        nonlocal counter_b
+        counter_b += 1
 
     DBOS.create_schedule(
-        schedule_name="every-second",
-        workflow_fn=scheduled_workflow,
+        schedule_name="every-second-a",
+        workflow_fn=workflow_a,
+        schedule="* * * * * *",
+    )
+    DBOS.create_schedule(
+        schedule_name="every-second-b",
+        workflow_fn=workflow_b,
         schedule="* * * * * *",
     )
 
-    def check_fired_twice() -> None:
-        assert wf_counter >= 2
+    def check_both_fired_twice() -> None:
+        assert counter_a >= 2
+        assert counter_b >= 2
 
-    retry_until_success(check_fired_twice)
+    retry_until_success(check_both_fired_twice)
 
-    DBOS.delete_schedule("every-second")
+    DBOS.delete_schedule("every-second-a")
+    DBOS.delete_schedule("every-second-b")
 
 
 def test_dynamic_scheduler_delete_stops_firing(dbos: DBOS) -> None:
