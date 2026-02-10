@@ -82,7 +82,7 @@ def dynamic_scheduler_loop(
     dbos = _get_dbos_instance()
 
     # Active schedule threads keyed by schedule_id
-    active: dict[str, _ScheduleThread] = {}
+    active_schedules: dict[str, _ScheduleThread] = {}
 
     while not stop_event.is_set():
         try:
@@ -98,24 +98,24 @@ def dynamic_scheduler_loop(
         current_ids = {s["schedule_id"] for s in schedules}
 
         # Stop threads for deleted schedules
-        for schedule_id in list(active.keys()):
+        for schedule_id in list(active_schedules.keys()):
             if schedule_id not in current_ids:
-                active[schedule_id].stop()
-                del active[schedule_id]
+                active_schedules[schedule_id].stop()
+                del active_schedules[schedule_id]
 
         # Start or restart threads for new/changed schedules
         for schedule in schedules:
             schedule_id = schedule["schedule_id"]
-            existing = active.get(schedule_id)
+            existing = active_schedules.get(schedule_id)
             if existing is None:
-                active[schedule_id] = _ScheduleThread(schedule)
+                active_schedules[schedule_id] = _ScheduleThread(schedule)
             elif existing.changed(schedule):
                 existing.stop()
-                active[schedule_id] = _ScheduleThread(schedule)
+                active_schedules[schedule_id] = _ScheduleThread(schedule)
 
         if stop_event.wait(timeout=polling_interval_sec):
             break
 
     # Clean up all threads on shutdown
-    for st in active.values():
+    for st in active_schedules.values():
         st.stop(join=True)
