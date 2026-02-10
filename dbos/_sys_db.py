@@ -236,6 +236,13 @@ class WorkflowSchedule(TypedDict):
     context: str
 
 
+class ClientScheduleInput(TypedDict):
+    schedule_name: str
+    workflow_name: str
+    schedule: str
+    context: Any
+
+
 class StepInfo(TypedDict):
     # The unique ID of the step in the workflow
     function_id: int

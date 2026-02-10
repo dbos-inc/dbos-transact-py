@@ -27,6 +27,7 @@ from typing import (
     Protocol,
     Tuple,
     Type,
+    TypedDict,
     TypeVar,
     Union,
     overload,
@@ -270,6 +271,13 @@ class DBOSRegistry:
         programmatic resuming and restarting of workflows.
         """
         return Queue(INTERNAL_QUEUE_NAME)
+
+
+class ScheduleInput(TypedDict):
+    schedule_name: str
+    workflow_fn: Callable[[datetime, Any], None]
+    schedule: str
+    context: Any
 
 
 class DBOS:
@@ -1872,13 +1880,13 @@ class DBOS:
     @classmethod
     def apply_schedules(
         cls,
-        schedules: Dict[str, Optional[Tuple[Any, ...]]],
+        schedules: List[ScheduleInput],
     ) -> None:
         """
-        Atomic apply a set of schedules.
+        Atomically create or replace a set of schedules.
 
         Args:
-            schedules: A mapping from schedule name to either a ``(workflow_fn, cron)`` or ``(workflow_fn, cron, context)`` tuple, or ``None``. Each named schedule will be updated to the given values, or deleted if set to ``None``.
+            schedules: A list of schedule inputs, each containing ``schedule_name``, ``workflow_fn``, ``schedule`` (cron), and ``context``.
 
         Raises:
             DBOSException: If called from within a workflow, a cron expression is invalid, or a workflow is not registered
@@ -1890,34 +1898,26 @@ class DBOS:
             )
         dbos = _get_dbos_instance()
         to_apply: List[WorkflowSchedule] = []
-        names_to_delete: List[str] = []
-        for schedule_name, entry in schedules.items():
-            if entry is None:
-                names_to_delete.append(schedule_name)
-            else:
-                workflow_fn = entry[0]
-                cron = entry[1]
-                ctx_value = entry[2] if len(entry) > 2 else None
-                if not croniter.is_valid(cron, second_at_beginning=True):
-                    raise DBOSException(f"Invalid cron schedule: '{cron}'")
-                workflow_name = get_dbos_func_name(workflow_fn)
-                if workflow_name not in dbos._registry.workflow_info_map:
-                    raise DBOSException(
-                        f"Workflow function '{workflow_name}' is not registered"
-                    )
-                to_apply.append(
-                    WorkflowSchedule(
-                        schedule_id=generate_uuid(),
-                        schedule_name=schedule_name,
-                        workflow_name=workflow_name,
-                        schedule=cron,
-                        status="ACTIVE",
-                        context=dbos._sys_db.serializer.serialize(ctx_value),
-                    )
+        for entry in schedules:
+            cron = entry["schedule"]
+            if not croniter.is_valid(cron, second_at_beginning=True):
+                raise DBOSException(f"Invalid cron schedule: '{cron}'")
+            workflow_name = get_dbos_func_name(entry["workflow_fn"])
+            if workflow_name not in dbos._registry.workflow_info_map:
+                raise DBOSException(
+                    f"Workflow function '{workflow_name}' is not registered"
                 )
+            to_apply.append(
+                WorkflowSchedule(
+                    schedule_id=generate_uuid(),
+                    schedule_name=entry["schedule_name"],
+                    workflow_name=workflow_name,
+                    schedule=cron,
+                    status="ACTIVE",
+                    context=dbos._sys_db.serializer.serialize(entry["context"]),
+                )
+            )
         with dbos._sys_db.engine.begin() as c:
-            for name in names_to_delete:
-                dbos._sys_db.delete_schedule(name, conn=c)
             for sched in to_apply:
                 dbos._sys_db.delete_schedule(sched["schedule_name"], conn=c)
                 dbos._sys_db.create_schedule(sched, conn=c)

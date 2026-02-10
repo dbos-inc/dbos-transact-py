@@ -34,6 +34,7 @@ from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._scheduler import backfill_schedule, trigger_schedule
 from dbos._serialization import DefaultSerializer, Serializer, WorkflowInputs
 from dbos._sys_db import (
+    ClientScheduleInput,
     EnqueueOptionsInternal,
     StepInfo,
     SystemDatabase,
@@ -748,41 +749,33 @@ class DBOSClient:
 
     def apply_schedules(
         self,
-        schedules: Dict[str, Optional[Tuple[Any, ...]]],
+        schedules: List[ClientScheduleInput],
     ) -> None:
         """
-        Atomic apply a set of schedules.
+        Atomically create or replace a set of schedules.
 
         Args:
-            schedules: A mapping from schedule name to either a ``(workflow_name, cron)`` or ``(workflow_name, cron, context)`` tuple, or ``None``. Each named schedule will be updated to the given values, or deleted if set to ``None``.
+            schedules: A list of schedule inputs, each containing ``schedule_name``, ``workflow_name``, ``schedule`` (cron), and ``context``.
 
         Raises:
             DBOSException: If a cron expression is invalid
         """
         to_apply: List[WorkflowSchedule] = []
-        names_to_delete: List[str] = []
-        for schedule_name, entry in schedules.items():
-            if entry is None:
-                names_to_delete.append(schedule_name)
-            else:
-                wf_name = entry[0]
-                cron = entry[1]
-                ctx_value = entry[2] if len(entry) > 2 else None
-                if not croniter.is_valid(cron, second_at_beginning=True):
-                    raise DBOSException(f"Invalid cron schedule: '{cron}'")
-                to_apply.append(
-                    WorkflowSchedule(
-                        schedule_id=generate_uuid(),
-                        schedule_name=schedule_name,
-                        workflow_name=wf_name,
-                        schedule=cron,
-                        status="ACTIVE",
-                        context=self._sys_db.serializer.serialize(ctx_value),
-                    )
+        for entry in schedules:
+            cron = entry["schedule"]
+            if not croniter.is_valid(cron, second_at_beginning=True):
+                raise DBOSException(f"Invalid cron schedule: '{cron}'")
+            to_apply.append(
+                WorkflowSchedule(
+                    schedule_id=generate_uuid(),
+                    schedule_name=entry["schedule_name"],
+                    workflow_name=entry["workflow_name"],
+                    schedule=cron,
+                    status="ACTIVE",
+                    context=self._sys_db.serializer.serialize(entry["context"]),
                 )
+            )
         with self._sys_db.engine.begin() as c:
-            for name in names_to_delete:
-                self._sys_db.delete_schedule(name, conn=c)
             for sched in to_apply:
                 self._sys_db.delete_schedule(sched["schedule_name"], conn=c)
                 self._sys_db.create_schedule(sched, conn=c)

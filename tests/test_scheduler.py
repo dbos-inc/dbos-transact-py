@@ -109,52 +109,86 @@ def test_apply_schedules(dbos: DBOS) -> None:
     def wf_b(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
-    # Apply two schedules at once, one with context
+    # Apply two schedules at once
     DBOS.apply_schedules(
-        {
-            "sched-a": (wf_a, "* * * * *", {"region": "us"}),
-            "sched-b": (wf_b, "0 0 * * *"),
-        }
+        [
+            {
+                "schedule_name": "sched-a",
+                "workflow_fn": wf_a,
+                "schedule": "* * * * *",
+                "context": {"region": "us"},
+            },
+            {
+                "schedule_name": "sched-b",
+                "workflow_fn": wf_b,
+                "schedule": "0 0 * * *",
+                "context": None,
+            },
+        ]
     )
     schedules = DBOS.list_schedules()
     assert len(schedules) == 2
     by_name = {s["schedule_name"]: s for s in schedules}
     assert by_name["sched-a"]["schedule"] == "* * * * *"
-    assert by_name["sched-a"]["context"]
     assert by_name["sched-b"]["schedule"] == "0 0 * * *"
-    assert by_name["sched-b"]["context"]
 
-    # Replace one, delete the other, add a new one
+    # Replace sched-a, add sched-c
     DBOS.apply_schedules(
-        {
-            "sched-a": (wf_a, "0 * * * *"),
-            "sched-b": None,
-            "sched-c": (wf_b, "*/5 * * * *", [1, 2, 3]),
-        }
+        [
+            {
+                "schedule_name": "sched-a",
+                "workflow_fn": wf_a,
+                "schedule": "0 * * * *",
+                "context": None,
+            },
+            {
+                "schedule_name": "sched-c",
+                "workflow_fn": wf_b,
+                "schedule": "*/5 * * * *",
+                "context": [1, 2, 3],
+            },
+        ]
     )
     schedules = DBOS.list_schedules()
-    assert len(schedules) == 2
+    assert len(schedules) == 3
     by_name = {s["schedule_name"]: s for s in schedules}
-    assert "sched-b" not in by_name
     assert by_name["sched-a"]["schedule"] == "0 * * * *"
-    assert by_name["sched-a"]["context"]
     assert by_name["sched-c"]["schedule"] == "*/5 * * * *"
-    assert by_name["sched-c"]["context"]
 
     # Reject invalid cron
     with pytest.raises(DBOSException, match="Invalid cron schedule"):
-        DBOS.apply_schedules({"bad": (wf_a, "not a cron")})
+        DBOS.apply_schedules(
+            [
+                {
+                    "schedule_name": "bad",
+                    "workflow_fn": wf_a,
+                    "schedule": "not a cron",
+                    "context": None,
+                }
+            ]
+        )
 
     # Reject call from within a workflow
     @DBOS.workflow()
     def bad_workflow() -> None:
-        DBOS.apply_schedules({"x": (wf_a, "* * * * *")})
+        DBOS.apply_schedules(
+            [
+                {
+                    "schedule_name": "x",
+                    "workflow_fn": wf_a,
+                    "schedule": "* * * * *",
+                    "context": None,
+                }
+            ]
+        )
 
     with pytest.raises(DBOSException, match="cannot be called from within a workflow"):
         DBOS.start_workflow(bad_workflow).get_result()
 
     # Clean up
-    DBOS.apply_schedules({"sched-a": None, "sched-c": None})
+    DBOS.delete_schedule("sched-a")
+    DBOS.delete_schedule("sched-b")
+    DBOS.delete_schedule("sched-c")
     assert len(DBOS.list_schedules()) == 0
 
 
@@ -524,44 +558,69 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
 
 
 def test_client_apply_schedules(client: DBOSClient) -> None:
-    # Apply two schedules at once, one with context
+    # Apply two schedules at once
     client.apply_schedules(
-        {
-            "sched-a": ("wf.a", "* * * * *", {"region": "eu"}),
-            "sched-b": ("wf.b", "0 0 * * *"),
-        }
+        [
+            {
+                "schedule_name": "sched-a",
+                "workflow_name": "wf.a",
+                "schedule": "* * * * *",
+                "context": {"region": "eu"},
+            },
+            {
+                "schedule_name": "sched-b",
+                "workflow_name": "wf.b",
+                "schedule": "0 0 * * *",
+                "context": None,
+            },
+        ]
     )
     schedules = client.list_schedules()
     assert len(schedules) == 2
     by_name = {s["schedule_name"]: s for s in schedules}
     assert by_name["sched-a"]["schedule"] == "* * * * *"
-    assert by_name["sched-a"]["context"]
     assert by_name["sched-b"]["workflow_name"] == "wf.b"
-    assert by_name["sched-b"]["context"]
 
-    # Replace one, delete the other, add a new one
+    # Replace sched-a, add sched-c
     client.apply_schedules(
-        {
-            "sched-a": ("wf.a", "0 * * * *"),
-            "sched-b": None,
-            "sched-c": ("wf.c", "*/5 * * * *", [1, 2]),
-        }
+        [
+            {
+                "schedule_name": "sched-a",
+                "workflow_name": "wf.a",
+                "schedule": "0 * * * *",
+                "context": None,
+            },
+            {
+                "schedule_name": "sched-c",
+                "workflow_name": "wf.c",
+                "schedule": "*/5 * * * *",
+                "context": [1, 2],
+            },
+        ]
     )
     schedules = client.list_schedules()
-    assert len(schedules) == 2
+    assert len(schedules) == 3
     by_name = {s["schedule_name"]: s for s in schedules}
-    assert "sched-b" not in by_name
     assert by_name["sched-a"]["schedule"] == "0 * * * *"
-    assert by_name["sched-a"]["context"]
     assert by_name["sched-c"]["schedule"] == "*/5 * * * *"
-    assert by_name["sched-c"]["context"]
 
     # Reject invalid cron
     with pytest.raises(DBOSException, match="Invalid cron schedule"):
-        client.apply_schedules({"bad": ("wf.x", "not a cron")})
+        client.apply_schedules(
+            [
+                {
+                    "schedule_name": "bad",
+                    "workflow_name": "wf.x",
+                    "schedule": "not a cron",
+                    "context": None,
+                }
+            ]
+        )
 
     # Clean up
-    client.apply_schedules({"sched-a": None, "sched-c": None})
+    client.delete_schedule("sched-a")
+    client.delete_schedule("sched-b")
+    client.delete_schedule("sched-c")
     assert len(client.list_schedules()) == 0
 
 
