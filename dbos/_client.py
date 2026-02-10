@@ -11,7 +11,6 @@ from typing import (
     Optional,
     TypedDict,
     TypeVar,
-    Union,
 )
 
 import sqlalchemy as sa
@@ -24,6 +23,7 @@ from dbos._utils import generate_uuid
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 
+from dbos._croniter import croniter  # type: ignore
 from dbos._dbos_config import get_system_database_url, is_valid_database_url
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
@@ -32,6 +32,7 @@ from dbos._sys_db import (
     EnqueueOptionsInternal,
     StepInfo,
     SystemDatabase,
+    WorkflowSchedule,
     WorkflowStatus,
     WorkflowStatusInternal,
     WorkflowStatusString,
@@ -629,3 +630,34 @@ class DBOSClient:
                     break
                 await asyncio.sleep(1.0)
                 continue
+
+    def create_schedule(
+        self,
+        *,
+        schedule_name: str,
+        workflow_name: str,
+        schedule: str,
+    ) -> None:
+        """Create a new workflow schedule."""
+        if not croniter.is_valid(schedule, second_at_beginning=True):
+            raise DBOSException(f"Invalid cron schedule: '{schedule}'")
+        self._sys_db.create_schedule(
+            WorkflowSchedule(
+                schedule_id=generate_uuid(),
+                schedule_name=schedule_name,
+                workflow_name=workflow_name,
+                schedule=schedule,
+            )
+        )
+
+    def list_schedules(self) -> List[WorkflowSchedule]:
+        """List all workflow schedules."""
+        return self._sys_db.list_schedules()
+
+    def get_schedule(self, name: str) -> Optional[WorkflowSchedule]:
+        """Get a workflow schedule by name."""
+        return self._sys_db.get_schedule(name)
+
+    def delete_schedule(self, name: str) -> None:
+        """Delete a workflow schedule by name."""
+        self._sys_db.delete_schedule(name)

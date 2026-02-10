@@ -3,7 +3,7 @@ from datetime import datetime
 
 import pytest
 
-from dbos import DBOS
+from dbos import DBOS, DBOSClient
 from dbos._error import DBOSException
 
 from .conftest import retry_until_success
@@ -171,3 +171,41 @@ def test_dynamic_scheduler_add_after_launch(dbos: DBOS) -> None:
     retry_until_success(check_fired_twice)
 
     DBOS.delete_schedule("late-add")
+
+
+def test_client_schedule_crud(client: DBOSClient) -> None:
+    # Create a schedule
+    client.create_schedule(
+        schedule_name="client-schedule",
+        workflow_name="some.workflow",
+        schedule="* * * * *",
+    )
+
+    # List schedules and verify
+    schedules = client.list_schedules()
+    assert len(schedules) == 1
+    assert schedules[0]["schedule_name"] == "client-schedule"
+    assert schedules[0]["workflow_name"] == "some.workflow"
+    assert schedules[0]["schedule"] == "* * * * *"
+
+    # Get schedule by name
+    sched = client.get_schedule("client-schedule")
+    assert sched is not None
+    assert sched["schedule_name"] == "client-schedule"
+    assert sched["schedule_id"] == schedules[0]["schedule_id"]
+
+    # Get nonexistent schedule
+    assert client.get_schedule("nonexistent") is None
+
+    # Reject invalid cron expression
+    with pytest.raises(DBOSException, match="Invalid cron schedule"):
+        client.create_schedule(
+            schedule_name="bad-schedule",
+            workflow_name="some.workflow",
+            schedule="not a cron",
+        )
+
+    # Delete schedule
+    client.delete_schedule("client-schedule")
+    assert client.get_schedule("client-schedule") is None
+    assert len(client.list_schedules()) == 0
