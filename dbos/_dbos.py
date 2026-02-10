@@ -1762,6 +1762,55 @@ class DBOS:
         else:
             dbos._sys_db.delete_schedule(name)
 
+    @classmethod
+    def apply_schedules(
+        cls,
+        schedules: Dict[str, Optional[Tuple[Callable[[datetime], None], str]]],
+    ) -> None:
+        """
+        Atomic apply a set of schedules.
+
+        Args:
+            schedules(Dict[str, Optional[Tuple[Callable[[datetime], None], str]]]): A mapping from schedule name to either a ``(workflow_fn, cron)`` tuple or ``None``. Each named schedule will be updated to the given values, or deleted if set to "None".
+
+        Raises:
+            DBOSException: If called from within a workflow, a cron expression is invalid, or a workflow is not registered
+        """
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            raise DBOSException(
+                "DBOS.apply_schedules cannot be called from within a workflow"
+            )
+        dbos = _get_dbos_instance()
+        to_apply: List[WorkflowSchedule] = []
+        names_to_delete: List[str] = []
+        for schedule_name, entry in schedules.items():
+            if entry is None:
+                names_to_delete.append(schedule_name)
+            else:
+                workflow_fn, cron = entry
+                if not croniter.is_valid(cron, second_at_beginning=True):
+                    raise DBOSException(f"Invalid cron schedule: '{cron}'")
+                workflow_name = get_dbos_func_name(workflow_fn)
+                if workflow_name not in dbos._registry.workflow_info_map:
+                    raise DBOSException(
+                        f"Workflow function '{workflow_name}' is not registered"
+                    )
+                to_apply.append(
+                    WorkflowSchedule(
+                        schedule_id=generate_uuid(),
+                        schedule_name=schedule_name,
+                        workflow_name=workflow_name,
+                        schedule=cron,
+                    )
+                )
+        with dbos._sys_db.engine.begin() as c:
+            for name in names_to_delete:
+                dbos._sys_db.delete_schedule(name, conn=c)
+            for sched in to_apply:
+                dbos._sys_db.delete_schedule(sched["schedule_name"], conn=c)
+                dbos._sys_db.create_schedule(sched, conn=c)
+
     @classproperty
     def application_version(cls) -> str:
         return GlobalParams.app_version

@@ -61,6 +61,60 @@ def test_schedule_crud(dbos: DBOS) -> None:
     assert len(DBOS.list_schedules()) == 0
 
 
+def test_apply_schedules(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def wf_a(scheduled_at: datetime) -> None:
+        pass
+
+    @DBOS.workflow()
+    def wf_b(scheduled_at: datetime) -> None:
+        pass
+
+    # Apply two schedules at once
+    DBOS.apply_schedules(
+        {
+            "sched-a": (wf_a, "* * * * *"),
+            "sched-b": (wf_b, "0 0 * * *"),
+        }
+    )
+    schedules = DBOS.list_schedules()
+    assert len(schedules) == 2
+    by_name = {s["schedule_name"]: s for s in schedules}
+    assert by_name["sched-a"]["schedule"] == "* * * * *"
+    assert by_name["sched-b"]["schedule"] == "0 0 * * *"
+
+    # Replace one, delete the other, add a new one
+    DBOS.apply_schedules(
+        {
+            "sched-a": (wf_a, "0 * * * *"),
+            "sched-b": None,
+            "sched-c": (wf_b, "*/5 * * * *"),
+        }
+    )
+    schedules = DBOS.list_schedules()
+    assert len(schedules) == 2
+    by_name = {s["schedule_name"]: s for s in schedules}
+    assert "sched-b" not in by_name
+    assert by_name["sched-a"]["schedule"] == "0 * * * *"
+    assert by_name["sched-c"]["schedule"] == "*/5 * * * *"
+
+    # Reject invalid cron
+    with pytest.raises(DBOSException, match="Invalid cron schedule"):
+        DBOS.apply_schedules({"bad": (wf_a, "not a cron")})
+
+    # Reject call from within a workflow
+    @DBOS.workflow()
+    def bad_workflow() -> None:
+        DBOS.apply_schedules({"x": (wf_a, "* * * * *")})
+
+    with pytest.raises(DBOSException, match="cannot be called from within a workflow"):
+        DBOS.start_workflow(bad_workflow).get_result()
+
+    # Clean up
+    DBOS.apply_schedules({"sched-a": None, "sched-c": None})
+    assert len(DBOS.list_schedules()) == 0
+
+
 def test_schedule_crud_from_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
     def target_workflow(scheduled_at: datetime) -> None:
