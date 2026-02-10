@@ -1,5 +1,6 @@
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 
@@ -11,18 +12,19 @@ from .conftest import retry_until_success
 
 def test_schedule_crud(dbos: DBOS) -> None:
     @DBOS.workflow()
-    def my_workflow(scheduled_at: datetime) -> None:
+    def my_workflow(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
     @DBOS.workflow()
-    def other_workflow(scheduled_at: datetime) -> None:
+    def other_workflow(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
-    # Create a schedule
+    # Create a schedule with context
     DBOS.create_schedule(
         schedule_name="test-schedule",
         workflow_fn=my_workflow,
         schedule="* * * * *",
+        context={"env": "test"},
     )
 
     # List schedules and verify
@@ -31,6 +33,7 @@ def test_schedule_crud(dbos: DBOS) -> None:
     assert schedules[0]["schedule_name"] == "test-schedule"
     assert schedules[0]["workflow_name"] == my_workflow.dbos_function_name  # type: ignore
     assert schedules[0]["schedule"] == "* * * * *"
+    assert schedules[0]["context"]
 
     # Get schedule by name
     sched = DBOS.get_schedule("test-schedule")
@@ -39,6 +42,7 @@ def test_schedule_crud(dbos: DBOS) -> None:
     assert sched["workflow_name"] == my_workflow.dbos_function_name  # type: ignore
     assert sched["schedule"] == "* * * * *"
     assert sched["schedule_id"] == schedules[0]["schedule_id"]
+    assert sched["context"]
 
     # Get nonexistent schedule
     assert DBOS.get_schedule("nonexistent") is None
@@ -98,17 +102,17 @@ def test_schedule_crud(dbos: DBOS) -> None:
 
 def test_apply_schedules(dbos: DBOS) -> None:
     @DBOS.workflow()
-    def wf_a(scheduled_at: datetime) -> None:
+    def wf_a(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
     @DBOS.workflow()
-    def wf_b(scheduled_at: datetime) -> None:
+    def wf_b(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
-    # Apply two schedules at once
+    # Apply two schedules at once, one with context
     DBOS.apply_schedules(
         {
-            "sched-a": (wf_a, "* * * * *"),
+            "sched-a": (wf_a, "* * * * *", {"region": "us"}),
             "sched-b": (wf_b, "0 0 * * *"),
         }
     )
@@ -116,14 +120,16 @@ def test_apply_schedules(dbos: DBOS) -> None:
     assert len(schedules) == 2
     by_name = {s["schedule_name"]: s for s in schedules}
     assert by_name["sched-a"]["schedule"] == "* * * * *"
+    assert by_name["sched-a"]["context"]
     assert by_name["sched-b"]["schedule"] == "0 0 * * *"
+    assert by_name["sched-b"]["context"]
 
     # Replace one, delete the other, add a new one
     DBOS.apply_schedules(
         {
             "sched-a": (wf_a, "0 * * * *"),
             "sched-b": None,
-            "sched-c": (wf_b, "*/5 * * * *"),
+            "sched-c": (wf_b, "*/5 * * * *", [1, 2, 3]),
         }
     )
     schedules = DBOS.list_schedules()
@@ -131,7 +137,9 @@ def test_apply_schedules(dbos: DBOS) -> None:
     by_name = {s["schedule_name"]: s for s in schedules}
     assert "sched-b" not in by_name
     assert by_name["sched-a"]["schedule"] == "0 * * * *"
+    assert by_name["sched-a"]["context"]
     assert by_name["sched-c"]["schedule"] == "*/5 * * * *"
+    assert by_name["sched-c"]["context"]
 
     # Reject invalid cron
     with pytest.raises(DBOSException, match="Invalid cron schedule"):
@@ -152,7 +160,7 @@ def test_apply_schedules(dbos: DBOS) -> None:
 
 def test_schedule_crud_from_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
-    def target_workflow(scheduled_at: datetime) -> None:
+    def target_workflow(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
     @DBOS.workflow()
@@ -161,11 +169,13 @@ def test_schedule_crud_from_workflow(dbos: DBOS) -> None:
             schedule_name="wf-schedule",
             workflow_fn=target_workflow,
             schedule="* * * * *",
+            context={"from": "workflow"},
         )
 
         schedules = DBOS.list_schedules()
         assert len(schedules) == 1
         assert schedules[0]["schedule_name"] == "wf-schedule"
+        assert schedules[0]["context"]
 
         sched = DBOS.get_schedule("wf-schedule")
         assert sched is not None
@@ -195,33 +205,35 @@ def test_schedule_crud_from_workflow(dbos: DBOS) -> None:
 
 
 def test_dynamic_scheduler_fires(dbos: DBOS) -> None:
-    counter_a: int = 0
-    counter_b: int = 0
+    received_a: list[Any] = []
+    received_b: list[Any] = []
 
     @DBOS.workflow()
-    def workflow_a(scheduled_at: datetime) -> None:
-        nonlocal counter_a
-        counter_a += 1
+    def workflow_a(scheduled_at: datetime, ctx: Any) -> None:
+        received_a.append(ctx)
 
     @DBOS.workflow()
-    def workflow_b(scheduled_at: datetime) -> None:
-        nonlocal counter_b
-        counter_b += 1
+    def workflow_b(scheduled_at: datetime, ctx: Any) -> None:
+        received_b.append(ctx)
 
     DBOS.create_schedule(
         schedule_name="every-second-a",
         workflow_fn=workflow_a,
         schedule="* * * * * *",
+        context={"id": "a"},
     )
     DBOS.create_schedule(
         schedule_name="every-second-b",
         workflow_fn=workflow_b,
         schedule="* * * * * *",
+        context={"id": "b"},
     )
 
     def check_both_fired_twice() -> None:
-        assert counter_a >= 2
-        assert counter_b >= 2
+        assert len(received_a) >= 2
+        assert all(c == {"id": "a"} for c in received_a)
+        assert len(received_b) >= 2
+        assert all(c == {"id": "b"} for c in received_b)
 
     retry_until_success(check_both_fired_twice)
 
@@ -233,7 +245,7 @@ def test_dynamic_scheduler_delete_stops_firing(dbos: DBOS) -> None:
     wf_counter: int = 0
 
     @DBOS.workflow()
-    def scheduled_workflow(scheduled_at: datetime) -> None:
+    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
         nonlocal wf_counter
         wf_counter += 1
 
@@ -241,6 +253,7 @@ def test_dynamic_scheduler_delete_stops_firing(dbos: DBOS) -> None:
         schedule_name="delete-test",
         workflow_fn=scheduled_workflow,
         schedule="* * * * * *",
+        context="delete-ctx",
     )
 
     def check_fired() -> None:
@@ -260,7 +273,7 @@ def test_dynamic_scheduler_add_after_launch(dbos: DBOS) -> None:
     wf_counter: int = 0
 
     @DBOS.workflow()
-    def scheduled_workflow(scheduled_at: datetime) -> None:
+    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
         nonlocal wf_counter
         wf_counter += 1
 
@@ -284,21 +297,21 @@ def test_dynamic_scheduler_add_after_launch(dbos: DBOS) -> None:
 
 
 def test_dynamic_scheduler_replace_schedule(dbos: DBOS) -> None:
-    wf_counter: int = 0
+    received_contexts: list[Any] = []
 
     @DBOS.workflow()
-    def scheduled_workflow(scheduled_at: datetime) -> None:
-        nonlocal wf_counter
-        wf_counter += 1
+    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        received_contexts.append(ctx)
 
     # Create a schedule that runs once a day — should not fire during this test
     DBOS.create_schedule(
         schedule_name="replaceable",
         workflow_fn=scheduled_workflow,
         schedule="0 0 * * *",
+        context={"version": 1},
     )
     time.sleep(3)
-    assert wf_counter == 0
+    assert len(received_contexts) == 0
 
     # Delete it and replace with one that runs every second
     DBOS.delete_schedule("replaceable")
@@ -306,12 +319,30 @@ def test_dynamic_scheduler_replace_schedule(dbos: DBOS) -> None:
         schedule_name="replaceable-fast",
         workflow_fn=scheduled_workflow,
         schedule="* * * * * *",
+        context={"version": 2},
     )
 
-    def check_fired_twice() -> None:
-        assert wf_counter >= 2
+    def check_fired_v2() -> None:
+        assert len(received_contexts) >= 2
+        assert all(c == {"version": 2} for c in received_contexts)
 
-    retry_until_success(check_fired_twice)
+    retry_until_success(check_fired_v2)
+
+    # Replace with a new context and verify the workflow picks it up
+    count_before = len(received_contexts)
+    DBOS.delete_schedule("replaceable-fast")
+    DBOS.create_schedule(
+        schedule_name="replaceable-fast",
+        workflow_fn=scheduled_workflow,
+        schedule="* * * * * *",
+        context={"version": 3},
+    )
+
+    def check_fired_v3() -> None:
+        v3 = [c for c in received_contexts[count_before:] if c == {"version": 3}]
+        assert len(v3) >= 2
+
+    retry_until_success(check_fired_v3)
 
     DBOS.delete_schedule("replaceable-fast")
 
@@ -320,7 +351,7 @@ def test_long_schedule_shutdown(dbos: DBOS) -> None:
     wf_counter: int = 0
 
     @DBOS.workflow()
-    def scheduled_workflow(scheduled_at: datetime) -> None:
+    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
         nonlocal wf_counter
         wf_counter += 1
 
@@ -338,16 +369,17 @@ def test_long_schedule_shutdown(dbos: DBOS) -> None:
 
 
 def test_backfill_schedule(dbos: DBOS) -> None:
-    received_times: list[datetime] = []
+    received: list[tuple[datetime, Any]] = []
 
     @DBOS.workflow()
-    def backfill_workflow(scheduled_at: datetime) -> None:
-        received_times.append(scheduled_at)
+    def backfill_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        received.append((scheduled_at, ctx))
 
     DBOS.create_schedule(
         schedule_name="backfill-test",
         workflow_fn=backfill_workflow,
         schedule="0 * * * *",  # every hour
+        context={"env": "backfill"},
     )
 
     # Backfill from 00:30 to 03:30 — yields 01:00, 02:00, 03:00
@@ -361,13 +393,14 @@ def test_backfill_schedule(dbos: DBOS) -> None:
         h.get_result()
 
     expected = [datetime(2025, 1, 1, h, 0, 0, tzinfo=timezone.utc) for h in range(1, 4)]
-    assert sorted(received_times) == expected
+    assert sorted(t for t, _ in received) == expected
+    assert all(ctx == {"env": "backfill"} for _, ctx in received)
 
     # Backfilling again should be idempotent (same workflow IDs)
     handles2 = DBOS.backfill_schedule("backfill-test", start, end)
     assert len(handles2) == 3
     time.sleep(1)
-    assert len(received_times) == 3
+    assert len(received) == 3
 
     # Nonexistent schedule
     with pytest.raises(DBOSException, match="does not exist"):
@@ -377,16 +410,17 @@ def test_backfill_schedule(dbos: DBOS) -> None:
 
 
 def test_trigger_schedule(dbos: DBOS) -> None:
-    received_times: list[datetime] = []
+    received: list[tuple[datetime, Any]] = []
 
     @DBOS.workflow()
-    def trigger_workflow(scheduled_at: datetime) -> None:
-        received_times.append(scheduled_at)
+    def trigger_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        received.append((scheduled_at, ctx))
 
     DBOS.create_schedule(
         schedule_name="trigger-test",
         workflow_fn=trigger_workflow,
         schedule="0 0 * * *",  # daily, won't fire during test
+        context=[1, 2, 3],
     )
 
     before = datetime.now(timezone.utc)
@@ -396,8 +430,9 @@ def test_trigger_schedule(dbos: DBOS) -> None:
     assert handle.workflow_id.startswith("sched-trigger-test-trigger-")
     handle.get_result()
 
-    assert len(received_times) == 1
-    assert before <= received_times[0] <= after
+    assert len(received) == 1
+    assert before <= received[0][0] <= after
+    assert received[0][1] == [1, 2, 3]
 
     # Nonexistent schedule
     with pytest.raises(DBOSException, match="does not exist"):
@@ -407,11 +442,12 @@ def test_trigger_schedule(dbos: DBOS) -> None:
 
 
 def test_client_schedule_crud(client: DBOSClient) -> None:
-    # Create a schedule
+    # Create a schedule with context
     client.create_schedule(
         schedule_name="client-schedule",
         workflow_name="some.workflow",
         schedule="* * * * *",
+        context={"tenant": "acme"},
     )
 
     # List schedules and verify
@@ -420,12 +456,14 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
     assert schedules[0]["schedule_name"] == "client-schedule"
     assert schedules[0]["workflow_name"] == "some.workflow"
     assert schedules[0]["schedule"] == "* * * * *"
+    assert schedules[0]["context"]
 
     # Get schedule by name
     sched = client.get_schedule("client-schedule")
     assert sched is not None
     assert sched["schedule_name"] == "client-schedule"
     assert sched["schedule_id"] == schedules[0]["schedule_id"]
+    assert sched["context"]
 
     # Get nonexistent schedule
     assert client.get_schedule("nonexistent") is None
@@ -486,10 +524,10 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
 
 
 def test_client_apply_schedules(client: DBOSClient) -> None:
-    # Apply two schedules at once
+    # Apply two schedules at once, one with context
     client.apply_schedules(
         {
-            "sched-a": ("wf.a", "* * * * *"),
+            "sched-a": ("wf.a", "* * * * *", {"region": "eu"}),
             "sched-b": ("wf.b", "0 0 * * *"),
         }
     )
@@ -497,14 +535,16 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
     assert len(schedules) == 2
     by_name = {s["schedule_name"]: s for s in schedules}
     assert by_name["sched-a"]["schedule"] == "* * * * *"
+    assert by_name["sched-a"]["context"]
     assert by_name["sched-b"]["workflow_name"] == "wf.b"
+    assert by_name["sched-b"]["context"]
 
     # Replace one, delete the other, add a new one
     client.apply_schedules(
         {
             "sched-a": ("wf.a", "0 * * * *"),
             "sched-b": None,
-            "sched-c": ("wf.c", "*/5 * * * *"),
+            "sched-c": ("wf.c", "*/5 * * * *", [1, 2]),
         }
     )
     schedules = client.list_schedules()
@@ -512,7 +552,9 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
     by_name = {s["schedule_name"]: s for s in schedules}
     assert "sched-b" not in by_name
     assert by_name["sched-a"]["schedule"] == "0 * * * *"
+    assert by_name["sched-a"]["context"]
     assert by_name["sched-c"]["schedule"] == "*/5 * * * *"
+    assert by_name["sched-c"]["context"]
 
     # Reject invalid cron
     with pytest.raises(DBOSException, match="Invalid cron schedule"):
@@ -524,16 +566,17 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
 
 
 def test_client_backfill_schedule(client: DBOSClient) -> None:
-    received_times: list[datetime] = []
+    received: list[tuple[datetime, Any]] = []
 
     @DBOS.workflow()
-    def backfill_workflow(scheduled_at: datetime) -> None:
-        received_times.append(scheduled_at)
+    def backfill_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        received.append((scheduled_at, ctx))
 
     client.create_schedule(
         schedule_name="client-backfill",
         workflow_name=backfill_workflow.__qualname__,
         schedule="0 * * * *",
+        context={"source": "client"},
     )
 
     start = datetime(2025, 6, 1, 0, 30, 0, tzinfo=timezone.utc)
@@ -545,22 +588,24 @@ def test_client_backfill_schedule(client: DBOSClient) -> None:
         h.get_result()
 
     expected = [datetime(2025, 6, 1, h, 0, 0, tzinfo=timezone.utc) for h in range(1, 4)]
-    assert sorted(received_times) == expected
+    assert sorted(t for t, _ in received) == expected
+    assert all(ctx == {"source": "client"} for _, ctx in received)
 
     client.delete_schedule("client-backfill")
 
 
 def test_client_trigger_schedule(client: DBOSClient) -> None:
-    received_times: list[datetime] = []
+    received: list[tuple[datetime, Any]] = []
 
     @DBOS.workflow()
-    def trigger_workflow(scheduled_at: datetime) -> None:
-        received_times.append(scheduled_at)
+    def trigger_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        received.append((scheduled_at, ctx))
 
     client.create_schedule(
         schedule_name="client-trigger",
         workflow_name=trigger_workflow.__qualname__,
         schedule="0 0 * * *",
+        context="trigger-ctx",
     )
 
     before = datetime.now(timezone.utc)
@@ -570,8 +615,9 @@ def test_client_trigger_schedule(client: DBOSClient) -> None:
     assert handle.workflow_id.startswith("sched-client-trigger-trigger-")
     handle.get_result()
 
-    assert len(received_times) == 1
-    assert before <= received_times[0] <= after
+    assert len(received) == 1
+    assert before <= received[0][0] <= after
+    assert received[0][1] == "trigger-ctx"
 
     client.delete_schedule("client-trigger")
 
@@ -580,7 +626,7 @@ def test_pause_resume_schedule(dbos: DBOS) -> None:
     wf_counter: int = 0
 
     @DBOS.workflow()
-    def scheduled_workflow(scheduled_at: datetime) -> None:
+    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
         nonlocal wf_counter
         wf_counter += 1
 
@@ -646,22 +692,25 @@ def test_client_pause_resume_schedule(client: DBOSClient) -> None:
 @pytest.mark.asyncio
 async def test_schedule_crud_async(dbos: DBOS) -> None:
     @DBOS.workflow()
-    def my_workflow(scheduled_at: datetime) -> None:
+    def my_workflow(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
     await DBOS.create_schedule_async(
         schedule_name="async-schedule",
         workflow_fn=my_workflow,
         schedule="* * * * *",
+        context={"async": True},
     )
 
     schedules = await DBOS.list_schedules_async()
     assert len(schedules) == 1
     assert schedules[0]["schedule_name"] == "async-schedule"
+    assert schedules[0]["context"]
 
     sched = await DBOS.get_schedule_async("async-schedule")
     assert sched is not None
     assert sched["schedule"] == "* * * * *"
+    assert sched["context"]
 
     assert await DBOS.get_schedule_async("nonexistent") is None
 
@@ -681,15 +730,18 @@ async def test_client_schedule_crud_async(client: DBOSClient) -> None:
         schedule_name="async-client",
         workflow_name="some.workflow",
         schedule="0 0 * * *",
+        context=42,
     )
 
     schedules = await client.list_schedules_async()
     assert len(schedules) == 1
     assert schedules[0]["schedule_name"] == "async-client"
+    assert schedules[0]["context"]
 
     sched = await client.get_schedule_async("async-client")
     assert sched is not None
     assert sched["workflow_name"] == "some.workflow"
+    assert sched["context"]
 
     assert await client.get_schedule_async("nonexistent") is None
 

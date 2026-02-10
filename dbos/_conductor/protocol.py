@@ -451,6 +451,7 @@ class ScheduleOutput:
     workflow_name: str
     schedule: str
     status: str
+    context: str
 
     @classmethod
     def from_schedule(cls, s: WorkflowSchedule) -> "ScheduleOutput":
@@ -460,6 +461,7 @@ class ScheduleOutput:
             workflow_name=s["workflow_name"],
             schedule=s["schedule"],
             status=s["status"],
+            context=s["context"],
         )
 
 

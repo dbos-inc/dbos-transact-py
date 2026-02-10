@@ -1673,19 +1673,22 @@ class DBOS:
         cls,
         *,
         schedule_name: str,
-        workflow_fn: Callable[[datetime], None],
+        workflow_fn: Callable[[datetime, Any], None],
         schedule: str,
+        context: Any = None,
     ) -> None:
         """
         Create a cron schedule that periodically invokes a workflow function.
 
-        The workflow receives the scheduled execution time as its argument.
-        If called from within a workflow, the operation is recorded as a step.
+        The workflow receives the scheduled execution time and an optional context
+        as its arguments. If called from within a workflow, the operation is
+        recorded as a step.
 
         Args:
             schedule_name(str): Unique name identifying this schedule
             workflow_fn(Callable[[datetime], None]): The workflow function to invoke
             schedule(str): A cron expression (supports seconds with 6 fields)
+            context: An optional context object passed as the second argument to every invocation
 
         Raises:
             DBOSException: If the cron expression is invalid, the workflow is not registered, or a schedule with the same name already exists
@@ -1704,6 +1707,7 @@ class DBOS:
             workflow_name=workflow_name,
             schedule=schedule,
             status="ACTIVE",
+            context=dbos._sys_db.serializer.serialize(context),
         )
         ctx = snapshot_step_context(reserve_sleep_id=False)
         if ctx and ctx.is_workflow():
@@ -1790,8 +1794,9 @@ class DBOS:
         cls,
         *,
         schedule_name: str,
-        workflow_fn: Callable[[datetime], None],
+        workflow_fn: Callable[[datetime, Any], None],
         schedule: str,
+        context: Any = None,
     ) -> None:
         """Async version of :meth:`create_schedule`."""
         await cls._configure_asyncio_thread_pool()
@@ -1800,6 +1805,7 @@ class DBOS:
             schedule_name=schedule_name,
             workflow_fn=workflow_fn,
             schedule=schedule,
+            context=context,
         )
 
     @classmethod
@@ -1866,13 +1872,13 @@ class DBOS:
     @classmethod
     def apply_schedules(
         cls,
-        schedules: Dict[str, Optional[Tuple[Callable[[datetime], None], str]]],
+        schedules: Dict[str, Optional[Tuple[Any, ...]]],
     ) -> None:
         """
         Atomic apply a set of schedules.
 
         Args:
-            schedules(Dict[str, Optional[Tuple[Callable[[datetime], None], str]]]): A mapping from schedule name to either a ``(workflow_fn, cron)`` tuple or ``None``. Each named schedule will be updated to the given values, or deleted if set to "None".
+            schedules: A mapping from schedule name to either a ``(workflow_fn, cron)`` or ``(workflow_fn, cron, context)`` tuple, or ``None``. Each named schedule will be updated to the given values, or deleted if set to ``None``.
 
         Raises:
             DBOSException: If called from within a workflow, a cron expression is invalid, or a workflow is not registered
@@ -1889,7 +1895,9 @@ class DBOS:
             if entry is None:
                 names_to_delete.append(schedule_name)
             else:
-                workflow_fn, cron = entry
+                workflow_fn = entry[0]
+                cron = entry[1]
+                ctx_value = entry[2] if len(entry) > 2 else None
                 if not croniter.is_valid(cron, second_at_beginning=True):
                     raise DBOSException(f"Invalid cron schedule: '{cron}'")
                 workflow_name = get_dbos_func_name(workflow_fn)
@@ -1904,6 +1912,7 @@ class DBOS:
                         workflow_name=workflow_name,
                         schedule=cron,
                         status="ACTIVE",
+                        context=dbos._sys_db.serializer.serialize(ctx_value),
                     )
                 )
         with dbos._sys_db.engine.begin() as c:

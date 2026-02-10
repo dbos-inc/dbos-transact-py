@@ -233,6 +233,7 @@ class WorkflowSchedule(TypedDict):
     workflow_name: str
     schedule: str
     status: str
+    context: str
 
 
 class StepInfo(TypedDict):
@@ -2878,6 +2879,7 @@ class SystemDatabase(ABC):
                         workflow_name=schedule["workflow_name"],
                         schedule=schedule["schedule"],
                         status=schedule["status"],
+                        context=schedule["context"],
                     )
                 )
             except sa.exc.IntegrityError:
@@ -2906,6 +2908,7 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_schedules.c.workflow_name,
                 SystemSchema.workflow_schedules.c.schedule,
                 SystemSchema.workflow_schedules.c.status,
+                SystemSchema.workflow_schedules.c.context,
             )
             if status is not None:
                 vals = [status] if isinstance(status, str) else status
@@ -2941,6 +2944,7 @@ class SystemDatabase(ABC):
                     workflow_name=row[2],
                     schedule=row[3],
                     status=row[4],
+                    context=row[5],
                 )
                 for row in rows
             ]
@@ -2961,6 +2965,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_schedules.c.workflow_name,
                     SystemSchema.workflow_schedules.c.schedule,
                     SystemSchema.workflow_schedules.c.status,
+                    SystemSchema.workflow_schedules.c.context,
                 ).where(SystemSchema.workflow_schedules.c.schedule_name == name)
             ).fetchone()
             if row is None:
@@ -2971,6 +2976,7 @@ class SystemDatabase(ABC):
                 workflow_name=row[2],
                 schedule=row[3],
                 status=row[4],
+                context=row[5],
             )
 
         if conn is not None:

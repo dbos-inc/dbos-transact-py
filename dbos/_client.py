@@ -642,6 +642,7 @@ class DBOSClient:
         schedule_name: str,
         workflow_name: str,
         schedule: str,
+        context: Any = None,
     ) -> None:
         """
         Create a cron schedule that periodically invokes a workflow.
@@ -650,6 +651,7 @@ class DBOSClient:
             schedule_name: Unique name identifying this schedule
             workflow_name: Fully-qualified name of the workflow function to invoke
             schedule: A cron expression (supports seconds with 6 fields)
+            context: An optional context object passed as the second argument to every invocation
 
         Raises:
             DBOSException: If the cron expression is invalid or a schedule with the same name already exists
@@ -663,6 +665,7 @@ class DBOSClient:
                 workflow_name=workflow_name,
                 schedule=schedule,
                 status="ACTIVE",
+                context=self._sys_db.serializer.serialize(context),
             )
         )
 
@@ -701,6 +704,7 @@ class DBOSClient:
         schedule_name: str,
         workflow_name: str,
         schedule: str,
+        context: Any = None,
     ) -> None:
         """Async version of :meth:`create_schedule`."""
         await asyncio.to_thread(
@@ -708,6 +712,7 @@ class DBOSClient:
             schedule_name=schedule_name,
             workflow_name=workflow_name,
             schedule=schedule,
+            context=context,
         )
 
     async def list_schedules_async(
@@ -743,13 +748,13 @@ class DBOSClient:
 
     def apply_schedules(
         self,
-        schedules: Dict[str, Optional[Tuple[str, str]]],
+        schedules: Dict[str, Optional[Tuple[Any, ...]]],
     ) -> None:
         """
         Atomic apply a set of schedules.
 
         Args:
-            schedules: A mapping from schedule name to either a ``(workflow_name, cron)`` tuple or ``None``. Each named schedule will be updated to the given values, or deleted if set to ``None``.
+            schedules: A mapping from schedule name to either a ``(workflow_name, cron)`` or ``(workflow_name, cron, context)`` tuple, or ``None``. Each named schedule will be updated to the given values, or deleted if set to ``None``.
 
         Raises:
             DBOSException: If a cron expression is invalid
@@ -760,16 +765,19 @@ class DBOSClient:
             if entry is None:
                 names_to_delete.append(schedule_name)
             else:
-                workflow_name, cron = entry
+                wf_name = entry[0]
+                cron = entry[1]
+                ctx_value = entry[2] if len(entry) > 2 else None
                 if not croniter.is_valid(cron, second_at_beginning=True):
                     raise DBOSException(f"Invalid cron schedule: '{cron}'")
                 to_apply.append(
                     WorkflowSchedule(
                         schedule_id=generate_uuid(),
                         schedule_name=schedule_name,
-                        workflow_name=workflow_name,
+                        workflow_name=wf_name,
                         schedule=cron,
                         status="ACTIVE",
+                        context=self._sys_db.serializer.serialize(ctx_value),
                     )
                 )
         with self._sys_db.engine.begin() as c:

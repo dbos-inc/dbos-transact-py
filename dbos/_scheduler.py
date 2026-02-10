@@ -2,13 +2,13 @@ import random
 import threading
 import traceback
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ._context import SetWorkflowID
 from ._croniter import croniter  # type: ignore
 from ._error import DBOSException
 from ._logger import dbos_logger
-from ._serialization import WorkflowInputs
+from ._serialization import Serializer, WorkflowInputs
 from ._sys_db import WorkflowSchedule, WorkflowStatusInternal, WorkflowStatusString
 from ._utils import INTERNAL_QUEUE_NAME
 
@@ -19,10 +19,12 @@ if TYPE_CHECKING:
 class _ScheduleThread:
     """Manages a dedicated thread for a single cron schedule."""
 
-    def __init__(self, schedule: WorkflowSchedule):
+    def __init__(self, schedule: WorkflowSchedule, serializer: Serializer):
         self.schedule_name: str = schedule["schedule_name"]
         self.workflow_name: str = schedule["workflow_name"]
         self.cron: str = schedule["schedule"]
+        self.serialized_context: str = schedule["context"]
+        self.context: Any = serializer.deserialize(self.serialized_context)
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -62,7 +64,7 @@ class _ScheduleThread:
                 workflow_id = f"sched-{self.schedule_name}-{next_exec_time.isoformat()}"
                 if not dbos._sys_db.get_workflow_status(workflow_id):
                     with SetWorkflowID(workflow_id):
-                        scheduler_queue.enqueue(func, next_exec_time)
+                        scheduler_queue.enqueue(func, next_exec_time, self.context)
             except Exception:
                 dbos_logger.warning(
                     f"Exception in schedule '{self.schedule_name}': "
@@ -73,6 +75,7 @@ class _ScheduleThread:
         return (
             self.workflow_name != schedule["workflow_name"]
             or self.cron != schedule["schedule"]
+            or self.serialized_context != schedule["context"]
         )
 
     @staticmethod
@@ -90,9 +93,10 @@ def _enqueue_scheduled_workflow(
     workflow_name: str,
     scheduled_at: datetime,
     workflow_id: str,
+    context: Any = None,
 ) -> None:
     """Enqueue a single scheduled workflow execution via init_workflow."""
-    inputs: WorkflowInputs = {"args": (scheduled_at,), "kwargs": {}}
+    inputs: WorkflowInputs = {"args": (scheduled_at, context), "kwargs": {}}
     status: WorkflowStatusInternal = {
         "workflow_uuid": workflow_id,
         "status": WorkflowStatusString.ENQUEUED.value,
@@ -141,6 +145,7 @@ def backfill_schedule(
     schedule = sys_db.get_schedule(schedule_name)
     if schedule is None:
         raise DBOSException(f"Schedule '{schedule_name}' does not exist")
+    context = sys_db.serializer.deserialize(schedule["context"])
     it = croniter(schedule["schedule"], start, second_at_beginning=True)
     workflow_ids: list[str] = []
     while True:
@@ -150,7 +155,7 @@ def backfill_schedule(
         workflow_id = f"sched-{schedule_name}-{next_time.isoformat()}"
         if not sys_db.get_workflow_status(workflow_id):
             _enqueue_scheduled_workflow(
-                sys_db, schedule["workflow_name"], next_time, workflow_id
+                sys_db, schedule["workflow_name"], next_time, workflow_id, context
             )
         workflow_ids.append(workflow_id)
     return workflow_ids
@@ -161,9 +166,12 @@ def trigger_schedule(sys_db: "SystemDatabase", schedule_name: str) -> str:
     schedule = sys_db.get_schedule(schedule_name)
     if schedule is None:
         raise DBOSException(f"Schedule '{schedule_name}' does not exist")
+    context = sys_db.serializer.deserialize(schedule["context"])
     now = datetime.now(timezone.utc)
     workflow_id = f"sched-{schedule_name}-trigger-{now.isoformat()}"
-    _enqueue_scheduled_workflow(sys_db, schedule["workflow_name"], now, workflow_id)
+    _enqueue_scheduled_workflow(
+        sys_db, schedule["workflow_name"], now, workflow_id, context
+    )
     return workflow_id
 
 
@@ -206,10 +214,14 @@ def dynamic_scheduler_loop(
                     existing.stop()
                     del active_schedules[schedule_id]
             elif existing is None:
-                active_schedules[schedule_id] = _ScheduleThread(schedule)
+                active_schedules[schedule_id] = _ScheduleThread(
+                    schedule, dbos._sys_db.serializer
+                )
             elif existing.changed(schedule):
                 existing.stop()
-                active_schedules[schedule_id] = _ScheduleThread(schedule)
+                active_schedules[schedule_id] = _ScheduleThread(
+                    schedule, dbos._sys_db.serializer
+                )
 
         if stop_event.wait(timeout=polling_interval_sec):
             break
