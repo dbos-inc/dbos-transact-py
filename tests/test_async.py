@@ -1,7 +1,7 @@
 import asyncio
 import time
 import uuid
-from typing import List, Optional, cast
+from typing import Any, List, Optional, cast
 
 import pytest
 import sqlalchemy as sa
@@ -692,15 +692,22 @@ async def test_child_workflow_async(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_workflow_recovery_async(dbos: DBOS) -> None:
+async def test_workflow_recovery_async(dbos: DBOS, config: DBOSConfig) -> None:
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
     step_counter: int = 0
     wf_counter: int = 0
     value = "value"
 
+    wf_event_loop_id: int = 0
+
     @DBOS.workflow()
     async def test_workflow(var: str, var2: str) -> str:
-        nonlocal wf_counter
+        nonlocal wf_counter, wf_event_loop_id
         wf_counter += 1
+        wf_event_loop_id = id(asyncio.get_running_loop())
         output = await test_step(var2)
         assert output == var2
         return var
@@ -711,26 +718,35 @@ async def test_workflow_recovery_async(dbos: DBOS) -> None:
         step_counter += 1
         return var2
 
-    wfuuid = str(uuid.uuid4())
-    with SetWorkflowID(wfuuid):
-        assert (await test_workflow(value, value)) == value
+    test_event_loop_id = id(asyncio.get_running_loop())
 
+    workflow_id = str(uuid.uuid4())
+    with SetWorkflowID(workflow_id):
+        assert (await test_workflow(value, value)) == value
+    # Verify the workflow runs in the test event loop
+    assert wf_event_loop_id == test_event_loop_id
     # Change the workflow status to pending
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.update(SystemSchema.workflow_status)
             .values({"status": "PENDING", "name": test_workflow.__qualname__})
-            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
+            .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
         )
 
-    # Recovery should execute the workflow again but skip the step
-    workflow_handles = DBOS._recover_pending_workflows()
-    assert len(workflow_handles) == 1
-    assert workflow_handles[0].get_result() == value
+    # Run recovery (which is fundamentally sync) in a thread
+    def recover_in_thread() -> List[WorkflowHandle[Any]]:
+        handles = DBOS._recover_pending_workflows()
+        assert len(handles) == 1
+        return handles[0].get_result()
+
+    recovered_result = await asyncio.to_thread(recover_in_thread)
+    assert recovered_result
     assert wf_counter == 2
     assert step_counter == 1
+    # Verify the recovered workflow runs in the test event loop
+    assert wf_event_loop_id == test_event_loop_id
 
     # Test that there was a recovery attempt of this
-    stat = await DBOS.get_workflow_status_async(workflow_handles[0].workflow_id)
+    stat = await DBOS.get_workflow_status_async(workflow_id)
     assert stat
     assert stat.recovery_attempts == 2
