@@ -519,7 +519,7 @@ def _execute_workflow_wthread(
                     functools.partial(func, *args, **kwargs)
                 )
             else:
-                output = dbos._sys_db.await_workflow_result(
+                output: R = dbos._sys_db.await_workflow_result(
                     status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL
                 )
                 return output
