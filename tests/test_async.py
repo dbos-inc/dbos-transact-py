@@ -734,7 +734,7 @@ async def test_workflow_recovery_async(dbos: DBOS, config: DBOSConfig) -> None:
         )
 
     # Run recovery (which is fundamentally sync) in a thread
-    def recover_in_thread() -> List[WorkflowHandle[Any]]:
+    def recover_in_thread() -> Any:
         handles = DBOS._recover_pending_workflows()
         assert len(handles) == 1
         return handles[0].get_result()
