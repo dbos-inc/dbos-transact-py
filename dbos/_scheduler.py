@@ -71,13 +71,6 @@ class _ScheduleThread:
                     f"{traceback.format_exc()}"
                 )
 
-    def changed(self, schedule: WorkflowSchedule) -> bool:
-        return (
-            self.workflow_name != schedule["workflow_name"]
-            or self.cron != schedule["schedule"]
-            or self.serialized_context != schedule["context"]
-        )
-
     @staticmethod
     def is_active(schedule: WorkflowSchedule) -> bool:
         return schedule.get("status", "ACTIVE") == "ACTIVE"
@@ -183,7 +176,7 @@ def dynamic_scheduler_loop(
     dbos = _get_dbos_instance()
 
     # Active schedule threads keyed by schedule_id
-    active_schedules: dict[str, _ScheduleThread] = {}
+    schedule_threads: dict[str, _ScheduleThread] = {}
 
     while not stop_event.is_set():
         try:
@@ -199,27 +192,22 @@ def dynamic_scheduler_loop(
         current_ids = {s["schedule_id"] for s in schedules}
 
         # Stop threads for deleted schedules
-        for schedule_id in list(active_schedules.keys()):
+        for schedule_id in list(schedule_threads.keys()):
             if schedule_id not in current_ids:
-                active_schedules[schedule_id].stop()
-                del active_schedules[schedule_id]
+                schedule_threads[schedule_id].stop()
+                del schedule_threads[schedule_id]
 
         # Start, restart, or stop threads based on schedule state
         for schedule in schedules:
             schedule_id = schedule["schedule_id"]
-            existing = active_schedules.get(schedule_id)
+            schedule_thread = schedule_threads.get(schedule_id)
             if not _ScheduleThread.is_active(schedule):
                 # Paused — stop the thread if running
-                if existing is not None:
-                    existing.stop()
-                    del active_schedules[schedule_id]
-            elif existing is None:
-                active_schedules[schedule_id] = _ScheduleThread(
-                    schedule, dbos._sys_db.serializer
-                )
-            elif existing.changed(schedule):
-                existing.stop()
-                active_schedules[schedule_id] = _ScheduleThread(
+                if schedule_thread is not None:
+                    schedule_thread.stop()
+                    del schedule_threads[schedule_id]
+            elif schedule_thread is None:
+                schedule_threads[schedule_id] = _ScheduleThread(
                     schedule, dbos._sys_db.serializer
                 )
 
@@ -227,5 +215,5 @@ def dynamic_scheduler_loop(
             break
 
     # Clean up all threads on shutdown
-    for st in active_schedules.values():
+    for st in schedule_threads.values():
         st.stop(join=True)
