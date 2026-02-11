@@ -71,6 +71,20 @@ async def test_simple_workflow(dbos: DBOS) -> None:
     assert TryConcExec.max_conc == 1
     assert TryConcExec.max_wf == 1
 
+    # Test workflow recovery
+    def recover_in_thread() -> None:
+        dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+        wfh1r = dbos._execute_workflow_id(wfid)
+        dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+        wfh2r = dbos._execute_workflow_id(wfid)
+        wfh1r.get_result()
+        wfh2r.get_result()
+
+    await asyncio.to_thread(recover_in_thread)
+
+    assert TryConcExec.max_conc == 1
+    assert TryConcExec.max_wf == 1
+
 
 @pytest.mark.asyncio
 async def test_step_undoredo(dbos: DBOS) -> None:
