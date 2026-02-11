@@ -597,6 +597,25 @@ def execute_workflow_by_id(
             inputs["args"] = (class_object,) + inputs["args"]
 
         with SetWorkflowID(workflow_id):
+            if inspect.iscoroutinefunction(wf_func):
+                ctx = get_local_dbos_context()
+                parent_ctx_copy = copy.copy(ctx)
+                child_ctx = DBOSContext.create_start_workflow_child(ctx)
+                async_handle = dbos._background_event_loop.submit_coroutine(
+                    start_workflow_async(
+                        dbos,
+                        parent_ctx_copy,
+                        child_ctx,
+                        wf_func,
+                        inputs["args"],
+                        inputs["kwargs"],
+                        queue_name=status["queue_name"],
+                        execute_workflow=True,
+                        is_recovery_request=is_recovery,
+                        is_dequeued_request=is_dequeue,
+                    )
+                )
+                return WorkflowHandlePolling(async_handle.get_workflow_id(), dbos)
             return start_workflow(
                 dbos,
                 wf_func,
