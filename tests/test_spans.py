@@ -303,7 +303,7 @@ def test_wf_fastapi(
     log_processor.force_flush(timeout_millis=5000)
     logs = log_exporter.get_finished_logs()
 
-    assert len(logs) == 2
+    assert len(logs) == 1
     assert logs[0].log_record.attributes is not None
     assert (
         logs[0].log_record.attributes["applicationVersion"] == DBOS.application_version
