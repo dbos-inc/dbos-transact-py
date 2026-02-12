@@ -10,10 +10,11 @@ import sqlalchemy as sa
 
 from dbos import DBOS, Queue, WorkflowHandle
 from dbos._client import DBOSClient
-from dbos._schemas.system_database import PortableWorkflowError, SystemSchema
+from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import (
     DBOSDefaultSerializer,
     DBOSPortableJSON,
+    PortableWorkflowError,
     WorkflowSerializationFormat,
 )
 
