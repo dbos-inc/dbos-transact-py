@@ -86,9 +86,8 @@ class Serializer(ABC):
     def deserialize(cls, serialized_data: str) -> Any:
         pass
 
-    @abstractmethod
     def name(self) -> str:
-        pass
+        return "custom_serializer"
 
 
 class DefaultSerializer(Serializer):
