@@ -2,7 +2,9 @@ import glob
 import os
 import subprocess
 import sys
+import threading
 import time
+import traceback
 from typing import Any, Callable, Generator, Optional, Tuple, TypeVar
 
 T = TypeVar("T")
@@ -283,5 +285,22 @@ def pytest_sessionfinish(session: Any, exitstatus: int) -> None:
 
 
 def pytest_unconfigure(config: Any) -> None:
+    print("Shutting down pytest")
+    non_daemon_threads = [
+        t
+        for t in threading.enumerate()
+        if t.is_alive() and not t.daemon and t is not threading.main_thread()
+    ]
+    if non_daemon_threads:
+        frames = sys._current_frames()
+        print(f"\n{len(non_daemon_threads)} active non-daemon background thread(s):")
+        for t in non_daemon_threads:
+            print(f"  - {t.name} (ident={t.ident}, class={type(t).__qualname__})")
+            frame = frames.get(t.ident)
+            if frame:
+                print("    Stack trace:")
+                for line in traceback.format_stack(frame):
+                    print(f"    {line}", end="")
+
     code = _EXIT_CODE if _EXIT_CODE is not None else 1
     sys.exit(code)
