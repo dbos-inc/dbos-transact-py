@@ -296,11 +296,12 @@ def pytest_unconfigure(config: Any) -> None:
         print(f"\n{len(non_daemon_threads)} active non-daemon background thread(s):")
         for t in non_daemon_threads:
             print(f"  - {t.name} (ident={t.ident}, class={type(t).__qualname__})")
-            frame = frames.get(t.ident)
-            if frame:
-                print("    Stack trace:")
-                for line in traceback.format_stack(frame):
-                    print(f"    {line}", end="")
+            if t.ident:
+                frame = frames.get(t.ident)
+                if frame:
+                    print("    Stack trace:")
+                    for line in traceback.format_stack(frame):
+                        print(f"    {line}", end="")
 
     code = _EXIT_CODE if _EXIT_CODE is not None else 1
     sys.exit(code)
