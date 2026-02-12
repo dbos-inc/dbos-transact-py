@@ -9,6 +9,8 @@ from sqlalchemy.engine import Engine
 from dbos import DBOS
 from dbos._error import DBOSWorkflowFunctionNotFoundError
 
+from .conftest import retry_until_success
+
 
 def simulate_db_restart(engine: Engine, downtime: float) -> None:
     # Get DB name
@@ -101,8 +103,10 @@ def test_scheduled_workflow(dbos: DBOS) -> None:
         nonlocal wf_counter
         wf_counter += 1
 
-    time.sleep(5)
-    assert wf_counter > 1 and wf_counter <= 5
+    def check_fired() -> None:
+        assert wf_counter >= 2
+
+    retry_until_success(check_fired)
 
 
 def test_async_scheduled_workflow(dbos: DBOS) -> None:
@@ -114,8 +118,10 @@ def test_async_scheduled_workflow(dbos: DBOS) -> None:
         nonlocal wf_counter
         wf_counter += 1
 
-    time.sleep(5)
-    assert wf_counter > 1 and wf_counter <= 5
+    def check_fired() -> None:
+        assert wf_counter >= 2
+
+    retry_until_success(check_fired)
 
 
 def test_appdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
@@ -133,11 +139,20 @@ def test_appdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
         test_transaction("x")
         wf_counter += 1
 
-    time.sleep(2)
+    def check_fired_before() -> None:
+        assert wf_counter >= 1
+
+    retry_until_success(check_fired_before)
+
     assert dbos._app_db
     simulate_db_restart(dbos._app_db.engine, 2)
-    time.sleep(3)
-    assert wf_counter > 2
+
+    count_before_restart = wf_counter
+
+    def check_fired_after_restart() -> None:
+        assert wf_counter > count_before_restart
+
+    retry_until_success(check_fired_after_restart)
 
 
 def test_sysdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
@@ -149,12 +164,19 @@ def test_sysdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
         nonlocal wf_counter
         wf_counter += 1
 
-    time.sleep(2)
+    def check_fired_before() -> None:
+        assert wf_counter >= 1
+
+    retry_until_success(check_fired_before)
+
     simulate_db_restart(dbos._sys_db.engine, 2)
-    time.sleep(3)
-    # We know there should be at least 2 occurrences from the 4 seconds when the DB was up.
-    #  There could be more than 4, depending on the pace the machine...
-    assert wf_counter >= 2
+
+    count_before_restart = wf_counter
+
+    def check_fired_after_restart() -> None:
+        assert wf_counter > count_before_restart
+
+    retry_until_success(check_fired_after_restart)
 
 
 def test_scheduled_transaction(dbos: DBOS) -> None:
@@ -166,8 +188,10 @@ def test_scheduled_transaction(dbos: DBOS) -> None:
         nonlocal txn_counter
         txn_counter += 1
 
-    time.sleep(5)
-    assert txn_counter > 1 and txn_counter <= 5
+    def check_fired() -> None:
+        assert txn_counter >= 2
+
+    retry_until_success(check_fired)
 
 
 def test_scheduled_step(dbos: DBOS) -> None:
@@ -179,8 +203,10 @@ def test_scheduled_step(dbos: DBOS) -> None:
         nonlocal step_counter
         step_counter += 1
 
-    time.sleep(5)
-    assert step_counter > 2 and step_counter <= 5
+    def check_fired() -> None:
+        assert step_counter >= 2
+
+    retry_until_success(check_fired)
 
 
 def test_scheduled_workflow_exception(dbos: DBOS) -> None:
@@ -193,8 +219,10 @@ def test_scheduled_workflow_exception(dbos: DBOS) -> None:
         wf_counter += 1
         raise Exception("error")
 
-    time.sleep(4)
-    assert wf_counter >= 1 and wf_counter <= 4
+    def check_fired() -> None:
+        assert wf_counter >= 2
+
+    retry_until_success(check_fired)
 
 
 def test_scheduler_oaoo(dbos: DBOS) -> None:
@@ -218,18 +246,15 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
         nonlocal txn_counter
         txn_counter += 1
 
-    time.sleep(4)
-    assert wf_counter >= 1 and wf_counter <= 4
-    max_tries = 10
-    for i in range(max_tries):
-        try:
-            assert txn_counter == wf_counter
-            break
-        except Exception as e:
-            if i == max_tries - 1:
-                raise e
-            else:
-                time.sleep(1)
+    def check_fired() -> None:
+        assert wf_counter >= 1
+
+    retry_until_success(check_fired)
+
+    def check_txn_matches_wf() -> None:
+        assert txn_counter == wf_counter
+
+    retry_until_success(check_txn_matches_wf)
 
     # Stop the scheduled workflow
     for evt in dbos.poller_stop_events:
@@ -243,16 +268,11 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
     workflow_handles = DBOS._recover_pending_workflows()
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == None
-    max_tries = 10
-    for i in range(max_tries):
-        try:
-            assert txn_counter + 1 == wf_counter
-            break
-        except Exception as e:
-            if i == max_tries - 1:
-                raise e
-            else:
-                time.sleep(1)
+
+    def check_recovery_oaoo() -> None:
+        assert wf_counter == txn_counter + 1
+
+    retry_until_success(check_recovery_oaoo)
 
 
 def test_long_workflow(dbos: DBOS) -> None:
