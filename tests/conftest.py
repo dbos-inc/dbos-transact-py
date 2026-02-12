@@ -276,15 +276,6 @@ def retry_until_success(
     raise RuntimeError("retry_until_success failed without an exception")
 
 
-# Force exit after test success or failure with appropriate error code
-_EXIT_CODE = None
-
-
-def pytest_sessionfinish(session: Any, exitstatus: int) -> None:
-    global _EXIT_CODE
-    _EXIT_CODE = 0 if exitstatus == 0 else 1
-
-
 def pytest_unconfigure(config: Any) -> None:
     print("Shutting down pytest")
     non_daemon_threads = [
@@ -303,6 +294,5 @@ def pytest_unconfigure(config: Any) -> None:
                     print("    Stack trace:")
                     for line in traceback.format_stack(frame):
                         print(f"    {line}", end="")
-
-    code = _EXIT_CODE if _EXIT_CODE is not None else 1
-    sys.exit(code)
+    else:
+        print("No active non-daemon threads")
