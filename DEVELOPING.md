@@ -1,4 +1,4 @@
-### Setting Up for Development
+### Setting Up for Development 
 
 #### Installing `pdm` and `venv`
 
