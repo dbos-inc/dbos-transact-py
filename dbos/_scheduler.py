@@ -2,7 +2,7 @@ import random
 import threading
 import traceback
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
 from ._context import SetWorkflowID
 from ._croniter import croniter  # type: ignore
@@ -14,6 +14,11 @@ from ._utils import INTERNAL_QUEUE_NAME
 
 if TYPE_CHECKING:
     from ._sys_db import SystemDatabase
+
+ScheduledWorkflow = (
+    Callable[[datetime, Any], None]
+    | Callable[[datetime, Any], Coroutine[Any, Any, None]]
+)
 
 
 class _ScheduleThread:

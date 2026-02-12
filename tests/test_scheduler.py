@@ -759,14 +759,16 @@ def test_client_pause_resume_schedule(client: DBOSClient) -> None:
 
 @pytest.mark.asyncio
 async def test_schedule_crud_async(dbos: DBOS) -> None:
+    received: list[Any] = []
+
     @DBOS.workflow()
-    def my_workflow(scheduled_at: datetime, ctx: Any) -> None:
-        pass
+    async def my_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        received.append(ctx)
 
     await DBOS.create_schedule_async(
         schedule_name="async-schedule",
         workflow_fn=my_workflow,
-        schedule="* * * * *",
+        schedule="* * * * * *",
         context={"async": True},
     )
 
@@ -777,7 +779,7 @@ async def test_schedule_crud_async(dbos: DBOS) -> None:
 
     sched = await DBOS.get_schedule_async("async-schedule")
     assert sched is not None
-    assert sched["schedule"] == "* * * * *"
+    assert sched["schedule"] == "* * * * * *"
     assert sched["context"] == {"async": True}
 
     assert await DBOS.get_schedule_async("nonexistent") is None
@@ -786,6 +788,13 @@ async def test_schedule_crud_async(dbos: DBOS) -> None:
     assert len(await DBOS.list_schedules_async(status="ACTIVE")) == 1
     assert len(await DBOS.list_schedules_async(schedule_name_prefix="async-")) == 1
     assert len(await DBOS.list_schedules_async(schedule_name_prefix="nope-")) == 0
+
+    # Verify the schedule actually fires
+    def check_fired() -> None:
+        assert len(received) >= 2
+        assert all(c == {"async": True} for c in received)
+
+    retry_until_success(check_fired)
 
     await DBOS.delete_schedule_async("async-schedule")
     assert await DBOS.get_schedule_async("async-schedule") is None

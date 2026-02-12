@@ -76,7 +76,12 @@ from ._registrations import (
     get_or_create_class_info,
 )
 from ._roles import default_required_roles, required_roles
-from ._scheduler import backfill_schedule, dynamic_scheduler_loop, trigger_schedule
+from ._scheduler import (
+    ScheduledWorkflow,
+    backfill_schedule,
+    dynamic_scheduler_loop,
+    trigger_schedule,
+)
 from ._scheduler_decorator import DecoratedScheduledWorkflow, scheduled
 from ._sys_db import (
     StepInfo,
@@ -1681,7 +1686,7 @@ class DBOS:
         cls,
         *,
         schedule_name: str,
-        workflow_fn: Callable[[datetime, Any], None],
+        workflow_fn: ScheduledWorkflow,
         schedule: str,
         context: Any = None,
     ) -> None:
@@ -1812,7 +1817,7 @@ class DBOS:
         cls,
         *,
         schedule_name: str,
-        workflow_fn: Callable[[datetime, Any], None],
+        workflow_fn: ScheduledWorkflow,
         schedule: str,
         context: Any = None,
     ) -> None:
