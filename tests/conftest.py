@@ -67,6 +67,7 @@ def default_config() -> DBOSConfig:
         ),
         "enable_otlp": False,
         "notification_listener_polling_interval_sec": 0.01,
+        "scheduler_polling_interval_sec": 1,
     }
 
 
@@ -261,7 +262,7 @@ def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
 
 
 def retry_until_success(
-    func: Callable[[], T], interval: float = 1, max_attempts: int = 5
+    func: Callable[[], T], interval: float = 1, max_attempts: int = 10
 ) -> T:
     error: Optional[Exception] = None
     for _ in range(max_attempts):

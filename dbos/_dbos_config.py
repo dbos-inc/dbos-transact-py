@@ -45,6 +45,7 @@ class DBOSConfig(TypedDict, total=False):
         serializer (Serializer): A custom serializer and deserializer DBOS uses when storing program data in the system database
         use_listen_notify (bool): Whether to use LISTEN/NOTIFY or polling to listen for notifications and events.  Defaults to True. As this affects migrations, may not be changed after the system database is first created.
         notification_listener_polling_interval_sec (float): Polling interval in seconds for the notification listener background process. Defaults to 1.0. Minimum value is 0.001. Lower values can speed up test execution.
+        scheduler_polling_interval_sec (float): Polling interval in seconds for the scheduler thread to detect new workflow schedules. Defaults to 30.0.
     """
 
     name: str
@@ -73,6 +74,7 @@ class DBOSConfig(TypedDict, total=False):
     use_listen_notify: Optional[bool]
     max_executor_threads: Optional[int]
     notification_listener_polling_interval_sec: Optional[float]
+    scheduler_polling_interval_sec: Optional[float]
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -82,6 +84,7 @@ class RuntimeConfig(TypedDict, total=False):
     run_admin_server: Optional[bool]
     max_executor_threads: Optional[int]
     notification_listener_polling_interval_sec: Optional[float]
+    scheduler_polling_interval_sec: Optional[float]
 
 
 class DatabaseConfig(TypedDict, total=False):
@@ -177,6 +180,10 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         translated_config["runtimeConfig"][
             "notification_listener_polling_interval_sec"
         ] = interval
+    if "scheduler_polling_interval_sec" in config:
+        translated_config["runtimeConfig"]["scheduler_polling_interval_sec"] = config[
+            "scheduler_polling_interval_sec"
+        ]
 
     # Telemetry config
     enable_otlp = config.get("enable_otlp", None)

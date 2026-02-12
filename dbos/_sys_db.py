@@ -39,6 +39,7 @@ from ._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSConflictingWorkflowError,
+    DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
@@ -224,6 +225,22 @@ class GetPendingWorkflowsOutput:
     def __init__(self, *, workflow_id: str, queue_name: Optional[str] = None):
         self.workflow_id: str = workflow_id
         self.queue_name: Optional[str] = queue_name
+
+
+class WorkflowSchedule(TypedDict):
+    schedule_id: str
+    schedule_name: str
+    workflow_name: str
+    schedule: str
+    status: str
+    context: Any
+
+
+class ClientScheduleInput(TypedDict):
+    schedule_name: str
+    workflow_name: str
+    schedule: str
+    context: Any
 
 
 class StepInfo(TypedDict):
@@ -2854,3 +2871,189 @@ class SystemDatabase(ABC):
                             function_id=stream["function_id"],
                         )
                     )
+
+    # ── Schedule CRUD ─────────────────────────────────────────────
+
+    def create_schedule(
+        self, schedule: WorkflowSchedule, conn: Optional[sa.Connection] = None
+    ) -> None:
+        def _do(c: sa.Connection) -> None:
+            try:
+                c.execute(
+                    sa.insert(SystemSchema.workflow_schedules).values(
+                        schedule_id=schedule["schedule_id"],
+                        schedule_name=schedule["schedule_name"],
+                        workflow_name=schedule["workflow_name"],
+                        schedule=schedule["schedule"],
+                        status=schedule["status"],
+                        context=schedule["context"],
+                    )
+                )
+            except sa.exc.IntegrityError:
+                raise DBOSException(
+                    f"Schedule '{schedule['schedule_name']}' already exists"
+                )
+
+        if conn is not None:
+            _do(conn)
+        else:
+            with self.engine.begin() as c:
+                _do(c)
+
+    def list_schedules(
+        self,
+        *,
+        status: Optional[Union[str, List[str]]] = None,
+        workflow_name: Optional[Union[str, List[str]]] = None,
+        schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+        conn: Optional[sa.Connection] = None,
+    ) -> List[WorkflowSchedule]:
+        def _do(c: sa.Connection) -> List[WorkflowSchedule]:
+            query = sa.select(
+                SystemSchema.workflow_schedules.c.schedule_id,
+                SystemSchema.workflow_schedules.c.schedule_name,
+                SystemSchema.workflow_schedules.c.workflow_name,
+                SystemSchema.workflow_schedules.c.schedule,
+                SystemSchema.workflow_schedules.c.status,
+                SystemSchema.workflow_schedules.c.context,
+            )
+            if status is not None:
+                vals = [status] if isinstance(status, str) else status
+                query = query.where(SystemSchema.workflow_schedules.c.status.in_(vals))
+            if workflow_name is not None:
+                vals = (
+                    [workflow_name] if isinstance(workflow_name, str) else workflow_name
+                )
+                query = query.where(
+                    SystemSchema.workflow_schedules.c.workflow_name.in_(vals)
+                )
+            if schedule_name_prefix is not None:
+                prefixes = (
+                    [schedule_name_prefix]
+                    if isinstance(schedule_name_prefix, str)
+                    else schedule_name_prefix
+                )
+                query = query.where(
+                    sa.or_(
+                        *(
+                            SystemSchema.workflow_schedules.c.schedule_name.startswith(
+                                p
+                            )
+                            for p in prefixes
+                        )
+                    )
+                )
+            rows = c.execute(query).fetchall()
+            return [
+                WorkflowSchedule(
+                    schedule_id=row[0],
+                    schedule_name=row[1],
+                    workflow_name=row[2],
+                    schedule=row[3],
+                    status=row[4],
+                    context=row[5],
+                )
+                for row in rows
+            ]
+
+        if conn is not None:
+            return _do(conn)
+        with self.engine.begin() as c:
+            return _do(c)
+
+    def get_schedule(
+        self, name: str, conn: Optional[sa.Connection] = None
+    ) -> Optional[WorkflowSchedule]:
+        def _do(c: sa.Connection) -> Optional[WorkflowSchedule]:
+            row = c.execute(
+                sa.select(
+                    SystemSchema.workflow_schedules.c.schedule_id,
+                    SystemSchema.workflow_schedules.c.schedule_name,
+                    SystemSchema.workflow_schedules.c.workflow_name,
+                    SystemSchema.workflow_schedules.c.schedule,
+                    SystemSchema.workflow_schedules.c.status,
+                    SystemSchema.workflow_schedules.c.context,
+                ).where(SystemSchema.workflow_schedules.c.schedule_name == name)
+            ).fetchone()
+            if row is None:
+                return None
+            return WorkflowSchedule(
+                schedule_id=row[0],
+                schedule_name=row[1],
+                workflow_name=row[2],
+                schedule=row[3],
+                status=row[4],
+                context=row[5],
+            )
+
+        if conn is not None:
+            return _do(conn)
+        with self.engine.begin() as c:
+            return _do(c)
+
+    def _set_schedule_status(
+        self, name: str, status: str, conn: Optional[sa.Connection] = None
+    ) -> None:
+        def _do(c: sa.Connection) -> None:
+            c.execute(
+                sa.update(SystemSchema.workflow_schedules)
+                .where(SystemSchema.workflow_schedules.c.schedule_name == name)
+                .values(status=status)
+            )
+
+        if conn is not None:
+            _do(conn)
+        else:
+            with self.engine.begin() as c:
+                _do(c)
+
+    def pause_schedule(self, name: str, conn: Optional[sa.Connection] = None) -> None:
+        self._set_schedule_status(name, "PAUSED", conn)
+
+    def resume_schedule(self, name: str, conn: Optional[sa.Connection] = None) -> None:
+        self._set_schedule_status(name, "ACTIVE", conn)
+
+    def delete_schedule(self, name: str, conn: Optional[sa.Connection] = None) -> None:
+        def _do(c: sa.Connection) -> None:
+            c.execute(
+                sa.delete(SystemSchema.workflow_schedules).where(
+                    SystemSchema.workflow_schedules.c.schedule_name == name
+                )
+            )
+
+        if conn is not None:
+            _do(conn)
+        else:
+            with self.engine.begin() as c:
+                _do(c)
+
+    @db_retry()
+    def call_txn_as_step(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        function_name: str,
+        op: Callable[[sa.Connection], T],
+    ) -> T:
+        start_time = int(time.time() * 1000)
+        with self.engine.begin() as c:
+            recorded = self._check_operation_execution_txn(
+                workflow_uuid, function_id, function_name, conn=c
+            )
+            if recorded is not None:
+                assert recorded["output"] is not None
+                recorded_output: SystemDatabase.T = self.serializer.deserialize(
+                    recorded["output"]
+                )
+                return recorded_output
+            result = op(c)
+            output: OperationResultInternal = {
+                "workflow_uuid": workflow_uuid,
+                "function_id": function_id,
+                "function_name": function_name,
+                "started_at_epoch_ms": start_time,
+                "output": (self.serializer.serialize(result)),
+                "error": None,
+            }
+            self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
+            return result
