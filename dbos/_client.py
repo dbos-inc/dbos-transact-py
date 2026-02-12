@@ -1,14 +1,17 @@
 import asyncio
 import json
 import time
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Dict,
     Generator,
     Generic,
     List,
     Optional,
+    Tuple,
     TypedDict,
     TypeVar,
     Union,
@@ -24,14 +27,18 @@ from dbos._utils import generate_uuid
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 
+from dbos._croniter import croniter  # type: ignore
 from dbos._dbos_config import get_system_database_url, is_valid_database_url
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
+from dbos._scheduler import backfill_schedule, trigger_schedule
 from dbos._serialization import DefaultSerializer, Serializer, WorkflowInputs
 from dbos._sys_db import (
+    ClientScheduleInput,
     EnqueueOptionsInternal,
     StepInfo,
     SystemDatabase,
+    WorkflowSchedule,
     WorkflowStatus,
     WorkflowStatusInternal,
     WorkflowStatusString,
@@ -629,3 +636,196 @@ class DBOSClient:
                     break
                 await asyncio.sleep(1.0)
                 continue
+
+    def create_schedule(
+        self,
+        *,
+        schedule_name: str,
+        workflow_name: str,
+        schedule: str,
+        context: Any = None,
+    ) -> None:
+        """
+        Create a cron schedule that periodically invokes a workflow.
+
+        Args:
+            schedule_name: Unique name identifying this schedule.
+            workflow_name: Fully-qualified name of the workflow function to invoke.
+            schedule: A cron expression (supports seconds with 6 fields).
+            context: A context object passed as the second argument to every invocation. Defaults to ``None``.
+
+        Raises:
+            DBOSException: If the cron expression is invalid or a schedule with the same name already exists.
+        """
+        if not croniter.is_valid(schedule, second_at_beginning=True):
+            raise DBOSException(f"Invalid cron schedule: '{schedule}'")
+        self._sys_db.create_schedule(
+            WorkflowSchedule(
+                schedule_id=generate_uuid(),
+                schedule_name=schedule_name,
+                workflow_name=workflow_name,
+                schedule=schedule,
+                status="ACTIVE",
+                context=self._sys_db.serializer.serialize(context),
+            )
+        )
+
+    def list_schedules(
+        self,
+        *,
+        status: Optional[Union[str, List[str]]] = None,
+        workflow_name: Optional[Union[str, List[str]]] = None,
+        schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+    ) -> List[WorkflowSchedule]:
+        """
+        Return all registered workflow schedules, optionally filtered.
+
+        Args:
+            status: Filter by status (e.g. ``"ACTIVE"``) or a list of statuses
+            workflow_name: Filter by workflow name or a list of names
+            schedule_name_prefix: Filter by schedule name prefix or a list of prefixes
+        """
+        schedules = self._sys_db.list_schedules(
+            status=status,
+            workflow_name=workflow_name,
+            schedule_name_prefix=schedule_name_prefix,
+        )
+        for s in schedules:
+            s["context"] = self._sys_db.serializer.deserialize(s["context"])
+        return schedules
+
+    def get_schedule(self, name: str) -> Optional[WorkflowSchedule]:
+        """Return the schedule with the given name, or ``None`` if it does not exist."""
+        schedule = self._sys_db.get_schedule(name)
+        if schedule is not None:
+            schedule["context"] = self._sys_db.serializer.deserialize(
+                schedule["context"]
+            )
+        return schedule
+
+    def delete_schedule(self, name: str) -> None:
+        """Delete the schedule with the given name. No-op if it does not exist."""
+        self._sys_db.delete_schedule(name)
+
+    async def create_schedule_async(
+        self,
+        *,
+        schedule_name: str,
+        workflow_name: str,
+        schedule: str,
+        context: Any = None,
+    ) -> None:
+        """Async version of :meth:`create_schedule`."""
+        await asyncio.to_thread(
+            self.create_schedule,
+            schedule_name=schedule_name,
+            workflow_name=workflow_name,
+            schedule=schedule,
+            context=context,
+        )
+
+    async def list_schedules_async(
+        self,
+        *,
+        status: Optional[Union[str, List[str]]] = None,
+        workflow_name: Optional[Union[str, List[str]]] = None,
+        schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+    ) -> List[WorkflowSchedule]:
+        """Async version of :meth:`list_schedules`."""
+        return await asyncio.to_thread(
+            self.list_schedules,
+            status=status,
+            workflow_name=workflow_name,
+            schedule_name_prefix=schedule_name_prefix,
+        )
+
+    async def get_schedule_async(self, name: str) -> Optional[WorkflowSchedule]:
+        """Async version of :meth:`get_schedule`."""
+        return await asyncio.to_thread(self.get_schedule, name)
+
+    async def delete_schedule_async(self, name: str) -> None:
+        """Async version of :meth:`delete_schedule`."""
+        await asyncio.to_thread(self.delete_schedule, name)
+
+    def pause_schedule(self, name: str) -> None:
+        """Pause the schedule with the given name. A paused schedule does not fire."""
+        self._sys_db.pause_schedule(name)
+
+    def resume_schedule(self, name: str) -> None:
+        """Resume a paused schedule so it begins firing again."""
+        self._sys_db.resume_schedule(name)
+
+    def apply_schedules(
+        self,
+        schedules: List[ClientScheduleInput],
+    ) -> None:
+        """
+        Atomically create or replace a set of schedules.
+
+        Args:
+            schedules: A list of schedule inputs, each containing ``schedule_name``, ``workflow_name``, ``schedule`` (cron), and ``context``.
+
+        Raises:
+            DBOSException: If a cron expression is invalid
+        """
+        to_apply: List[WorkflowSchedule] = []
+        for entry in schedules:
+            cron = entry["schedule"]
+            if not croniter.is_valid(cron, second_at_beginning=True):
+                raise DBOSException(f"Invalid cron schedule: '{cron}'")
+            to_apply.append(
+                WorkflowSchedule(
+                    schedule_id=generate_uuid(),
+                    schedule_name=entry["schedule_name"],
+                    workflow_name=entry["workflow_name"],
+                    schedule=cron,
+                    status="ACTIVE",
+                    context=self._sys_db.serializer.serialize(entry["context"]),
+                )
+            )
+        with self._sys_db.engine.begin() as c:
+            for sched in to_apply:
+                self._sys_db.delete_schedule(sched["schedule_name"], conn=c)
+                self._sys_db.create_schedule(sched, conn=c)
+
+    def backfill_schedule(
+        self, schedule_name: str, start: datetime, end: datetime
+    ) -> List["WorkflowHandle[None]"]:
+        """
+        Enqueue all executions of a schedule that would have run between ``start`` and ``end``.
+
+        Each execution uses the same deterministic workflow ID as the live scheduler,
+        so already-executed times are skipped.
+
+        Args:
+            schedule_name: Name of an existing schedule
+            start: Start of the backfill window (exclusive)
+            end: End of the backfill window (exclusive)
+
+        Returns:
+            A list of workflow handles for each enqueued execution.
+
+        Raises:
+            DBOSException: If the schedule does not exist
+        """
+        workflow_ids = backfill_schedule(self._sys_db, schedule_name, start, end)
+        return [
+            WorkflowHandleClientPolling[None](wf_id, self._sys_db)
+            for wf_id in workflow_ids
+        ]
+
+    def trigger_schedule(self, schedule_name: str) -> "WorkflowHandle[None]":
+        """
+        Immediately enqueue the scheduled workflow at the current time.
+
+        Args:
+            schedule_name: Name of an existing schedule
+
+        Returns:
+            A workflow handle for the enqueued execution.
+
+        Raises:
+            DBOSException: If the schedule does not exist
+        """
+        workflow_id = trigger_schedule(self._sys_db, schedule_name)
+        return WorkflowHandleClientPolling[None](workflow_id, self._sys_db)
