@@ -8,6 +8,6 @@
     "esbuild": "^0.27.2"
   },
   "dependencies": {
-    "@dbos-inc/dbos-sdk": "file:../../../dbos-transact/dbos-inc-dbos-sdk-0.0.0-placeholder.tgz"
+    "@dbos-inc/dbos-sdk": "^4.9.4-preview"
   }
 }
