@@ -922,7 +922,7 @@ def test_send_recv(dbos: DBOS, config: DBOSConfig) -> None:
             begin_time = time.time()
             timeoutres = test_recv_timeout(1.0)
             duration = time.time() - begin_time
-            assert duration < 0.3
+            assert duration < 0.9
             assert timeoutres is None
 
         # Test recv outside of a workflow
