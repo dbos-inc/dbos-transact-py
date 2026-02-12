@@ -1,6 +1,4 @@
 import asyncio
-import threading
-import time
 import uuid
 from typing import List
 
@@ -16,38 +14,38 @@ from tests.conftest import queue_entries_are_cleaned_up
 async def test_cancel_workflow_async(dbos: DBOS) -> None:
     """Test async cancel_workflow method."""
     steps_completed = 0
-    workflow_event = threading.Event()
-    main_thread_event = threading.Event()
+    workflow_event = asyncio.Event()
+    main_event = asyncio.Event()
     input_val = 5
 
     @DBOS.step()
-    def step_one() -> None:
+    async def step_one() -> None:
         nonlocal steps_completed
         steps_completed += 1
 
     @DBOS.step()
-    def step_two() -> None:
+    async def step_two() -> None:
         nonlocal steps_completed
         steps_completed += 1
 
     @DBOS.workflow()
-    def simple_workflow(x: int) -> int:
-        step_one()
-        main_thread_event.set()
-        workflow_event.wait()
-        step_two()
+    async def simple_workflow(x: int) -> int:
+        await step_one()
+        main_event.set()
+        await workflow_event.wait()
+        await step_two()
         return x
 
     # Start the workflow and cancel it async
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        handle = DBOS.start_workflow(simple_workflow, input_val)
-    main_thread_event.wait()
+        handle = await DBOS.start_workflow_async(simple_workflow, input_val)
+    await main_event.wait()
     await DBOS.cancel_workflow_async(wfid)
     workflow_event.set()
 
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
-        handle.get_result()
+        await handle.get_result()
     assert steps_completed == 1
 
 
@@ -55,38 +53,38 @@ async def test_cancel_workflow_async(dbos: DBOS) -> None:
 async def test_resume_workflow_async(dbos: DBOS) -> None:
     """Test async resume_workflow method."""
     steps_completed = 0
-    workflow_event = threading.Event()
-    main_thread_event = threading.Event()
+    workflow_event = asyncio.Event()
+    main_event = asyncio.Event()
     input_val = 5
 
     @DBOS.step()
-    def step_one() -> None:
+    async def step_one() -> None:
         nonlocal steps_completed
         steps_completed += 1
 
     @DBOS.step()
-    def step_two() -> None:
+    async def step_two() -> None:
         nonlocal steps_completed
         steps_completed += 1
 
     @DBOS.workflow()
-    def simple_workflow(x: int) -> int:
-        step_one()
-        main_thread_event.set()
-        workflow_event.wait()
-        step_two()
+    async def simple_workflow(x: int) -> int:
+        await step_one()
+        main_event.set()
+        await workflow_event.wait()
+        await step_two()
         return x
 
     # Start the workflow and cancel it
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        handle = DBOS.start_workflow(simple_workflow, input_val)
-    main_thread_event.wait()
+        handle = await DBOS.start_workflow_async(simple_workflow, input_val)
+    await main_event.wait()
     await DBOS.cancel_workflow_async(wfid)
     workflow_event.set()
 
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
-        handle.get_result()
+        await handle.get_result()
     assert steps_completed == 1
 
     # Resume the workflow async
@@ -102,34 +100,35 @@ async def test_fork_workflow_async(dbos: DBOS) -> None:
     step_two_count = 0
     step_three_count = 0
 
-    @DBOS.workflow()
-    def simple_workflow(x: int) -> int:
-        return step_one(x) + step_two(x) + step_three(x)
-
     @DBOS.step()
-    def step_one(x: int) -> int:
+    async def step_one(x: int) -> int:
         nonlocal step_one_count
         step_one_count += 1
         return x + 1
 
     @DBOS.step()
-    def step_two(x: int) -> int:
+    async def step_two(x: int) -> int:
         nonlocal step_two_count
         step_two_count += 1
         return x + 2
 
     @DBOS.step()
-    def step_three(x: int) -> int:
+    async def step_three(x: int) -> int:
         nonlocal step_three_count
         step_three_count += 1
         return x + 3
+
+    @DBOS.workflow()
+    async def simple_workflow(x: int) -> int:
+        return await step_one(x) + await step_two(x) + await step_three(x)
 
     input_val = 1
     output = 3 * input_val + 6
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        assert await asyncio.to_thread(simple_workflow, input_val) == output
+        handle = await DBOS.start_workflow_async(simple_workflow, input_val)
+        assert await handle.get_result() == output
 
     assert step_one_count == 1
     assert step_two_count == 1
@@ -152,7 +151,7 @@ async def test_list_workflows_async(dbos: DBOS) -> None:
     workflow_ids = []
 
     @DBOS.workflow()
-    def simple_workflow(x: int) -> int:
+    async def simple_workflow(x: int) -> int:
         return x
 
     # Create a few workflows
@@ -160,8 +159,8 @@ async def test_list_workflows_async(dbos: DBOS) -> None:
         wfid = str(uuid.uuid4())
         workflow_ids.append(wfid)
         with SetWorkflowID(wfid):
-            handle = DBOS.start_workflow(simple_workflow, i)
-            handle.get_result()
+            handle = await DBOS.start_workflow_async(simple_workflow, i)
+            await handle.get_result()
 
     # List workflows async
     workflows: List[WorkflowStatus] = await DBOS.list_workflows_async()
@@ -184,17 +183,17 @@ async def test_list_workflows_async(dbos: DBOS) -> None:
 async def test_list_queued_workflows_async(dbos: DBOS) -> None:
     """Test async list_queued_workflows method."""
     queue = Queue("test_queue_async")
-    workflow_event = threading.Event()
+    workflow_event = asyncio.Event()
 
     @DBOS.workflow()
-    def blocking_workflow(x: int) -> int:
-        workflow_event.wait()
+    async def blocking_workflow(x: int) -> int:
+        await workflow_event.wait()
         return x
 
     # Enqueue a workflow but don't let it complete yet
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        handle = queue.enqueue(blocking_workflow, 42)
+        handle = await queue.enqueue_async(blocking_workflow, 42)
 
     # List queued workflows async while workflow is still running
     queued_workflows = await DBOS.list_queued_workflows_async(
@@ -207,7 +206,7 @@ async def test_list_queued_workflows_async(dbos: DBOS) -> None:
 
     # Let the workflow complete
     workflow_event.set()
-    handle.get_result()
+    await handle.get_result()
 
     assert queue_entries_are_cleaned_up(dbos)
 
@@ -216,24 +215,24 @@ async def test_list_queued_workflows_async(dbos: DBOS) -> None:
 async def test_list_workflow_steps_async(dbos: DBOS) -> None:
     """Test async list_workflow_steps method."""
 
-    @DBOS.workflow()
-    def simple_workflow(x: int) -> int:
-        step_one(x)
-        step_two(x)
-        return x
-
     @DBOS.step()
-    def step_one(x: int) -> int:
+    async def step_one(x: int) -> int:
         return x + 1
 
     @DBOS.step()
-    def step_two(x: int) -> int:
+    async def step_two(x: int) -> int:
         return x + 2
+
+    @DBOS.workflow()
+    async def simple_workflow(x: int) -> int:
+        await step_one(x)
+        await step_two(x)
+        return x
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        handle = DBOS.start_workflow(simple_workflow, 1)
-        handle.get_result()
+        handle = await DBOS.start_workflow_async(simple_workflow, 1)
+        await handle.get_result()
 
     # List workflow steps async
     steps: List[StepInfo] = await DBOS.list_workflow_steps_async(wfid)
