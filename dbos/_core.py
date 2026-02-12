@@ -437,20 +437,12 @@ def _get_wf_invoke_func(
             )
             return recorded_result
         try:
-            owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
-            if owned:
-                if inspect.iscoroutinefunction(func):
-                    output = dbos._background_event_loop.submit_coroutine(
-                        cast(Coroutine[Any, Any, R], func())
-                    )
-                else:
-                    output = func()
-            else:
-                # Await the workflow result
-                output = dbos._sys_db.await_workflow_result(
-                    status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL
+            if inspect.iscoroutinefunction(func):
+                output = dbos._background_event_loop.submit_coroutine(
+                    cast(Coroutine[Any, Any, R], func())
                 )
-                return output
+            else:
+                output = func()
 
             dbos._sys_db.update_workflow_outcome(
                 status["workflow_uuid"],
@@ -473,9 +465,6 @@ def _get_wf_invoke_func(
                 error=dbos._serializer.serialize(error),
             )
             raise
-        finally:
-            if owned:
-                dbos._active_workflows_set.release(status["workflow_uuid"])
 
     return persist
 
@@ -523,15 +512,25 @@ def _execute_workflow_wthread(
         "operationType": OperationType.WORKFLOW.value,
     }
     with EnterDBOSWorkflow(attributes, ctx):
+        owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
         try:
-            return _get_wf_invoke_func(dbos, status)(
-                functools.partial(func, *args, **kwargs)
-            )
+            if owned:
+                return _get_wf_invoke_func(dbos, status)(
+                    functools.partial(func, *args, **kwargs)
+                )
+            else:
+                output: R = dbos._sys_db.await_workflow_result(
+                    status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL
+                )
+                return output
         except Exception as e:
             dbos.logger.error(
                 f"Exception encountered in asynchronous workflow:", exc_info=e
             )
             raise
+        finally:
+            if owned:
+                dbos._active_workflows_set.release(status["workflow_uuid"])
 
 
 async def _execute_workflow_async(
@@ -547,16 +546,30 @@ async def _execute_workflow_async(
         "operationType": OperationType.WORKFLOW.value,
     }
     with EnterDBOSWorkflow(attributes, ctx):
+        owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
         try:
-            result = Pending[R](functools.partial(func, *args, **kwargs)).then(
-                _get_wf_invoke_func(dbos, status)
-            )
-            return await result()
+            if owned:
+                result = Pending[R](functools.partial(func, *args, **kwargs)).then(
+                    _get_wf_invoke_func(dbos, status)
+                )
+                return await result()
+            else:
+
+                def fn() -> Any:
+                    return dbos._sys_db.await_workflow_result(
+                        status["workflow_uuid"],
+                        polling_interval=DEFAULT_POLLING_INTERVAL,
+                    )
+
+                return await asyncio.to_thread(fn)
         except Exception as e:
             dbos.logger.error(
                 f"Exception encountered in asynchronous workflow:", exc_info=e
             )
             raise
+        finally:
+            if owned:
+                dbos._active_workflows_set.release(status["workflow_uuid"])
 
 
 def execute_workflow_by_id(
@@ -597,6 +610,25 @@ def execute_workflow_by_id(
             inputs["args"] = (class_object,) + inputs["args"]
 
         with SetWorkflowID(workflow_id):
+            if inspect.iscoroutinefunction(wf_func):
+                ctx = get_local_dbos_context()
+                parent_ctx_copy = copy.copy(ctx)
+                child_ctx = DBOSContext.create_start_workflow_child(ctx)
+                async_handle = dbos._background_event_loop.submit_coroutine(
+                    start_workflow_async(
+                        dbos,
+                        parent_ctx_copy,
+                        child_ctx,
+                        wf_func,
+                        inputs["args"],
+                        inputs["kwargs"],
+                        queue_name=status["queue_name"],
+                        execute_workflow=True,
+                        is_recovery_request=is_recovery,
+                        is_dequeued_request=is_dequeue,
+                    )
+                )
+                return WorkflowHandlePolling(async_handle.get_workflow_id(), dbos)
             return start_workflow(
                 dbos,
                 wf_func,
