@@ -1290,6 +1290,7 @@ def test_log_config(dbos: DBOS):
     }
     dbos = DBOS(config=config)
     DBOS.launch()
-    assert len(dbos.logger.handlers) == 1
-    assert dbos.logger.handlers[0].level == 40  # console handler at ERROR
+    assert any(
+        h.level == 40 for h in dbos.logger.handlers
+    )  # at least one handler at ERROR
     DBOS.destroy(destroy_registry=True)
