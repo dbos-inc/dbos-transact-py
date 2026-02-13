@@ -8,7 +8,13 @@ from ._context import (
     SetWorkflowTimeout,
 )
 from ._core import StepOptions
-from ._dbos import DBOS, DBOSConfiguredInstance, WorkflowHandle, WorkflowHandleAsync
+from ._dbos import (
+    DBOS,
+    DBOSConfiguredInstance,
+    ScheduleInput,
+    WorkflowHandle,
+    WorkflowHandleAsync,
+)
 from ._dbos_config import DBOSConfig
 from ._debouncer import Debouncer, DebouncerClient
 from ._kafka_message import KafkaMessage
@@ -18,7 +24,13 @@ from ._serialization import (
     Serializer,
     WorkflowSerializationFormat,
 )
-from ._sys_db import StepInfo, WorkflowStatus, WorkflowStatusString
+from ._sys_db import (
+    ClientScheduleInput,
+    StepInfo,
+    WorkflowSchedule,
+    WorkflowStatus,
+    WorkflowStatusString,
+)
 from .cli.migration import run_dbos_database_migrations
 
 __all__ = [
@@ -28,6 +40,7 @@ __all__ = [
     "DBOSConfiguredInstance",
     "DBOSContextEnsure",
     "DBOSContextSetAuth",
+    "ScheduleInput",
     "EnqueueOptions",
     "KafkaMessage",
     "PortableWorkflowError",
@@ -39,6 +52,8 @@ __all__ = [
     "WorkflowHandle",
     "WorkflowHandleAsync",
     "WorkflowSerializationFormat",
+    "WorkflowSchedule",
+    "ClientScheduleInput",
     "WorkflowStatus",
     "WorkflowStatusString",
     "error",

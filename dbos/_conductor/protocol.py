@@ -3,7 +3,8 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Type, TypedDict, TypeVar, Union
 
-from dbos._sys_db import StepInfo, WorkflowStatus
+from dbos._serialization import Serializer
+from dbos._sys_db import StepInfo, WorkflowSchedule, WorkflowStatus
 
 
 class MessageType(str, Enum):
@@ -24,6 +25,12 @@ class MessageType(str, Enum):
     ALERT = "alert"
     EXPORT_WORKFLOW = "export_workflow"
     IMPORT_WORKFLOW = "import_workflow"
+    LIST_SCHEDULES = "list_schedules"
+    GET_SCHEDULE = "get_schedule"
+    PAUSE_SCHEDULE = "pause_schedule"
+    RESUME_SCHEDULE = "resume_schedule"
+    BACKFILL_SCHEDULE = "backfill_schedule"
+    TRIGGER_SCHEDULE = "trigger_schedule"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -432,4 +439,105 @@ class ImportWorkflowRequest(BaseMessage):
 @dataclass
 class ImportWorkflowResponse(BaseMessage):
     success: bool
+    error_message: Optional[str] = None
+
+
+# --- Schedule messages ---
+
+
+@dataclass
+class ScheduleOutput:
+    schedule_id: str
+    schedule_name: str
+    workflow_name: str
+    schedule: str
+    status: str
+    context: str
+
+    @classmethod
+    def from_schedule(
+        cls, s: WorkflowSchedule, serializer: Serializer
+    ) -> "ScheduleOutput":
+        context_str = str(serializer.deserialize(s["context"]))
+        return cls(
+            schedule_id=s["schedule_id"],
+            schedule_name=s["schedule_name"],
+            workflow_name=s["workflow_name"],
+            schedule=s["schedule"],
+            status=s["status"],
+            context=context_str,
+        )
+
+
+class ListSchedulesBody(TypedDict, total=False):
+    status: Optional[Union[str, List[str]]]
+    workflow_name: Optional[Union[str, List[str]]]
+    schedule_name_prefix: Optional[Union[str, List[str]]]
+
+
+@dataclass
+class ListSchedulesRequest(BaseMessage):
+    body: ListSchedulesBody
+
+
+@dataclass
+class ListSchedulesResponse(BaseMessage):
+    output: List[ScheduleOutput]
+    error_message: Optional[str] = None
+
+
+@dataclass
+class GetScheduleRequest(BaseMessage):
+    schedule_name: str
+
+
+@dataclass
+class GetScheduleResponse(BaseMessage):
+    output: Optional[ScheduleOutput]
+    error_message: Optional[str] = None
+
+
+@dataclass
+class PauseScheduleRequest(BaseMessage):
+    schedule_name: str
+
+
+@dataclass
+class PauseScheduleResponse(BaseMessage):
+    success: bool
+    error_message: Optional[str] = None
+
+
+@dataclass
+class ResumeScheduleRequest(BaseMessage):
+    schedule_name: str
+
+
+@dataclass
+class ResumeScheduleResponse(BaseMessage):
+    success: bool
+    error_message: Optional[str] = None
+
+
+@dataclass
+class BackfillScheduleRequest(BaseMessage):
+    schedule_name: str
+    start: str  # ISO 8601
+    end: str  # ISO 8601
+
+
+@dataclass
+class BackfillScheduleResponse(BaseMessage):
+    workflow_ids: List[str]
+    error_message: Optional[str] = None
+
+
+@dataclass
+class TriggerScheduleRequest(BaseMessage):
+    schedule_name: str
+
+
+@dataclass
+class TriggerScheduleResponse(BaseMessage):
+    workflow_id: Optional[str]
     error_message: Optional[str] = None

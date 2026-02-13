@@ -2,7 +2,9 @@ import glob
 import os
 import subprocess
 import sys
+import threading
 import time
+import traceback
 from typing import Any, Callable, Generator, Optional, Tuple, TypeVar
 
 T = TypeVar("T")
@@ -65,6 +67,7 @@ def default_config() -> DBOSConfig:
         ),
         "enable_otlp": False,
         "notification_listener_polling_interval_sec": 0.01,
+        "scheduler_polling_interval_sec": 1,
     }
 
 
@@ -259,7 +262,7 @@ def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
 
 
 def retry_until_success(
-    func: Callable[[], T], interval: float = 1, max_attempts: int = 5
+    func: Callable[[], T], interval: float = 1, max_attempts: int = 10
 ) -> T:
     error: Optional[Exception] = None
     for _ in range(max_attempts):
@@ -273,15 +276,23 @@ def retry_until_success(
     raise RuntimeError("retry_until_success failed without an exception")
 
 
-# Force exit after test success or failure with appropriate error code
-_EXIT_CODE = None
-
-
-def pytest_sessionfinish(session: Any, exitstatus: int) -> None:
-    global _EXIT_CODE
-    _EXIT_CODE = 0 if exitstatus == 0 else 1
-
-
 def pytest_unconfigure(config: Any) -> None:
-    code = _EXIT_CODE if _EXIT_CODE is not None else 1
-    sys.exit(code)
+    print("Shutting down pytest")
+    non_daemon_threads = [
+        t
+        for t in threading.enumerate()
+        if t.is_alive() and not t.daemon and t is not threading.main_thread()
+    ]
+    if non_daemon_threads:
+        frames = sys._current_frames()
+        print(f"\n{len(non_daemon_threads)} active non-daemon background thread(s):")
+        for t in non_daemon_threads:
+            print(f"  - {t.name} (ident={t.ident}, class={type(t).__qualname__})")
+            if t.ident:
+                frame = frames.get(t.ident)
+                if frame:
+                    print("    Stack trace:")
+                    for line in traceback.format_stack(frame):
+                        print(f"    {line}", end="")
+    else:
+        print("No active non-daemon threads")

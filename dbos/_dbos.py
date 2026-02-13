@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from logging import Logger
 from typing import (
     TYPE_CHECKING,
@@ -25,7 +26,9 @@ from typing import (
     Protocol,
     Tuple,
     Type,
+    TypedDict,
     TypeVar,
+    Union,
     overload,
 )
 
@@ -65,19 +68,28 @@ from ._core import (
     start_workflow_async,
     write_stream,
 )
+from ._croniter import croniter  # type: ignore
 from ._queue import Queue, queue_thread
 from ._recovery import recover_pending_workflows, startup_recovery_thread
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
     _class_fqn,
+    get_dbos_func_name,
     get_or_create_class_info,
 )
 from ._roles import default_required_roles, required_roles
-from ._scheduler import ScheduledWorkflow, scheduled
+from ._scheduler import (
+    ScheduledWorkflow,
+    backfill_schedule,
+    dynamic_scheduler_loop,
+    trigger_schedule,
+)
+from ._scheduler_decorator import DecoratedScheduledWorkflow, scheduled
 from ._sys_db import (
     StepInfo,
     SystemDatabase,
+    WorkflowSchedule,
     WorkflowStatus,
     _dbos_stream_closed_sentinel,
     workflow_is_active,
@@ -98,6 +110,7 @@ from ._admin_server import AdminServer
 from ._app_db import ApplicationDatabase
 from ._context import (
     DBOSContext,
+    EnterDBOSStepCtx,
     StepStatus,
     assert_current_dbos_context,
     get_local_dbos_context,
@@ -266,6 +279,13 @@ class DBOSRegistry:
         programmatic resuming and restarting of workflows.
         """
         return Queue(INTERNAL_QUEUE_NAME)
+
+
+class ScheduleInput(TypedDict):
+    schedule_name: str
+    workflow_fn: Callable[[datetime, Any], None]
+    schedule: str
+    context: Any
 
 
 class DBOS:
@@ -596,6 +616,23 @@ class DBOS:
                 self._background_threads.append(poller_thread)
             self._registry.pollers = []
 
+            # Start the dynamic scheduler thread
+            scheduler_polling_interval_sec: float = (
+                self._config.get("runtimeConfig", {}).get(
+                    "scheduler_polling_interval_sec"
+                )
+                or 30.0
+            )
+            scheduler_evt = threading.Event()
+            self.poller_stop_events.append(scheduler_evt)
+            scheduler_thread = threading.Thread(
+                target=dynamic_scheduler_loop,
+                args=(scheduler_evt, scheduler_polling_interval_sec),
+                daemon=True,
+            )
+            scheduler_thread.start()
+            self._background_threads.append(scheduler_thread)
+
             dbos_logger.info("DBOS launched!")
 
             if self.conductor_key is None and os.environ.get("DBOS__CLOUD") != "true":
@@ -610,10 +647,11 @@ class DBOS:
 
             # Flush handlers and add OTLP to all loggers if enabled
             # to enable their export in DBOS Cloud
-            for handler in dbos_logger.handlers:
-                handler.flush()
-            add_otlp_to_all_loggers()
-            add_transformer_to_all_loggers()
+            if GlobalParams.dbos_cloud:
+                for handler in dbos_logger.handlers:
+                    handler.flush()
+                add_otlp_to_all_loggers()
+                add_transformer_to_all_loggers()
         except Exception as e:
             dbos_logger.error(f"DBOS failed to launch:", exc_info=e)
             raise
@@ -801,7 +839,9 @@ class DBOS:
         return required_roles(roles)
 
     @classmethod
-    def scheduled(cls, cron: str) -> Callable[[ScheduledWorkflow], ScheduledWorkflow]:
+    def scheduled(
+        cls, cron: str
+    ) -> Callable[[DecoratedScheduledWorkflow], DecoratedScheduledWorkflow]:
         """Decorate a workflow function with its invocation schedule."""
 
         return scheduled(_get_or_create_dbos_registry(), cron)
@@ -1694,6 +1734,317 @@ class DBOS:
         return await _get_dbos_instance()._sys_db.call_function_as_step_from_async(
             fn, "DBOS.listWorkflowSteps", step_ctx
         )
+
+    @classmethod
+    def create_schedule(
+        cls,
+        *,
+        schedule_name: str,
+        workflow_fn: ScheduledWorkflow,
+        schedule: str,
+        context: Any = None,
+    ) -> None:
+        """
+        Create a cron schedule that periodically invokes a workflow function.
+
+        The workflow receives the scheduled execution time and a context object
+        as its arguments. If called from within a workflow, the operation is
+        recorded as a step.
+
+        Args:
+            schedule_name: Unique name identifying this schedule.
+            workflow_fn: The workflow function to invoke. Must accept ``(datetime, context)``.
+            schedule: A cron expression (supports seconds with 6 fields).
+            context: A context object passed as the second argument to every invocation. Defaults to ``None``.
+
+        Raises:
+            DBOSException: If the cron expression is invalid, the workflow is not registered, or a schedule with the same name already exists
+        """
+        if not croniter.is_valid(schedule, second_at_beginning=True):
+            raise DBOSException(f"Invalid cron schedule: '{schedule}'")
+        dbos = _get_dbos_instance()
+        workflow_name = get_dbos_func_name(workflow_fn)
+        if workflow_name not in dbos._registry.workflow_info_map:
+            raise DBOSException(
+                f"Workflow function '{workflow_name}' is not registered"
+            )
+        sched = WorkflowSchedule(
+            schedule_id=generate_uuid(),
+            schedule_name=schedule_name,
+            workflow_name=workflow_name,
+            schedule=schedule,
+            status="ACTIVE",
+            context=dbos._sys_db.serializer.serialize(context),
+        )
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "createSchedule"}, ctx) as step:
+                dbos._sys_db.call_txn_as_step(
+                    step.workflow_id,
+                    step.curr_step_function_id,
+                    "DBOS.createSchedule",
+                    lambda c: dbos._sys_db.create_schedule(sched, conn=c),
+                )
+        else:
+            dbos._sys_db.create_schedule(sched)
+
+    @classmethod
+    def list_schedules(
+        cls,
+        *,
+        status: Optional[Union[str, List[str]]] = None,
+        workflow_name: Optional[Union[str, List[str]]] = None,
+        schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+    ) -> List["WorkflowSchedule"]:
+        """
+        Return all registered workflow schedules, optionally filtered.
+
+        Args:
+            status: Filter by status (e.g. ``"ACTIVE"``) or a list of statuses
+            workflow_name: Filter by workflow name or a list of names
+            schedule_name_prefix: Filter by schedule name prefix or a list of prefixes
+        """
+        dbos = _get_dbos_instance()
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "listSchedules"}, ctx) as step:
+                schedules = dbos._sys_db.call_txn_as_step(
+                    step.workflow_id,
+                    step.curr_step_function_id,
+                    "DBOS.listSchedules",
+                    lambda c: dbos._sys_db.list_schedules(
+                        status=status,
+                        workflow_name=workflow_name,
+                        schedule_name_prefix=schedule_name_prefix,
+                        conn=c,
+                    ),
+                )
+        else:
+            schedules = dbos._sys_db.list_schedules(
+                status=status,
+                workflow_name=workflow_name,
+                schedule_name_prefix=schedule_name_prefix,
+            )
+        for s in schedules:
+            s["context"] = dbos._sys_db.serializer.deserialize(s["context"])
+        return schedules
+
+    @classmethod
+    def get_schedule(cls, name: str) -> Optional["WorkflowSchedule"]:
+        """Return the schedule with the given name, or ``None`` if it does not exist."""
+        dbos = _get_dbos_instance()
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "getSchedule"}, ctx) as step:
+                schedule = dbos._sys_db.call_txn_as_step(
+                    step.workflow_id,
+                    step.curr_step_function_id,
+                    "DBOS.getSchedule",
+                    lambda c: dbos._sys_db.get_schedule(name, conn=c),
+                )
+        else:
+            schedule = dbos._sys_db.get_schedule(name)
+        if schedule is not None:
+            schedule["context"] = dbos._sys_db.serializer.deserialize(
+                schedule["context"]
+            )
+        return schedule
+
+    @classmethod
+    def delete_schedule(cls, name: str) -> None:
+        """Delete the schedule with the given name. No-op if it does not exist."""
+        dbos = _get_dbos_instance()
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "deleteSchedule"}, ctx) as step:
+                dbos._sys_db.call_txn_as_step(
+                    step.workflow_id,
+                    step.curr_step_function_id,
+                    "DBOS.deleteSchedule",
+                    lambda c: dbos._sys_db.delete_schedule(name, conn=c),
+                )
+        else:
+            dbos._sys_db.delete_schedule(name)
+
+    @classmethod
+    async def create_schedule_async(
+        cls,
+        *,
+        schedule_name: str,
+        workflow_fn: ScheduledWorkflow,
+        schedule: str,
+        context: Any = None,
+    ) -> None:
+        """Async version of :meth:`create_schedule`."""
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(
+            cls.create_schedule,
+            schedule_name=schedule_name,
+            workflow_fn=workflow_fn,
+            schedule=schedule,
+            context=context,
+        )
+
+    @classmethod
+    async def list_schedules_async(
+        cls,
+        *,
+        status: Optional[Union[str, List[str]]] = None,
+        workflow_name: Optional[Union[str, List[str]]] = None,
+        schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+    ) -> List["WorkflowSchedule"]:
+        """Async version of :meth:`list_schedules`."""
+        await cls._configure_asyncio_thread_pool()
+        return await asyncio.to_thread(
+            cls.list_schedules,
+            status=status,
+            workflow_name=workflow_name,
+            schedule_name_prefix=schedule_name_prefix,
+        )
+
+    @classmethod
+    async def get_schedule_async(cls, name: str) -> Optional["WorkflowSchedule"]:
+        """Async version of :meth:`get_schedule`."""
+        await cls._configure_asyncio_thread_pool()
+        return await asyncio.to_thread(cls.get_schedule, name)
+
+    @classmethod
+    async def delete_schedule_async(cls, name: str) -> None:
+        """Async version of :meth:`delete_schedule`."""
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(cls.delete_schedule, name)
+
+    @classmethod
+    def pause_schedule(cls, name: str) -> None:
+        """Pause the schedule with the given name. A paused schedule does not fire."""
+        dbos = _get_dbos_instance()
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "pauseSchedule"}, ctx) as step:
+                dbos._sys_db.call_txn_as_step(
+                    step.workflow_id,
+                    step.curr_step_function_id,
+                    "DBOS.pauseSchedule",
+                    lambda c: dbos._sys_db.pause_schedule(name, conn=c),
+                )
+        else:
+            dbos._sys_db.pause_schedule(name)
+
+    @classmethod
+    def resume_schedule(cls, name: str) -> None:
+        """Resume a paused schedule so it begins firing again."""
+        dbos = _get_dbos_instance()
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "resumeSchedule"}, ctx) as step:
+                dbos._sys_db.call_txn_as_step(
+                    step.workflow_id,
+                    step.curr_step_function_id,
+                    "DBOS.resumeSchedule",
+                    lambda c: dbos._sys_db.resume_schedule(name, conn=c),
+                )
+        else:
+            dbos._sys_db.resume_schedule(name)
+
+    @classmethod
+    def apply_schedules(
+        cls,
+        schedules: List[ScheduleInput],
+    ) -> None:
+        """
+        Atomically create or replace a set of schedules.
+
+        Args:
+            schedules: A list of schedule inputs, each containing ``schedule_name``, ``workflow_fn``, ``schedule`` (cron), and ``context``.
+
+        Raises:
+            DBOSException: If called from within a workflow, a cron expression is invalid, or a workflow is not registered
+        """
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            raise DBOSException(
+                "DBOS.apply_schedules cannot be called from within a workflow"
+            )
+        dbos = _get_dbos_instance()
+        to_apply: List[WorkflowSchedule] = []
+        for entry in schedules:
+            cron = entry["schedule"]
+            if not croniter.is_valid(cron, second_at_beginning=True):
+                raise DBOSException(f"Invalid cron schedule: '{cron}'")
+            workflow_name = get_dbos_func_name(entry["workflow_fn"])
+            if workflow_name not in dbos._registry.workflow_info_map:
+                raise DBOSException(
+                    f"Workflow function '{workflow_name}' is not registered"
+                )
+            to_apply.append(
+                WorkflowSchedule(
+                    schedule_id=generate_uuid(),
+                    schedule_name=entry["schedule_name"],
+                    workflow_name=workflow_name,
+                    schedule=cron,
+                    status="ACTIVE",
+                    context=dbos._sys_db.serializer.serialize(entry["context"]),
+                )
+            )
+        with dbos._sys_db.engine.begin() as c:
+            for sched in to_apply:
+                dbos._sys_db.delete_schedule(sched["schedule_name"], conn=c)
+                dbos._sys_db.create_schedule(sched, conn=c)
+
+    @classmethod
+    def backfill_schedule(
+        cls, schedule_name: str, start: datetime, end: datetime
+    ) -> List[WorkflowHandle[None]]:
+        """
+        Enqueue all executions of a schedule that would have run between ``start`` and ``end``.
+
+        Each execution uses the same deterministic workflow ID as the live scheduler,
+        so already-executed times are skipped. Must not be called from within a workflow.
+
+        Args:
+            schedule_name(str): Name of an existing schedule
+            start(datetime): Start of the backfill window (exclusive)
+            end(datetime): End of the backfill window (exclusive)
+
+        Returns:
+            A list of workflow handles for each enqueued execution.
+
+        Raises:
+            DBOSException: If called from within a workflow or the schedule does not exist
+        """
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            raise DBOSException(
+                "DBOS.backfill_schedule cannot be called from within a workflow"
+            )
+        dbos = _get_dbos_instance()
+        workflow_ids = backfill_schedule(dbos._sys_db, schedule_name, start, end)
+        return [WorkflowHandlePolling(wf_id, dbos) for wf_id in workflow_ids]
+
+    @classmethod
+    def trigger_schedule(cls, schedule_name: str) -> WorkflowHandle[None]:
+        """
+        Immediately enqueue the scheduled workflow at the current time.
+
+        Must not be called from within a workflow.
+
+        Args:
+            schedule_name(str): Name of an existing schedule
+
+        Returns:
+            A workflow handle for the enqueued execution.
+
+        Raises:
+            DBOSException: If called from within a workflow or the schedule does not exist
+        """
+        ctx = snapshot_step_context(reserve_sleep_id=False)
+        if ctx and ctx.is_workflow():
+            raise DBOSException(
+                "DBOS.trigger_schedule cannot be called from within a workflow"
+            )
+        dbos = _get_dbos_instance()
+        workflow_id = trigger_schedule(dbos._sys_db, schedule_name)
+        return WorkflowHandlePolling(workflow_id, dbos)
 
     @classproperty
     def application_version(cls) -> str:

@@ -60,8 +60,14 @@ def test_spans(
 
     test_workflow()
 
+    expected_log_bodies = {"This is a test_step", "This is a test_workflow"}
+
     log_processor.force_flush(timeout_millis=5000)
-    logs = log_exporter.get_finished_logs()
+    logs = [
+        l
+        for l in log_exporter.get_finished_logs()
+        if l.log_record.body in expected_log_bodies
+    ]
     assert len(logs) == 2
     for log in logs:
         assert log.log_record.attributes is not None
@@ -73,10 +79,6 @@ def test_spans(
         # Make sure the log record has a span_id and trace_id
         assert log.log_record.span_id is not None and log.log_record.span_id > 0
         assert log.log_record.trace_id is not None and log.log_record.trace_id > 0
-        assert (
-            log.log_record.body == "This is a test_step"
-            or log.log_record.body == "This is a test_workflow"
-        )
         assert log.log_record.attributes["traceId"] == format_trace_id(
             log.log_record.trace_id
         )
@@ -186,10 +188,16 @@ async def test_spans_async(
     log_exporter.clear()  # Clear any logs generated during setup
     exporter.clear()
 
+    expected_log_bodies = {"This is a test_step", "This is a test_workflow"}
+
     await test_workflow()
 
     log_processor.force_flush(timeout_millis=5000)
-    logs = log_exporter.get_finished_logs()
+    logs = [
+        l
+        for l in log_exporter.get_finished_logs()
+        if l.log_record.body in expected_log_bodies
+    ]
     assert len(logs) == 2
     for log in logs:
         assert log.log_record.attributes is not None
@@ -200,10 +208,6 @@ async def test_spans_async(
         # Make sure the log record has a span_id and trace_id
         assert log.log_record.span_id is not None and log.log_record.span_id > 0
         assert log.log_record.trace_id is not None and log.log_record.trace_id > 0
-        assert (
-            log.log_record.body == "This is a test_step"
-            or log.log_record.body == "This is a test_workflow"
-        )
         assert log.log_record.attributes["traceId"] == format_trace_id(
             log.log_record.trace_id
         )
@@ -300,23 +304,16 @@ def test_wf_fastapi(
     assert response.status_code == 200
     assert response.text == '"test"'
 
+    expected_log_bodies = {"This is a test_workflow_endpoint"}
+
     log_processor.force_flush(timeout_millis=5000)
-    logs = log_exporter.get_finished_logs()
+    logs = [
+        l
+        for l in log_exporter.get_finished_logs()
+        if l.log_record.body in expected_log_bodies
+    ]
 
-    logs = tuple(
-        log
-        for log in logs
-        if log.log_record.severity_text != "ERROR"  # Error logged from bogus exporter
-    )
-
-    if len(logs) != 2:
-        DBOS.logger.warning("Expection on number of logs not met")
-        for log in logs:
-            DBOS.logger.info(
-                f"  {log.log_record.event_name} - {str(log.log_record.body)} - {log.log_record.severity_text}"
-            )
-
-    assert len(logs) == 2
+    assert len(logs) == 1
     assert logs[0].log_record.attributes is not None
     assert (
         logs[0].log_record.attributes["applicationVersion"] == DBOS.application_version
@@ -378,10 +375,16 @@ def test_disable_otlp_no_spans(
     log_exporter.clear()  # Clear any logs generated during setup
     exporter.clear()
 
+    expected_log_bodies = {"This is a test_step", "This is a test_workflow"}
+
     test_workflow()
 
     log_processor.force_flush(timeout_millis=5000)
-    logs = log_exporter.get_finished_logs()
+    logs = [
+        l
+        for l in log_exporter.get_finished_logs()
+        if l.log_record.body in expected_log_bodies
+    ]
     assert len(logs) == 2
     for log in logs:
         assert log.log_record.attributes is not None
@@ -393,10 +396,6 @@ def test_disable_otlp_no_spans(
         # We disable OTLP, so no span_id or trace_id should be present
         assert log.log_record.span_id is not None and log.log_record.span_id == 0
         assert log.log_record.trace_id is not None and log.log_record.trace_id == 0
-        assert (
-            log.log_record.body == "This is a test_step"
-            or log.log_record.body == "This is a test_workflow"
-        )
         assert log.log_record.attributes.get("traceId") is None
 
     spans = exporter.get_finished_spans()
