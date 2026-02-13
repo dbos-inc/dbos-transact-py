@@ -1,0 +1,13 @@
+{
+  "name": "ts-testclient",
+  "private": true,
+  "scripts": {
+    "build": "node esbuild.config.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.2"
+  },
+  "dependencies": {
+    "@dbos-inc/dbos-sdk": "^4.9.4-preview"
+  }
+}

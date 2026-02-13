@@ -470,6 +470,7 @@ def test_error_serialization() -> None:
         serializer.deserialize(serializer.serialize(bad_exception))
     input, output, exception = safe_deserialize(
         serializer,
+        serializer.name(),
         "my_id",
         serialized_input=None,
         serialized_exception=serializer.serialize(bad_exception),

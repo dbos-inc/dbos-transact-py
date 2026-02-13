@@ -2090,6 +2090,9 @@ def test_custom_serializer(
         def deserialize(self, serialized_data: str) -> Any:
             return json.loads(serialized_data)
 
+        def name(self) -> Any:
+            return "custom_json"
+
     # Configure DBOS with a JSON-based custom serializer
     DBOS.destroy(destroy_registry=True)
     config["serializer"] = JsonSerializer()
