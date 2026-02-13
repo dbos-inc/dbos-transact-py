@@ -644,10 +644,11 @@ class DBOS:
 
             # Flush handlers and add OTLP to all loggers if enabled
             # to enable their export in DBOS Cloud
-            for handler in dbos_logger.handlers:
-                handler.flush()
-            add_otlp_to_all_loggers()
-            add_transformer_to_all_loggers()
+            if GlobalParams.dbos_cloud:
+                for handler in dbos_logger.handlers:
+                    handler.flush()
+                add_otlp_to_all_loggers()
+                add_transformer_to_all_loggers()
         except Exception as e:
             dbos_logger.error(f"DBOS failed to launch:", exc_info=e)
             raise
