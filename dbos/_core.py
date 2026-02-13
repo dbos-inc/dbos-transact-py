@@ -74,10 +74,10 @@ from ._serialization import (
     deserialize_args,
     deserialize_exception,
     deserialize_value,
-    serialization_for_type,
     serialize_args,
     serialize_exception,
     serialize_value,
+    serialize_value_as,
 )
 from ._sys_db import (
     EnqueueOptionsInternal,
@@ -346,7 +346,9 @@ def _init_workflow(
     sertype: WorkflowSerializationFormat | None = serialization_type
     if sertype is None or sertype == WorkflowSerializationFormat.DEFAULT:
         sertype = ctx.serialization_type
-    serialization = serialization_for_type(sertype, dbos._serializer)
+    serargs, serialization = serialize_args(
+        inputs["args"], inputs["kwargs"], sertype, dbos._serializer
+    )
 
     # Initialize a workflow status object from the context
     status: WorkflowStatusInternal = {
@@ -392,9 +394,7 @@ def _init_workflow(
             if enqueue_options is not None
             else 0
         ),
-        "inputs": serialize_args(
-            inputs["args"], inputs["kwargs"], serialization, dbos._serializer
-        )[0],
+        "inputs": serargs,
         "queue_partition_key": (
             enqueue_options["queue_partition_key"]
             if enqueue_options is not None
@@ -494,7 +494,7 @@ def _get_wf_invoke_func(
             else:
                 output = func()
 
-            serval, _serialization = serialize_value(
+            serval, _serialization = serialize_value_as(
                 output, status["serialization"], dbos._serializer
             )
             dbos._sys_db.update_workflow_outcome(

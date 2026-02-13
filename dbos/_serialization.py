@@ -207,6 +207,16 @@ def serialization_for_type(
 
 def serialize_value(
     value: Optional[Any],
+    serialization_type: Optional[WorkflowSerializationFormat],
+    serializer: Serializer,
+) -> tuple[Optional[str], str]:
+    return serialize_value_as(
+        value, serialization_for_type(serialization_type, serializer), serializer
+    )
+
+
+def serialize_value_as(
+    value: Optional[Any],
     serialization: Optional[str],
     serializer: Serializer,
 ) -> tuple[Optional[str], str]:
@@ -238,9 +248,10 @@ def deserialize_value(
 def serialize_args(
     args: Tuple[Any, ...],
     kwargs: Dict[str, Any],
-    serialization: Optional[str],
+    serialization_type: Optional[WorkflowSerializationFormat],
     serializer: Serializer,
 ) -> tuple[str, str]:
+    serialization = serialization_for_type(serialization_type, serializer)
     if serialization == DBOSPortableJSON.name():
         a: JsonWorkflowArgs = {"namedArgs": kwargs, "positionalArgs": list(args)}
         serval = DBOSPortableJSON.serialize(a)

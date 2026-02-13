@@ -35,15 +35,11 @@ from dbos._scheduler import backfill_schedule, trigger_schedule
 from dbos._serialization import (
     DefaultSerializer,
     Serializer,
-    WorkflowInputs,
     WorkflowSerializationFormat,
-    serialization_for_type,
     serialize_args,
-    serialize_value,
 )
 from dbos._sys_db import (
     ClientScheduleInput,
-    EnqueueOptionsInternal,
     StepInfo,
     SystemDatabase,
     WorkflowSchedule,
@@ -208,7 +204,7 @@ class DBOSClient:
         inputs, serialization = serialize_args(
             args,
             kwargs,
-            serialization_for_type(options.get("serialization_type"), self._serializer),
+            options.get("serialization_type"),
             self._serializer,
         )
 
@@ -299,7 +295,7 @@ class DBOSClient:
         serargs, argser = serialize_args(
             (),
             {},
-            serialization_for_type(serialization_type, self._serializer),
+            serialization_type,
             self._serializer,
         )
         status: WorkflowStatusInternal = {

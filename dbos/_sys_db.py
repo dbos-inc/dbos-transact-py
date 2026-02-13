@@ -57,7 +57,6 @@ from ._serialization import (
     deserialize_exception,
     deserialize_value,
     safe_deserialize,
-    serialization_for_type,
     serialize_value,
 )
 
@@ -1548,7 +1547,7 @@ class SystemDatabase(ABC):
         topic = topic if topic is not None else _dbos_null_topic
         serval, serialization = serialize_value(
             message,
-            serialization_for_type(serialization_type, self.serializer),
+            serialization_type,
             self.serializer,
         )
         with self.engine.begin() as c:
@@ -1842,7 +1841,7 @@ class SystemDatabase(ABC):
     ) -> None:
         serval, serialization = serialize_value(
             message,
-            serialization_for_type(serialization_type, self.serializer),
+            serialization_type,
             self.serializer,
         )
         function_name = "DBOS.setEvent"
@@ -1911,7 +1910,7 @@ class SystemDatabase(ABC):
     ) -> None:
         serval, serialization = serialize_value(
             message,
-            serialization_for_type(serialization_type, self.serializer),
+            serialization_type,
             self.serializer,
         )
 
@@ -2439,7 +2438,7 @@ class SystemDatabase(ABC):
         # Serialize the value before storing
         serialized_value, serialization = serialize_value(
             value,
-            serialization_for_type(serialization_type, self.serializer),
+            serialization_type,
             self.serializer,
         )
 
@@ -2471,7 +2470,7 @@ class SystemDatabase(ABC):
     ) -> None:
         serialized_value, serialization = serialize_value(
             value,
-            serialization_for_type(serialization_type, self.serializer),
+            serialization_type,
             self.serializer,
         )
 
