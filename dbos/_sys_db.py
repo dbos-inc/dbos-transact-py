@@ -14,7 +14,6 @@ from typing import (
     Dict,
     List,
     Literal,
-    NotRequired,
     Optional,
     Sequence,
     Tuple,
@@ -238,10 +237,10 @@ class WorkflowSchedule(TypedDict):
     context: Any
 
 
-class ClientScheduleInput(TypedDict):
+class ClientScheduleInput(TypedDict, total=False):
     schedule_name: str
     workflow_name: str
-    workflow_class_name: NotRequired[Optional[str]]
+    workflow_class_name: Optional[str]
     schedule: str
     context: Any
 
