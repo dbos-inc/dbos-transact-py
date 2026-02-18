@@ -8,13 +8,14 @@ from typing import Any, Dict, Optional
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, Queue, WorkflowHandle
+from dbos import DBOS, DBOSConfig, Queue, WorkflowHandle
 from dbos._client import DBOSClient
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import (
     DBOSDefaultSerializer,
     DBOSPortableJSON,
     PortableWorkflowError,
+    Serializer,
     WorkflowSerializationFormat,
 )
 
@@ -458,3 +459,255 @@ def test_nodejs_invoke(dbos: DBOS) -> None:
     result = subprocess.run(args, env=env, capture_output=True, text=True)
     assert result.returncode == 0, f"Worker failed with error: {result.stderr}"
     DBOS.logger.info(result.stdout)
+
+
+def test_custom_serializer_across_restarts(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+) -> None:
+    """Test that serializer changes across DBOS restarts are handled correctly.
+
+    Phase 1: Run workflows with the default (pickle) serializer.
+    Phase 2: Restart with a custom JSON serializer; verify old and new data are readable.
+    Phase 3: Restart without the custom serializer; verify old pickle data still works,
+             custom-serialized data raises TypeError on hard paths, and safe
+             introspection (list_workflows / list_workflow_steps) degrades gracefully.
+    """
+
+    class JsonSerializer(Serializer):
+        def serialize(self, data: Any) -> str:
+            return json.dumps(data)
+
+        def deserialize(self, serialized_data: str) -> Any:
+            return json.loads(serialized_data)
+
+        def name(self) -> str:
+            return "custom_json"
+
+    # --- DB inspection helpers ---
+    def check_wf_ser(engine: sa.Engine, wfid: str, expected_ser: str) -> None:
+        with engine.connect() as c:
+            row = c.execute(
+                sa.select(SystemSchema.workflow_status.c.serialization).where(
+                    SystemSchema.workflow_status.c.workflow_uuid == wfid,
+                )
+            ).fetchone()
+            assert row is not None
+            assert row.serialization == expected_ser
+
+    def check_evt_ser(
+        engine: sa.Engine, wfid: str, key: str, expected_ser: str
+    ) -> None:
+        with engine.connect() as c:
+            row = c.execute(
+                sa.select(SystemSchema.workflow_events.c.serialization).where(
+                    SystemSchema.workflow_events.c.workflow_uuid == wfid,
+                    SystemSchema.workflow_events.c.key == key,
+                )
+            ).fetchone()
+            assert row is not None
+            assert row.serialization == expected_ser
+
+    # --- Workflow registration helper ---
+    # Must produce the same qualified name each time so retrieve_workflow works
+    # across restarts.
+    def register_workflows() -> Any:
+        @DBOS.workflow(name="ser_restart_workflow")
+        def ser_restart_workflow(val: str) -> str:
+            step_result = ser_restart_step(val)
+            DBOS.set_event("evt_key", {"data": val})
+            return f"result_{step_result}"
+
+        @DBOS.step()
+        def ser_restart_step(val: str) -> str:
+            return val
+
+        return ser_restart_workflow
+
+    sys_db_url = config["system_database_url"]
+    assert sys_db_url is not None
+
+    # ======= PHASE 1: Default serializer (py_pickle) =======
+    DBOS.destroy(destroy_registry=True)
+    dbos_inst = DBOS(config=config)
+    DBOS.launch()
+    phase_workflow = register_workflows()
+
+    handle1 = DBOS.start_workflow(phase_workflow, "phase1")
+    result1 = handle1.get_result()
+    assert result1 == "result_phase1"
+    phase1_wfid = handle1.workflow_id
+
+    # Verify DB serialization column
+    check_wf_ser(dbos_inst._sys_db.engine, phase1_wfid, DBOSDefaultSerializer.name())
+    check_evt_ser(
+        dbos_inst._sys_db.engine, phase1_wfid, "evt_key", DBOSDefaultSerializer.name()
+    )
+
+    # Verify get_event works
+    assert DBOS.get_event(phase1_wfid, "evt_key") == {"data": "phase1"}
+
+    # Verify list_workflows returns properly deserialized data
+    wfs = DBOS.list_workflows(workflow_ids=[phase1_wfid])
+    assert len(wfs) == 1
+    assert wfs[0].output == "result_phase1"
+
+    # Verify list_workflow_steps returns step outputs
+    steps1 = DBOS.list_workflow_steps(phase1_wfid)
+    assert len(steps1) >= 1
+
+    # DBOSClient (default serializer) can also read phase 1 data
+    client = DBOSClient(system_database_url=sys_db_url)
+    cwfs = client.list_workflows(workflow_ids=[phase1_wfid])
+    assert len(cwfs) == 1
+    assert cwfs[0].output == "result_phase1"
+    assert client.retrieve_workflow(phase1_wfid).get_result() == "result_phase1"
+    assert client.get_event(phase1_wfid, "evt_key") == {"data": "phase1"}
+    csteps = client.list_workflow_steps(phase1_wfid)
+    assert len(csteps) >= 1
+    client.destroy()
+
+    DBOS.destroy(destroy_registry=True)
+
+    # ======= PHASE 2: Custom serializer (custom_json) =======
+    config["serializer"] = JsonSerializer()
+    dbos_inst = DBOS(config=config)
+    DBOS.launch()
+    phase_workflow = register_workflows()
+
+    handle2 = DBOS.start_workflow(phase_workflow, "phase2")
+    result2 = handle2.get_result()
+    assert result2 == "result_phase2"
+    phase2_wfid = handle2.workflow_id
+
+    # Verify DB uses custom_json for the new workflow
+    check_wf_ser(dbos_inst._sys_db.engine, phase2_wfid, "custom_json")
+    check_evt_ser(dbos_inst._sys_db.engine, phase2_wfid, "evt_key", "custom_json")
+
+    # Phase 1 data (py_pickle) is still readable because it's a built-in serializer
+    assert DBOS.retrieve_workflow(phase1_wfid).get_result() == "result_phase1"
+    assert DBOS.get_event(phase1_wfid, "evt_key") == {"data": "phase1"}
+
+    # list_workflows sees both, all properly deserialized
+    wfs = DBOS.list_workflows(workflow_ids=[phase1_wfid, phase2_wfid])
+    assert len(wfs) == 2
+    wf_by_id = {wf.workflow_id: wf for wf in wfs}
+    assert wf_by_id[phase1_wfid].output == "result_phase1"
+    assert wf_by_id[phase2_wfid].output == "result_phase2"
+
+    # DBOSClient with the custom serializer reads both phases correctly
+    client_custom = DBOSClient(
+        system_database_url=sys_db_url, serializer=JsonSerializer()
+    )
+    assert client_custom.retrieve_workflow(phase1_wfid).get_result() == "result_phase1"
+    assert client_custom.retrieve_workflow(phase2_wfid).get_result() == "result_phase2"
+    assert client_custom.get_event(phase1_wfid, "evt_key") == {"data": "phase1"}
+    assert client_custom.get_event(phase2_wfid, "evt_key") == {"data": "phase2"}
+    cwfs = client_custom.list_workflows(workflow_ids=[phase1_wfid, phase2_wfid])
+    assert len(cwfs) == 2
+    cwf_by_id = {wf.workflow_id: wf for wf in cwfs}
+    assert cwf_by_id[phase1_wfid].output == "result_phase1"
+    assert cwf_by_id[phase2_wfid].output == "result_phase2"
+    client_custom.destroy()
+
+    # DBOSClient without the custom serializer: safe paths degrade gracefully
+    client_default = DBOSClient(system_database_url=sys_db_url)
+    # Phase 1 data still readable (py_pickle is built-in)
+    assert client_default.retrieve_workflow(phase1_wfid).get_result() == "result_phase1"
+    assert client_default.get_event(phase1_wfid, "evt_key") == {"data": "phase1"}
+    # Phase 2 data raises TypeError on hard paths
+    with pytest.raises(TypeError, match="custom_json is not available"):
+        client_default.retrieve_workflow(phase2_wfid).get_result()
+    with pytest.raises(TypeError, match="custom_json is not available"):
+        client_default.get_event(phase2_wfid, "evt_key")
+    # list_workflows returns raw strings for phase 2 data
+    cwfs = client_default.list_workflows(workflow_ids=[phase1_wfid, phase2_wfid])
+    assert len(cwfs) == 2
+    cwf_by_id = {wf.workflow_id: wf for wf in cwfs}
+    assert cwf_by_id[phase1_wfid].output == "result_phase1"
+    assert isinstance(cwf_by_id[phase2_wfid].output, str)
+    assert cwf_by_id[phase2_wfid].output == json.dumps("result_phase2")
+    client_default.destroy()
+
+    DBOS.destroy(destroy_registry=True)
+
+    # ======= PHASE 3: Back to default serializer (custom removed) =======
+    config.pop("serializer", None)
+    dbos_inst = DBOS(config=config)
+    DBOS.launch()
+    phase_workflow = register_workflows()
+
+    # Phase 1 data (py_pickle) still works fine
+    assert DBOS.retrieve_workflow(phase1_wfid).get_result() == "result_phase1"
+    assert DBOS.get_event(phase1_wfid, "evt_key") == {"data": "phase1"}
+
+    # Phase 2 data (custom_json) raises TypeError on hard deserialization paths
+    with pytest.raises(TypeError, match="custom_json is not available"):
+        DBOS.retrieve_workflow(phase2_wfid).get_result()
+
+    with pytest.raises(TypeError, match="custom_json is not available"):
+        DBOS.get_event(phase2_wfid, "evt_key")
+
+    # Safe introspection paths (list_workflows, list_workflow_steps) don't crash;
+    # they fall back to returning raw serialized strings for undeserializable data.
+    wfs = DBOS.list_workflows(workflow_ids=[phase1_wfid, phase2_wfid])
+    assert len(wfs) == 2
+    wf_by_id = {wf.workflow_id: wf for wf in wfs}
+
+    # Phase 1 workflow: properly deserialized
+    wf1 = wf_by_id[phase1_wfid]
+    assert wf1.output == "result_phase1"
+
+    # Phase 2 workflow: raw string fallback (the JSON-encoded serialized form)
+    wf2 = wf_by_id[phase2_wfid]
+    assert isinstance(wf2.output, str)
+    assert wf2.output == json.dumps("result_phase2")
+
+    # list_workflow_steps also uses safe_deserialize
+    steps2 = DBOS.list_workflow_steps(phase2_wfid)
+    assert len(steps2) >= 1
+    # The step output should be a raw string since custom_json is not available
+    assert isinstance(steps2[0]["output"], str)
+
+    # A new workflow in Phase 3 works normally with the default serializer
+    handle3 = DBOS.start_workflow(phase_workflow, "phase3")
+    assert handle3.get_result() == "result_phase3"
+    phase3_wfid = handle3.workflow_id
+    check_wf_ser(dbos_inst._sys_db.engine, phase3_wfid, DBOSDefaultSerializer.name())
+
+    # DBOSClient with the custom serializer can still rescue phase 2 data,
+    # even though the DBOS instance itself no longer has the custom serializer.
+    client_rescue = DBOSClient(
+        system_database_url=sys_db_url, serializer=JsonSerializer()
+    )
+    assert client_rescue.retrieve_workflow(phase1_wfid).get_result() == "result_phase1"
+    assert client_rescue.retrieve_workflow(phase2_wfid).get_result() == "result_phase2"
+    assert client_rescue.retrieve_workflow(phase3_wfid).get_result() == "result_phase3"
+    assert client_rescue.get_event(phase2_wfid, "evt_key") == {"data": "phase2"}
+    cwfs = client_rescue.list_workflows(
+        workflow_ids=[phase1_wfid, phase2_wfid, phase3_wfid]
+    )
+    assert len(cwfs) == 3
+    cwf_by_id = {wf.workflow_id: wf for wf in cwfs}
+    assert cwf_by_id[phase1_wfid].output == "result_phase1"
+    assert cwf_by_id[phase2_wfid].output == "result_phase2"
+    assert cwf_by_id[phase3_wfid].output == "result_phase3"
+    client_rescue.destroy()
+
+    # DBOSClient without the custom serializer sees the same degradation as DBOS
+    client_no_custom = DBOSClient(system_database_url=sys_db_url)
+    assert (
+        client_no_custom.retrieve_workflow(phase1_wfid).get_result() == "result_phase1"
+    )
+    assert (
+        client_no_custom.retrieve_workflow(phase3_wfid).get_result() == "result_phase3"
+    )
+    with pytest.raises(TypeError, match="custom_json is not available"):
+        client_no_custom.retrieve_workflow(phase2_wfid).get_result()
+    # list_workflow_steps via client also degrades gracefully
+    csteps2 = client_no_custom.list_workflow_steps(phase2_wfid)
+    assert len(csteps2) >= 1
+    assert isinstance(csteps2[0]["output"], str)
+    client_no_custom.destroy()
+
+    DBOS.destroy(destroy_registry=True)
