@@ -134,11 +134,11 @@ CREATE TABLE \"{schema}\".operation_outputs (
 );
 
 CREATE TABLE \"{schema}\".notifications (
+    message_uuid TEXT NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY, -- Built-in function
     destination_uuid TEXT NOT NULL,
     topic TEXT,
     message TEXT NOT NULL,
     created_at_epoch_ms BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
-    message_uuid TEXT NOT NULL DEFAULT gen_random_uuid(), -- Built-in function
     FOREIGN KEY (destination_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
@@ -343,11 +343,11 @@ CREATE TABLE operation_outputs (
 );
 
 CREATE TABLE notifications (
+    message_uuid TEXT NOT NULL DEFAULT (hex(randomblob(16))) PRIMARY KEY,
     destination_uuid TEXT NOT NULL,
     topic TEXT,
     message TEXT NOT NULL,
     created_at_epoch_ms INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
-    message_uuid TEXT NOT NULL DEFAULT (hex(randomblob(16))),
     FOREIGN KEY (destination_uuid) REFERENCES workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
