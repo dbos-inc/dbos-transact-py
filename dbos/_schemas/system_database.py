@@ -195,6 +195,7 @@ class SystemSchema:
         Column("schedule_id", Text, primary_key=True),
         Column("schedule_name", Text, nullable=False, unique=True),
         Column("workflow_name", Text, nullable=False),
+        Column("workflow_class_name", Text, nullable=True),
         Column("schedule", Text, nullable=False),
         Column("status", Text, nullable=False, server_default="ACTIVE"),
         Column("context", Text, nullable=False),
