@@ -133,6 +133,7 @@ class SystemSchema:
             "message_uuid",
             Text,
             nullable=False,
+            primary_key=True,
         ),
         Index("idx_workflow_topic", "destination_uuid", "topic"),
     )
