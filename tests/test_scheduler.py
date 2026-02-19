@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from dbos import DBOS, DBOSClient
+from dbos import DBOS, DBOSClient, DBOSConfiguredInstance
 from dbos._error import DBOSException
 
 from .conftest import retry_until_success
@@ -34,6 +34,7 @@ def test_schedule_crud(dbos: DBOS) -> None:
     assert schedules[0]["workflow_name"] == my_workflow.dbos_function_name  # type: ignore
     assert schedules[0]["schedule"] == "* * * * *"
     assert schedules[0]["context"] == {"env": "test"}
+    assert schedules[0]["workflow_class_name"] is None
 
     # Get schedule by name
     sched = DBOS.get_schedule("test-schedule")
@@ -43,6 +44,7 @@ def test_schedule_crud(dbos: DBOS) -> None:
     assert sched["schedule"] == "* * * * *"
     assert sched["schedule_id"] == schedules[0]["schedule_id"]
     assert sched["context"] == {"env": "test"}
+    assert sched["workflow_class_name"] is None
 
     # Get nonexistent schedule
     assert DBOS.get_schedule("nonexistent") is None
@@ -214,11 +216,13 @@ def test_schedule_crud_from_workflow(dbos: DBOS) -> None:
         assert len(schedules) == 1
         assert schedules[0]["schedule_name"] == "wf-schedule"
         assert schedules[0]["context"] == {"from": "workflow"}
+        assert schedules[0]["workflow_class_name"] is None
 
         sched = DBOS.get_schedule("wf-schedule")
         assert sched is not None
         assert sched["schedule_name"] == "wf-schedule"
         assert sched["context"] == {"from": "workflow"}
+        assert sched["workflow_class_name"] is None
 
         DBOS.delete_schedule("wf-schedule")
         assert DBOS.get_schedule("wf-schedule") is None
@@ -496,6 +500,7 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
     assert schedules[0]["workflow_name"] == "some.workflow"
     assert schedules[0]["schedule"] == "* * * * *"
     assert schedules[0]["context"] == {"tenant": "acme"}
+    assert schedules[0]["workflow_class_name"] is None
 
     # Get schedule by name
     sched = client.get_schedule("client-schedule")
@@ -503,6 +508,7 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
     assert sched["schedule_name"] == "client-schedule"
     assert sched["schedule_id"] == schedules[0]["schedule_id"]
     assert sched["context"] == {"tenant": "acme"}
+    assert sched["workflow_class_name"] is None
 
     # Get nonexistent schedule
     assert client.get_schedule("nonexistent") is None
@@ -830,3 +836,59 @@ async def test_client_schedule_crud_async(client: DBOSClient) -> None:
     await client.delete_schedule_async("async-client")
     assert await client.get_schedule_async("async-client") is None
     assert len(await client.list_schedules_async()) == 0
+
+
+def test_static_class_method_schedule(dbos: DBOS) -> None:
+    received: list[Any] = []
+
+    @DBOS.dbos_class()
+    class MyScheduledClass:
+        @staticmethod
+        @DBOS.workflow()
+        def scheduled_wf(scheduled_at: datetime, ctx: Any) -> None:
+            received.append(ctx)
+
+    DBOS.create_schedule(
+        schedule_name="static-class-schedule",
+        workflow_fn=MyScheduledClass.scheduled_wf,
+        schedule="* * * * * *",
+        context={"class": True},
+    )
+
+    sched = DBOS.get_schedule("static-class-schedule")
+    assert sched is not None
+    assert (
+        sched["workflow_class_name"]
+        == "test_static_class_method_schedule.<locals>.MyScheduledClass"
+    )
+    assert sched["context"] == {"class": True}
+
+    def check_fired() -> None:
+        assert len(received) >= 2
+        assert all(c == {"class": True} for c in received)
+
+    retry_until_success(check_fired)
+
+    DBOS.delete_schedule("static-class-schedule")
+
+
+def test_instance_method_schedule_rejected(dbos: DBOS) -> None:
+    @DBOS.dbos_class()
+    class MyConfigured(DBOSConfiguredInstance):
+        def __init__(self) -> None:
+            super().__init__("my-config")
+
+        @DBOS.workflow()
+        def scheduled_wf(self, scheduled_at: datetime, ctx: Any) -> None:
+            pass
+
+    inst = MyConfigured()
+
+    with pytest.raises(
+        DBOSException, match="Configured instance methods cannot be used"
+    ):
+        DBOS.create_schedule(
+            schedule_name="instance-schedule",
+            workflow_fn=inst.scheduled_wf,
+            schedule="* * * * *",
+        )

@@ -450,6 +450,7 @@ class ScheduleOutput:
     schedule_id: str
     schedule_name: str
     workflow_name: str
+    workflow_class_name: Optional[str]
     schedule: str
     status: str
     context: str
@@ -463,6 +464,7 @@ class ScheduleOutput:
             schedule_id=s["schedule_id"],
             schedule_name=s["schedule_name"],
             workflow_name=s["workflow_name"],
+            workflow_class_name=s["workflow_class_name"],
             schedule=s["schedule"],
             status=s["status"],
             context=context_str,

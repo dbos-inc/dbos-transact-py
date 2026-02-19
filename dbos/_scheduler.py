@@ -2,7 +2,7 @@ import random
 import threading
 import traceback
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Coroutine
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
 
 from ._context import SetWorkflowID
 from ._croniter import croniter  # type: ignore
@@ -92,6 +92,7 @@ def _enqueue_scheduled_workflow(
     scheduled_at: datetime,
     workflow_id: str,
     context: Any = None,
+    class_name: Optional[str] = None,
 ) -> None:
     """Enqueue a single scheduled workflow execution via init_workflow."""
     inputs: WorkflowInputs = {"args": (scheduled_at, context), "kwargs": {}}
@@ -99,7 +100,7 @@ def _enqueue_scheduled_workflow(
         "workflow_uuid": workflow_id,
         "status": WorkflowStatusString.ENQUEUED.value,
         "name": workflow_name,
-        "class_name": None,
+        "class_name": class_name,
         "queue_name": INTERNAL_QUEUE_NAME,
         "app_version": None,
         "config_name": None,
@@ -145,6 +146,7 @@ def backfill_schedule(
     if schedule is None:
         raise DBOSException(f"Schedule '{schedule_name}' does not exist")
     context = sys_db.serializer.deserialize(schedule["context"])
+    class_name = schedule["workflow_class_name"]
     it = croniter(schedule["schedule"], start, second_at_beginning=True)
     workflow_ids: list[str] = []
     while True:
@@ -154,7 +156,12 @@ def backfill_schedule(
         workflow_id = f"sched-{schedule_name}-{next_time.isoformat()}"
         if not sys_db.get_workflow_status(workflow_id):
             _enqueue_scheduled_workflow(
-                sys_db, schedule["workflow_name"], next_time, workflow_id, context
+                sys_db,
+                schedule["workflow_name"],
+                next_time,
+                workflow_id,
+                context,
+                class_name,
             )
         workflow_ids.append(workflow_id)
     return workflow_ids
@@ -166,10 +173,11 @@ def trigger_schedule(sys_db: "SystemDatabase", schedule_name: str) -> str:
     if schedule is None:
         raise DBOSException(f"Schedule '{schedule_name}' does not exist")
     context = sys_db.serializer.deserialize(schedule["context"])
+    class_name = schedule["workflow_class_name"]
     now = datetime.now(timezone.utc)
     workflow_id = f"sched-{schedule_name}-trigger-{now.isoformat()}"
     _enqueue_scheduled_workflow(
-        sys_db, schedule["workflow_name"], now, workflow_id, context
+        sys_db, schedule["workflow_name"], now, workflow_id, context, class_name
     )
     return workflow_id
 

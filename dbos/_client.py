@@ -666,6 +666,7 @@ class DBOSClient:
         workflow_name: str,
         schedule: str,
         context: Any = None,
+        workflow_class_name: Optional[str] = None,
     ) -> None:
         """
         Create a cron schedule that periodically invokes a workflow.
@@ -675,6 +676,7 @@ class DBOSClient:
             workflow_name: Fully-qualified name of the workflow function to invoke.
             schedule: A cron expression (supports seconds with 6 fields).
             context: A context object passed as the second argument to every invocation. Defaults to ``None``.
+            workflow_class_name: Class name for static class method workflows. Defaults to ``None``.
 
         Raises:
             DBOSException: If the cron expression is invalid or a schedule with the same name already exists.
@@ -686,6 +688,7 @@ class DBOSClient:
                 schedule_id=generate_uuid(),
                 schedule_name=schedule_name,
                 workflow_name=workflow_name,
+                workflow_class_name=workflow_class_name,
                 schedule=schedule,
                 status="ACTIVE",
                 context=self._sys_db.serializer.serialize(context),
@@ -736,6 +739,7 @@ class DBOSClient:
         workflow_name: str,
         schedule: str,
         context: Any = None,
+        workflow_class_name: Optional[str] = None,
     ) -> None:
         """Async version of :meth:`create_schedule`."""
         await asyncio.to_thread(
@@ -744,6 +748,7 @@ class DBOSClient:
             workflow_name=workflow_name,
             schedule=schedule,
             context=context,
+            workflow_class_name=workflow_class_name,
         )
 
     async def list_schedules_async(
@@ -800,6 +805,7 @@ class DBOSClient:
                     schedule_id=generate_uuid(),
                     schedule_name=entry["schedule_name"],
                     workflow_name=entry["workflow_name"],
+                    workflow_class_name=entry.get("workflow_class_name"),
                     schedule=cron,
                     status="ACTIVE",
                     context=self._sys_db.serializer.serialize(entry["context"]),

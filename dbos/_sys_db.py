@@ -243,14 +243,16 @@ class WorkflowSchedule(TypedDict):
     schedule_id: str
     schedule_name: str
     workflow_name: str
+    workflow_class_name: Optional[str]
     schedule: str
     status: str
     context: Any
 
 
-class ClientScheduleInput(TypedDict):
+class ClientScheduleInput(TypedDict, total=False):
     schedule_name: str
     workflow_name: str
+    workflow_class_name: Optional[str]
     schedule: str
     context: Any
 
@@ -3069,6 +3071,7 @@ class SystemDatabase(ABC):
                         schedule_id=schedule["schedule_id"],
                         schedule_name=schedule["schedule_name"],
                         workflow_name=schedule["workflow_name"],
+                        workflow_class_name=schedule["workflow_class_name"],
                         schedule=schedule["schedule"],
                         status=schedule["status"],
                         context=schedule["context"],
@@ -3098,6 +3101,7 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_schedules.c.schedule_id,
                 SystemSchema.workflow_schedules.c.schedule_name,
                 SystemSchema.workflow_schedules.c.workflow_name,
+                SystemSchema.workflow_schedules.c.workflow_class_name,
                 SystemSchema.workflow_schedules.c.schedule,
                 SystemSchema.workflow_schedules.c.status,
                 SystemSchema.workflow_schedules.c.context,
@@ -3134,9 +3138,10 @@ class SystemDatabase(ABC):
                     schedule_id=row[0],
                     schedule_name=row[1],
                     workflow_name=row[2],
-                    schedule=row[3],
-                    status=row[4],
-                    context=row[5],
+                    workflow_class_name=row[3],
+                    schedule=row[4],
+                    status=row[5],
+                    context=row[6],
                 )
                 for row in rows
             ]
@@ -3155,6 +3160,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_schedules.c.schedule_id,
                     SystemSchema.workflow_schedules.c.schedule_name,
                     SystemSchema.workflow_schedules.c.workflow_name,
+                    SystemSchema.workflow_schedules.c.workflow_class_name,
                     SystemSchema.workflow_schedules.c.schedule,
                     SystemSchema.workflow_schedules.c.status,
                     SystemSchema.workflow_schedules.c.context,
@@ -3166,9 +3172,10 @@ class SystemDatabase(ABC):
                 schedule_id=row[0],
                 schedule_name=row[1],
                 workflow_name=row[2],
-                schedule=row[3],
-                status=row[4],
-                context=row[5],
+                workflow_class_name=row[3],
+                schedule=row[4],
+                status=row[5],
+                context=row[6],
             )
 
         if conn is not None:

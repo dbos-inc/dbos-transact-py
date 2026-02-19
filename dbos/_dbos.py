@@ -74,8 +74,10 @@ from ._recovery import recover_pending_workflows, startup_recovery_thread
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
+    DBOSFuncType,
     _class_fqn,
     get_dbos_func_name,
+    get_func_info,
     get_or_create_class_info,
 )
 from ._roles import default_required_roles, required_roles
@@ -1768,10 +1770,19 @@ class DBOS:
             raise DBOSException(
                 f"Workflow function '{workflow_name}' is not registered"
             )
+        fi = get_func_info(workflow_fn)
+        if fi and fi.func_type == DBOSFuncType.Instance:
+            raise DBOSException(
+                "Configured instance methods cannot be used as scheduled workflows"
+            )
+        workflow_class_name = (
+            fi.class_info.registered_name if fi and fi.class_info else None
+        )
         sched = WorkflowSchedule(
             schedule_id=generate_uuid(),
             schedule_name=schedule_name,
             workflow_name=workflow_name,
+            workflow_class_name=workflow_class_name,
             schedule=schedule,
             status="ACTIVE",
             context=dbos._sys_db.serializer.serialize(context),
@@ -1971,16 +1982,26 @@ class DBOS:
             cron = entry["schedule"]
             if not croniter.is_valid(cron, second_at_beginning=True):
                 raise DBOSException(f"Invalid cron schedule: '{cron}'")
-            workflow_name = get_dbos_func_name(entry["workflow_fn"])
+            workflow_fn = entry["workflow_fn"]
+            workflow_name = get_dbos_func_name(workflow_fn)
             if workflow_name not in dbos._registry.workflow_info_map:
                 raise DBOSException(
                     f"Workflow function '{workflow_name}' is not registered"
                 )
+            fi = get_func_info(workflow_fn)
+            if fi and fi.func_type == DBOSFuncType.Instance:
+                raise DBOSException(
+                    "Configured instance methods cannot be used as scheduled workflows"
+                )
+            workflow_class_name = (
+                fi.class_info.registered_name if fi and fi.class_info else None
+            )
             to_apply.append(
                 WorkflowSchedule(
                     schedule_id=generate_uuid(),
                     schedule_name=entry["schedule_name"],
                     workflow_name=workflow_name,
+                    workflow_class_name=workflow_class_name,
                     schedule=cron,
                     status="ACTIVE",
                     context=dbos._sys_db.serializer.serialize(entry["context"]),
