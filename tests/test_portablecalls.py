@@ -3,7 +3,7 @@ import os
 import subprocess
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -991,6 +991,47 @@ def test_nodejs_invoke(dbos: DBOS) -> None:
         ) -> str:
             DBOS.logger.info("defSerPortable was called...")
             return workflow_func(s, x, o, wfid)
+
+        @classmethod
+        @DBOS.workflow(
+            name="workflowRichTypes",
+            serialization_type=WorkflowSerializationFormat.PORTABLE,
+            validate_args=pydantic_args_validator,
+        )
+        def richTypes(
+            cls,
+            date: datetime,
+            items: List[Any],
+            nested: Dict[str, Any],
+        ) -> Dict[str, Any]:
+            DBOS.logger.info("richTypes was called...")
+            DBOS.set_event(
+                "date_event",
+                date,
+                serialization_type=WorkflowSerializationFormat.PORTABLE,
+            )
+            DBOS.set_event(
+                "array_event",
+                items,
+                serialization_type=WorkflowSerializationFormat.PORTABLE,
+            )
+            DBOS.set_event(
+                "map_event",
+                nested,
+                serialization_type=WorkflowSerializationFormat.PORTABLE,
+            )
+            msg = DBOS.recv("rich_incoming")
+            return {
+                "date_echo": date.isoformat(timespec="milliseconds").replace(
+                    "+00:00", "Z"
+                ),
+                "date_obj": date,
+                "items": items,
+                "items_count": len(items),
+                "nested": nested,
+                "nested_keys": sorted(nested.keys()),
+                "received_msg": msg,
+            }
 
     queue = Queue("testq")
 

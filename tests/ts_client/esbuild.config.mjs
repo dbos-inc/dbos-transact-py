@@ -10,7 +10,10 @@ await esbuild.build({
   sourcemap: false,
   minify: true,
   treeShaking: true,
-  // If you decide to use "pg" but not bundle it, you can mark it external:
-  // external: ["pg"],
+  // Optional telemetry / logging deps that the client path never touches:
+  external: [
+    "winston", "winston-transport",
+    "@opentelemetry/*",
+  ],
 });
 
