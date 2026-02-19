@@ -568,6 +568,123 @@ def test_directinsert_wrong_args(dbos: DBOS) -> None:
     assert "TypeError" in exc_info.value.name
 
 
+def test_directinsert_bogus_notification(dbos: DBOS) -> None:
+    """A bogus notification message (unparseable JSON) should cause the receiving
+    workflow to fail with ERROR, not hang or retry forever."""
+    dburl = dbos._config["system_database_url"]
+    assert dburl is not None
+    schema = "dbos." if dburl.startswith("postgres") else ""
+
+    @DBOS.dbos_class("workflows")
+    class WFTest:
+        @classmethod
+        @DBOS.workflow(
+            name="workflowRecvTest",
+            serialization_type=WorkflowSerializationFormat.PORTABLE,
+        )
+        def recvWorkflow(cls, topic: str) -> Any:
+            return DBOS.recv(topic)
+
+    queue = Queue("testq_bogusnotif")
+
+    # Test 1: Unparseable JSON in notification message
+    wf_id = str(uuid.uuid4())
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.text(
+                f"""
+            INSERT INTO {schema}workflow_status(
+              workflow_uuid, name, class_name, queue_name, status,
+              inputs, created_at, serialization
+            )
+            VALUES (:workflow_uuid, :name, :class_name, :queue_name, :status,
+                    :inputs, :created_at, :serialization);
+            """
+            ),
+            {
+                "workflow_uuid": wf_id,
+                "name": "workflowRecvTest",
+                "class_name": "workflows",
+                "queue_name": "testq_bogusnotif",
+                "status": "ENQUEUED",
+                "inputs": json.dumps({"positionalArgs": ["incoming"]}),
+                "created_at": int(time.time() * 1000),
+                "serialization": "portable_json",
+            },
+        )
+        c.execute(
+            sa.text(
+                f"""
+            INSERT INTO {schema}notifications(
+              destination_uuid, topic, message, serialization
+            )
+            VALUES (:destination_uuid, :topic, :message, :serialization);
+            """
+            ),
+            {
+                "destination_uuid": wf_id,
+                "topic": "incoming",
+                "message": "this is not valid json {{{",
+                "serialization": "portable_json",
+            },
+        )
+        c.commit()
+
+    wfh: WorkflowHandle[Any] = DBOS.retrieve_workflow(wf_id)
+    with pytest.raises(PortableWorkflowError) as exc_info:
+        wfh.get_result()
+    assert "JSONDecodeError" in exc_info.value.name
+
+    # Test 2: Valid JSON but unexpected structure (object where scalar expected)
+    wf_id2 = str(uuid.uuid4())
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.text(
+                f"""
+            INSERT INTO {schema}workflow_status(
+              workflow_uuid, name, class_name, queue_name, status,
+              inputs, created_at, serialization
+            )
+            VALUES (:workflow_uuid, :name, :class_name, :queue_name, :status,
+                    :inputs, :created_at, :serialization);
+            """
+            ),
+            {
+                "workflow_uuid": wf_id2,
+                "name": "workflowRecvTest",
+                "class_name": "workflows",
+                "queue_name": "testq_bogusnotif",
+                "status": "ENQUEUED",
+                "inputs": json.dumps({"positionalArgs": ["incoming2"]}),
+                "created_at": int(time.time() * 1000),
+                "serialization": "portable_json",
+            },
+        )
+        c.execute(
+            sa.text(
+                f"""
+            INSERT INTO {schema}notifications(
+              destination_uuid, topic, message, serialization
+            )
+            VALUES (:destination_uuid, :topic, :message, :serialization);
+            """
+            ),
+            {
+                "destination_uuid": wf_id2,
+                "topic": "incoming2",
+                "message": json.dumps({"unexpected": "structure"}),
+                "serialization": "portable_json",
+            },
+        )
+        c.commit()
+
+    # This should succeed — recv just returns whatever was deserialized,
+    # the dict is valid JSON and gets delivered as-is
+    wfh2: WorkflowHandle[Any] = DBOS.retrieve_workflow(wf_id2)
+    result = wfh2.get_result()
+    assert result == {"unexpected": "structure"}
+
+
 def test_directinsert_with_pydantic_validation(dbos: DBOS) -> None:
     """Pydantic validation catches type mismatches before workflow execution."""
     dburl = dbos._config["system_database_url"]
@@ -623,6 +740,10 @@ def test_directinsert_with_pydantic_validation(dbos: DBOS) -> None:
 
     wfh_ok: WorkflowHandle[str] = DBOS.retrieve_workflow(wf_id_ok)
     assert wfh_ok.get_result() == "hello-42-key"
+
+    # Test: enqueue round-trip through the queue with portable serialization
+    wfh_enq = queue.enqueue(WFTest.validatedWorkflow, "enqueued", 7, {"k": "val"})
+    assert wfh_enq.get_result() == "enqueued-7-val"
 
     # Test 2: String where int expected — pydantic should reject it
     wf_id_bad_type = str(uuid.uuid4())
@@ -757,6 +878,13 @@ def test_directinsert_datetime_validation(dbos: DBOS) -> None:
     result = wfh_ok.get_result()
     assert "task1@2025-06-15T10:30:00" in result
     assert "urgent,review" in result
+
+    # Test: enqueue round-trip with a real datetime object through portable serialization
+    dt = datetime(2026, 1, 20, 14, 0, 0)
+    wfh_enq = queue.enqueue(WFTest.datetimeWorkflow, "enqueued", dt, ["live"])
+    enq_result = wfh_enq.get_result()
+    assert "enqueued@2026-01-20T14:00:00" in enq_result
+    assert "live" in enq_result
 
     # Test 2: Not a valid date string — pydantic should reject it
     wf_id_bad = str(uuid.uuid4())
