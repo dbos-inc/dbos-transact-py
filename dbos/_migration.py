@@ -134,11 +134,11 @@ CREATE TABLE \"{schema}\".operation_outputs (
 );
 
 CREATE TABLE \"{schema}\".notifications (
+    message_uuid TEXT NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY, -- Built-in function
     destination_uuid TEXT NOT NULL,
     topic TEXT,
     message TEXT NOT NULL,
     created_at_epoch_ms BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
-    message_uuid TEXT NOT NULL DEFAULT gen_random_uuid(), -- Built-in function
     FOREIGN KEY (destination_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
@@ -273,6 +273,25 @@ CREATE TABLE "{schema}".workflow_schedules (
 """
 
 
+# An earlier version of DBOS had a bug where this table was created without a primary key.
+# The initial migration has been changed to create a key, and this migration creates the key
+# for existing applications.
+def get_dbos_migration_ten(schema: str) -> str:
+    return f"""
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE table_schema = '{schema}'
+        AND table_name = 'notifications'
+        AND constraint_type = 'PRIMARY KEY'
+    ) THEN
+        ALTER TABLE "{schema}".notifications ADD PRIMARY KEY (message_uuid);
+    END IF;
+END $$;
+"""
+
+
 def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
     return [
         get_dbos_migration_one(schema, use_listen_notify),
@@ -284,6 +303,7 @@ def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
         get_dbos_migration_seven(schema),
         get_dbos_migration_eight(schema),
         get_dbos_migration_nine(schema),
+        get_dbos_migration_ten(schema),
     ]
 
 
@@ -343,11 +363,11 @@ CREATE TABLE operation_outputs (
 );
 
 CREATE TABLE notifications (
+    message_uuid TEXT NOT NULL DEFAULT (hex(randomblob(16))) PRIMARY KEY,
     destination_uuid TEXT NOT NULL,
     topic TEXT,
     message TEXT NOT NULL,
     created_at_epoch_ms INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
-    message_uuid TEXT NOT NULL DEFAULT (hex(randomblob(16))),
     FOREIGN KEY (destination_uuid) REFERENCES workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
