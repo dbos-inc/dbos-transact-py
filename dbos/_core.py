@@ -57,6 +57,7 @@ from ._logger import dbos_logger
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSFuncType,
+    ValidateArgsCallable,
     get_config_name,
     get_dbos_class_name,
     get_dbos_func_name,
@@ -635,9 +636,28 @@ def execute_workflow_by_id(
     status = dbos._sys_db.get_workflow_status(workflow_id)
     if not status:
         raise DBOSRecoveryError(workflow_id, "Workflow status not found")
-    inputs: WorkflowInputs = deserialize_args(
-        status["inputs"], status["serialization"], dbos._serializer
-    )
+    try:
+        inputs: WorkflowInputs = deserialize_args(
+            status["inputs"], status["serialization"], dbos._serializer
+        )
+    except Exception as deser_error:
+        # Mark workflow as ERROR immediately instead of leaving it PENDING for infinite retry
+        try:
+            error_str = serialize_exception(
+                deser_error, status["serialization"], dbos._serializer
+            )[0]
+        except Exception:
+            # Fallback: create a simple error we know can be serialized
+            fallback = Exception(f"{type(deser_error).__name__}: {deser_error}")
+            error_str = serialize_exception(
+                fallback, status["serialization"], dbos._serializer
+            )[0]
+        dbos._sys_db.update_workflow_outcome(
+            workflow_id,
+            WorkflowStatusString.ERROR.value,
+            error=error_str,
+        )
+        raise
     wf_func = dbos._registry.workflow_info_map.get(status["name"], None)
     if not wf_func:
         raise DBOSWorkflowFunctionNotFoundError(
@@ -650,6 +670,30 @@ def execute_workflow_by_id(
             "<NONE>",
             f"{wf_func.__name__} is not a registered workflow function",
         )
+    # Run argument validation if configured on the workflow
+    if fi.validate_args is not None and inputs is not None:
+        try:
+            validated_args, validated_kwargs = fi.validate_args(
+                inputs["args"], inputs["kwargs"]
+            )
+            inputs = {"args": validated_args, "kwargs": validated_kwargs}
+        except Exception as val_error:
+            try:
+                error_str = serialize_exception(
+                    val_error, status["serialization"], dbos._serializer
+                )[0]
+            except Exception:
+                # Fallback: create a simple error we know can be serialized
+                fallback = Exception(f"{type(val_error).__name__}: {val_error}")
+                error_str = serialize_exception(
+                    fallback, status["serialization"], dbos._serializer
+                )[0]
+            dbos._sys_db.update_workflow_outcome(
+                workflow_id,
+                WorkflowStatusString.ERROR.value,
+                error=error_str,
+            )
+            raise
     with DBOSContextEnsure():
         # If this function belongs to a configured class, add that class instance as its first argument
         if status["config_name"] is not None:
@@ -968,12 +1012,14 @@ def workflow_wrapper(
     max_recovery_attempts: Optional[int] = DEFAULT_MAX_RECOVERY_ATTEMPTS,
     *,
     serialization_type: WorkflowSerializationFormat = WorkflowSerializationFormat.DEFAULT,
+    validate_args: Optional["ValidateArgsCallable"] = None,
 ) -> Callable[P, R]:
     func.__orig_func = func  # type: ignore
 
     fi = get_or_create_func_info(func)
     fi.max_recovery_attempts = max_recovery_attempts
     fi.serialization_type = serialization_type
+    fi.validate_args = validate_args
 
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> R:
@@ -1124,13 +1170,28 @@ def decorate_workflow(
     max_recovery_attempts: Optional[int],
     *,
     serialization_type: Optional[WorkflowSerializationFormat] = None,
+    validate_args: Optional["ValidateArgsCallable"] = None,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     if serialization_type is None:
         serialization_type = WorkflowSerializationFormat.DEFAULT
 
     def _workflow_decorator(func: Callable[P, R]) -> Callable[P, R]:
+        resolved_validate_args = validate_args
+        # If pydantic_args_validator sentinel is passed, build a real validator
+        # from the function's type hints at decoration time
+        if resolved_validate_args is not None:
+            from ._validation import pydantic_args_validator
+
+            if resolved_validate_args is pydantic_args_validator:
+                from ._validation import make_pydantic_args_validator
+
+                resolved_validate_args = make_pydantic_args_validator(func)
         wrapped_func = workflow_wrapper(
-            reg, func, max_recovery_attempts, serialization_type=serialization_type
+            reg,
+            func,
+            max_recovery_attempts,
+            serialization_type=serialization_type,
+            validate_args=resolved_validate_args,
         )
         func_name = name if name is not None else func.__qualname__
         set_dbos_func_name(func, func_name)

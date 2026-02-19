@@ -49,6 +49,11 @@ class DBOSFuncType(Enum):
     Instance = 4
 
 
+ValidateArgsCallable = Callable[
+    [Tuple[Any, ...], dict[str, Any]], Tuple[Tuple[Any, ...], dict[str, Any]]
+]
+
+
 @dataclass
 class DBOSFuncInfo:
     class_info: Optional[DBOSClassInfo] = None
@@ -56,6 +61,7 @@ class DBOSFuncInfo:
     required_roles: Optional[List[str]] = None
     max_recovery_attempts: Optional[int] = DEFAULT_MAX_RECOVERY_ATTEMPTS
     serialization_type: Optional["WorkflowSerializationFormat"] = None
+    validate_args: Optional[ValidateArgsCallable] = None
 
 
 def get_or_create_class_info(

@@ -45,6 +45,9 @@ otel = [
     "opentelemetry-sdk>=1.37.0",
     "opentelemetry-exporter-otlp-proto-http>=1.37.0",
 ]
+validation = [
+    "pydantic>=2.0",
+]
 [build-system]
 requires = ["pdm-backend"]
 build-backend = "pdm.backend"

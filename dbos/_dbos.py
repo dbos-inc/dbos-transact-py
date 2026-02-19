@@ -75,6 +75,7 @@ from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
     DBOSFuncType,
+    ValidateArgsCallable,
     _class_fqn,
     get_dbos_func_name,
     get_func_info,
@@ -736,6 +737,7 @@ class DBOS:
         name: Optional[str] = None,
         max_recovery_attempts: Optional[int] = DEFAULT_MAX_RECOVERY_ATTEMPTS,
         serialization_type: Optional[WorkflowSerializationFormat] = None,
+        validate_args: Optional["ValidateArgsCallable"] = None,
     ) -> Callable[[Callable[P, R]], Callable[P, R]]:
         """Decorate a function for use as a DBOS workflow."""
         return decorate_workflow(
@@ -743,6 +745,7 @@ class DBOS:
             name,
             max_recovery_attempts,
             serialization_type=serialization_type,
+            validate_args=validate_args,
         )
 
     @classmethod

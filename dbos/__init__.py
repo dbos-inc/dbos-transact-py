@@ -31,6 +31,7 @@ from ._sys_db import (
     WorkflowStatus,
     WorkflowStatusString,
 )
+from ._validation import make_pydantic_args_validator, pydantic_args_validator
 from .cli.migration import run_dbos_database_migrations
 
 __all__ = [
@@ -61,5 +62,7 @@ __all__ = [
     "Debouncer",
     "DebouncerClient",
     "Serializer",
+    "pydantic_args_validator",
+    "make_pydantic_args_validator",
     "run_dbos_database_migrations",
 ]

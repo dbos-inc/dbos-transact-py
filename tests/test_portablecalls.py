@@ -3,12 +3,13 @@ import os
 import subprocess
 import time
 import uuid
-from typing import Any, Dict, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, DBOSConfig, Queue, WorkflowHandle
+from dbos import DBOS, DBOSConfig, Queue, WorkflowHandle, pydantic_args_validator
 from dbos._client import DBOSClient
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import (
@@ -423,6 +424,421 @@ def test_directinsert_workflows(dbos: DBOS) -> None:
     wfh: WorkflowHandle[str] = DBOS.retrieve_workflow(id)
     res = wfh.get_result()
     assert res == 's-1-k:v@"M"'
+
+
+def test_directinsert_invalid_json(dbos: DBOS) -> None:
+    """Inserting unparseable JSON into the inputs column should cause an ERROR, not infinite retry."""
+    dburl = dbos._config["system_database_url"]
+    assert dburl is not None
+    schema = "dbos." if dburl.startswith("postgres") else ""
+
+    @DBOS.dbos_class("workflows")
+    class WFTest:
+        @classmethod
+        @DBOS.workflow(name="workflowPortable")
+        def defSerPortable(
+            cls,
+            s: str,
+            x: int,
+            o: Dict[str, Any],
+        ) -> str:
+            return f"{s}-{x}"
+
+    queue = Queue("testq_badjson")
+
+    wf_id = str(uuid.uuid4())
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.text(
+                f"""
+            INSERT INTO {schema}workflow_status(
+              workflow_uuid, name, class_name, queue_name, status,
+              inputs, created_at, serialization
+            )
+            VALUES (:workflow_uuid, :name, :class_name, :queue_name, :status,
+                    :inputs, :created_at, :serialization);
+            """
+            ),
+            {
+                "workflow_uuid": wf_id,
+                "name": "workflowPortable",
+                "class_name": "workflows",
+                "queue_name": "testq_badjson",
+                "status": "ENQUEUED",
+                "inputs": "this is not valid json {{{",
+                "created_at": int(time.time() * 1000),
+                "serialization": "portable_json",
+            },
+        )
+        c.commit()
+
+    wfh: WorkflowHandle[str] = DBOS.retrieve_workflow(wf_id)
+    with pytest.raises(PortableWorkflowError) as exc_info:
+        wfh.get_result()
+    assert "JSONDecodeError" in exc_info.value.name
+
+
+def test_directinsert_wrong_args(dbos: DBOS) -> None:
+    """Inserting valid JSON with wrong argument structure should cause an ERROR."""
+    dburl = dbos._config["system_database_url"]
+    assert dburl is not None
+    schema = "dbos." if dburl.startswith("postgres") else ""
+
+    @DBOS.dbos_class("workflows")
+    class WFTest:
+        @classmethod
+        @DBOS.workflow(name="workflowPortable")
+        def defSerPortable(
+            cls,
+            s: str,
+            x: int,
+            o: Dict[str, Any],
+        ) -> str:
+            return f"{s}-{x}-{o['k']}"
+
+    queue = Queue("testq_wrongargs")
+
+    # Test: missing required positional args (only 1 of 3)
+    wf_id = str(uuid.uuid4())
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.text(
+                f"""
+            INSERT INTO {schema}workflow_status(
+              workflow_uuid, name, class_name, queue_name, status,
+              inputs, created_at, serialization
+            )
+            VALUES (:workflow_uuid, :name, :class_name, :queue_name, :status,
+                    :inputs, :created_at, :serialization);
+            """
+            ),
+            {
+                "workflow_uuid": wf_id,
+                "name": "workflowPortable",
+                "class_name": "workflows",
+                "queue_name": "testq_wrongargs",
+                "status": "ENQUEUED",
+                "inputs": json.dumps(
+                    {"positionalArgs": ["s"]},
+                ),
+                "created_at": int(time.time() * 1000),
+                "serialization": "portable_json",
+            },
+        )
+        c.commit()
+
+    wfh: WorkflowHandle[str] = DBOS.retrieve_workflow(wf_id)
+    with pytest.raises(PortableWorkflowError) as exc_info:
+        wfh.get_result()
+
+    # The workflow function is missing required arguments
+    assert "TypeError" in exc_info.value.name
+
+    # Test: wrong type that causes runtime error (int where dict expected)
+    wf_id2 = str(uuid.uuid4())
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.text(
+                f"""
+            INSERT INTO {schema}workflow_status(
+              workflow_uuid, name, class_name, queue_name, status,
+              inputs, created_at, serialization
+            )
+            VALUES (:workflow_uuid, :name, :class_name, :queue_name, :status,
+                    :inputs, :created_at, :serialization);
+            """
+            ),
+            {
+                "workflow_uuid": wf_id2,
+                "name": "workflowPortable",
+                "class_name": "workflows",
+                "queue_name": "testq_wrongargs",
+                "status": "ENQUEUED",
+                "inputs": json.dumps({"positionalArgs": ["s", 1, 42]}),
+                "created_at": int(time.time() * 1000),
+                "serialization": "portable_json",
+            },
+        )
+        c.commit()
+
+    wfh2: WorkflowHandle[str] = DBOS.retrieve_workflow(wf_id2)
+    with pytest.raises(PortableWorkflowError) as exc_info:
+        wfh2.get_result()
+    # 42['k'] raises TypeError
+    assert "TypeError" in exc_info.value.name
+
+
+def test_directinsert_with_pydantic_validation(dbos: DBOS) -> None:
+    """Pydantic validation catches type mismatches before workflow execution."""
+    dburl = dbos._config["system_database_url"]
+    assert dburl is not None
+    schema = "dbos." if dburl.startswith("postgres") else ""
+
+    @DBOS.dbos_class("workflows")
+    class WFTest:
+        @classmethod
+        @DBOS.workflow(
+            name="workflowValidated",
+            serialization_type=WorkflowSerializationFormat.PORTABLE,
+            validate_args=pydantic_args_validator,
+        )
+        def validatedWorkflow(
+            cls,
+            s: str,
+            x: int,
+            o: Dict[str, Any],
+        ) -> str:
+            return f"{s}-{x}-{o['k']}"
+
+    queue = Queue("testq_pydantic")
+
+    # Test 1: Valid args should succeed
+    wf_id_ok = str(uuid.uuid4())
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.text(
+                f"""
+            INSERT INTO {schema}workflow_status(
+              workflow_uuid, name, class_name, queue_name, status,
+              inputs, created_at, serialization
+            )
+            VALUES (:workflow_uuid, :name, :class_name, :queue_name, :status,
+                    :inputs, :created_at, :serialization);
+            """
+            ),
+            {
+                "workflow_uuid": wf_id_ok,
+                "name": "workflowValidated",
+                "class_name": "workflows",
+                "queue_name": "testq_pydantic",
+                "status": "ENQUEUED",
+                "inputs": json.dumps(
+                    {"positionalArgs": ["hello", 42, {"k": "key", "v": ["a", "b"]}]}
+                ),
+                "created_at": int(time.time() * 1000),
+                "serialization": "portable_json",
+            },
+        )
+        c.commit()
+
+    wfh_ok: WorkflowHandle[str] = DBOS.retrieve_workflow(wf_id_ok)
+    assert wfh_ok.get_result() == "hello-42-key"
+
+    # Test 2: String where int expected — pydantic should reject it
+    wf_id_bad_type = str(uuid.uuid4())
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.text(
+                f"""
+            INSERT INTO {schema}workflow_status(
+              workflow_uuid, name, class_name, queue_name, status,
+              inputs, created_at, serialization
+            )
+            VALUES (:workflow_uuid, :name, :class_name, :queue_name, :status,
+                    :inputs, :created_at, :serialization);
+            """
+            ),
+            {
+                "workflow_uuid": wf_id_bad_type,
+                "name": "workflowValidated",
+                "class_name": "workflows",
+                "queue_name": "testq_pydantic",
+                "status": "ENQUEUED",
+                "inputs": json.dumps(
+                    {"positionalArgs": ["hello", "not_a_number", {"k": "key"}]}
+                ),
+                "created_at": int(time.time() * 1000),
+                "serialization": "portable_json",
+            },
+        )
+        c.commit()
+
+    wfh_bad: WorkflowHandle[str] = DBOS.retrieve_workflow(wf_id_bad_type)
+    with pytest.raises(PortableWorkflowError) as exc_info:
+        wfh_bad.get_result()
+    assert "ValueError" in exc_info.value.name
+    assert "validation" in exc_info.value.message.lower()
+
+    # Test 3: Missing required args — pydantic validator should catch it
+    wf_id_missing = str(uuid.uuid4())
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.text(
+                f"""
+            INSERT INTO {schema}workflow_status(
+              workflow_uuid, name, class_name, queue_name, status,
+              inputs, created_at, serialization
+            )
+            VALUES (:workflow_uuid, :name, :class_name, :queue_name, :status,
+                    :inputs, :created_at, :serialization);
+            """
+            ),
+            {
+                "workflow_uuid": wf_id_missing,
+                "name": "workflowValidated",
+                "class_name": "workflows",
+                "queue_name": "testq_pydantic",
+                "status": "ENQUEUED",
+                "inputs": json.dumps({"positionalArgs": ["hello"]}),
+                "created_at": int(time.time() * 1000),
+                "serialization": "portable_json",
+            },
+        )
+        c.commit()
+
+    wfh_missing: WorkflowHandle[str] = DBOS.retrieve_workflow(wf_id_missing)
+    with pytest.raises(PortableWorkflowError) as exc_info:
+        wfh_missing.get_result()
+    assert "ValueError" in exc_info.value.name
+    assert "missing" in exc_info.value.message.lower()
+
+
+def test_directinsert_datetime_validation(dbos: DBOS) -> None:
+    """JSON has no native date type — pydantic should coerce ISO strings to datetime,
+    and reject values that aren't valid date strings."""
+    dburl = dbos._config["system_database_url"]
+    assert dburl is not None
+    schema = "dbos." if dburl.startswith("postgres") else ""
+
+    @DBOS.dbos_class("workflows")
+    class WFTest:
+        @classmethod
+        @DBOS.workflow(
+            name="workflowWithDatetime",
+            serialization_type=WorkflowSerializationFormat.PORTABLE,
+            validate_args=pydantic_args_validator,
+        )
+        def datetimeWorkflow(
+            cls,
+            name: str,
+            due: datetime,
+            tags: List[str],
+        ) -> str:
+            return f"{name}@{due.isoformat()}#{','.join(tags)}"
+
+    queue = Queue("testq_datetime")
+
+    # Test 1: ISO date string should be coerced to datetime by pydantic
+    wf_id_ok = str(uuid.uuid4())
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.text(
+                f"""
+            INSERT INTO {schema}workflow_status(
+              workflow_uuid, name, class_name, queue_name, status,
+              inputs, created_at, serialization
+            )
+            VALUES (:workflow_uuid, :name, :class_name, :queue_name, :status,
+                    :inputs, :created_at, :serialization);
+            """
+            ),
+            {
+                "workflow_uuid": wf_id_ok,
+                "name": "workflowWithDatetime",
+                "class_name": "workflows",
+                "queue_name": "testq_datetime",
+                "status": "ENQUEUED",
+                "inputs": json.dumps(
+                    {
+                        "positionalArgs": [
+                            "task1",
+                            "2025-06-15T10:30:00",
+                            ["urgent", "review"],
+                        ]
+                    },
+                ),
+                "created_at": int(time.time() * 1000),
+                "serialization": "portable_json",
+            },
+        )
+        c.commit()
+
+    wfh_ok: WorkflowHandle[str] = DBOS.retrieve_workflow(wf_id_ok)
+    result = wfh_ok.get_result()
+    assert "task1@2025-06-15T10:30:00" in result
+    assert "urgent,review" in result
+
+    # Test 2: Not a valid date string — pydantic should reject it
+    wf_id_bad = str(uuid.uuid4())
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.text(
+                f"""
+            INSERT INTO {schema}workflow_status(
+              workflow_uuid, name, class_name, queue_name, status,
+              inputs, created_at, serialization
+            )
+            VALUES (:workflow_uuid, :name, :class_name, :queue_name, :status,
+                    :inputs, :created_at, :serialization);
+            """
+            ),
+            {
+                "workflow_uuid": wf_id_bad,
+                "name": "workflowWithDatetime",
+                "class_name": "workflows",
+                "queue_name": "testq_datetime",
+                "status": "ENQUEUED",
+                "inputs": json.dumps(
+                    {
+                        "positionalArgs": [
+                            "task2",
+                            "not-a-date-at-all",
+                            ["tag"],
+                        ]
+                    },
+                ),
+                "created_at": int(time.time() * 1000),
+                "serialization": "portable_json",
+            },
+        )
+        c.commit()
+
+    wfh_bad: WorkflowHandle[str] = DBOS.retrieve_workflow(wf_id_bad)
+    with pytest.raises(PortableWorkflowError) as exc_info:
+        wfh_bad.get_result()
+    assert "ValueError" in exc_info.value.name
+    assert "validation" in exc_info.value.message.lower()
+
+    # Test 3: A boolean where datetime expected — should be rejected
+    # (Note: pydantic coerces ints to datetime as unix timestamps, which is valid)
+    wf_id_bool = str(uuid.uuid4())
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.text(
+                f"""
+            INSERT INTO {schema}workflow_status(
+              workflow_uuid, name, class_name, queue_name, status,
+              inputs, created_at, serialization
+            )
+            VALUES (:workflow_uuid, :name, :class_name, :queue_name, :status,
+                    :inputs, :created_at, :serialization);
+            """
+            ),
+            {
+                "workflow_uuid": wf_id_bool,
+                "name": "workflowWithDatetime",
+                "class_name": "workflows",
+                "queue_name": "testq_datetime",
+                "status": "ENQUEUED",
+                "inputs": json.dumps(
+                    {
+                        "positionalArgs": [
+                            "task3",
+                            True,
+                            ["tag"],
+                        ]
+                    },
+                ),
+                "created_at": int(time.time() * 1000),
+                "serialization": "portable_json",
+            },
+        )
+        c.commit()
+
+    wfh_bool: WorkflowHandle[str] = DBOS.retrieve_workflow(wf_id_bool)
+    with pytest.raises(PortableWorkflowError) as exc_info:
+        wfh_bool.get_result()
+    assert "ValueError" in exc_info.value.name
 
 
 def test_nodejs_invoke(dbos: DBOS) -> None:
