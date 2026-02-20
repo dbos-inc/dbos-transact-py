@@ -110,7 +110,7 @@ CREATE TABLE \"{schema}\".workflow_status (
     inputs TEXT,
     started_at_epoch_ms BIGINT,
     deduplication_id TEXT,
-    priority INTEGER NOT NULL DEFAULT 0
+    priority INT4 NOT NULL DEFAULT 0
 );
 
 CREATE INDEX workflow_status_created_at_index ON \"{schema}\".workflow_status (created_at);
@@ -123,7 +123,7 @@ UNIQUE (queue_name, deduplication_id);
 
 CREATE TABLE \"{schema}\".operation_outputs (
     workflow_uuid TEXT NOT NULL,
-    function_id INTEGER NOT NULL,
+    function_id INT4 NOT NULL,
     function_name TEXT NOT NULL DEFAULT '',
     output TEXT,
     error TEXT,
@@ -157,7 +157,7 @@ CREATE TABLE \"{schema}\".streams (
     workflow_uuid TEXT NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
-    "offset" INTEGER NOT NULL,
+    "offset" INT4 NOT NULL,
     PRIMARY KEY (workflow_uuid, key, "offset"),
     FOREIGN KEY (workflow_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
@@ -237,14 +237,14 @@ def get_dbos_migration_six(schema: str) -> str:
     return f"""
 CREATE TABLE \"{schema}\".workflow_events_history (
     workflow_uuid TEXT NOT NULL,
-    function_id INTEGER NOT NULL,
+    function_id INT4 NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
     PRIMARY KEY (workflow_uuid, function_id, key),
-    FOREIGN KEY (workflow_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid) 
+    FOREIGN KEY (workflow_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid)
         ON UPDATE CASCADE ON DELETE CASCADE
 );
-ALTER TABLE \"{schema}\".streams ADD COLUMN function_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE \"{schema}\".streams ADD COLUMN function_id INT4 NOT NULL DEFAULT 0;
 """
 
 
