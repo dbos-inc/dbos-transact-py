@@ -119,6 +119,7 @@ def _enqueue_scheduled_workflow(
         "deduplication_id": None,
         "priority": 0,
         "inputs": sys_db.serializer.serialize(inputs),
+        "serialization": None,
         "queue_partition_key": None,
         "forked_from": None,
         "parent_workflow_id": None,

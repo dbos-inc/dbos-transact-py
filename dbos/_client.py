@@ -32,10 +32,14 @@ from dbos._dbos_config import get_system_database_url, is_valid_database_url
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._scheduler import backfill_schedule, trigger_schedule
-from dbos._serialization import DefaultSerializer, Serializer, WorkflowInputs
+from dbos._serialization import (
+    DefaultSerializer,
+    Serializer,
+    WorkflowSerializationFormat,
+    serialize_args,
+)
 from dbos._sys_db import (
     ClientScheduleInput,
-    EnqueueOptionsInternal,
     StepInfo,
     SystemDatabase,
     WorkflowSchedule,
@@ -67,6 +71,9 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     queue_partition_key: str
     authenticated_user: str
     authenticated_roles: list[str]
+    serialization_type: WorkflowSerializationFormat
+    class_name: str
+    instance_name: str
 
 
 def validate_enqueue_options(options: EnqueueOptions) -> None:
@@ -186,12 +193,6 @@ class DBOSClient:
         if workflow_id is None:
             workflow_id = generate_uuid()
         workflow_timeout = options.get("workflow_timeout", None)
-        enqueue_options_internal: EnqueueOptionsInternal = {
-            "deduplication_id": options.get("deduplication_id"),
-            "priority": options.get("priority"),
-            "app_version": options.get("app_version"),
-            "queue_partition_key": options.get("queue_partition_key"),
-        }
 
         authenticated_user = options.get("authenticated_user")
         authenticated_roles = (
@@ -200,19 +201,21 @@ class DBOSClient:
             else None
         )
 
-        inputs: WorkflowInputs = {
-            "args": args,
-            "kwargs": kwargs,
-        }
+        inputs, serialization = serialize_args(
+            args,
+            kwargs,
+            options.get("serialization_type"),
+            self._serializer,
+        )
 
         status: WorkflowStatusInternal = {
             "workflow_uuid": workflow_id,
             "status": WorkflowStatusString.ENQUEUED.value,
             "name": workflow_name,
-            "class_name": None,
+            "class_name": options.get("class_name"),
             "queue_name": queue_name,
-            "app_version": enqueue_options_internal["app_version"],
-            "config_name": None,
+            "app_version": options.get("app_version"),
+            "config_name": options.get("instance_name"),
             "authenticated_user": authenticated_user,
             "assumed_role": None,
             "authenticated_roles": authenticated_roles,
@@ -227,14 +230,15 @@ class DBOSClient:
                 int(workflow_timeout * 1000) if workflow_timeout is not None else None
             ),
             "workflow_deadline_epoch_ms": None,
-            "deduplication_id": enqueue_options_internal["deduplication_id"],
+            "deduplication_id": options.get("deduplication_id", None),
             "priority": (
-                enqueue_options_internal["priority"]
-                if enqueue_options_internal["priority"] is not None
+                options.get("priority", 0)
+                if options.get("priority", None) is not None
                 else 0
             ),
-            "inputs": self._serializer.serialize(inputs),
-            "queue_partition_key": enqueue_options_internal["queue_partition_key"],
+            "inputs": inputs,
+            "serialization": serialization,
+            "queue_partition_key": options.get("queue_partition_key", None),
             "forked_from": None,
             "parent_workflow_id": None,
             "started_at_epoch_ms": None,
@@ -282,8 +286,18 @@ class DBOSClient:
         message: Any,
         topic: Optional[str] = None,
         idempotency_key: Optional[str] = None,
+        *,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
     ) -> None:
         idempotency_key = idempotency_key if idempotency_key else generate_uuid()
+        serargs, argser = serialize_args(
+            (),
+            {},
+            serialization_type,
+            self._serializer,
+        )
         status: WorkflowStatusInternal = {
             "workflow_uuid": f"{destination_id}-{idempotency_key}",
             "status": WorkflowStatusString.SUCCESS.value,
@@ -306,7 +320,8 @@ class DBOSClient:
             "workflow_deadline_epoch_ms": None,
             "deduplication_id": None,
             "priority": 0,
-            "inputs": self._serializer.serialize({"args": (), "kwargs": {}}),
+            "inputs": serargs,
+            "serialization": argser,
             "queue_partition_key": None,
             "forked_from": None,
             "parent_workflow_id": None,
@@ -322,7 +337,14 @@ class DBOSClient:
                 is_dequeued_request=False,
                 is_recovery_request=False,
             )
-        self._sys_db.send(status["workflow_uuid"], 0, destination_id, message, topic)
+        self._sys_db.send(
+            status["workflow_uuid"],
+            0,
+            destination_id,
+            message,
+            topic,
+            serialization_type=serialization_type,
+        )
 
     async def send_async(
         self,

@@ -5,6 +5,7 @@ from types import FunctionType
 from typing import Any, Callable, List, Literal, Optional, Tuple, Type, cast
 
 from dbos._error import DBOSWorkflowFunctionNotFoundError
+from dbos._serialization import WorkflowSerializationFormat
 
 DEFAULT_MAX_RECOVERY_ATTEMPTS = 100
 
@@ -48,12 +49,19 @@ class DBOSFuncType(Enum):
     Instance = 4
 
 
+ValidateArgsCallable = Callable[
+    [Tuple[Any, ...], dict[str, Any]], Tuple[Tuple[Any, ...], dict[str, Any]]
+]
+
+
 @dataclass
 class DBOSFuncInfo:
     class_info: Optional[DBOSClassInfo] = None
     func_type: DBOSFuncType = DBOSFuncType.Unknown
     required_roles: Optional[List[str]] = None
     max_recovery_attempts: Optional[int] = DEFAULT_MAX_RECOVERY_ATTEMPTS
+    serialization_type: Optional["WorkflowSerializationFormat"] = None
+    validate_args: Optional[ValidateArgsCallable] = None
 
 
 def get_or_create_class_info(

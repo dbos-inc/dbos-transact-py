@@ -19,8 +19,9 @@ from ._sys_db import StepInfo
 class TransactionResultInternal(TypedDict):
     workflow_uuid: str
     function_id: int
-    output: Optional[str]  # JSON (jsonpickle)
-    error: Optional[str]  # JSON (jsonpickle)
+    output: Optional[str]  # determined by `serialization`
+    error: Optional[str]  # determined by `serialization`
+    serialization: Optional[str]
     txn_id: Optional[str]
     txn_snapshot: str
     executor_id: Optional[str]
@@ -28,8 +29,9 @@ class TransactionResultInternal(TypedDict):
 
 
 class RecordedResult(TypedDict):
-    output: Optional[str]  # JSON (jsonpickle)
-    error: Optional[str]  # JSON (jsonpickle)
+    output: Optional[str]  # determined by `serialization`
+    error: Optional[str]  # determined by `serialization`
+    serialization: Optional[str]
 
 
 class ApplicationDatabase(ABC):
@@ -174,6 +176,7 @@ class ApplicationDatabase(ABC):
         result: RecordedResult = {
             "output": output,
             "error": error,
+            "serialization": None,
         }
         return result
 
