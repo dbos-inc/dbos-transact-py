@@ -272,6 +272,19 @@ CREATE TABLE "{schema}".workflow_schedules (
 """
 
 
+def get_dbos_migration_ten(schema: str) -> str:
+    return f"""
+CREATE TABLE "{schema}".queue_config (
+    queue_name TEXT PRIMARY KEY,
+    concurrency INTEGER,
+    worker_concurrency INTEGER,
+    limiter_limit INTEGER,
+    limiter_period_ms BIGINT,
+    updated_at_epoch_ms BIGINT NOT NULL
+);
+"""
+
+
 def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
     return [
         get_dbos_migration_one(schema, use_listen_notify),
@@ -283,6 +296,7 @@ def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
         get_dbos_migration_seven(schema),
         get_dbos_migration_eight(schema),
         get_dbos_migration_nine(schema),
+        get_dbos_migration_ten(schema),
     ]
 
 
@@ -424,6 +438,17 @@ CREATE TABLE workflow_schedules (
 );
 """
 
+sqlite_migration_ten = """
+CREATE TABLE queue_config (
+    queue_name TEXT PRIMARY KEY,
+    concurrency INTEGER,
+    worker_concurrency INTEGER,
+    limiter_limit INTEGER,
+    limiter_period_ms INTEGER,
+    updated_at_epoch_ms INTEGER NOT NULL
+);
+"""
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -434,4 +459,5 @@ sqlite_migrations = [
     sqlite_migration_seven,
     sqlite_migration_eight,
     sqlite_migration_nine,
+    sqlite_migration_ten,
 ]

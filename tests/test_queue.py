@@ -1771,3 +1771,104 @@ def test_listen_queue(dbos: DBOS, config: DBOSConfig) -> None:
     assert DBOS.retrieve_workflow(handle_two.workflow_id).get_result()
     # Verify the internal queue works
     assert DBOS.fork_workflow(handle_two.workflow_id, 0).get_result()
+
+
+def test_set_concurrency(dbos: DBOS) -> None:
+    """Queue.set_concurrency() dynamically raises the global concurrency limit."""
+    workflow_event = threading.Event()
+    main_event1 = threading.Event()
+    main_event2 = threading.Event()
+
+    @DBOS.workflow()
+    def blocking_workflow(idx: int) -> int:
+        if idx == 1:
+            main_event1.set()
+        elif idx == 2:
+            main_event2.set()
+        workflow_event.wait()
+        return idx
+
+    # Start with concurrency=1 — only one workflow runs at a time.
+    queue = Queue("test_queue", concurrency=1)
+    handle1 = queue.enqueue(blocking_workflow, 1)
+    handle2 = queue.enqueue(blocking_workflow, 2)
+
+    # Wait for wf1 to start; wf2 must stay ENQUEUED while the limit holds.
+    main_event1.wait(timeout=10)
+    time.sleep(2)
+    assert handle2.get_status().status == "ENQUEUED"
+
+    # Raise the limit to 2 — wf2 should now be dequeued and start running.
+    queue.set_concurrency(2)
+    assert main_event2.wait(timeout=10), "wf2 did not start after set_concurrency(2)"
+
+    # Release both workflows and verify results.
+    workflow_event.set()
+    assert handle1.get_result() == 1
+    assert handle2.get_result() == 2
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_set_limiter(dbos: DBOS) -> None:
+    """Queue.set_limiter() dynamically removes a rate limiter so blocked work proceeds."""
+    flag = False
+
+    @DBOS.workflow()
+    def quick_workflow() -> None:
+        pass
+
+    @DBOS.workflow()
+    def flag_workflow() -> None:
+        nonlocal flag
+        flag = True
+
+    # Tight limiter: at most 1 workflow started per 60 seconds.
+    queue = Queue("test_queue", limiter={"limit": 1, "period": 60})
+
+    # First workflow consumes the rate-limit budget.
+    queue.enqueue(quick_workflow).get_result()
+
+    # Second workflow stays ENQUEUED because the budget is exhausted.
+    handle2 = queue.enqueue(flag_workflow)
+    time.sleep(2)
+    assert not flag
+    assert handle2.get_status().status == "ENQUEUED"
+
+    # Remove the limiter entirely — the second workflow should now be dequeued.
+    queue.set_limiter(None)
+    assert handle2.get_result() is None
+    assert flag
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_dbos_set_queue_concurrency(dbos: DBOS) -> None:
+    """DBOS.set_queue_concurrency() is a static alternative to Queue.set_concurrency()."""
+    workflow_event = threading.Event()
+    main_event1 = threading.Event()
+    main_event2 = threading.Event()
+
+    @DBOS.workflow()
+    def blocking_workflow(idx: int) -> int:
+        if idx == 1:
+            main_event1.set()
+        elif idx == 2:
+            main_event2.set()
+        workflow_event.wait()
+        return idx
+
+    queue = Queue("test_queue", concurrency=1)
+    handle1 = queue.enqueue(blocking_workflow, 1)
+    handle2 = queue.enqueue(blocking_workflow, 2)
+
+    main_event1.wait(timeout=10)
+    time.sleep(2)
+    assert handle2.get_status().status == "ENQUEUED"
+
+    # Use the static DBOS API instead of the Queue instance.
+    DBOS.set_queue_concurrency("test_queue", 2)
+    assert main_event2.wait(timeout=10), "wf2 did not start after DBOS.set_queue_concurrency(2)"
+
+    workflow_event.set()
+    assert handle1.get_result() == 1
+    assert handle2.get_result() == 2
+    assert queue_entries_are_cleaned_up(dbos)

@@ -37,6 +37,7 @@ class SystemSchema:
         cls.streams.schema = schema_name
         cls.workflow_events_history.schema = schema_name
         cls.workflow_schedules.schema = schema_name
+        cls.queue_config.schema = schema_name
 
     workflow_status = Table(
         "workflow_status",
@@ -198,4 +199,15 @@ class SystemSchema:
         Column("schedule", Text, nullable=False),
         Column("status", Text, nullable=False, server_default="ACTIVE"),
         Column("context", Text, nullable=False),
+    )
+
+    queue_config = Table(
+        "queue_config",
+        metadata_obj,
+        Column("queue_name", Text, primary_key=True),
+        Column("concurrency", Integer, nullable=True),
+        Column("worker_concurrency", Integer, nullable=True),
+        Column("limiter_limit", Integer, nullable=True),
+        Column("limiter_period_ms", BigInteger, nullable=True),
+        Column("updated_at_epoch_ms", BigInteger, nullable=False),
     )

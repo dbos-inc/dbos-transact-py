@@ -18,7 +18,7 @@ from ._dbos import (
 from ._dbos_config import DBOSConfig
 from ._debouncer import Debouncer, DebouncerClient
 from ._kafka_message import KafkaMessage
-from ._queue import Queue
+from ._queue import Queue, QueueRateLimit
 from ._serialization import Serializer
 from ._sys_db import (
     ClientScheduleInput,
@@ -52,6 +52,7 @@ __all__ = [
     "WorkflowStatusString",
     "error",
     "Queue",
+    "QueueRateLimit",
     "Debouncer",
     "DebouncerClient",
     "Serializer",

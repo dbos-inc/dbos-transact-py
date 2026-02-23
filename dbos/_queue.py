@@ -71,6 +71,59 @@ class Queue:
             raise Exception(f"Queue {name} has already been declared")
         registry.queue_info_map[self.name] = self
 
+    def set_concurrency(
+        self,
+        concurrency: Optional[int] = None,
+        *,
+        worker_concurrency: Optional[int] = None,
+    ) -> None:
+        """Dynamically update this queue's concurrency limits at runtime.
+
+        Changes take effect on this worker immediately and are persisted to
+        the database so that all other workers pick them up within one
+        polling cycle. Changes survive process restarts.
+
+        Args:
+            concurrency: New global concurrency limit (max workflows PENDING
+                across all workers). Pass ``None`` to remove the limit.
+            worker_concurrency: New per-worker concurrency limit. Pass
+                ``None`` to remove the limit.
+        """
+        if (
+            worker_concurrency is not None
+            and concurrency is not None
+            and worker_concurrency > concurrency
+        ):
+            raise ValueError(
+                "worker_concurrency must be less than or equal to concurrency"
+            )
+        self.concurrency = concurrency
+        self.worker_concurrency = worker_concurrency
+        from ._dbos import _get_dbos_instance
+
+        dbos = _get_dbos_instance()
+        dbos._sys_db.set_queue_concurrency(self.name, concurrency, worker_concurrency)
+
+    def set_limiter(self, limiter: Optional[QueueRateLimit]) -> None:
+        """Dynamically update this queue's rate limiter at runtime.
+
+        Changes take effect on this worker immediately and are persisted to
+        the database so that all other workers pick them up within one
+        polling cycle. Changes survive process restarts.
+
+        Args:
+            limiter: New rate-limit config, or ``None`` to remove the limiter.
+        """
+        self.limiter = limiter
+        limiter_limit = limiter["limit"] if limiter is not None else None
+        limiter_period_ms = (
+            int(limiter["period"] * 1000) if limiter is not None else None
+        )
+        from ._dbos import _get_dbos_instance
+
+        dbos = _get_dbos_instance()
+        dbos._sys_db.set_queue_limiter(self.name, limiter_limit, limiter_period_ms)
+
     def enqueue(
         self, func: "Callable[P, R]", *args: P.args, **kwargs: P.kwargs
     ) -> "WorkflowHandle[R]":

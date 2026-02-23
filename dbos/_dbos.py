@@ -66,7 +66,7 @@ from ._core import (
     write_stream,
 )
 from ._croniter import croniter  # type: ignore
-from ._queue import Queue, queue_thread
+from ._queue import Queue, QueueRateLimit, queue_thread
 from ._recovery import recover_pending_workflows, startup_recovery_thread
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
@@ -324,7 +324,13 @@ class DBOS:
         global _dbos_global_registry
         if _dbos_global_instance is None:
             _dbos_global_instance = super().__new__(cls)
-            _dbos_global_instance.__init__(fastapi=fastapi, config=config, flask=flask, conductor_url=conductor_url, conductor_key=conductor_key)  # type: ignore
+            _dbos_global_instance.__init__(
+                fastapi=fastapi,
+                config=config,
+                flask=flask,
+                conductor_url=conductor_url,
+                conductor_key=conductor_key,
+            )  # type: ignore
         return _dbos_global_instance
 
     @classmethod
@@ -667,10 +673,75 @@ class DBOS:
                 "reset_system_database has no effect because global DBOS object does not exist"
             )
 
+    @classmethod
+    def set_queue_concurrency(
+        cls,
+        queue_name: str,
+        concurrency: Optional[int] = None,
+        *,
+        worker_concurrency: Optional[int] = None,
+    ) -> None:
+        """Dynamically update a queue's concurrency limits at runtime.
+
+        This is the static alternative to ``Queue.set_concurrency()`` for
+        situations where the ``Queue`` instance is not readily available
+        (e.g. multi-tenant code that computes limits dynamically).
+
+        Changes are persisted to the database and propagate to all workers
+        within one polling cycle. Changes survive process restarts.
+
+        Args:
+            queue_name: Name of the queue to update.
+            concurrency: New global concurrency limit. Pass ``None`` to remove.
+            worker_concurrency: New per-worker concurrency limit. Pass ``None`` to remove.
+        """
+        if (
+            worker_concurrency is not None
+            and concurrency is not None
+            and worker_concurrency > concurrency
+        ):
+            raise ValueError(
+                "worker_concurrency must be less than or equal to concurrency"
+            )
+        dbos = _get_dbos_instance()
+        if queue_name in dbos._registry.queue_info_map:
+            q = dbos._registry.queue_info_map[queue_name]
+            q.concurrency = concurrency
+            q.worker_concurrency = worker_concurrency
+        dbos._sys_db.set_queue_concurrency(queue_name, concurrency, worker_concurrency)
+
+    @classmethod
+    def set_queue_limiter(
+        cls,
+        queue_name: str,
+        limiter: Optional[QueueRateLimit] = None,
+    ) -> None:
+        """Dynamically update a queue's rate limiter at runtime.
+
+        This is the static alternative to ``Queue.set_limiter()`` for
+        situations where the ``Queue`` instance is not readily available.
+
+        Changes are persisted to the database and propagate to all workers
+        within one polling cycle. Changes survive process restarts.
+
+        Args:
+            queue_name: Name of the queue to update.
+            limiter: New rate-limit config, or ``None`` to remove the limiter.
+        """
+        dbos = _get_dbos_instance()
+        if queue_name in dbos._registry.queue_info_map:
+            q = dbos._registry.queue_info_map[queue_name]
+            q.limiter = limiter
+        limiter_limit = limiter["limit"] if limiter is not None else None
+        limiter_period_ms = (
+            int(limiter["period"] * 1000) if limiter is not None else None
+        )
+        dbos._sys_db.set_queue_limiter(queue_name, limiter_limit, limiter_period_ms)
+
     def _reset_system_database(self) -> None:
-        assert (
-            not self._launched
-        ), "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
+        assert not self._launched, (
+            "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
+        )
 
         SystemDatabase.reset_system_database(get_system_database_url(self._config))
 
