@@ -23,6 +23,7 @@ from dbos import (
     SetWorkflowID,
     SetWorkflowTimeout,
     WorkflowHandle,
+    WorkflowHandleAsync,
     WorkflowStatusString,
 )
 
@@ -2423,22 +2424,32 @@ async def test_run_step_async(dbos: DBOS) -> None:
     await test_errors_wf_async()
 
 
-def test_wait_first(dbos: DBOS) -> None:
+def test_wait_first(dbos: DBOS, client: DBOSClient) -> None:
     @DBOS.workflow()
     def fast_workflow() -> str:
         return "fast"
 
     @DBOS.workflow()
     def slow_workflow() -> str:
-        time.sleep(1)
+        time.sleep(2)
         return "slow"
 
     handle_fast = DBOS.start_workflow(fast_workflow)
     handle_slow = DBOS.start_workflow(slow_workflow)
 
+    # Test DBOS.wait_first
     result_handle = DBOS.wait_first([handle_fast, handle_slow])
     assert result_handle.workflow_id == handle_fast.workflow_id
     assert result_handle.get_result() == "fast"
+
+    # Test client.wait_first with retrieved handles
+    client_fast: WorkflowHandle[str] = client.retrieve_workflow(handle_fast.workflow_id)
+    client_slow: WorkflowHandle[str] = client.retrieve_workflow(handle_slow.workflow_id)
+    client_result = client.wait_first([client_fast, client_slow])
+    # fast_workflow already completed, so it should be returned
+    assert client_result.workflow_id == handle_fast.workflow_id
+    assert client_result.get_result() == "fast"
+
     # Wait for slow workflow to finish so it doesn't hang
     handle_slow.get_result()
 
@@ -2449,7 +2460,7 @@ def test_wait_first_empty(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_wait_first_async(dbos: DBOS) -> None:
+async def test_wait_first_async(dbos: DBOS, client: DBOSClient) -> None:
     @DBOS.workflow()
     async def fast_async_wf() -> str:
         return "fast"
@@ -2462,8 +2473,21 @@ async def test_wait_first_async(dbos: DBOS) -> None:
     handle_fast = await DBOS.start_workflow_async(fast_async_wf)
     handle_slow = await DBOS.start_workflow_async(slow_async_wf)
 
+    # Test DBOS.wait_first_async
     result_handle = await DBOS.wait_first_async([handle_fast, handle_slow])
     assert result_handle.workflow_id == handle_fast.workflow_id
     assert await result_handle.get_result() == "fast"
+
+    # Test client.wait_first_async with retrieved handles
+    client_fast: WorkflowHandleAsync[str] = await client.retrieve_workflow_async(
+        handle_fast.workflow_id
+    )
+    client_slow: WorkflowHandleAsync[str] = await client.retrieve_workflow_async(
+        handle_slow.workflow_id
+    )
+    client_result = await client.wait_first_async([client_fast, client_slow])
+    assert client_result.workflow_id == handle_fast.workflow_id
+    assert await client_result.get_result() == "fast"
+
     # Wait for slow workflow to finish so it doesn't hang
     await handle_slow.get_result()
