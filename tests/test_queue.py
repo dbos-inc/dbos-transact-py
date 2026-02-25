@@ -1780,7 +1780,7 @@ def test_wait_first_queue(dbos: DBOS) -> None:
     @DBOS.workflow()
     def process_task(task_id: int) -> str:
         # Higher task_id sleeps less, so tasks complete in reverse order
-        time.sleep(1.0 * (num_tasks - 1 - task_id))
+        time.sleep(2.0 * (num_tasks - 1 - task_id))
         return f"result-{task_id}"
 
     @DBOS.workflow()
