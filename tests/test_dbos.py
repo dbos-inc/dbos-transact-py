@@ -2467,7 +2467,7 @@ async def test_wait_first_async(dbos: DBOS, client: DBOSClient) -> None:
 
     @DBOS.workflow()
     async def slow_async_wf() -> str:
-        await asyncio.sleep(1)
+        await asyncio.sleep(2)
         return "slow"
 
     handle_fast = await DBOS.start_workflow_async(fast_async_wf)

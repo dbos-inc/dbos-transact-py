@@ -14,6 +14,7 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    text,
 )
 
 
@@ -131,12 +132,14 @@ class SystemSchema:
             "created_at_epoch_ms",
             BigInteger,
             nullable=False,
+            server_default=text("(EXTRACT(epoch FROM now()) * 1000.0)::bigint"),
         ),
         Column(
             "message_uuid",
             Text,
             nullable=False,
             primary_key=True,
+            server_default=text("gen_random_uuid()"),
         ),
         Column("serialization", Text()),
         Index("idx_workflow_topic", "destination_uuid", "topic"),
