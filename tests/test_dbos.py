@@ -2504,3 +2504,14 @@ def test_get_event_timeout(dbos: DBOS) -> None:
     assert handle.get_result() is None
     forked_handle = DBOS.fork_workflow(handle.workflow_id, 5)
     assert forked_handle.get_result() is None
+
+
+def test_recv_timeout(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def workflow() -> Any:
+        return DBOS.recv(timeout_seconds=0)
+
+    handle = DBOS.start_workflow(workflow)
+    assert handle.get_result() is None
+    forked_handle = DBOS.fork_workflow(handle.workflow_id, 5)
+    assert forked_handle.get_result() is None

@@ -1721,11 +1721,13 @@ class SystemDatabase(ABC):
             rows = c.execute(delete_stmt).fetchall()
             message: Any = None
             serialization: Optional[str] = None
-            sermsg: Optional[str] = None
             if len(rows) > 0:
                 message = deserialize_value(rows[0][0], rows[0][1], self.serializer)
                 serialization = rows[0][1]
-                sermsg = rows[0][0]
+
+            sermsg, serialization = serialize_value_as(
+                message, serialization, self.serializer
+            )
             self._record_operation_result_txn(
                 {
                     "workflow_uuid": workflow_uuid,
@@ -2090,9 +2092,10 @@ class SystemDatabase(ABC):
             with self.engine.begin() as c:
                 final_recv = c.execute(get_sql).fetchall()
                 if len(final_recv) > 0:
-                    serval = final_recv[0][0]
                     serialization = final_recv[0][1]
-                    value = deserialize_value(serval, serialization, self.serializer)
+                    value = deserialize_value(
+                        final_recv[0][0], serialization, self.serializer
+                    )
         condition.release()
         self.workflow_events_map.pop(payload)
 
