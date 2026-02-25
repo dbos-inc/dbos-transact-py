@@ -58,6 +58,7 @@ from ._serialization import (
     deserialize_value,
     safe_deserialize,
     serialize_value,
+    serialize_value_as,
 )
 
 if TYPE_CHECKING:
@@ -2097,6 +2098,9 @@ class SystemDatabase(ABC):
 
         # Record the output if it's in a workflow
         if caller_ctx is not None:
+            serval, serialization = serialize_value_as(
+                value, serialization, self.serializer
+            )
             self.record_operation_result(
                 {
                     "workflow_uuid": caller_ctx["workflow_uuid"],

@@ -2491,3 +2491,16 @@ async def test_wait_first_async(dbos: DBOS, client: DBOSClient) -> None:
 
     # Wait for slow workflow to finish so it doesn't hang
     await handle_slow.get_result()
+
+
+def test_get_event_timeout(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def workflow() -> Any:
+        workflow_id = DBOS.workflow_id
+        assert workflow_id
+        return DBOS.get_event(workflow_id, "key", timeout_seconds=0)
+
+    handle = DBOS.start_workflow(workflow)
+    assert handle.get_result() is None
+    forked_handle = DBOS.fork_workflow(handle.workflow_id, 5)
+    assert forked_handle.get_result() is None
