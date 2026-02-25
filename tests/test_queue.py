@@ -1771,3 +1771,35 @@ def test_listen_queue(dbos: DBOS, config: DBOSConfig) -> None:
     assert DBOS.retrieve_workflow(handle_two.workflow_id).get_result()
     # Verify the internal queue works
     assert DBOS.fork_workflow(handle_two.workflow_id, 0).get_result()
+
+
+def test_wait_first_queue(dbos: DBOS) -> None:
+    num_tasks = 5
+    queue = Queue("wait_first_queue", concurrency=num_tasks)
+
+    @DBOS.workflow()
+    def process_task(task_id: int) -> str:
+        # Higher task_id sleeps less, so tasks complete in reverse order
+        time.sleep(1.0 * (num_tasks - 1 - task_id))
+        return f"result-{task_id}"
+
+    @DBOS.workflow()
+    def process_tasks() -> List[str]:
+        handles: List[WorkflowHandle[str]] = []
+        for i in range(num_tasks):
+            handle = queue.enqueue(process_task, i)
+            handles.append(handle)
+
+        results: List[str] = []
+        remaining = list(handles)
+        while remaining:
+            completed = DBOS.wait_first(remaining)
+            results.append(completed.get_result())
+            remaining = [h for h in remaining if h.workflow_id != completed.workflow_id]
+        return results
+
+    result = process_tasks()
+    assert len(result) == num_tasks
+    # Tasks complete in reverse order: task 4 first (0s), task 3 next (0.5s), etc.
+    assert result == [f"result-{i}" for i in reversed(range(num_tasks))]
+    assert queue_entries_are_cleaned_up(dbos)

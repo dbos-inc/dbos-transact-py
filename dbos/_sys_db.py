@@ -1038,6 +1038,40 @@ class SystemDatabase(ABC):
                     pass  # CB: I guess we're assuming the WF will show up eventually.
             time.sleep(polling_interval)
 
+    @db_retry()
+    def await_first_workflow_id(
+        self, workflow_ids: List[str], polling_interval: float
+    ) -> str:
+        """Poll until at least one of the given workflows has completed.
+
+        A workflow is considered complete when its status is not PENDING
+        and not ENQUEUED.  Returns the workflow_uuid of the first
+        completed workflow found.
+        """
+        if not workflow_ids:
+            raise ValueError("workflow_ids must not be empty")
+        while True:
+            with self.engine.begin() as c:
+                row = c.execute(
+                    sa.select(
+                        SystemSchema.workflow_status.c.workflow_uuid,
+                    )
+                    .where(
+                        SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids),
+                        ~SystemSchema.workflow_status.c.status.in_(
+                            [
+                                WorkflowStatusString.PENDING.value,
+                                WorkflowStatusString.ENQUEUED.value,
+                            ]
+                        ),
+                    )
+                    .limit(1)
+                ).fetchone()
+                if row is not None:
+                    result: str = row[0]
+                    return result
+            time.sleep(polling_interval)
+
     def list_workflows(
         self,
         *,

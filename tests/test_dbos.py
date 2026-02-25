@@ -2421,3 +2421,49 @@ async def test_run_step_async(dbos: DBOS) -> None:
         assert n_thrown_errors == 5
 
     await test_errors_wf_async()
+
+
+def test_wait_first(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def fast_workflow() -> str:
+        return "fast"
+
+    @DBOS.workflow()
+    def slow_workflow() -> str:
+        time.sleep(1)
+        return "slow"
+
+    handle_fast = DBOS.start_workflow(fast_workflow)
+    handle_slow = DBOS.start_workflow(slow_workflow)
+
+    result_handle = DBOS.wait_first([handle_fast, handle_slow])
+    assert result_handle.workflow_id == handle_fast.workflow_id
+    assert result_handle.get_result() == "fast"
+    # Wait for slow workflow to finish so it doesn't hang
+    handle_slow.get_result()
+
+
+def test_wait_first_empty(dbos: DBOS) -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        DBOS.wait_first([])
+
+
+@pytest.mark.asyncio
+async def test_wait_first_async(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def fast_async_wf() -> str:
+        return "fast"
+
+    @DBOS.workflow()
+    async def slow_async_wf() -> str:
+        await asyncio.sleep(1)
+        return "slow"
+
+    handle_fast = await DBOS.start_workflow_async(fast_async_wf)
+    handle_slow = await DBOS.start_workflow_async(slow_async_wf)
+
+    result_handle = await DBOS.wait_first_async([handle_fast, handle_slow])
+    assert result_handle.workflow_id == handle_fast.workflow_id
+    assert await result_handle.get_result() == "fast"
+    # Wait for slow workflow to finish so it doesn't hang
+    await handle_slow.get_result()
