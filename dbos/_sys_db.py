@@ -1678,7 +1678,7 @@ class SystemDatabase(ABC):
                 # This should not happen, but if it does, it means the workflow is executed concurrently.
                 raise DBOSWorkflowConflictIDError(workflow_uuid)
 
-            # Check if the key is already in the database. If not, wait for the notification.
+            # Check if an unconsumed message is already in the database. If not, wait for the notification.
             init_recv: Sequence[Any]
             with self.engine.begin() as c:
                 init_recv = c.execute(
@@ -1687,6 +1687,7 @@ class SystemDatabase(ABC):
                     ).where(
                         SystemSchema.notifications.c.destination_uuid == workflow_uuid,
                         SystemSchema.notifications.c.topic == topic,
+                        SystemSchema.notifications.c.consumed == False,
                     )
                 ).fetchall()
 
@@ -1701,13 +1702,14 @@ class SystemDatabase(ABC):
             condition.release()
             self.notifications_map.pop(payload)
 
-        # Transactionally consume and return the message if it's in the database, otherwise return null.
+        # Transactionally consume and return the oldest unconsumed message, or null if none.
         with self.engine.begin() as c:
-            delete_stmt = (
-                sa.delete(SystemSchema.notifications)
+            consume_stmt = (
+                sa.update(SystemSchema.notifications)
                 .where(
                     SystemSchema.notifications.c.destination_uuid == workflow_uuid,
                     SystemSchema.notifications.c.topic == topic,
+                    SystemSchema.notifications.c.consumed == False,
                     SystemSchema.notifications.c.message_uuid
                     == (
                         sa.select(SystemSchema.notifications.c.message_uuid)
@@ -1715,6 +1717,7 @@ class SystemDatabase(ABC):
                             SystemSchema.notifications.c.destination_uuid
                             == workflow_uuid,
                             SystemSchema.notifications.c.topic == topic,
+                            SystemSchema.notifications.c.consumed == False,
                         )
                         .order_by(
                             SystemSchema.notifications.c.created_at_epoch_ms.asc()
@@ -1723,12 +1726,13 @@ class SystemDatabase(ABC):
                         .scalar_subquery()
                     ),
                 )
+                .values(consumed=True)
                 .returning(
                     SystemSchema.notifications.c.message,
                     SystemSchema.notifications.c.serialization,
                 )
             )
-            rows = c.execute(delete_stmt).fetchall()
+            rows = c.execute(consume_stmt).fetchall()
             message: Any = None
             serialization: Optional[str] = None
             sermsg: Optional[str] = None
@@ -1790,6 +1794,7 @@ class SystemDatabase(ABC):
                                 SystemSchema.notifications.c.destination_uuid
                                 == dest_uuid,
                                 SystemSchema.notifications.c.topic == topic,
+                                SystemSchema.notifications.c.consumed == False,
                             )
                             .limit(1)
                         )
