@@ -1771,3 +1771,70 @@ def test_listen_queue(dbos: DBOS, config: DBOSConfig) -> None:
     assert DBOS.retrieve_workflow(handle_two.workflow_id).get_result()
     # Verify the internal queue works
     assert DBOS.fork_workflow(handle_two.workflow_id, 0).get_result()
+
+
+def test_wait_first_queue(dbos: DBOS) -> None:
+    num_tasks = 5
+    queue = Queue("wait_first_queue", concurrency=num_tasks)
+
+    go_events = [threading.Event() for _ in range(num_tasks)]
+    consumed_events = [threading.Event() for _ in range(num_tasks)]
+
+    @DBOS.workflow()
+    def process_task(task_id: int) -> str:
+        go_events[task_id].wait()
+        return f"result-{task_id}"
+
+    @DBOS.workflow()
+    def process_tasks() -> List[str]:
+        handles: List[WorkflowHandle[str]] = []
+        for i in range(num_tasks):
+            handle = queue.enqueue(process_task, i)
+            handles.append(handle)
+
+        results: List[str] = []
+        remaining = list(handles)
+        for round_idx in range(num_tasks):
+            completed = DBOS.wait_first(remaining)
+            results.append(completed.get_result())
+            remaining = [h for h in remaining if h.workflow_id != completed.workflow_id]
+            consumed_events[round_idx].set()
+        return results
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = dbos.start_workflow(process_tasks)
+
+    # Release tasks in reverse order, waiting for each to be consumed
+    for round_idx, task_id in enumerate(reversed(range(num_tasks))):
+        go_events[task_id].set()
+        consumed_events[round_idx].wait()
+
+    result = handle.get_result()
+    expected = [f"result-{i}" for i in reversed(range(num_tasks))]
+    assert result == expected
+
+    # Verify the steps are correct:
+    # 5 enqueue steps + 5 (waitFirst, getResult) pairs = 15 steps
+    steps = DBOS.list_workflow_steps(wfid)
+    assert len(steps) == num_tasks * 3
+
+    # First num_tasks steps are the enqueues
+    for i in range(num_tasks):
+        assert steps[i]["function_id"] == i + 1
+        assert steps[i]["function_name"] == process_task.__qualname__
+        assert steps[i]["child_workflow_id"] is not None
+
+    # Remaining steps alternate between waitFirst and getResult
+    for i in range(num_tasks):
+        wait_step = steps[num_tasks + i * 2]
+        result_step = steps[num_tasks + i * 2 + 1]
+        assert wait_step["function_name"] == "DBOS.waitFirst"
+        assert result_step["function_name"] == "DBOS.getResult"
+
+    # Fork from the last waitFirst step and verify same result
+    last_wait_first_step = steps[num_tasks + (num_tasks - 1) * 2]["function_id"]
+    forked_handle = DBOS.fork_workflow(wfid, last_wait_first_step)
+    assert forked_handle.get_result() == expected
+
+    assert queue_entries_are_cleaned_up(dbos)
