@@ -1055,10 +1055,10 @@ class DBOS:
         check_async("wait_first")
         if not handles:
             raise ValueError("handles must not be empty")
-        handle_map: Dict[str, WorkflowHandle[Any]] = {
-            h.workflow_id: h for h in reversed(handles)
-        }
-        workflow_ids = list(handle_map.keys())
+        workflow_ids = [h.workflow_id for h in handles]
+        if len(set(workflow_ids)) != len(workflow_ids):
+            raise ValueError("handles must not contain duplicate workflow IDs")
+        handle_map: Dict[str, WorkflowHandle[Any]] = {h.workflow_id: h for h in handles}
 
         def fn() -> str:
             return _get_dbos_instance()._sys_db.await_first_workflow_id(
@@ -1083,10 +1083,12 @@ class DBOS:
         """
         if not handles:
             raise ValueError("handles must not be empty")
+        workflow_ids = [h.workflow_id for h in handles]
+        if len(set(workflow_ids)) != len(workflow_ids):
+            raise ValueError("handles must not contain duplicate workflow IDs")
         handle_map: Dict[str, WorkflowHandleAsync[Any]] = {
-            h.workflow_id: h for h in reversed(handles)
+            h.workflow_id: h for h in handles
         }
-        workflow_ids = list(handle_map.keys())
 
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
