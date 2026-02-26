@@ -289,10 +289,12 @@ class DBOSClient:
         """Wait for any one of the given workflow handles to complete and return it."""
         if not handles:
             raise ValueError("handles must not be empty")
+        workflow_ids = [h.workflow_id for h in handles]
+        if len(set(workflow_ids)) != len(workflow_ids):
+            raise ValueError("handles must not contain duplicate workflow IDs")
         handle_map: Dict[str, "WorkflowHandle[Any]"] = {
-            h.workflow_id: h for h in reversed(handles)
+            h.workflow_id: h for h in handles
         }
-        workflow_ids = list(handle_map.keys())
         completed_id = self._sys_db.await_first_workflow_id(
             workflow_ids, polling_interval_sec
         )
@@ -307,10 +309,12 @@ class DBOSClient:
         """Async version of :meth:`wait_first`."""
         if not handles:
             raise ValueError("handles must not be empty")
+        workflow_ids = [h.workflow_id for h in handles]
+        if len(set(workflow_ids)) != len(workflow_ids):
+            raise ValueError("handles must not contain duplicate workflow IDs")
         handle_map: Dict[str, "WorkflowHandleAsync[Any]"] = {
-            h.workflow_id: h for h in reversed(handles)
+            h.workflow_id: h for h in handles
         }
-        workflow_ids = list(handle_map.keys())
         completed_id = await asyncio.to_thread(
             self._sys_db.await_first_workflow_id,
             workflow_ids,
