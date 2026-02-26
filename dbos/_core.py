@@ -32,6 +32,7 @@ from ._context import (
     DBOSAssumeRole,
     DBOSContext,
     DBOSContextEnsure,
+    DBOSContextSetAuth,
     EnterDBOSStepCtx,
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
@@ -701,7 +702,12 @@ def execute_workflow_by_id(
                 error=error_str,
             )
             raise
-    with DBOSContextEnsure():
+    # Restore authentication context from the saved workflow status
+    recovered_user = status.get("authenticated_user")
+    recovered_roles_str = status.get("authenticated_roles")
+    recovered_roles = json.loads(recovered_roles_str) if recovered_roles_str else None
+
+    with DBOSContextSetAuth(recovered_user, recovered_roles):
         # If this function belongs to a configured class, add that class instance as its first argument
         if status["config_name"] is not None:
             config_name = status["config_name"]

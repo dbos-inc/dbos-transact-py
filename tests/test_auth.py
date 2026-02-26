@@ -154,7 +154,7 @@ def test_simple_endpoint(
     )
 
 
-def test_roles(dbos: DBOS) -> None:
+def test_roles_recovery(dbos: DBOS) -> None:
 
     @DBOS.required_roles(["admin"])
     @DBOS.workflow()
@@ -167,6 +167,13 @@ def test_roles(dbos: DBOS) -> None:
         handle = DBOS.start_workflow(workflow)
 
     assert handle.get_result() is None
+
+    # Recover the workflow, verify roles are set right
+    dbos._sys_db.update_workflow_outcome(handle.workflow_id, "PENDING")
+    recovery_handles = DBOS._recover_pending_workflows()
+    assert len(recovery_handles) == 1
+    recovery_handle = recovery_handles[0]
+    assert recovery_handle.get_result() is None
 
 
 # This does not test DBOS at all
