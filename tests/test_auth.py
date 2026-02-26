@@ -176,6 +176,29 @@ def test_roles_recovery(dbos: DBOS) -> None:
     assert recovery_handle.get_result() is None
 
 
+@pytest.mark.asyncio
+async def test_roles_recovery_async(dbos: DBOS) -> None:
+
+    @DBOS.required_roles(["admin"])
+    @DBOS.workflow()
+    async def workflow() -> None:
+        assert DBOS.authenticated_roles == ["user", "admin"]
+        assert DBOS.authenticated_user == "admin"
+        assert DBOS.assumed_role == "admin"
+
+    with DBOSContextSetAuth("admin", ["user", "admin"]):
+        handle = await DBOS.start_workflow_async(workflow)
+
+    assert await handle.get_result() is None
+
+    # Recover the workflow, verify roles are set right
+    dbos._sys_db.update_workflow_outcome(handle.workflow_id, "PENDING")
+    recovery_handles = DBOS._recover_pending_workflows()
+    assert len(recovery_handles) == 1
+    recovery_handle = recovery_handles[0]
+    assert recovery_handle.get_result() is None
+
+
 # This does not test DBOS at all
 # (It's just a hard-earned example of how you can unit test your spans)
 def test_role_tracing() -> None:
