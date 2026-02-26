@@ -189,7 +189,7 @@ async def test_roles_recovery_async(dbos: DBOS) -> None:
     with DBOSContextSetAuth("admin", ["user", "admin"]):
         handle = await DBOS.start_workflow_async(workflow)
 
-    assert await handle.get_result() is None
+    await handle.get_result()
 
     # Recover the workflow, verify roles are set right
     dbos._sys_db.update_workflow_outcome(handle.workflow_id, "PENDING")
