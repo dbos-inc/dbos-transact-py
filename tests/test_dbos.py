@@ -985,11 +985,12 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
 
 
 def test_send_idempotency_key(dbos: DBOS) -> None:
+    recv_two_messages_event = threading.Event()
+
     @DBOS.workflow()
     def recv_two_msgs() -> str:
         msg1 = DBOS.recv(timeout_seconds=10)
-        # If the duplicate was actually delivered, this would return "hello_duplicate".
-        # With a short timeout, it returns None, proving only one message arrived.
+        recv_two_messages_event.set()
         msg2 = DBOS.recv(timeout_seconds=2)
         return f"{msg1}-{msg2}"
 
@@ -1000,6 +1001,7 @@ def test_send_idempotency_key(dbos: DBOS) -> None:
 
     idem_key = str(uuid.uuid4())
     DBOS.send(dest_uuid, "hello", idempotency_key=idem_key)
+    recv_two_messages_event.wait()
     # Duplicate send with the same key should be silently ignored.
     DBOS.send(dest_uuid, "hello_duplicate", idempotency_key=idem_key)
     # The second recv times out (returns None), proving only one message was delivered.
