@@ -58,6 +58,7 @@ from ._serialization import (
     deserialize_value,
     safe_deserialize,
     serialize_value,
+    serialize_value_as,
 )
 
 if TYPE_CHECKING:
@@ -1038,6 +1039,40 @@ class SystemDatabase(ABC):
                     pass  # CB: I guess we're assuming the WF will show up eventually.
             time.sleep(polling_interval)
 
+    @db_retry()
+    def await_first_workflow_id(
+        self, workflow_ids: List[str], polling_interval: float
+    ) -> str:
+        """Poll until at least one of the given workflows has completed.
+
+        A workflow is considered complete when its status is not PENDING
+        and not ENQUEUED.  Returns the workflow_uuid of the first
+        completed workflow found.
+        """
+        if not workflow_ids:
+            raise ValueError("workflow_ids must not be empty")
+        while True:
+            with self.engine.begin() as c:
+                row = c.execute(
+                    sa.select(
+                        SystemSchema.workflow_status.c.workflow_uuid,
+                    )
+                    .where(
+                        SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids),
+                        ~SystemSchema.workflow_status.c.status.in_(
+                            [
+                                WorkflowStatusString.PENDING.value,
+                                WorkflowStatusString.ENQUEUED.value,
+                            ]
+                        ),
+                    )
+                    .limit(1)
+                ).fetchone()
+                if row is not None:
+                    result: str = row[0]
+                    return result
+            time.sleep(polling_interval)
+
     def list_workflows(
         self,
         *,
@@ -1686,11 +1721,13 @@ class SystemDatabase(ABC):
             rows = c.execute(delete_stmt).fetchall()
             message: Any = None
             serialization: Optional[str] = None
-            sermsg: Optional[str] = None
             if len(rows) > 0:
                 message = deserialize_value(rows[0][0], rows[0][1], self.serializer)
                 serialization = rows[0][1]
-                sermsg = rows[0][0]
+
+            sermsg, serialization = serialize_value_as(
+                message, serialization, self.serializer
+            )
             self._record_operation_result_txn(
                 {
                     "workflow_uuid": workflow_uuid,
@@ -2055,14 +2092,18 @@ class SystemDatabase(ABC):
             with self.engine.begin() as c:
                 final_recv = c.execute(get_sql).fetchall()
                 if len(final_recv) > 0:
-                    serval = final_recv[0][0]
                     serialization = final_recv[0][1]
-                    value = deserialize_value(serval, serialization, self.serializer)
+                    value = deserialize_value(
+                        final_recv[0][0], serialization, self.serializer
+                    )
         condition.release()
         self.workflow_events_map.pop(payload)
 
         # Record the output if it's in a workflow
         if caller_ctx is not None:
+            serval, serialization = serialize_value_as(
+                value, serialization, self.serializer
+            )
             self.record_operation_result(
                 {
                     "workflow_uuid": caller_ctx["workflow_uuid"],

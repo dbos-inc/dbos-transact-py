@@ -1041,6 +1041,71 @@ class DBOS:
         )
 
     @classmethod
+    def wait_first(
+        cls,
+        handles: List[WorkflowHandle[Any]],
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+    ) -> WorkflowHandle[Any]:
+        """Wait for any one of the given workflow handles to complete and return it.
+
+        Polls the database until at least one workflow's status is no longer
+        PENDING or ENQUEUED, then returns the corresponding handle.
+        """
+        check_async("wait_first")
+        if not handles:
+            raise ValueError("handles must not be empty")
+        workflow_ids = [h.workflow_id for h in handles]
+        if len(set(workflow_ids)) != len(workflow_ids):
+            raise ValueError("handles must not contain duplicate workflow IDs")
+        handle_map: Dict[str, WorkflowHandle[Any]] = {h.workflow_id: h for h in handles}
+
+        def fn() -> str:
+            return _get_dbos_instance()._sys_db.await_first_workflow_id(
+                workflow_ids, polling_interval_sec
+            )
+
+        completed_id: str = _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.waitFirst", snapshot_step_context(reserve_sleep_id=False)
+        )
+        return handle_map[completed_id]
+
+    @classmethod
+    async def wait_first_async(
+        cls,
+        handles: List[WorkflowHandleAsync[Any]],
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+    ) -> WorkflowHandleAsync[Any]:
+        """Async version of :meth:`wait_first`.
+
+        Wait for any one of the given workflow handles to complete and return it.
+        """
+        if not handles:
+            raise ValueError("handles must not be empty")
+        workflow_ids = [h.workflow_id for h in handles]
+        if len(set(workflow_ids)) != len(workflow_ids):
+            raise ValueError("handles must not contain duplicate workflow IDs")
+        handle_map: Dict[str, WorkflowHandleAsync[Any]] = {
+            h.workflow_id: h for h in handles
+        }
+
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
+        await cls._configure_asyncio_thread_pool()
+
+        def fn() -> str:
+            return _get_dbos_instance()._sys_db.await_first_workflow_id(
+                workflow_ids, polling_interval_sec
+            )
+
+        completed_id: (
+            str
+        ) = await _get_dbos_instance()._sys_db.call_function_as_step_from_async(
+            fn, "DBOS.waitFirst", step_ctx
+        )
+        return handle_map[completed_id]
+
+    @classmethod
     def retrieve_workflow(
         cls, workflow_id: str, existing_workflow: bool = True
     ) -> WorkflowHandle[R]:
