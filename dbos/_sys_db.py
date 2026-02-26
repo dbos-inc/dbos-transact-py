@@ -30,6 +30,7 @@ from sqlalchemy.sql import func
 from dbos._debug_trigger import DebugTriggers
 from dbos._utils import (
     INTERNAL_QUEUE_NAME,
+    generate_uuid,
     retriable_postgres_exception,
     retriable_sqlite_exception,
 )
@@ -1591,6 +1592,50 @@ class SystemDatabase(ABC):
                 "serialization": None,
             }
             self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
+
+    @db_retry()
+    def send_direct(
+        self,
+        destination_uuid: str,
+        message: Any,
+        topic: Optional[str] = None,
+        message_uuid: Optional[str] = None,
+        *,
+        serialization_type: Optional["WorkflowSerializationFormat"] = None,
+    ) -> None:
+        """Send a message without requiring a workflow context.
+
+        Idempotency is provided by the primary key constraint on message_uuid.
+        On duplicate message_uuid, silently returns (idempotent replay).
+        """
+
+        topic = topic if topic is not None else _dbos_null_topic
+        if message_uuid is None:
+            message_uuid = str(generate_uuid())
+        serval, serialization = serialize_value(
+            message,
+            serialization_type,
+            self.serializer,
+        )
+        try:
+            with self.engine.begin() as c:
+                c.execute(
+                    sa.insert(SystemSchema.notifications).values(
+                        destination_uuid=destination_uuid,
+                        topic=topic,
+                        message=serval,
+                        message_uuid=message_uuid,
+                        serialization=serialization,
+                    )
+                )
+        except DBAPIError as dbapi_error:
+            if self._is_unique_constraint_violation(dbapi_error):
+                return  # Idempotent replay — duplicate message_uuid
+            if self._is_foreign_key_violation(dbapi_error):
+                raise DBOSNonExistentWorkflowError(
+                    "`send` destination", destination_uuid
+                )
+            raise
 
     @db_retry()
     def recv(

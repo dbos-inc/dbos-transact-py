@@ -952,13 +952,8 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
     assert handle.get_result() == "testsend1"
 
     wfs = DBOS.list_workflows()
-    assert len(wfs) == 2
+    assert len(wfs) == 1
     assert wfs[0].workflow_id == dest_uuid
-    assert wfs[1].workflow_id != dest_uuid
-
-    wfi = DBOS.get_workflow_status(wfs[1].workflow_id)
-    assert wfi
-    assert wfi.name == "<temp>.temp_send_workflow"
 
     assert recv_counter == 1
 
@@ -987,6 +982,52 @@ def test_send_recv_temp_wf(dbos: DBOS) -> None:
 
     x = DBOS.list_workflows(workflow_id_prefix="1" + dest_uuid)
     assert len(x) == 0
+
+
+def test_send_idempotency_key(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def recv_two_msgs() -> str:
+        msg1 = DBOS.recv(timeout_seconds=10)
+        # If the duplicate was actually delivered, this would return "hello_duplicate".
+        # With a short timeout, it returns None, proving only one message arrived.
+        msg2 = DBOS.recv(timeout_seconds=2)
+        return f"{msg1}-{msg2}"
+
+    # Test 1: Sending with the same idempotency key twice delivers only one message.
+    dest_uuid = str(uuid.uuid4())
+    with SetWorkflowID(dest_uuid):
+        handle = dbos.start_workflow(recv_two_msgs)
+
+    idem_key = str(uuid.uuid4())
+    DBOS.send(dest_uuid, "hello", idempotency_key=idem_key)
+    # Duplicate send with the same key should be silently ignored.
+    DBOS.send(dest_uuid, "hello_duplicate", idempotency_key=idem_key)
+    # The second recv times out (returns None), proving only one message was delivered.
+    assert handle.get_result() == "hello-None"
+
+    # Test 2: Different idempotency keys deliver separate messages.
+    dest_uuid2 = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    def recv_two_workflow() -> str:
+        msg1 = DBOS.recv("t", timeout_seconds=10)
+        msg2 = DBOS.recv("t", timeout_seconds=10)
+        return f"{msg1}-{msg2}"
+
+    with SetWorkflowID(dest_uuid2):
+        handle2 = dbos.start_workflow(recv_two_workflow)
+
+    DBOS.send(dest_uuid2, "a", "t", idempotency_key=str(uuid.uuid4()))
+    DBOS.send(dest_uuid2, "b", "t", idempotency_key=str(uuid.uuid4()))
+    assert handle2.get_result() == "a-b"
+
+    # Test 3: idempotency_key inside a workflow raises an error.
+    @DBOS.workflow()
+    def bad_workflow() -> None:
+        DBOS.send(dest_uuid, "msg", idempotency_key="should-fail")
+
+    with pytest.raises(DBOSException, match="idempotency_key is not allowed"):
+        bad_workflow()
 
 
 def test_set_get_events(dbos: DBOS, config: DBOSConfig) -> None:
@@ -1409,7 +1450,6 @@ def test_duplicate_registration(
     DBOS.destroy()
     DBOS(config=config)
     DBOS.launch()
-    assert "Duplicate registration of function 'temp_send_workflow'" not in caplog.text
 
     # Reset logging
     logging.getLogger("dbos").propagate = original_propagate
@@ -1882,7 +1922,7 @@ def test_custom_database(
     assert DBOS.get_event(handle.workflow_id, key) == val
     DBOS.send(handle.workflow_id, val)
     assert handle.get_result() == val
-    assert len(DBOS.list_workflows()) == 2
+    assert len(DBOS.list_workflows()) == 1
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 4
     assert "transaction" in steps[0]["function_name"]
@@ -1893,7 +1933,7 @@ def test_custom_database(
         system_database_url=config["system_database_url"],
         application_database_url=config["application_database_url"],
     )
-    assert len(client.list_workflows()) == 2
+    assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 4
     assert "transaction" in steps[0]["function_name"]
@@ -1933,7 +1973,7 @@ def test_custom_schema(
     assert DBOS.get_event(handle.workflow_id, key) == val
     DBOS.send(handle.workflow_id, val)
     assert handle.get_result() == val
-    assert len(DBOS.list_workflows()) == 2
+    assert len(DBOS.list_workflows()) == 1
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 4
     assert "transaction" in steps[0]["function_name"]
@@ -1945,7 +1985,7 @@ def test_custom_schema(
         application_database_url=config["application_database_url"],
         dbos_system_schema=config["dbos_system_schema"],
     )
-    assert len(client.list_workflows()) == 2
+    assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 4
     assert "transaction" in steps[0]["function_name"]
@@ -1996,7 +2036,7 @@ def test_custom_engine(
     assert DBOS.get_event(handle.workflow_id, key) == val
     DBOS.send(handle.workflow_id, val)
     assert handle.get_result() == val
-    assert len(DBOS.list_workflows()) == 2
+    assert len(DBOS.list_workflows()) == 1
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 3
     assert "setEvent" in steps[0]["function_name"]
@@ -2013,7 +2053,7 @@ def test_custom_engine(
         system_database_url="postgresql://bogus:url@not:42/fake",
         system_database_engine=config["system_database_engine"],
     )
-    assert len(client.list_workflows()) == 2
+    assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 3
     assert "setEvent" in steps[0]["function_name"]
@@ -2022,7 +2062,7 @@ def test_custom_engine(
     client = DBOSClient(
         system_database_engine=config["system_database_engine"],
     )
-    assert len(client.list_workflows()) == 2
+    assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 3
     assert "setEvent" in steps[0]["function_name"]
@@ -2121,7 +2161,7 @@ def test_custom_serializer(
     assert handle.get_status().input == expected_input
 
     # Verify the workflow is correctly stored in the system database
-    assert len(DBOS.list_workflows()) == 2
+    assert len(DBOS.list_workflows()) == 1
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 3
     assert "setEvent" in steps[0]["function_name"]
@@ -2133,7 +2173,7 @@ def test_custom_serializer(
         system_database_url=config["system_database_url"],
         serializer=JsonSerializer(),
     )
-    assert len(client.list_workflows()) == 2
+    assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 3
     assert "setEvent" in steps[0]["function_name"]
@@ -2152,7 +2192,7 @@ def test_custom_serializer(
         system_database_url=config["system_database_url"],
     )
     workflows = client.list_workflows()
-    assert len(workflows) == 4
+    assert len(workflows) == 2
     assert cast(str, workflows[0].input) == json.dumps(expected_input)
     assert workflows[0].output == json.dumps(val)
 
