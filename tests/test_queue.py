@@ -1777,10 +1777,12 @@ def test_wait_first_queue(dbos: DBOS) -> None:
     num_tasks = 5
     queue = Queue("wait_first_queue", concurrency=num_tasks)
 
+    go_events = [threading.Event() for _ in range(num_tasks)]
+    consumed_events = [threading.Event() for _ in range(num_tasks)]
+
     @DBOS.workflow()
     def process_task(task_id: int) -> str:
-        # Higher task_id sleeps less, so tasks complete in reverse order
-        time.sleep(2.0 * (num_tasks - 1 - task_id))
+        go_events[task_id].wait()
         return f"result-{task_id}"
 
     @DBOS.workflow()
@@ -1792,15 +1794,23 @@ def test_wait_first_queue(dbos: DBOS) -> None:
 
         results: List[str] = []
         remaining = list(handles)
-        while remaining:
+        for round_idx in range(num_tasks):
             completed = DBOS.wait_first(remaining)
             results.append(completed.get_result())
             remaining = [h for h in remaining if h.workflow_id != completed.workflow_id]
+            consumed_events[round_idx].set()
         return results
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        result = process_tasks()
+        handle = dbos.start_workflow(process_tasks)
+
+    # Release tasks in reverse order, waiting for each to be consumed
+    for round_idx, task_id in enumerate(reversed(range(num_tasks))):
+        go_events[task_id].set()
+        consumed_events[round_idx].wait()
+
+    result = handle.get_result()
     expected = [f"result-{i}" for i in reversed(range(num_tasks))]
     assert result == expected
 
