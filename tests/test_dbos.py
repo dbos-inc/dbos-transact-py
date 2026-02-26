@@ -1032,6 +1032,59 @@ def test_send_idempotency_key(dbos: DBOS) -> None:
     with pytest.raises(DBOSException, match="idempotency_key is not allowed"):
         bad_workflow()
 
+    # Test 4: Send from a step (without idempotency key).
+    @DBOS.step()
+    def send_from_step(dest: str, msg: str, topic: Optional[str] = None) -> None:
+        DBOS.send(dest, msg, topic)
+
+    dest_uuid3 = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    def recv_one_msg_wf() -> str:
+        return str(DBOS.recv("s", timeout_seconds=10))
+
+    with SetWorkflowID(dest_uuid3):
+        handle3 = dbos.start_workflow(recv_one_msg_wf)
+
+    @DBOS.workflow()
+    def send_from_step_wf() -> None:
+        send_from_step(dest_uuid3, "from_step", "s")
+
+    send_from_step_wf()
+    assert handle3.get_result() == "from_step"
+
+    # Test 5: Send from a step with same idempotency key twice delivers only one message.
+    recv_step_event = threading.Event()
+
+    @DBOS.workflow()
+    def recv_two_msgs_step() -> str:
+        msg1 = DBOS.recv(timeout_seconds=10)
+        recv_step_event.set()
+        msg2 = DBOS.recv(timeout_seconds=2)
+        return f"{msg1}-{msg2}"
+
+    @DBOS.step()
+    def send_from_step_with_key(dest: str, msg: str, key: str) -> None:
+        DBOS.send(dest, msg, idempotency_key=key)
+
+    dest_uuid4 = str(uuid.uuid4())
+    with SetWorkflowID(dest_uuid4):
+        handle4 = dbos.start_workflow(recv_two_msgs_step)
+
+    step_idem_key = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    def send_from_step_idem_wf() -> None:
+        send_from_step_with_key(dest_uuid4, "hello_step", step_idem_key)
+
+    send_from_step_idem_wf()
+    recv_step_event.wait()
+
+    # Duplicate send with the same key should be silently ignored.
+    send_from_step_idem_wf()
+    # The second recv times out (returns None), proving only one message was delivered.
+    assert handle4.get_result() == "hello_step-None"
+
 
 def test_set_get_events(dbos: DBOS, config: DBOSConfig) -> None:
     for use_listen_notify in [True, False]:

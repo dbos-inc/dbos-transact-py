@@ -1756,11 +1756,10 @@ def send(
                 serialization_type=serialization_type,
             )
 
-    if cur_ctx and cur_ctx.is_within_workflow():
-        assert cur_ctx.is_workflow(), "send() must be called from within a workflow"
+    if cur_ctx and cur_ctx.is_workflow():
         if idempotency_key is not None:
             raise DBOSException(
-                "idempotency_key is not allowed when calling send() from within a workflow"
+                "idempotency_key is not allowed when calling send() from a workflow"
             )
         return do_send(destination_id, message, topic)
     else:
