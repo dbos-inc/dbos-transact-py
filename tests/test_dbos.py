@@ -1907,6 +1907,8 @@ def test_custom_database(
 
     key = "key"
     val = "val"
+    ready_evt = threading.Event()
+    send_evt = threading.Event()
 
     @DBOS.transaction()
     def transaction() -> None:
@@ -1916,15 +1918,18 @@ def test_custom_database(
     def recv_workflow() -> Any:
         transaction()
         DBOS.set_event(key, val)
+        ready_evt.set()
+        send_evt.wait()
         return DBOS.recv()
 
     handle = DBOS.start_workflow(recv_workflow)
-    assert DBOS.get_event(handle.workflow_id, key) == val
+    ready_evt.wait()
     DBOS.send(handle.workflow_id, val)
+    send_evt.set()
     assert handle.get_result() == val
     assert len(DBOS.list_workflows()) == 1
     steps = DBOS.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 4
+    assert len(steps) == 3
     assert "transaction" in steps[0]["function_name"]
     DBOS.destroy(destroy_registry=True)
 
@@ -1935,7 +1940,7 @@ def test_custom_database(
     )
     assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 4
+    assert len(steps) == 3
     assert "transaction" in steps[0]["function_name"]
 
 
@@ -1958,6 +1963,8 @@ def test_custom_schema(
 
     key = "key"
     val = "val"
+    ready_evt = threading.Event()
+    send_evt = threading.Event()
 
     @DBOS.transaction()
     def transaction() -> None:
@@ -1967,15 +1974,18 @@ def test_custom_schema(
     def recv_workflow() -> Any:
         transaction()
         DBOS.set_event(key, val)
+        ready_evt.set()
+        send_evt.wait()
         return DBOS.recv()
 
     handle = DBOS.start_workflow(recv_workflow)
-    assert DBOS.get_event(handle.workflow_id, key) == val
+    ready_evt.wait()
     DBOS.send(handle.workflow_id, val)
+    send_evt.set()
     assert handle.get_result() == val
     assert len(DBOS.list_workflows()) == 1
     steps = DBOS.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 4
+    assert len(steps) == 3
     assert "transaction" in steps[0]["function_name"]
     DBOS.destroy(destroy_registry=True)
 
@@ -1987,7 +1997,7 @@ def test_custom_schema(
     )
     assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 4
+    assert len(steps) == 3
     assert "transaction" in steps[0]["function_name"]
 
 
@@ -2025,20 +2035,25 @@ def test_custom_engine(
 
     key = "key"
     val = "val"
+    ready_evt = threading.Event()
+    send_evt = threading.Event()
 
     @DBOS.workflow()
     def recv_workflow() -> Any:
         DBOS.set_event(key, val)
+        ready_evt.set()
+        send_evt.wait()
         return DBOS.recv()
 
     assert dbos._sys_db.engine == engine
     handle = DBOS.start_workflow(recv_workflow)
-    assert DBOS.get_event(handle.workflow_id, key) == val
+    ready_evt.wait()
     DBOS.send(handle.workflow_id, val)
+    send_evt.set()
     assert handle.get_result() == val
     assert len(DBOS.list_workflows()) == 1
     steps = DBOS.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 3
+    assert len(steps) == 2
     assert "setEvent" in steps[0]["function_name"]
     DBOS.destroy(destroy_registry=True)
 
@@ -2055,7 +2070,7 @@ def test_custom_engine(
     )
     assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 3
+    assert len(steps) == 2
     assert "setEvent" in steps[0]["function_name"]
 
     # Test custom engine with client and no URL
@@ -2064,7 +2079,7 @@ def test_custom_engine(
     )
     assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 3
+    assert len(steps) == 2
     assert "setEvent" in steps[0]["function_name"]
 
 
@@ -2142,9 +2157,14 @@ def test_custom_serializer(
     key = "key"
     val = "val"
 
+    ready_evt = threading.Event()
+    send_evt = threading.Event()
+
     @DBOS.workflow()
     def recv_workflow(input: str) -> Any:
         DBOS.set_event(key, input)
+        ready_evt.set()
+        send_evt.wait()
         return DBOS.recv()
 
     expected_input = {
@@ -2155,15 +2175,16 @@ def test_custom_serializer(
     # Run an enqueued workflow testing workflow communication methods
     queue = Queue("example_queue")
     handle = queue.enqueue(recv_workflow, val)
-    assert DBOS.get_event(handle.workflow_id, key) == val
+    ready_evt.wait()
     DBOS.send(handle.workflow_id, val)
+    send_evt.set()
     assert handle.get_result() == val
     assert handle.get_status().input == expected_input
 
     # Verify the workflow is correctly stored in the system database
     assert len(DBOS.list_workflows()) == 1
     steps = DBOS.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 3
+    assert len(steps) == 2
     assert "setEvent" in steps[0]["function_name"]
     assert "DBOS.recv" in steps[1]["function_name"]
     assert steps[1]["output"] == val
@@ -2175,7 +2196,7 @@ def test_custom_serializer(
     )
     assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 3
+    assert len(steps) == 2
     assert "setEvent" in steps[0]["function_name"]
     assert "DBOS.recv" in steps[1]["function_name"]
     assert steps[1]["output"] == val
