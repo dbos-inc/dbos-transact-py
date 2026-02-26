@@ -569,26 +569,30 @@ def _execute_workflow_wthread(
         "name": get_dbos_func_name(func),
         "operationType": OperationType.WORKFLOW.value,
     }
+    fi = get_func_info(func)
     with EnterDBOSWorkflow(attributes, ctx):
-        owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
-        try:
-            if owned:
-                return _get_wf_invoke_func(dbos, status)(
-                    functools.partial(func, *args, **kwargs)
+        rr: Optional[str] = check_required_roles(func, fi)
+        with DBOSAssumeRole(rr):
+            owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
+            try:
+                if owned:
+                    return _get_wf_invoke_func(dbos, status)(
+                        functools.partial(func, *args, **kwargs)
+                    )
+                else:
+                    output: R = dbos._sys_db.await_workflow_result(
+                        status["workflow_uuid"],
+                        polling_interval=DEFAULT_POLLING_INTERVAL,
+                    )
+                    return output
+            except Exception as e:
+                dbos.logger.error(
+                    f"Exception encountered in asynchronous workflow:", exc_info=e
                 )
-            else:
-                output: R = dbos._sys_db.await_workflow_result(
-                    status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL
-                )
-                return output
-        except Exception as e:
-            dbos.logger.error(
-                f"Exception encountered in asynchronous workflow:", exc_info=e
-            )
-            raise
-        finally:
-            if owned:
-                dbos._active_workflows_set.release(status["workflow_uuid"])
+                raise
+            finally:
+                if owned:
+                    dbos._active_workflows_set.release(status["workflow_uuid"])
 
 
 async def _execute_workflow_async(
@@ -603,31 +607,34 @@ async def _execute_workflow_async(
         "name": get_dbos_func_name(func),
         "operationType": OperationType.WORKFLOW.value,
     }
+    fi = get_func_info(func)
     with EnterDBOSWorkflow(attributes, ctx):
-        owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
-        try:
-            if owned:
-                result = Pending[R](functools.partial(func, *args, **kwargs)).then(
-                    _get_wf_invoke_func(dbos, status)
-                )
-                return await result()
-            else:
-
-                def fn() -> Any:
-                    return dbos._sys_db.await_workflow_result(
-                        status["workflow_uuid"],
-                        polling_interval=DEFAULT_POLLING_INTERVAL,
+        rr: Optional[str] = check_required_roles(func, fi)
+        with DBOSAssumeRole(rr):
+            owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
+            try:
+                if owned:
+                    result = Pending[R](functools.partial(func, *args, **kwargs)).then(
+                        _get_wf_invoke_func(dbos, status)
                     )
+                    return await result()
+                else:
 
-                return await asyncio.to_thread(fn)
-        except Exception as e:
-            dbos.logger.error(
-                f"Exception encountered in asynchronous workflow:", exc_info=e
-            )
-            raise
-        finally:
-            if owned:
-                dbos._active_workflows_set.release(status["workflow_uuid"])
+                    def fn() -> Any:
+                        return dbos._sys_db.await_workflow_result(
+                            status["workflow_uuid"],
+                            polling_interval=DEFAULT_POLLING_INTERVAL,
+                        )
+
+                    return await asyncio.to_thread(fn)
+            except Exception as e:
+                dbos.logger.error(
+                    f"Exception encountered in asynchronous workflow:", exc_info=e
+                )
+                raise
+            finally:
+                if owned:
+                    dbos._active_workflows_set.release(status["workflow_uuid"])
 
 
 def execute_workflow_by_id(
