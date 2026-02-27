@@ -1655,17 +1655,21 @@ class SystemDatabase(ABC):
         try:
             with self.engine.begin() as c:
                 c.execute(
-                    sa.insert(SystemSchema.notifications).values(
+                    self.dialect.insert(SystemSchema.notifications)
+                    .values(
                         destination_uuid=destination_uuid,
                         topic=topic,
                         message=serval,
                         message_uuid=message_uuid,
                         serialization=serialization,
                     )
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            SystemSchema.notifications.c.message_uuid,
+                        ]
+                    )
                 )
         except DBAPIError as dbapi_error:
-            if self._is_unique_constraint_violation(dbapi_error):
-                return  # Idempotent replay — duplicate message_uuid
             if self._is_foreign_key_violation(dbapi_error):
                 raise DBOSNonExistentWorkflowError(
                     "`send` destination", destination_uuid
