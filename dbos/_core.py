@@ -1227,8 +1227,17 @@ def decorate_transaction(
                 raise DBOSException(
                     f"Function {transaction_name} invoked before DBOS initialized"
                 )
-
             dbos = dbosreg.dbos
+
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                pass
+            else:
+                dbosreg.dbos.logger.warning(
+                    f"Transaction {transaction_name} was called while an event loop is running. Invoke transactions from an async context using asyncio.to_thread to avoid blocking the event loop."
+                )
+
             assert (
                 dbos._app_db
             ), "Transactions can only be used if DBOS is configured with an application_database_url"
