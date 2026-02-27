@@ -101,7 +101,8 @@ def _enqueue_scheduled_workflow(
         "name": workflow_name,
         "class_name": class_name,
         "queue_name": INTERNAL_QUEUE_NAME,
-        "app_version": None,
+        # Scheduled workflows are always enqueued on the latest application version
+        "app_version": sys_db.get_latest_version(),
         "config_name": None,
         "authenticated_user": None,
         "assumed_role": None,
