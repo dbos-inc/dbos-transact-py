@@ -891,6 +891,59 @@ def test_static_class_method_schedule(dbos: DBOS) -> None:
     DBOS.delete_schedule("static-class-backfill")
 
 
+def test_classmethod_schedule(dbos: DBOS) -> None:
+    received: list[Any] = []
+
+    @DBOS.dbos_class()
+    class MyClassMethodSchedule:
+        @classmethod
+        @DBOS.workflow()
+        def scheduled_wf(cls, scheduled_at: datetime, ctx: Any) -> None:
+            received.append(ctx)
+
+    DBOS.create_schedule(
+        schedule_name="classmethod-schedule",
+        workflow_fn=MyClassMethodSchedule.scheduled_wf,
+        schedule="* * * * * *",
+        context={"cls": True},
+    )
+
+    sched = DBOS.get_schedule("classmethod-schedule")
+    assert sched is not None
+    # Class methods should have the class name set
+    assert sched["workflow_name"] == MyClassMethodSchedule.scheduled_wf.__qualname__
+    assert sched["workflow_class_name"] == MyClassMethodSchedule.__qualname__
+    assert sched["context"] == {"cls": True}
+
+    def check_fired() -> None:
+        assert len(received) >= 2
+        assert all(c == {"cls": True} for c in received)
+
+    retry_until_success(check_fired)
+
+    # Trigger should work for class methods
+    handle = DBOS.trigger_schedule("classmethod-schedule")
+    handle.get_result()
+    assert received[-1] == {"cls": True}
+
+    # Backfill should work for class methods
+    start = datetime(2025, 1, 1, 0, 30, 0, tzinfo=timezone.utc)
+    end = start + timedelta(hours=3)
+    DBOS.delete_schedule("classmethod-schedule")
+    DBOS.create_schedule(
+        schedule_name="classmethod-backfill",
+        workflow_fn=MyClassMethodSchedule.scheduled_wf,
+        schedule="0 * * * *",
+        context={"backfill": True},
+    )
+    handles = DBOS.backfill_schedule("classmethod-backfill", start, end)
+    assert len(handles) == 3
+    for h in handles:
+        h.get_result()
+
+    DBOS.delete_schedule("classmethod-backfill")
+
+
 def test_instance_method_schedule_rejected(dbos: DBOS) -> None:
     @DBOS.dbos_class()
     class MyConfigured(DBOSConfiguredInstance):
