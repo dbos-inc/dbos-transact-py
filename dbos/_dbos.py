@@ -1856,7 +1856,9 @@ class DBOS:
                 "Configured instance methods cannot be used as scheduled workflows"
             )
         workflow_class_name = (
-            fi.class_info.registered_name if fi and fi.class_info else None
+            fi.class_info.registered_name
+            if fi and fi.class_info and fi.func_type == DBOSFuncType.Class
+            else None
         )
         sched = WorkflowSchedule(
             schedule_id=generate_uuid(),
@@ -2074,7 +2076,9 @@ class DBOS:
                     "Configured instance methods cannot be used as scheduled workflows"
                 )
             workflow_class_name = (
-                fi.class_info.registered_name if fi and fi.class_info else None
+                fi.class_info.registered_name
+                if fi and fi.class_info and fi.func_type == DBOSFuncType.Class
+                else None
             )
             to_apply.append(
                 WorkflowSchedule(

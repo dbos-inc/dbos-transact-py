@@ -857,10 +857,9 @@ def test_static_class_method_schedule(dbos: DBOS) -> None:
 
     sched = DBOS.get_schedule("static-class-schedule")
     assert sched is not None
-    assert (
-        sched["workflow_class_name"]
-        == "test_static_class_method_schedule.<locals>.MyScheduledClass"
-    )
+    # Static methods should not have a class name set
+    assert sched["workflow_name"] == MyScheduledClass.scheduled_wf.__qualname__
+    assert sched["workflow_class_name"] is None
     assert sched["context"] == {"class": True}
 
     def check_fired() -> None:
@@ -869,7 +868,27 @@ def test_static_class_method_schedule(dbos: DBOS) -> None:
 
     retry_until_success(check_fired)
 
+    # Trigger should work for static class methods
+    handle = DBOS.trigger_schedule("static-class-schedule")
+    handle.get_result()
+    assert received[-1] == {"class": True}
+
+    # Backfill should work for static class methods
+    start = datetime(2025, 1, 1, 0, 30, 0, tzinfo=timezone.utc)
+    end = start + timedelta(hours=3)
     DBOS.delete_schedule("static-class-schedule")
+    DBOS.create_schedule(
+        schedule_name="static-class-backfill",
+        workflow_fn=MyScheduledClass.scheduled_wf,
+        schedule="0 * * * *",
+        context={"backfill": True},
+    )
+    handles = DBOS.backfill_schedule("static-class-backfill", start, end)
+    assert len(handles) == 3
+    for h in handles:
+        h.get_result()
+
+    DBOS.delete_schedule("static-class-backfill")
 
 
 def test_instance_method_schedule_rejected(dbos: DBOS) -> None:
