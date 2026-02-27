@@ -1024,13 +1024,31 @@ def test_send_idempotency_key(dbos: DBOS) -> None:
     DBOS.send(dest_uuid2, "b", "t", idempotency_key=str(uuid.uuid4()))
     assert handle2.get_result() == "a-b"
 
-    # Test 3: idempotency_key inside a workflow raises an error.
-    @DBOS.workflow()
-    def bad_workflow() -> None:
-        DBOS.send(dest_uuid, "msg", idempotency_key="should-fail")
+    # Test 3: Send from a workflow with same idempotency key twice delivers only one message.
+    recv_wf_event = threading.Event()
 
-    with pytest.raises(DBOSException, match="idempotency_key is not allowed"):
-        bad_workflow()
+    @DBOS.workflow()
+    def recv_two_msgs_wf_idem() -> str:
+        msg1 = DBOS.recv(timeout_seconds=10)
+        recv_wf_event.set()
+        msg2 = DBOS.recv(timeout_seconds=2)
+        return f"{msg1}-{msg2}"
+
+    dest_uuid_wf = str(uuid.uuid4())
+    with SetWorkflowID(dest_uuid_wf):
+        handle_wf = dbos.start_workflow(recv_two_msgs_wf_idem)
+
+    wf_idem_key = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    def send_with_key_wf(dest: str, msg: str, key: str) -> None:
+        DBOS.send(dest, msg, idempotency_key=key)
+
+    send_with_key_wf(dest_uuid_wf, "hello_wf", wf_idem_key)
+    recv_wf_event.wait()
+    # Duplicate send with the same key should be silently ignored.
+    send_with_key_wf(dest_uuid_wf, "hello_wf_dup", wf_idem_key)
+    assert handle_wf.get_result() == "hello_wf-None"
 
     # Test 4: Send from a step (without idempotency key).
     @DBOS.step()

@@ -1576,13 +1576,16 @@ class SystemDatabase(ABC):
         function_id: int,
         destination_uuid: str,
         message: Any,
-        topic: Optional[str] = None,
+        topic: Optional[str],
         *,
         serialization_type: Optional["WorkflowSerializationFormat"],
+        message_uuid: Optional[str],
     ) -> None:
         function_name = "DBOS.send"
         start_time = int(time.time() * 1000)
         topic = topic if topic is not None else _dbos_null_topic
+        if message_uuid is None:
+            message_uuid = str(generate_uuid())
         serval, serialization = serialize_value(
             message,
             serialization_type,
@@ -1604,11 +1607,18 @@ class SystemDatabase(ABC):
 
             try:
                 c.execute(
-                    sa.insert(SystemSchema.notifications).values(
+                    self.dialect.insert(SystemSchema.notifications)
+                    .values(
                         destination_uuid=destination_uuid,
                         topic=topic,
                         message=serval,
+                        message_uuid=message_uuid,
                         serialization=serialization,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            SystemSchema.notifications.c.message_uuid,
+                        ]
                     )
                 )
             except DBAPIError as dbapi_error:

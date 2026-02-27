@@ -1776,13 +1776,10 @@ def send(
                 message,
                 topic,
                 serialization_type=serialization_type,
+                message_uuid=idempotency_key,
             )
 
     if cur_ctx and cur_ctx.is_workflow():
-        if idempotency_key is not None:
-            raise DBOSException(
-                "idempotency_key is not allowed when calling send() from a workflow"
-            )
         return do_send(destination_id, message, topic)
     else:
         dbos._sys_db.send_direct(
