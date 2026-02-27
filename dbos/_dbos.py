@@ -92,6 +92,7 @@ from ._scheduler_decorator import DecoratedScheduledWorkflow, scheduled
 from ._sys_db import (
     StepInfo,
     SystemDatabase,
+    VersionInfo,
     WorkflowSchedule,
     WorkflowStatus,
     _dbos_stream_closed_sentinel,
@@ -543,10 +544,7 @@ class DBOS:
             # Register the current application version
             self._sys_db.create_version(GlobalParams.app_version)
             latest = self._sys_db.get_latest_version()
-            if (
-                latest is not None
-                and latest["version_name"] != GlobalParams.app_version
-            ):
+            if latest["version_name"] != GlobalParams.app_version:
                 dbos_logger.warning(
                     f"Current version '{GlobalParams.app_version}' is not the latest version. "
                     f"Latest version is '{latest['version_name']}'."
@@ -1817,6 +1815,8 @@ class DBOS:
             fn, "DBOS.listWorkflowSteps", step_ctx
         )
 
+    # ── Schedule API ──────────────────────────────────────────────
+
     @classmethod
     def create_schedule(
         cls,
@@ -2146,6 +2146,45 @@ class DBOS:
         dbos = _get_dbos_instance()
         workflow_id = trigger_schedule(dbos._sys_db, schedule_name)
         return WorkflowHandlePolling(workflow_id, dbos)
+
+    # ── Version API ──────────────────────────────────────────────
+
+    @classmethod
+    def list_versions(cls) -> List[VersionInfo]:
+        """Return all application versions ordered by timestamp descending."""
+        dbos = _get_dbos_instance()
+        return dbos._sys_db.list_versions()
+
+    @classmethod
+    def get_latest_version(cls) -> VersionInfo:
+        """Return the latest application version."""
+        dbos = _get_dbos_instance()
+        return dbos._sys_db.get_latest_version()
+
+    @classmethod
+    def set_latest_version(cls, version_name: str) -> None:
+        """Set a version as the latest by updating its timestamp to now."""
+        dbos = _get_dbos_instance()
+        new_timestamp = int(time.time() * 1000)
+        dbos._sys_db.update_version_timestamp(version_name, new_timestamp)
+
+    @classmethod
+    async def list_versions_async(cls) -> List[VersionInfo]:
+        """Async version of :meth:`list_versions`."""
+        await cls._configure_asyncio_thread_pool()
+        return await asyncio.to_thread(cls.list_versions)
+
+    @classmethod
+    async def get_latest_version_async(cls) -> VersionInfo:
+        """Async version of :meth:`get_latest_version`."""
+        await cls._configure_asyncio_thread_pool()
+        return await asyncio.to_thread(cls.get_latest_version)
+
+    @classmethod
+    async def set_latest_version_async(cls, version_name: str) -> None:
+        """Async version of :meth:`set_latest_version`."""
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(cls.set_latest_version, version_name)
 
     @classproperty
     def application_version(cls) -> str:

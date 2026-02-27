@@ -3306,7 +3306,7 @@ class SystemDatabase(ABC):
                 for row in rows
             ]
 
-    def get_latest_version(self) -> Optional[VersionInfo]:
+    def get_latest_version(self) -> VersionInfo:
         with self.engine.begin() as c:
             row = c.execute(
                 sa.select(
@@ -3318,7 +3318,7 @@ class SystemDatabase(ABC):
                 .limit(1)
             ).fetchone()
             if row is None:
-                return None
+                raise DBOSException("No versions found")
             return VersionInfo(
                 version_id=row[0],
                 version_name=row[1],

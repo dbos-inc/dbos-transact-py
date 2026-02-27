@@ -42,6 +42,7 @@ from dbos._sys_db import (
     ClientScheduleInput,
     StepInfo,
     SystemDatabase,
+    VersionInfo,
     WorkflowSchedule,
     WorkflowStatus,
     WorkflowStatusInternal,
@@ -701,6 +702,8 @@ class DBOSClient:
                 await asyncio.sleep(1.0)
                 continue
 
+    # ── Schedule API ──────────────────────────────────────────────
+
     def create_schedule(
         self,
         *,
@@ -899,3 +902,30 @@ class DBOSClient:
         """
         workflow_id = trigger_schedule(self._sys_db, schedule_name)
         return WorkflowHandleClientPolling[None](workflow_id, self._sys_db)
+
+    # ── Version API ──────────────────────────────────────────────
+
+    def list_versions(self) -> List[VersionInfo]:
+        """Return all application versions ordered by timestamp descending."""
+        return self._sys_db.list_versions()
+
+    def get_latest_version(self) -> VersionInfo:
+        """Return the latest application version."""
+        return self._sys_db.get_latest_version()
+
+    def set_latest_version(self, version_name: str) -> None:
+        """Set a version as the latest by updating its timestamp to now."""
+        new_timestamp = int(time.time() * 1000)
+        self._sys_db.update_version_timestamp(version_name, new_timestamp)
+
+    async def list_versions_async(self) -> List[VersionInfo]:
+        """Async version of :meth:`list_versions`."""
+        return await asyncio.to_thread(self.list_versions)
+
+    async def get_latest_version_async(self) -> VersionInfo:
+        """Async version of :meth:`get_latest_version`."""
+        return await asyncio.to_thread(self.get_latest_version)
+
+    async def set_latest_version_async(self, version_name: str) -> None:
+        """Async version of :meth:`set_latest_version`."""
+        await asyncio.to_thread(self.set_latest_version, version_name)
