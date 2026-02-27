@@ -1582,13 +1582,16 @@ class SystemDatabase(ABC):
         function_id: int,
         destination_uuid: str,
         message: Any,
-        topic: Optional[str] = None,
+        topic: Optional[str],
         *,
         serialization_type: Optional["WorkflowSerializationFormat"],
+        message_uuid: Optional[str],
     ) -> None:
         function_name = "DBOS.send"
         start_time = int(time.time() * 1000)
         topic = topic if topic is not None else _dbos_null_topic
+        if message_uuid is None:
+            message_uuid = str(generate_uuid())
         serval, serialization = serialize_value(
             message,
             serialization_type,
@@ -1610,11 +1613,18 @@ class SystemDatabase(ABC):
 
             try:
                 c.execute(
-                    sa.insert(SystemSchema.notifications).values(
+                    self.dialect.insert(SystemSchema.notifications)
+                    .values(
                         destination_uuid=destination_uuid,
                         topic=topic,
                         message=serval,
+                        message_uuid=message_uuid,
                         serialization=serialization,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            SystemSchema.notifications.c.message_uuid,
+                        ]
                     )
                 )
             except DBAPIError as dbapi_error:
@@ -1633,6 +1643,54 @@ class SystemDatabase(ABC):
                 "serialization": None,
             }
             self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
+
+    @db_retry()
+    def send_direct(
+        self,
+        destination_uuid: str,
+        message: Any,
+        topic: Optional[str] = None,
+        message_uuid: Optional[str] = None,
+        *,
+        serialization_type: Optional["WorkflowSerializationFormat"] = None,
+    ) -> None:
+        """Send a message without requiring a workflow context.
+
+        Idempotency is provided by the primary key constraint on message_uuid.
+        On duplicate message_uuid, silently returns (idempotent replay).
+        """
+
+        topic = topic if topic is not None else _dbos_null_topic
+        if message_uuid is None:
+            message_uuid = str(generate_uuid())
+        serval, serialization = serialize_value(
+            message,
+            serialization_type,
+            self.serializer,
+        )
+        try:
+            with self.engine.begin() as c:
+                c.execute(
+                    self.dialect.insert(SystemSchema.notifications)
+                    .values(
+                        destination_uuid=destination_uuid,
+                        topic=topic,
+                        message=serval,
+                        message_uuid=message_uuid,
+                        serialization=serialization,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            SystemSchema.notifications.c.message_uuid,
+                        ]
+                    )
+                )
+        except DBAPIError as dbapi_error:
+            if self._is_foreign_key_violation(dbapi_error):
+                raise DBOSNonExistentWorkflowError(
+                    "`send` destination", destination_uuid
+                )
+            raise
 
     @db_retry()
     def recv(
@@ -1675,7 +1733,7 @@ class SystemDatabase(ABC):
                 # This should not happen, but if it does, it means the workflow is executed concurrently.
                 raise DBOSWorkflowConflictIDError(workflow_uuid)
 
-            # Check if the key is already in the database. If not, wait for the notification.
+            # Check if an unconsumed message is already in the database. If not, wait for the notification.
             init_recv: Sequence[Any]
             with self.engine.begin() as c:
                 init_recv = c.execute(
@@ -1684,6 +1742,7 @@ class SystemDatabase(ABC):
                     ).where(
                         SystemSchema.notifications.c.destination_uuid == workflow_uuid,
                         SystemSchema.notifications.c.topic == topic,
+                        SystemSchema.notifications.c.consumed == False,
                     )
                 ).fetchall()
 
@@ -1698,13 +1757,14 @@ class SystemDatabase(ABC):
             condition.release()
             self.notifications_map.pop(payload)
 
-        # Transactionally consume and return the message if it's in the database, otherwise return null.
+        # Transactionally consume and return the oldest unconsumed message, or null if none.
         with self.engine.begin() as c:
-            delete_stmt = (
-                sa.delete(SystemSchema.notifications)
+            consume_stmt = (
+                sa.update(SystemSchema.notifications)
                 .where(
                     SystemSchema.notifications.c.destination_uuid == workflow_uuid,
                     SystemSchema.notifications.c.topic == topic,
+                    SystemSchema.notifications.c.consumed == False,
                     SystemSchema.notifications.c.message_uuid
                     == (
                         sa.select(SystemSchema.notifications.c.message_uuid)
@@ -1712,6 +1772,7 @@ class SystemDatabase(ABC):
                             SystemSchema.notifications.c.destination_uuid
                             == workflow_uuid,
                             SystemSchema.notifications.c.topic == topic,
+                            SystemSchema.notifications.c.consumed == False,
                         )
                         .order_by(
                             SystemSchema.notifications.c.created_at_epoch_ms.asc()
@@ -1720,12 +1781,13 @@ class SystemDatabase(ABC):
                         .scalar_subquery()
                     ),
                 )
+                .values(consumed=True)
                 .returning(
                     SystemSchema.notifications.c.message,
                     SystemSchema.notifications.c.serialization,
                 )
             )
-            rows = c.execute(delete_stmt).fetchall()
+            rows = c.execute(consume_stmt).fetchall()
             message: Any = None
             serialization: Optional[str] = None
             if len(rows) > 0:
@@ -1789,6 +1851,7 @@ class SystemDatabase(ABC):
                                 SystemSchema.notifications.c.destination_uuid
                                 == dest_uuid,
                                 SystemSchema.notifications.c.topic == topic,
+                                SystemSchema.notifications.c.consumed == False,
                             )
                             .limit(1)
                         )

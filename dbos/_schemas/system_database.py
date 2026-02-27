@@ -4,6 +4,7 @@ from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     ForeignKey,
     Index,
@@ -143,6 +144,7 @@ class SystemSchema:
             server_default=text("gen_random_uuid()"),
         ),
         Column("serialization", Text()),
+        Column("consumed", Boolean, nullable=False, server_default="false"),
         Index("idx_workflow_topic", "destination_uuid", "topic"),
     )
 

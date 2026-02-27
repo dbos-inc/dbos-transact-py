@@ -1751,6 +1751,7 @@ def send(
     topic: Optional[str] = None,
     *,
     serialization_type: Optional[WorkflowSerializationFormat],
+    idempotency_key: Optional[str] = None,
 ) -> None:
     if (
         serialization_type is None
@@ -1775,15 +1776,19 @@ def send(
                 message,
                 topic,
                 serialization_type=serialization_type,
+                message_uuid=idempotency_key,
             )
 
-    if cur_ctx and cur_ctx.is_within_workflow():
-        assert cur_ctx.is_workflow(), "send() must be called from within a workflow"
+    if cur_ctx and cur_ctx.is_workflow():
         return do_send(destination_id, message, topic)
     else:
-        wffn = dbos._registry.workflow_info_map.get(TEMP_SEND_WF_NAME)
-        assert wffn
-        wffn(destination_id, message, topic)
+        dbos._sys_db.send_direct(
+            destination_id,
+            message,
+            topic,
+            message_uuid=idempotency_key,
+            serialization_type=serialization_type,
+        )
 
 
 def recv(

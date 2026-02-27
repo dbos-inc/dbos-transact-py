@@ -438,7 +438,8 @@ class DBOS:
 
             setup_flask_middleware(self.flask)
 
-        # Register send_stub as a workflow
+        # Register send_temp_workflow for backwards compatibility only.
+        # Old workflow_status rows may reference TEMP_SEND_WF_NAME.
         def send_temp_workflow(
             destination_id: str, message: Any, topic: Optional[str]
         ) -> None:
@@ -1155,6 +1156,7 @@ class DBOS:
         message: Any,
         topic: Optional[str] = None,
         *,
+        idempotency_key: Optional[str] = None,
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
@@ -1168,6 +1170,7 @@ class DBOS:
             message,
             topic,
             serialization_type=serialization_type,
+            idempotency_key=idempotency_key,
         )
 
     @classmethod
@@ -1177,6 +1180,7 @@ class DBOS:
         message: Any,
         topic: Optional[str] = None,
         *,
+        idempotency_key: Optional[str] = None,
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
@@ -1192,6 +1196,7 @@ class DBOS:
             message,
             topic,
             serialization_type=serialization_type,
+            idempotency_key=idempotency_key,
         )
 
     @classmethod

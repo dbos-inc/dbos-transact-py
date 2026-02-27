@@ -268,7 +268,6 @@ def test_client_send_idempotent(
     topic = f"test-topic-{now}"
     message = f"Hello, DBOS! {now}"
     idempotency_key = f"test-idempotency-{now}"
-    sendWFID = f"{wfid}-{idempotency_key}"
 
     run_send_worker(wfid, topic, DBOS.application_version)
 
@@ -282,18 +281,6 @@ def test_client_send_idempotent(
             ).bindparams(wfid=wfid)
         ).fetchall()
         assert len(nresult) == 1
-        oresult = conn.execute(
-            sa.text(
-                "SELECT * FROM dbos.operation_outputs WHERE workflow_uuid = :wfid"
-            ).bindparams(wfid=sendWFID)
-        ).fetchall()
-        assert len(oresult) == 1
-        sresult = conn.execute(
-            sa.text(
-                "SELECT * FROM dbos.workflow_status WHERE workflow_uuid = :wfid"
-            ).bindparams(wfid=sendWFID)
-        ).fetchall()
-        assert len(sresult) == 1
 
     DBOS._recover_pending_workflows()
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
@@ -304,61 +291,6 @@ def test_client_send_idempotent(
 def reexecute_workflow_by_id(dbos: DBOS, wfid: str) -> "WorkflowHandle[Any]":
     dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
     return dbos._execute_workflow_id(wfid)
-
-
-def test_client_send_failure(
-    dbos: DBOS, client: DBOSClient, skip_with_sqlite: None
-) -> None:
-    run_client_collateral()
-
-    now = math.floor(time.time())
-    wfid = f"test-send-fail-{now}"
-    topic = f"test-topic-{now}"
-    message = f"Hello, DBOS! {now}"
-    idempotency_key = f"test-idempotency-{now}"
-    sendWFID = f"{wfid}-{idempotency_key}"
-
-    run_send_worker(wfid, topic, DBOS.application_version)
-
-    client.send(wfid, message, topic, idempotency_key)
-
-    # simulate a send failure by deleting notification but leaving the WF status table result
-    with dbos._sys_db.engine.connect() as conn:
-        oresult = conn.execute(
-            sa.text(
-                "DELETE FROM dbos.operation_outputs WHERE workflow_uuid = :wfid"
-            ).bindparams(wfid=sendWFID)
-        )
-        assert oresult.rowcount == 1
-        nresult = conn.execute(
-            sa.text(
-                "DELETE FROM dbos.notifications WHERE destination_uuid = :wfid"
-            ).bindparams(wfid=wfid)
-        )
-        assert nresult.rowcount == 1
-        sresult = conn.execute(
-            sa.text(
-                "SELECT recovery_attempts FROM dbos.workflow_status WHERE workflow_uuid = :wfid"
-            ).bindparams(wfid=sendWFID)
-        ).fetchall()
-        assert len(sresult) == 1
-        assert sresult[0][0] == 1
-
-    reexecute_workflow_by_id(dbos, sendWFID)
-
-    with dbos._sys_db.engine.connect() as conn:
-        s2result = conn.execute(
-            sa.text(
-                "SELECT recovery_attempts FROM dbos.workflow_status WHERE workflow_uuid = :wfid"
-            ).bindparams(wfid=sendWFID)
-        ).fetchall()
-        assert len(s2result) == 1
-        assert s2result[0][0] == 2
-
-    DBOS._recover_pending_workflows()
-    handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
-    result = handle.get_result()
-    assert result == message
 
 
 def test_client_get_event(client: DBOSClient, dbos: DBOS) -> None:

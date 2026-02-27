@@ -20,7 +20,7 @@ from typing import (
 import sqlalchemy as sa
 
 from dbos._context import MaxPriority, MinPriority
-from dbos._core import DEFAULT_POLLING_INTERVAL, TEMP_SEND_WF_NAME
+from dbos._core import DEFAULT_POLLING_INTERVAL
 from dbos._sys_db import SystemDatabase
 from dbos._utils import generate_uuid
 
@@ -334,58 +334,11 @@ class DBOSClient:
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
     ) -> None:
-        idempotency_key = idempotency_key if idempotency_key else generate_uuid()
-        serargs, argser = serialize_args(
-            (),
-            {},
-            serialization_type,
-            self._serializer,
-        )
-        status: WorkflowStatusInternal = {
-            "workflow_uuid": f"{destination_id}-{idempotency_key}",
-            "status": WorkflowStatusString.SUCCESS.value,
-            "name": TEMP_SEND_WF_NAME,
-            "class_name": None,
-            "queue_name": None,
-            "config_name": None,
-            "authenticated_user": None,
-            "assumed_role": None,
-            "authenticated_roles": None,
-            "output": None,
-            "error": None,
-            "created_at": None,
-            "updated_at": None,
-            "executor_id": None,
-            "recovery_attempts": None,
-            "app_id": None,
-            "app_version": None,
-            "workflow_timeout_ms": None,
-            "workflow_deadline_epoch_ms": None,
-            "deduplication_id": None,
-            "priority": 0,
-            "inputs": serargs,
-            "serialization": argser,
-            "queue_partition_key": None,
-            "forked_from": None,
-            "parent_workflow_id": None,
-            "started_at_epoch_ms": None,
-            "owner_xid": None,
-        }
-        with self._sys_db.engine.begin() as conn:
-            self._sys_db._insert_workflow_status(
-                status,
-                conn,
-                max_recovery_attempts=None,
-                owner_xid=None,
-                is_dequeued_request=False,
-                is_recovery_request=False,
-            )
-        self._sys_db.send(
-            status["workflow_uuid"],
-            0,
+        self._sys_db.send_direct(
             destination_id,
             message,
             topic,
+            message_uuid=idempotency_key,
             serialization_type=serialization_type,
         )
 
