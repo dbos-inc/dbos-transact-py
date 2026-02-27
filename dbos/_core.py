@@ -32,6 +32,7 @@ from ._context import (
     DBOSAssumeRole,
     DBOSContext,
     DBOSContextEnsure,
+    DBOSContextSetAuth,
     EnterDBOSStepCtx,
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
@@ -569,26 +570,30 @@ def _execute_workflow_wthread(
         "name": get_dbos_func_name(func),
         "operationType": OperationType.WORKFLOW.value,
     }
+    fi = get_func_info(func)
     with EnterDBOSWorkflow(attributes, ctx):
-        owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
-        try:
-            if owned:
-                return _get_wf_invoke_func(dbos, status)(
-                    functools.partial(func, *args, **kwargs)
+        rr: Optional[str] = check_required_roles(func, fi)
+        with DBOSAssumeRole(rr):
+            owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
+            try:
+                if owned:
+                    return _get_wf_invoke_func(dbos, status)(
+                        functools.partial(func, *args, **kwargs)
+                    )
+                else:
+                    output: R = dbos._sys_db.await_workflow_result(
+                        status["workflow_uuid"],
+                        polling_interval=DEFAULT_POLLING_INTERVAL,
+                    )
+                    return output
+            except Exception as e:
+                dbos.logger.error(
+                    f"Exception encountered in asynchronous workflow:", exc_info=e
                 )
-            else:
-                output: R = dbos._sys_db.await_workflow_result(
-                    status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL
-                )
-                return output
-        except Exception as e:
-            dbos.logger.error(
-                f"Exception encountered in asynchronous workflow:", exc_info=e
-            )
-            raise
-        finally:
-            if owned:
-                dbos._active_workflows_set.release(status["workflow_uuid"])
+                raise
+            finally:
+                if owned:
+                    dbos._active_workflows_set.release(status["workflow_uuid"])
 
 
 async def _execute_workflow_async(
@@ -603,31 +608,34 @@ async def _execute_workflow_async(
         "name": get_dbos_func_name(func),
         "operationType": OperationType.WORKFLOW.value,
     }
+    fi = get_func_info(func)
     with EnterDBOSWorkflow(attributes, ctx):
-        owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
-        try:
-            if owned:
-                result = Pending[R](functools.partial(func, *args, **kwargs)).then(
-                    _get_wf_invoke_func(dbos, status)
-                )
-                return await result()
-            else:
-
-                def fn() -> Any:
-                    return dbos._sys_db.await_workflow_result(
-                        status["workflow_uuid"],
-                        polling_interval=DEFAULT_POLLING_INTERVAL,
+        rr: Optional[str] = check_required_roles(func, fi)
+        with DBOSAssumeRole(rr):
+            owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
+            try:
+                if owned:
+                    result = Pending[R](functools.partial(func, *args, **kwargs)).then(
+                        _get_wf_invoke_func(dbos, status)
                     )
+                    return await result()
+                else:
 
-                return await asyncio.to_thread(fn)
-        except Exception as e:
-            dbos.logger.error(
-                f"Exception encountered in asynchronous workflow:", exc_info=e
-            )
-            raise
-        finally:
-            if owned:
-                dbos._active_workflows_set.release(status["workflow_uuid"])
+                    def fn() -> Any:
+                        return dbos._sys_db.await_workflow_result(
+                            status["workflow_uuid"],
+                            polling_interval=DEFAULT_POLLING_INTERVAL,
+                        )
+
+                    return await asyncio.to_thread(fn)
+            except Exception as e:
+                dbos.logger.error(
+                    f"Exception encountered in asynchronous workflow:", exc_info=e
+                )
+                raise
+            finally:
+                if owned:
+                    dbos._active_workflows_set.release(status["workflow_uuid"])
 
 
 def execute_workflow_by_id(
@@ -694,7 +702,12 @@ def execute_workflow_by_id(
                 error=error_str,
             )
             raise
-    with DBOSContextEnsure():
+    # Restore authentication context from the saved workflow status
+    recovered_user = status.get("authenticated_user")
+    recovered_roles_str = status.get("authenticated_roles")
+    recovered_roles = json.loads(recovered_roles_str) if recovered_roles_str else None
+
+    with DBOSContextSetAuth(recovered_user, recovered_roles):
         # If this function belongs to a configured class, add that class instance as its first argument
         if status["config_name"] is not None:
             config_name = status["config_name"]

@@ -13,9 +13,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 # Public API
 from dbos import DBOS, DBOSContextSetAuth
-
-# Private API because this is a unit test
-from dbos._context import assert_current_dbos_context
 from dbos._error import DBOSInitializationError, DBOSNotAuthorizedError
 from tests.conftest import TestOtelType
 
@@ -48,44 +45,34 @@ def test_simple_endpoint(
     @DBOS.required_roles([])
     @DBOS.workflow()
     def test_open_endpoint(var1: str) -> str:
-        result = var1
-        ctx = assert_current_dbos_context()
-        return result
+        return var1
 
     @app.get("/user/{var1}")
     @DBOS.required_roles(["user"])
     @DBOS.workflow()
     def test_user_endpoint(var1: str) -> str:
-        result = var1
-        ctx = assert_current_dbos_context()
-        assert ctx.assumed_role == "user"
-        return result
+        assert DBOS.assumed_role == "user"
+        return var1
 
     @app.get("/engineer/{var1}")
     @DBOS.required_roles(["engineer"])
     @DBOS.workflow()
     def test_engineer_endpoint(var1: str) -> str:
-        result = var1
-        ctx = assert_current_dbos_context()
-        assert ctx.assumed_role == "engineer"
-        return result
+        assert DBOS.assumed_role == "engineer"
+        return var1
 
     @app.get("/admin/{var1}")
     @DBOS.required_roles(["admin"])
     @DBOS.workflow()
     def test_admin_endpoint(var1: str) -> str:
-        result = var1
-        ctx = assert_current_dbos_context()
-        assert ctx.assumed_role == "admin"
-        return result
+        assert DBOS.assumed_role == "admin"
+        return var1
 
     @DBOS.required_roles(["admin"])
     @DBOS.workflow()
     def test_admin_endpoint_nh(var1: str) -> str:
-        result = var1
-        ctx = assert_current_dbos_context()
-        assert ctx.assumed_role == "admin"
-        return result
+        assert DBOS.assumed_role == "admin"
+        return var1
 
     @app.get("/adminalt/{var1}")
     def test_admin_handler(var1: str) -> str:
@@ -165,6 +152,51 @@ def test_simple_endpoint(
         response.text
         == '{"message":"Function test_simple_endpoint.<locals>.test_admin_endpoint has required roles, but user is not authenticated for any of them","dbos_error_code":"8","dbos_error":"DBOSNotAuthorizedError"}'
     )
+
+
+def test_roles_recovery(dbos: DBOS) -> None:
+
+    @DBOS.required_roles(["admin"])
+    @DBOS.workflow()
+    def workflow() -> None:
+        assert DBOS.authenticated_roles == ["user", "admin"]
+        assert DBOS.authenticated_user == "admin"
+        assert DBOS.assumed_role == "admin"
+
+    with DBOSContextSetAuth("admin", ["user", "admin"]):
+        handle = DBOS.start_workflow(workflow)
+
+    assert handle.get_result() is None
+
+    # Recover the workflow, verify roles are set right
+    dbos._sys_db.update_workflow_outcome(handle.workflow_id, "PENDING")
+    recovery_handles = DBOS._recover_pending_workflows()
+    assert len(recovery_handles) == 1
+    recovery_handle = recovery_handles[0]
+    assert recovery_handle.get_result() is None
+
+
+@pytest.mark.asyncio
+async def test_roles_recovery_async(dbos: DBOS) -> None:
+
+    @DBOS.required_roles(["admin"])
+    @DBOS.workflow()
+    async def workflow() -> None:
+        assert DBOS.authenticated_roles == ["user", "admin"]
+        assert DBOS.authenticated_user == "admin"
+        assert DBOS.assumed_role == "admin"
+
+    with DBOSContextSetAuth("admin", ["user", "admin"]):
+        handle = await DBOS.start_workflow_async(workflow)
+
+    await handle.get_result()
+
+    # Recover the workflow, verify roles are set right
+    dbos._sys_db.update_workflow_outcome(handle.workflow_id, "PENDING")
+    recovery_handles = DBOS._recover_pending_workflows()
+    assert len(recovery_handles) == 1
+    recovery_handle = recovery_handles[0]
+    assert recovery_handle.get_result() is None
 
 
 # This does not test DBOS at all
