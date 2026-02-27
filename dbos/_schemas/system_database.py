@@ -217,7 +217,7 @@ class SystemSchema:
         "versions",
         metadata_obj,
         Column("version_id", Text, primary_key=True),
-        Column("version_name", Text, nullable=False),
+        Column("version_name", Text, nullable=False, unique=True),
         Column(
             "version_timestamp",
             BigInteger,
