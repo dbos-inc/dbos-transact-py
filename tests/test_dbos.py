@@ -1416,7 +1416,11 @@ def test_duplicate_registration(
     logging.getLogger("dbos").propagate = original_propagate
 
 
-def test_app_version(config: DBOSConfig, cleanup_test_databases: None) -> None:
+def test_app_version(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    skip_with_sqlite_imprecise_time: None,
+) -> None:
     def is_hex(s: str) -> bool:
         return all(c in "0123456789abcdefABCDEF" for c in s)
 
