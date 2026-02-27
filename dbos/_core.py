@@ -1235,7 +1235,7 @@ def decorate_transaction(
                 pass
             else:
                 dbosreg.dbos.logger.warning(
-                    f"Transaction {transaction_name} was called while an event loop is running. Invoke transactions from an async context using asyncio.to_thread."
+                    f"Transaction {transaction_name} was called while an event loop is running. Invoke transactions from an async context using asyncio.to_thread to avoid blocking the event loop."
                 )
 
             assert (
