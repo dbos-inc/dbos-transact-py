@@ -1526,21 +1526,21 @@ def test_app_version(config: DBOSConfig, cleanup_test_databases: None) -> None:
     DBOS.launch()
     created_versions.append(version_five)
 
-    # Verify list_versions returns exactly the versions we created
-    versions = DBOS.list_versions()
+    # Verify list_application_versions returns exactly the versions we created
+    versions = DBOS.list_application_versions()
     version_names = set(v["version_name"] for v in versions)
     assert version_names == set(created_versions)
 
-    # get_latest_version should return the most recently launched version
-    latest = DBOS.get_latest_version()
+    # get_latest_application_version should return the most recently launched version
+    latest = DBOS.get_latest_application_version()
     assert latest["version_name"] == version_five
 
-    # set_latest_version changes which version is latest
-    DBOS.set_latest_version(version_four)
-    latest = DBOS.get_latest_version()
+    # set_latest_application_version changes which version is latest
+    DBOS.set_latest_application_version(version_four)
+    latest = DBOS.get_latest_application_version()
     assert latest["version_name"] == version_four
     # First entry should be the latest (highest timestamp)
-    versions = DBOS.list_versions()
+    versions = DBOS.list_application_versions()
     assert versions[0]["version_name"] == version_four
 
     # ── Test version CRUD via Client API ─────────────────────────
@@ -1553,20 +1553,20 @@ def test_app_version(config: DBOSConfig, cleanup_test_databases: None) -> None:
     )
 
     # Verify client sees exactly the same versions
-    client_versions = client.list_versions()
+    client_versions = client.list_application_versions()
     client_version_names = set(v["version_name"] for v in client_versions)
     assert client_version_names == set(created_versions)
 
-    client_latest = client.get_latest_version()
+    client_latest = client.get_latest_application_version()
     assert client_latest["version_name"] == version_four
 
     # Set version_five as latest via client
-    client.set_latest_version(version_five)
-    client_latest = client.get_latest_version()
+    client.set_latest_application_version(version_five)
+    client_latest = client.get_latest_application_version()
     assert client_latest["version_name"] == version_five
 
     # Verify DBOS API sees the same change
-    assert DBOS.get_latest_version()["version_name"] == version_five
+    assert DBOS.get_latest_application_version()["version_name"] == version_five
 
     client.destroy()
     DBOS.destroy(destroy_registry=True)

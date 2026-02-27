@@ -3267,12 +3267,12 @@ class SystemDatabase(ABC):
             with self.engine.begin() as c:
                 _do(c)
 
-    # ── Version CRUD ─────────────────────────────────────────────
+    # ── Application Version CRUD ────────────────────────────────
 
-    def create_version(self, version_name: str) -> None:
+    def create_application_version(self, version_name: str) -> None:
         with self.engine.begin() as c:
             c.execute(
-                self.dialect.insert(SystemSchema.versions)
+                self.dialect.insert(SystemSchema.application_versions)
                 .values(
                     version_id=generate_uuid(),
                     version_name=version_name,
@@ -3280,22 +3280,24 @@ class SystemDatabase(ABC):
                 .on_conflict_do_nothing(index_elements=["version_name"])
             )
 
-    def update_version_timestamp(self, version_name: str, new_timestamp: int) -> None:
+    def update_application_version_timestamp(
+        self, version_name: str, new_timestamp: int
+    ) -> None:
         with self.engine.begin() as c:
             c.execute(
-                sa.update(SystemSchema.versions)
-                .where(SystemSchema.versions.c.version_name == version_name)
+                sa.update(SystemSchema.application_versions)
+                .where(SystemSchema.application_versions.c.version_name == version_name)
                 .values(version_timestamp=new_timestamp)
             )
 
-    def list_versions(self) -> List[VersionInfo]:
+    def list_application_versions(self) -> List[VersionInfo]:
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(
-                    SystemSchema.versions.c.version_id,
-                    SystemSchema.versions.c.version_name,
-                    SystemSchema.versions.c.version_timestamp,
-                ).order_by(SystemSchema.versions.c.version_timestamp.desc())
+                    SystemSchema.application_versions.c.version_id,
+                    SystemSchema.application_versions.c.version_name,
+                    SystemSchema.application_versions.c.version_timestamp,
+                ).order_by(SystemSchema.application_versions.c.version_timestamp.desc())
             ).fetchall()
             return [
                 VersionInfo(
@@ -3306,19 +3308,19 @@ class SystemDatabase(ABC):
                 for row in rows
             ]
 
-    def get_latest_version(self) -> VersionInfo:
+    def get_latest_application_version(self) -> VersionInfo:
         with self.engine.begin() as c:
             row = c.execute(
                 sa.select(
-                    SystemSchema.versions.c.version_id,
-                    SystemSchema.versions.c.version_name,
-                    SystemSchema.versions.c.version_timestamp,
+                    SystemSchema.application_versions.c.version_id,
+                    SystemSchema.application_versions.c.version_name,
+                    SystemSchema.application_versions.c.version_timestamp,
                 )
-                .order_by(SystemSchema.versions.c.version_timestamp.desc())
+                .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
                 .limit(1)
             ).fetchone()
             if row is None:
-                raise DBOSException("No versions found")
+                raise DBOSException("No application versions found")
             return VersionInfo(
                 version_id=row[0],
                 version_name=row[1],

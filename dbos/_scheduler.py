@@ -95,7 +95,7 @@ def _enqueue_scheduled_workflow(
 ) -> None:
     """Enqueue a single scheduled workflow execution via init_workflow."""
     # Scheduled workflows are always enqueued to the latest application version
-    latest_application_version = sys_db.get_latest_version()["version_name"]
+    latest_application_version = sys_db.get_latest_application_version()["version_name"]
     inputs: WorkflowInputs = {"args": (scheduled_at, context), "kwargs": {}}
     status: WorkflowStatusInternal = {
         "workflow_uuid": workflow_id,
