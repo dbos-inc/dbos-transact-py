@@ -27,6 +27,7 @@ from ._serialization import (
 from ._sys_db import (
     ClientScheduleInput,
     StepInfo,
+    VersionInfo,
     WorkflowSchedule,
     WorkflowStatus,
     WorkflowStatusString,
@@ -55,6 +56,7 @@ __all__ = [
     "WorkflowSerializationFormat",
     "WorkflowSchedule",
     "ClientScheduleInput",
+    "VersionInfo",
     "WorkflowStatus",
     "WorkflowStatusString",
     "error",

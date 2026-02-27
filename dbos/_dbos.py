@@ -540,6 +540,18 @@ class DBOS:
                 dbos_logger.debug("Running application database migrations")
                 self._app_db.run_migrations()
 
+            # Register the current application version
+            self._sys_db.create_version(GlobalParams.app_version)
+            latest = self._sys_db.get_latest_version()
+            if (
+                latest is not None
+                and latest["version_name"] != GlobalParams.app_version
+            ):
+                dbos_logger.warning(
+                    f"Current version '{GlobalParams.app_version}' is not the latest version. "
+                    f"Latest version is '{latest['version_name']}'."
+                )
+
             admin_port = self._config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:
                 admin_port = 3001

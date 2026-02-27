@@ -30,6 +30,7 @@ from sqlalchemy.sql import func
 from dbos._debug_trigger import DebugTriggers
 from dbos._utils import (
     INTERNAL_QUEUE_NAME,
+    generate_uuid,
     retriable_postgres_exception,
     retriable_sqlite_exception,
 )
@@ -256,6 +257,12 @@ class ClientScheduleInput(TypedDict, total=False):
     workflow_class_name: Optional[str]
     schedule: str
     context: Any
+
+
+class VersionInfo(TypedDict):
+    version_id: str
+    version_name: str
+    version_timestamp: int
 
 
 class StepInfo(TypedDict):
@@ -3259,6 +3266,64 @@ class SystemDatabase(ABC):
         else:
             with self.engine.begin() as c:
                 _do(c)
+
+    # ── Version CRUD ─────────────────────────────────────────────
+
+    def create_version(self, version_name: str) -> None:
+        with self.engine.begin() as c:
+            c.execute(
+                self.dialect.insert(SystemSchema.versions)
+                .values(
+                    version_id=generate_uuid(),
+                    version_name=version_name,
+                )
+                .on_conflict_do_nothing(index_elements=["version_name"])
+            )
+
+    def update_version_timestamp(self, version_name: str, new_timestamp: int) -> None:
+        with self.engine.begin() as c:
+            c.execute(
+                sa.update(SystemSchema.versions)
+                .where(SystemSchema.versions.c.version_name == version_name)
+                .values(version_timestamp=new_timestamp)
+            )
+
+    def list_versions(self) -> List[VersionInfo]:
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.versions.c.version_id,
+                    SystemSchema.versions.c.version_name,
+                    SystemSchema.versions.c.version_timestamp,
+                ).order_by(SystemSchema.versions.c.version_timestamp.desc())
+            ).fetchall()
+            return [
+                VersionInfo(
+                    version_id=row[0],
+                    version_name=row[1],
+                    version_timestamp=row[2],
+                )
+                for row in rows
+            ]
+
+    def get_latest_version(self) -> Optional[VersionInfo]:
+        with self.engine.begin() as c:
+            row = c.execute(
+                sa.select(
+                    SystemSchema.versions.c.version_id,
+                    SystemSchema.versions.c.version_name,
+                    SystemSchema.versions.c.version_timestamp,
+                )
+                .order_by(SystemSchema.versions.c.version_timestamp.desc())
+                .limit(1)
+            ).fetchone()
+            if row is None:
+                return None
+            return VersionInfo(
+                version_id=row[0],
+                version_name=row[1],
+                version_timestamp=row[2],
+            )
 
     @db_retry()
     def call_txn_as_step(
