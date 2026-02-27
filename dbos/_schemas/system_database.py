@@ -39,6 +39,7 @@ class SystemSchema:
         cls.streams.schema = schema_name
         cls.workflow_events_history.schema = schema_name
         cls.workflow_schedules.schema = schema_name
+        cls.versions.schema = schema_name
 
     workflow_status = Table(
         "workflow_status",
@@ -210,4 +211,16 @@ class SystemSchema:
         Column("schedule", Text, nullable=False),
         Column("status", Text, nullable=False, server_default="ACTIVE"),
         Column("context", Text, nullable=False),
+    )
+
+    versions = Table(
+        "versions",
+        metadata_obj,
+        Column("version_id", Text, primary_key=True),
+        Column("version_name", Text, nullable=False),
+        Column(
+            "version_timestamp",
+            BigInteger,
+            nullable=False,
+        ),
     )
