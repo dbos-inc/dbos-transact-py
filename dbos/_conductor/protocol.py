@@ -4,7 +4,7 @@ from enum import Enum
 from typing import Dict, List, Optional, Type, TypedDict, TypeVar, Union
 
 from dbos._serialization import Serializer
-from dbos._sys_db import StepInfo, WorkflowSchedule, WorkflowStatus
+from dbos._sys_db import StepInfo, VersionInfo, WorkflowSchedule, WorkflowStatus
 
 
 class MessageType(str, Enum):
@@ -31,6 +31,8 @@ class MessageType(str, Enum):
     RESUME_SCHEDULE = "resume_schedule"
     BACKFILL_SCHEDULE = "backfill_schedule"
     TRIGGER_SCHEDULE = "trigger_schedule"
+    LIST_APPLICATION_VERSIONS = "list_application_versions"
+    SET_LATEST_APPLICATION_VERSION = "set_latest_application_version"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -542,4 +544,44 @@ class TriggerScheduleRequest(BaseMessage):
 @dataclass
 class TriggerScheduleResponse(BaseMessage):
     workflow_id: Optional[str]
+    error_message: Optional[str] = None
+
+
+# --- Application version messages ---
+
+
+@dataclass
+class ApplicationVersionOutput:
+    version_id: str
+    version_name: str
+    version_timestamp: int
+
+    @classmethod
+    def from_version_info(cls, v: VersionInfo) -> "ApplicationVersionOutput":
+        return cls(
+            version_id=v["version_id"],
+            version_name=v["version_name"],
+            version_timestamp=v["version_timestamp"],
+        )
+
+
+@dataclass
+class ListApplicationVersionsRequest(BaseMessage):
+    pass
+
+
+@dataclass
+class ListApplicationVersionsResponse(BaseMessage):
+    output: List[ApplicationVersionOutput]
+    error_message: Optional[str] = None
+
+
+@dataclass
+class SetLatestApplicationVersionRequest(BaseMessage):
+    version_name: str
+
+
+@dataclass
+class SetLatestApplicationVersionResponse(BaseMessage):
+    success: bool
     error_message: Optional[str] = None
