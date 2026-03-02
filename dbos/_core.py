@@ -1790,32 +1790,6 @@ def send(
         )
 
 
-def recv(
-    dbos: "DBOS",
-    cur_ctx: Optional["DBOSContext"],
-    topic: Optional[str] = None,
-    timeout_seconds: float = 60,
-) -> Any:
-    if cur_ctx is not None:
-        # Must call it within a workflow
-        assert cur_ctx.is_workflow(), "recv() must be called from within a workflow"
-        attributes: TracedAttributes = {
-            "name": "recv",
-        }
-        with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
-            timeout_function_id = ctx.curr_step_function_id + 1
-            return dbos._sys_db.recv(
-                ctx.workflow_id,
-                ctx.curr_step_function_id,
-                timeout_function_id,
-                topic,
-                timeout_seconds,
-            )
-    else:
-        # Cannot call it from outside of a workflow
-        raise DBOSException("recv() must be called from within a workflow")
-
-
 def set_event(
     dbos: "DBOS",
     cur_ctx: Optional["DBOSContext"],

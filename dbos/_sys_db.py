@@ -1714,14 +1714,21 @@ class SystemDatabase(ABC):
             raise
 
     @db_retry()
-    def recv(
+    def recv_setup(
         self,
         workflow_uuid: str,
         function_id: int,
         timeout_function_id: int,
         topic: Optional[str],
         timeout_seconds: float = 60,
-    ) -> Any:
+    ) -> Union[
+        tuple[Literal[True], Any],
+        tuple[Literal[False], threading.Event, float, str, int],
+    ]:
+        """Setup phase of recv. Returns either:
+        - (True, result) if a cached result was found (OAOO replay or message already available)
+        - (False, event, actual_timeout, payload, start_time) if caller must wait on the event
+        """
         function_name = "DBOS.recv"
         start_time = int(time.time() * 1000)
         topic = topic if topic is not None else _dbos_null_topic
@@ -1733,7 +1740,7 @@ class SystemDatabase(ABC):
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying recv, id: {function_id}, topic: {topic}")
             if recorded_output["output"] is not None:
-                return deserialize_value(
+                return True, deserialize_value(
                     recorded_output["output"],
                     recorded_output["serialization"],
                     self.serializer,
@@ -1752,7 +1759,7 @@ class SystemDatabase(ABC):
             raise DBOSWorkflowConflictIDError(workflow_uuid)
 
         try:
-            # Check if an unconsumed message is already in the database. If not, wait for the event.
+            # Check if an unconsumed message is already in the database.
             init_recv: Sequence[Any]
             with self.engine.begin() as c:
                 init_recv = c.execute(
@@ -1765,17 +1772,33 @@ class SystemDatabase(ABC):
                     )
                 ).fetchall()
 
-            if len(init_recv) == 0:
-                # Wait for the notification
-                # Support OAOO sleep
-                actual_timeout = self.record_sleep(
-                    workflow_uuid, timeout_function_id, timeout_seconds
-                )
-                event.wait(timeout=actual_timeout)
-        finally:
-            self.notifications_map.pop(payload)
+            if len(init_recv) > 0:
+                # Message already available, signal the event so wait is a no-op
+                event.set()
 
-        # Transactionally consume and return the oldest unconsumed message, or null if none.
+            # Record the durable sleep timeout
+            actual_timeout = self.record_sleep(
+                workflow_uuid, timeout_function_id, timeout_seconds
+            )
+        except:
+            self.notifications_map.pop(payload)
+            raise
+
+        return False, event, actual_timeout, payload, start_time
+
+    @db_retry()
+    def recv_consume(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        topic: Optional[str],
+        start_time: int,
+    ) -> Any:
+        """Consume phase of recv. Transactionally consumes the oldest unconsumed
+        message and records the operation result."""
+        function_name = "DBOS.recv"
+        topic = topic if topic is not None else _dbos_null_topic
+
         with self.engine.begin() as c:
             consume_stmt = (
                 sa.update(SystemSchema.notifications)
@@ -1829,6 +1852,62 @@ class SystemDatabase(ABC):
                 conn=c,
             )
         return message
+
+    def recv(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        timeout_function_id: int,
+        topic: Optional[str],
+        timeout_seconds: float = 60,
+    ) -> Any:
+        setup = self.recv_setup(
+            workflow_uuid, function_id, timeout_function_id, topic, timeout_seconds
+        )
+        if setup[0]:
+            return setup[1]
+        _, event, actual_timeout, payload, start_time = setup
+        try:
+            event.wait(timeout=actual_timeout)
+            return self.recv_consume(workflow_uuid, function_id, topic, start_time)
+        finally:
+            self.notifications_map.pop(payload)
+
+    async def recv_async(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        timeout_function_id: int,
+        topic: Optional[str],
+        timeout_seconds: float = 60,
+    ) -> Any:
+        setup = await asyncio.to_thread(
+            self.recv_setup,
+            workflow_uuid,
+            function_id,
+            timeout_function_id,
+            topic,
+            timeout_seconds,
+        )
+        if setup[0]:
+            return setup[1]
+        _, event, actual_timeout, payload, start_time = setup
+        try:
+            deadline = time.time() + actual_timeout
+            while not event.is_set():
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(min(remaining, 0.1))
+            return await asyncio.to_thread(
+                self.recv_consume,
+                workflow_uuid,
+                function_id,
+                topic,
+                start_time,
+            )
+        finally:
+            self.notifications_map.pop(payload)
 
     @abstractmethod
     def _notification_listener(self) -> None:

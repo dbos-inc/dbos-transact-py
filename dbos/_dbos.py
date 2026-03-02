@@ -59,7 +59,6 @@ from ._core import (
     execute_workflow_by_id,
     get_event,
     record_sleep,
-    recv,
     run_step,
     run_step_async,
     send,
@@ -115,6 +114,7 @@ from ._context import (
     DBOSContext,
     EnterDBOSStepCtx,
     StepStatus,
+    TracedAttributes,
     assert_current_dbos_context,
     get_local_dbos_context,
     snapshot_step_context,
@@ -1202,12 +1202,19 @@ class DBOS:
         `recv` will return the message sent on `topic`, waiting if necessary.
         """
         check_async("recv")
-        return recv(
-            _get_dbos_instance(),
-            snapshot_step_context(reserve_sleep_id=True),
-            topic,
-            timeout_seconds,
-        )
+        cur_ctx = snapshot_step_context(reserve_sleep_id=True)
+        if cur_ctx is None or not cur_ctx.is_workflow():
+            raise DBOSException("recv() must be called from within a workflow")
+        attributes: TracedAttributes = {"name": "recv"}
+        with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
+            timeout_function_id = ctx.curr_step_function_id + 1
+            return _get_dbos_instance()._sys_db.recv(
+                ctx.workflow_id,
+                ctx.curr_step_function_id,
+                timeout_function_id,
+                topic,
+                timeout_seconds,
+            )
 
     @classmethod
     async def recv_async(
@@ -1217,13 +1224,22 @@ class DBOS:
         Receive a workflow message.
 
         This function is to be called from within a workflow.
-        `recv_async` will return the message sent on `topic`, asyncronously waiting if necessary.
+        `recv_async` will return the message sent on `topic`, asynchronously waiting if necessary.
         """
-        ctx = snapshot_step_context(reserve_sleep_id=True)
+        cur_ctx = snapshot_step_context(reserve_sleep_id=True)
+        if cur_ctx is None or not cur_ctx.is_workflow():
+            raise DBOSException("recv() must be called from within a workflow")
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(
-            recv, _get_dbos_instance(), ctx, topic, timeout_seconds
-        )
+        attributes: TracedAttributes = {"name": "recv"}
+        with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
+            timeout_function_id = ctx.curr_step_function_id + 1
+            return await _get_dbos_instance()._sys_db.recv_async(
+                ctx.workflow_id,
+                ctx.curr_step_function_id,
+                timeout_function_id,
+                topic,
+                timeout_seconds,
+            )
 
     @classmethod
     def sleep(cls, seconds: float) -> None:
