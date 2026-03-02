@@ -754,7 +754,7 @@ async def test_workflow_recovery_async(dbos: DBOS, config: DBOSConfig) -> None:
 
 
 @pytest.mark.asyncio
-async def test_concurrent_async(dbos: DBOS, config: DBOSConfig) -> None:
+async def test_high_async_concurrency(dbos: DBOS, config: DBOSConfig) -> None:
     config["max_executor_threads"] = 64
     DBOS.destroy(destroy_registry=True)
     DBOS(config=config)
