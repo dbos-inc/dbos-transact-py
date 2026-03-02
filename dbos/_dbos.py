@@ -91,6 +91,7 @@ from ._sys_db import (
     GetEventWorkflowContext,
     StepInfo,
     SystemDatabase,
+    VersionInfo,
     WorkflowSchedule,
     WorkflowStatus,
     _dbos_stream_closed_sentinel,
@@ -540,6 +541,15 @@ class DBOS:
             if self._app_db:
                 dbos_logger.debug("Running application database migrations")
                 self._app_db.run_migrations()
+
+            # Register the current application version
+            self._sys_db.create_application_version(GlobalParams.app_version)
+            latest = self._sys_db.get_latest_application_version()
+            if latest["version_name"] != GlobalParams.app_version:
+                dbos_logger.warning(
+                    f"Current version '{GlobalParams.app_version}' is not the latest version. "
+                    f"Latest version is '{latest['version_name']}'."
+                )
 
             admin_port = self._config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:
@@ -1889,6 +1899,8 @@ class DBOS:
             step_ctx,
         )
 
+    # ── Schedule API ──────────────────────────────────────────────
+
     @classmethod
     def create_schedule(
         cls,
@@ -1928,7 +1940,9 @@ class DBOS:
                 "Configured instance methods cannot be used as scheduled workflows"
             )
         workflow_class_name = (
-            fi.class_info.registered_name if fi and fi.class_info else None
+            fi.class_info.registered_name
+            if fi and fi.class_info and fi.func_type == DBOSFuncType.Class
+            else None
         )
         sched = WorkflowSchedule(
             schedule_id=generate_uuid(),
@@ -2146,7 +2160,9 @@ class DBOS:
                     "Configured instance methods cannot be used as scheduled workflows"
                 )
             workflow_class_name = (
-                fi.class_info.registered_name if fi and fi.class_info else None
+                fi.class_info.registered_name
+                if fi and fi.class_info and fi.func_type == DBOSFuncType.Class
+                else None
             )
             to_apply.append(
                 WorkflowSchedule(
@@ -2218,6 +2234,45 @@ class DBOS:
         dbos = _get_dbos_instance()
         workflow_id = trigger_schedule(dbos._sys_db, schedule_name)
         return WorkflowHandlePolling(workflow_id, dbos)
+
+    # ── Application Version API ─────────────────────────────────
+
+    @classmethod
+    def list_application_versions(cls) -> List[VersionInfo]:
+        """Return all application versions ordered by timestamp descending."""
+        dbos = _get_dbos_instance()
+        return dbos._sys_db.list_application_versions()
+
+    @classmethod
+    def get_latest_application_version(cls) -> VersionInfo:
+        """Return the latest application version."""
+        dbos = _get_dbos_instance()
+        return dbos._sys_db.get_latest_application_version()
+
+    @classmethod
+    def set_latest_application_version(cls, version_name: str) -> None:
+        """Set a version as the latest by updating its timestamp to now."""
+        dbos = _get_dbos_instance()
+        new_timestamp = int(time.time() * 1000)
+        dbos._sys_db.update_application_version_timestamp(version_name, new_timestamp)
+
+    @classmethod
+    async def list_application_versions_async(cls) -> List[VersionInfo]:
+        """Async version of :meth:`list_application_versions`."""
+        await cls._configure_asyncio_thread_pool()
+        return await asyncio.to_thread(cls.list_application_versions)
+
+    @classmethod
+    async def get_latest_application_version_async(cls) -> VersionInfo:
+        """Async version of :meth:`get_latest_application_version`."""
+        await cls._configure_asyncio_thread_pool()
+        return await asyncio.to_thread(cls.get_latest_application_version)
+
+    @classmethod
+    async def set_latest_application_version_async(cls, version_name: str) -> None:
+        """Async version of :meth:`set_latest_application_version`."""
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(cls.set_latest_application_version, version_name)
 
     @classproperty
     def application_version(cls) -> str:

@@ -261,6 +261,13 @@ class ClientScheduleInput(TypedDict, total=False):
     context: Any
 
 
+class VersionInfo(TypedDict):
+    version_id: str
+    version_name: str
+    version_timestamp: int
+    created_at: int
+
+
 class StepInfo(TypedDict):
     # The unique ID of the step in the workflow
     function_id: int
@@ -3536,6 +3543,70 @@ class SystemDatabase(ABC):
         else:
             with self.engine.begin() as c:
                 _do(c)
+
+    # ── Application Version CRUD ────────────────────────────────
+
+    def create_application_version(self, version_name: str) -> None:
+        with self.engine.begin() as c:
+            c.execute(
+                self.dialect.insert(SystemSchema.application_versions)
+                .values(
+                    version_id=generate_uuid(),
+                    version_name=version_name,
+                )
+                .on_conflict_do_nothing(index_elements=["version_name"])
+            )
+
+    def update_application_version_timestamp(
+        self, version_name: str, new_timestamp: int
+    ) -> None:
+        with self.engine.begin() as c:
+            c.execute(
+                sa.update(SystemSchema.application_versions)
+                .where(SystemSchema.application_versions.c.version_name == version_name)
+                .values(version_timestamp=new_timestamp)
+            )
+
+    def list_application_versions(self) -> List[VersionInfo]:
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.application_versions.c.version_id,
+                    SystemSchema.application_versions.c.version_name,
+                    SystemSchema.application_versions.c.version_timestamp,
+                    SystemSchema.application_versions.c.created_at,
+                ).order_by(SystemSchema.application_versions.c.version_timestamp.desc())
+            ).fetchall()
+            return [
+                VersionInfo(
+                    version_id=row[0],
+                    version_name=row[1],
+                    version_timestamp=row[2],
+                    created_at=row[3],
+                )
+                for row in rows
+            ]
+
+    def get_latest_application_version(self) -> VersionInfo:
+        with self.engine.begin() as c:
+            row = c.execute(
+                sa.select(
+                    SystemSchema.application_versions.c.version_id,
+                    SystemSchema.application_versions.c.version_name,
+                    SystemSchema.application_versions.c.version_timestamp,
+                    SystemSchema.application_versions.c.created_at,
+                )
+                .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
+                .limit(1)
+            ).fetchone()
+            if row is None:
+                raise DBOSException("No application versions found")
+            return VersionInfo(
+                version_id=row[0],
+                version_name=row[1],
+                version_timestamp=row[2],
+                created_at=row[3],
+            )
 
     @db_retry()
     def call_txn_as_step(

@@ -681,6 +681,46 @@ class ConductorWebsocket(threading.Thread):
                                     error_message=error_message,
                                 ).to_json()
                             )
+                        elif msg_type == p.MessageType.LIST_APPLICATION_VERSIONS:
+                            versions: list[p.ApplicationVersionOutput] = []
+                            try:
+                                versions = [
+                                    p.ApplicationVersionOutput.from_version_info(v)
+                                    for v in self.dbos._sys_db.list_application_versions()
+                                ]
+                            except Exception:
+                                error_message = f"Exception encountered when listing application versions: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                            websocket.send(
+                                p.ListApplicationVersionsResponse(
+                                    type=p.MessageType.LIST_APPLICATION_VERSIONS,
+                                    request_id=base_message.request_id,
+                                    output=versions,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
+                        elif msg_type == p.MessageType.SET_LATEST_APPLICATION_VERSION:
+                            set_version_msg = (
+                                p.SetLatestApplicationVersionRequest.from_json(message)
+                            )
+                            success = True
+                            try:
+                                self.dbos._sys_db.update_application_version_timestamp(
+                                    set_version_msg.version_name,
+                                    int(time.time() * 1000),
+                                )
+                            except Exception:
+                                error_message = f"Exception encountered when setting latest application version '{set_version_msg.version_name}': {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                                success = False
+                            websocket.send(
+                                p.SetLatestApplicationVersionResponse(
+                                    type=p.MessageType.SET_LATEST_APPLICATION_VERSION,
+                                    request_id=base_message.request_id,
+                                    success=success,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
                         else:
                             self.dbos.logger.warning(
                                 f"Unexpected message type: {msg_type}"

@@ -42,6 +42,7 @@ from dbos._sys_db import (
     ClientScheduleInput,
     StepInfo,
     SystemDatabase,
+    VersionInfo,
     WorkflowSchedule,
     WorkflowStatus,
     WorkflowStatusInternal,
@@ -654,6 +655,8 @@ class DBOSClient:
                 await asyncio.sleep(1.0)
                 continue
 
+    # ── Schedule API ──────────────────────────────────────────────
+
     def create_schedule(
         self,
         *,
@@ -852,3 +855,30 @@ class DBOSClient:
         """
         workflow_id = trigger_schedule(self._sys_db, schedule_name)
         return WorkflowHandleClientPolling[None](workflow_id, self._sys_db)
+
+    # ── Application Version API ─────────────────────────────────
+
+    def list_application_versions(self) -> List[VersionInfo]:
+        """Return all application versions ordered by timestamp descending."""
+        return self._sys_db.list_application_versions()
+
+    def get_latest_application_version(self) -> VersionInfo:
+        """Return the latest application version."""
+        return self._sys_db.get_latest_application_version()
+
+    def set_latest_application_version(self, version_name: str) -> None:
+        """Set a version as the latest by updating its timestamp to now."""
+        new_timestamp = int(time.time() * 1000)
+        self._sys_db.update_application_version_timestamp(version_name, new_timestamp)
+
+    async def list_application_versions_async(self) -> List[VersionInfo]:
+        """Async version of :meth:`list_application_versions`."""
+        return await asyncio.to_thread(self.list_application_versions)
+
+    async def get_latest_application_version_async(self) -> VersionInfo:
+        """Async version of :meth:`get_latest_application_version`."""
+        return await asyncio.to_thread(self.get_latest_application_version)
+
+    async def set_latest_application_version_async(self, version_name: str) -> None:
+        """Async version of :meth:`set_latest_application_version`."""
+        await asyncio.to_thread(self.set_latest_application_version, version_name)

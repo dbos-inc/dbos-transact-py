@@ -6,6 +6,7 @@ import pytest
 
 from dbos import DBOS, DBOSClient, DBOSConfiguredInstance
 from dbos._error import DBOSException
+from dbos._utils import INTERNAL_QUEUE_NAME
 
 from .conftest import retry_until_success
 
@@ -857,10 +858,9 @@ def test_static_class_method_schedule(dbos: DBOS) -> None:
 
     sched = DBOS.get_schedule("static-class-schedule")
     assert sched is not None
-    assert (
-        sched["workflow_class_name"]
-        == "test_static_class_method_schedule.<locals>.MyScheduledClass"
-    )
+    # Static methods should not have a class name set
+    assert sched["workflow_name"] == MyScheduledClass.scheduled_wf.__qualname__
+    assert sched["workflow_class_name"] is None
     assert sched["context"] == {"class": True}
 
     def check_fired() -> None:
@@ -869,7 +869,84 @@ def test_static_class_method_schedule(dbos: DBOS) -> None:
 
     retry_until_success(check_fired)
 
+    # Trigger should work for static class methods
+    handle = DBOS.trigger_schedule("static-class-schedule")
+    handle.get_result()
+    assert received[-1] == {"class": True}
+
+    # Backfill should work for static class methods
+    start = datetime(2025, 1, 1, 0, 30, 0, tzinfo=timezone.utc)
+    end = start + timedelta(hours=3)
     DBOS.delete_schedule("static-class-schedule")
+    DBOS.create_schedule(
+        schedule_name="static-class-backfill",
+        workflow_fn=MyScheduledClass.scheduled_wf,
+        schedule="0 * * * *",
+        context={"backfill": True},
+    )
+    handles = DBOS.backfill_schedule("static-class-backfill", start, end)
+    assert len(handles) == 3
+    for h in handles:
+        h.get_result()
+
+    DBOS.delete_schedule("static-class-backfill")
+
+
+def test_classmethod_schedule(dbos: DBOS) -> None:
+    received: list[Any] = []
+
+    @DBOS.dbos_class()
+    class MyClassMethodSchedule:
+        @classmethod
+        @DBOS.workflow()
+        def scheduled_wf(cls, scheduled_at: datetime, ctx: Any) -> None:
+            assert DBOS.workflow_id
+            status = DBOS.get_workflow_status(DBOS.workflow_id)
+            assert status
+            assert status.queue_name == INTERNAL_QUEUE_NAME
+            received.append(ctx)
+
+    DBOS.create_schedule(
+        schedule_name="classmethod-schedule",
+        workflow_fn=MyClassMethodSchedule.scheduled_wf,
+        schedule="* * * * * *",
+        context={"cls": True},
+    )
+
+    sched = DBOS.get_schedule("classmethod-schedule")
+    assert sched is not None
+    # Class methods should have the class name set
+    assert sched["workflow_name"] == MyClassMethodSchedule.scheduled_wf.__qualname__
+    assert sched["workflow_class_name"] == MyClassMethodSchedule.__qualname__
+    assert sched["context"] == {"cls": True}
+
+    def check_fired() -> None:
+        assert len(received) >= 2
+        assert all(c == {"cls": True} for c in received)
+
+    retry_until_success(check_fired)
+
+    # Trigger should work for class methods
+    handle = DBOS.trigger_schedule("classmethod-schedule")
+    handle.get_result()
+    assert received[-1] == {"cls": True}
+
+    # Backfill should work for class methods
+    start = datetime(2025, 1, 1, 0, 30, 0, tzinfo=timezone.utc)
+    end = start + timedelta(hours=3)
+    DBOS.delete_schedule("classmethod-schedule")
+    DBOS.create_schedule(
+        schedule_name="classmethod-backfill",
+        workflow_fn=MyClassMethodSchedule.scheduled_wf,
+        schedule="0 * * * *",
+        context={"backfill": True},
+    )
+    handles = DBOS.backfill_schedule("classmethod-backfill", start, end)
+    assert len(handles) == 3
+    for h in handles:
+        h.get_result()
+
+    DBOS.delete_schedule("classmethod-backfill")
 
 
 def test_instance_method_schedule_rejected(dbos: DBOS) -> None:

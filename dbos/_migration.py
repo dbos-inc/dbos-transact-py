@@ -310,6 +310,17 @@ CREATE INDEX "idx_notifications_unconsumed" ON "{schema}"."notifications" ("dest
 """
 
 
+def get_dbos_migration_thirteen(schema: str) -> str:
+    return f"""
+CREATE TABLE "{schema}".application_versions (
+    version_id TEXT NOT NULL PRIMARY KEY,
+    version_name TEXT NOT NULL UNIQUE,
+    version_timestamp BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
+    created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
+);
+"""
+
+
 def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
     return [
         get_dbos_migration_one(schema, use_listen_notify),
@@ -324,6 +335,7 @@ def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
         get_dbos_migration_ten(schema),
         get_dbos_migration_eleven(schema),
         get_dbos_migration_twelve(schema),
+        get_dbos_migration_thirteen(schema),
     ]
 
 
@@ -475,11 +487,21 @@ ALTER TABLE "operation_outputs" ADD COLUMN "serialization" TEXT DEFAULT NULL;
 ALTER TABLE "streams" ADD COLUMN "serialization" TEXT DEFAULT NULL;
 """
 
+
 sqlite_migration_twelve = """
 ALTER TABLE "notifications" ADD COLUMN "consumed" BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE INDEX "idx_notifications_unconsumed" ON "notifications" ("destination_uuid", "topic") WHERE consumed = FALSE;
 """
 
+
+sqlite_migration_thirteen = f"""
+CREATE TABLE application_versions (
+    version_id TEXT NOT NULL PRIMARY KEY,
+    version_name TEXT NOT NULL UNIQUE,
+    version_timestamp INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
+    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
+);
+"""
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -492,4 +514,5 @@ sqlite_migrations = [
     sqlite_migration_nine,
     sqlite_migration_eleven,
     sqlite_migration_twelve,
+    sqlite_migration_thirteen,
 ]

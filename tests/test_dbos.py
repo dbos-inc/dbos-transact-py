@@ -1529,7 +1529,11 @@ def test_duplicate_registration(
     logging.getLogger("dbos").propagate = original_propagate
 
 
-def test_app_version(config: DBOSConfig) -> None:
+def test_app_version(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    skip_with_sqlite_imprecise_time: None,
+) -> None:
     def is_hex(s: str) -> bool:
         return all(c in "0123456789abcdefABCDEF" for c in s)
 
@@ -1547,9 +1551,12 @@ def test_app_version(config: DBOSConfig) -> None:
     DBOS.launch()
 
     # Verify that app version is correctly set to a hex string
-    app_version = DBOS.application_version
-    assert len(app_version) > 0
-    assert is_hex(app_version)
+    version_one = DBOS.application_version
+    assert len(version_one) > 0
+    assert is_hex(version_one)
+
+    # Track all distinct versions created during this test
+    created_versions = [version_one]
 
     DBOS.destroy(destroy_registry=True)
     assert DBOS.application_version == ""
@@ -1566,7 +1573,7 @@ def test_app_version(config: DBOSConfig) -> None:
     DBOS.launch()
 
     # Verify stability--the same workflow source produces the same app version.
-    assert DBOS.application_version == app_version
+    assert DBOS.application_version == version_one
 
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
@@ -1577,11 +1584,13 @@ def test_app_version(config: DBOSConfig) -> None:
 
     # Verify that changing the workflow source changes the workflow version
     DBOS.launch()
-    assert DBOS.application_version != app_version
+    version_two = DBOS.application_version
+    assert version_two != version_one
+    created_versions.append(version_two)
 
     # Verify that version can be overriden with an environment variable
-    app_version = str(uuid.uuid4())
-    os.environ["DBOS__APPVERSION"] = app_version
+    version_three = str(uuid.uuid4())
+    os.environ["DBOS__APPVERSION"] = version_three
 
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
@@ -1591,16 +1600,17 @@ def test_app_version(config: DBOSConfig) -> None:
         return x
 
     DBOS.launch()
-    assert DBOS.application_version == app_version
+    assert DBOS.application_version == version_three
+    created_versions.append(version_three)
 
     del os.environ["DBOS__APPVERSION"]
 
     # Verify that version and executor ID can be overriden with a config parameter
-    app_version = str(uuid.uuid4())
+    version_four = str(uuid.uuid4())
     executor_id = str(uuid.uuid4())
 
     DBOS.destroy(destroy_registry=True)
-    config["application_version"] = app_version
+    config["application_version"] = version_four
     config["executor_id"] = executor_id
     DBOS(config=config)
 
@@ -1610,12 +1620,101 @@ def test_app_version(config: DBOSConfig) -> None:
         return DBOS.workflow_id
 
     DBOS.launch()
-    assert DBOS.application_version == app_version
+    assert DBOS.application_version == version_four
     assert GlobalParams.executor_id == executor_id == DBOS.executor_id
     wfid = test_workflow()
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
-    assert handle.get_status().app_version == app_version
+    assert handle.get_status().app_version == version_four
     assert handle.get_status().executor_id == executor_id
+    created_versions.append(version_four)
+
+    # ── Test version CRUD via DBOS API ───────────────────────────
+
+    # Create another version by relaunching with a different app_version
+    version_five = str(uuid.uuid4())
+    DBOS.destroy(destroy_registry=True)
+    config["application_version"] = version_five
+    DBOS(config=config)
+
+    @DBOS.workflow()
+    def test_workflow() -> str:
+        return "hello"
+
+    DBOS.launch()
+    created_versions.append(version_five)
+
+    # Verify list_application_versions returns exactly the versions we created
+    versions = DBOS.list_application_versions()
+    version_names = set(v["version_name"] for v in versions)
+    assert version_names == set(created_versions)
+
+    # Verify created_at is set on all versions
+    for v in versions:
+        assert "created_at" in v
+        assert isinstance(v["created_at"], int)
+        assert v["created_at"] > 0
+
+    # get_latest_application_version should return the most recently launched version
+    latest = DBOS.get_latest_application_version()
+    assert latest["version_name"] == version_five
+    assert "created_at" in latest
+
+    # Record created_at before set_latest to verify it doesn't change
+    version_four_created_at = next(
+        v["created_at"] for v in versions if v["version_name"] == version_four
+    )
+
+    # set_latest_application_version changes which version is latest
+    DBOS.set_latest_application_version(version_four)
+    latest = DBOS.get_latest_application_version()
+    assert latest["version_name"] == version_four
+    # created_at should not change when updating timestamp
+    assert latest["created_at"] == version_four_created_at
+    # First entry should be the latest (highest timestamp)
+    versions = DBOS.list_application_versions()
+    assert versions[0]["version_name"] == version_four
+
+    # ── Test version CRUD via Client API ─────────────────────────
+
+    assert config["application_database_url"] is not None
+    assert config["system_database_url"] is not None
+    client = DBOSClient(
+        application_database_url=config["application_database_url"],
+        system_database_url=config["system_database_url"],
+    )
+
+    # Verify client sees exactly the same versions
+    client_versions = client.list_application_versions()
+    client_version_names = set(v["version_name"] for v in client_versions)
+    assert client_version_names == set(created_versions)
+
+    # Verify created_at is present in client results
+    for v in client_versions:
+        assert "created_at" in v
+        assert isinstance(v["created_at"], int)
+        assert v["created_at"] > 0
+
+    client_latest = client.get_latest_application_version()
+    assert client_latest["version_name"] == version_four
+    assert "created_at" in client_latest
+
+    # Record created_at before client update
+    version_five_created_at = next(
+        v["created_at"] for v in client_versions if v["version_name"] == version_five
+    )
+
+    # Set version_five as latest via client
+    client.set_latest_application_version(version_five)
+    client_latest = client.get_latest_application_version()
+    assert client_latest["version_name"] == version_five
+    # created_at should not change when updating timestamp via client
+    assert client_latest["created_at"] == version_five_created_at
+
+    # Verify DBOS API sees the same change
+    assert DBOS.get_latest_application_version()["version_name"] == version_five
+
+    client.destroy()
+    DBOS.destroy(destroy_registry=True)
 
 
 def test_recovery_appversion(config: DBOSConfig) -> None:
