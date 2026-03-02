@@ -240,8 +240,7 @@ class WorkflowHandleAsyncPolling(Generic[R]):
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
         try:
-            r: R = await asyncio.to_thread(
-                self.dbos._sys_db.await_workflow_result,
+            r: R = await self.dbos._sys_db.await_workflow_result_async(
                 self.workflow_id,
                 polling_interval_sec,
             )

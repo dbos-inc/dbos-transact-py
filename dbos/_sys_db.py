@@ -49,6 +49,7 @@ from ._error import (
     MaxRecoveryAttemptsExceededError,
 )
 from ._logger import dbos_logger
+from ._outcome import NoResult
 from ._schemas.system_database import SystemSchema
 from ._serialization import (
     DBOSPortableJSON,
@@ -1003,42 +1004,56 @@ class SystemDatabase(ABC):
             return workflow_id
 
     @db_retry()
+    def check_workflow_result(self, workflow_id: str) -> Union[NoResult, Any]:
+        """Check if a workflow has completed and return its result.
+
+        Returns NoResult() if the workflow is still pending/enqueued/not found.
+        Returns the deserialized output on success.
+        Raises on error, cancellation, or max recovery attempts exceeded.
+        """
+        with self.engine.begin() as c:
+            row = c.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.status,
+                    SystemSchema.workflow_status.c.output,
+                    SystemSchema.workflow_status.c.error,
+                    SystemSchema.workflow_status.c.serialization,
+                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+            ).fetchone()
+            if row is not None:
+                status = row[0]
+                if status == WorkflowStatusString.SUCCESS.value:
+                    output = row[1]
+                    return deserialize_value(output, row[3], self.serializer)
+                elif status == WorkflowStatusString.ERROR.value:
+                    error = row[2]
+                    e: Exception = deserialize_exception(error, row[3], self.serializer)
+                    raise e
+                elif status == WorkflowStatusString.CANCELLED.value:
+                    # Raise AwaitedWorkflowCancelledError here, not the cancellation exception
+                    # because the awaiting workflow is not being cancelled.
+                    raise DBOSAwaitedWorkflowCancelledError(workflow_id)
+                elif (
+                    status == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
+                ):
+                    raise DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(workflow_id)
+        return NoResult()
+
     def await_workflow_result(self, workflow_id: str, polling_interval: float) -> Any:
         while True:
-            with self.engine.begin() as c:
-                row = c.execute(
-                    sa.select(
-                        SystemSchema.workflow_status.c.status,
-                        SystemSchema.workflow_status.c.output,
-                        SystemSchema.workflow_status.c.error,
-                        SystemSchema.workflow_status.c.serialization,
-                    ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-                ).fetchone()
-                if row is not None:
-                    status = row[0]
-                    if status == WorkflowStatusString.SUCCESS.value:
-                        output = row[1]
-                        return deserialize_value(output, row[3], self.serializer)
-                    elif status == WorkflowStatusString.ERROR.value:
-                        error = row[2]
-                        e: Exception = deserialize_exception(
-                            error, row[3], self.serializer
-                        )
-                        raise e
-                    elif status == WorkflowStatusString.CANCELLED.value:
-                        # Raise AwaitedWorkflowCancelledError here, not the cancellation exception
-                        # because the awaiting workflow is not being cancelled.
-                        raise DBOSAwaitedWorkflowCancelledError(workflow_id)
-                    elif (
-                        status
-                        == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
-                    ):
-                        raise DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(
-                            workflow_id
-                        )
-                else:
-                    pass  # CB: I guess we're assuming the WF will show up eventually.
+            result = self.check_workflow_result(workflow_id)
+            if not isinstance(result, NoResult):
+                return result
             time.sleep(polling_interval)
+
+    async def await_workflow_result_async(
+        self, workflow_id: str, polling_interval: float
+    ) -> Any:
+        while True:
+            result = await asyncio.to_thread(self.check_workflow_result, workflow_id)
+            if not isinstance(result, NoResult):
+                return result
+            await asyncio.sleep(polling_interval)
 
     @db_retry()
     def await_first_workflow_id(
