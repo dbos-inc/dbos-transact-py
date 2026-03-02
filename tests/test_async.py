@@ -755,7 +755,7 @@ async def test_workflow_recovery_async(dbos: DBOS, config: DBOSConfig) -> None:
 
 @pytest.mark.asyncio
 async def test_high_async_concurrency(dbos: DBOS, config: DBOSConfig) -> None:
-    config["max_executor_threads"] = 64
+    config["max_executor_threads"] = 32
     DBOS.destroy(destroy_registry=True)
     DBOS(config=config)
     DBOS.launch()
@@ -773,6 +773,8 @@ async def test_high_async_concurrency(dbos: DBOS, config: DBOSConfig) -> None:
         nonlocal peak_threads
         peak_threads = max(peak_threads, threading.active_count())
         await DBOS.sleep_async(5)
+        message = await DBOS.recv_async(timeout_seconds=5)
+        assert message is None
 
     @DBOS.workflow()
     async def concurrent_step_workflow() -> None:
@@ -805,4 +807,4 @@ async def test_high_async_concurrency(dbos: DBOS, config: DBOSConfig) -> None:
         config["max_executor_threads"]
         and peak_threads < config["max_executor_threads"] + 10
     )
-    assert elapsed < 30
+    assert elapsed < 60
