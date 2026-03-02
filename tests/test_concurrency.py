@@ -652,11 +652,14 @@ async def test_high_async_concurrency(dbos: DBOS, config: DBOSConfig) -> None:
 
     @DBOS.workflow()
     async def sleep_workflow() -> None:
+        assert DBOS.workflow_id
         nonlocal peak_threads
         peak_threads = max(peak_threads, threading.active_count())
         await DBOS.sleep_async(5)
         message = await DBOS.recv_async(timeout_seconds=5)
         assert message is None
+        value = await DBOS.get_event_async(DBOS.workflow_id, "key", timeout_seconds=5)
+        assert value is None
 
     @DBOS.workflow()
     async def concurrent_step_workflow() -> None:
