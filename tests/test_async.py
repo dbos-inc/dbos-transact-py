@@ -769,14 +769,40 @@ async def test_high_async_concurrency(dbos: DBOS, config: DBOSConfig) -> None:
         await asyncio.sleep(5)
 
     @DBOS.workflow()
-    async def concurrent_sleep_workflow() -> None:
+    async def sleep_workflow() -> None:
+        nonlocal peak_threads
+        peak_threads = max(peak_threads, threading.active_count())
+        await DBOS.sleep_async(5)
+
+    @DBOS.workflow()
+    async def concurrent_step_workflow() -> None:
         await asyncio.gather(*[sleep_step() for _ in range(1000)])
 
+    @DBOS.workflow()
+    async def concurrent_wf_workflow() -> None:
+        handles = await asyncio.gather(
+            *[DBOS.start_workflow_async(sleep_workflow) for _ in range(1000)]
+        )
+        await asyncio.gather(*[h.get_result() for h in handles])
+
+    # Test concurrent steps
     start_time = time.time()
-    await concurrent_sleep_workflow()
+    await concurrent_step_workflow()
     elapsed = time.time() - start_time
-    print(f"Elapsed: {elapsed}, peak threads: {peak_threads}")
-    # DBOS thread utilization should be restricted by the maximum,
-    # with a little extra for non-DBOS threads.
-    assert peak_threads < config["max_executor_threads"] + 10
+    print(f"Steps elapsed: {elapsed}, peak threads: {peak_threads}")
+    assert (
+        config["max_executor_threads"]
+        and peak_threads < config["max_executor_threads"] + 10
+    )
+    assert elapsed < 30
+
+    # Test concurrent workflows
+    start_time = time.time()
+    await concurrent_wf_workflow()
+    elapsed = time.time() - start_time
+    print(f"Workflows elapsed: {elapsed}, peak threads: {peak_threads}")
+    assert (
+        config["max_executor_threads"]
+        and peak_threads < config["max_executor_threads"] + 10
+    )
     assert elapsed < 30
