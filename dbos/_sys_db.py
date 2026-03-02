@@ -263,6 +263,7 @@ class VersionInfo(TypedDict):
     version_id: str
     version_name: str
     version_timestamp: int
+    created_at: int
 
 
 class StepInfo(TypedDict):
@@ -3360,6 +3361,7 @@ class SystemDatabase(ABC):
                     SystemSchema.application_versions.c.version_id,
                     SystemSchema.application_versions.c.version_name,
                     SystemSchema.application_versions.c.version_timestamp,
+                    SystemSchema.application_versions.c.created_at,
                 ).order_by(SystemSchema.application_versions.c.version_timestamp.desc())
             ).fetchall()
             return [
@@ -3367,6 +3369,7 @@ class SystemDatabase(ABC):
                     version_id=row[0],
                     version_name=row[1],
                     version_timestamp=row[2],
+                    created_at=row[3],
                 )
                 for row in rows
             ]
@@ -3378,6 +3381,7 @@ class SystemDatabase(ABC):
                     SystemSchema.application_versions.c.version_id,
                     SystemSchema.application_versions.c.version_name,
                     SystemSchema.application_versions.c.version_timestamp,
+                    SystemSchema.application_versions.c.created_at,
                 )
                 .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
                 .limit(1)
@@ -3388,6 +3392,7 @@ class SystemDatabase(ABC):
                 version_id=row[0],
                 version_name=row[1],
                 version_timestamp=row[2],
+                created_at=row[3],
             )
 
     @db_retry()

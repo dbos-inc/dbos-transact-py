@@ -225,4 +225,9 @@ class SystemSchema:
             BigInteger,
             nullable=False,
         ),
+        Column(
+            "created_at",
+            BigInteger,
+            nullable=False,
+        ),
     )

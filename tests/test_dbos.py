@@ -1648,14 +1648,28 @@ def test_app_version(
     version_names = set(v["version_name"] for v in versions)
     assert version_names == set(created_versions)
 
+    # Verify created_at is set on all versions
+    for v in versions:
+        assert "created_at" in v
+        assert isinstance(v["created_at"], int)
+        assert v["created_at"] > 0
+
     # get_latest_application_version should return the most recently launched version
     latest = DBOS.get_latest_application_version()
     assert latest["version_name"] == version_five
+    assert "created_at" in latest
+
+    # Record created_at before set_latest to verify it doesn't change
+    version_four_created_at = next(
+        v["created_at"] for v in versions if v["version_name"] == version_four
+    )
 
     # set_latest_application_version changes which version is latest
     DBOS.set_latest_application_version(version_four)
     latest = DBOS.get_latest_application_version()
     assert latest["version_name"] == version_four
+    # created_at should not change when updating timestamp
+    assert latest["created_at"] == version_four_created_at
     # First entry should be the latest (highest timestamp)
     versions = DBOS.list_application_versions()
     assert versions[0]["version_name"] == version_four
@@ -1674,13 +1688,27 @@ def test_app_version(
     client_version_names = set(v["version_name"] for v in client_versions)
     assert client_version_names == set(created_versions)
 
+    # Verify created_at is present in client results
+    for v in client_versions:
+        assert "created_at" in v
+        assert isinstance(v["created_at"], int)
+        assert v["created_at"] > 0
+
     client_latest = client.get_latest_application_version()
     assert client_latest["version_name"] == version_four
+    assert "created_at" in client_latest
+
+    # Record created_at before client update
+    version_five_created_at = next(
+        v["created_at"] for v in client_versions if v["version_name"] == version_five
+    )
 
     # Set version_five as latest via client
     client.set_latest_application_version(version_five)
     client_latest = client.get_latest_application_version()
     assert client_latest["version_name"] == version_five
+    # created_at should not change when updating timestamp via client
+    assert client_latest["created_at"] == version_five_created_at
 
     # Verify DBOS API sees the same change
     assert DBOS.get_latest_application_version()["version_name"] == version_five

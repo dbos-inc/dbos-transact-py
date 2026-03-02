@@ -315,7 +315,8 @@ def get_dbos_migration_thirteen(schema: str) -> str:
 CREATE TABLE "{schema}".application_versions (
     version_id TEXT NOT NULL PRIMARY KEY,
     version_name TEXT NOT NULL UNIQUE,
-    version_timestamp BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
+    version_timestamp BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
+    created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
 );
 """
 
@@ -497,7 +498,8 @@ sqlite_migration_thirteen = f"""
 CREATE TABLE application_versions (
     version_id TEXT NOT NULL PRIMARY KEY,
     version_name TEXT NOT NULL UNIQUE,
-    version_timestamp INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
+    version_timestamp INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
+    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
 );
 """
 sqlite_migrations = [

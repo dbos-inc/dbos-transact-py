@@ -555,6 +555,7 @@ class ApplicationVersionOutput:
     version_id: str
     version_name: str
     version_timestamp: int
+    created_at: int
 
     @classmethod
     def from_version_info(cls, v: VersionInfo) -> "ApplicationVersionOutput":
@@ -562,6 +563,7 @@ class ApplicationVersionOutput:
             version_id=v["version_id"],
             version_name=v["version_name"],
             version_timestamp=v["version_timestamp"],
+            created_at=v["created_at"],
         )
 
 
