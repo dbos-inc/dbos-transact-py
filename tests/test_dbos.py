@@ -2626,6 +2626,34 @@ async def test_wait_first_async(dbos: DBOS, client: DBOSClient) -> None:
     # Wait for slow workflow to finish so it doesn't hang
     await handle_slow.get_result()
 
+    # Test wait_first_async called from within a workflow and verify checkpointing
+    @DBOS.workflow()
+    async def caller_wf() -> str:
+        h_fast = await DBOS.start_workflow_async(fast_async_wf)
+        h_slow = await DBOS.start_workflow_async(slow_async_wf)
+        winner = await DBOS.wait_first_async([h_fast, h_slow])
+        result: str = await winner.get_result()
+        await h_slow.get_result()
+        return result
+
+    caller_wfid = str(uuid.uuid4())
+    with SetWorkflowID(caller_wfid):
+        assert await caller_wf() == "fast"
+
+    steps = await DBOS.list_workflow_steps_async(caller_wfid)
+    assert len(steps) == 5
+    # Step 1: start fast workflow
+    assert steps[0]["function_name"] == fast_async_wf.__qualname__
+    # Step 2: start slow workflow
+    assert steps[1]["function_name"] == slow_async_wf.__qualname__
+    # Step 3: wait_first returns the fast workflow's ID
+    assert steps[2]["function_name"] == "DBOS.waitFirst"
+    assert steps[2]["output"] == steps[0]["child_workflow_id"]
+    # Step 4: get_result on the fast workflow
+    assert steps[3]["function_name"] == "DBOS.getResult"
+    # Step 5: get_result on the slow workflow
+    assert steps[4]["function_name"] == "DBOS.getResult"
+
 
 def test_get_event_timeout(dbos: DBOS) -> None:
     @DBOS.workflow()
