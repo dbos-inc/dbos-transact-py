@@ -56,9 +56,9 @@ from ._core import (
     decorate_step,
     decorate_transaction,
     decorate_workflow,
-    durable_sleep,
     execute_workflow_by_id,
     get_event,
+    record_sleep,
     recv,
     run_step,
     run_step_async,
@@ -1233,7 +1233,7 @@ class DBOS:
         if seconds <= 0:
             return
         cur_ctx = snapshot_step_context()
-        duration = durable_sleep(_get_dbos_instance(), cur_ctx, seconds)
+        duration = record_sleep(_get_dbos_instance(), cur_ctx, seconds)
         time.sleep(duration)
 
     @classmethod
@@ -1249,7 +1249,7 @@ class DBOS:
         cur_ctx = snapshot_step_context()
         await cls._configure_asyncio_thread_pool()
         duration = await asyncio.to_thread(
-            durable_sleep, _get_dbos_instance(), cur_ctx, seconds
+            record_sleep, _get_dbos_instance(), cur_ctx, seconds
         )
         await asyncio.sleep(duration)
 

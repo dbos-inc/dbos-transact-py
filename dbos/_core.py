@@ -1893,7 +1893,7 @@ def get_event(
         return dbos._sys_db.get_event(workflow_id, key, timeout_seconds)
 
 
-def durable_sleep(
+def record_sleep(
     dbos: "DBOS", cur_ctx: Optional["DBOSContext"], seconds: float
 ) -> float:
     if cur_ctx is not None:
@@ -1903,7 +1903,7 @@ def durable_sleep(
             "name": "sleep",
         }
         with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
-            return dbos._sys_db.sleep(
+            return dbos._sys_db.record_sleep(
                 ctx.workflow_id, ctx.curr_step_function_id, seconds
             )
     else:

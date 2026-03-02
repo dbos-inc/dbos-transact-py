@@ -1743,7 +1743,7 @@ class SystemDatabase(ABC):
             if len(init_recv) == 0:
                 # Wait for the notification
                 # Support OAOO sleep
-                actual_timeout = self.sleep(
+                actual_timeout = self.record_sleep(
                     workflow_uuid, timeout_function_id, timeout_seconds
                 )
                 condition.wait(timeout=actual_timeout)
@@ -1886,7 +1886,7 @@ class SystemDatabase(ABC):
             PostgresSystemDatabase._reset_system_database(database_url)
 
     @db_retry()
-    def sleep(
+    def record_sleep(
         self,
         workflow_uuid: str,
         function_id: int,
@@ -2140,7 +2140,7 @@ class SystemDatabase(ABC):
             actual_timeout = timeout_seconds
             if caller_ctx is not None:
                 # Support OAOO sleep for workflows
-                actual_timeout = self.sleep(
+                actual_timeout = self.record_sleep(
                     caller_ctx["workflow_uuid"],
                     caller_ctx["timeout_function_id"],
                     timeout_seconds,
