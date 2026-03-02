@@ -6,6 +6,7 @@ import pytest
 
 from dbos import DBOS, DBOSClient, DBOSConfiguredInstance
 from dbos._error import DBOSException
+from dbos._utils import INTERNAL_QUEUE_NAME
 
 from .conftest import retry_until_success
 
@@ -899,6 +900,10 @@ def test_classmethod_schedule(dbos: DBOS) -> None:
         @classmethod
         @DBOS.workflow()
         def scheduled_wf(cls, scheduled_at: datetime, ctx: Any) -> None:
+            assert DBOS.workflow_id
+            status = DBOS.get_workflow_status(DBOS.workflow_id)
+            assert status
+            assert status.queue_name == INTERNAL_QUEUE_NAME
             received.append(ctx)
 
     DBOS.create_schedule(
