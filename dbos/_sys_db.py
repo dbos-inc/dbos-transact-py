@@ -2465,13 +2465,6 @@ class SystemDatabase(ABC):
             )
         return result
 
-    async def call_function_as_step_from_async(
-        self, fn: Callable[[], T], function_name: str, ctx: Optional[DBOSContext]
-    ) -> T:
-        return await asyncio.to_thread(
-            self.call_function_as_step, fn, function_name, ctx
-        )
-
     @db_retry()
     def init_workflow(
         self,
