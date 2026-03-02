@@ -1198,7 +1198,7 @@ class DBOS:
         """
         Receive a workflow message.
 
-        This function is to be called from within a workflow.
+        This function must be called from within a workflow.
         `recv` will return the message sent on `topic`, waiting if necessary.
         """
         check_async("recv")
@@ -1223,7 +1223,7 @@ class DBOS:
         """
         Receive a workflow message.
 
-        This function is to be called from within a workflow.
+        This function must be called from within a workflow.
         `recv_async` will return the message sent on `topic`, asynchronously waiting if necessary.
         """
         cur_ctx = snapshot_step_context(reserve_sleep_id=True)
@@ -2454,10 +2454,11 @@ class DBOS:
                 offset += 1
             except ValueError:
                 # Poll the offset until a value arrives or the workflow terminates
-                status = (
-                    await (await cls.retrieve_workflow_async(workflow_id)).get_status()
-                ).status
-                if not workflow_is_active(status):
+                handle: WorkflowHandleAsync[Any] = await cls.retrieve_workflow_async(
+                    workflow_id
+                )
+                status = await handle.get_status()
+                if not workflow_is_active(status.status):
                     break
                 await asyncio.sleep(polling_interval)
                 continue
