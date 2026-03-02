@@ -1095,17 +1095,15 @@ class DBOS:
 
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
+        dbos = _get_dbos_instance()
 
-        def fn() -> str:
-            return _get_dbos_instance()._sys_db.await_first_workflow_id(
+        async def fn() -> str:
+            return await dbos._sys_db.await_first_workflow_id_async(
                 workflow_ids, polling_interval_sec
             )
 
-        completed_id: str = await asyncio.to_thread(
-            _get_dbos_instance()._sys_db.call_function_as_step,
-            fn,
-            "DBOS.waitFirst",
-            step_ctx,
+        completed_id: str = await dbos._sys_db.call_coroutine_as_step(
+            fn, "DBOS.waitFirst", step_ctx
         )
         return handle_map[completed_id]
 
