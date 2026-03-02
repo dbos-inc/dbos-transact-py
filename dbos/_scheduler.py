@@ -4,7 +4,6 @@ import traceback
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
 
-from ._context import SetWorkflowID
 from ._croniter import croniter  # type: ignore
 from ._error import DBOSException
 from ._logger import dbos_logger
@@ -27,6 +26,7 @@ class _ScheduleThread:
     def __init__(self, schedule: WorkflowSchedule, serializer: Serializer):
         self.schedule_name: str = schedule["schedule_name"]
         self.workflow_name: str = schedule["workflow_name"]
+        self.class_name: Optional[str] = schedule["workflow_class_name"]
         self.cron: str = schedule["schedule"]
         self.serialized_context: str = schedule["context"]
         self.context: Any = serializer.deserialize(self.serialized_context)
@@ -38,13 +38,6 @@ class _ScheduleThread:
         from ._dbos import _get_dbos_instance
 
         dbos = _get_dbos_instance()
-        func = dbos._registry.workflow_info_map.get(self.workflow_name)
-        if func is None:
-            dbos_logger.warning(
-                f"Scheduled workflow '{self.workflow_name}' is not registered, skipping"
-            )
-            return
-        scheduler_queue = dbos._registry.get_internal_queue()
         try:
             it = croniter(
                 self.cron, datetime.now(timezone.utc), second_at_beginning=True
@@ -68,8 +61,14 @@ class _ScheduleThread:
             try:
                 workflow_id = f"sched-{self.schedule_name}-{next_exec_time.isoformat()}"
                 if not dbos._sys_db.get_workflow_status(workflow_id):
-                    with SetWorkflowID(workflow_id):
-                        scheduler_queue.enqueue(func, next_exec_time, self.context)
+                    _enqueue_scheduled_workflow(
+                        dbos._sys_db,
+                        self.workflow_name,
+                        next_exec_time,
+                        workflow_id,
+                        self.context,
+                        self.class_name,
+                    )
             except Exception:
                 dbos_logger.warning(
                     f"Exception in schedule '{self.schedule_name}': "
@@ -95,6 +94,8 @@ def _enqueue_scheduled_workflow(
     class_name: Optional[str] = None,
 ) -> None:
     """Enqueue a single scheduled workflow execution via init_workflow."""
+    # Scheduled workflows are always enqueued to the latest application version
+    latest_application_version = sys_db.get_latest_application_version()["version_name"]
     inputs: WorkflowInputs = {"args": (scheduled_at, context), "kwargs": {}}
     status: WorkflowStatusInternal = {
         "workflow_uuid": workflow_id,
@@ -102,7 +103,7 @@ def _enqueue_scheduled_workflow(
         "name": workflow_name,
         "class_name": class_name,
         "queue_name": INTERNAL_QUEUE_NAME,
-        "app_version": None,
+        "app_version": latest_application_version,
         "config_name": None,
         "authenticated_user": None,
         "assumed_role": None,
