@@ -1034,18 +1034,14 @@ class DBOS:
 
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
+        dbos = _get_dbos_instance()
 
-        def fn() -> Optional[Any]:
-            return _get_dbos_instance()._sys_db.await_workflow_result(
+        async def fn() -> Optional[Any]:
+            return await dbos._sys_db.await_workflow_result_async(
                 workflow_id, DEFAULT_POLLING_INTERVAL
             )
 
-        return await asyncio.to_thread(
-            _get_dbos_instance()._sys_db.call_function_as_step,
-            fn,
-            "DBOS.getResult",
-            step_ctx,
-        )
+        return await dbos._sys_db.call_coroutine_as_step(fn, "DBOS.getResult", step_ctx)
 
     @classmethod
     def wait_first(

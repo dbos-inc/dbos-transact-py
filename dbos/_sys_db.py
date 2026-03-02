@@ -10,6 +10,7 @@ from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
+    Awaitable,
     Callable,
     Dict,
     List,
@@ -2462,6 +2463,58 @@ class SystemDatabase(ABC):
                     "serialization": serialization,
                     "error": None,
                 }
+            )
+        return result
+
+    async def call_coroutine_as_step(
+        self,
+        fn: Callable[[], Awaitable[T]],
+        function_name: str,
+        ctx: Optional[DBOSContext],
+    ) -> T:
+        start_time = int(time.time() * 1000)
+        if ctx and ctx.is_transaction():
+            raise Exception(f"Invalid call to `{function_name}` inside a transaction")
+        if ctx and ctx.is_workflow():
+            res = await asyncio.to_thread(
+                self.check_operation_execution,
+                ctx.workflow_id,
+                ctx.function_id,
+                function_name,
+            )
+            if res is not None:
+                if res["output"] is not None:
+                    return cast(
+                        SystemDatabase.T,
+                        deserialize_value(
+                            res["output"],
+                            res["serialization"],
+                            self.serializer,
+                        ),
+                    )
+                elif res["error"] is not None:
+                    e: Exception = deserialize_exception(
+                        res["error"], res["serialization"], self.serializer
+                    )
+                    raise e
+                else:
+                    raise Exception(
+                        f"Recorded output and error are both None for {function_name}"
+                    )
+        result = await fn()
+        if ctx and ctx.is_workflow():
+            serval, serialization = serialize_value(result, None, self.serializer)
+            await asyncio.to_thread(
+                self.record_operation_result,
+                {
+                    "workflow_uuid": ctx.workflow_id,
+                    "function_id": ctx.function_id,
+                    "function_name": function_name,
+                    "started_at_epoch_ms": start_time,
+                    "output": serval,
+                    "serialization": serialization,
+                    "error": None,
+                },
             )
         return result
 
