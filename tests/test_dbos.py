@@ -2003,7 +2003,7 @@ def test_custom_database(
     assert handle.get_result() == val
     assert len(DBOS.list_workflows()) == 1
     steps = DBOS.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 3
+    assert len(steps) == 4
     assert "transaction" in steps[0]["function_name"]
     DBOS.destroy(destroy_registry=True)
 
@@ -2014,7 +2014,7 @@ def test_custom_database(
     )
     assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 3
+    assert len(steps) == 4
     assert "transaction" in steps[0]["function_name"]
 
 
@@ -2059,7 +2059,7 @@ def test_custom_schema(
     assert handle.get_result() == val
     assert len(DBOS.list_workflows()) == 1
     steps = DBOS.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 3
+    assert len(steps) == 4
     assert "transaction" in steps[0]["function_name"]
     DBOS.destroy(destroy_registry=True)
 
@@ -2071,7 +2071,7 @@ def test_custom_schema(
     )
     assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 3
+    assert len(steps) == 4
     assert "transaction" in steps[0]["function_name"]
 
 
@@ -2127,7 +2127,7 @@ def test_custom_engine(
     assert handle.get_result() == val
     assert len(DBOS.list_workflows()) == 1
     steps = DBOS.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 2
+    assert len(steps) == 3
     assert "setEvent" in steps[0]["function_name"]
     DBOS.destroy(destroy_registry=True)
 
@@ -2144,7 +2144,7 @@ def test_custom_engine(
     )
     assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 2
+    assert len(steps) == 3
     assert "setEvent" in steps[0]["function_name"]
 
     # Test custom engine with client and no URL
@@ -2153,7 +2153,7 @@ def test_custom_engine(
     )
     assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 2
+    assert len(steps) == 3
     assert "setEvent" in steps[0]["function_name"]
 
 
@@ -2258,7 +2258,7 @@ def test_custom_serializer(
     # Verify the workflow is correctly stored in the system database
     assert len(DBOS.list_workflows()) == 1
     steps = DBOS.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 2
+    assert len(steps) == 3
     assert "setEvent" in steps[0]["function_name"]
     assert "DBOS.recv" in steps[1]["function_name"]
     assert steps[1]["output"] == val
@@ -2270,7 +2270,7 @@ def test_custom_serializer(
     )
     assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 2
+    assert len(steps) == 3
     assert "setEvent" in steps[0]["function_name"]
     assert "DBOS.recv" in steps[1]["function_name"]
     assert steps[1]["output"] == val
