@@ -538,18 +538,19 @@ def test_set_get_event(dbos: DBOS) -> None:
         assert set_get_workflow() == value
 
     wfsteps = DBOS.list_workflow_steps(wfid)
-    assert len(wfsteps) == 5
+    assert len(wfsteps) == 6
     assert wfsteps[0]["function_name"] == "DBOS.setEvent"
     assert wfsteps[1]["function_name"] == stepOne.__qualname__
-    assert wfsteps[3]["function_name"] == "DBOS.sleep"
     assert wfsteps[2]["function_name"] == "DBOS.getEvent"
     assert wfsteps[2]["child_workflow_id"] == None
     assert wfsteps[2]["output"] == None
     assert wfsteps[2]["error"] == None
+    assert wfsteps[3]["function_name"] == "DBOS.sleep"
     assert wfsteps[4]["function_name"] == "DBOS.getEvent"
     assert wfsteps[4]["child_workflow_id"] == None
     assert wfsteps[4]["output"] == value
     assert wfsteps[4]["error"] == None
+    assert wfsteps[5]["function_name"] == "DBOS.sleep"
 
 
 def test_callchild_first_sync(dbos: DBOS) -> None:
