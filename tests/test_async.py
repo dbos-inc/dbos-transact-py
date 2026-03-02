@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 import uuid
 from typing import Any, List, Optional, cast
@@ -753,9 +754,18 @@ async def test_workflow_recovery_async(dbos: DBOS, config: DBOSConfig) -> None:
 
 
 @pytest.mark.asyncio
-async def test_concurrent_async_sleeps(dbos: DBOS) -> None:
+async def test_concurrent_async(dbos: DBOS, config: DBOSConfig) -> None:
+    config["max_executor_threads"] = 64
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+    DBOS.launch()
+
+    peak_threads = 0
+
     @DBOS.step()
     async def sleep_step() -> None:
+        nonlocal peak_threads
+        peak_threads = max(peak_threads, threading.active_count())
         await asyncio.sleep(5)
 
     @DBOS.workflow()
@@ -765,5 +775,8 @@ async def test_concurrent_async_sleeps(dbos: DBOS) -> None:
     start_time = time.time()
     await concurrent_sleep_workflow()
     elapsed = time.time() - start_time
-    print(f"Elapsed: {elapsed}")
+    print(f"Elapsed: {elapsed}, peak threads: {peak_threads}")
+    # DBOS thread utilization should be restricted by the maximum,
+    # with a little extra for non-DBOS threads.
+    assert peak_threads < config["max_executor_threads"] + 10
     assert elapsed < 30
