@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 # Public API
 from dbos import DBOS, SetWorkflowID, StepInfo
+from dbos._dbos_config import DBOSConfig
 from dbos._error import DBOSNonExistentWorkflowError
 from tests.conftest import using_sqlite
 
@@ -632,3 +633,60 @@ async def test_gather_many_set_event(dbos: DBOS) -> None:
     assert wfsteps_serial is not None
     assert wfsteps_concurrent is not None
     compare_wf_runs(wfsteps_serial, wfsteps_concurrent)
+
+
+@pytest.mark.asyncio
+async def test_high_async_concurrency(dbos: DBOS, config: DBOSConfig) -> None:
+    config["max_executor_threads"] = 32
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+    DBOS.launch()
+
+    peak_threads = 0
+
+    @DBOS.step()
+    async def sleep_step() -> None:
+        nonlocal peak_threads
+        peak_threads = max(peak_threads, threading.active_count())
+        await asyncio.sleep(5)
+
+    @DBOS.workflow()
+    async def sleep_workflow() -> None:
+        nonlocal peak_threads
+        peak_threads = max(peak_threads, threading.active_count())
+        await DBOS.sleep_async(5)
+        message = await DBOS.recv_async(timeout_seconds=5)
+        assert message is None
+
+    @DBOS.workflow()
+    async def concurrent_step_workflow() -> None:
+        await asyncio.gather(*[sleep_step() for _ in range(1000)])
+
+    @DBOS.workflow()
+    async def concurrent_wf_workflow() -> None:
+        handles = await asyncio.gather(
+            *[DBOS.start_workflow_async(sleep_workflow) for _ in range(1000)]
+        )
+        await asyncio.gather(*[h.get_result() for h in handles])
+
+    # Test concurrent steps
+    start_time = time.time()
+    await concurrent_step_workflow()
+    elapsed = time.time() - start_time
+    print(f"Steps elapsed: {elapsed}, peak threads: {peak_threads}")
+    assert (
+        config["max_executor_threads"]
+        and peak_threads < config["max_executor_threads"] + 10
+    )
+    assert elapsed < 30
+
+    # Test concurrent workflows
+    start_time = time.time()
+    await concurrent_wf_workflow()
+    elapsed = time.time() - start_time
+    print(f"Workflows elapsed: {elapsed}, peak threads: {peak_threads}")
+    assert (
+        config["max_executor_threads"]
+        and peak_threads < config["max_executor_threads"] + 10
+    )
+    assert elapsed < 60
