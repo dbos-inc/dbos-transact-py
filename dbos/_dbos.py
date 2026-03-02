@@ -57,7 +57,6 @@ from ._core import (
     decorate_transaction,
     decorate_workflow,
     execute_workflow_by_id,
-    get_event,
     record_sleep,
     run_step,
     run_step_async,
@@ -89,6 +88,7 @@ from ._scheduler import (
 )
 from ._scheduler_decorator import DecoratedScheduledWorkflow, scheduled
 from ._sys_db import (
+    GetEventWorkflowContext,
     StepInfo,
     SystemDatabase,
     WorkflowSchedule,
@@ -1349,13 +1349,24 @@ class DBOS:
 
         """
         check_async("get_event")
-        return get_event(
-            _get_dbos_instance(),
-            snapshot_step_context(reserve_sleep_id=True),
-            workflow_id,
-            key,
-            timeout_seconds,
-        )
+        cur_ctx = snapshot_step_context(reserve_sleep_id=True)
+        dbos = _get_dbos_instance()
+        if cur_ctx is not None and cur_ctx.is_workflow():
+            attributes: TracedAttributes = {
+                "name": "get_event",
+            }
+            with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
+                timeout_function_id = ctx.curr_step_function_id + 1
+                caller_ctx: GetEventWorkflowContext = {
+                    "workflow_uuid": ctx.workflow_id,
+                    "function_id": ctx.curr_step_function_id,
+                    "timeout_function_id": timeout_function_id,
+                }
+                return dbos._sys_db.get_event(
+                    workflow_id, key, timeout_seconds, caller_ctx
+                )
+        else:
+            return dbos._sys_db.get_event(workflow_id, key, timeout_seconds)
 
     @classmethod
     async def get_event_async(
@@ -1372,11 +1383,25 @@ class DBOS:
             timeout_seconds(float): The amount of time to wait, in case `set_event` has not yet been called byt the workflow
 
         """
-        ctx = snapshot_step_context(reserve_sleep_id=True)
+        cur_ctx = snapshot_step_context(reserve_sleep_id=True)
+        dbos = _get_dbos_instance()
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(
-            get_event, _get_dbos_instance(), ctx, workflow_id, key, timeout_seconds
-        )
+        if cur_ctx is not None and cur_ctx.is_workflow():
+            attributes: TracedAttributes = {
+                "name": "get_event",
+            }
+            with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
+                timeout_function_id = ctx.curr_step_function_id + 1
+                caller_ctx: GetEventWorkflowContext = {
+                    "workflow_uuid": ctx.workflow_id,
+                    "function_id": ctx.curr_step_function_id,
+                    "timeout_function_id": timeout_function_id,
+                }
+                return await dbos._sys_db.get_event_async(
+                    workflow_id, key, timeout_seconds, caller_ctx
+                )
+        else:
+            return await dbos._sys_db.get_event_async(workflow_id, key, timeout_seconds)
 
     @classmethod
     def get_all_events(cls, workflow_id: str) -> Dict[str, Any]:
