@@ -1895,7 +1895,7 @@ def get_event(
 
 def durable_sleep(
     dbos: "DBOS", cur_ctx: Optional["DBOSContext"], seconds: float
-) -> None:
+) -> float:
     if cur_ctx is not None:
         # Must call it within a workflow
         assert cur_ctx.is_workflow(), "sleep() must be called from within a workflow"
@@ -1903,7 +1903,9 @@ def durable_sleep(
             "name": "sleep",
         }
         with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
-            dbos._sys_db.sleep(ctx.workflow_id, ctx.curr_step_function_id, seconds)
+            return dbos._sys_db.sleep(
+                ctx.workflow_id, ctx.curr_step_function_id, seconds
+            )
     else:
         # Cannot call it from outside of a workflow
         raise DBOSException("sleep() must be called from within a workflow")

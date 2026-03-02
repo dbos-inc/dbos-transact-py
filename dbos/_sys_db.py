@@ -1744,7 +1744,7 @@ class SystemDatabase(ABC):
                 # Wait for the notification
                 # Support OAOO sleep
                 actual_timeout = self.sleep(
-                    workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
+                    workflow_uuid, timeout_function_id, timeout_seconds
                 )
                 condition.wait(timeout=actual_timeout)
         finally:
@@ -1891,7 +1891,6 @@ class SystemDatabase(ABC):
         workflow_uuid: str,
         function_id: int,
         seconds: float,
-        skip_sleep: bool = False,
     ) -> float:
         function_name = "DBOS.sleep"
         start_time = int(time.time() * 1000)
@@ -1927,10 +1926,7 @@ class SystemDatabase(ABC):
                 )
             except DBOSWorkflowConflictIDError:
                 pass
-        duration = max(0, end_time - time.time())
-        if not skip_sleep:
-            time.sleep(duration)
-        return duration
+        return max(0, end_time - time.time())
 
     @db_retry()
     def set_event_from_workflow(
@@ -2148,7 +2144,6 @@ class SystemDatabase(ABC):
                     caller_ctx["workflow_uuid"],
                     caller_ctx["timeout_function_id"],
                     timeout_seconds,
-                    skip_sleep=True,
                 )
             condition.wait(timeout=actual_timeout)
 

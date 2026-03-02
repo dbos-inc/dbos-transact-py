@@ -1233,7 +1233,8 @@ class DBOS:
         if seconds <= 0:
             return
         cur_ctx = snapshot_step_context()
-        durable_sleep(_get_dbos_instance(), cur_ctx, seconds)
+        duration = durable_sleep(_get_dbos_instance(), cur_ctx, seconds)
+        time.sleep(duration)
 
     @classmethod
     async def sleep_async(cls, seconds: float) -> None:
@@ -1247,7 +1248,10 @@ class DBOS:
             return
         cur_ctx = snapshot_step_context()
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(durable_sleep, _get_dbos_instance(), cur_ctx, seconds)
+        duration = await asyncio.to_thread(
+            durable_sleep, _get_dbos_instance(), cur_ctx, seconds
+        )
+        await asyncio.sleep(duration)
 
     @classmethod
     def set_event(
