@@ -333,8 +333,8 @@ def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
         get_dbos_migration_nine(schema),
         get_dbos_migration_ten(schema),
         get_dbos_migration_eleven(schema),
-        get_dbos_migration_thirteen(schema),
         get_dbos_migration_twelve(schema),
+        get_dbos_migration_thirteen(schema),
     ]
 
 
@@ -511,6 +511,6 @@ sqlite_migrations = [
     sqlite_migration_eight,
     sqlite_migration_nine,
     sqlite_migration_eleven,
-    sqlite_migration_thirteen,
     sqlite_migration_twelve,
+    sqlite_migration_thirteen,
 ]
