@@ -124,27 +124,21 @@ class PostgresSystemDatabase(SystemDatabase):
                         )
                         if channel == "dbos_notifications_channel":
                             if notify.payload:
-                                condition = self.notifications_map.get(notify.payload)
-                                if condition is None:
-                                    # No condition found for this payload
+                                event = self.notifications_map.get(notify.payload)
+                                if event is None:
                                     continue
-                                condition.acquire()
-                                condition.notify_all()
-                                condition.release()
+                                event.set()
                                 dbos_logger.debug(
-                                    f"Signaled notifications condition for {notify.payload}"
+                                    f"Signaled notifications event for {notify.payload}"
                                 )
                         elif channel == "dbos_workflow_events_channel":
                             if notify.payload:
-                                condition = self.workflow_events_map.get(notify.payload)
-                                if condition is None:
-                                    # No condition found for this payload
+                                event = self.workflow_events_map.get(notify.payload)
+                                if event is None:
                                     continue
-                                condition.acquire()
-                                condition.notify_all()
-                                condition.release()
+                                event.set()
                                 dbos_logger.debug(
-                                    f"Signaled workflow_events condition for {notify.payload}"
+                                    f"Signaled workflow_events event for {notify.payload}"
                                 )
                         else:
                             dbos_logger.error(f"Unknown channel: {channel}")

@@ -282,45 +282,41 @@ _dbos_null_topic = "__null__topic__"
 _dbos_stream_closed_sentinel = "__DBOS_STREAM_CLOSED__"
 
 
-class ConditionCount(TypedDict):
-    condition: threading.Condition
+class EventCount(TypedDict):
+    event: threading.Event
     count: int
 
 
-class ThreadSafeConditionDict:
+class ThreadSafeEventDict:
     def __init__(self) -> None:
-        self._dict: Dict[str, ConditionCount] = {}
+        self._dict: Dict[str, EventCount] = {}
         self._lock = threading.Lock()
 
-    def get(self, key: str) -> Optional[threading.Condition]:
+    def get(self, key: str) -> Optional[threading.Event]:
         with self._lock:
             if key not in self._dict:
-                # Key does not exist, return None
                 return None
-            return self._dict[key]["condition"]
+            return self._dict[key]["event"]
 
-    def set(
-        self, key: str, value: threading.Condition
-    ) -> tuple[bool, threading.Condition]:
+    def set(self, key: str, value: threading.Event) -> tuple[bool, threading.Event]:
         with self._lock:
             if key in self._dict:
                 # Key already exists, do not overwrite. Increment the wait count.
-                cc = self._dict[key]
-                cc["count"] += 1
-                return False, cc["condition"]
-            self._dict[key] = ConditionCount(condition=value, count=1)
+                ec = self._dict[key]
+                ec["count"] += 1
+                return False, ec["event"]
+            self._dict[key] = EventCount(event=value, count=1)
             return True, value
 
     def pop(self, key: str) -> None:
         with self._lock:
             if key in self._dict:
-                cc = self._dict[key]
-                cc["count"] -= 1
-                if cc["count"] == 0:
-                    # No more threads waiting on this condition, remove it
+                ec = self._dict[key]
+                ec["count"] -= 1
+                if ec["count"] == 0:
                     del self._dict[key]
             else:
-                dbos_logger.warning(f"Key {key} not found in condition dictionary.")
+                dbos_logger.warning(f"Key {key} not found in event dictionary.")
 
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -464,8 +460,8 @@ class SystemDatabase(ABC):
             self.created_engine = True
         self._engine_kwargs = engine_kwargs
 
-        self.notifications_map = ThreadSafeConditionDict()
-        self.workflow_events_map = ThreadSafeConditionDict()
+        self.notifications_map = ThreadSafeEventDict()
+        self.workflow_events_map = ThreadSafeEventDict()
         self.executor_id = executor_id
         self._notification_listener_polling_interval_sec = (
             notification_listener_polling_interval_sec
@@ -1747,18 +1743,16 @@ class SystemDatabase(ABC):
         else:
             dbos_logger.debug(f"Running recv, id: {function_id}, topic: {topic}")
 
-        # Insert a condition to the notifications map, so the listener can notify it when a message is received.
+        # Insert an event to the notifications map, so the listener can signal it when a message is received.
         payload = f"{workflow_uuid}::{topic}"
-        condition = threading.Condition()
-        # Must acquire first before adding to the map. Otherwise, the notification listener may notify it before the condition is acquired and waited.
-        try:
-            condition.acquire()
-            success, _ = self.notifications_map.set(payload, condition)
-            if not success:
-                # This should not happen, but if it does, it means the workflow is executed concurrently.
-                raise DBOSWorkflowConflictIDError(workflow_uuid)
+        event = threading.Event()
+        success, _ = self.notifications_map.set(payload, event)
+        if not success:
+            # This should not happen, but if it does, it means the workflow is executed concurrently.
+            raise DBOSWorkflowConflictIDError(workflow_uuid)
 
-            # Check if an unconsumed message is already in the database. If not, wait for the notification.
+        try:
+            # Check if an unconsumed message is already in the database. If not, wait for the event.
             init_recv: Sequence[Any]
             with self.engine.begin() as c:
                 init_recv = c.execute(
@@ -1777,9 +1771,8 @@ class SystemDatabase(ABC):
                 actual_timeout = self.record_sleep(
                     workflow_uuid, timeout_function_id, timeout_seconds
                 )
-                condition.wait(timeout=actual_timeout)
+                event.wait(timeout=actual_timeout)
         finally:
-            condition.release()
             self.notifications_map.pop(payload)
 
         # Transactionally consume and return the oldest unconsumed message, or null if none.
@@ -1852,14 +1845,12 @@ class SystemDatabase(ABC):
                 return parts[0], parts[1]
             return payload, None
 
-        def signal_condition(condition_map: Any, payload: str) -> None:
-            """Signal a condition variable if it exists."""
-            condition = condition_map.get(payload)
-            if condition:
-                condition.acquire()
-                condition.notify_all()
-                condition.release()
-                dbos_logger.debug(f"Signaled condition for {payload}")
+        def signal_event(event_map: ThreadSafeEventDict, payload: str) -> None:
+            """Signal an event if it exists."""
+            event = event_map.get(payload)
+            if event:
+                event.set()
+                dbos_logger.debug(f"Signaled event for {payload}")
 
         while self._run_background_processes:
             try:
@@ -1881,7 +1872,7 @@ class SystemDatabase(ABC):
                             .limit(1)
                         )
                         if result.fetchone():
-                            signal_condition(self.notifications_map, payload)
+                            signal_event(self.notifications_map, payload)
 
                 # Check all payloads in the workflow_events_map
                 for payload in list(self.workflow_events_map._dict.keys()):
@@ -1897,7 +1888,7 @@ class SystemDatabase(ABC):
                             .limit(1)
                         )
                         if result.fetchone():
-                            signal_condition(self.workflow_events_map, payload)
+                            signal_event(self.workflow_events_map, payload)
 
             except Exception as e:
                 if self._run_background_processes:
@@ -2145,49 +2136,47 @@ class SystemDatabase(ABC):
                 )
 
         payload = f"{target_uuid}::{key}"
-        condition = threading.Condition()
-        condition.acquire()
-        success, existing_condition = self.workflow_events_map.set(payload, condition)
+        event = threading.Event()
+        success, existing_event = self.workflow_events_map.set(payload, event)
         if not success:
-            # Wait on the existing condition
-            condition.release()
-            condition = existing_condition
-            condition.acquire()
+            # Key already exists, wait on the existing event
+            event = existing_event
 
-        # Check if the key is already in the database. If not, wait for the notification.
-        init_recv: Sequence[Any]
-        with self.engine.begin() as c:
-            init_recv = c.execute(get_sql).fetchall()
-
-        value: Any = None
-        serval: Optional[str] = None
-        serialization: Optional[str] = None
-        if len(init_recv) > 0:
-            serval = init_recv[0][0]
-            serialization = init_recv[0][1]
-            value = deserialize_value(serval, serialization, self.serializer)
-        else:
-            # Wait for the notification
-            actual_timeout = timeout_seconds
-            if caller_ctx is not None:
-                # Support OAOO sleep for workflows
-                actual_timeout = self.record_sleep(
-                    caller_ctx["workflow_uuid"],
-                    caller_ctx["timeout_function_id"],
-                    timeout_seconds,
-                )
-            condition.wait(timeout=actual_timeout)
-
-            # Read the value from the database
+        try:
+            # Check if the key is already in the database. If not, wait for the event.
+            init_recv: Sequence[Any]
             with self.engine.begin() as c:
-                final_recv = c.execute(get_sql).fetchall()
-                if len(final_recv) > 0:
-                    serialization = final_recv[0][1]
-                    value = deserialize_value(
-                        final_recv[0][0], serialization, self.serializer
+                init_recv = c.execute(get_sql).fetchall()
+
+            value: Any = None
+            serval: Optional[str] = None
+            serialization: Optional[str] = None
+            if len(init_recv) > 0:
+                serval = init_recv[0][0]
+                serialization = init_recv[0][1]
+                value = deserialize_value(serval, serialization, self.serializer)
+            else:
+                # Wait for the notification
+                actual_timeout = timeout_seconds
+                if caller_ctx is not None:
+                    # Support OAOO sleep for workflows
+                    actual_timeout = self.record_sleep(
+                        caller_ctx["workflow_uuid"],
+                        caller_ctx["timeout_function_id"],
+                        timeout_seconds,
                     )
-        condition.release()
-        self.workflow_events_map.pop(payload)
+                event.wait(timeout=actual_timeout)
+
+                # Read the value from the database
+                with self.engine.begin() as c:
+                    final_recv = c.execute(get_sql).fetchall()
+                    if len(final_recv) > 0:
+                        serialization = final_recv[0][1]
+                        value = deserialize_value(
+                            final_recv[0][0], serialization, self.serializer
+                        )
+        finally:
+            self.workflow_events_map.pop(payload)
 
         # Record the output if it's in a workflow
         if caller_ctx is not None:
