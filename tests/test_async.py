@@ -750,3 +750,20 @@ async def test_workflow_recovery_async(dbos: DBOS, config: DBOSConfig) -> None:
     stat = await DBOS.get_workflow_status_async(workflow_id)
     assert stat
     assert stat.recovery_attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_async_sleeps(dbos: DBOS) -> None:
+    @DBOS.step()
+    async def sleep_step() -> None:
+        await asyncio.sleep(5)
+
+    @DBOS.workflow()
+    async def concurrent_sleep_workflow() -> None:
+        await asyncio.gather(*[sleep_step() for _ in range(1000)])
+
+    start_time = time.time()
+    await concurrent_sleep_workflow()
+    elapsed = time.time() - start_time
+    print(f"Elapsed: {elapsed}")
+    assert elapsed < 30
