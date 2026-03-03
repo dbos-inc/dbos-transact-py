@@ -83,7 +83,6 @@ from ._serialization import (
 )
 from ._sys_db import (
     EnqueueOptionsInternal,
-    GetEventWorkflowContext,
     OperationResultInternal,
     WorkflowStatus,
     WorkflowStatusInternal,
@@ -240,8 +239,7 @@ class WorkflowHandleAsyncPolling(Generic[R]):
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
         try:
-            r: R = await asyncio.to_thread(
-                self.dbos._sys_db.await_workflow_result,
+            r: R = await self.dbos._sys_db.await_workflow_result_async(
                 self.workflow_id,
                 polling_interval_sec,
             )
@@ -1791,32 +1789,6 @@ def send(
         )
 
 
-def recv(
-    dbos: "DBOS",
-    cur_ctx: Optional["DBOSContext"],
-    topic: Optional[str] = None,
-    timeout_seconds: float = 60,
-) -> Any:
-    if cur_ctx is not None:
-        # Must call it within a workflow
-        assert cur_ctx.is_workflow(), "recv() must be called from within a workflow"
-        attributes: TracedAttributes = {
-            "name": "recv",
-        }
-        with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
-            timeout_function_id = ctx.curr_step_function_id + 1
-            return dbos._sys_db.recv(
-                ctx.workflow_id,
-                ctx.curr_step_function_id,
-                timeout_function_id,
-                topic,
-                timeout_seconds,
-            )
-    else:
-        # Cannot call it from outside of a workflow
-        raise DBOSException("recv() must be called from within a workflow")
-
-
 def set_event(
     dbos: "DBOS",
     cur_ctx: Optional["DBOSContext"],
@@ -1865,37 +1837,9 @@ def set_event(
         raise DBOSException("set_event() must be called from within a workflow or step")
 
 
-def get_event(
-    dbos: "DBOS",
-    cur_ctx: Optional[DBOSContext],
-    workflow_id: str,
-    key: str,
-    timeout_seconds: float = 60,
-) -> Any:
-    if cur_ctx is not None and cur_ctx.is_within_workflow():
-        # Call it within a workflow
-        assert (
-            cur_ctx.is_workflow()
-        ), "get_event() must be called from within a workflow"
-        attributes: TracedAttributes = {
-            "name": "get_event",
-        }
-        with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
-            timeout_function_id = ctx.curr_step_function_id + 1
-            caller_ctx: GetEventWorkflowContext = {
-                "workflow_uuid": ctx.workflow_id,
-                "function_id": ctx.curr_step_function_id,
-                "timeout_function_id": timeout_function_id,
-            }
-            return dbos._sys_db.get_event(workflow_id, key, timeout_seconds, caller_ctx)
-    else:
-        # Directly call it outside of a workflow
-        return dbos._sys_db.get_event(workflow_id, key, timeout_seconds)
-
-
-def durable_sleep(
+def record_sleep(
     dbos: "DBOS", cur_ctx: Optional["DBOSContext"], seconds: float
-) -> None:
+) -> float:
     if cur_ctx is not None:
         # Must call it within a workflow
         assert cur_ctx.is_workflow(), "sleep() must be called from within a workflow"
@@ -1903,7 +1847,9 @@ def durable_sleep(
             "name": "sleep",
         }
         with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
-            dbos._sys_db.sleep(ctx.workflow_id, ctx.curr_step_function_id, seconds)
+            return dbos._sys_db.record_sleep(
+                ctx.workflow_id, ctx.curr_step_function_id, seconds
+            )
     else:
         # Cannot call it from outside of a workflow
         raise DBOSException("sleep() must be called from within a workflow")

@@ -10,6 +10,7 @@ from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
+    Awaitable,
     Callable,
     Dict,
     List,
@@ -49,6 +50,7 @@ from ._error import (
     MaxRecoveryAttemptsExceededError,
 )
 from ._logger import dbos_logger
+from ._outcome import NoResult
 from ._schemas.system_database import SystemSchema
 from ._serialization import (
     DBOSPortableJSON,
@@ -287,45 +289,41 @@ _dbos_null_topic = "__null__topic__"
 _dbos_stream_closed_sentinel = "__DBOS_STREAM_CLOSED__"
 
 
-class ConditionCount(TypedDict):
-    condition: threading.Condition
+class EventCount(TypedDict):
+    event: threading.Event
     count: int
 
 
-class ThreadSafeConditionDict:
+class ThreadSafeEventDict:
     def __init__(self) -> None:
-        self._dict: Dict[str, ConditionCount] = {}
+        self._dict: Dict[str, EventCount] = {}
         self._lock = threading.Lock()
 
-    def get(self, key: str) -> Optional[threading.Condition]:
+    def get(self, key: str) -> Optional[threading.Event]:
         with self._lock:
             if key not in self._dict:
-                # Key does not exist, return None
                 return None
-            return self._dict[key]["condition"]
+            return self._dict[key]["event"]
 
-    def set(
-        self, key: str, value: threading.Condition
-    ) -> tuple[bool, threading.Condition]:
+    def set(self, key: str, value: threading.Event) -> tuple[bool, threading.Event]:
         with self._lock:
             if key in self._dict:
                 # Key already exists, do not overwrite. Increment the wait count.
-                cc = self._dict[key]
-                cc["count"] += 1
-                return False, cc["condition"]
-            self._dict[key] = ConditionCount(condition=value, count=1)
+                ec = self._dict[key]
+                ec["count"] += 1
+                return False, ec["event"]
+            self._dict[key] = EventCount(event=value, count=1)
             return True, value
 
     def pop(self, key: str) -> None:
         with self._lock:
             if key in self._dict:
-                cc = self._dict[key]
-                cc["count"] -= 1
-                if cc["count"] == 0:
-                    # No more threads waiting on this condition, remove it
+                ec = self._dict[key]
+                ec["count"] -= 1
+                if ec["count"] == 0:
                     del self._dict[key]
             else:
-                dbos_logger.warning(f"Key {key} not found in condition dictionary.")
+                dbos_logger.warning(f"Key {key} not found in event dictionary.")
 
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -469,8 +467,8 @@ class SystemDatabase(ABC):
             self.created_engine = True
         self._engine_kwargs = engine_kwargs
 
-        self.notifications_map = ThreadSafeConditionDict()
-        self.workflow_events_map = ThreadSafeConditionDict()
+        self.notifications_map = ThreadSafeEventDict()
+        self.workflow_events_map = ThreadSafeEventDict()
         self.executor_id = executor_id
         self._notification_listener_polling_interval_sec = (
             notification_listener_polling_interval_sec
@@ -1010,76 +1008,105 @@ class SystemDatabase(ABC):
             return workflow_id
 
     @db_retry()
+    def check_workflow_result(self, workflow_id: str) -> Union[NoResult, Any]:
+        """Check if a workflow has completed and return its result.
+
+        Returns NoResult() if the workflow is still pending/enqueued/not found.
+        Returns the deserialized output on success.
+        Raises on error, cancellation, or max recovery attempts exceeded.
+        """
+        with self.engine.begin() as c:
+            row = c.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.status,
+                    SystemSchema.workflow_status.c.output,
+                    SystemSchema.workflow_status.c.error,
+                    SystemSchema.workflow_status.c.serialization,
+                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+            ).fetchone()
+            if row is not None:
+                status = row[0]
+                if status == WorkflowStatusString.SUCCESS.value:
+                    output = row[1]
+                    return deserialize_value(output, row[3], self.serializer)
+                elif status == WorkflowStatusString.ERROR.value:
+                    error = row[2]
+                    e: Exception = deserialize_exception(error, row[3], self.serializer)
+                    raise e
+                elif status == WorkflowStatusString.CANCELLED.value:
+                    # Raise AwaitedWorkflowCancelledError here, not the cancellation exception
+                    # because the awaiting workflow is not being cancelled.
+                    raise DBOSAwaitedWorkflowCancelledError(workflow_id)
+                elif (
+                    status == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
+                ):
+                    raise DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(workflow_id)
+        return NoResult()
+
     def await_workflow_result(self, workflow_id: str, polling_interval: float) -> Any:
         while True:
-            with self.engine.begin() as c:
-                row = c.execute(
-                    sa.select(
-                        SystemSchema.workflow_status.c.status,
-                        SystemSchema.workflow_status.c.output,
-                        SystemSchema.workflow_status.c.error,
-                        SystemSchema.workflow_status.c.serialization,
-                    ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-                ).fetchone()
-                if row is not None:
-                    status = row[0]
-                    if status == WorkflowStatusString.SUCCESS.value:
-                        output = row[1]
-                        return deserialize_value(output, row[3], self.serializer)
-                    elif status == WorkflowStatusString.ERROR.value:
-                        error = row[2]
-                        e: Exception = deserialize_exception(
-                            error, row[3], self.serializer
-                        )
-                        raise e
-                    elif status == WorkflowStatusString.CANCELLED.value:
-                        # Raise AwaitedWorkflowCancelledError here, not the cancellation exception
-                        # because the awaiting workflow is not being cancelled.
-                        raise DBOSAwaitedWorkflowCancelledError(workflow_id)
-                    elif (
-                        status
-                        == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
-                    ):
-                        raise DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(
-                            workflow_id
-                        )
-                else:
-                    pass  # CB: I guess we're assuming the WF will show up eventually.
+            result = self.check_workflow_result(workflow_id)
+            if not isinstance(result, NoResult):
+                return result
             time.sleep(polling_interval)
 
+    async def await_workflow_result_async(
+        self, workflow_id: str, polling_interval: float
+    ) -> Any:
+        while True:
+            result = await asyncio.to_thread(self.check_workflow_result, workflow_id)
+            if not isinstance(result, NoResult):
+                return result
+            await asyncio.sleep(polling_interval)
+
     @db_retry()
-    def await_first_workflow_id(
-        self, workflow_ids: List[str], polling_interval: float
-    ) -> str:
-        """Poll until at least one of the given workflows has completed.
+    def check_first_workflow_id(self, workflow_ids: List[str]) -> Union[NoResult, str]:
+        """Check if at least one of the given workflows has completed.
 
         A workflow is considered complete when its status is not PENDING
         and not ENQUEUED.  Returns the workflow_uuid of the first
-        completed workflow found.
+        completed workflow found, or NoResult() if none have completed.
         """
         if not workflow_ids:
             raise ValueError("workflow_ids must not be empty")
+        with self.engine.begin() as c:
+            row = c.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.workflow_uuid,
+                )
+                .where(
+                    SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids),
+                    ~SystemSchema.workflow_status.c.status.in_(
+                        [
+                            WorkflowStatusString.PENDING.value,
+                            WorkflowStatusString.ENQUEUED.value,
+                        ]
+                    ),
+                )
+                .limit(1)
+            ).fetchone()
+            if row is not None:
+                result: str = row[0]
+                return result
+        return NoResult()
+
+    def await_first_workflow_id(
+        self, workflow_ids: List[str], polling_interval: float
+    ) -> str:
         while True:
-            with self.engine.begin() as c:
-                row = c.execute(
-                    sa.select(
-                        SystemSchema.workflow_status.c.workflow_uuid,
-                    )
-                    .where(
-                        SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids),
-                        ~SystemSchema.workflow_status.c.status.in_(
-                            [
-                                WorkflowStatusString.PENDING.value,
-                                WorkflowStatusString.ENQUEUED.value,
-                            ]
-                        ),
-                    )
-                    .limit(1)
-                ).fetchone()
-                if row is not None:
-                    result: str = row[0]
-                    return result
+            result = self.check_first_workflow_id(workflow_ids)
+            if not isinstance(result, NoResult):
+                return result
             time.sleep(polling_interval)
+
+    async def await_first_workflow_id_async(
+        self, workflow_ids: List[str], polling_interval: float
+    ) -> str:
+        while True:
+            result = await asyncio.to_thread(self.check_first_workflow_id, workflow_ids)
+            if not isinstance(result, NoResult):
+                return result
+            await asyncio.sleep(polling_interval)
 
     def list_workflows(
         self,
@@ -1694,14 +1721,21 @@ class SystemDatabase(ABC):
             raise
 
     @db_retry()
-    def recv(
+    def recv_setup(
         self,
         workflow_uuid: str,
         function_id: int,
         timeout_function_id: int,
         topic: Optional[str],
         timeout_seconds: float = 60,
-    ) -> Any:
+    ) -> Union[
+        tuple[Literal[True], Any],
+        tuple[Literal[False], threading.Event, float, str, int],
+    ]:
+        """Setup phase of recv. Returns either:
+        - (True, result) if a cached result was found (OAOO replay or message already available)
+        - (False, event, actual_timeout, payload, start_time) if caller must wait on the event
+        """
         function_name = "DBOS.recv"
         start_time = int(time.time() * 1000)
         topic = topic if topic is not None else _dbos_null_topic
@@ -1713,7 +1747,7 @@ class SystemDatabase(ABC):
         if recorded_output is not None:
             dbos_logger.debug(f"Replaying recv, id: {function_id}, topic: {topic}")
             if recorded_output["output"] is not None:
-                return deserialize_value(
+                return True, deserialize_value(
                     recorded_output["output"],
                     recorded_output["serialization"],
                     self.serializer,
@@ -1723,18 +1757,16 @@ class SystemDatabase(ABC):
         else:
             dbos_logger.debug(f"Running recv, id: {function_id}, topic: {topic}")
 
-        # Insert a condition to the notifications map, so the listener can notify it when a message is received.
+        # Insert an event to the notifications map, so the listener can signal it when a message is received.
         payload = f"{workflow_uuid}::{topic}"
-        condition = threading.Condition()
-        # Must acquire first before adding to the map. Otherwise, the notification listener may notify it before the condition is acquired and waited.
-        try:
-            condition.acquire()
-            success, _ = self.notifications_map.set(payload, condition)
-            if not success:
-                # This should not happen, but if it does, it means the workflow is executed concurrently.
-                raise DBOSWorkflowConflictIDError(workflow_uuid)
+        event = threading.Event()
+        success, _ = self.notifications_map.set(payload, event)
+        if not success:
+            # This should not happen, but if it does, it means the workflow is executed concurrently.
+            raise DBOSWorkflowConflictIDError(workflow_uuid)
 
-            # Check if an unconsumed message is already in the database. If not, wait for the notification.
+        try:
+            # Check if an unconsumed message is already in the database.
             init_recv: Sequence[Any]
             with self.engine.begin() as c:
                 init_recv = c.execute(
@@ -1747,18 +1779,33 @@ class SystemDatabase(ABC):
                     )
                 ).fetchall()
 
-            if len(init_recv) == 0:
-                # Wait for the notification
-                # Support OAOO sleep
-                actual_timeout = self.sleep(
-                    workflow_uuid, timeout_function_id, timeout_seconds, skip_sleep=True
-                )
-                condition.wait(timeout=actual_timeout)
-        finally:
-            condition.release()
-            self.notifications_map.pop(payload)
+            if len(init_recv) > 0:
+                # Message already available, signal the event so wait is a no-op
+                event.set()
 
-        # Transactionally consume and return the oldest unconsumed message, or null if none.
+            # Record the durable sleep timeout
+            actual_timeout = self.record_sleep(
+                workflow_uuid, timeout_function_id, timeout_seconds
+            )
+        except:
+            self.notifications_map.pop(payload)
+            raise
+
+        return False, event, actual_timeout, payload, start_time
+
+    @db_retry()
+    def recv_consume(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        topic: Optional[str],
+        start_time: int,
+    ) -> Any:
+        """Consume phase of recv. Transactionally consumes the oldest unconsumed
+        message and records the operation result."""
+        function_name = "DBOS.recv"
+        topic = topic if topic is not None else _dbos_null_topic
+
         with self.engine.begin() as c:
             consume_stmt = (
                 sa.update(SystemSchema.notifications)
@@ -1813,6 +1860,62 @@ class SystemDatabase(ABC):
             )
         return message
 
+    def recv(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        timeout_function_id: int,
+        topic: Optional[str],
+        timeout_seconds: float = 60,
+    ) -> Any:
+        setup = self.recv_setup(
+            workflow_uuid, function_id, timeout_function_id, topic, timeout_seconds
+        )
+        if setup[0]:
+            return setup[1]
+        _, event, actual_timeout, payload, start_time = setup
+        try:
+            event.wait(timeout=actual_timeout)
+            return self.recv_consume(workflow_uuid, function_id, topic, start_time)
+        finally:
+            self.notifications_map.pop(payload)
+
+    async def recv_async(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        timeout_function_id: int,
+        topic: Optional[str],
+        timeout_seconds: float = 60,
+    ) -> Any:
+        setup = await asyncio.to_thread(
+            self.recv_setup,
+            workflow_uuid,
+            function_id,
+            timeout_function_id,
+            topic,
+            timeout_seconds,
+        )
+        if setup[0]:
+            return setup[1]
+        _, event, actual_timeout, payload, start_time = setup
+        try:
+            deadline = time.time() + actual_timeout
+            while not event.is_set():
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(min(remaining, 0.1))
+            return await asyncio.to_thread(
+                self.recv_consume,
+                workflow_uuid,
+                function_id,
+                topic,
+                start_time,
+            )
+        finally:
+            self.notifications_map.pop(payload)
+
     @abstractmethod
     def _notification_listener(self) -> None:
         """Listen for database notifications using database-specific mechanisms."""
@@ -1828,14 +1931,12 @@ class SystemDatabase(ABC):
                 return parts[0], parts[1]
             return payload, None
 
-        def signal_condition(condition_map: Any, payload: str) -> None:
-            """Signal a condition variable if it exists."""
-            condition = condition_map.get(payload)
-            if condition:
-                condition.acquire()
-                condition.notify_all()
-                condition.release()
-                dbos_logger.debug(f"Signaled condition for {payload}")
+        def signal_event(event_map: ThreadSafeEventDict, payload: str) -> None:
+            """Signal an event if it exists."""
+            event = event_map.get(payload)
+            if event:
+                event.set()
+                dbos_logger.debug(f"Signaled event for {payload}")
 
         while self._run_background_processes:
             try:
@@ -1857,7 +1958,7 @@ class SystemDatabase(ABC):
                             .limit(1)
                         )
                         if result.fetchone():
-                            signal_condition(self.notifications_map, payload)
+                            signal_event(self.notifications_map, payload)
 
                 # Check all payloads in the workflow_events_map
                 for payload in list(self.workflow_events_map._dict.keys()):
@@ -1873,7 +1974,7 @@ class SystemDatabase(ABC):
                             .limit(1)
                         )
                         if result.fetchone():
-                            signal_condition(self.workflow_events_map, payload)
+                            signal_event(self.workflow_events_map, payload)
 
             except Exception as e:
                 if self._run_background_processes:
@@ -1893,12 +1994,11 @@ class SystemDatabase(ABC):
             PostgresSystemDatabase._reset_system_database(database_url)
 
     @db_retry()
-    def sleep(
+    def record_sleep(
         self,
         workflow_uuid: str,
         function_id: int,
         seconds: float,
-        skip_sleep: bool = False,
     ) -> float:
         function_name = "DBOS.sleep"
         start_time = int(time.time() * 1000)
@@ -1934,10 +2034,7 @@ class SystemDatabase(ABC):
                 )
             except DBOSWorkflowConflictIDError:
                 pass
-        duration = max(0, end_time - time.time())
-        if not skip_sleep:
-            time.sleep(duration)
-        return duration
+        return max(0, end_time - time.time())
 
     @db_retry()
     def set_event_from_workflow(
@@ -2086,22 +2183,23 @@ class SystemDatabase(ABC):
             return events
 
     @db_retry()
-    def get_event(
+    def get_event_setup(
         self,
         target_uuid: str,
         key: str,
         timeout_seconds: float = 60,
         caller_ctx: Optional[GetEventWorkflowContext] = None,
-    ) -> Any:
+    ) -> Union[
+        tuple[Literal[True], Any],
+        tuple[Literal[False], threading.Event, float, str, int],
+    ]:
+        """Setup phase of get_event. Returns either:
+        - (True, result) if a cached result was found (OAOO replay)
+        - (False, event, actual_timeout, payload, start_time) if caller must wait on the event
+        """
         function_name = "DBOS.getEvent"
         start_time = int(time.time() * 1000)
-        get_sql = sa.select(
-            SystemSchema.workflow_events.c.value,
-            SystemSchema.workflow_events.c.serialization,
-        ).where(
-            SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
-            SystemSchema.workflow_events.c.key == key,
-        )
+
         # Check for previous executions only if it's in a workflow
         if caller_ctx is not None:
             recorded_output = self.check_operation_execution(
@@ -2112,7 +2210,7 @@ class SystemDatabase(ABC):
                     f"Replaying get_event, id: {caller_ctx['function_id']}, key: {key}"
                 )
                 if recorded_output["output"] is not None:
-                    return deserialize_value(
+                    return True, deserialize_value(
                         recorded_output["output"],
                         recorded_output["serialization"],
                         self.serializer,
@@ -2125,50 +2223,69 @@ class SystemDatabase(ABC):
                 )
 
         payload = f"{target_uuid}::{key}"
-        condition = threading.Condition()
-        condition.acquire()
-        success, existing_condition = self.workflow_events_map.set(payload, condition)
+        event = threading.Event()
+        success, existing_event = self.workflow_events_map.set(payload, event)
         if not success:
-            # Wait on the existing condition
-            condition.release()
-            condition = existing_condition
-            condition.acquire()
+            # Key already exists, wait on the existing event
+            event = existing_event
 
-        # Check if the key is already in the database. If not, wait for the notification.
-        init_recv: Sequence[Any]
-        with self.engine.begin() as c:
-            init_recv = c.execute(get_sql).fetchall()
+        try:
+            # Check if the key is already in the database
+            with self.engine.begin() as c:
+                init_recv = c.execute(
+                    sa.select(
+                        SystemSchema.workflow_events.c.value,
+                        SystemSchema.workflow_events.c.serialization,
+                    ).where(
+                        SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
+                        SystemSchema.workflow_events.c.key == key,
+                    )
+                ).fetchall()
 
-        value: Any = None
-        serval: Optional[str] = None
-        serialization: Optional[str] = None
-        if len(init_recv) > 0:
-            serval = init_recv[0][0]
-            serialization = init_recv[0][1]
-            value = deserialize_value(serval, serialization, self.serializer)
-        else:
-            # Wait for the notification
+            if len(init_recv) > 0:
+                event.set()
+
+            # Record the durable sleep timeout
             actual_timeout = timeout_seconds
             if caller_ctx is not None:
-                # Support OAOO sleep for workflows
-                actual_timeout = self.sleep(
+                actual_timeout = self.record_sleep(
                     caller_ctx["workflow_uuid"],
                     caller_ctx["timeout_function_id"],
                     timeout_seconds,
-                    skip_sleep=True,
                 )
-            condition.wait(timeout=actual_timeout)
+        except:
+            self.workflow_events_map.pop(payload)
+            raise
 
-            # Read the value from the database
-            with self.engine.begin() as c:
-                final_recv = c.execute(get_sql).fetchall()
-                if len(final_recv) > 0:
-                    serialization = final_recv[0][1]
-                    value = deserialize_value(
-                        final_recv[0][0], serialization, self.serializer
-                    )
-        condition.release()
-        self.workflow_events_map.pop(payload)
+        return False, event, actual_timeout, payload, start_time
+
+    def get_event_consume(
+        self,
+        target_uuid: str,
+        key: str,
+        start_time: int,
+        caller_ctx: Optional[GetEventWorkflowContext] = None,
+    ) -> Any:
+        """Consume phase of get_event. Reads the value from the database
+        and records the operation result if in a workflow."""
+        function_name = "DBOS.getEvent"
+
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.workflow_events.c.value,
+                    SystemSchema.workflow_events.c.serialization,
+                ).where(
+                    SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
+                    SystemSchema.workflow_events.c.key == key,
+                )
+            ).fetchall()
+
+        value: Any = None
+        serialization: Optional[str] = None
+        if len(rows) > 0:
+            serialization = rows[0][1]
+            value = deserialize_value(rows[0][0], serialization, self.serializer)
 
         # Record the output if it's in a workflow
         if caller_ctx is not None:
@@ -2187,6 +2304,57 @@ class SystemDatabase(ABC):
                 }
             )
         return value
+
+    def get_event(
+        self,
+        target_uuid: str,
+        key: str,
+        timeout_seconds: float = 60,
+        caller_ctx: Optional[GetEventWorkflowContext] = None,
+    ) -> Any:
+        setup = self.get_event_setup(target_uuid, key, timeout_seconds, caller_ctx)
+        if setup[0]:
+            return setup[1]
+        _, event, actual_timeout, payload, start_time = setup
+        try:
+            event.wait(timeout=actual_timeout)
+            return self.get_event_consume(target_uuid, key, start_time, caller_ctx)
+        finally:
+            self.workflow_events_map.pop(payload)
+
+    async def get_event_async(
+        self,
+        target_uuid: str,
+        key: str,
+        timeout_seconds: float = 60,
+        caller_ctx: Optional[GetEventWorkflowContext] = None,
+    ) -> Any:
+        setup = await asyncio.to_thread(
+            self.get_event_setup,
+            target_uuid,
+            key,
+            timeout_seconds,
+            caller_ctx,
+        )
+        if setup[0]:
+            return setup[1]
+        _, event, actual_timeout, payload, start_time = setup
+        try:
+            deadline = time.time() + actual_timeout
+            while not event.is_set():
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(min(remaining, 0.1))
+            return await asyncio.to_thread(
+                self.get_event_consume,
+                target_uuid,
+                key,
+                start_time,
+                caller_ctx,
+            )
+        finally:
+            self.workflow_events_map.pop(payload)
 
     @db_retry()
     def get_queue_partitions(self, queue_name: str) -> List[str]:
@@ -2462,12 +2630,57 @@ class SystemDatabase(ABC):
             )
         return result
 
-    async def call_function_as_step_from_async(
-        self, fn: Callable[[], T], function_name: str, ctx: Optional[DBOSContext]
+    async def call_coroutine_as_step(
+        self,
+        fn: Callable[[], Awaitable[T]],
+        function_name: str,
+        ctx: Optional[DBOSContext],
     ) -> T:
-        return await asyncio.to_thread(
-            self.call_function_as_step, fn, function_name, ctx
-        )
+        start_time = int(time.time() * 1000)
+        if ctx and ctx.is_transaction():
+            raise Exception(f"Invalid call to `{function_name}` inside a transaction")
+        if ctx and ctx.is_workflow():
+            res = await asyncio.to_thread(
+                self.check_operation_execution,
+                ctx.workflow_id,
+                ctx.function_id,
+                function_name,
+            )
+            if res is not None:
+                if res["output"] is not None:
+                    return cast(
+                        SystemDatabase.T,
+                        deserialize_value(
+                            res["output"],
+                            res["serialization"],
+                            self.serializer,
+                        ),
+                    )
+                elif res["error"] is not None:
+                    e: Exception = deserialize_exception(
+                        res["error"], res["serialization"], self.serializer
+                    )
+                    raise e
+                else:
+                    raise Exception(
+                        f"Recorded output and error are both None for {function_name}"
+                    )
+        result = await fn()
+        if ctx and ctx.is_workflow():
+            serval, serialization = serialize_value(result, None, self.serializer)
+            await asyncio.to_thread(
+                self.record_operation_result,
+                {
+                    "workflow_uuid": ctx.workflow_id,
+                    "function_id": ctx.function_id,
+                    "function_name": function_name,
+                    "started_at_epoch_ms": start_time,
+                    "output": serval,
+                    "serialization": serialization,
+                    "error": None,
+                },
+            )
+        return result
 
     @db_retry()
     def init_workflow(
