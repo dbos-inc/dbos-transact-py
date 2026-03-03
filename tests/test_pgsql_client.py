@@ -44,7 +44,7 @@ def _get_db_connection(config: DBOSConfig) -> sa.Engine:
 
 def _get_schema_name(config: DBOSConfig) -> str:
     """Get schema name from DBOS config."""
-    return config.get("dbos_system_schema", "dbos")
+    return str(config.get("dbos_system_schema", "dbos"))
 
 
 def _execute_sql(engine: sa.Engine, sql: str, params: Optional[Dict[str, Any]] = None) -> Any:
@@ -137,7 +137,7 @@ def test_pgsql_enqueue_and_get_result(dbos: DBOS, config: DBOSConfig, skip_with_
     assert returned_wfid == wfid
 
     # Wait for workflow completion and verify result
-    handle = DBOS.retrieve_workflow(wfid)
+    handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     result = handle.get_result()
     assert result == '42-test-{"first": "John", "last": "Doe", "age": 30}'
 
@@ -477,7 +477,7 @@ def test_pgsql_enqueue_with_deduplication(dbos: DBOS, config: DBOSConfig, skip_w
 
     # Third enqueue with same dedup_id but different workflow ID should fail
     wfid2 = str(uuid.uuid4())
-    with pytest.raises((IntegrityError, sa.exc.IntegrityError)):
+    with pytest.raises(IntegrityError):
         _execute_sql(engine, sql, {
             "arg1": json.dumps("def"),
             "wfid": wfid2,
@@ -485,7 +485,7 @@ def test_pgsql_enqueue_with_deduplication(dbos: DBOS, config: DBOSConfig, skip_w
         })
 
     # Verify workflow completes with first argument
-    handle = DBOS.retrieve_workflow(wfid)
+    handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     assert handle.get_result() == "abc"
 
 
@@ -521,5 +521,5 @@ def test_pgsql_enqueue_with_priority(dbos: DBOS, config: DBOSConfig, skip_with_s
     assert status["priority"] == priority
 
     # Verify workflow completes
-    handle = DBOS.retrieve_workflow(wfid)
+    handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     assert handle.get_result() == "priority-test"
