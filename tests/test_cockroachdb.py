@@ -1,7 +1,8 @@
 import os
+from urllib.parse import urlparse, urlunparse
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 from dbos import DBOS, DBOSConfig, Queue
 
@@ -10,6 +11,17 @@ def test_cockroachdb() -> None:
     database_url = os.environ.get("DBOS_COCKROACHDB_URL")
     if database_url is None:
         pytest.skip("No CockroachDB database URL provided")
+
+    # Drop and recreate the dbos_test database using the provided URL
+    default_engine = create_engine(database_url, isolation_level="AUTOCOMMIT")
+    with default_engine.connect() as conn:
+        conn.execute(text("DROP DATABASE IF EXISTS dbos_test CASCADE"))
+        conn.execute(text("CREATE DATABASE dbos_test"))
+    default_engine.dispose()
+
+    # Use the dbos_test database for the test
+    parsed = urlparse(database_url)
+    test_url = urlunparse(parsed._replace(path="/dbos_test"))
 
     key = "key"
     value = "value"
@@ -23,10 +35,10 @@ def test_cockroachdb() -> None:
     queue = Queue("queue")
 
     try:
-        engine = create_engine(database_url)
+        engine = create_engine(test_url)
         config: DBOSConfig = {
             "name": "cockroachdb-test",
-            "system_database_url": database_url,
+            "system_database_url": test_url,
             "use_listen_notify": False,
             "system_database_engine": engine,
         }
