@@ -61,7 +61,23 @@ def run_dbos_migrations(
 
             # Execute the migration
             dbos_logger.info(f"Applying DBOS system database schema migration {i}")
-            conn.execute(sa.text(migration_sql))
+
+            # Migration 10 adds a primary key to the notifications table.
+            # Skip it if the table already has one.
+            if (
+                i == 10
+                and conn.execute(
+                    sa.text(
+                        f"SELECT 1 FROM information_schema.table_constraints "
+                        f"WHERE table_schema = '{schema}' "
+                        f"AND table_name = 'notifications' "
+                        f"AND constraint_type = 'PRIMARY KEY'"
+                    )
+                ).scalar()
+            ):
+                dbos_logger.info("Migration 10 skipped, primary key already exists")
+            else:
+                conn.execute(sa.text(migration_sql))
 
             # Update the single row with the new version
             if last_applied == 0:
@@ -278,17 +294,7 @@ CREATE TABLE "{schema}".workflow_schedules (
 # for existing applications.
 def get_dbos_migration_ten(schema: str) -> str:
     return f"""
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.table_constraints
-        WHERE table_schema = '{schema}'
-        AND table_name = 'notifications'
-        AND constraint_type = 'PRIMARY KEY'
-    ) THEN
-        ALTER TABLE "{schema}".notifications ADD PRIMARY KEY (message_uuid);
-    END IF;
-END $$;
+ALTER TABLE "{schema}".notifications ADD PRIMARY KEY (message_uuid);
 """
 
 

@@ -40,6 +40,18 @@ jobs:
         ports:
           # Maps tcp port 5432 on service container to the host
           - 5432:5432
+      # CockroachDB service container
+      cockroachdb:
+        image: cockroachdb/cockroach:latest
+        ports:
+          - 26257:26257
+        env:
+          COCKROACH_ARGS: start-single-node --insecure
+        options: >-
+          --health-cmd "curl -f http://localhost:8080/health?ready=1 || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
       # Kafka service container
       kafka:
         image: apache/kafka:latest
@@ -92,3 +104,4 @@ jobs:
         PGPASSWORD: a!b@c$d()e*_,/:;=?@ff[]22
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         DBOS_DATABASE: ${{ matrix.dbos-database }}
+        DBOS_COCKROACHDB_URL: cockroachdb://root@localhost:26257/postgres
