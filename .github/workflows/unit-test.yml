@@ -97,7 +97,7 @@ jobs:
       working-directory: ./
 
     - name: Run Unit Tests
-      run: pdm run pytest tests
+      run: pdm run pytest tests tests/test_cockroachdb.py
       working-directory: ./
       timeout-minutes: 30
       env:
