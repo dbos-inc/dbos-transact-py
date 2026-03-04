@@ -53,6 +53,7 @@ from ._error import (
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
     DBOSWorkflowFunctionNotFoundError,
+    MaxRecoveryAttemptsExceededError,
 )
 from ._logger import dbos_logger
 from ._registrations import (
@@ -123,7 +124,13 @@ class WorkflowHandleFuture(Generic[R]):
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
         try:
-            r = self.future.result()
+            try:
+                r = self.future.result()
+            # A cancelled workflow may be resumed later, and the handle should reflect this
+            except (DBOSWorkflowCancelledError, DBOSAwaitedWorkflowCancelledError):
+                r = self.dbos._sys_db.await_workflow_result(
+                    self.workflow_id, polling_interval_sec
+                )
         except Exception as e:
             serialized_e, serialization = serialize_exception(
                 e, None, self.dbos._serializer
@@ -196,7 +203,13 @@ class WorkflowHandleAsyncTask(Generic[R]):
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
         try:
-            r = await self.task
+            try:
+                r = await self.task
+            # A cancelled workflow may be resumed later, and the handle should reflect this
+            except (DBOSWorkflowCancelledError, DBOSAwaitedWorkflowCancelledError):
+                r = await self.dbos._sys_db.await_workflow_result_async(
+                    self.workflow_id, polling_interval_sec
+                )
         except Exception as e:
             serialized_e, serialization = serialize_exception(
                 e, None, self.dbos._serializer
