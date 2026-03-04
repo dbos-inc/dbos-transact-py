@@ -2259,6 +2259,7 @@ class SystemDatabase(ABC):
 
         return False, event, actual_timeout, payload, start_time
 
+    @db_retry()
     def get_event_consume(
         self,
         target_uuid: str,
