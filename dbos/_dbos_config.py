@@ -470,10 +470,11 @@ def configure_db_engine_parameters(
         )
 
     # If NullPool is specified, remove pool parameters
-    del default_engine_kwargs["pool_timeout"]
-    del default_engine_kwargs["max_overflow"]
-    del default_engine_kwargs["pool_size"]
-    del default_engine_kwargs["pool_pre_ping"]
+    if custom_engine_kwargs and custom_engine_kwargs.get("poolclass") == sa.NullPool:
+        del default_engine_kwargs["pool_timeout"]
+        del default_engine_kwargs["max_overflow"]
+        del default_engine_kwargs["pool_size"]
+        del default_engine_kwargs["pool_pre_ping"]
 
     # Configure system database engine parameters. User-provided sys_db_pool_size takes precedence
     system_engine_kwargs = default_engine_kwargs.copy()

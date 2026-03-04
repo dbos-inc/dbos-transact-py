@@ -1,16 +1,15 @@
 # type: ignore
 
 import os
-from unittest.mock import mock_open, patch
+from unittest.mock import mock_open
 from urllib.parse import quote
 
 import pytest
-import pytest_mock
-from sqlalchemy import event
+from sqlalchemy import NullPool, event
 from sqlalchemy.exc import OperationalError
 
 # Public API
-from dbos import DBOS, DBOSClient
+from dbos import DBOS
 from dbos._dbos_config import (
     ConfigFile,
     DBOSConfig,
@@ -21,7 +20,6 @@ from dbos._dbos_config import (
     translate_dbos_config_to_config_file,
 )
 from dbos._error import DBOSInitializationError
-from dbos._schemas.system_database import SystemSchema
 
 mock_filename = "dbos-config.yaml"
 original_open = __builtins__["open"]
@@ -1293,4 +1291,12 @@ def test_log_config(dbos: DBOS):
     assert any(
         h.level == 40 for h in dbos.logger.handlers
     )  # at least one handler at ERROR
+    DBOS.destroy(destroy_registry=True)
+
+
+def test_null_pool(dbos: DBOS, config: DBOSConfig):
+    DBOS.destroy(destroy_registry=True)
+    config["db_engine_kwargs"] = {"poolclass": NullPool}
+    dbos = DBOS(config=config)
+    DBOS.launch()
     DBOS.destroy(destroy_registry=True)
