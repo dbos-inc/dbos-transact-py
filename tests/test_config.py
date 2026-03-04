@@ -1299,4 +1299,5 @@ def test_null_pool(dbos: DBOS, config: DBOSConfig):
     config["db_engine_kwargs"] = {"poolclass": NullPool}
     dbos = DBOS(config=config)
     DBOS.launch()
+    assert isinstance(dbos._sys_db.engine.pool, NullPool)
     DBOS.destroy(destroy_registry=True)
