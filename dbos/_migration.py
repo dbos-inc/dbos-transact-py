@@ -403,25 +403,28 @@ BEGIN
 
     -- Validate workflow metadata matches
     IF v_existing_name IS DISTINCT FROM workflow_name THEN
-        RAISE EXCEPTION 'DBOS_CONFLICTING_WORKFLOW: Workflow already exists with a different function name: %s, but the provided function name is: %s', v_existing_name, workflow_name;
+        RAISE EXCEPTION 'Conflicting DBOS workflow name'
+            USING DETAIL = format('Workflow %s exists with name %s, but the provided workflow name is: %s', v_workflow_id, v_existing_name, workflow_name),
+                ERRCODE = 'invalid_parameter_value';
     END IF;
     IF v_existing_class_name IS DISTINCT FROM class_name THEN
-        RAISE EXCEPTION 'DBOS_CONFLICTING_WORKFLOW: Workflow already exists with a different class name: %s, but the provided class name is: %s', v_existing_class_name, class_name;
+        RAISE EXCEPTION 'Conflicting DBOS workflow class_name'
+            USING DETAIL = format('Workflow %s exists with class_name %s, but the provided class_name is: %s', v_workflow_id, v_existing_class_name, class_name),
+                ERRCODE = 'invalid_parameter_value';
     END IF;
     IF v_existing_config_name IS DISTINCT FROM config_name THEN
-        RAISE EXCEPTION 'DBOS_CONFLICTING_WORKFLOW: Workflow already exists with a different class configuration: %s, but the provided class configuration is: %s', v_existing_config_name, config_name;
+        RAISE EXCEPTION 'Conflicting DBOS workflow config_name'
+            USING DETAIL = format('Workflow %s exists with config_name %s, but the provided config_name is: %s', v_workflow_id, v_existing_config_name, config_name),
+                ERRCODE = 'invalid_parameter_value';
     END IF;
 
     RETURN v_workflow_id;
 
 EXCEPTION
     WHEN unique_violation THEN
-        IF SQLERRM LIKE 'deduplication_id' THEN
-            RAISE EXCEPTION 'DBOS_QUEUE_DUPLICATED: Workflow %s with queue %s and deduplication ID %s already exists', v_workflow_id, COALESCE(queue_name, ''), COALESCE(deduplication_id, '');
-        END IF;
-        RAISE;
-    WHEN OTHERS THEN
-        RAISE;
+        RAISE EXCEPTION 'DBOS queue duplicated'
+            USING DETAIL = format('Workflow %s with queue %s and deduplication ID %s already exists', v_workflow_id, queue_name, deduplication_id),
+                ERRCODE = 'unique_violation';
 END;
 $$ LANGUAGE plpgsql;
 
@@ -443,12 +446,12 @@ BEGIN
     ON CONFLICT (message_uuid) DO NOTHING;
 EXCEPTION
     WHEN foreign_key_violation THEN
-        RAISE EXCEPTION 'DBOSNonExistentWorkflowException: Destination workflow %s does not exist', destination_id;
+        RAISE EXCEPTION 'DBOS non-existent workflow'
+            USING DETAIL = format('Destination workflow %s does not exist', destination_id),
+                ERRCODE = 'foreign_key_violation';
 END;
 $$ LANGUAGE plpgsql;
 """
-
-
 
 def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
     return [
