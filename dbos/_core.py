@@ -123,7 +123,7 @@ class WorkflowHandleFuture(Generic[R]):
         try:
             try:
                 r = self.future.result()
-            # A cancelled workflow may be resumed later, and the handle should reflect this
+            # If the handle was cancelled, check the database
             except (DBOSWorkflowCancelledError, DBOSAwaitedWorkflowCancelledError):
                 r = self.dbos._sys_db.await_workflow_result(
                     self.workflow_id, polling_interval_sec
@@ -202,7 +202,7 @@ class WorkflowHandleAsyncTask(Generic[R]):
         try:
             try:
                 r = await self.task
-            # A cancelled workflow may be resumed later, and the handle should reflect this
+            # If the handle was cancelled, check the database
             except (DBOSWorkflowCancelledError, DBOSAwaitedWorkflowCancelledError):
                 r = await self.dbos._sys_db.await_workflow_result_async(
                     self.workflow_id, polling_interval_sec
