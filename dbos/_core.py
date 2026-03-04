@@ -31,7 +31,6 @@ from ._app_db import ApplicationDatabase, TransactionResultInternal
 from ._context import (
     DBOSAssumeRole,
     DBOSContext,
-    DBOSContextEnsure,
     DBOSContextSetAuth,
     EnterDBOSStepCtx,
     EnterDBOSTransaction,
@@ -53,9 +52,7 @@ from ._error import (
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
     DBOSWorkflowFunctionNotFoundError,
-    MaxRecoveryAttemptsExceededError,
 )
-from ._logger import dbos_logger
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSFuncType,
