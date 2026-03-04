@@ -67,7 +67,6 @@ class PostgresSystemDatabase(SystemDatabase):
                 locked = True
             except Exception:
                 conn.close()
-                pass
             ensure_dbos_schema(self.engine, self.schema)
             run_dbos_migrations(self.engine, self.schema, self.use_listen_notify)
         finally:
