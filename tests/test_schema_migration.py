@@ -1,6 +1,7 @@
 import os
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pytest
 import sqlalchemy as sa
@@ -400,3 +401,61 @@ def test_programmatic_migration(db_engine: sa.Engine, skip_with_sqlite: None) ->
     assert workflow_id
     assert DBOS.get_event(workflow_id, workflow_id) == workflow_id
     DBOS.destroy()
+
+
+def test_concurrent_migrations(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
+    """Test that 10 system databases can be created and migrated concurrently on the same database."""
+    num_instances = 10
+    db_name = "concurrent_migration_test"
+
+    # Clean up any leftover database from previous runs
+    with db_engine.connect() as conn:
+        conn.execution_options(isolation_level="AUTOCOMMIT")
+        conn.execute(sa.text(f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE)"))
+
+    sys_url = db_engine.url.set(
+        drivername="postgresql+psycopg", database=db_name
+    ).render_as_string(hide_password=False)
+
+    def create_and_migrate(index: int) -> None:
+        sys_db = SystemDatabase.create(
+            system_database_url=sys_url,
+            engine_kwargs={},
+            engine=None,
+            schema="dbos",
+            serializer=DefaultSerializer(),
+            executor_id=None,
+        )
+        try:
+            sys_db.run_migrations()
+            # Verify migration succeeded
+            with sys_db.engine.connect() as conn:
+                rows = conn.execute(
+                    sa.text("SELECT version FROM dbos.dbos_migrations")
+                ).fetchall()
+                assert len(rows) == 1
+                assert rows[0][0] == len(get_dbos_migrations("dbos", True))
+        finally:
+            sys_db.destroy()
+
+    # Run all migrations concurrently on the same database
+    errors = []
+    with ThreadPoolExecutor(max_workers=num_instances) as executor:
+        futures = {
+            executor.submit(create_and_migrate, i): i for i in range(num_instances)
+        }
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                future.result()
+            except Exception as e:
+                errors.append((index, e))
+
+    # Assert no errors
+    if errors:
+        error_details = "\n".join(
+            f"  Instance {idx}: {type(e).__name__}: {e}" for idx, e in errors
+        )
+        pytest.fail(
+            f"{len(errors)}/{num_instances} concurrent migrations failed:\n{error_details}"
+        )
