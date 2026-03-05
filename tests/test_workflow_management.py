@@ -149,6 +149,86 @@ def test_delete_workflow(dbos: DBOS) -> None:
     DBOS.delete_workflow(parent_wfid2, delete_children=False)
 
 
+def test_bulk_cancel(dbos: DBOS) -> None:
+    steps_completed = 0
+    workflow_events: dict[str, threading.Event] = {}
+    main_events: dict[str, threading.Event] = {}
+
+    @DBOS.step()
+    def step_one() -> None:
+        nonlocal steps_completed
+        steps_completed += 1
+
+    @DBOS.step()
+    def step_two() -> None:
+        nonlocal steps_completed
+        steps_completed += 1
+
+    @DBOS.workflow()
+    def blocking_workflow() -> str:
+        wfid = DBOS.workflow_id
+        step_one()
+        main_events[wfid].set()
+        workflow_events[wfid].wait()
+        step_two()
+        return wfid
+
+    # Start three workflows, wait for each to reach its blocking point
+    wfids: list[str] = []
+    handles = []
+    for _ in range(3):
+        wfid = str(uuid.uuid4())
+        wfids.append(wfid)
+        workflow_events[wfid] = threading.Event()
+        main_events[wfid] = threading.Event()
+        with SetWorkflowID(wfid):
+            handles.append(DBOS.start_workflow(blocking_workflow))
+        main_events[wfid].wait()
+
+    assert steps_completed == 3
+
+    # Bulk cancel all three workflows at once
+    DBOS.cancel_workflow(wfids)
+
+    # Release all workflows so they can observe cancellation
+    for evt in workflow_events.values():
+        evt.set()
+
+    for handle in handles:
+        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+            handle.get_result()
+
+    # step_two should not have run for any workflow
+    assert steps_completed == 3
+
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_bulk_delete(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def simple_workflow(x: int) -> int:
+        return x
+
+    # Run three workflows
+    wfids: list[str] = []
+    for i in range(3):
+        wfid = str(uuid.uuid4())
+        wfids.append(wfid)
+        with SetWorkflowID(wfid):
+            assert simple_workflow(i) == i
+
+    # Verify all exist
+    for wfid in wfids:
+        assert DBOS.get_workflow_status(wfid) is not None
+
+    # Bulk delete all three
+    DBOS.delete_workflow(wfids)
+
+    # Verify all are gone
+    for wfid in wfids:
+        assert DBOS.get_workflow_status(wfid) is None
+
+
 def test_cancel_resume_txn(dbos: DBOS) -> None:
     txn_completed = 0
     workflow_event = threading.Event()
