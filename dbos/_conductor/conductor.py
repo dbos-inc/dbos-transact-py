@@ -7,7 +7,7 @@ import time
 import traceback
 from datetime import datetime
 from importlib.metadata import version
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from websockets import ConnectionClosed, ConnectionClosedOK, InvalidStatus
 from websockets.sync.client import connect
@@ -366,6 +366,81 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(get_workflow_response.to_json())
+                        elif msg_type == p.MessageType.GET_WORKFLOW_EVENTS:
+                            events_message = p.GetWorkflowEventsRequest.from_json(
+                                message
+                            )
+                            event_outputs: Optional[List[p.EventOutput]] = None
+                            error_message = None
+                            try:
+                                raw_events = self.dbos._sys_db.get_all_events(
+                                    events_message.workflow_id
+                                )
+                                event_outputs = [
+                                    p.EventOutput.from_event_data(k, v)
+                                    for k, v in raw_events.items()
+                                ]
+                            except Exception as e:
+                                error_message = f"Exception encountered when getting events for workflow {events_message.workflow_id}: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                            websocket.send(
+                                p.GetWorkflowEventsResponse(
+                                    type=p.MessageType.GET_WORKFLOW_EVENTS,
+                                    request_id=base_message.request_id,
+                                    events=event_outputs,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
+                        elif msg_type == p.MessageType.GET_WORKFLOW_NOTIFICATIONS:
+                            notif_message = p.GetWorkflowNotificationsRequest.from_json(
+                                message
+                            )
+                            notif_outputs: Optional[List[p.NotificationOutput]] = None
+                            error_message = None
+                            try:
+                                raw_notifs = self.dbos._sys_db.get_all_notifications(
+                                    notif_message.workflow_id
+                                )
+                                notif_outputs = [
+                                    p.NotificationOutput.from_notification_info(n)
+                                    for n in raw_notifs
+                                ]
+                            except Exception as e:
+                                error_message = f"Exception encountered when getting notifications for workflow {notif_message.workflow_id}: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                            websocket.send(
+                                p.GetWorkflowNotificationsResponse(
+                                    type=p.MessageType.GET_WORKFLOW_NOTIFICATIONS,
+                                    request_id=base_message.request_id,
+                                    notifications=notif_outputs,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
+                        elif msg_type == p.MessageType.GET_WORKFLOW_STREAMS:
+                            streams_message = p.GetWorkflowStreamsRequest.from_json(
+                                message
+                            )
+                            stream_outputs: Optional[List[p.StreamEntryOutput]] = None
+                            error_message = None
+                            try:
+                                raw_streams = self.dbos._sys_db.get_all_stream_entries(
+                                    streams_message.workflow_id
+                                )
+                                stream_outputs = [
+                                    p.StreamEntryOutput.from_stream_data(k, v)
+                                    for k, v in raw_streams.items()
+                                ]
+                            except Exception as e:
+                                error_message = f"Exception encountered when getting streams for workflow {streams_message.workflow_id}: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                            websocket.send(
+                                p.GetWorkflowStreamsResponse(
+                                    type=p.MessageType.GET_WORKFLOW_STREAMS,
+                                    request_id=base_message.request_id,
+                                    streams=stream_outputs,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
                         elif msg_type == p.MessageType.EXIST_PENDING_WORKFLOWS:
                             exist_pending_workflows_message = (
                                 p.ExistPendingWorkflowsRequest.from_json(message)

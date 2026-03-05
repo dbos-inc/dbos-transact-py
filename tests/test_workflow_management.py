@@ -1020,3 +1020,98 @@ def test_fork_streams(dbos: DBOS) -> None:
     for handle in [fork_one, fork_two, fork_three, fork_four, fork_five]:
         assert handle.get_result()
         assert list(DBOS.read_stream(handle.workflow_id, key)) == [0, 1, 2]
+
+
+def test_get_all_events(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def event_workflow() -> str:
+        DBOS.set_event("key1", "value1")
+        DBOS.set_event("key2", 42)
+        DBOS.set_event("key1", "updated")
+        return DBOS.workflow_id  # type: ignore
+
+    handle = DBOS.start_workflow(event_workflow)
+    wfid = handle.get_result()
+
+    events = dbos._sys_db.get_all_events(wfid)
+    assert events == {"key1": "updated", "key2": 42}
+
+    # Empty workflow has no events
+    empty_events = dbos._sys_db.get_all_events("nonexistent")
+    assert empty_events == {}
+
+
+def test_get_all_notifications(dbos: DBOS) -> None:
+    recv_event = threading.Event()
+
+    @DBOS.workflow()
+    def receiver_workflow() -> str:
+        DBOS.recv(topic="topic_a")
+        DBOS.recv(topic="topic_b")
+        recv_event.set()
+        return DBOS.workflow_id  # type: ignore
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(receiver_workflow)
+
+    # Send messages to the receiver workflow
+    DBOS.send(wfid, "hello", topic="topic_a")
+    DBOS.send(wfid, {"data": 123}, topic="topic_b")
+    recv_event.wait()
+    handle.get_result()
+
+    notifications = dbos._sys_db.get_all_notifications(wfid)
+    assert len(notifications) == 2
+    assert notifications[0]["topic"] == "topic_a"
+    assert notifications[0]["message"] == "hello"
+    assert notifications[0]["consumed"] is True
+    assert notifications[1]["topic"] == "topic_b"
+    assert notifications[1]["message"] == {"data": 123}
+    assert notifications[1]["consumed"] is True
+
+    # Nonexistent workflow has no notifications
+    assert dbos._sys_db.get_all_notifications("nonexistent") == []
+
+
+def test_get_all_notifications_null_topic(dbos: DBOS) -> None:
+    recv_event = threading.Event()
+
+    @DBOS.workflow()
+    def receiver_workflow() -> str:
+        DBOS.recv()
+        recv_event.set()
+        return DBOS.workflow_id  # type: ignore
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(receiver_workflow)
+
+    DBOS.send(wfid, "no_topic_msg")
+    recv_event.wait()
+    handle.get_result()
+
+    notifications = dbos._sys_db.get_all_notifications(wfid)
+    assert len(notifications) == 1
+    assert notifications[0]["topic"] is None
+    assert notifications[0]["message"] == "no_topic_msg"
+
+
+def test_get_all_stream_entries(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def stream_workflow() -> str:
+        DBOS.write_stream("stream_a", 10)
+        DBOS.write_stream("stream_a", 20)
+        DBOS.write_stream("stream_b", "hello")
+        DBOS.close_stream("stream_a")
+        DBOS.close_stream("stream_b")
+        return DBOS.workflow_id  # type: ignore
+
+    handle = DBOS.start_workflow(stream_workflow)
+    wfid = handle.get_result()
+
+    streams = dbos._sys_db.get_all_stream_entries(wfid)
+    assert streams == {"stream_a": [10, 20], "stream_b": ["hello"]}
+
+    # Nonexistent workflow has no streams
+    assert dbos._sys_db.get_all_stream_entries("nonexistent") == {}
