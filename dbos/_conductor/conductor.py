@@ -146,14 +146,14 @@ class ConductorWebsocket(threading.Thread):
                             websocket.send(recovery_response.to_json())
                         elif msg_type == p.MessageType.CANCEL:
                             cancel_message = p.CancelRequest.from_json(message)
-                            workflow_ids = cancel_message.workflow_ids or [
+                            cancel_ids = cancel_message.workflow_ids or [
                                 cancel_message.workflow_id
                             ]
                             success = True
                             try:
-                                self.dbos.cancel_workflows(workflow_ids)
+                                self.dbos.cancel_workflows(cancel_ids)
                             except Exception as e:
-                                error_message = f"Exception encountered when cancelling workflow(s) {workflow_ids}: {traceback.format_exc()}"
+                                error_message = f"Exception encountered when cancelling workflow(s) {cancel_ids}: {traceback.format_exc()}"
                                 self.dbos.logger.error(error_message)
                                 success = False
                             cancel_response = p.CancelResponse(
@@ -165,18 +165,18 @@ class ConductorWebsocket(threading.Thread):
                             websocket.send(cancel_response.to_json())
                         elif msg_type == p.MessageType.DELETE:
                             delete_message = p.DeleteRequest.from_json(message)
-                            workflow_ids = delete_message.workflow_ids or [
+                            delete_ids = delete_message.workflow_ids or [
                                 delete_message.workflow_id
                             ]
                             success = True
                             try:
                                 delete_workflow(
                                     self.dbos,
-                                    workflow_ids,
+                                    delete_ids,
                                     delete_children=delete_message.delete_children,
                                 )
                             except Exception as e:
-                                error_message = f"Exception encountered when deleting workflow(s) {workflow_ids}: {traceback.format_exc()}"
+                                error_message = f"Exception encountered when deleting workflow(s) {delete_ids}: {traceback.format_exc()}"
                                 self.dbos.logger.error(error_message)
                                 success = False
                             delete_response = p.DeleteResponse(
@@ -188,14 +188,14 @@ class ConductorWebsocket(threading.Thread):
                             websocket.send(delete_response.to_json())
                         elif msg_type == p.MessageType.RESUME:
                             resume_message = p.ResumeRequest.from_json(message)
-                            workflow_ids = resume_message.workflow_ids or [
+                            resume_ids = resume_message.workflow_ids or [
                                 resume_message.workflow_id
                             ]
                             success = True
                             try:
-                                self.dbos.resume_workflows(workflow_ids)
+                                self.dbos.resume_workflows(resume_ids)
                             except Exception as e:
-                                error_message = f"Exception encountered when resuming workflow(s) {workflow_ids}: {traceback.format_exc()}"
+                                error_message = f"Exception encountered when resuming workflow(s) {resume_ids}: {traceback.format_exc()}"
                                 self.dbos.logger.error(error_message)
                                 success = False
                             resume_response = p.ResumeResponse(

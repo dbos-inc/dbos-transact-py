@@ -167,6 +167,7 @@ def test_bulk_cancel(dbos: DBOS) -> None:
     @DBOS.workflow()
     def blocking_workflow() -> str:
         wfid = DBOS.workflow_id
+        assert wfid is not None
         step_one()
         main_events[wfid].set()
         workflow_events[wfid].wait()
@@ -222,6 +223,7 @@ def test_bulk_resume(dbos: DBOS) -> None:
     @DBOS.workflow()
     def blocking_workflow(x: int) -> int:
         wfid = DBOS.workflow_id
+        assert wfid is not None
         step_one()
         main_events[wfid].set()
         workflow_events[wfid].wait()
