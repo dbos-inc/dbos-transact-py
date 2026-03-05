@@ -188,7 +188,7 @@ def test_bulk_cancel(dbos: DBOS) -> None:
     assert steps_completed == 3
 
     # Bulk cancel all three workflows at once
-    DBOS.cancel_workflow(wfids)
+    DBOS.cancel_workflows(wfids)
 
     # Release all workflows so they can observe cancellation
     for evt in workflow_events.values():
@@ -242,7 +242,7 @@ def test_bulk_resume(dbos: DBOS) -> None:
 
     assert steps_completed == 3
 
-    DBOS.cancel_workflow(wfids)
+    DBOS.cancel_workflows(wfids)
     for evt in workflow_events.values():
         evt.set()
     for handle in handles:
@@ -278,7 +278,7 @@ def test_bulk_delete(dbos: DBOS) -> None:
         assert DBOS.get_workflow_status(wfid) is not None
 
     # Bulk delete all three
-    DBOS.delete_workflow(wfids)
+    DBOS.delete_workflows(wfids)
 
     # Verify all are gone
     for wfid in wfids:

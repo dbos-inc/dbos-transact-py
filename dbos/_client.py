@@ -363,12 +363,17 @@ class DBOSClient:
             self.get_event, workflow_id, key, timeout_seconds
         )
 
-    def cancel_workflow(self, workflow_id: Union[str, List[str]]) -> None:
-        workflow_ids = [workflow_id] if isinstance(workflow_id, str) else workflow_id
+    def cancel_workflow(self, workflow_id: str) -> None:
+        self._sys_db.cancel_workflows([workflow_id])
+
+    async def cancel_workflow_async(self, workflow_id: str) -> None:
+        await asyncio.to_thread(self.cancel_workflow, workflow_id)
+
+    def cancel_workflows(self, workflow_ids: List[str]) -> None:
         self._sys_db.cancel_workflows(workflow_ids)
 
-    async def cancel_workflow_async(self, workflow_id: Union[str, List[str]]) -> None:
-        await asyncio.to_thread(self.cancel_workflow, workflow_id)
+    async def cancel_workflows_async(self, workflow_ids: List[str]) -> None:
+        await asyncio.to_thread(self._sys_db.cancel_workflows, workflow_ids)
 
     def resume_workflow(self, workflow_id: str) -> "WorkflowHandle[Any]":
         self._sys_db.resume_workflows([workflow_id])
