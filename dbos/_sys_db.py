@@ -687,16 +687,16 @@ class SystemDatabase(ABC):
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
             )
 
-    def cancel_workflow(
+    def cancel_workflows(
         self,
-        workflow_id: str,
+        workflow_ids: list[str],
     ) -> None:
         with self.engine.begin() as c:
-            # Set the workflow's status to CANCELLED and remove it from any queue it is on,
+            # Set the workflows' status to CANCELLED and remove them from any queue,
             # but only if the workflow is not already complete.
             c.execute(
                 sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .where(SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids))
                 .where(
                     SystemSchema.workflow_status.c.status.notin_(
                         [
@@ -714,13 +714,13 @@ class SystemDatabase(ABC):
                 )
             )
 
-    def resume_workflow(self, workflow_id: str) -> None:
+    def resume_workflows(self, workflow_ids: list[str]) -> None:
         with self.engine.begin() as c:
-            # Set the workflow's status to ENQUEUED and clear its recovery attempts and deadline,
+            # Set the workflows' status to ENQUEUED and clear recovery attempts and deadline,
             # but only if the workflow is not already complete.
             c.execute(
                 sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .where(SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids))
                 .where(
                     SystemSchema.workflow_status.c.status.notin_(
                         [

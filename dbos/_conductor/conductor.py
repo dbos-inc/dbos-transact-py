@@ -166,7 +166,7 @@ class ConductorWebsocket(threading.Thread):
                             try:
                                 delete_workflow(
                                     self.dbos,
-                                    delete_message.workflow_id,
+                                    [delete_message.workflow_id],
                                     delete_children=delete_message.delete_children,
                                 )
                             except Exception as e:

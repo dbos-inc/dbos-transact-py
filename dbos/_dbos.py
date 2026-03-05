@@ -1466,27 +1466,29 @@ class DBOS:
         return recover_pending_workflows(_get_dbos_instance(), executor_ids)
 
     @classmethod
-    def cancel_workflow(cls, workflow_id: str) -> None:
-        """Cancel a workflow by ID."""
+    def cancel_workflow(cls, workflow_id: Union[str, List[str]]) -> None:
+        """Cancel one or more workflows by ID."""
         check_async("cancel_workflow")
+        workflow_ids = [workflow_id] if isinstance(workflow_id, str) else workflow_id
 
         def fn() -> None:
-            dbos_logger.info(f"Cancelling workflow: {workflow_id}")
-            _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
+            dbos_logger.info(f"Cancelling workflow(s): {workflow_ids}")
+            _get_dbos_instance()._sys_db.cancel_workflows(workflow_ids)
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
             fn, "DBOS.cancelWorkflow", snapshot_step_context(reserve_sleep_id=False)
         )
 
     @classmethod
-    async def cancel_workflow_async(cls, workflow_id: str) -> None:
-        """Cancel a workflow by ID."""
+    async def cancel_workflow_async(cls, workflow_id: Union[str, List[str]]) -> None:
+        """Cancel one or more workflows by ID."""
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
+        workflow_ids = [workflow_id] if isinstance(workflow_id, str) else workflow_id
 
         def fn() -> None:
-            dbos_logger.info(f"Cancelling workflow: {workflow_id}")
-            _get_dbos_instance()._sys_db.cancel_workflow(workflow_id)
+            dbos_logger.info(f"Cancelling workflow(s): {workflow_ids}")
+            _get_dbos_instance()._sys_db.cancel_workflows(workflow_ids)
 
         return await asyncio.to_thread(
             _get_dbos_instance()._sys_db.call_function_as_step,
@@ -1497,18 +1499,19 @@ class DBOS:
 
     @classmethod
     def delete_workflow(
-        cls, workflow_id: str, *, delete_children: bool = False
+        cls, workflow_id: Union[str, List[str]], *, delete_children: bool = False
     ) -> None:
-        """Delete a workflow and all its associated data by ID.
+        """Delete one or more workflows and all associated data by ID.
 
         If delete_children is True, also deletes all child workflows recursively.
         """
         check_async("delete_workflow")
+        workflow_ids = [workflow_id] if isinstance(workflow_id, str) else workflow_id
 
         def fn() -> None:
-            dbos_logger.info(f"Deleting workflow: {workflow_id}")
+            dbos_logger.info(f"Deleting workflow(s): {workflow_ids}")
             delete_workflow(
-                _get_dbos_instance(), workflow_id, delete_children=delete_children
+                _get_dbos_instance(), workflow_ids, delete_children=delete_children
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -1517,19 +1520,20 @@ class DBOS:
 
     @classmethod
     async def delete_workflow_async(
-        cls, workflow_id: str, *, delete_children: bool = False
+        cls, workflow_id: Union[str, List[str]], *, delete_children: bool = False
     ) -> None:
-        """Delete a workflow and all its associated data by ID.
+        """Delete one or more workflows and all associated data by ID.
 
         If delete_children is True, also deletes all child workflows recursively.
         """
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
+        workflow_ids = [workflow_id] if isinstance(workflow_id, str) else workflow_id
 
         def fn() -> None:
-            dbos_logger.info(f"Deleting workflow: {workflow_id}")
+            dbos_logger.info(f"Deleting workflow(s): {workflow_ids}")
             delete_workflow(
-                _get_dbos_instance(), workflow_id, delete_children=delete_children
+                _get_dbos_instance(), workflow_ids, delete_children=delete_children
             )
 
         return await asyncio.to_thread(
@@ -1556,7 +1560,7 @@ class DBOS:
 
         def fn() -> None:
             dbos_logger.info(f"Resuming workflow: {workflow_id}")
-            _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
+            _get_dbos_instance()._sys_db.resume_workflows([workflow_id])
 
         _get_dbos_instance()._sys_db.call_function_as_step(
             fn, "DBOS.resumeWorkflow", snapshot_step_context(reserve_sleep_id=False)
@@ -1572,7 +1576,7 @@ class DBOS:
 
         def fnres() -> None:
             dbos_logger.info(f"Resuming workflow: {workflow_id}")
-            _get_dbos_instance()._sys_db.resume_workflow(workflow_id)
+            _get_dbos_instance()._sys_db.resume_workflows([workflow_id])
 
         await asyncio.to_thread(
             _get_dbos_instance()._sys_db.call_function_as_step,
