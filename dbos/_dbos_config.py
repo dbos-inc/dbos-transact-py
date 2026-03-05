@@ -448,7 +448,7 @@ def configure_db_engine_parameters(
     """
 
     # Configure user database engine parameters
-    app_engine_kwargs: dict[str, Any] = {
+    default_engine_kwargs: dict[str, Any] = {
         "connect_args": {"application_name": "dbos_transact"},
         "pool_timeout": 30,
         "max_overflow": 0,
@@ -456,25 +456,32 @@ def configure_db_engine_parameters(
         "pool_pre_ping": True,
     }
     # If user-provided kwargs are present, use them instead
-    user_kwargs = data.get("db_engine_kwargs")
-    if user_kwargs is not None:
-        app_engine_kwargs.update(user_kwargs)
+    custom_engine_kwargs = data.get("db_engine_kwargs")
+    if custom_engine_kwargs is not None:
+        default_engine_kwargs.update(custom_engine_kwargs)
 
     # If user-provided kwargs do not contain connect_timeout, check if their URL did (this function connect_timeout parameter).
     # Else default to 10
-    if "connect_args" not in app_engine_kwargs:
-        app_engine_kwargs["connect_args"] = {}
-    if "connect_timeout" not in app_engine_kwargs["connect_args"]:
-        app_engine_kwargs["connect_args"]["connect_timeout"] = (
+    if "connect_args" not in default_engine_kwargs:
+        default_engine_kwargs["connect_args"] = {}
+    if "connect_timeout" not in default_engine_kwargs["connect_args"]:
+        default_engine_kwargs["connect_args"]["connect_timeout"] = (
             connect_timeout if connect_timeout else 10
         )
 
+    # If NullPool is specified, remove pool parameters
+    if custom_engine_kwargs and custom_engine_kwargs.get("poolclass") == sa.NullPool:
+        del default_engine_kwargs["pool_timeout"]
+        del default_engine_kwargs["max_overflow"]
+        del default_engine_kwargs["pool_size"]
+        del default_engine_kwargs["pool_pre_ping"]
+
     # Configure system database engine parameters. User-provided sys_db_pool_size takes precedence
-    system_engine_kwargs = app_engine_kwargs.copy()
+    system_engine_kwargs = default_engine_kwargs.copy()
     if data.get("sys_db_pool_size") is not None:
         system_engine_kwargs["pool_size"] = data["sys_db_pool_size"]
 
-    data["db_engine_kwargs"] = app_engine_kwargs
+    data["db_engine_kwargs"] = default_engine_kwargs
     data["sys_db_engine_kwargs"] = system_engine_kwargs
 
 
