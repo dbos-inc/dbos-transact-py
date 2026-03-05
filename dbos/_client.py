@@ -380,6 +380,22 @@ class DBOSClient:
         await asyncio.to_thread(self.resume_workflow, workflow_id)
         return WorkflowHandleClientAsyncPolling[Any](workflow_id, self._sys_db)
 
+    def resume_workflows(self, workflow_ids: List[str]) -> "List[WorkflowHandle[Any]]":
+        self._sys_db.resume_workflows(workflow_ids)
+        return [
+            WorkflowHandleClientPolling[Any](wfid, self._sys_db)
+            for wfid in workflow_ids
+        ]
+
+    async def resume_workflows_async(
+        self, workflow_ids: List[str]
+    ) -> "List[WorkflowHandleAsync[Any]]":
+        await asyncio.to_thread(self._sys_db.resume_workflows, workflow_ids)
+        return [
+            WorkflowHandleClientAsyncPolling[Any](wfid, self._sys_db)
+            for wfid in workflow_ids
+        ]
+
     def list_workflows(
         self,
         *,

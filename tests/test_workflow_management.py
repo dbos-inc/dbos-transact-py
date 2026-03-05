@@ -204,6 +204,62 @@ def test_bulk_cancel(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def test_bulk_resume(dbos: DBOS) -> None:
+    steps_completed = 0
+    workflow_events: dict[str, threading.Event] = {}
+    main_events: dict[str, threading.Event] = {}
+
+    @DBOS.step()
+    def step_one() -> None:
+        nonlocal steps_completed
+        steps_completed += 1
+
+    @DBOS.step()
+    def step_two() -> None:
+        nonlocal steps_completed
+        steps_completed += 1
+
+    @DBOS.workflow()
+    def blocking_workflow(x: int) -> int:
+        wfid = DBOS.workflow_id
+        step_one()
+        main_events[wfid].set()
+        workflow_events[wfid].wait()
+        step_two()
+        return x
+
+    # Start three workflows and cancel them
+    wfids: list[str] = []
+    handles = []
+    for i in range(3):
+        wfid = str(uuid.uuid4())
+        wfids.append(wfid)
+        workflow_events[wfid] = threading.Event()
+        main_events[wfid] = threading.Event()
+        with SetWorkflowID(wfid):
+            handles.append(DBOS.start_workflow(blocking_workflow, i))
+        main_events[wfid].wait()
+
+    assert steps_completed == 3
+
+    DBOS.cancel_workflow(wfids)
+    for evt in workflow_events.values():
+        evt.set()
+    for handle in handles:
+        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+            handle.get_result()
+    assert steps_completed == 3
+
+    # Bulk resume all three workflows
+    resumed_handles = DBOS.resume_workflows(wfids)
+    assert len(resumed_handles) == 3
+    for i, handle in enumerate(resumed_handles):
+        assert handle.get_result() == i
+    assert steps_completed == 6
+
+    assert queue_entries_are_cleaned_up(dbos)
+
+
 def test_bulk_delete(dbos: DBOS) -> None:
     @DBOS.workflow()
     def simple_workflow(x: int) -> int:

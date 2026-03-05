@@ -1565,13 +1565,12 @@ class DBOS:
         _get_dbos_instance()._sys_db.call_function_as_step(
             fn, "DBOS.resumeWorkflow", snapshot_step_context(reserve_sleep_id=False)
         )
-        return cls.retrieve_workflow(workflow_id)
+        return WorkflowHandlePolling(workflow_id, _get_dbos_instance())
 
     @classmethod
     async def resume_workflow_async(cls, workflow_id: str) -> WorkflowHandleAsync[Any]:
         """Resume a workflow by ID."""
         step_ctx_res = snapshot_step_context(reserve_sleep_id=False)
-        step_ctx_ret = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
 
         def fnres() -> None:
@@ -1584,19 +1583,47 @@ class DBOS:
             "DBOS.resumeWorkflow",
             step_ctx_res,
         )
-
-        def fnret() -> Optional[WorkflowStatus]:
-            return get_workflow(_get_dbos_instance()._sys_db, workflow_id)
-
-        stat = await asyncio.to_thread(
-            _get_dbos_instance()._sys_db.call_function_as_step,
-            fnret,
-            "DBOS.getStatus",
-            step_ctx_ret,
-        )
-        if stat is None:
-            raise DBOSNonExistentWorkflowError("target", workflow_id)
         return WorkflowHandleAsyncPolling(workflow_id, _get_dbos_instance())
+
+    @classmethod
+    def resume_workflows(cls, workflow_ids: List[str]) -> List[WorkflowHandle[Any]]:
+        """Resume multiple workflows by ID."""
+        check_async("resume_workflows")
+
+        def fn() -> None:
+            dbos_logger.info(f"Resuming workflows: {workflow_ids}")
+            _get_dbos_instance()._sys_db.resume_workflows(workflow_ids)
+
+        _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.resumeWorkflow", snapshot_step_context(reserve_sleep_id=False)
+        )
+        return [
+            WorkflowHandlePolling(wfid, _get_dbos_instance()) for wfid in workflow_ids
+        ]
+
+    @classmethod
+    async def resume_workflows_async(
+        cls, workflow_ids: List[str]
+    ) -> List[WorkflowHandleAsync[Any]]:
+        """Resume multiple workflows by ID."""
+        step_ctx_res = snapshot_step_context(reserve_sleep_id=False)
+        await cls._configure_asyncio_thread_pool()
+
+        def fnres() -> None:
+            dbos_logger.info(f"Resuming workflows: {workflow_ids}")
+            _get_dbos_instance()._sys_db.resume_workflows(workflow_ids)
+
+        await asyncio.to_thread(
+            _get_dbos_instance()._sys_db.call_function_as_step,
+            fnres,
+            "DBOS.resumeWorkflow",
+            step_ctx_res,
+        )
+
+        return [
+            WorkflowHandleAsyncPolling(wfid, _get_dbos_instance())
+            for wfid in workflow_ids
+        ]
 
     @classmethod
     def fork_workflow(
