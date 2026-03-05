@@ -96,6 +96,7 @@ class RecoveryResponse(BaseMessage):
 @dataclass
 class CancelRequest(BaseMessage):
     workflow_id: str
+    workflow_ids: Optional[List[str]] = None
 
 
 @dataclass
@@ -108,6 +109,7 @@ class CancelResponse(BaseMessage):
 class DeleteRequest(BaseMessage):
     workflow_id: str
     delete_children: bool
+    workflow_ids: Optional[List[str]] = None
 
 
 @dataclass
@@ -119,6 +121,7 @@ class DeleteResponse(BaseMessage):
 @dataclass
 class ResumeRequest(BaseMessage):
     workflow_id: str
+    workflow_ids: Optional[List[str]] = None
 
 
 @dataclass
