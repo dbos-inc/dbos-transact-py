@@ -78,19 +78,22 @@ async def test_resume_workflow_async(dbos: DBOS) -> None:
     # Start the workflow and cancel it
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        handle = await DBOS.start_workflow_async(simple_workflow, input_val)
+        cancelled_handle = await DBOS.start_workflow_async(simple_workflow, input_val)
     await main_event.wait()
     await DBOS.cancel_workflow_async(wfid)
     workflow_event.set()
 
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
-        await handle.get_result()
+        await cancelled_handle.get_result()
     assert steps_completed == 1
 
     # Resume the workflow async
     async_handle = await DBOS.resume_workflow_async(wfid)
     assert (await async_handle.get_result()) == input_val
     assert steps_completed == 2
+
+    # The cancelled handle should still work after resumption
+    assert (await cancelled_handle.get_result()) == input_val
 
 
 @pytest.mark.asyncio

@@ -45,12 +45,12 @@ def test_cancel_resume(dbos: DBOS) -> None:
     # Verify it stops after step one but before step two
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        handle = DBOS.start_workflow(simple_workflow, input)
+        cancelled_handle = DBOS.start_workflow(simple_workflow, input)
     main_thread_event.wait()
     DBOS.cancel_workflow(wfid)
     workflow_event.set()
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
-        handle.get_result()
+        cancelled_handle.get_result()
     assert steps_completed == 1
 
     # Resume the workflow. Verify it completes successfully.
@@ -59,6 +59,9 @@ def test_cancel_resume(dbos: DBOS) -> None:
     assert handle.get_status().queue_name == INTERNAL_QUEUE_NAME
     assert handle.get_result() == input
     assert steps_completed == 2
+
+    # The original handle should also retrieve the correct result
+    assert cancelled_handle.get_result() == input
 
     # Resume the workflow again. Verify it does not run again.
     handle = DBOS.resume_workflow(wfid)
