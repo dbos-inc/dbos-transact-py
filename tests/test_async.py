@@ -769,6 +769,96 @@ async def test_asyncio_wait_all_completed(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
+async def test_asyncio_wait_first_exception(dbos: DBOS) -> None:
+    step_counter: int = 0
+    gate = asyncio.Event()
+
+    @DBOS.step()
+    async def error_step() -> str:
+        nonlocal step_counter
+        step_counter += 1
+        raise ValueError("boom")
+
+    @DBOS.step()
+    async def slow_step(val: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
+        await gate.wait()
+        return val
+
+    @DBOS.workflow()
+    async def wait_exception_workflow() -> None:
+        done, pending = await DBOS.asyncio_wait(
+            [error_step(), slow_step("ok")],
+            return_when=asyncio.FIRST_EXCEPTION,
+        )
+
+        assert len(done) == 1
+        assert len(pending) == 1
+        task = next(iter(done))
+        assert isinstance(task.exception(), ValueError)
+        assert "boom" in str(task.exception())
+
+        # Let the slow step finish and wait for it
+        gate.set()
+        done2, pending2 = await DBOS.asyncio_wait(pending)
+        assert len(done2) == 1
+        assert len(pending2) == 0
+        assert next(iter(done2)).result() == "ok"
+
+    handle = await DBOS.start_workflow_async(wait_exception_workflow)
+    await handle.get_result()
+    assert step_counter == 2
+
+    # Fork from a high step to replay everything from DB (OAOO)
+    gate.set()
+    forked = await DBOS.fork_workflow_async(handle.workflow_id, 100)
+    await forked.get_result()
+    assert step_counter == 2
+
+
+@pytest.mark.asyncio
+async def test_asyncio_wait_timeout(dbos: DBOS) -> None:
+    step_counter: int = 0
+    gate = asyncio.Event()
+
+    @DBOS.step()
+    async def blocked_step(val: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
+        await gate.wait()
+        return val
+
+    @DBOS.workflow()
+    async def wait_timeout_workflow() -> None:
+        done, pending = await DBOS.asyncio_wait(
+            [blocked_step("a"), blocked_step("b")],
+            timeout=0.1,
+        )
+
+        # Both should still be pending after timeout
+        assert len(done) == 0
+        assert len(pending) == 2
+
+        # Unblock and wait for all
+        gate.set()
+        done2, pending2 = await DBOS.asyncio_wait(pending)
+        assert len(done2) == 2
+        assert len(pending2) == 0
+        assert sorted([t.result() for t in done2]) == ["a", "b"]
+
+    handle = await DBOS.start_workflow_async(wait_timeout_workflow)
+    await handle.get_result()
+    assert step_counter == 2
+
+    # Fork from a high step to replay everything from DB (OAOO)
+    gate.set()
+    forked = await DBOS.fork_workflow_async(handle.workflow_id, 100)
+    await forked.get_result()
+    assert step_counter == 2
+
+
+@pytest.mark.asyncio
 async def test_workflow_recovery_async(dbos: DBOS, config: DBOSConfig) -> None:
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
