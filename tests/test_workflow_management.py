@@ -5,7 +5,7 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, Queue, SetWorkflowID, WorkflowHandle
+from dbos import DBOS, DBOSClient, Queue, SetWorkflowID, WorkflowHandle
 from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.application_database import ApplicationSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
@@ -1121,3 +1121,28 @@ def test_get_all_stream_entries(dbos: DBOS) -> None:
 
     # Nonexistent workflow has no streams
     assert dbos._sys_db.get_all_stream_entries("nonexistent") == {}
+
+
+def test_client_delete_workflow(client: DBOSClient, dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def simple_workflow(x: int) -> int:
+        return x
+
+    # Test single delete
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert simple_workflow(1) == 1
+    assert len(client.list_workflows(workflow_ids=[wfid])) == 1
+    client.delete_workflow(wfid)
+    assert len(client.list_workflows(workflow_ids=[wfid])) == 0
+
+    # Test bulk delete
+    wfids: list[str] = []
+    for i in range(3):
+        wfid = str(uuid.uuid4())
+        wfids.append(wfid)
+        with SetWorkflowID(wfid):
+            assert simple_workflow(i) == i
+    assert len(client.list_workflows(workflow_ids=wfids)) == 3
+    client.delete_workflows(wfids)
+    assert len(client.list_workflows(workflow_ids=wfids)) == 0

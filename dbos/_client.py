@@ -375,6 +375,34 @@ class DBOSClient:
     async def cancel_workflows_async(self, workflow_ids: List[str]) -> None:
         await asyncio.to_thread(self._sys_db.cancel_workflows, workflow_ids)
 
+    def delete_workflow(
+        self, workflow_id: str, *, delete_children: bool = False
+    ) -> None:
+        self.delete_workflows([workflow_id], delete_children=delete_children)
+
+    async def delete_workflow_async(
+        self, workflow_id: str, *, delete_children: bool = False
+    ) -> None:
+        await asyncio.to_thread(
+            self.delete_workflows, [workflow_id], delete_children=delete_children
+        )
+
+    def delete_workflows(
+        self, workflow_ids: List[str], *, delete_children: bool = False
+    ) -> None:
+        all_ids = list(workflow_ids)
+        if delete_children:
+            for wfid in workflow_ids:
+                all_ids.extend(self._sys_db.get_workflow_children(wfid))
+        self._sys_db.delete_workflows(all_ids)
+
+    async def delete_workflows_async(
+        self, workflow_ids: List[str], *, delete_children: bool = False
+    ) -> None:
+        await asyncio.to_thread(
+            self.delete_workflows, workflow_ids, delete_children=delete_children
+        )
+
     def resume_workflow(self, workflow_id: str) -> "WorkflowHandle[Any]":
         self._sys_db.resume_workflows([workflow_id])
         return WorkflowHandleClientPolling[Any](workflow_id, self._sys_db)
