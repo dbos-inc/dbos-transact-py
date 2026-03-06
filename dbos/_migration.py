@@ -350,9 +350,6 @@ DECLARE
     v_now BIGINT;
     v_recovery_attempts INTEGER := 0;
     v_priority INTEGER;
-    v_existing_name TEXT;
-    v_existing_class_name TEXT;
-    v_existing_config_name TEXT;
 BEGIN
 
     -- Validate required parameters
@@ -397,26 +394,7 @@ BEGIN
     )
     ON CONFLICT (workflow_uuid)
     DO UPDATE SET
-        updated_at = EXCLUDED.updated_at
-    RETURNING workflow_status.name, workflow_status.class_name, workflow_status.config_name
-    INTO v_existing_name, v_existing_class_name, v_existing_config_name;
-
-    -- Validate workflow metadata matches
-    IF v_existing_name IS DISTINCT FROM workflow_name THEN
-        RAISE EXCEPTION 'Conflicting DBOS workflow name'
-            USING DETAIL = format('Workflow %s exists with name %s, but the provided workflow name is: %s', v_workflow_id, v_existing_name, workflow_name),
-                ERRCODE = 'invalid_parameter_value';
-    END IF;
-    IF v_existing_class_name IS DISTINCT FROM class_name THEN
-        RAISE EXCEPTION 'Conflicting DBOS workflow class_name'
-            USING DETAIL = format('Workflow %s exists with class_name %s, but the provided class_name is: %s', v_workflow_id, v_existing_class_name, class_name),
-                ERRCODE = 'invalid_parameter_value';
-    END IF;
-    IF v_existing_config_name IS DISTINCT FROM config_name THEN
-        RAISE EXCEPTION 'Conflicting DBOS workflow config_name'
-            USING DETAIL = format('Workflow %s exists with config_name %s, but the provided config_name is: %s', v_workflow_id, v_existing_config_name, config_name),
-                ERRCODE = 'invalid_parameter_value';
-    END IF;
+        updated_at = EXCLUDED.updated_at;
 
     RETURN v_workflow_id;
 
