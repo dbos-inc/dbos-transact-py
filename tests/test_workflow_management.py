@@ -1055,20 +1055,26 @@ def test_get_all_notifications(dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(receiver_workflow)
 
-    # Send messages to the receiver workflow
+    # Send messages to the receiver workflow (two consumed, one unconsumed)
     DBOS.send(wfid, "hello", topic="topic_a")
     DBOS.send(wfid, {"data": 123}, topic="topic_b")
     recv_event.wait()
     handle.get_result()
 
+    # Send an extra message that the workflow never consumes
+    DBOS.send(wfid, "unconsumed", topic="topic_c")
+
     notifications = dbos._sys_db.get_all_notifications(wfid)
-    assert len(notifications) == 2
+    assert len(notifications) == 3
     assert notifications[0]["topic"] == "topic_a"
     assert notifications[0]["message"] == "hello"
     assert notifications[0]["consumed"] is True
     assert notifications[1]["topic"] == "topic_b"
     assert notifications[1]["message"] == {"data": 123}
     assert notifications[1]["consumed"] is True
+    assert notifications[2]["topic"] == "topic_c"
+    assert notifications[2]["message"] == "unconsumed"
+    assert notifications[2]["consumed"] is False
 
     # Nonexistent workflow has no notifications
     assert dbos._sys_db.get_all_notifications("nonexistent") == []
