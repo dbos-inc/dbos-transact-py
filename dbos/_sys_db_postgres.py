@@ -52,8 +52,30 @@ class PostgresSystemDatabase(SystemDatabase):
                 conn.execute(sa.text("SELECT 1"))
 
         assert self.schema
-        ensure_dbos_schema(self.engine, self.schema)
-        run_dbos_migrations(self.engine, self.schema, self.use_listen_notify)
+        # Use an advisory lock to serialize concurrent migrations.
+        # Some Postgres implementations do not support advisory locks,
+        # so fall back to running without a lock if the call fails.
+        MIGRATION_LOCK_ID = 1234567890
+        locked = False
+        conn = self.engine.connect()
+        try:
+            try:
+                conn.execute(
+                    sa.text("SELECT pg_advisory_lock(:lock_id)"),
+                    {"lock_id": MIGRATION_LOCK_ID},
+                )
+                locked = True
+            except Exception:
+                conn.close()
+            ensure_dbos_schema(self.engine, self.schema)
+            run_dbos_migrations(self.engine, self.schema, self.use_listen_notify)
+        finally:
+            if locked:
+                conn.execute(
+                    sa.text("SELECT pg_advisory_unlock(:lock_id)"),
+                    {"lock_id": MIGRATION_LOCK_ID},
+                )
+                conn.close()
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""

@@ -312,7 +312,7 @@ ALTER TABLE "{schema}"."streams" ADD COLUMN "serialization" TEXT DEFAULT NULL;
 def get_dbos_migration_twelve(schema: str) -> str:
     return f"""
 ALTER TABLE "{schema}"."notifications" ADD COLUMN "consumed" BOOLEAN NOT NULL DEFAULT FALSE;
-CREATE INDEX "idx_notifications_unconsumed" ON "{schema}"."notifications" ("destination_uuid", "topic") WHERE consumed = FALSE;
+CREATE INDEX "idx_notifications" ON "{schema}"."notifications" ("destination_uuid", "topic");
 """
 
 
@@ -623,7 +623,7 @@ ALTER TABLE "streams" ADD COLUMN "serialization" TEXT DEFAULT NULL;
 
 sqlite_migration_twelve = """
 ALTER TABLE "notifications" ADD COLUMN "consumed" BOOLEAN NOT NULL DEFAULT FALSE;
-CREATE INDEX "idx_notifications_unconsumed" ON "notifications" ("destination_uuid", "topic") WHERE consumed = FALSE;
+CREATE INDEX "idx_notifications" ON "notifications" ("destination_uuid", "topic");
 """
 
 

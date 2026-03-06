@@ -31,7 +31,6 @@ from ._app_db import ApplicationDatabase, TransactionResultInternal
 from ._context import (
     DBOSAssumeRole,
     DBOSContext,
-    DBOSContextEnsure,
     DBOSContextSetAuth,
     EnterDBOSStepCtx,
     EnterDBOSTransaction,
@@ -54,7 +53,6 @@ from ._error import (
     DBOSWorkflowConflictIDError,
     DBOSWorkflowFunctionNotFoundError,
 )
-from ._logger import dbos_logger
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSFuncType,
@@ -123,7 +121,13 @@ class WorkflowHandleFuture(Generic[R]):
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
         try:
-            r = self.future.result()
+            try:
+                r = self.future.result()
+            # If the handle was cancelled, check the database
+            except (DBOSWorkflowCancelledError, DBOSAwaitedWorkflowCancelledError):
+                r = self.dbos._sys_db.await_workflow_result(
+                    self.workflow_id, polling_interval_sec
+                )
         except Exception as e:
             serialized_e, serialization = serialize_exception(
                 e, None, self.dbos._serializer
@@ -196,7 +200,13 @@ class WorkflowHandleAsyncTask(Generic[R]):
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
         try:
-            r = await self.task
+            try:
+                r = await self.task
+            # If the handle was cancelled, check the database
+            except (DBOSWorkflowCancelledError, DBOSAwaitedWorkflowCancelledError):
+                r = await self.dbos._sys_db.await_workflow_result_async(
+                    self.workflow_id, polling_interval_sec
+                )
         except Exception as e:
             serialized_e, serialization = serialize_exception(
                 e, None, self.dbos._serializer
