@@ -4,7 +4,13 @@ from enum import Enum
 from typing import Dict, List, Optional, Type, TypedDict, TypeVar, Union
 
 from dbos._serialization import Serializer
-from dbos._sys_db import StepInfo, VersionInfo, WorkflowSchedule, WorkflowStatus
+from dbos._sys_db import (
+    NotificationInfo,
+    StepInfo,
+    VersionInfo,
+    WorkflowSchedule,
+    WorkflowStatus,
+)
 
 
 class MessageType(str, Enum):
@@ -33,6 +39,9 @@ class MessageType(str, Enum):
     TRIGGER_SCHEDULE = "trigger_schedule"
     LIST_APPLICATION_VERSIONS = "list_application_versions"
     SET_LATEST_APPLICATION_VERSION = "set_latest_application_version"
+    GET_WORKFLOW_EVENTS = "get_workflow_events"
+    GET_WORKFLOW_NOTIFICATIONS = "get_workflow_notifications"
+    GET_WORKFLOW_STREAMS = "get_workflow_streams"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -96,6 +105,7 @@ class RecoveryResponse(BaseMessage):
 @dataclass
 class CancelRequest(BaseMessage):
     workflow_id: str
+    workflow_ids: Optional[List[str]] = None
 
 
 @dataclass
@@ -108,6 +118,7 @@ class CancelResponse(BaseMessage):
 class DeleteRequest(BaseMessage):
     workflow_id: str
     delete_children: bool
+    workflow_ids: Optional[List[str]] = None
 
 
 @dataclass
@@ -119,6 +130,7 @@ class DeleteResponse(BaseMessage):
 @dataclass
 class ResumeRequest(BaseMessage):
     workflow_id: str
+    workflow_ids: Optional[List[str]] = None
 
 
 @dataclass
@@ -586,4 +598,74 @@ class SetLatestApplicationVersionRequest(BaseMessage):
 @dataclass
 class SetLatestApplicationVersionResponse(BaseMessage):
     success: bool
+    error_message: Optional[str] = None
+
+
+@dataclass
+class NotificationOutput:
+    topic: Optional[str]
+    message: str
+    created_at_epoch_ms: int
+    consumed: bool
+
+    @classmethod
+    def from_notification_info(cls, info: NotificationInfo) -> "NotificationOutput":
+        return cls(
+            topic=info["topic"],
+            message=str(info["message"]),
+            created_at_epoch_ms=info["created_at_epoch_ms"],
+            consumed=info["consumed"],
+        )
+
+
+@dataclass
+class StreamEntryOutput:
+    key: str
+    values: List[str]
+
+    @classmethod
+    def from_stream_data(cls, key: str, values: List[object]) -> "StreamEntryOutput":
+        return cls(key=key, values=[str(v) for v in values])
+
+
+@dataclass
+class EventOutput:
+    key: str
+    value: str
+
+    @classmethod
+    def from_event_data(cls, key: str, value: object) -> "EventOutput":
+        return cls(key=key, value=str(value))
+
+
+@dataclass
+class GetWorkflowEventsRequest(BaseMessage):
+    workflow_id: str
+
+
+@dataclass
+class GetWorkflowEventsResponse(BaseMessage):
+    events: Optional[List[EventOutput]]
+    error_message: Optional[str] = None
+
+
+@dataclass
+class GetWorkflowNotificationsRequest(BaseMessage):
+    workflow_id: str
+
+
+@dataclass
+class GetWorkflowNotificationsResponse(BaseMessage):
+    notifications: Optional[List[NotificationOutput]]
+    error_message: Optional[str] = None
+
+
+@dataclass
+class GetWorkflowStreamsRequest(BaseMessage):
+    workflow_id: str
+
+
+@dataclass
+class GetWorkflowStreamsResponse(BaseMessage):
+    streams: Optional[List[StreamEntryOutput]]
     error_message: Optional[str] = None
