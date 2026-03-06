@@ -40,22 +40,6 @@ def fork_workflow(
     return forked_workflow_id
 
 
-def delete_workflow(
-    dbos: "DBOS", workflow_ids: list[str], *, delete_children: bool
-) -> None:
-    """Delete workflows and all their associated data.
-
-    If delete_children is True, also deletes all child workflows recursively.
-    """
-    all_ids = list(workflow_ids)
-    if delete_children:
-        for wfid in workflow_ids:
-            all_ids.extend(dbos._sys_db.get_workflow_children(wfid))
-    dbos._sys_db.delete_workflows(all_ids)
-    if dbos._app_db:
-        dbos._app_db.delete_transaction_outputs(all_ids)
-
-
 def garbage_collect(
     dbos: "DBOS",
     cutoff_epoch_timestamp_ms: Optional[int],

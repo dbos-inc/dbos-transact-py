@@ -16,12 +16,7 @@ from websockets.sync.connection import Connection
 from dbos._context import SetWorkflowID
 from dbos._scheduler import backfill_schedule, trigger_schedule
 from dbos._utils import GlobalParams, generate_uuid
-from dbos._workflow_commands import (
-    delete_workflow,
-    garbage_collect,
-    get_workflow,
-    global_timeout,
-)
+from dbos._workflow_commands import garbage_collect, get_workflow, global_timeout
 
 from . import protocol as p
 
@@ -170,8 +165,7 @@ class ConductorWebsocket(threading.Thread):
                             ]
                             success = True
                             try:
-                                delete_workflow(
-                                    self.dbos,
+                                self.dbos.delete_workflows(
                                     delete_ids,
                                     delete_children=delete_message.delete_children,
                                 )
