@@ -692,6 +692,193 @@ async def test_child_workflow_async(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
+async def test_asyncio_wait(dbos: DBOS) -> None:
+    step_counter: int = 0
+    gate = asyncio.Event()
+
+    @DBOS.step()
+    async def fast_step(val: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
+        return val + "_done"
+
+    @DBOS.step()
+    async def slow_step(val: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
+        await gate.wait()
+        return val + "_done"
+
+    @DBOS.workflow()
+    async def wait_workflow() -> None:
+        done, pending = await DBOS.asyncio_wait(
+            [fast_step("fast"), slow_step("slow")],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        assert len(done) == 1
+        assert len(pending) == 1
+        assert [t.result() for t in done] == ["fast_done"]
+
+        # Let the slow step finish and wait for it
+        gate.set()
+        done2, pending2 = await DBOS.asyncio_wait(pending)
+        assert len(done2) == 1
+        assert len(pending2) == 0
+        assert [t.result() for t in done2] == ["slow_done"]
+
+    handle = await DBOS.start_workflow_async(wait_workflow)
+    await handle.get_result()
+    assert step_counter == 2
+
+    # Verify recorded steps
+    steps = await DBOS.list_workflow_steps_async(handle.workflow_id)
+    assert len(steps) == 4
+    # Step 1: first asyncio_wait snapshots its context before the tasks run.
+    # Recorded done indices [0] means the first future (fast_step) completed.
+    assert steps[0]["function_id"] == 1
+    assert steps[0]["function_name"] == "DBOS.asyncio_wait"
+    assert steps[0]["output"] == [0]
+    # Steps 2 & 3: the step coroutines execute inside the asyncio tasks
+    assert steps[1]["function_id"] == 2
+    assert steps[1]["function_name"] == fast_step.__qualname__
+    assert steps[1]["output"] == "fast_done"
+    assert steps[2]["function_id"] == 3
+    assert steps[2]["function_name"] == slow_step.__qualname__
+    assert steps[2]["output"] == "slow_done"
+    # Step 4: second asyncio_wait on the pending set
+    assert steps[3]["function_id"] == 4
+    assert steps[3]["function_name"] == "DBOS.asyncio_wait"
+    assert steps[3]["output"] == [0]
+
+    # Fork from a high step to replay everything from DB (OAOO)
+    gate.set()
+    forked = await DBOS.fork_workflow_async(handle.workflow_id, 100)
+    await forked.get_result()
+    assert step_counter == 2
+
+
+@pytest.mark.asyncio
+async def test_asyncio_wait_all_completed(dbos: DBOS) -> None:
+    step_counter: int = 0
+
+    @DBOS.step()
+    async def my_step(val: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
+        return val
+
+    @DBOS.workflow()
+    async def wait_all_workflow() -> None:
+        done, pending = await DBOS.asyncio_wait(
+            [my_step("a"), my_step("b")], return_when=asyncio.ALL_COMPLETED
+        )
+
+        assert len(done) == 2
+        assert len(pending) == 0
+        assert sorted([t.result() for t in done]) == ["a", "b"]
+
+    handle = await DBOS.start_workflow_async(wait_all_workflow)
+    await handle.get_result()
+    assert step_counter == 2
+
+    # Fork from a high step to replay everything from DB (OAOO)
+    forked = await DBOS.fork_workflow_async(handle.workflow_id, 100)
+    await forked.get_result()
+    assert step_counter == 2
+
+
+@pytest.mark.asyncio
+async def test_asyncio_wait_first_exception(dbos: DBOS) -> None:
+    step_counter: int = 0
+    gate = asyncio.Event()
+
+    @DBOS.step()
+    async def error_step() -> str:
+        nonlocal step_counter
+        step_counter += 1
+        raise ValueError("boom")
+
+    @DBOS.step()
+    async def slow_step(val: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
+        await gate.wait()
+        return val
+
+    @DBOS.workflow()
+    async def wait_exception_workflow() -> None:
+        done, pending = await DBOS.asyncio_wait(
+            [error_step(), slow_step("ok")],
+            return_when=asyncio.FIRST_EXCEPTION,
+        )
+
+        assert len(done) == 1
+        assert len(pending) == 1
+        task = next(iter(done))
+        assert isinstance(task.exception(), ValueError)
+        assert "boom" in str(task.exception())
+
+        # Let the slow step finish and wait for it
+        gate.set()
+        done2, pending2 = await DBOS.asyncio_wait(pending)
+        assert len(done2) == 1
+        assert len(pending2) == 0
+        assert next(iter(done2)).result() == "ok"
+
+    handle = await DBOS.start_workflow_async(wait_exception_workflow)
+    await handle.get_result()
+    assert step_counter == 2
+
+    # Fork from a high step to replay everything from DB (OAOO)
+    gate.set()
+    forked = await DBOS.fork_workflow_async(handle.workflow_id, 100)
+    await forked.get_result()
+    assert step_counter == 2
+
+
+@pytest.mark.asyncio
+async def test_asyncio_wait_timeout(dbos: DBOS) -> None:
+    step_counter: int = 0
+    gate = asyncio.Event()
+
+    @DBOS.step()
+    async def blocked_step(val: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
+        await gate.wait()
+        return val
+
+    @DBOS.workflow()
+    async def wait_timeout_workflow() -> None:
+        done, pending = await DBOS.asyncio_wait(
+            [blocked_step("a"), blocked_step("b")],
+            timeout=0.1,
+        )
+
+        # Both should still be pending after timeout
+        assert len(done) == 0
+        assert len(pending) == 2
+
+        # Unblock and wait for all
+        gate.set()
+        done2, pending2 = await DBOS.asyncio_wait(pending)
+        assert len(done2) == 2
+        assert len(pending2) == 0
+        assert sorted([t.result() for t in done2]) == ["a", "b"]
+
+    handle = await DBOS.start_workflow_async(wait_timeout_workflow)
+    await handle.get_result()
+    assert step_counter == 2
+
+    # Fork from a high step to replay everything from DB (OAOO)
+    gate.set()
+    forked = await DBOS.fork_workflow_async(handle.workflow_id, 100)
+    await forked.get_result()
+    assert step_counter == 2
+
+
+@pytest.mark.asyncio
 async def test_workflow_recovery_async(dbos: DBOS, config: DBOSConfig) -> None:
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
