@@ -16,6 +16,7 @@ from typing import (
 
 from dbos._context import EnterDBOSStepRetry
 from dbos._error import DBOSException
+from dbos._logger import dbos_logger
 from dbos._registrations import get_dbos_func_name
 
 if TYPE_CHECKING:
@@ -185,6 +186,7 @@ class Pending(Outcome[T]):
             value = await func()
             return await asyncio.to_thread(after, lambda: value)
         except asyncio.CancelledError:
+            dbos_logger.warning(f"asyncio task cancelled for workflow or step {func}")
             raise
         except BaseException as exp:
             return await asyncio.to_thread(after, lambda: Pending._raise(exp))
