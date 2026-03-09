@@ -331,6 +331,7 @@ def get_dbos_migration_fourteen(schema: str) -> str:
     return f"""
 ALTER TABLE "{schema}".workflow_schedules ADD COLUMN "last_fired_at" TEXT DEFAULT NULL;
 ALTER TABLE "{schema}".workflow_schedules ADD COLUMN "automatic_backfill" BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE "{schema}".workflow_schedules ADD COLUMN "cron_timezone" TEXT DEFAULT NULL;
 """
 
 
@@ -519,6 +520,7 @@ CREATE TABLE application_versions (
 sqlite_migration_fourteen = """
 ALTER TABLE workflow_schedules ADD COLUMN "last_fired_at" TEXT DEFAULT NULL;
 ALTER TABLE workflow_schedules ADD COLUMN "automatic_backfill" BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE workflow_schedules ADD COLUMN "cron_timezone" TEXT DEFAULT NULL;
 """
 
 sqlite_migrations = [

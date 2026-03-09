@@ -3,6 +3,7 @@ import threading
 import traceback
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
+from zoneinfo import ZoneInfo
 
 from ._croniter import croniter  # type: ignore
 from ._error import DBOSException
@@ -30,6 +31,8 @@ class _ScheduleThread:
         self.cron: str = schedule["schedule"]
         self.serialized_context: str = schedule["context"]
         self.context: Any = serializer.deserialize(self.serialized_context)
+        tz_name = schedule.get("cron_timezone")
+        self.tzinfo = ZoneInfo(tz_name) if tz_name else timezone.utc
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -40,7 +43,7 @@ class _ScheduleThread:
         dbos = _get_dbos_instance()
         try:
             it = croniter(
-                self.cron, datetime.now(timezone.utc), second_at_beginning=True
+                self.cron, datetime.now(self.tzinfo), second_at_beginning=True
             )
         except Exception:
             dbos_logger.error(
@@ -151,7 +154,10 @@ def backfill_schedule(
         raise DBOSException(f"Schedule '{schedule_name}' does not exist")
     context = sys_db.serializer.deserialize(schedule["context"])
     class_name = schedule["workflow_class_name"]
-    it = croniter(schedule["schedule"], start, second_at_beginning=True)
+    tz_name = schedule.get("cron_timezone")
+    tz = ZoneInfo(tz_name) if tz_name else timezone.utc
+    start_in_tz = start.astimezone(tz)
+    it = croniter(schedule["schedule"], start_in_tz, second_at_beginning=True)
     workflow_ids: list[str] = []
     while True:
         next_time = it.get_next(datetime)

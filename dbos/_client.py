@@ -16,6 +16,7 @@ from typing import (
     TypeVar,
     Union,
 )
+from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 
@@ -716,6 +717,7 @@ class DBOSClient:
         context: Any = None,
         workflow_class_name: Optional[str] = None,
         automatic_backfill: bool = False,
+        cron_timezone: Optional[str] = None,
     ) -> None:
         """
         Create a cron schedule that periodically invokes a workflow.
@@ -727,12 +729,18 @@ class DBOSClient:
             context: A context object passed as the second argument to every invocation. Defaults to ``None``.
             workflow_class_name: Class name for static class method workflows. Defaults to ``None``.
             automatic_backfill: If ``True``, on startup the scheduler will automatically backfill missed executions since the last time the schedule fired. Defaults to ``False``.
+            cron_timezone: IANA timezone name (e.g. ``"America/New_York"``) in which to evaluate the cron expression. Defaults to ``None`` (UTC).
 
         Raises:
             DBOSException: If the cron expression is invalid or a schedule with the same name already exists.
         """
         if not croniter.is_valid(schedule, second_at_beginning=True):
             raise DBOSException(f"Invalid cron schedule: '{schedule}'")
+        if cron_timezone is not None:
+            try:
+                ZoneInfo(cron_timezone)
+            except (KeyError, Exception):
+                raise DBOSException(f"Invalid timezone: '{cron_timezone}'")
         self._sys_db.create_schedule(
             WorkflowSchedule(
                 schedule_id=generate_uuid(),
@@ -744,6 +752,7 @@ class DBOSClient:
                 context=self._sys_db.serializer.serialize(context),
                 last_fired_at=None,
                 automatic_backfill=automatic_backfill,
+                cron_timezone=cron_timezone,
             )
         )
 
@@ -793,6 +802,7 @@ class DBOSClient:
         context: Any = None,
         workflow_class_name: Optional[str] = None,
         automatic_backfill: bool = False,
+        cron_timezone: Optional[str] = None,
     ) -> None:
         """Async version of :meth:`create_schedule`."""
         await asyncio.to_thread(
@@ -803,6 +813,7 @@ class DBOSClient:
             context=context,
             workflow_class_name=workflow_class_name,
             automatic_backfill=automatic_backfill,
+            cron_timezone=cron_timezone,
         )
 
     async def list_schedules_async(
@@ -877,6 +888,7 @@ class DBOSClient:
                     context=self._sys_db.serializer.serialize(entry["context"]),
                     last_fired_at=None,
                     automatic_backfill=entry.get("automatic_backfill", False),
+                    cron_timezone=entry.get("cron_timezone"),
                 )
             )
         with self._sys_db.engine.begin() as c:

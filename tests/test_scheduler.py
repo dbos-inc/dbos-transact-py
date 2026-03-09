@@ -20,12 +20,13 @@ def test_schedule_crud(dbos: DBOS) -> None:
     def other_workflow(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
-    # Create a schedule with context
+    # Create a schedule with context and timezone
     DBOS.create_schedule(
         schedule_name="test-schedule",
         workflow_fn=my_workflow,
         schedule="* * * * *",
         context={"env": "test"},
+        cron_timezone="America/New_York",
     )
 
     # List schedules and verify
@@ -36,6 +37,7 @@ def test_schedule_crud(dbos: DBOS) -> None:
     assert schedules[0]["schedule"] == "* * * * *"
     assert schedules[0]["context"] == {"env": "test"}
     assert schedules[0]["workflow_class_name"] is None
+    assert schedules[0]["cron_timezone"] == "America/New_York"
 
     # Get schedule by name
     sched = DBOS.get_schedule("test-schedule")
@@ -46,6 +48,7 @@ def test_schedule_crud(dbos: DBOS) -> None:
     assert sched["schedule_id"] == schedules[0]["schedule_id"]
     assert sched["context"] == {"env": "test"}
     assert sched["workflow_class_name"] is None
+    assert sched["cron_timezone"] == "America/New_York"
 
     # Get nonexistent schedule
     assert DBOS.get_schedule("nonexistent") is None
@@ -112,7 +115,7 @@ def test_apply_schedules(dbos: DBOS) -> None:
     def wf_b(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
-    # Apply two schedules at once (sched-b has automatic_backfill enabled)
+    # Apply two schedules at once (sched-b has automatic_backfill and timezone)
     DBOS.apply_schedules(
         [
             {
@@ -127,6 +130,7 @@ def test_apply_schedules(dbos: DBOS) -> None:
                 "schedule": "0 0 * * *",
                 "context": None,
                 "automatic_backfill": True,
+                "cron_timezone": "Europe/London",
             },
         ]
     )
@@ -136,9 +140,11 @@ def test_apply_schedules(dbos: DBOS) -> None:
     assert by_name["sched-a"]["schedule"] == "* * * * *"
     assert by_name["sched-a"]["context"] == {"region": "us"}
     assert by_name["sched-a"]["automatic_backfill"] is False
+    assert by_name["sched-a"]["cron_timezone"] is None
     assert by_name["sched-b"]["schedule"] == "0 0 * * *"
     assert by_name["sched-b"]["context"] is None
     assert by_name["sched-b"]["automatic_backfill"] is True
+    assert by_name["sched-b"]["cron_timezone"] == "Europe/London"
 
     # Replace sched-a, add sched-c
     DBOS.apply_schedules(
@@ -502,12 +508,13 @@ def test_trigger_schedule(dbos: DBOS) -> None:
 
 
 def test_client_schedule_crud(client: DBOSClient) -> None:
-    # Create a schedule with context
+    # Create a schedule with context and timezone
     client.create_schedule(
         schedule_name="client-schedule",
         workflow_name="some.workflow",
         schedule="* * * * *",
         context={"tenant": "acme"},
+        cron_timezone="Asia/Tokyo",
     )
 
     # List schedules and verify
@@ -518,6 +525,7 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
     assert schedules[0]["schedule"] == "* * * * *"
     assert schedules[0]["context"] == {"tenant": "acme"}
     assert schedules[0]["workflow_class_name"] is None
+    assert schedules[0]["cron_timezone"] == "Asia/Tokyo"
 
     # Get schedule by name
     sched = client.get_schedule("client-schedule")
@@ -526,6 +534,7 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
     assert sched["schedule_id"] == schedules[0]["schedule_id"]
     assert sched["context"] == {"tenant": "acme"}
     assert sched["workflow_class_name"] is None
+    assert sched["cron_timezone"] == "Asia/Tokyo"
 
     # Get nonexistent schedule
     assert client.get_schedule("nonexistent") is None
@@ -586,7 +595,7 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
 
 
 def test_client_apply_schedules(client: DBOSClient) -> None:
-    # Apply two schedules at once (sched-b has automatic_backfill enabled)
+    # Apply two schedules at once (sched-b has automatic_backfill and timezone)
     client.apply_schedules(
         [
             {
@@ -601,6 +610,7 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
                 "schedule": "0 0 * * *",
                 "context": None,
                 "automatic_backfill": True,
+                "cron_timezone": "US/Pacific",
             },
         ]
     )
@@ -610,9 +620,11 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
     assert by_name["sched-a"]["schedule"] == "* * * * *"
     assert by_name["sched-a"]["context"] == {"region": "eu"}
     assert by_name["sched-a"]["automatic_backfill"] is False
+    assert by_name["sched-a"]["cron_timezone"] is None
     assert by_name["sched-b"]["workflow_name"] == "wf.b"
     assert by_name["sched-b"]["context"] is None
     assert by_name["sched-b"]["automatic_backfill"] is True
+    assert by_name["sched-b"]["cron_timezone"] == "US/Pacific"
 
     # Replace sched-a, add sched-c
     client.apply_schedules(

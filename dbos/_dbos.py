@@ -31,6 +31,7 @@ from typing import (
     Union,
     overload,
 )
+from zoneinfo import ZoneInfo
 
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._debouncer import debouncer_workflow
@@ -291,6 +292,7 @@ class ScheduleInput(TypedDict, total=False):
     schedule: str
     context: Any
     automatic_backfill: bool
+    cron_timezone: Optional[str]
 
 
 class DBOS:
@@ -1962,6 +1964,7 @@ class DBOS:
         schedule: str,
         context: Any = None,
         automatic_backfill: bool = False,
+        cron_timezone: Optional[str] = None,
     ) -> None:
         """
         Create a cron schedule that periodically invokes a workflow function.
@@ -1976,6 +1979,7 @@ class DBOS:
             schedule: A cron expression (supports seconds with 6 fields).
             context: A context object passed as the second argument to every invocation. Defaults to ``None``.
             automatic_backfill: If ``True``, on startup the scheduler will automatically backfill missed executions since the last time the schedule fired. Defaults to ``False``.
+            cron_timezone: IANA timezone name (e.g. ``"America/New_York"``) in which to evaluate the cron expression. Defaults to ``None`` (UTC).
 
         Raises:
             DBOSException: If the cron expression is invalid, the workflow is not registered, or a schedule with the same name already exists
@@ -1998,6 +2002,11 @@ class DBOS:
             if fi and fi.class_info and fi.func_type == DBOSFuncType.Class
             else None
         )
+        if cron_timezone is not None:
+            try:
+                ZoneInfo(cron_timezone)
+            except (KeyError, Exception):
+                raise DBOSException(f"Invalid timezone: '{cron_timezone}'")
         sched = WorkflowSchedule(
             schedule_id=generate_uuid(),
             schedule_name=schedule_name,
@@ -2008,6 +2017,7 @@ class DBOS:
             context=dbos._sys_db.serializer.serialize(context),
             last_fired_at=None,
             automatic_backfill=automatic_backfill,
+            cron_timezone=cron_timezone,
         )
         ctx = snapshot_step_context(reserve_sleep_id=False)
         if ctx and ctx.is_workflow():
@@ -2108,6 +2118,7 @@ class DBOS:
         schedule: str,
         context: Any = None,
         automatic_backfill: bool = False,
+        cron_timezone: Optional[str] = None,
     ) -> None:
         """Async version of :meth:`create_schedule`."""
         await cls._configure_asyncio_thread_pool()
@@ -2118,6 +2129,7 @@ class DBOS:
             schedule=schedule,
             context=context,
             automatic_backfill=automatic_backfill,
+            cron_timezone=cron_timezone,
         )
 
     @classmethod
@@ -2245,6 +2257,7 @@ class DBOS:
                     context=dbos._sys_db.serializer.serialize(entry["context"]),
                     last_fired_at=None,
                     automatic_backfill=entry.get("automatic_backfill", False),
+                    cron_timezone=entry.get("cron_timezone"),
                 )
             )
         with dbos._sys_db.engine.begin() as c:
