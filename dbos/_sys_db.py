@@ -285,6 +285,13 @@ class StepInfo(TypedDict):
     completed_at_epoch_ms: Optional[int]
 
 
+class NotificationInfo(TypedDict):
+    topic: Optional[str]
+    message: Any
+    created_at_epoch_ms: int
+    consumed: bool
+
+
 _dbos_null_topic = "__null__topic__"
 _dbos_stream_closed_sentinel = "__DBOS_STREAM_CLOSED__"
 
@@ -687,16 +694,16 @@ class SystemDatabase(ABC):
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
             )
 
-    def cancel_workflow(
+    def cancel_workflows(
         self,
-        workflow_id: str,
+        workflow_ids: list[str],
     ) -> None:
         with self.engine.begin() as c:
-            # Set the workflow's status to CANCELLED and remove it from any queue it is on,
+            # Set the workflows' status to CANCELLED and remove them from any queue,
             # but only if the workflow is not already complete.
             c.execute(
                 sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .where(SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids))
                 .where(
                     SystemSchema.workflow_status.c.status.notin_(
                         [
@@ -714,13 +721,13 @@ class SystemDatabase(ABC):
                 )
             )
 
-    def resume_workflow(self, workflow_id: str) -> None:
+    def resume_workflows(self, workflow_ids: list[str]) -> None:
         with self.engine.begin() as c:
-            # Set the workflow's status to ENQUEUED and clear its recovery attempts and deadline,
+            # Set the workflows' status to ENQUEUED and clear recovery attempts and deadline,
             # but only if the workflow is not already complete.
             c.execute(
                 sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .where(SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids))
                 .where(
                     SystemSchema.workflow_status.c.status.notin_(
                         [
@@ -2181,6 +2188,67 @@ class SystemDatabase(ABC):
                 events[key] = value
 
             return events
+
+    def get_all_notifications(self, workflow_id: str) -> List[NotificationInfo]:
+        """Get all notifications sent to a workflow."""
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.notifications.c.topic,
+                    SystemSchema.notifications.c.message,
+                    SystemSchema.notifications.c.serialization,
+                    SystemSchema.notifications.c.created_at_epoch_ms,
+                    SystemSchema.notifications.c.consumed,
+                )
+                .where(SystemSchema.notifications.c.destination_uuid == workflow_id)
+                .order_by(SystemSchema.notifications.c.created_at_epoch_ms)
+            ).fetchall()
+            results: List[NotificationInfo] = []
+            for row in rows:
+                topic = row[0]
+                if topic == _dbos_null_topic:
+                    topic = None
+                results.append(
+                    {
+                        "topic": topic,
+                        "message": deserialize_value(row[1], row[2], self.serializer),
+                        "created_at_epoch_ms": row[3],
+                        "consumed": row[4],
+                    }
+                )
+            return results
+
+    def get_all_stream_entries(self, workflow_id: str) -> Dict[str, List[Any]]:
+        """Get all stream entries for a workflow.
+
+        Returns a dict mapping stream keys to lists of deserialized values (ordered by offset).
+        """
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.streams.c.key,
+                    SystemSchema.streams.c.value,
+                    SystemSchema.streams.c.offset,
+                    SystemSchema.streams.c.serialization,
+                )
+                .where(SystemSchema.streams.c.workflow_uuid == workflow_id)
+                .order_by(
+                    SystemSchema.streams.c.key,
+                    SystemSchema.streams.c.offset,
+                )
+            ).fetchall()
+            streams: Dict[str, List[Any]] = {}
+            for row in rows:
+                key = row[0]
+                value_str = row[1]
+                serialization = row[3]
+                value = deserialize_value(value_str, serialization, self.serializer)
+                if value == _dbos_stream_closed_sentinel:
+                    continue
+                if key not in streams:
+                    streams[key] = []
+                streams[key].append(value)
+            return streams
 
     @db_retry()
     def get_event_setup(

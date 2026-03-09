@@ -463,7 +463,7 @@ def _init_workflow(
                     was_stopped = evt.wait(time_to_wait_sec)
                     if was_stopped:
                         return
-                dbos._sys_db.cancel_workflow(wfid)
+                dbos._sys_db.cancel_workflows([wfid])
             except Exception as e:
                 dbos.logger.warning(
                     f"Exception in timeout thread for workflow {wfid}: {e}"

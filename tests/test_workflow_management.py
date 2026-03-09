@@ -5,7 +5,7 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, Queue, SetWorkflowID, WorkflowHandle
+from dbos import DBOS, DBOSClient, Queue, SetWorkflowID, WorkflowHandle
 from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.application_database import ApplicationSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
@@ -147,6 +147,144 @@ def test_delete_workflow(dbos: DBOS) -> None:
 
     # Verify deleting a non-existent workflow doesn't error
     DBOS.delete_workflow(parent_wfid2, delete_children=False)
+
+
+def test_bulk_cancel(dbos: DBOS) -> None:
+    steps_completed = 0
+    workflow_events: dict[str, threading.Event] = {}
+    main_events: dict[str, threading.Event] = {}
+
+    @DBOS.step()
+    def step_one() -> None:
+        nonlocal steps_completed
+        steps_completed += 1
+
+    @DBOS.step()
+    def step_two() -> None:
+        nonlocal steps_completed
+        steps_completed += 1
+
+    @DBOS.workflow()
+    def blocking_workflow() -> str:
+        wfid = DBOS.workflow_id
+        assert wfid is not None
+        step_one()
+        main_events[wfid].set()
+        workflow_events[wfid].wait()
+        step_two()
+        return wfid
+
+    # Start three workflows, wait for each to reach its blocking point
+    wfids: list[str] = []
+    handles = []
+    for _ in range(3):
+        wfid = str(uuid.uuid4())
+        wfids.append(wfid)
+        workflow_events[wfid] = threading.Event()
+        main_events[wfid] = threading.Event()
+        with SetWorkflowID(wfid):
+            handles.append(DBOS.start_workflow(blocking_workflow))
+        main_events[wfid].wait()
+
+    assert steps_completed == 3
+
+    # Bulk cancel all three workflows at once
+    DBOS.cancel_workflows(wfids)
+
+    # Release all workflows so they can observe cancellation
+    for evt in workflow_events.values():
+        evt.set()
+
+    for handle in handles:
+        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+            handle.get_result()
+
+    # step_two should not have run for any workflow
+    assert steps_completed == 3
+
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_bulk_resume(dbos: DBOS) -> None:
+    steps_completed = 0
+    workflow_events: dict[str, threading.Event] = {}
+    main_events: dict[str, threading.Event] = {}
+
+    @DBOS.step()
+    def step_one() -> None:
+        nonlocal steps_completed
+        steps_completed += 1
+
+    @DBOS.step()
+    def step_two() -> None:
+        nonlocal steps_completed
+        steps_completed += 1
+
+    @DBOS.workflow()
+    def blocking_workflow(x: int) -> int:
+        wfid = DBOS.workflow_id
+        assert wfid is not None
+        step_one()
+        main_events[wfid].set()
+        workflow_events[wfid].wait()
+        step_two()
+        return x
+
+    # Start three workflows and cancel them
+    wfids: list[str] = []
+    handles = []
+    for i in range(3):
+        wfid = str(uuid.uuid4())
+        wfids.append(wfid)
+        workflow_events[wfid] = threading.Event()
+        main_events[wfid] = threading.Event()
+        with SetWorkflowID(wfid):
+            handles.append(DBOS.start_workflow(blocking_workflow, i))
+        main_events[wfid].wait()
+
+    assert steps_completed == 3
+
+    DBOS.cancel_workflows(wfids)
+    for evt in workflow_events.values():
+        evt.set()
+    for handle in handles:
+        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+            handle.get_result()
+    assert steps_completed == 3
+
+    # Bulk resume all three workflows
+    resumed_handles = DBOS.resume_workflows(wfids)
+    assert len(resumed_handles) == 3
+    for i, handle in enumerate(resumed_handles):
+        assert handle.get_result() == i
+    assert steps_completed == 6
+
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_bulk_delete(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def simple_workflow(x: int) -> int:
+        return x
+
+    # Run three workflows
+    wfids: list[str] = []
+    for i in range(3):
+        wfid = str(uuid.uuid4())
+        wfids.append(wfid)
+        with SetWorkflowID(wfid):
+            assert simple_workflow(i) == i
+
+    # Verify all exist
+    for wfid in wfids:
+        assert DBOS.get_workflow_status(wfid) is not None
+
+    # Bulk delete all three
+    DBOS.delete_workflows(wfids)
+
+    # Verify all are gone
+    for wfid in wfids:
+        assert DBOS.get_workflow_status(wfid) is None
 
 
 def test_cancel_resume_txn(dbos: DBOS) -> None:
@@ -882,3 +1020,129 @@ def test_fork_streams(dbos: DBOS) -> None:
     for handle in [fork_one, fork_two, fork_three, fork_four, fork_five]:
         assert handle.get_result()
         assert list(DBOS.read_stream(handle.workflow_id, key)) == [0, 1, 2]
+
+
+def test_get_all_events(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def event_workflow() -> str:
+        DBOS.set_event("key1", "value1")
+        DBOS.set_event("key2", 42)
+        DBOS.set_event("key1", "updated")
+        return DBOS.workflow_id  # type: ignore
+
+    handle = DBOS.start_workflow(event_workflow)
+    wfid = handle.get_result()
+
+    events = dbos._sys_db.get_all_events(wfid)
+    assert events == {"key1": "updated", "key2": 42}
+
+    # Empty workflow has no events
+    empty_events = dbos._sys_db.get_all_events("nonexistent")
+    assert empty_events == {}
+
+
+def test_get_all_notifications(dbos: DBOS) -> None:
+    recv_event = threading.Event()
+
+    @DBOS.workflow()
+    def receiver_workflow() -> str:
+        DBOS.recv(topic="topic_a")
+        DBOS.recv(topic="topic_b")
+        recv_event.set()
+        return DBOS.workflow_id  # type: ignore
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(receiver_workflow)
+
+    # Send messages to the receiver workflow (two consumed, one unconsumed)
+    DBOS.send(wfid, "hello", topic="topic_a")
+    DBOS.send(wfid, {"data": 123}, topic="topic_b")
+    recv_event.wait()
+    handle.get_result()
+
+    # Send an extra message that the workflow never consumes
+    DBOS.send(wfid, "unconsumed", topic="topic_c")
+
+    notifications = dbos._sys_db.get_all_notifications(wfid)
+    assert len(notifications) == 3
+    assert notifications[0]["topic"] == "topic_a"
+    assert notifications[0]["message"] == "hello"
+    assert notifications[0]["consumed"] is True
+    assert notifications[1]["topic"] == "topic_b"
+    assert notifications[1]["message"] == {"data": 123}
+    assert notifications[1]["consumed"] is True
+    assert notifications[2]["topic"] == "topic_c"
+    assert notifications[2]["message"] == "unconsumed"
+    assert notifications[2]["consumed"] is False
+
+    # Nonexistent workflow has no notifications
+    assert dbos._sys_db.get_all_notifications("nonexistent") == []
+
+
+def test_get_all_notifications_null_topic(dbos: DBOS) -> None:
+    recv_event = threading.Event()
+
+    @DBOS.workflow()
+    def receiver_workflow() -> str:
+        DBOS.recv()
+        recv_event.set()
+        return DBOS.workflow_id  # type: ignore
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(receiver_workflow)
+
+    DBOS.send(wfid, "no_topic_msg")
+    recv_event.wait()
+    handle.get_result()
+
+    notifications = dbos._sys_db.get_all_notifications(wfid)
+    assert len(notifications) == 1
+    assert notifications[0]["topic"] is None
+    assert notifications[0]["message"] == "no_topic_msg"
+
+
+def test_get_all_stream_entries(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def stream_workflow() -> str:
+        DBOS.write_stream("stream_a", 10)
+        DBOS.write_stream("stream_a", 20)
+        DBOS.write_stream("stream_b", "hello")
+        DBOS.close_stream("stream_a")
+        DBOS.close_stream("stream_b")
+        return DBOS.workflow_id  # type: ignore
+
+    handle = DBOS.start_workflow(stream_workflow)
+    wfid = handle.get_result()
+
+    streams = dbos._sys_db.get_all_stream_entries(wfid)
+    assert streams == {"stream_a": [10, 20], "stream_b": ["hello"]}
+
+    # Nonexistent workflow has no streams
+    assert dbos._sys_db.get_all_stream_entries("nonexistent") == {}
+
+
+def test_client_delete_workflow(client: DBOSClient, dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def simple_workflow(x: int) -> int:
+        return x
+
+    # Test single delete
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert simple_workflow(1) == 1
+    assert len(client.list_workflows(workflow_ids=[wfid])) == 1
+    client.delete_workflow(wfid)
+    assert len(client.list_workflows(workflow_ids=[wfid])) == 0
+
+    # Test bulk delete
+    wfids: list[str] = []
+    for i in range(3):
+        wfid = str(uuid.uuid4())
+        wfids.append(wfid)
+        with SetWorkflowID(wfid):
+            assert simple_workflow(i) == i
+    assert len(client.list_workflows(workflow_ids=wfids)) == 3
+    client.delete_workflows(wfids)
+    assert len(client.list_workflows(workflow_ids=wfids)) == 0
