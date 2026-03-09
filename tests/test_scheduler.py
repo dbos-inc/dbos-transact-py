@@ -280,6 +280,7 @@ def test_dynamic_scheduler_fires(dbos: DBOS) -> None:
         workflow_fn=workflow_b,
         schedule="* * * * * *",
         context={"id": "b"},
+        cron_timezone="America/New_York",
     )
 
     def check_both_fired_twice() -> None:
@@ -302,6 +303,14 @@ def test_dynamic_scheduler_fires(dbos: DBOS) -> None:
     last_fired_b = datetime.fromisoformat(sched_b["last_fired_at"])
     assert last_fired_a <= datetime.now(timezone.utc)
     assert last_fired_b <= datetime.now(timezone.utc)
+    # Schedule A has no timezone — last_fired_at should be in UTC
+    assert last_fired_a.utcoffset() == timedelta(0)
+    # Schedule B uses America/New_York — last_fired_at should carry that offset
+    from zoneinfo import ZoneInfo
+
+    ny_tz = ZoneInfo("America/New_York")
+    expected_offset = datetime.now(ny_tz).utcoffset()
+    assert last_fired_b.utcoffset() == expected_offset
 
     DBOS.delete_schedule("every-second-a")
     DBOS.delete_schedule("every-second-b")
