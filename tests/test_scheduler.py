@@ -475,6 +475,66 @@ def test_backfill_schedule(dbos: DBOS) -> None:
     DBOS.delete_schedule("backfill-test")
 
 
+def test_backfill_with_timezone(dbos: DBOS) -> None:
+    received_utc: list[datetime] = []
+    received_ny: list[datetime] = []
+
+    @DBOS.workflow()
+    def wf_utc(scheduled_at: datetime, ctx: Any) -> None:
+        received_utc.append(scheduled_at)
+
+    @DBOS.workflow()
+    def wf_ny(scheduled_at: datetime, ctx: Any) -> None:
+        received_ny.append(scheduled_at)
+
+    # Same cron (midnight daily), different timezones
+    DBOS.create_schedule(
+        schedule_name="tz-utc",
+        workflow_fn=wf_utc,
+        schedule="0 0 * * *",
+    )
+    DBOS.create_schedule(
+        schedule_name="tz-ny",
+        workflow_fn=wf_ny,
+        schedule="0 0 * * *",
+        cron_timezone="America/New_York",
+    )
+
+    # Backfill a window that contains two UTC midnights and two NY midnights
+    # In winter, America/New_York is UTC-5
+    # Start just before midnight UTC Jan 1
+    start = datetime(2024, 12, 31, 23, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2025, 1, 3, 0, 0, 0, tzinfo=timezone.utc)
+
+    handles_utc = DBOS.backfill_schedule("tz-utc", start, end)
+    handles_ny = DBOS.backfill_schedule("tz-ny", start, end)
+
+    for h in handles_utc + handles_ny:
+        h.get_result()
+
+    # UTC schedule: midnight UTC on Jan 1 and Jan 2
+    utc_times = sorted(received_utc)
+    assert len(utc_times) == 2
+    assert utc_times[0].day == 1 and utc_times[0].hour == 0
+    assert utc_times[1].day == 2 and utc_times[1].hour == 0
+
+    # NY schedule: midnight Eastern = 05:00 UTC, so Jan 1 05:00 and Jan 2 05:00
+    ny_times = sorted(received_ny)
+    assert len(ny_times) == 2
+    for t in ny_times:
+        # Midnight in New York
+        assert t.hour == 0
+        assert t.minute == 0
+    # The NY times should be different instants from the UTC times
+    # Convert to UTC for comparison: midnight EST = 05:00 UTC
+    ny_utc_times = sorted(t.astimezone(timezone.utc) for t in ny_times)
+    assert ny_utc_times[0].hour == 5
+    assert ny_utc_times[1].hour == 5
+
+    DBOS.delete_schedule("tz-utc")
+    DBOS.delete_schedule("tz-ny")
+
+
 def test_trigger_schedule(dbos: DBOS) -> None:
     received: list[tuple[datetime, Any]] = []
 
