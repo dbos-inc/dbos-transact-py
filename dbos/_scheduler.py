@@ -229,9 +229,8 @@ def dynamic_scheduler_loop(
                 # backfill missed executions before starting the thread.
                 if schedule.get("automatic_backfill") and schedule.get("last_fired_at"):
                     try:
-                        last_fired = datetime.fromisoformat(
-                            schedule["last_fired_at"]  # type: ignore[arg-type]
-                        )
+                        assert schedule["last_fired_at"]
+                        last_fired = datetime.fromisoformat(schedule["last_fired_at"])
                         now = datetime.now(timezone.utc)
                         if last_fired < now:
                             backfill_schedule(
