@@ -4,11 +4,11 @@ from typing import Any
 
 import pytest
 
-from dbos import DBOS, DBOSClient, DBOSConfiguredInstance
+from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance
 from dbos._error import DBOSException
 from dbos._utils import INTERNAL_QUEUE_NAME
 
-from .conftest import retry_until_success
+from .conftest import default_config, retry_until_success
 
 
 def test_schedule_crud(dbos: DBOS) -> None:
@@ -966,6 +966,63 @@ def test_classmethod_schedule(dbos: DBOS) -> None:
         h.get_result()
 
     DBOS.delete_schedule("classmethod-backfill")
+
+
+def test_automatic_backfill_on_restart(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> None:
+    """Automatic backfill should enqueue missed executions when DBOS restarts."""
+    received: list[datetime] = []
+
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def hourly_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        received.append(scheduled_at)
+
+    DBOS.launch()
+
+    # Create a schedule with automatic_backfill enabled (hourly — won't fire naturally)
+    DBOS.create_schedule(
+        schedule_name="backfill-restart",
+        workflow_fn=hourly_workflow,
+        schedule="0 * * * *",
+        context=None,
+        automatic_backfill=True,
+    )
+
+    # Set last_fired_at to 3 hours ago, simulating that the scheduler was down
+    three_hours_ago = datetime.now(timezone.utc) - timedelta(hours=3)
+    dbos._sys_db.update_last_fired_at("backfill-restart", three_hours_ago.isoformat())
+
+    # Verify the schedule metadata reflects our changes
+    sched = DBOS.get_schedule("backfill-restart")
+    assert sched is not None
+    assert sched["automatic_backfill"] is True
+    assert sched["last_fired_at"] is not None
+    assert datetime.fromisoformat(sched["last_fired_at"]) == three_hours_ago
+
+    # Destroy and relaunch DBOS — the scheduler should backfill on startup
+    DBOS.destroy()
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    # Wait for the scheduler loop to pick up the schedule and backfill
+    def check_backfilled() -> None:
+        assert len(received) >= 3
+
+    retry_until_success(check_backfilled)
+
+    # Verify the backfilled times are the 3 hourly slots between last_fired_at and now
+    fired_times = sorted(received)
+    for t in fired_times[:3]:
+        assert t > three_hours_ago
+        assert t <= datetime.now(timezone.utc)
+        assert t.minute == 0 and t.second == 0  # hourly cron fires at minute 0
+
+    DBOS.delete_schedule("backfill-restart")
+    DBOS.destroy(destroy_registry=True)
 
 
 def test_instance_method_schedule_rejected(dbos: DBOS) -> None:
