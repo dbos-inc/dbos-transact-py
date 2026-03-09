@@ -722,7 +722,7 @@ async def test_asyncio_wait(dbos: DBOS) -> None:
 
         # Let the slow step finish and wait for it
         gate.set()
-        done2, pending2 = await DBOS.asyncio_wait(pending)
+        done2, pending2 = await DBOS.asyncio_wait(list(pending))
         assert len(done2) == 1
         assert len(pending2) == 0
         assert [t.result() for t in done2] == ["slow_done"]
@@ -820,7 +820,7 @@ async def test_asyncio_wait_first_exception(dbos: DBOS) -> None:
 
         # Let the slow step finish and wait for it
         gate.set()
-        done2, pending2 = await DBOS.asyncio_wait(pending)
+        done2, pending2 = await DBOS.asyncio_wait(list(pending))
         assert len(done2) == 1
         assert len(pending2) == 0
         assert next(iter(done2)).result() == "ok"
@@ -860,7 +860,7 @@ async def test_asyncio_wait_timeout(dbos: DBOS) -> None:
 
         # Unblock and wait for all
         gate.set()
-        done2, pending2 = await DBOS.asyncio_wait(pending)
+        done2, pending2 = await DBOS.asyncio_wait(list(pending))
         assert len(done2) == 2
         assert len(pending2) == 0
         assert sorted([t.result() for t in done2]) == ["a", "b"]

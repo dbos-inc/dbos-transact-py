@@ -15,6 +15,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Awaitable,
     Callable,
     Coroutine,
     Dict,
@@ -1288,19 +1289,18 @@ class DBOS:
     @classmethod
     async def asyncio_wait(
         cls,
-        fs: Any,
+        fs: List[Awaitable[Any]],
         *,
         timeout: Optional[float] = None,
         return_when: str = asyncio.ALL_COMPLETED,
-    ) -> tuple[set[Any], set[Any]]:
+    ) -> tuple[set[asyncio.Task[Any]], set[asyncio.Task[Any]]]:
         """
         Durable version of asyncio.wait.
 
-        Has the same signature and behavior as `asyncio.wait`, but checkpoints which
-        futures are done vs pending so the result is deterministic during workflow recovery.
+        Checkpoints which tasks are done vs pending so the result is
+        deterministic during workflow recovery.
 
-        This function must be called from within a workflow.
-        When called outside a workflow, it falls back to regular `asyncio.wait`.
+        When called outside a workflow, falls back to regular `asyncio.wait`.
         """
         cur_ctx = snapshot_step_context()
         fs_list = [asyncio.ensure_future(f) for f in fs]
