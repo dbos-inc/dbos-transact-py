@@ -16,7 +16,6 @@ from typing import (
 
 from dbos._context import EnterDBOSStepRetry
 from dbos._error import DBOSException
-from dbos._logger import dbos_logger
 from dbos._registrations import get_dbos_func_name
 
 if TYPE_CHECKING:
@@ -185,14 +184,10 @@ class Pending(Outcome[T]):
         try:
             value = await func()
             return await asyncio.to_thread(after, lambda: value)
+        except asyncio.CancelledError:
+            raise
         except BaseException as exp:
-            try:
-                return await asyncio.to_thread(after, lambda: Pending._raise(exp))
-            except RuntimeError as re:
-                dbos_logger.warning(
-                    f"Runtime error recording step or workflow outcome: {re}"
-                )
-                raise exp
+            return await asyncio.to_thread(after, lambda: Pending._raise(exp))
 
     def wrap(
         self,
