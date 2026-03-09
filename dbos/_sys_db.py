@@ -3619,21 +3619,13 @@ class SystemDatabase(ABC):
     def resume_schedule(self, name: str, conn: Optional[sa.Connection] = None) -> None:
         self._set_schedule_status(name, "ACTIVE", conn)
 
-    def update_last_fired_at(
-        self, name: str, last_fired_at: str, conn: Optional[sa.Connection] = None
-    ) -> None:
-        def _do(c: sa.Connection) -> None:
+    def update_last_fired_at(self, name: str, last_fired_at: str) -> None:
+        with self.engine.begin() as c:
             c.execute(
                 sa.update(SystemSchema.workflow_schedules)
                 .where(SystemSchema.workflow_schedules.c.schedule_name == name)
                 .values(last_fired_at=last_fired_at)
             )
-
-        if conn is not None:
-            _do(conn)
-        else:
-            with self.engine.begin() as c:
-                _do(c)
 
     def delete_schedule(self, name: str, conn: Optional[sa.Connection] = None) -> None:
         def _do(c: sa.Connection) -> None:
