@@ -189,7 +189,9 @@ class Pending(Outcome[T]):
             try:
                 return await asyncio.to_thread(after, lambda: Pending._raise(exp))
             except RuntimeError as re:
-                dbos_logger.warning(f"Runtime error recording workflow outcome: {re}")
+                dbos_logger.warning(
+                    f"Runtime error recording step or workflow outcome: {re}"
+                )
                 raise exp
 
     def wrap(
