@@ -69,6 +69,15 @@ def test_schedule_crud(dbos: DBOS) -> None:
             schedule="0 0 * * *",
         )
 
+    # Reject invalid timezone
+    with pytest.raises(DBOSException, match="Invalid timezone"):
+        DBOS.create_schedule(
+            schedule_name="bad-tz",
+            workflow_fn=my_workflow,
+            schedule="* * * * *",
+            cron_timezone="Fake/Zone",
+        )
+
     # --- list_schedules filters ---
     DBOS.create_schedule(
         schedule_name="other-schedule",
@@ -182,6 +191,20 @@ def test_apply_schedules(dbos: DBOS) -> None:
                     "context": None,
                 }
             ]
+        )
+
+    # Reject missing required fields
+    with pytest.raises(DBOSException, match="missing required field 'schedule_name'"):
+        DBOS.apply_schedules(
+            [{"workflow_fn": wf_a, "schedule": "* * * * *", "context": None}]
+        )
+    with pytest.raises(DBOSException, match="missing required field 'workflow_fn'"):
+        DBOS.apply_schedules(
+            [{"schedule_name": "x", "schedule": "* * * * *", "context": None}]
+        )
+    with pytest.raises(DBOSException, match="missing required field 'schedule'"):
+        DBOS.apply_schedules(
+            [{"schedule_name": "x", "workflow_fn": wf_a, "context": None}]
         )
 
     # Reject call from within a workflow
@@ -616,6 +639,15 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
             schedule="not a cron",
         )
 
+    # Reject invalid timezone
+    with pytest.raises(DBOSException, match="Invalid timezone"):
+        client.create_schedule(
+            schedule_name="bad-tz",
+            workflow_name="some.workflow",
+            schedule="* * * * *",
+            cron_timezone="Fake/Zone",
+        )
+
     # --- list_schedules filters ---
     client.create_schedule(
         schedule_name="client-other",
@@ -731,6 +763,20 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
                     "context": None,
                 }
             ]
+        )
+
+    # Reject missing required fields
+    with pytest.raises(DBOSException, match="missing required field 'schedule_name'"):
+        client.apply_schedules(
+            [{"workflow_name": "wf.x", "schedule": "* * * * *", "context": None}]
+        )
+    with pytest.raises(DBOSException, match="missing required field 'workflow_name'"):
+        client.apply_schedules(
+            [{"schedule_name": "x", "schedule": "* * * * *", "context": None}]
+        )
+    with pytest.raises(DBOSException, match="missing required field 'schedule'"):
+        client.apply_schedules(
+            [{"schedule_name": "x", "workflow_name": "wf.x", "context": None}]
         )
 
     # Clean up
