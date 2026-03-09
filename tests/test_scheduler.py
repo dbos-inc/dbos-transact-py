@@ -112,7 +112,7 @@ def test_apply_schedules(dbos: DBOS) -> None:
     def wf_b(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
-    # Apply two schedules at once
+    # Apply two schedules at once (sched-b has automatic_backfill enabled)
     DBOS.apply_schedules(
         [
             {
@@ -126,6 +126,7 @@ def test_apply_schedules(dbos: DBOS) -> None:
                 "workflow_fn": wf_b,
                 "schedule": "0 0 * * *",
                 "context": None,
+                "automatic_backfill": True,
             },
         ]
     )
@@ -134,8 +135,10 @@ def test_apply_schedules(dbos: DBOS) -> None:
     by_name = {s["schedule_name"]: s for s in schedules}
     assert by_name["sched-a"]["schedule"] == "* * * * *"
     assert by_name["sched-a"]["context"] == {"region": "us"}
+    assert by_name["sched-a"]["automatic_backfill"] is False
     assert by_name["sched-b"]["schedule"] == "0 0 * * *"
     assert by_name["sched-b"]["context"] is None
+    assert by_name["sched-b"]["automatic_backfill"] is True
 
     # Replace sched-a, add sched-c
     DBOS.apply_schedules(
@@ -280,6 +283,19 @@ def test_dynamic_scheduler_fires(dbos: DBOS) -> None:
         assert all(c == {"id": "b"} for c in received_b)
 
     retry_until_success(check_both_fired_twice)
+
+    # Verify last_fired_at is set after firing
+    sched_a = DBOS.get_schedule("every-second-a")
+    sched_b = DBOS.get_schedule("every-second-b")
+    assert sched_a is not None
+    assert sched_b is not None
+    assert sched_a["last_fired_at"] is not None
+    assert sched_b["last_fired_at"] is not None
+    # last_fired_at should be a valid ISO datetime
+    last_fired_a = datetime.fromisoformat(sched_a["last_fired_at"])
+    last_fired_b = datetime.fromisoformat(sched_b["last_fired_at"])
+    assert last_fired_a <= datetime.now(timezone.utc)
+    assert last_fired_b <= datetime.now(timezone.utc)
 
     DBOS.delete_schedule("every-second-a")
     DBOS.delete_schedule("every-second-b")
@@ -570,7 +586,7 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
 
 
 def test_client_apply_schedules(client: DBOSClient) -> None:
-    # Apply two schedules at once
+    # Apply two schedules at once (sched-b has automatic_backfill enabled)
     client.apply_schedules(
         [
             {
@@ -584,6 +600,7 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
                 "workflow_name": "wf.b",
                 "schedule": "0 0 * * *",
                 "context": None,
+                "automatic_backfill": True,
             },
         ]
     )
@@ -592,8 +609,10 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
     by_name = {s["schedule_name"]: s for s in schedules}
     assert by_name["sched-a"]["schedule"] == "* * * * *"
     assert by_name["sched-a"]["context"] == {"region": "eu"}
+    assert by_name["sched-a"]["automatic_backfill"] is False
     assert by_name["sched-b"]["workflow_name"] == "wf.b"
     assert by_name["sched-b"]["context"] is None
+    assert by_name["sched-b"]["automatic_backfill"] is True
 
     # Replace sched-a, add sched-c
     client.apply_schedules(
