@@ -327,6 +327,13 @@ CREATE TABLE "{schema}".application_versions (
 """
 
 
+def get_dbos_migration_fourteen(schema: str) -> str:
+    return f"""
+ALTER TABLE "{schema}".workflow_schedules ADD COLUMN "last_fired_at" TEXT DEFAULT NULL;
+ALTER TABLE "{schema}".workflow_schedules ADD COLUMN "automatic_backfill" BOOLEAN NOT NULL DEFAULT FALSE;
+"""
+
+
 def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
     return [
         get_dbos_migration_one(schema, use_listen_notify),
@@ -342,6 +349,7 @@ def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
         get_dbos_migration_eleven(schema),
         get_dbos_migration_twelve(schema),
         get_dbos_migration_thirteen(schema),
+        get_dbos_migration_fourteen(schema),
     ]
 
 
@@ -508,6 +516,11 @@ CREATE TABLE application_versions (
     created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
 );
 """
+sqlite_migration_fourteen = """
+ALTER TABLE workflow_schedules ADD COLUMN "last_fired_at" TEXT DEFAULT NULL;
+ALTER TABLE workflow_schedules ADD COLUMN "automatic_backfill" BOOLEAN NOT NULL DEFAULT FALSE;
+"""
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -521,4 +534,5 @@ sqlite_migrations = [
     sqlite_migration_eleven,
     sqlite_migration_twelve,
     sqlite_migration_thirteen,
+    sqlite_migration_fourteen,
 ]

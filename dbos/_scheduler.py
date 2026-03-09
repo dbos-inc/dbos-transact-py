@@ -69,6 +69,9 @@ class _ScheduleThread:
                         self.context,
                         self.class_name,
                     )
+                dbos._sys_db.update_last_fired_at(
+                    self.schedule_name, next_exec_time.isoformat()
+                )
             except Exception:
                 dbos_logger.warning(
                     f"Exception in schedule '{self.schedule_name}': "
@@ -222,6 +225,27 @@ def dynamic_scheduler_loop(
                     schedule_thread.stop()
                     del schedule_threads[schedule_id]
             elif schedule_thread is None:
+                # Automatic backfill: if enabled and last_fired_at is set,
+                # backfill missed executions before starting the thread.
+                if schedule.get("automatic_backfill") and schedule.get("last_fired_at"):
+                    try:
+                        last_fired = datetime.fromisoformat(
+                            schedule["last_fired_at"]  # type: ignore[arg-type]
+                        )
+                        now = datetime.now(timezone.utc)
+                        if last_fired < now:
+                            backfill_schedule(
+                                dbos._sys_db,
+                                schedule["schedule_name"],
+                                last_fired,
+                                now,
+                            )
+                    except Exception:
+                        dbos_logger.warning(
+                            f"Exception during automatic backfill for "
+                            f"schedule '{schedule['schedule_name']}': "
+                            f"{traceback.format_exc()}"
+                        )
                 schedule_threads[schedule_id] = _ScheduleThread(
                     schedule, dbos._sys_db.serializer
                 )

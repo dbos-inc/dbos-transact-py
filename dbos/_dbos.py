@@ -285,11 +285,12 @@ class DBOSRegistry:
         return Queue(INTERNAL_QUEUE_NAME)
 
 
-class ScheduleInput(TypedDict):
+class ScheduleInput(TypedDict, total=False):
     schedule_name: str
     workflow_fn: Callable[[datetime, Any], None]
     schedule: str
     context: Any
+    automatic_backfill: bool
 
 
 class DBOS:
@@ -1960,6 +1961,7 @@ class DBOS:
         workflow_fn: ScheduledWorkflow,
         schedule: str,
         context: Any = None,
+        automatic_backfill: bool = False,
     ) -> None:
         """
         Create a cron schedule that periodically invokes a workflow function.
@@ -1973,6 +1975,7 @@ class DBOS:
             workflow_fn: The workflow function to invoke. Must accept ``(datetime, context)``.
             schedule: A cron expression (supports seconds with 6 fields).
             context: A context object passed as the second argument to every invocation. Defaults to ``None``.
+            automatic_backfill: If ``True``, on startup the scheduler will automatically backfill missed executions since the last time the schedule fired. Defaults to ``False``.
 
         Raises:
             DBOSException: If the cron expression is invalid, the workflow is not registered, or a schedule with the same name already exists
@@ -2003,6 +2006,8 @@ class DBOS:
             schedule=schedule,
             status="ACTIVE",
             context=dbos._sys_db.serializer.serialize(context),
+            last_fired_at=None,
+            automatic_backfill=automatic_backfill,
         )
         ctx = snapshot_step_context(reserve_sleep_id=False)
         if ctx and ctx.is_workflow():
@@ -2102,6 +2107,7 @@ class DBOS:
         workflow_fn: ScheduledWorkflow,
         schedule: str,
         context: Any = None,
+        automatic_backfill: bool = False,
     ) -> None:
         """Async version of :meth:`create_schedule`."""
         await cls._configure_asyncio_thread_pool()
@@ -2111,6 +2117,7 @@ class DBOS:
             workflow_fn=workflow_fn,
             schedule=schedule,
             context=context,
+            automatic_backfill=automatic_backfill,
         )
 
     @classmethod
@@ -2195,7 +2202,19 @@ class DBOS:
             )
         dbos = _get_dbos_instance()
         to_apply: List[WorkflowSchedule] = []
-        for entry in schedules:
+        for i, entry in enumerate(schedules):
+            if "schedule_name" not in entry:
+                raise DBOSException(
+                    f"Schedule entry {i} is missing required field 'schedule_name'"
+                )
+            if "workflow_fn" not in entry:
+                raise DBOSException(
+                    f"Schedule entry {i} is missing required field 'workflow_fn'"
+                )
+            if "schedule" not in entry:
+                raise DBOSException(
+                    f"Schedule entry {i} is missing required field 'schedule'"
+                )
             cron = entry["schedule"]
             if not croniter.is_valid(cron, second_at_beginning=True):
                 raise DBOSException(f"Invalid cron schedule: '{cron}'")
@@ -2224,6 +2243,8 @@ class DBOS:
                     schedule=cron,
                     status="ACTIVE",
                     context=dbos._sys_db.serializer.serialize(entry["context"]),
+                    last_fired_at=None,
+                    automatic_backfill=entry.get("automatic_backfill", False),
                 )
             )
         with dbos._sys_db.engine.begin() as c:

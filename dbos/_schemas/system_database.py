@@ -213,6 +213,8 @@ class SystemSchema:
         Column("schedule", Text, nullable=False),
         Column("status", Text, nullable=False, server_default="ACTIVE"),
         Column("context", Text, nullable=False),
+        Column("last_fired_at", Text, nullable=True),
+        Column("automatic_backfill", Boolean, nullable=False, server_default="false"),
     )
 
     application_versions = Table(

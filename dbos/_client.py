@@ -715,6 +715,7 @@ class DBOSClient:
         schedule: str,
         context: Any = None,
         workflow_class_name: Optional[str] = None,
+        automatic_backfill: bool = False,
     ) -> None:
         """
         Create a cron schedule that periodically invokes a workflow.
@@ -725,6 +726,7 @@ class DBOSClient:
             schedule: A cron expression (supports seconds with 6 fields).
             context: A context object passed as the second argument to every invocation. Defaults to ``None``.
             workflow_class_name: Class name for static class method workflows. Defaults to ``None``.
+            automatic_backfill: If ``True``, on startup the scheduler will automatically backfill missed executions since the last time the schedule fired. Defaults to ``False``.
 
         Raises:
             DBOSException: If the cron expression is invalid or a schedule with the same name already exists.
@@ -740,6 +742,8 @@ class DBOSClient:
                 schedule=schedule,
                 status="ACTIVE",
                 context=self._sys_db.serializer.serialize(context),
+                last_fired_at=None,
+                automatic_backfill=automatic_backfill,
             )
         )
 
@@ -788,6 +792,7 @@ class DBOSClient:
         schedule: str,
         context: Any = None,
         workflow_class_name: Optional[str] = None,
+        automatic_backfill: bool = False,
     ) -> None:
         """Async version of :meth:`create_schedule`."""
         await asyncio.to_thread(
@@ -797,6 +802,7 @@ class DBOSClient:
             schedule=schedule,
             context=context,
             workflow_class_name=workflow_class_name,
+            automatic_backfill=automatic_backfill,
         )
 
     async def list_schedules_async(
@@ -844,7 +850,19 @@ class DBOSClient:
             DBOSException: If a cron expression is invalid
         """
         to_apply: List[WorkflowSchedule] = []
-        for entry in schedules:
+        for i, entry in enumerate(schedules):
+            if "schedule_name" not in entry:
+                raise DBOSException(
+                    f"Schedule entry {i} is missing required field 'schedule_name'"
+                )
+            if "workflow_name" not in entry:
+                raise DBOSException(
+                    f"Schedule entry {i} is missing required field 'workflow_name'"
+                )
+            if "schedule" not in entry:
+                raise DBOSException(
+                    f"Schedule entry {i} is missing required field 'schedule'"
+                )
             cron = entry["schedule"]
             if not croniter.is_valid(cron, second_at_beginning=True):
                 raise DBOSException(f"Invalid cron schedule: '{cron}'")
@@ -857,6 +875,8 @@ class DBOSClient:
                     schedule=cron,
                     status="ACTIVE",
                     context=self._sys_db.serializer.serialize(entry["context"]),
+                    last_fired_at=None,
+                    automatic_backfill=entry.get("automatic_backfill", False),
                 )
             )
         with self._sys_db.engine.begin() as c:
