@@ -186,7 +186,7 @@ class Pending(Outcome[T]):
             value = await func()
             return await asyncio.to_thread(after, lambda: value)
         except asyncio.CancelledError:
-            dbos_logger.warning(f"asyncio task cancelled for workflow or step {func}")
+            dbos_logger.warning(f"Asyncio task cancelled for workflow or step {func}")
             raise
         except BaseException as exp:
             return await asyncio.to_thread(after, lambda: Pending._raise(exp))
