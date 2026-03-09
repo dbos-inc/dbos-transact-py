@@ -134,7 +134,6 @@ from ._error import (
     DBOSConflictingRegistrationError,
     DBOSException,
     DBOSNonExistentWorkflowError,
-    DBOSWorkflowConflictIDError,
 )
 from ._event_loop import BackgroundEventLoop
 from ._logger import (
@@ -1347,21 +1346,18 @@ class DBOS:
                 serialized_output, serialization = serialize_value(
                     done_idx_list, None, dbos._serializer
                 )
-                try:
-                    await asyncio.to_thread(
-                        dbos._sys_db.record_operation_result,
-                        {
-                            "workflow_uuid": ctx.workflow_id,
-                            "function_id": ctx.curr_step_function_id,
-                            "function_name": "DBOS.asyncio_wait",
-                            "output": serialized_output,
-                            "error": None,
-                            "serialization": serialization,
-                            "started_at_epoch_ms": int(time.time() * 1000),
-                        },
-                    )
-                except DBOSWorkflowConflictIDError:
-                    pass
+                await asyncio.to_thread(
+                    dbos._sys_db.record_operation_result,
+                    {
+                        "workflow_uuid": ctx.workflow_id,
+                        "function_id": ctx.curr_step_function_id,
+                        "function_name": "DBOS.asyncio_wait",
+                        "output": serialized_output,
+                        "error": None,
+                        "serialization": serialization,
+                        "started_at_epoch_ms": int(time.time() * 1000),
+                    },
+                )
                 return done, pending
 
     @classmethod

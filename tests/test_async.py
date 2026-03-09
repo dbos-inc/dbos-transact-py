@@ -752,7 +752,6 @@ async def test_asyncio_wait(dbos: DBOS) -> None:
     assert steps[3]["output"] == [0]
 
     # Fork from a high step to replay everything from DB (OAOO)
-    gate.set()
     forked = await DBOS.fork_workflow_async(handle.workflow_id, 100)
     await forked.get_result()
     assert step_counter == 2
@@ -831,7 +830,6 @@ async def test_asyncio_wait_first_exception(dbos: DBOS) -> None:
     assert step_counter == 2
 
     # Fork from a high step to replay everything from DB (OAOO)
-    gate.set()
     forked = await DBOS.fork_workflow_async(handle.workflow_id, 100)
     await forked.get_result()
     assert step_counter == 2
@@ -872,7 +870,6 @@ async def test_asyncio_wait_timeout(dbos: DBOS) -> None:
     assert step_counter == 2
 
     # Fork from a high step to replay everything from DB (OAOO)
-    gate.set()
     forked = await DBOS.fork_workflow_async(handle.workflow_id, 100)
     await forked.get_result()
     assert step_counter == 2
