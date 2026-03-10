@@ -15,6 +15,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Awaitable,
     Callable,
     Coroutine,
     Dict,
@@ -38,6 +39,8 @@ from dbos._serialization import (
     DefaultSerializer,
     Serializer,
     WorkflowSerializationFormat,
+    deserialize_value,
+    serialize_value,
 )
 from dbos._sys_db import SystemDatabase, WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, generate_uuid
@@ -1282,6 +1285,80 @@ class DBOS:
             record_sleep, _get_dbos_instance(), cur_ctx, seconds
         )
         await asyncio.sleep(duration)
+
+    @classmethod
+    async def asyncio_wait(
+        cls,
+        fs: List[Awaitable[Any]],
+        *,
+        timeout: Optional[float] = None,
+        return_when: str = asyncio.ALL_COMPLETED,
+    ) -> tuple[set[asyncio.Task[Any]], set[asyncio.Task[Any]]]:
+        """
+        Durable version of asyncio.wait.
+
+        Checkpoints which tasks are done vs pending so the result is
+        deterministic during workflow recovery.
+
+        When called outside a workflow, falls back to regular `asyncio.wait`.
+        """
+        cur_ctx = snapshot_step_context()
+        fs_list = [asyncio.ensure_future(f) for f in fs]
+        if cur_ctx is None or not cur_ctx.is_workflow():
+            result: tuple[set[Any], set[Any]] = await asyncio.wait(
+                fs_list, timeout=timeout, return_when=return_when
+            )
+            return result
+
+        await cls._configure_asyncio_thread_pool()
+        dbos = _get_dbos_instance()
+        attributes: TracedAttributes = {"name": "asyncio_wait"}
+
+        with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
+            recorded = await asyncio.to_thread(
+                dbos._sys_db.check_operation_execution,
+                ctx.workflow_id,
+                ctx.curr_step_function_id,
+                "DBOS.asyncio_wait",
+            )
+
+            if recorded is not None:
+                recorded_indices: set[int] = set(
+                    deserialize_value(
+                        recorded["output"],
+                        recorded["serialization"],
+                        dbos._serializer,
+                    )
+                    or []
+                )
+                done = {fs_list[i] for i in recorded_indices}
+                pending = {
+                    fs_list[i] for i in range(len(fs_list)) if i not in recorded_indices
+                }
+                if done:
+                    await asyncio.wait(done)
+                return done, pending
+            else:
+                done, pending = await asyncio.wait(
+                    fs_list, timeout=timeout, return_when=return_when
+                )
+                done_idx_list = [i for i, f in enumerate(fs_list) if f in done]
+                serialized_output, serialization = serialize_value(
+                    done_idx_list, None, dbos._serializer
+                )
+                await asyncio.to_thread(
+                    dbos._sys_db.record_operation_result,
+                    {
+                        "workflow_uuid": ctx.workflow_id,
+                        "function_id": ctx.curr_step_function_id,
+                        "function_name": "DBOS.asyncio_wait",
+                        "output": serialized_output,
+                        "error": None,
+                        "serialization": serialization,
+                        "started_at_epoch_ms": int(time.time() * 1000),
+                    },
+                )
+                return done, pending
 
     @classmethod
     def set_event(
