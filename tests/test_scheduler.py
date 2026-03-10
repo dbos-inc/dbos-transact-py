@@ -4,11 +4,11 @@ from typing import Any
 
 import pytest
 
-from dbos import DBOS, DBOSClient, DBOSConfiguredInstance
+from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance
 from dbos._error import DBOSException
 from dbos._utils import INTERNAL_QUEUE_NAME
 
-from .conftest import retry_until_success
+from .conftest import default_config, retry_until_success
 
 
 def test_schedule_crud(dbos: DBOS) -> None:
@@ -20,12 +20,13 @@ def test_schedule_crud(dbos: DBOS) -> None:
     def other_workflow(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
-    # Create a schedule with context
+    # Create a schedule with context and timezone
     DBOS.create_schedule(
         schedule_name="test-schedule",
         workflow_fn=my_workflow,
         schedule="* * * * *",
         context={"env": "test"},
+        cron_timezone="America/New_York",
     )
 
     # List schedules and verify
@@ -36,6 +37,7 @@ def test_schedule_crud(dbos: DBOS) -> None:
     assert schedules[0]["schedule"] == "* * * * *"
     assert schedules[0]["context"] == {"env": "test"}
     assert schedules[0]["workflow_class_name"] is None
+    assert schedules[0]["cron_timezone"] == "America/New_York"
 
     # Get schedule by name
     sched = DBOS.get_schedule("test-schedule")
@@ -46,6 +48,7 @@ def test_schedule_crud(dbos: DBOS) -> None:
     assert sched["schedule_id"] == schedules[0]["schedule_id"]
     assert sched["context"] == {"env": "test"}
     assert sched["workflow_class_name"] is None
+    assert sched["cron_timezone"] == "America/New_York"
 
     # Get nonexistent schedule
     assert DBOS.get_schedule("nonexistent") is None
@@ -64,6 +67,15 @@ def test_schedule_crud(dbos: DBOS) -> None:
             schedule_name="test-schedule",
             workflow_fn=my_workflow,
             schedule="0 0 * * *",
+        )
+
+    # Reject invalid timezone
+    with pytest.raises(DBOSException, match="Invalid timezone"):
+        DBOS.create_schedule(
+            schedule_name="bad-tz",
+            workflow_fn=my_workflow,
+            schedule="* * * * *",
+            cron_timezone="Fake/Zone",
         )
 
     # --- list_schedules filters ---
@@ -112,7 +124,7 @@ def test_apply_schedules(dbos: DBOS) -> None:
     def wf_b(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
-    # Apply two schedules at once
+    # Apply two schedules at once (sched-b has automatic_backfill and timezone)
     DBOS.apply_schedules(
         [
             {
@@ -126,6 +138,8 @@ def test_apply_schedules(dbos: DBOS) -> None:
                 "workflow_fn": wf_b,
                 "schedule": "0 0 * * *",
                 "context": None,
+                "automatic_backfill": True,
+                "cron_timezone": "Europe/London",
             },
         ]
     )
@@ -134,8 +148,12 @@ def test_apply_schedules(dbos: DBOS) -> None:
     by_name = {s["schedule_name"]: s for s in schedules}
     assert by_name["sched-a"]["schedule"] == "* * * * *"
     assert by_name["sched-a"]["context"] == {"region": "us"}
+    assert by_name["sched-a"]["automatic_backfill"] is False
+    assert by_name["sched-a"]["cron_timezone"] is None
     assert by_name["sched-b"]["schedule"] == "0 0 * * *"
     assert by_name["sched-b"]["context"] is None
+    assert by_name["sched-b"]["automatic_backfill"] is True
+    assert by_name["sched-b"]["cron_timezone"] == "Europe/London"
 
     # Replace sched-a, add sched-c
     DBOS.apply_schedules(
@@ -173,6 +191,20 @@ def test_apply_schedules(dbos: DBOS) -> None:
                     "context": None,
                 }
             ]
+        )
+
+    # Reject missing required fields
+    with pytest.raises(DBOSException, match="missing required field 'schedule_name'"):
+        DBOS.apply_schedules(
+            [{"workflow_fn": wf_a, "schedule": "* * * * *", "context": None}]
+        )
+    with pytest.raises(DBOSException, match="missing required field 'workflow_fn'"):
+        DBOS.apply_schedules(
+            [{"schedule_name": "x", "schedule": "* * * * *", "context": None}]
+        )
+    with pytest.raises(DBOSException, match="missing required field 'schedule'"):
+        DBOS.apply_schedules(
+            [{"schedule_name": "x", "workflow_fn": wf_a, "context": None}]
         )
 
     # Reject call from within a workflow
@@ -271,6 +303,7 @@ def test_dynamic_scheduler_fires(dbos: DBOS) -> None:
         workflow_fn=workflow_b,
         schedule="* * * * * *",
         context={"id": "b"},
+        cron_timezone="America/New_York",
     )
 
     def check_both_fired_twice() -> None:
@@ -280,6 +313,27 @@ def test_dynamic_scheduler_fires(dbos: DBOS) -> None:
         assert all(c == {"id": "b"} for c in received_b)
 
     retry_until_success(check_both_fired_twice)
+
+    # Verify last_fired_at is set after firing
+    sched_a = DBOS.get_schedule("every-second-a")
+    sched_b = DBOS.get_schedule("every-second-b")
+    assert sched_a is not None
+    assert sched_b is not None
+    assert sched_a["last_fired_at"] is not None
+    assert sched_b["last_fired_at"] is not None
+    # last_fired_at should be a valid ISO datetime
+    last_fired_a = datetime.fromisoformat(sched_a["last_fired_at"])
+    last_fired_b = datetime.fromisoformat(sched_b["last_fired_at"])
+    assert last_fired_a <= datetime.now(timezone.utc)
+    assert last_fired_b <= datetime.now(timezone.utc)
+    # Schedule A has no timezone — last_fired_at should be in UTC
+    assert last_fired_a.utcoffset() == timedelta(0)
+    # Schedule B uses America/New_York — last_fired_at should carry that offset
+    from zoneinfo import ZoneInfo
+
+    ny_tz = ZoneInfo("America/New_York")
+    expected_offset = datetime.now(ny_tz).utcoffset()
+    assert last_fired_b.utcoffset() == expected_offset
 
     DBOS.delete_schedule("every-second-a")
     DBOS.delete_schedule("every-second-b")
@@ -453,6 +507,66 @@ def test_backfill_schedule(dbos: DBOS) -> None:
     DBOS.delete_schedule("backfill-test")
 
 
+def test_backfill_with_timezone(dbos: DBOS) -> None:
+    received_utc: list[datetime] = []
+    received_ny: list[datetime] = []
+
+    @DBOS.workflow()
+    def wf_utc(scheduled_at: datetime, ctx: Any) -> None:
+        received_utc.append(scheduled_at)
+
+    @DBOS.workflow()
+    def wf_ny(scheduled_at: datetime, ctx: Any) -> None:
+        received_ny.append(scheduled_at)
+
+    # Same cron (midnight daily), different timezones
+    DBOS.create_schedule(
+        schedule_name="tz-utc",
+        workflow_fn=wf_utc,
+        schedule="0 0 * * *",
+    )
+    DBOS.create_schedule(
+        schedule_name="tz-ny",
+        workflow_fn=wf_ny,
+        schedule="0 0 * * *",
+        cron_timezone="America/New_York",
+    )
+
+    # Backfill a window that contains two UTC midnights and two NY midnights
+    # In winter, America/New_York is UTC-5
+    # Start just before midnight UTC Jan 1
+    start = datetime(2024, 12, 31, 23, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2025, 1, 3, 0, 0, 0, tzinfo=timezone.utc)
+
+    handles_utc = DBOS.backfill_schedule("tz-utc", start, end)
+    handles_ny = DBOS.backfill_schedule("tz-ny", start, end)
+
+    for h in handles_utc + handles_ny:
+        h.get_result()
+
+    # UTC schedule: midnight UTC on Jan 1 and Jan 2
+    utc_times = sorted(received_utc)
+    assert len(utc_times) == 2
+    assert utc_times[0].day == 1 and utc_times[0].hour == 0
+    assert utc_times[1].day == 2 and utc_times[1].hour == 0
+
+    # NY schedule: midnight Eastern = 05:00 UTC, so Jan 1 05:00 and Jan 2 05:00
+    ny_times = sorted(received_ny)
+    assert len(ny_times) == 2
+    for t in ny_times:
+        # Midnight in New York
+        assert t.hour == 0
+        assert t.minute == 0
+    # The NY times should be different instants from the UTC times
+    # Convert to UTC for comparison: midnight EST = 05:00 UTC
+    ny_utc_times = sorted(t.astimezone(timezone.utc) for t in ny_times)
+    assert ny_utc_times[0].hour == 5
+    assert ny_utc_times[1].hour == 5
+
+    DBOS.delete_schedule("tz-utc")
+    DBOS.delete_schedule("tz-ny")
+
+
 def test_trigger_schedule(dbos: DBOS) -> None:
     received: list[tuple[datetime, Any]] = []
 
@@ -486,12 +600,13 @@ def test_trigger_schedule(dbos: DBOS) -> None:
 
 
 def test_client_schedule_crud(client: DBOSClient) -> None:
-    # Create a schedule with context
+    # Create a schedule with context and timezone
     client.create_schedule(
         schedule_name="client-schedule",
         workflow_name="some.workflow",
         schedule="* * * * *",
         context={"tenant": "acme"},
+        cron_timezone="Asia/Tokyo",
     )
 
     # List schedules and verify
@@ -502,6 +617,7 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
     assert schedules[0]["schedule"] == "* * * * *"
     assert schedules[0]["context"] == {"tenant": "acme"}
     assert schedules[0]["workflow_class_name"] is None
+    assert schedules[0]["cron_timezone"] == "Asia/Tokyo"
 
     # Get schedule by name
     sched = client.get_schedule("client-schedule")
@@ -510,6 +626,7 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
     assert sched["schedule_id"] == schedules[0]["schedule_id"]
     assert sched["context"] == {"tenant": "acme"}
     assert sched["workflow_class_name"] is None
+    assert sched["cron_timezone"] == "Asia/Tokyo"
 
     # Get nonexistent schedule
     assert client.get_schedule("nonexistent") is None
@@ -520,6 +637,15 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
             schedule_name="bad-schedule",
             workflow_name="some.workflow",
             schedule="not a cron",
+        )
+
+    # Reject invalid timezone
+    with pytest.raises(DBOSException, match="Invalid timezone"):
+        client.create_schedule(
+            schedule_name="bad-tz",
+            workflow_name="some.workflow",
+            schedule="* * * * *",
+            cron_timezone="Fake/Zone",
         )
 
     # --- list_schedules filters ---
@@ -570,7 +696,7 @@ def test_client_schedule_crud(client: DBOSClient) -> None:
 
 
 def test_client_apply_schedules(client: DBOSClient) -> None:
-    # Apply two schedules at once
+    # Apply two schedules at once (sched-b has automatic_backfill and timezone)
     client.apply_schedules(
         [
             {
@@ -584,6 +710,8 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
                 "workflow_name": "wf.b",
                 "schedule": "0 0 * * *",
                 "context": None,
+                "automatic_backfill": True,
+                "cron_timezone": "US/Pacific",
             },
         ]
     )
@@ -592,8 +720,12 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
     by_name = {s["schedule_name"]: s for s in schedules}
     assert by_name["sched-a"]["schedule"] == "* * * * *"
     assert by_name["sched-a"]["context"] == {"region": "eu"}
+    assert by_name["sched-a"]["automatic_backfill"] is False
+    assert by_name["sched-a"]["cron_timezone"] is None
     assert by_name["sched-b"]["workflow_name"] == "wf.b"
     assert by_name["sched-b"]["context"] is None
+    assert by_name["sched-b"]["automatic_backfill"] is True
+    assert by_name["sched-b"]["cron_timezone"] == "US/Pacific"
 
     # Replace sched-a, add sched-c
     client.apply_schedules(
@@ -631,6 +763,20 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
                     "context": None,
                 }
             ]
+        )
+
+    # Reject missing required fields
+    with pytest.raises(DBOSException, match="missing required field 'schedule_name'"):
+        client.apply_schedules(
+            [{"workflow_name": "wf.x", "schedule": "* * * * *", "context": None}]
+        )
+    with pytest.raises(DBOSException, match="missing required field 'workflow_name'"):
+        client.apply_schedules(
+            [{"schedule_name": "x", "schedule": "* * * * *", "context": None}]
+        )
+    with pytest.raises(DBOSException, match="missing required field 'schedule'"):
+        client.apply_schedules(
+            [{"schedule_name": "x", "workflow_name": "wf.x", "context": None}]
         )
 
     # Clean up
@@ -947,6 +1093,63 @@ def test_classmethod_schedule(dbos: DBOS) -> None:
         h.get_result()
 
     DBOS.delete_schedule("classmethod-backfill")
+
+
+def test_automatic_backfill_on_restart(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> None:
+    """Automatic backfill should enqueue missed executions when DBOS restarts."""
+    received: list[datetime] = []
+
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def hourly_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        received.append(scheduled_at)
+
+    DBOS.launch()
+
+    # Create a schedule with automatic_backfill enabled (hourly — won't fire naturally)
+    DBOS.create_schedule(
+        schedule_name="backfill-restart",
+        workflow_fn=hourly_workflow,
+        schedule="0 * * * *",
+        context=None,
+        automatic_backfill=True,
+    )
+
+    # Set last_fired_at to 3 hours ago, simulating that the scheduler was down
+    three_hours_ago = datetime.now(timezone.utc) - timedelta(hours=3)
+    dbos._sys_db.update_last_fired_at("backfill-restart", three_hours_ago.isoformat())
+
+    # Verify the schedule metadata reflects our changes
+    sched = DBOS.get_schedule("backfill-restart")
+    assert sched is not None
+    assert sched["automatic_backfill"] is True
+    assert sched["last_fired_at"] is not None
+    assert datetime.fromisoformat(sched["last_fired_at"]) == three_hours_ago
+
+    # Destroy and relaunch DBOS — the scheduler should backfill on startup
+    DBOS.destroy()
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    # Wait for the scheduler loop to pick up the schedule and backfill
+    def check_backfilled() -> None:
+        assert len(received) >= 3
+
+    retry_until_success(check_backfilled)
+
+    # Verify the backfilled times are the 3 hourly slots between last_fired_at and now
+    fired_times = sorted(received)
+    for t in fired_times[:3]:
+        assert t > three_hours_ago
+        assert t <= datetime.now(timezone.utc)
+        assert t.minute == 0 and t.second == 0  # hourly cron fires at minute 0
+
+    DBOS.delete_schedule("backfill-restart")
+    DBOS.destroy(destroy_registry=True)
 
 
 def test_instance_method_schedule_rejected(dbos: DBOS) -> None:

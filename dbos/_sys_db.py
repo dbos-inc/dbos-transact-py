@@ -251,6 +251,9 @@ class WorkflowSchedule(TypedDict):
     schedule: str
     status: str
     context: Any
+    last_fired_at: Optional[str]
+    automatic_backfill: bool
+    cron_timezone: Optional[str]  # IANA timezone name, stored as string in DB
 
 
 class ClientScheduleInput(TypedDict, total=False):
@@ -259,6 +262,8 @@ class ClientScheduleInput(TypedDict, total=False):
     workflow_class_name: Optional[str]
     schedule: str
     context: Any
+    automatic_backfill: bool
+    cron_timezone: Optional[str]
 
 
 class VersionInfo(TypedDict):
@@ -3469,6 +3474,9 @@ class SystemDatabase(ABC):
                         schedule=schedule["schedule"],
                         status=schedule["status"],
                         context=schedule["context"],
+                        last_fired_at=schedule.get("last_fired_at"),
+                        automatic_backfill=schedule.get("automatic_backfill", False),
+                        cron_timezone=schedule.get("cron_timezone"),
                     )
                 )
             except sa.exc.IntegrityError:
@@ -3499,6 +3507,9 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_schedules.c.schedule,
                 SystemSchema.workflow_schedules.c.status,
                 SystemSchema.workflow_schedules.c.context,
+                SystemSchema.workflow_schedules.c.last_fired_at,
+                SystemSchema.workflow_schedules.c.automatic_backfill,
+                SystemSchema.workflow_schedules.c.cron_timezone,
             )
             if status is not None:
                 vals = [status] if isinstance(status, str) else status
@@ -3536,6 +3547,9 @@ class SystemDatabase(ABC):
                     schedule=row[4],
                     status=row[5],
                     context=row[6],
+                    last_fired_at=row[7],
+                    automatic_backfill=bool(row[8]),
+                    cron_timezone=row[9],
                 )
                 for row in rows
             ]
@@ -3558,6 +3572,9 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_schedules.c.schedule,
                     SystemSchema.workflow_schedules.c.status,
                     SystemSchema.workflow_schedules.c.context,
+                    SystemSchema.workflow_schedules.c.last_fired_at,
+                    SystemSchema.workflow_schedules.c.automatic_backfill,
+                    SystemSchema.workflow_schedules.c.cron_timezone,
                 ).where(SystemSchema.workflow_schedules.c.schedule_name == name)
             ).fetchone()
             if row is None:
@@ -3570,6 +3587,9 @@ class SystemDatabase(ABC):
                 schedule=row[4],
                 status=row[5],
                 context=row[6],
+                last_fired_at=row[7],
+                automatic_backfill=bool(row[8]),
+                cron_timezone=row[9],
             )
 
         if conn is not None:
@@ -3598,6 +3618,14 @@ class SystemDatabase(ABC):
 
     def resume_schedule(self, name: str, conn: Optional[sa.Connection] = None) -> None:
         self._set_schedule_status(name, "ACTIVE", conn)
+
+    def update_last_fired_at(self, name: str, last_fired_at: str) -> None:
+        with self.engine.begin() as c:
+            c.execute(
+                sa.update(SystemSchema.workflow_schedules)
+                .where(SystemSchema.workflow_schedules.c.schedule_name == name)
+                .values(last_fired_at=last_fired_at)
+            )
 
     def delete_schedule(self, name: str, conn: Optional[sa.Connection] = None) -> None:
         def _do(c: sa.Connection) -> None:
