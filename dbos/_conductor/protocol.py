@@ -131,6 +131,7 @@ class DeleteResponse(BaseMessage):
 class ResumeRequest(BaseMessage):
     workflow_id: str
     workflow_ids: Optional[List[str]] = None
+    queue_name: Optional[str] = None
 
 
 @dataclass
@@ -370,6 +371,8 @@ class ForkWorkflowBody(TypedDict):
     start_step: int
     application_version: Optional[str]
     new_workflow_id: Optional[str]
+    queue_name: Optional[str]
+    queue_partition_key: Optional[str]
 
 
 @dataclass
