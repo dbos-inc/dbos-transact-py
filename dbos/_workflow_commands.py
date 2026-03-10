@@ -23,6 +23,8 @@ def fork_workflow(
     start_step: int,
     *,
     application_version: Optional[str],
+    queue_name: Optional[str] = None,
+    queue_partition_key: Optional[str] = None,
 ) -> str:
 
     ctx = get_local_dbos_context()
@@ -36,6 +38,8 @@ def fork_workflow(
         forked_workflow_id,
         start_step,
         application_version=application_version,
+        queue_name=queue_name,
+        queue_partition_key=queue_partition_key,
     )
     return forked_workflow_id
 

@@ -404,27 +404,57 @@ class DBOSClient:
             self.delete_workflows, workflow_ids, delete_children=delete_children
         )
 
-    def resume_workflow(self, workflow_id: str) -> "WorkflowHandle[Any]":
-        self._sys_db.resume_workflows([workflow_id])
+    def resume_workflow(
+        self,
+        workflow_id: str,
+        *,
+        queue_name: Optional[str] = None,
+    ) -> "WorkflowHandle[Any]":
+        self._sys_db.resume_workflows(
+            [workflow_id],
+            queue_name=queue_name,
+        )
         return WorkflowHandleClientPolling[Any](workflow_id, self._sys_db)
 
     async def resume_workflow_async(
-        self, workflow_id: str
+        self,
+        workflow_id: str,
+        *,
+        queue_name: Optional[str] = None,
     ) -> "WorkflowHandleAsync[Any]":
-        await asyncio.to_thread(self.resume_workflow, workflow_id)
+        await asyncio.to_thread(
+            self.resume_workflow,
+            workflow_id,
+            queue_name=queue_name,
+        )
         return WorkflowHandleClientAsyncPolling[Any](workflow_id, self._sys_db)
 
-    def resume_workflows(self, workflow_ids: List[str]) -> "List[WorkflowHandle[Any]]":
-        self._sys_db.resume_workflows(workflow_ids)
+    def resume_workflows(
+        self,
+        workflow_ids: List[str],
+        *,
+        queue_name: Optional[str] = None,
+    ) -> "List[WorkflowHandle[Any]]":
+        self._sys_db.resume_workflows(
+            workflow_ids,
+            queue_name=queue_name,
+        )
         return [
             WorkflowHandleClientPolling[Any](wfid, self._sys_db)
             for wfid in workflow_ids
         ]
 
     async def resume_workflows_async(
-        self, workflow_ids: List[str]
+        self,
+        workflow_ids: List[str],
+        *,
+        queue_name: Optional[str] = None,
     ) -> "List[WorkflowHandleAsync[Any]]":
-        await asyncio.to_thread(self._sys_db.resume_workflows, workflow_ids)
+        await asyncio.to_thread(
+            self._sys_db.resume_workflows,
+            workflow_ids,
+            queue_name=queue_name,
+        )
         return [
             WorkflowHandleClientAsyncPolling[Any](wfid, self._sys_db)
             for wfid in workflow_ids
@@ -613,12 +643,16 @@ class DBOSClient:
         start_step: int,
         *,
         application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
     ) -> "WorkflowHandle[Any]":
         forked_workflow_id = fork_workflow(
             self._sys_db,
             workflow_id,
             start_step,
             application_version=application_version,
+            queue_name=queue_name,
+            queue_partition_key=queue_partition_key,
         )
         return WorkflowHandleClientPolling[Any](forked_workflow_id, self._sys_db)
 
@@ -628,6 +662,8 @@ class DBOSClient:
         start_step: int,
         *,
         application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
     ) -> "WorkflowHandleAsync[Any]":
         forked_workflow_id = await asyncio.to_thread(
             fork_workflow,
@@ -635,6 +671,8 @@ class DBOSClient:
             workflow_id,
             start_step,
             application_version=application_version,
+            queue_name=queue_name,
+            queue_partition_key=queue_partition_key,
         )
         return WorkflowHandleClientAsyncPolling[Any](forked_workflow_id, self._sys_db)
 
