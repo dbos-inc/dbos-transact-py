@@ -1654,13 +1654,21 @@ class DBOS:
         loop.set_default_executor(_get_dbos_instance()._executor)
 
     @classmethod
-    def resume_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
+    def resume_workflow(
+        cls,
+        workflow_id: str,
+        *,
+        queue_name: Optional[str] = None,
+    ) -> WorkflowHandle[Any]:
         """Resume a workflow by ID."""
         check_async("resume_workflow")
 
         def fn() -> None:
             dbos_logger.info(f"Resuming workflow: {workflow_id}")
-            _get_dbos_instance()._sys_db.resume_workflows([workflow_id])
+            _get_dbos_instance()._sys_db.resume_workflows(
+                [workflow_id],
+                queue_name=queue_name,
+            )
 
         _get_dbos_instance()._sys_db.call_function_as_step(
             fn, "DBOS.resumeWorkflow", snapshot_step_context(reserve_sleep_id=False)
@@ -1668,14 +1676,22 @@ class DBOS:
         return WorkflowHandlePolling(workflow_id, _get_dbos_instance())
 
     @classmethod
-    async def resume_workflow_async(cls, workflow_id: str) -> WorkflowHandleAsync[Any]:
+    async def resume_workflow_async(
+        cls,
+        workflow_id: str,
+        *,
+        queue_name: Optional[str] = None,
+    ) -> WorkflowHandleAsync[Any]:
         """Resume a workflow by ID."""
         step_ctx_res = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
 
         def fnres() -> None:
             dbos_logger.info(f"Resuming workflow: {workflow_id}")
-            _get_dbos_instance()._sys_db.resume_workflows([workflow_id])
+            _get_dbos_instance()._sys_db.resume_workflows(
+                [workflow_id],
+                queue_name=queue_name,
+            )
 
         await asyncio.to_thread(
             _get_dbos_instance()._sys_db.call_function_as_step,
@@ -1686,13 +1702,21 @@ class DBOS:
         return WorkflowHandleAsyncPolling(workflow_id, _get_dbos_instance())
 
     @classmethod
-    def resume_workflows(cls, workflow_ids: List[str]) -> List[WorkflowHandle[Any]]:
+    def resume_workflows(
+        cls,
+        workflow_ids: List[str],
+        *,
+        queue_name: Optional[str] = None,
+    ) -> List[WorkflowHandle[Any]]:
         """Resume multiple workflows by ID."""
         check_async("resume_workflows")
 
         def fn() -> None:
             dbos_logger.info(f"Resuming workflows: {workflow_ids}")
-            _get_dbos_instance()._sys_db.resume_workflows(workflow_ids)
+            _get_dbos_instance()._sys_db.resume_workflows(
+                workflow_ids,
+                queue_name=queue_name,
+            )
 
         _get_dbos_instance()._sys_db.call_function_as_step(
             fn, "DBOS.resumeWorkflow", snapshot_step_context(reserve_sleep_id=False)
@@ -1703,7 +1727,10 @@ class DBOS:
 
     @classmethod
     async def resume_workflows_async(
-        cls, workflow_ids: List[str]
+        cls,
+        workflow_ids: List[str],
+        *,
+        queue_name: Optional[str] = None,
     ) -> List[WorkflowHandleAsync[Any]]:
         """Resume multiple workflows by ID."""
         step_ctx_res = snapshot_step_context(reserve_sleep_id=False)
@@ -1711,7 +1738,10 @@ class DBOS:
 
         def fnres() -> None:
             dbos_logger.info(f"Resuming workflows: {workflow_ids}")
-            _get_dbos_instance()._sys_db.resume_workflows(workflow_ids)
+            _get_dbos_instance()._sys_db.resume_workflows(
+                workflow_ids,
+                queue_name=queue_name,
+            )
 
         await asyncio.to_thread(
             _get_dbos_instance()._sys_db.call_function_as_step,
@@ -1732,6 +1762,8 @@ class DBOS:
         start_step: int,
         *,
         application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
     ) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID from a specific step"""
         check_async("fork_workflow")
@@ -1743,6 +1775,8 @@ class DBOS:
                 workflow_id,
                 start_step,
                 application_version=application_version,
+                queue_name=queue_name,
+                queue_partition_key=queue_partition_key,
             )
 
         new_id = _get_dbos_instance()._sys_db.call_function_as_step(
@@ -1757,6 +1791,8 @@ class DBOS:
         start_step: int,
         *,
         application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
     ) -> WorkflowHandleAsync[Any]:
         """Restart a workflow with a new workflow ID from a specific step"""
         step_ctx_res = snapshot_step_context(reserve_sleep_id=False)
@@ -1770,6 +1806,8 @@ class DBOS:
                 workflow_id,
                 start_step,
                 application_version=application_version,
+                queue_name=queue_name,
+                queue_partition_key=queue_partition_key,
             )
 
         new_id = await asyncio.to_thread(

@@ -726,7 +726,12 @@ class SystemDatabase(ABC):
                 )
             )
 
-    def resume_workflows(self, workflow_ids: list[str]) -> None:
+    def resume_workflows(
+        self,
+        workflow_ids: list[str],
+        *,
+        queue_name: Optional[str] = None,
+    ) -> None:
         with self.engine.begin() as c:
             # Set the workflows' status to ENQUEUED and clear recovery attempts and deadline,
             # but only if the workflow is not already complete.
@@ -743,7 +748,9 @@ class SystemDatabase(ABC):
                 )
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
-                    queue_name=INTERNAL_QUEUE_NAME,
+                    queue_name=(
+                        queue_name if queue_name is not None else INTERNAL_QUEUE_NAME
+                    ),
                     recovery_attempts=0,
                     workflow_deadline_epoch_ms=None,
                     deduplication_id=None,
@@ -768,6 +775,8 @@ class SystemDatabase(ABC):
         start_step: int,
         *,
         application_version: Optional[str],
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
     ) -> str:
 
         status = self.get_workflow_status(original_workflow_id)
@@ -789,7 +798,10 @@ class SystemDatabase(ABC):
                     authenticated_user=status["authenticated_user"],
                     authenticated_roles=status["authenticated_roles"],
                     serialization=status["serialization"],
-                    queue_name=INTERNAL_QUEUE_NAME,
+                    queue_name=(
+                        queue_name if queue_name is not None else INTERNAL_QUEUE_NAME
+                    ),
+                    queue_partition_key=queue_partition_key,
                     inputs=status["inputs"],
                     assumed_role=status["assumed_role"],
                     forked_from=original_workflow_id,
