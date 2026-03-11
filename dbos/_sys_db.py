@@ -1438,11 +1438,14 @@ class SystemDatabase(ABC):
                     error=error,
                     serialization=result["serialization"],
                 )
-                .on_conflict_do_nothing(
+                .on_conflict_do_update(
                     index_elements=[
                         SystemSchema.operation_outputs.c.workflow_uuid,
                         SystemSchema.operation_outputs.c.function_id,
-                    ]
+                    ],
+                    set_={
+                        "completed_at_epoch_ms": SystemSchema.operation_outputs.c.completed_at_epoch_ms,
+                    },
                 )
                 .returning(SystemSchema.operation_outputs.c.completed_at_epoch_ms)
             )
