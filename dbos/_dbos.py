@@ -278,9 +278,7 @@ class DBOSRegistry:
             )
         except Exception:
             dbos_logger.warning(
-                "Could not get workflow source code to compute an application version."
-                "Defaulting app version to 'DEFAULT_VERSION'."
-                "Set a custom version through the 'application_version' field in DBOSConfig."
+                "Could not get workflow source code to compute an application version, defaulting application version to 'DEFAULT_VERSION'. Set a custom version through the 'application_version' field in DBOSConfig"
             )
             return "DEFAULT_VERSION"
         # Different DBOS versions should produce different app versions
