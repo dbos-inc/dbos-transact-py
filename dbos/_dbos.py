@@ -269,12 +269,20 @@ class DBOSRegistry:
         This is guaranteed to be stable given identical source code because it uses an MD5 hash
         and because it iterates through the workflows in sorted order.
         This way, if the app's workflows are updated (which would break recovery), its version changes.
-        App version can be manually set through the DBOS__APPVERSION environment variable.
+        App version can be manually set through the application_version field in DBOSConfig.
         """
         hasher = hashlib.md5()
-        sources = sorted(
-            [inspect.getsource(wf) for wf in self.workflow_info_map.values()]
-        )
+        try:
+            sources = sorted(
+                [inspect.getsource(wf) for wf in self.workflow_info_map.values()]
+            )
+        except Exception:
+            dbos_logger.warning(
+                "Could not get workflow source code to compute an application version."
+                "Defaulting app version to 'DEFAULT_VERSION'."
+                "Set a custom version through the 'application_version' field in DBOSConfig."
+            )
+            return "DEFAULT_VERSION"
         # Different DBOS versions should produce different app versions
         sources.append(GlobalParams.dbos_version)
         for source in sources:
