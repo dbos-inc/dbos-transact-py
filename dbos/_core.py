@@ -577,6 +577,7 @@ def _execute_workflow_wthread(
     attributes: TracedAttributes = {
         "name": get_dbos_func_name(func),
         "operationType": OperationType.WORKFLOW.value,
+        "queueName": status.get("queue_name"),
     }
     fi = get_func_info(func)
     with EnterDBOSWorkflow(attributes, ctx):
@@ -615,6 +616,7 @@ async def _execute_workflow_async(
     attributes: TracedAttributes = {
         "name": get_dbos_func_name(func),
         "operationType": OperationType.WORKFLOW.value,
+        "queueName": status.get("queue_name"),
     }
     fi = get_func_info(func)
     with EnterDBOSWorkflow(attributes, ctx):

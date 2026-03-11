@@ -52,6 +52,7 @@ class TracedAttributes(TypedDict, total=False):
     authenticatedUser: Optional[str]
     authenticatedUserRoles: Optional[str]
     authenticatedUserAssumedRole: Optional[str]
+    queueName: Optional[str]
 
 
 @dataclass
