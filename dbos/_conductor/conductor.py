@@ -193,7 +193,10 @@ class ConductorWebsocket(threading.Thread):
                             ]
                             success = True
                             try:
-                                self.dbos.resume_workflows(resume_ids)
+                                self.dbos.resume_workflows(
+                                    resume_ids,
+                                    queue_name=resume_message.queue_name,
+                                )
                             except Exception as e:
                                 error_message = f"Exception encountered when resuming workflow(s) {resume_ids}: {traceback.format_exc()}"
                                 self.dbos.logger.error(error_message)
@@ -230,12 +233,18 @@ class ConductorWebsocket(threading.Thread):
                             workflow_id = fork_message.body["workflow_id"]
                             start_step = fork_message.body["start_step"]
                             app_version = fork_message.body["application_version"]
+                            queue_name = fork_message.body.get("queue_name")
+                            queue_partition_key = fork_message.body.get(
+                                "queue_partition_key"
+                            )
                             try:
                                 with SetWorkflowID(new_workflow_id):
                                     new_handle = self.dbos.fork_workflow(
                                         workflow_id,
                                         start_step,
                                         application_version=app_version,
+                                        queue_name=queue_name,
+                                        queue_partition_key=queue_partition_key,
                                     )
                                 new_workflow_id = new_handle.workflow_id
                             except Exception as e:

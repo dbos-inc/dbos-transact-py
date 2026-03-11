@@ -803,6 +803,68 @@ def test_fork_version(
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def test_resume_and_fork_to_queue(dbos: DBOS) -> None:
+    step_one_count = 0
+    step_two_count = 0
+    workflow_event = threading.Event()
+    main_thread_event = threading.Event()
+
+    @DBOS.step()
+    def step_one(x: int) -> int:
+        nonlocal step_one_count
+        step_one_count += 1
+        return x + 1
+
+    @DBOS.step()
+    def step_two(x: int) -> int:
+        nonlocal step_two_count
+        step_two_count += 1
+        return x + 2
+
+    @DBOS.workflow()
+    def simple_workflow(x: int) -> int:
+        a = step_one(x)
+        main_thread_event.set()
+        workflow_event.wait()
+        b = step_two(x)
+        return a + b
+
+    queue = Queue("test_resume_fork_queue")
+    input = 5
+    output = (input + 1) + (input + 2)
+
+    # Enqueue workflow, let step_one run, then cancel before step_two
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = queue.enqueue(simple_workflow, input)
+    main_thread_event.wait()
+    DBOS.cancel_workflow(wfid)
+    workflow_event.set()
+    with pytest.raises(Exception):
+        handle.get_result()
+    assert step_one_count == 1
+    assert step_two_count == 0
+
+    # Resume the workflow onto the queue and verify queue_name
+    resumed_handle = DBOS.resume_workflow(wfid, queue_name="test_resume_fork_queue")
+    assert resumed_handle.get_status().queue_name == "test_resume_fork_queue"
+    assert resumed_handle.get_result() == output
+    assert step_one_count == 1  # Step 1 replayed from checkpoint
+    assert step_two_count == 1
+
+    # Fork the workflow onto the queue from step 2 and verify queue_name
+    forked_handle = DBOS.fork_workflow(
+        wfid, 2, queue_name="test_resume_fork_queue", queue_partition_key="my_partition"
+    )
+    assert forked_handle.get_status().queue_name == "test_resume_fork_queue"
+    assert forked_handle.get_status().forked_from == wfid
+    assert forked_handle.get_result() == output
+    assert step_one_count == 1  # Step 1 replayed from checkpoint
+    assert step_two_count == 2  # Step 2 was re-executed
+
+    assert queue_entries_are_cleaned_up(dbos)
+
+
 def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
     event = threading.Event()
 
