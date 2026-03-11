@@ -8,7 +8,7 @@ from inline_snapshot import snapshot
 from opentelemetry import trace
 from opentelemetry.trace.span import format_trace_id
 
-from dbos import DBOS, DBOSConfig
+from dbos import DBOS, DBOSConfig, Queue
 from dbos._utils import GlobalParams
 from tests.conftest import TestOtelType
 
@@ -94,6 +94,7 @@ def test_spans(
         assert span.attributes["executorID"] == GlobalParams.executor_id
         assert span.context is not None
         assert span.attributes["foo"] == "bar"
+        assert "queueName" not in span.attributes
         assert span.context.span_id > 0
         assert span.context.trace_id > 0
 
@@ -402,3 +403,40 @@ def test_disable_otlp_no_spans(
 
     # No spans should be created since OTLP is disabled
     assert len(spans) == 0
+
+
+def test_queue_span_has_queue_name(
+    config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    exporter, log_processor, log_exporter = setup_in_memory_otlp_collector
+
+    DBOS.destroy(destroy_registry=True)
+    config["enable_otlp"] = True
+    DBOS(config=config)
+
+    queue = Queue("test_queue")
+
+    @DBOS.workflow()
+    def queued_workflow() -> str:
+        return "queued_result"
+
+    DBOS.launch()
+
+    log_processor.force_flush(timeout_millis=5000)
+    log_exporter.clear()
+    exporter.clear()
+
+    handle = queue.enqueue(queued_workflow)
+    result = handle.get_result()
+    assert result == "queued_result"
+
+    spans = exporter.get_finished_spans()
+    workflow_spans = [s for s in spans if s.name == queued_workflow.__qualname__]
+    assert len(workflow_spans) == 1
+    span = workflow_spans[0]
+    assert span.attributes is not None
+    assert span.attributes["queueName"] == "test_queue"
+    assert span.attributes["operationType"] == "workflow"
+    assert span.attributes["applicationVersion"] == DBOS.application_version
+    assert span.attributes["executorID"] == GlobalParams.executor_id
+    assert span.attributes["operationUUID"] == handle.workflow_id

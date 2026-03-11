@@ -1450,11 +1450,14 @@ class SystemDatabase(ABC):
                     error=error,
                     serialization=result["serialization"],
                 )
-                .on_conflict_do_nothing(
+                .on_conflict_do_update(
                     index_elements=[
                         SystemSchema.operation_outputs.c.workflow_uuid,
                         SystemSchema.operation_outputs.c.function_id,
-                    ]
+                    ],
+                    set_={
+                        "completed_at_epoch_ms": SystemSchema.operation_outputs.c.completed_at_epoch_ms,
+                    },
                 )
                 .returning(SystemSchema.operation_outputs.c.completed_at_epoch_ms)
             )
@@ -1471,15 +1474,14 @@ class SystemDatabase(ABC):
 
     def record_operation_result(self, result: OperationResultInternal) -> None:
         completed_at_epoch_ms = int(time.time() * 1000)
-        self._record_operation_result_retry(result, completed_at_epoch_ms)
 
-    @db_retry()
-    def _record_operation_result_retry(
-        self, result: OperationResultInternal, completed_at_epoch_ms: int
-    ) -> None:
-        with self.engine.begin() as c:
-            self._record_operation_result_txn(result, completed_at_epoch_ms, c)
-        DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
+        @db_retry()
+        def record_operation_result_retry() -> None:
+            with self.engine.begin() as c:
+                self._record_operation_result_txn(result, completed_at_epoch_ms, c)
+            DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
+
+        record_operation_result_retry()
 
     @db_retry()
     def record_get_result(
