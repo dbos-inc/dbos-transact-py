@@ -212,15 +212,8 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                     start_step: int = data.get("start_step", 1)
                     new_workflow_id: Optional[str] = data.get("new_workflow_id")
                     application_version: Optional[str] = data.get("application_version")
-                    queue_name: Optional[str] = data.get("queue_name")
-                    queue_partition_key: Optional[str] = data.get("queue_partition_key")
                     self._handle_fork(
-                        workflow_id,
-                        start_step,
-                        new_workflow_id,
-                        application_version,
-                        queue_name,
-                        queue_partition_key,
+                        workflow_id, start_step, new_workflow_id, application_version
                     )
                 except (json.JSONDecodeError, AttributeError) as e:
                     self.send_response(500)
@@ -237,12 +230,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 self._handle_restart(workflow_id)
             elif resume_match:
                 workflow_id = resume_match.group("workflow_id")
-                try:
-                    data = json.loads(post_data.decode("utf-8"))
-                    resume_queue_name: Optional[str] = data.get("queue_name")
-                except (json.JSONDecodeError, AttributeError):
-                    resume_queue_name = None
-                self._handle_resume(workflow_id, resume_queue_name)
+                self._handle_resume(workflow_id)
             elif cancel_match:
                 workflow_id = cancel_match.group("workflow_id")
                 self._handle_cancel(workflow_id)
@@ -282,27 +270,17 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         start_step: int,
         new_workflow_id: Optional[str],
         application_version: Optional[str],
-        queue_name: Optional[str] = None,
-        queue_partition_key: Optional[str] = None,
     ) -> None:
         try:
             print(f"Forking workflow {workflow_id} from step {start_step}")
             if new_workflow_id is not None:
                 with SetWorkflowID(new_workflow_id):
                     handle = self.dbos.fork_workflow(
-                        workflow_id,
-                        start_step,
-                        application_version=application_version,
-                        queue_name=queue_name,
-                        queue_partition_key=queue_partition_key,
+                        workflow_id, start_step, application_version=application_version
                     )
             else:
                 handle = self.dbos.fork_workflow(
-                    workflow_id,
-                    start_step,
-                    application_version=application_version,
-                    queue_name=queue_name,
-                    queue_partition_key=queue_partition_key,
+                    workflow_id, start_step, application_version=application_version
                 )
             response_body = json.dumps(
                 {
@@ -323,11 +301,9 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(response_body)
 
-    def _handle_resume(
-        self, workflow_id: str, queue_name: Optional[str] = None
-    ) -> None:
+    def _handle_resume(self, workflow_id: str) -> None:
         print("Resuming workflow", workflow_id)
-        self.dbos.resume_workflow(workflow_id, queue_name=queue_name)
+        self.dbos.resume_workflow(workflow_id)
         self.send_response(204)
         self._end_headers()
 
