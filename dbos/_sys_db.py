@@ -3,6 +3,7 @@ import datetime
 import functools
 import json
 import random
+import sys
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -2513,7 +2514,7 @@ class SystemDatabase(ABC):
                     return []
 
             # Compute max_tasks, the number of workflows that can be dequeued given local and global concurrency limits,
-            max_tasks = 100  # To minimize contention with large queues, never dequeue more than 100 tasks
+            max_tasks = sys.maxsize
             if queue.worker_concurrency is not None or queue.concurrency is not None:
                 # Count how many workflows on this queue are currently PENDING both locally and globally.
                 pending_tasks_query = (
@@ -2597,7 +2598,8 @@ class SystemDatabase(ABC):
                 )
             else:
                 query = query.order_by(SystemSchema.workflow_status.c.created_at.asc())
-            query = query.limit(int(max_tasks))
+            if max_tasks != sys.maxsize:
+                query = query.limit(int(max_tasks))
 
             rows = c.execute(query).fetchall()
 
