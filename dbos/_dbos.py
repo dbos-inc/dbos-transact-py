@@ -408,7 +408,7 @@ class DBOS:
         if self.conductor_executor_metadata is not None:
             try:
                 json.dumps(self.conductor_executor_metadata)
-            except (TypeError, ValueError) as e:
+            except Exception as e:
                 raise DBOSException(
                     f"conductor_executor_metadata must be JSON-serializable: {e}"
                 )
