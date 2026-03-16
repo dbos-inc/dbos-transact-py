@@ -686,7 +686,9 @@ class ConductorWebsocket(threading.Thread):
                                 )
                                 if sched is not None:
                                     output = p.ScheduleOutput.from_schedule(
-                                        sched, self.dbos._sys_db.serializer
+                                        sched,
+                                        self.dbos._sys_db.serializer,
+                                        load_context=get_sched_msg.load_context,
                                     )
                             except Exception:
                                 error_message = f"Exception encountered when getting schedule '{get_sched_msg.schedule_name}': {traceback.format_exc()}"

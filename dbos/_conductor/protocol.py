@@ -524,6 +524,7 @@ class ListSchedulesResponse(BaseMessage):
 @dataclass
 class GetScheduleRequest(BaseMessage):
     schedule_name: str
+    load_context: bool = False
 
 
 @dataclass
