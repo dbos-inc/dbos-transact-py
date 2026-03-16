@@ -42,6 +42,7 @@ class MessageType(str, Enum):
     GET_WORKFLOW_EVENTS = "get_workflow_events"
     GET_WORKFLOW_NOTIFICATIONS = "get_workflow_notifications"
     GET_WORKFLOW_STREAMS = "get_workflow_streams"
+    GET_WORKFLOW_AGGREGATES = "get_workflow_aggregates"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -689,4 +690,36 @@ class GetWorkflowStreamsRequest(BaseMessage):
 @dataclass
 class GetWorkflowStreamsResponse(BaseMessage):
     streams: Optional[List[StreamEntryOutput]]
+    error_message: Optional[str] = None
+
+
+class GetWorkflowAggregatesBody(TypedDict, total=False):
+    group_by_status: bool
+    group_by_name: bool
+    group_by_queue_name: bool
+    group_by_executor_id: bool
+    group_by_application_version: bool
+    status: Optional[List[str]]
+    start_time: Optional[str]
+    end_time: Optional[str]
+    name: Optional[List[str]]
+    app_version: Optional[List[str]]
+    executor_id: Optional[List[str]]
+    queue_name: Optional[List[str]]
+
+
+@dataclass
+class GetWorkflowAggregatesRequest(BaseMessage):
+    body: GetWorkflowAggregatesBody
+
+
+@dataclass
+class WorkflowAggregateOutput:
+    group: Dict[str, Optional[str]]
+    count: int
+
+
+@dataclass
+class GetWorkflowAggregatesResponse(BaseMessage):
+    output: List[WorkflowAggregateOutput]
     error_message: Optional[str] = None

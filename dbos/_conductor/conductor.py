@@ -824,6 +824,52 @@ class ConductorWebsocket(threading.Thread):
                                     error_message=error_message,
                                 ).to_json()
                             )
+                        elif msg_type == p.MessageType.GET_WORKFLOW_AGGREGATES:
+                            agg_message = p.GetWorkflowAggregatesRequest.from_json(
+                                message
+                            )
+                            agg_body = agg_message.body
+                            agg_output: list[p.WorkflowAggregateOutput] = []
+                            try:
+                                agg_rows = self.dbos._sys_db.get_workflow_aggregates(
+                                    group_by_status=agg_body.get(
+                                        "group_by_status", False
+                                    ),
+                                    group_by_name=agg_body.get("group_by_name", False),
+                                    group_by_queue_name=agg_body.get(
+                                        "group_by_queue_name", False
+                                    ),
+                                    group_by_executor_id=agg_body.get(
+                                        "group_by_executor_id", False
+                                    ),
+                                    group_by_application_version=agg_body.get(
+                                        "group_by_application_version", False
+                                    ),
+                                    status=agg_body.get("status", None),
+                                    start_time=agg_body.get("start_time", None),
+                                    end_time=agg_body.get("end_time", None),
+                                    name=agg_body.get("name", None),
+                                    app_version=agg_body.get("app_version", None),
+                                    executor_id=agg_body.get("executor_id", None),
+                                    queue_name=agg_body.get("queue_name", None),
+                                )
+                                agg_output = [
+                                    p.WorkflowAggregateOutput(
+                                        group=r["group"], count=r["count"]
+                                    )
+                                    for r in agg_rows
+                                ]
+                            except Exception:
+                                error_message = f"Exception encountered when getting workflow aggregates: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                            websocket.send(
+                                p.GetWorkflowAggregatesResponse(
+                                    type=p.MessageType.GET_WORKFLOW_AGGREGATES,
+                                    request_id=base_message.request_id,
+                                    output=agg_output,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
                         else:
                             self.dbos.logger.warning(
                                 f"Unexpected message type: {msg_type}"
