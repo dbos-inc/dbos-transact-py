@@ -337,8 +337,8 @@ class ListQueuedWorkflowsResponse(BaseMessage):
 @dataclass
 class GetWorkflowRequest(BaseMessage):
     workflow_id: str
-    load_input: bool = False
-    load_output: bool = False
+    load_input: bool = True
+    load_output: bool = True
 
 
 @dataclass
@@ -362,7 +362,7 @@ class ExistPendingWorkflowsResponse(BaseMessage):
 @dataclass
 class ListStepsRequest(BaseMessage):
     workflow_id: str
-    load_output: bool = False
+    load_output: bool = True
 
 
 @dataclass
@@ -526,7 +526,7 @@ class ListSchedulesResponse(BaseMessage):
 @dataclass
 class GetScheduleRequest(BaseMessage):
     schedule_name: str
-    load_context: bool = False
+    load_context: bool = True
 
 
 @dataclass

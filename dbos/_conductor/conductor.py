@@ -286,8 +286,8 @@ class ConductorWebsocket(threading.Thread):
                                     workflow_id_prefix=body.get(
                                         "workflow_id_prefix", None
                                     ),
-                                    load_input=body.get("load_input", False),
-                                    load_output=body.get("load_output", False),
+                                    load_input=body.get("load_input", True),
+                                    load_output=body.get("load_output", True),
                                     executor_id=body.get("executor_id", None),
                                     queues_only=body.get("queues_only", False),
                                 )
@@ -331,8 +331,8 @@ class ConductorWebsocket(threading.Thread):
                                     workflow_id_prefix=q_body.get(
                                         "workflow_id_prefix", None
                                     ),
-                                    load_input=q_body.get("load_input", False),
-                                    load_output=q_body.get("load_output", False),
+                                    load_input=q_body.get("load_input", True),
+                                    load_output=q_body.get("load_output", True),
                                     executor_id=q_body.get("executor_id", None),
                                     queues_only=True,
                                 )
@@ -650,7 +650,7 @@ class ConductorWebsocket(threading.Thread):
                             sched_body = list_sched_msg.body
                             schedules: list[p.ScheduleOutput] = []
                             try:
-                                load_context = sched_body.get("load_context", False)
+                                load_context = sched_body.get("load_context", True)
                                 schedules = [
                                     p.ScheduleOutput.from_schedule(
                                         s,
