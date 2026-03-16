@@ -473,16 +473,22 @@ class ScheduleOutput:
     workflow_class_name: Optional[str]
     schedule: str
     status: str
-    context: str
+    context: Optional[str]
     last_fired_at: Optional[str]
     automatic_backfill: bool
     cron_timezone: Optional[str]
 
     @classmethod
     def from_schedule(
-        cls, s: WorkflowSchedule, serializer: Serializer
+        cls,
+        s: WorkflowSchedule,
+        serializer: Serializer,
+        *,
+        load_context: bool = True,
     ) -> "ScheduleOutput":
-        context_str = str(serializer.deserialize(s["context"]))
+        context_str = (
+            str(serializer.deserialize(s["context"])) if load_context else None
+        )
         return cls(
             schedule_id=s["schedule_id"],
             schedule_name=s["schedule_name"],
@@ -501,6 +507,7 @@ class ListSchedulesBody(TypedDict, total=False):
     status: Optional[Union[str, List[str]]]
     workflow_name: Optional[Union[str, List[str]]]
     schedule_name_prefix: Optional[Union[str, List[str]]]
+    load_context: bool
 
 
 @dataclass

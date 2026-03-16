@@ -649,9 +649,12 @@ class ConductorWebsocket(threading.Thread):
                             sched_body = list_sched_msg.body
                             schedules: list[p.ScheduleOutput] = []
                             try:
+                                load_context = sched_body.get("load_context", False)
                                 schedules = [
                                     p.ScheduleOutput.from_schedule(
-                                        s, self.dbos._sys_db.serializer
+                                        s,
+                                        self.dbos._sys_db.serializer,
+                                        load_context=load_context,
                                     )
                                     for s in self.dbos._sys_db.list_schedules(
                                         status=sched_body.get("status", None),
