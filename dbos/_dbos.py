@@ -402,6 +402,13 @@ class DBOS:
         self.conductor_key: Optional[str] = conductor_key
         if config.get("conductor_key"):
             self.conductor_key = config.get("conductor_key")
+        self.enable_patching = config.get("enable_patching") == True
+        self.conductor_websocket: Optional[ConductorWebsocket] = None
+        self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
+        self._active_workflows_set: ActiveWorkflowById = ActiveWorkflowById()
+        self._alert_handler: Optional[Callable[[str, str, Dict[str, str]], None]] = None
+        serializer = config.get("serializer")
+        self._serializer: Serializer = serializer if serializer else DefaultSerializer()
         self.conductor_executor_metadata: Optional[Dict[str, Any]] = config.get(
             "conductor_executor_metadata"
         )
@@ -412,13 +419,6 @@ class DBOS:
                 raise DBOSException(
                     f"conductor_executor_metadata must be JSON-serializable: {e}"
                 )
-        self.enable_patching = config.get("enable_patching") == True
-        self.conductor_websocket: Optional[ConductorWebsocket] = None
-        self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
-        self._active_workflows_set: ActiveWorkflowById = ActiveWorkflowById()
-        self._alert_handler: Optional[Callable[[str, str, Dict[str, str]], None]] = None
-        serializer = config.get("serializer")
-        self._serializer: Serializer = serializer if serializer else DefaultSerializer()
 
         # Globally set the application version and executor ID.
         # In DBOS Cloud, instead use the values supplied through environment variables.
