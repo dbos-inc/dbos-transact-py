@@ -1322,3 +1322,4 @@ def test_conductor_executor_metadata_not_serializable():
     }
     with pytest.raises(DBOSException):
         DBOS(config=config)
+    DBOS.destroy()
