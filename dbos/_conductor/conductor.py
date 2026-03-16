@@ -358,7 +358,10 @@ class ConductorWebsocket(threading.Thread):
                             info = None
                             try:
                                 info = get_workflow(
-                                    self.dbos._sys_db, get_workflow_message.workflow_id
+                                    self.dbos._sys_db,
+                                    get_workflow_message.workflow_id,
+                                    load_input=get_workflow_message.load_input,
+                                    load_output=get_workflow_message.load_output,
                                 )
                             except Exception as e:
                                 error_message = f"Exception encountered when getting workflow {get_workflow_message.workflow_id}: {traceback.format_exc()}"

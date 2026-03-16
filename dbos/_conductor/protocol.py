@@ -335,6 +335,8 @@ class ListQueuedWorkflowsResponse(BaseMessage):
 @dataclass
 class GetWorkflowRequest(BaseMessage):
     workflow_id: str
+    load_input: bool = False
+    load_output: bool = False
 
 
 @dataclass
