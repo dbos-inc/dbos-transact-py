@@ -1365,7 +1365,9 @@ class SystemDatabase(ABC):
                 for row in rows
             ]
 
-    def list_workflow_steps(self, workflow_id: str) -> List[StepInfo]:
+    def list_workflow_steps(
+        self, workflow_id: str, *, load_output: bool = True
+    ) -> List[StepInfo]:
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(
@@ -1383,14 +1385,18 @@ class SystemDatabase(ABC):
             ).fetchall()
             steps = []
             for row in rows:
-                _, output, exception = safe_deserialize(
-                    self.serializer,
-                    row[7],
-                    workflow_id,
-                    serialized_input=None,
-                    serialized_output=row[2],
-                    serialized_exception=row[3],
-                )
+                if load_output:
+                    _, output, exception = safe_deserialize(
+                        self.serializer,
+                        row[7],
+                        workflow_id,
+                        serialized_input=None,
+                        serialized_output=row[2],
+                        serialized_exception=row[3],
+                    )
+                else:
+                    output = None
+                    exception = None
                 step = StepInfo(
                     function_id=row[0],
                     function_name=row[1],

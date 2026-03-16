@@ -360,6 +360,7 @@ class ExistPendingWorkflowsResponse(BaseMessage):
 @dataclass
 class ListStepsRequest(BaseMessage):
     workflow_id: str
+    load_output: bool = False
 
 
 @dataclass
