@@ -4,6 +4,7 @@ import asyncio
 import copy
 import hashlib
 import inspect
+import json
 import os
 import sys
 import threading
@@ -401,6 +402,16 @@ class DBOS:
         self.conductor_key: Optional[str] = conductor_key
         if config.get("conductor_key"):
             self.conductor_key = config.get("conductor_key")
+        self.conductor_executor_metadata: Optional[Dict[str, Any]] = config.get(
+            "conductor_executor_metadata"
+        )
+        if self.conductor_executor_metadata is not None:
+            try:
+                json.dumps(self.conductor_executor_metadata)
+            except (TypeError, ValueError) as e:
+                raise DBOSException(
+                    f"conductor_executor_metadata must be JSON-serializable: {e}"
+                )
         self.enable_patching = config.get("enable_patching") == True
         self.conductor_websocket: Optional[ConductorWebsocket] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()

@@ -88,6 +88,7 @@ class ExecutorInfoResponse(BaseMessage):
     hostname: Optional[str]
     language: Optional[str]
     dbos_version: Optional[str]
+    executor_metadata: Optional[Dict[str, object]] = None
     error_message: Optional[str] = None
 
 
