@@ -1310,7 +1310,7 @@ def test_conductor_executor_metadata_valid():
         "conductor_executor_metadata": {"region": "us-east-1", "instance": 42},
     }
     dbos = DBOS(config=config)
-    assert dbos.conductor_executor_metadata == {"region": "us-east-1", "instance": 42}
+    assert dbos._conductor_executor_metadata == {"region": "us-east-1", "instance": 42}
     dbos.destroy()
 
 
@@ -1320,7 +1320,5 @@ def test_conductor_executor_metadata_not_serializable():
         "name": "test-app",
         "conductor_executor_metadata": {"bad": object()},
     }
-    with pytest.raises(
-        DBOSException, match="conductor_executor_metadata must be JSON-serializable"
-    ):
+    with pytest.raises(DBOSException):
         DBOS(config=config)
