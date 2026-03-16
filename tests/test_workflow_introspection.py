@@ -1278,3 +1278,63 @@ def test_list_workflows_by_parent(dbos: DBOS) -> None:
         parent_workflow_id=["nonexistent", "also_nonexistent"]
     )
     assert len(no_children) == 0
+
+
+def test_get_workflow_aggregates(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def workflow_a() -> None:
+        return
+
+    @DBOS.workflow()
+    def workflow_b() -> None:
+        raise Exception("fail")
+
+    # Run some workflows
+    for _ in range(3):
+        workflow_a()
+
+    for _ in range(2):
+        with pytest.raises(Exception):
+            workflow_b()
+
+    # Group by status
+    results = dbos._sys_db.get_workflow_aggregates(group_by_status=True)
+    status_map = {r["group"]["status"]: r["count"] for r in results}
+    assert status_map["SUCCESS"] == 3
+    assert status_map["ERROR"] == 2
+
+    # Group by name
+    results = dbos._sys_db.get_workflow_aggregates(group_by_name=True)
+    name_map = {r["group"]["name"]: r["count"] for r in results}
+    assert name_map[workflow_a.__qualname__] == 3
+    assert name_map[workflow_b.__qualname__] == 2
+
+    # Group by both status and name
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True, group_by_name=True
+    )
+    combo_map = {
+        (r["group"]["status"], r["group"]["name"]): r["count"] for r in results
+    }
+    assert combo_map[("SUCCESS", workflow_a.__qualname__)] == 3
+    assert combo_map[("ERROR", workflow_b.__qualname__)] == 2
+
+    # Filter by status
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_name=True, status=["SUCCESS"]
+    )
+    assert len(results) == 1
+    assert results[0]["group"]["name"] == workflow_a.__qualname__
+    assert results[0]["count"] == 3
+
+    # Filter by name
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True, name=[workflow_b.__qualname__]
+    )
+    assert len(results) == 1
+    assert results[0]["group"]["status"] == "ERROR"
+    assert results[0]["count"] == 2
+
+    # No group_by flags should raise
+    with pytest.raises(ValueError, match="At least one group_by flag must be set"):
+        dbos._sys_db.get_workflow_aggregates()

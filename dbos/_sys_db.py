@@ -291,6 +291,11 @@ class StepInfo(TypedDict):
     completed_at_epoch_ms: Optional[int]
 
 
+class WorkflowAggregateRow(TypedDict):
+    group: Dict[str, Optional[str]]
+    count: int
+
+
 class NotificationInfo(TypedDict):
     topic: Optional[str]
     message: Any
@@ -1408,6 +1413,95 @@ class SystemDatabase(ABC):
                 )
                 steps.append(step)
             return steps
+
+    def get_workflow_aggregates(
+        self,
+        *,
+        group_by_status: bool = False,
+        group_by_name: bool = False,
+        group_by_queue_name: bool = False,
+        group_by_executor_id: bool = False,
+        group_by_application_version: bool = False,
+        status: Optional[List[str]] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        name: Optional[List[str]] = None,
+        app_version: Optional[List[str]] = None,
+        executor_id: Optional[List[str]] = None,
+        queue_name: Optional[List[str]] = None,
+    ) -> List[WorkflowAggregateRow]:
+        # Build group_by columns from boolean flags
+        group_by_flags = [
+            ("status", group_by_status, SystemSchema.workflow_status.c.status),
+            ("name", group_by_name, SystemSchema.workflow_status.c.name),
+            (
+                "queue_name",
+                group_by_queue_name,
+                SystemSchema.workflow_status.c.queue_name,
+            ),
+            (
+                "executor_id",
+                group_by_executor_id,
+                SystemSchema.workflow_status.c.executor_id,
+            ),
+            (
+                "application_version",
+                group_by_application_version,
+                SystemSchema.workflow_status.c.application_version,
+            ),
+        ]
+        group_names = []
+        group_columns = []
+        for col_name, enabled, col in group_by_flags:
+            if enabled:
+                group_names.append(col_name)
+                group_columns.append(col)
+
+        if not group_columns:
+            raise ValueError("At least one group_by flag must be set to True")
+
+        query = sa.select(*group_columns, func.count().label("count"))
+
+        # Apply filters
+        if status:
+            query = query.where(SystemSchema.workflow_status.c.status.in_(status))
+        if start_time:
+            query = query.where(
+                SystemSchema.workflow_status.c.created_at
+                >= datetime.datetime.fromisoformat(start_time).timestamp() * 1000
+            )
+        if end_time:
+            query = query.where(
+                SystemSchema.workflow_status.c.created_at
+                <= datetime.datetime.fromisoformat(end_time).timestamp() * 1000
+            )
+        if name:
+            query = query.where(SystemSchema.workflow_status.c.name.in_(name))
+        if app_version:
+            query = query.where(
+                SystemSchema.workflow_status.c.application_version.in_(app_version)
+            )
+        if executor_id:
+            query = query.where(
+                SystemSchema.workflow_status.c.executor_id.in_(executor_id)
+            )
+        if queue_name:
+            query = query.where(
+                SystemSchema.workflow_status.c.queue_name.in_(queue_name)
+            )
+
+        query = query.group_by(*group_columns)
+
+        with self.engine.begin() as c:
+            rows = c.execute(query).fetchall()
+
+        results: List[WorkflowAggregateRow] = []
+        for row in rows:
+            group = {group_names[i]: row[i] for i in range(len(group_names))}
+            results.append(
+                WorkflowAggregateRow(group=group, count=row[len(group_names)])
+            )
+        return results
 
     def _record_operation_result_txn(
         self,
