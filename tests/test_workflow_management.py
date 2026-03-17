@@ -5,7 +5,14 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, DBOSClient, Queue, SetWorkflowID, WorkflowHandle
+from dbos import (
+    DBOS,
+    DBOSClient,
+    Queue,
+    SetEnqueueOptions,
+    SetWorkflowID,
+    WorkflowHandle,
+)
 from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.application_database import ApplicationSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
@@ -939,6 +946,29 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     # Verify only the blocked workflow remains
     workflows = DBOS.list_workflows()
     assert len(workflows) == 0
+
+    # ENQUEUED and DELAYED workflows must not be garbage collected
+    queue = Queue("gc_test_queue")
+
+    @DBOS.workflow()
+    def gc_test_workflow() -> None:
+        pass
+
+    enqueued_handle = queue.enqueue(gc_test_workflow)
+    with SetEnqueueOptions(delay_seconds=60.0):
+        delayed_handle = queue.enqueue(gc_test_workflow)
+
+    garbage_collect(
+        dbos, cutoff_epoch_timestamp_ms=int(time.time() * 1000), rows_threshold=None
+    )
+    workflows = DBOS.list_workflows()
+    wf_ids = {w.workflow_id for w in workflows}
+    assert enqueued_handle.workflow_id in wf_ids
+    assert delayed_handle.workflow_id in wf_ids
+
+    # Clean up so they don't interfere with the rest of the test
+    DBOS.cancel_workflow(enqueued_handle.workflow_id)
+    DBOS.cancel_workflow(delayed_handle.workflow_id)
 
     # Verify GC runs without error on a blank table
     garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
