@@ -2813,7 +2813,7 @@ def test_notification_fallback_polling(dbos: DBOS) -> None:
     sys_db = dbos._sys_db
 
     # Set a fast poll interval so the test doesn't take 60s
-    sys_db._notification_internal_polling_interval = 0.1
+    sys_db._notification_fallback_polling_interval = 0.1
 
     # Kill the notification listener thread
     sys_db._run_background_processes = False

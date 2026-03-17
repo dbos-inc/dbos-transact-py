@@ -1992,7 +1992,8 @@ class SystemDatabase(ABC):
         event: threading.Event,
     ) -> None:
         """Poll the database directly for a pending notification and signal the event if found.
-        Used as a fallback in case the notification listener thread has failures."""
+        Used as a fallback in case the notification listener thread drops a notification.
+        """
         normalized_topic = topic if topic is not None else _dbos_null_topic
         try:
             with self.engine.begin() as c:
@@ -2008,8 +2009,8 @@ class SystemDatabase(ABC):
         except Exception:
             dbos_logger.warning("Fallback notification poll failed", exc_info=True)
 
-    # The interval that recv and get_event poll on internally to catch dropped notifications
-    _notification_internal_polling_interval: float = 60.0
+    # The interval that recv and get_event poll on as a fallback to catch dropped notifications
+    _notification_fallback_polling_interval: float = 60.0
 
     def recv(
         self,
@@ -2032,7 +2033,7 @@ class SystemDatabase(ABC):
                 if remaining <= 0:
                     break
                 event.wait(
-                    timeout=min(remaining, self._notification_internal_polling_interval)
+                    timeout=min(remaining, self._notification_fallback_polling_interval)
                 )
                 if not event.is_set():
                     self.recv_check(workflow_uuid, topic, event)
@@ -2070,7 +2071,7 @@ class SystemDatabase(ABC):
                 now = time.time()
                 if (
                     not event.is_set()
-                    and now - last_poll >= self._notification_internal_polling_interval
+                    and now - last_poll >= self._notification_fallback_polling_interval
                 ):
                     last_poll = now
                     await asyncio.to_thread(
@@ -2566,7 +2567,7 @@ class SystemDatabase(ABC):
                 if remaining <= 0:
                     break
                 event.wait(
-                    timeout=min(remaining, self._notification_internal_polling_interval)
+                    timeout=min(remaining, self._notification_fallback_polling_interval)
                 )
                 if not event.is_set():
                     self._check_for_workflow_event(target_uuid, key, event)
@@ -2602,7 +2603,7 @@ class SystemDatabase(ABC):
                 now = time.time()
                 if (
                     not event.is_set()
-                    and now - last_poll >= self._notification_internal_polling_interval
+                    and now - last_poll >= self._notification_fallback_polling_interval
                 ):
                     last_poll = now
                     await asyncio.to_thread(
