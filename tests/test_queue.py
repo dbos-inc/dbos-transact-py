@@ -2022,6 +2022,8 @@ def test_delay(dbos: DBOS, client: DBOSClient) -> None:
     assert wait_handle.get_status().status == WorkflowStatusString.DELAYED.value
     completed = DBOS.wait_first([wait_handle])
     assert completed.workflow_id == wait_handle.workflow_id
+    completed.get_result()
+    assert completed.get_status().status == WorkflowStatusString.SUCCESS.value
 
     # Deduplication: a second enqueue with the same dedup ID should fail while DELAYED
     dedup_id = str(uuid.uuid4())
