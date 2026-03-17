@@ -2008,7 +2008,8 @@ class SystemDatabase(ABC):
         except Exception:
             dbos_logger.warning("Fallback notification poll failed", exc_info=True)
 
-    _notification_poll_interval: float = 60.0
+    # The interval that recv and get_event poll on internally to catch dropped notifications
+    _notification_internal_polling_interval: float = 60.0
 
     def recv(
         self,
@@ -2030,7 +2031,9 @@ class SystemDatabase(ABC):
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     break
-                event.wait(timeout=min(remaining, self._notification_poll_interval))
+                event.wait(
+                    timeout=min(remaining, self._notification_internal_polling_interval)
+                )
                 if not event.is_set():
                     self.recv_check(workflow_uuid, topic, event)
             return self.recv_consume(workflow_uuid, function_id, topic, start_time)
@@ -2067,7 +2070,7 @@ class SystemDatabase(ABC):
                 now = time.time()
                 if (
                     not event.is_set()
-                    and now - last_poll >= self._notification_poll_interval
+                    and now - last_poll >= self._notification_internal_polling_interval
                 ):
                     last_poll = now
                     await asyncio.to_thread(
@@ -2562,7 +2565,9 @@ class SystemDatabase(ABC):
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     break
-                event.wait(timeout=min(remaining, self._notification_poll_interval))
+                event.wait(
+                    timeout=min(remaining, self._notification_internal_polling_interval)
+                )
                 if not event.is_set():
                     self._check_for_workflow_event(target_uuid, key, event)
             return self.get_event_consume(target_uuid, key, start_time, caller_ctx)
@@ -2597,7 +2602,7 @@ class SystemDatabase(ABC):
                 now = time.time()
                 if (
                     not event.is_set()
-                    and now - last_poll >= self._notification_poll_interval
+                    and now - last_poll >= self._notification_internal_polling_interval
                 ):
                     last_poll = now
                     await asyncio.to_thread(
