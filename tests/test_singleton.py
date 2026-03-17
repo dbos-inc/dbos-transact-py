@@ -10,7 +10,9 @@ from dbos._context import DBOSContextEnsure, assert_current_dbos_context
 from tests.conftest import default_config
 
 
-def test_dbos_singleton(cleanup_test_databases: None) -> None:
+def test_dbos_singleton(
+    cleanup_test_databases: None, skip_with_sqlite_imprecise_time: None
+) -> None:
     # Initialize singleton
     DBOS.destroy()  # In case of other tests leaving it
 

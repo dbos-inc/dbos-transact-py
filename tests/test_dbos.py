@@ -1104,7 +1104,9 @@ def test_send_idempotency_key(dbos: DBOS) -> None:
     assert handle4.get_result() == "hello_step-None"
 
 
-def test_set_get_events(dbos: DBOS, config: DBOSConfig) -> None:
+def test_set_get_events(
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite_imprecise_time: None
+) -> None:
     for use_listen_notify in [True, False]:
         # Test using both LISTEN/NOTIFY and polling
         DBOS.destroy(destroy_registry=True)
