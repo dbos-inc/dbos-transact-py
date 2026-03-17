@@ -219,7 +219,11 @@ class DBOSClient:
 
         status: WorkflowStatusInternal = {
             "workflow_uuid": workflow_id,
-            "status": WorkflowStatusString.ENQUEUED.value,
+            "status": (
+                WorkflowStatusString.DELAYED.value
+                if delay_until_epoch_ms is not None
+                else WorkflowStatusString.ENQUEUED.value
+            ),
             "name": workflow_name,
             "class_name": options.get("class_name"),
             "queue_name": queue_name,

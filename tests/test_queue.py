@@ -1741,6 +1741,7 @@ def test_delay(dbos: DBOS, client: DBOSClient) -> None:
     t_after = int(time.time() * 1000)
 
     status = handle.get_status()
+    assert status.status == WorkflowStatusString.DELAYED.value
     assert status.delay_until_epoch_ms is not None
     assert status.delay_until_epoch_ms >= t_before + int(delay_seconds * 1000)
     assert status.delay_until_epoch_ms <= t_after + int(delay_seconds * 1000)
@@ -1757,6 +1758,7 @@ def test_delay(dbos: DBOS, client: DBOSClient) -> None:
     t_after = int(time.time() * 1000)
 
     client_status = client_handle.get_status()
+    assert client_status.status == WorkflowStatusString.DELAYED.value
     assert client_status.delay_until_epoch_ms is not None
     assert client_status.delay_until_epoch_ms >= t_before + int(delay_seconds * 1000)
     assert client_status.delay_until_epoch_ms <= t_after + int(delay_seconds * 1000)

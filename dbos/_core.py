@@ -366,7 +366,12 @@ def _init_workflow(
         "status": (
             WorkflowStatusString.PENDING.value
             if queue is None
-            else WorkflowStatusString.ENQUEUED.value
+            else (
+                WorkflowStatusString.DELAYED.value
+                if enqueue_options is not None
+                and enqueue_options["delay_until_epoch_ms"] is not None
+                else WorkflowStatusString.ENQUEUED.value
+            )
         ),
         "name": wf_name,
         "class_name": class_name,

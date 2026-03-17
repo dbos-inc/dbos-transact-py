@@ -99,3 +99,7 @@ def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
         status=WorkflowStatusString.ENQUEUED.value, end_time=cutoff_iso
     ):
         dbos.cancel_workflow(workflow.workflow_id)
+    for workflow in dbos.list_workflows(
+        status=WorkflowStatusString.DELAYED.value, end_time=cutoff_iso
+    ):
+        dbos.cancel_workflow(workflow.workflow_id)

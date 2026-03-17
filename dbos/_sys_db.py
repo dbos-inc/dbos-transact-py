@@ -78,12 +78,14 @@ class WorkflowStatusString(Enum):
     MAX_RECOVERY_ATTEMPTS_EXCEEDED = "MAX_RECOVERY_ATTEMPTS_EXCEEDED"
     CANCELLED = "CANCELLED"
     ENQUEUED = "ENQUEUED"
+    DELAYED = "DELAYED"
 
 
 def workflow_is_active(status: str) -> bool:
     return (
         status == WorkflowStatusString.ENQUEUED.value
         or status == WorkflowStatusString.PENDING.value
+        or status == WorkflowStatusString.DELAYED.value
     )
 
 
@@ -94,13 +96,14 @@ WorkflowStatuses = Literal[
     "MAX_RECOVERY_ATTEMPTS_EXCEEDED",
     "CANCELLED",
     "ENQUEUED",
+    "DELAYED",
 ]
 
 
 class WorkflowStatus:
     # The workflow ID
     workflow_id: str
-    # The workflow status. Must be one of ENQUEUED, PENDING, SUCCESS, ERROR, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED
+    # The workflow status. Must be one of DELAYED, ENQUEUED, PENDING, SUCCESS, ERROR, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED
     status: WorkflowStatuses
     # The name of the workflow function
     name: str
@@ -540,13 +543,16 @@ class SystemDatabase(ABC):
         workflow_deadline_epoch_ms: Optional[int] = status["workflow_deadline_epoch_ms"]
         force_execute = is_recovery_request or is_dequeued_request
         should_execute = True
+        _enqueued_statuses = [
+            WorkflowStatusString.ENQUEUED.value,
+            WorkflowStatusString.DELAYED.value,
+        ]
 
         # Values to update when a row already exists for this workflow
         update_values: dict[str, Any] = {
             "recovery_attempts": sa.case(
                 (
-                    SystemSchema.workflow_status.c.status
-                    != WorkflowStatusString.ENQUEUED.value,
+                    SystemSchema.workflow_status.c.status.notin_(_enqueued_statuses),
                     SystemSchema.workflow_status.c.recovery_attempts
                     + (1 if force_execute else 0),
                 ),
@@ -555,7 +561,7 @@ class SystemDatabase(ABC):
             "updated_at": sa.func.extract("epoch", sa.func.now()) * 1000,
         }
         # Don't update an existing executor ID when enqueueing a workflow.
-        if wf_status != WorkflowStatusString.ENQUEUED.value:
+        if wf_status not in _enqueued_statuses:
             update_values["executor_id"] = status["executor_id"]
 
         cmd = (
@@ -575,9 +581,7 @@ class SystemDatabase(ABC):
                 authenticated_roles=status["authenticated_roles"],
                 assumed_role=status["assumed_role"],
                 queue_name=status["queue_name"],
-                recovery_attempts=(
-                    1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
-                ),
+                recovery_attempts=(1 if wf_status not in _enqueued_statuses else 0),
                 workflow_timeout_ms=status["workflow_timeout_ms"],
                 workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
                 deduplication_id=status["deduplication_id"],
@@ -1118,6 +1122,7 @@ class SystemDatabase(ABC):
                         [
                             WorkflowStatusString.PENDING.value,
                             WorkflowStatusString.ENQUEUED.value,
+                            WorkflowStatusString.DELAYED.value,
                         ]
                     ),
                 )
@@ -1229,7 +1234,9 @@ class SystemDatabase(ABC):
             )
             if not status_list:
                 query = query.where(
-                    SystemSchema.workflow_status.c.status.in_(["ENQUEUED", "PENDING"])
+                    SystemSchema.workflow_status.c.status.in_(
+                        ["DELAYED", "ENQUEUED", "PENDING"]
+                    )
                 )
         else:
             query = sa.select(*load_columns)
@@ -2587,6 +2594,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.status.in_(
                         [
                             WorkflowStatusString.ENQUEUED.value,
+                            WorkflowStatusString.DELAYED.value,
                         ]
                     )
                 )
@@ -2618,8 +2626,12 @@ class SystemDatabase(ABC):
                     .select_from(SystemSchema.workflow_status)
                     .where(SystemSchema.workflow_status.c.queue_name == queue.name)
                     .where(
-                        SystemSchema.workflow_status.c.status
-                        != WorkflowStatusString.ENQUEUED.value
+                        SystemSchema.workflow_status.c.status.notin_(
+                            [
+                                WorkflowStatusString.ENQUEUED.value,
+                                WorkflowStatusString.DELAYED.value,
+                            ]
+                        )
                     )
                     .where(
                         SystemSchema.workflow_status.c.started_at_epoch_ms
