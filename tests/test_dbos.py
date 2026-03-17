@@ -1871,6 +1871,9 @@ def test_workflow_timeout(dbos: DBOS) -> None:
         assert assert_current_dbos_context().workflow_timeout_ms == 1000
     assert get_local_dbos_context() is None
 
+    # Verify all timeout tasks completed
+    assert len(dbos._timeout_tasks) == 0
+
 
 def test_timeout_cleanup_on_destroy(dbos: DBOS, config: DBOSConfig) -> None:
     @DBOS.workflow()
