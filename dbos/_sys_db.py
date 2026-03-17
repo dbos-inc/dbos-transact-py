@@ -3377,7 +3377,6 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.forked_from,
                         SystemSchema.workflow_status.c.parent_workflow_id,
                         SystemSchema.workflow_status.c.serialization,
-                        SystemSchema.workflow_status.c.dequeued_at,
                         SystemSchema.workflow_status.c.delay_until_epoch_ms,
                     ).where(SystemSchema.workflow_status.c.workflow_uuid == wf_id)
                 ).fetchone()
@@ -3413,8 +3412,7 @@ class SystemDatabase(ABC):
                     "forked_from": status_row[24],
                     "parent_workflow_id": status_row[25],
                     "serialization": status_row[26],
-                    "dequeued_at": status_row[27],
-                    "delay_until_epoch_ms": status_row[28],
+                    "delay_until_epoch_ms": status_row[27],
                 }
 
                 # Export operation_outputs
@@ -3568,7 +3566,6 @@ class SystemDatabase(ABC):
                         forked_from=status["forked_from"],
                         parent_workflow_id=status.get("parent_workflow_id"),
                         serialization=status.get("serialization"),
-                        dequeued_at=status.get("dequeued_at"),
                         delay_until_epoch_ms=status.get("delay_until_epoch_ms"),
                     )
                 )
