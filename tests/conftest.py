@@ -246,7 +246,7 @@ def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:
                     sa.and_(
                         SystemSchema.workflow_status.c.queue_name.isnot(None),
                         SystemSchema.workflow_status.c.status.in_(
-                            ["ENQUEUED", "PENDING"]
+                            ["DELAYED", "ENQUEUED", "PENDING"]
                         ),
                     )
                 )
