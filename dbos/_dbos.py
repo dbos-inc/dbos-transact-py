@@ -4,6 +4,7 @@ import asyncio
 import copy
 import hashlib
 import inspect
+import json
 import os
 import sys
 import threading
@@ -408,6 +409,16 @@ class DBOS:
         self._alert_handler: Optional[Callable[[str, str, Dict[str, str]], None]] = None
         serializer = config.get("serializer")
         self._serializer: Serializer = serializer if serializer else DefaultSerializer()
+        self._conductor_executor_metadata: Optional[Dict[str, Any]] = config.get(
+            "conductor_executor_metadata"
+        )
+        if self._conductor_executor_metadata is not None:
+            try:
+                json.dumps(self._conductor_executor_metadata)
+            except Exception as e:
+                raise DBOSException(
+                    f"conductor_executor_metadata must be JSON-serializable: {e}"
+                )
 
         # Globally set the application version and executor ID.
         # In DBOS Cloud, instead use the values supplied through environment variables.
