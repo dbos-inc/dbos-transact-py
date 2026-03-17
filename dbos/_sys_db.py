@@ -2577,7 +2577,7 @@ class SystemDatabase(ABC):
     @db_retry()
     def get_queue_partitions(self, queue_name: str) -> List[str]:
         """
-        Get all unique partition names associated with a queue for ENQUEUED workflows.
+        Get all unique partition names associated with a queue for ENQUEUED or DELAYED workflows.
 
         Args:
             queue_name: The name of the queue to get partitions for
