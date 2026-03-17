@@ -441,6 +441,12 @@ ALTER TABLE "{schema}".workflow_schedules ADD COLUMN "cron_timezone" TEXT DEFAUL
 """
 
 
+def get_dbos_migration_sixteen(schema: str) -> str:
+    return f"""
+ALTER TABLE "{schema}"."workflow_status" ADD COLUMN "delay_until_epoch_ms" BIGINT DEFAULT NULL;
+"""
+
+
 def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
     return [
         get_dbos_migration_one(schema, use_listen_notify),
@@ -458,6 +464,7 @@ def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
         get_dbos_migration_thirteen(schema),
         get_dbos_migration_fourteen(schema),
         get_dbos_migration_fifteen(schema),
+        get_dbos_migration_sixteen(schema),
     ]
 
 
@@ -630,6 +637,10 @@ ALTER TABLE workflow_schedules ADD COLUMN "automatic_backfill" BOOLEAN NOT NULL 
 ALTER TABLE workflow_schedules ADD COLUMN "cron_timezone" TEXT DEFAULT NULL;
 """
 
+sqlite_migration_sixteen = """
+ALTER TABLE workflow_status ADD COLUMN "delay_until_epoch_ms" BIGINT DEFAULT NULL;
+"""
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -645,4 +656,5 @@ sqlite_migrations = [
     sqlite_migration_thirteen,
     # Note, there is no sqlite version of migration fourteen
     sqlite_migration_fifteen,
+    sqlite_migration_sixteen,
 ]

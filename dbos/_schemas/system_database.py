@@ -85,6 +85,7 @@ class SystemSchema:
         Column("owner_xid", Text()),
         Column("parent_workflow_id", Text()),
         Column("serialization", Text()),
+        Column("delay_until_epoch_ms", BigInteger, nullable=True),
         Index("workflow_status_created_at_index", "created_at"),
         Index("workflow_status_executor_id_index", "executor_id"),
         Index("workflow_status_status_index", "status"),

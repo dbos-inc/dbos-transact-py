@@ -146,6 +146,8 @@ class WorkflowStatus:
     parent_workflow_id: Optional[str]
     # The UNIX epoch timestamp at which the workflow was last dequeued, if it had been enqueued
     dequeued_at: Optional[int]
+    # The UNIX epoch timestamp before which the workflow should not be dequeued
+    delay_until_epoch_ms: Optional[int]
 
     # INTERNAL FIELDS
 
@@ -184,6 +186,7 @@ class WorkflowStatusInternal(TypedDict):
     started_at_epoch_ms: Optional[int]
     serialization: Optional[str]
     owner_xid: Optional[str]
+    delay_until_epoch_ms: Optional[int]
 
 
 class MetricData(TypedDict):
@@ -205,6 +208,8 @@ class EnqueueOptionsInternal(TypedDict):
     app_version: Optional[str]
     # If the workflow is enqueued on a partitioned queue, its partition key
     queue_partition_key: Optional[str]
+    # The UNIX epoch timestamp before which the workflow should not be dequeued
+    delay_until_epoch_ms: Optional[int]
 
 
 class RecordedResult(TypedDict):
@@ -582,6 +587,7 @@ class SystemDatabase(ABC):
                 queue_partition_key=status["queue_partition_key"],
                 parent_workflow_id=status["parent_workflow_id"],
                 owner_xid=owner_xid,
+                delay_until_epoch_ms=status["delay_until_epoch_ms"],
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
@@ -974,6 +980,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.parent_workflow_id,
                     SystemSchema.workflow_status.c.started_at_epoch_ms,
                     SystemSchema.workflow_status.c.serialization,
+                    SystemSchema.workflow_status.c.delay_until_epoch_ms,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -1007,6 +1014,7 @@ class SystemDatabase(ABC):
                 "started_at_epoch_ms": row[22],
                 "serialization": row[23],
                 "owner_xid": None,
+                "delay_until_epoch_ms": row[24],
             }
             return status
 
@@ -1205,6 +1213,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.forked_from,
             SystemSchema.workflow_status.c.parent_workflow_id,
             SystemSchema.workflow_status.c.started_at_epoch_ms,
+            SystemSchema.workflow_status.c.delay_until_epoch_ms,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -1319,8 +1328,9 @@ class SystemDatabase(ABC):
             info.forked_from = row[20]
             info.parent_workflow_id = row[21]
             info.dequeued_at = row[22]
+            info.delay_until_epoch_ms = row[23]
 
-            idx = 23
+            idx = 24
             raw_input = row[idx] if load_input else None
             if load_input:
                 idx += 1
@@ -3344,6 +3354,7 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.forked_from,
                         SystemSchema.workflow_status.c.parent_workflow_id,
                         SystemSchema.workflow_status.c.serialization,
+                        SystemSchema.workflow_status.c.delay_until_epoch_ms,
                     ).where(SystemSchema.workflow_status.c.workflow_uuid == wf_id)
                 ).fetchone()
 
@@ -3378,6 +3389,7 @@ class SystemDatabase(ABC):
                     "forked_from": status_row[24],
                     "parent_workflow_id": status_row[25],
                     "serialization": status_row[26],
+                    "delay_until_epoch_ms": status_row[27],
                 }
 
                 # Export operation_outputs
@@ -3531,6 +3543,7 @@ class SystemDatabase(ABC):
                         forked_from=status["forked_from"],
                         parent_workflow_id=status.get("parent_workflow_id"),
                         serialization=status.get("serialization"),
+                        delay_until_epoch_ms=status.get("delay_until_epoch_ms"),
                     )
                 )
 

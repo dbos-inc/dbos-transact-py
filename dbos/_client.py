@@ -67,6 +67,7 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     workflow_id: str
     app_version: str
     workflow_timeout: float
+    delay_seconds: float
     deduplication_id: str
     priority: int
     max_recovery_attempts: int
@@ -195,6 +196,12 @@ class DBOSClient:
         if workflow_id is None:
             workflow_id = generate_uuid()
         workflow_timeout = options.get("workflow_timeout", None)
+        delay_seconds = options.get("delay_seconds", None)
+        delay_until_epoch_ms: Optional[int] = (
+            int((time.time() + delay_seconds) * 1000)
+            if delay_seconds is not None
+            else None
+        )
 
         authenticated_user = options.get("authenticated_user")
         authenticated_roles = (
@@ -245,6 +252,7 @@ class DBOSClient:
             "parent_workflow_id": None,
             "started_at_epoch_ms": None,
             "owner_xid": None,
+            "delay_until_epoch_ms": delay_until_epoch_ms,
         }
 
         self._sys_db.init_workflow(

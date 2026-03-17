@@ -1725,6 +1725,43 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
             partitionless_queue.enqueue(normal_workflow)
 
 
+def test_delay(dbos: DBOS, client: DBOSClient) -> None:
+    queue = Queue("test_delay_queue")
+
+    @DBOS.workflow()
+    def test_workflow() -> None:
+        pass
+
+    delay_seconds = 60.0
+
+    # Test via SetEnqueueOptions
+    t_before = int(time.time() * 1000)
+    with SetEnqueueOptions(delay_seconds=delay_seconds):
+        handle = queue.enqueue(test_workflow)
+    t_after = int(time.time() * 1000)
+
+    status = handle.get_status()
+    assert status.delay_until_epoch_ms is not None
+    assert status.delay_until_epoch_ms >= t_before + int(delay_seconds * 1000)
+    assert status.delay_until_epoch_ms <= t_after + int(delay_seconds * 1000)
+
+    # Test via client enqueue
+    t_before = int(time.time() * 1000)
+    client_handle: WorkflowHandle[None] = client.enqueue(
+        {
+            "queue_name": queue.name,
+            "workflow_name": test_workflow.__qualname__,
+            "delay_seconds": delay_seconds,
+        }
+    )
+    t_after = int(time.time() * 1000)
+
+    client_status = client_handle.get_status()
+    assert client_status.delay_until_epoch_ms is not None
+    assert client_status.delay_until_epoch_ms >= t_before + int(delay_seconds * 1000)
+    assert client_status.delay_until_epoch_ms <= t_after + int(delay_seconds * 1000)
+
+
 def test_polling_interval(dbos: DBOS) -> None:
     queue = Queue("queue", polling_interval_sec=0.1)
 
