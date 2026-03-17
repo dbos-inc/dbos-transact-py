@@ -42,6 +42,7 @@ class MessageType(str, Enum):
     GET_WORKFLOW_EVENTS = "get_workflow_events"
     GET_WORKFLOW_NOTIFICATIONS = "get_workflow_notifications"
     GET_WORKFLOW_STREAMS = "get_workflow_streams"
+    GET_WORKFLOW_AGGREGATES = "get_workflow_aggregates"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -88,6 +89,7 @@ class ExecutorInfoResponse(BaseMessage):
     hostname: Optional[str]
     language: Optional[str]
     dbos_version: Optional[str]
+    executor_metadata: Optional[Dict[str, object]] = None
     error_message: Optional[str] = None
 
 
@@ -335,6 +337,8 @@ class ListQueuedWorkflowsResponse(BaseMessage):
 @dataclass
 class GetWorkflowRequest(BaseMessage):
     workflow_id: str
+    load_input: bool = True
+    load_output: bool = True
 
 
 @dataclass
@@ -358,6 +362,7 @@ class ExistPendingWorkflowsResponse(BaseMessage):
 @dataclass
 class ListStepsRequest(BaseMessage):
     workflow_id: str
+    load_output: bool = True
 
 
 @dataclass
@@ -470,16 +475,22 @@ class ScheduleOutput:
     workflow_class_name: Optional[str]
     schedule: str
     status: str
-    context: str
+    context: Optional[str]
     last_fired_at: Optional[str]
     automatic_backfill: bool
     cron_timezone: Optional[str]
 
     @classmethod
     def from_schedule(
-        cls, s: WorkflowSchedule, serializer: Serializer
+        cls,
+        s: WorkflowSchedule,
+        serializer: Serializer,
+        *,
+        load_context: bool = True,
     ) -> "ScheduleOutput":
-        context_str = str(serializer.deserialize(s["context"]))
+        context_str = (
+            str(serializer.deserialize(s["context"])) if load_context else None
+        )
         return cls(
             schedule_id=s["schedule_id"],
             schedule_name=s["schedule_name"],
@@ -498,6 +509,7 @@ class ListSchedulesBody(TypedDict, total=False):
     status: Optional[Union[str, List[str]]]
     workflow_name: Optional[Union[str, List[str]]]
     schedule_name_prefix: Optional[Union[str, List[str]]]
+    load_context: bool
 
 
 @dataclass
@@ -514,6 +526,7 @@ class ListSchedulesResponse(BaseMessage):
 @dataclass
 class GetScheduleRequest(BaseMessage):
     schedule_name: str
+    load_context: bool = True
 
 
 @dataclass
@@ -677,4 +690,37 @@ class GetWorkflowStreamsRequest(BaseMessage):
 @dataclass
 class GetWorkflowStreamsResponse(BaseMessage):
     streams: Optional[List[StreamEntryOutput]]
+    error_message: Optional[str] = None
+
+
+class GetWorkflowAggregatesBody(TypedDict, total=False):
+    group_by_status: bool
+    group_by_name: bool
+    group_by_queue_name: bool
+    group_by_executor_id: bool
+    group_by_application_version: bool
+    status: Optional[List[str]]
+    start_time: Optional[str]
+    end_time: Optional[str]
+    name: Optional[List[str]]
+    app_version: Optional[List[str]]
+    executor_id: Optional[List[str]]
+    queue_name: Optional[List[str]]
+    workflow_id_prefix: Optional[List[str]]
+
+
+@dataclass
+class GetWorkflowAggregatesRequest(BaseMessage):
+    body: GetWorkflowAggregatesBody
+
+
+@dataclass
+class WorkflowAggregateOutput:
+    group: Dict[str, Optional[str]]
+    count: int
+
+
+@dataclass
+class GetWorkflowAggregatesResponse(BaseMessage):
+    output: List[WorkflowAggregateOutput]
     error_message: Optional[str] = None

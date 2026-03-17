@@ -10,8 +10,18 @@ if TYPE_CHECKING:
     from ._dbos import DBOS
 
 
-def get_workflow(sys_db: SystemDatabase, workflow_id: str) -> Optional[WorkflowStatus]:
-    infos = sys_db.list_workflows(workflow_ids=[workflow_id])
+def get_workflow(
+    sys_db: SystemDatabase,
+    workflow_id: str,
+    *,
+    load_input: bool = True,
+    load_output: bool = True,
+) -> Optional[WorkflowStatus]:
+    infos = sys_db.list_workflows(
+        workflow_ids=[workflow_id],
+        load_input=load_input,
+        load_output=load_output,
+    )
     if not infos:
         return None
     return infos[0]

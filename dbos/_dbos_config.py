@@ -42,6 +42,7 @@ class DBOSConfig(TypedDict, total=False):
         system_database_engine (sa.Engine): A custom system database engine. If provided, DBOS will not create an engine but use this instead.
         conductor_key (str): An API key for DBOS Conductor. Pass this in to connect your process to Conductor.
         conductor_url (str): The websockets URL for your DBOS Conductor service. Only set if you're self-hosting Conductor.
+        conductor_executor_metadata (Dict[str, Any]): Metadata associated with this executor that may be used to identify an executor on the Conductor dashboard. Must be JSON-serializable.
         serializer (Serializer): A custom serializer and deserializer DBOS uses when storing program data in the system database
         use_listen_notify (bool): Whether to use LISTEN/NOTIFY or polling to listen for notifications and events.  Defaults to True. As this affects migrations, may not be changed after the system database is first created.
         notification_listener_polling_interval_sec (float): Polling interval in seconds for the notification listener background process. Defaults to 1.0. Minimum value is 0.001. Lower values can speed up test execution.
@@ -69,6 +70,7 @@ class DBOSConfig(TypedDict, total=False):
     system_database_engine: Optional[sa.Engine]
     conductor_key: Optional[str]
     conductor_url: Optional[str]
+    conductor_executor_metadata: Optional[Dict[str, Any]]
     serializer: Optional[Serializer]
     enable_patching: Optional[bool]
     use_listen_notify: Optional[bool]

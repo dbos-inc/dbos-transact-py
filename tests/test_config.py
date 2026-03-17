@@ -19,7 +19,7 @@ from dbos._dbos_config import (
     process_config,
     translate_dbos_config_to_config_file,
 )
-from dbos._error import DBOSInitializationError
+from dbos._error import DBOSException, DBOSInitializationError
 
 mock_filename = "dbos-config.yaml"
 original_open = __builtins__["open"]
@@ -1301,3 +1301,25 @@ def test_null_pool(dbos: DBOS, config: DBOSConfig):
     DBOS.launch()
     assert isinstance(dbos._sys_db.engine.pool, NullPool)
     DBOS.destroy(destroy_registry=True)
+
+
+def test_conductor_executor_metadata_valid():
+    DBOS.destroy()
+    config: DBOSConfig = {
+        "name": "test-app",
+        "conductor_executor_metadata": {"region": "us-east-1", "instance": 42},
+    }
+    dbos = DBOS(config=config)
+    assert dbos._conductor_executor_metadata == {"region": "us-east-1", "instance": 42}
+    dbos.destroy()
+
+
+def test_conductor_executor_metadata_not_serializable():
+    DBOS.destroy()
+    config: DBOSConfig = {
+        "name": "test-app",
+        "conductor_executor_metadata": {"bad": object()},
+    }
+    with pytest.raises(DBOSException):
+        DBOS(config=config)
+    DBOS.destroy()
