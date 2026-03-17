@@ -852,6 +852,9 @@ class ConductorWebsocket(threading.Thread):
                                     app_version=agg_body.get("app_version", None),
                                     executor_id=agg_body.get("executor_id", None),
                                     queue_name=agg_body.get("queue_name", None),
+                                    workflow_id_prefix=agg_body.get(
+                                        "workflow_id_prefix", None
+                                    ),
                                 )
                                 agg_output = [
                                     p.WorkflowAggregateOutput(

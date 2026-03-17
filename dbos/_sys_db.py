@@ -1429,6 +1429,7 @@ class SystemDatabase(ABC):
         app_version: Optional[List[str]] = None,
         executor_id: Optional[List[str]] = None,
         queue_name: Optional[List[str]] = None,
+        workflow_id_prefix: Optional[List[str]] = None,
     ) -> List[WorkflowAggregateRow]:
         # Build group_by columns from boolean flags
         group_by_flags = [
@@ -1488,6 +1489,17 @@ class SystemDatabase(ABC):
         if queue_name:
             query = query.where(
                 SystemSchema.workflow_status.c.queue_name.in_(queue_name)
+            )
+        if workflow_id_prefix:
+            query = query.where(
+                sa.or_(
+                    *[
+                        SystemSchema.workflow_status.c.workflow_uuid.startswith(
+                            p, autoescape=True
+                        )
+                        for p in workflow_id_prefix
+                    ]
+                )
             )
 
         query = query.group_by(*group_columns)

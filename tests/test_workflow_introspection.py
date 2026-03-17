@@ -1335,6 +1335,25 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
     assert results[0]["group"]["status"] == "ERROR"
     assert results[0]["count"] == 2
 
+    # Filter by workflow_id_prefix
+    # Run workflows with known prefixes
+    with SetWorkflowID("agg-prefix-1"):
+        workflow_a()
+    with SetWorkflowID("agg-prefix-2"):
+        workflow_a()
+
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_name=True, workflow_id_prefix=["agg-prefix"]
+    )
+    assert len(results) == 1
+    assert results[0]["group"]["name"] == workflow_a.__qualname__
+    assert results[0]["count"] == 2
+
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True, workflow_id_prefix=["nonexistent-prefix"]
+    )
+    assert len(results) == 0
+
     # No group_by flags should raise
     with pytest.raises(ValueError, match="At least one group_by flag must be set"):
         dbos._sys_db.get_workflow_aggregates()

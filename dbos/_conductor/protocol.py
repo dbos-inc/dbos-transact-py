@@ -706,6 +706,7 @@ class GetWorkflowAggregatesBody(TypedDict, total=False):
     app_version: Optional[List[str]]
     executor_id: Optional[List[str]]
     queue_name: Optional[List[str]]
+    workflow_id_prefix: Optional[List[str]]
 
 
 @dataclass
