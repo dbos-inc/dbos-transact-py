@@ -77,9 +77,35 @@ class BackgroundEventLoop:
     T = TypeVar("T")
 
     def submit_coroutine(self, coro: Coroutine[Any, Any, T]) -> T:
-        """Submit a coroutine to the background event loop"""
+        """Submit a coroutine to the background event loop and block until it completes."""
         if self._main_loop is not None and self._main_loop.is_running():
             return asyncio.run_coroutine_threadsafe(coro, self._main_loop).result()
         if self._loop is None:
             raise RuntimeError("Event loop not started")
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
+
+    def submit_coroutine_nowait(
+        self,
+        coro: Coroutine[Any, Any, Any],
+        task_set: Optional[set["asyncio.Task[Any]"]] = None,
+    ) -> None:
+        """Submit a coroutine to the background event loop without waiting.
+
+        If task_set is provided, the created task is added to it and
+        automatically removed when the task completes.
+        """
+        loop = (
+            self._main_loop
+            if self._main_loop is not None and self._main_loop.is_running()
+            else self._loop
+        )
+        if loop is None:
+            raise RuntimeError("Event loop not started")
+
+        def _create_task() -> None:
+            task = loop.create_task(coro)
+            if task_set is not None:
+                task_set.add(task)
+                task.add_done_callback(task_set.discard)
+
+        loop.call_soon_threadsafe(_create_task)

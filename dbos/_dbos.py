@@ -396,6 +396,7 @@ class DBOS:
         self.flask: Optional["Flask"] = flask
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
+        self._timeout_tasks: set[asyncio.Task[None]] = set()
         self.conductor_url: Optional[str] = conductor_url
         if config.get("conductor_url"):
             self.conductor_url = config.get("conductor_url")
@@ -733,6 +734,18 @@ class DBOS:
                     )
                 else:
                     break
+        if self._timeout_tasks:
+
+            async def cancel_timeout_tasks() -> None:
+                for task in self._timeout_tasks:
+                    task.cancel()
+                await asyncio.gather(*self._timeout_tasks, return_exceptions=True)
+                self._timeout_tasks.clear()
+
+            try:
+                self._background_event_loop.submit_coroutine(cancel_timeout_tasks())
+            except RuntimeError as e:
+                dbos_logger.warning(f"Exception cancelling timeout tasks: {e}")
         self._background_event_loop.stop()
         if self._admin_server_field is not None:
             self._admin_server_field.stop()

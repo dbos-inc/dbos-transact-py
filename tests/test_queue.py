@@ -866,7 +866,7 @@ def test_timeout_queue(dbos: DBOS) -> None:
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         return
 
-    queue = Queue("test_queue", concurrency=1)
+    queue = Queue("test_queue", concurrency=1, polling_interval_sec=0.1)
 
     # Enqueue a few blocked workflow
     num_workflows = 3
@@ -891,7 +891,7 @@ def test_timeout_queue(dbos: DBOS) -> None:
     # Verify if a parent called with a timeout enqueues a blocked child
     # the deadline propagates and the child is also cancelled.
     child_id = str(uuid.uuid4())
-    queue = Queue("regular_queue")
+    queue = Queue("regular_queue", polling_interval_sec=0.1)
 
     @DBOS.workflow()
     def parent_workflow() -> None:
@@ -924,7 +924,7 @@ def test_timeout_queue(dbos: DBOS) -> None:
     # never starts because the queue is blocked, the deadline propagates
     # and both parent and child are cancelled.
     child_id = str(uuid.uuid4())
-    queue = Queue("stuck_queue", concurrency=1)
+    queue = Queue("stuck_queue", concurrency=1, polling_interval_sec=0.1)
 
     start_event = threading.Event()
     blocking_event = threading.Event()
@@ -955,6 +955,122 @@ def test_timeout_queue(dbos: DBOS) -> None:
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
+
+    # Verify all timeout tasks completed
+    assert len(dbos._timeout_tasks) == 0
+
+
+@pytest.mark.asyncio
+async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    @DBOS.workflow()
+    async def blocking_workflow() -> None:
+        assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
+        while True:
+            await DBOS.sleep_async(0.1)
+
+    @DBOS.workflow()
+    async def normal_workflow() -> None:
+        assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
+        return
+
+    queue = Queue("test_queue_async", concurrency=1, polling_interval_sec=0.1)
+
+    # Enqueue a few blocked workflows
+    num_workflows = 3
+    handles: list[WorkflowHandleAsync[None]] = []
+    for _ in range(num_workflows):
+        with SetWorkflowTimeout(0.1):
+            handle = await queue.enqueue_async(blocking_workflow)
+            handles.append(handle)
+
+    # Also enqueue a normal workflow
+    with SetWorkflowTimeout(1.0):
+        normal_handle = await queue.enqueue_async(normal_workflow)
+
+    # Verify the blocked workflows are cancelled
+    for handle in handles:
+        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+            await handle.get_result()
+
+    # Verify the normal workflow succeeds
+    await normal_handle.get_result()
+
+    # Verify if a parent called with a timeout enqueues a blocked child
+    # the deadline propagates and the child is also cancelled.
+    child_id = str(uuid.uuid4())
+    queue = Queue("regular_queue_async", polling_interval_sec=0.1)
+
+    @DBOS.workflow()
+    async def parent_workflow() -> None:
+        with SetWorkflowID(child_id):
+            handle = await queue.enqueue_async(blocking_workflow)
+        await handle.get_result()
+
+    with SetWorkflowTimeout(1.0):
+        handle = await queue.enqueue_async(parent_workflow)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        await handle.get_result()
+
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        await (await DBOS.retrieve_workflow_async(child_id)).get_result()
+
+    # Verify if a parent called with a timeout enqueues a blocked child
+    # then exits the deadline propagates and the child is cancelled.
+
+    @DBOS.workflow()
+    async def exiting_parent_workflow() -> str:
+        handle = await queue.enqueue_async(blocking_workflow)
+        return handle.get_workflow_id()
+
+    with SetWorkflowTimeout(1.0):
+        child_id = await exiting_parent_workflow()
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        await (await DBOS.retrieve_workflow_async(child_id)).get_result()
+
+    # Verify if a parent called with a timeout enqueues a child that
+    # never starts because the queue is blocked, the deadline propagates
+    # and both parent and child are cancelled.
+    child_id = str(uuid.uuid4())
+    queue = Queue("stuck_queue_async", concurrency=1, polling_interval_sec=0.1)
+
+    start_event = asyncio.Event()
+    blocking_event = asyncio.Event()
+
+    @DBOS.workflow()
+    async def stuck_workflow() -> None:
+        start_event.set()
+        await blocking_event.wait()
+
+    stuck_handle = await queue.enqueue_async(stuck_workflow)
+    await start_event.wait()
+
+    @DBOS.workflow()
+    async def blocked_parent_workflow() -> None:
+        with SetWorkflowID(child_id):
+            await queue.enqueue_async(blocking_workflow)
+        while True:
+            await DBOS.sleep_async(0.1)
+
+    with SetWorkflowTimeout(1.0):
+        handle = await DBOS.start_workflow_async(blocked_parent_workflow)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        await handle.get_result()
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        await (await DBOS.retrieve_workflow_async(child_id)).get_result()
+    blocking_event.set()
+    await stuck_handle.get_result()
+
+    # Verify all queue entries eventually get cleaned up.
+    assert queue_entries_are_cleaned_up(dbos)
+
+    # Verify all timeout tasks completed
+    assert len(dbos._timeout_tasks) == 0
 
 
 def test_resuming_queued_workflows(dbos: DBOS) -> None:

@@ -519,6 +519,9 @@ async def test_workflow_timeout_async(dbos: DBOS) -> None:
         await (await DBOS.retrieve_workflow_async(direct_child)).get_result()
     assert "was cancelled" in str(exc_info.value)
 
+    # Verify all timeout tasks completed
+    assert len(dbos._timeout_tasks) == 0
+
 
 @pytest.mark.asyncio
 async def test_max_parallel_workflows(dbos: DBOS) -> None:

@@ -460,28 +460,24 @@ def _init_workflow(
         raise
 
     if should_execute and workflow_deadline_epoch_ms is not None:
-        evt = threading.Event()
-        dbos.background_thread_stop_events.append(evt)
 
-        def timeout_func() -> None:
+        async def timeout_func() -> None:
             try:
-                assert workflow_deadline_epoch_ms is not None
                 time_to_wait_sec = (
                     workflow_deadline_epoch_ms - (time.time() * 1000)
                 ) / 1000
                 if time_to_wait_sec > 0:
-                    was_stopped = evt.wait(time_to_wait_sec)
-                    if was_stopped:
-                        return
-                dbos._sys_db.cancel_workflows([wfid])
+                    await asyncio.sleep(time_to_wait_sec)
+
+                await asyncio.to_thread(dbos._sys_db.cancel_workflows, [wfid])
             except Exception as e:
                 dbos.logger.warning(
-                    f"Exception in timeout thread for workflow {wfid}: {e}"
+                    f"Exception in timeout task for workflow {wfid}: {e}"
                 )
 
-        timeout_thread = threading.Thread(target=timeout_func, daemon=True)
-        timeout_thread.start()
-        dbos._background_threads.append(timeout_thread)
+        dbos._background_event_loop.submit_coroutine_nowait(
+            timeout_func(), task_set=dbos._timeout_tasks
+        )
 
     ctx.workflow_deadline_epoch_ms = workflow_deadline_epoch_ms
     status["workflow_deadline_epoch_ms"] = workflow_deadline_epoch_ms
