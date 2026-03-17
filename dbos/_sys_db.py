@@ -1106,7 +1106,7 @@ class SystemDatabase(ABC):
         """Check if at least one of the given workflows has completed.
 
         A workflow is considered complete when its status is not PENDING
-        and not ENQUEUED.  Returns the workflow_uuid of the first
+        not ENQUEUED, and not DELAYED.  Returns the workflow_uuid of the first
         completed workflow found, or NoResult() if none have completed.
         """
         if not workflow_ids:
@@ -3135,7 +3135,7 @@ class SystemDatabase(ABC):
             return None
 
         with self.engine.begin() as c:
-            # Delete all workflows older than cutoff that are NOT PENDING or ENQUEUED
+            # Delete all workflows older than cutoff that are NOT PENDING, ENQUEUED, or DELAYED
             c.execute(
                 sa.delete(SystemSchema.workflow_status)
                 .where(
@@ -3147,6 +3147,7 @@ class SystemDatabase(ABC):
                         [
                             WorkflowStatusString.PENDING.value,
                             WorkflowStatusString.ENQUEUED.value,
+                            WorkflowStatusString.DELAYED.value,
                         ]
                     )
                 )
