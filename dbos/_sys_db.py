@@ -2463,7 +2463,7 @@ class SystemDatabase(ABC):
 
         try:
             # Check if the key is already in the database
-            self._check_for_workflow_event(target_uuid, key, event)
+            self.get_event_check(target_uuid, key, event)
 
             # Record the durable sleep timeout
             actual_timeout = timeout_seconds
@@ -2526,7 +2526,7 @@ class SystemDatabase(ABC):
             )
         return value
 
-    def _check_for_workflow_event(
+    def get_event_check(
         self,
         target_uuid: str,
         key: str,
@@ -2571,7 +2571,7 @@ class SystemDatabase(ABC):
                     timeout=min(remaining, self._notification_fallback_polling_interval)
                 )
                 if not event.is_set():
-                    self._check_for_workflow_event(target_uuid, key, event)
+                    self.get_event_check(target_uuid, key, event)
             return self.get_event_consume(target_uuid, key, start_time, caller_ctx)
         finally:
             self.workflow_events_map.pop(payload)
@@ -2608,7 +2608,7 @@ class SystemDatabase(ABC):
                 ):
                     last_poll = now
                     await asyncio.to_thread(
-                        self._check_for_workflow_event, target_uuid, key, event
+                        self.get_event_check, target_uuid, key, event
                     )
             return await asyncio.to_thread(
                 self.get_event_consume,
