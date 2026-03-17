@@ -514,7 +514,7 @@ class DBOS:
                 self._config.get("runtimeConfig", {}).get("max_executor_threads")
                 or sys.maxsize
             )
-            self._executor_field = ThreadPoolExecutor(max_workers=max_executor_threads)
+            self._executor_field = ThreadPoolExecutor(max_workers=max_executor_threads, thread_name_prefix="dbos-executor-")
 
             self._background_event_loop.start()
             assert self._config["database"]["sys_db_engine_kwargs"] is not None
