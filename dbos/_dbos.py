@@ -525,7 +525,9 @@ class DBOS:
                 self._config.get("runtimeConfig", {}).get("max_executor_threads")
                 or sys.maxsize
             )
-            self._executor_field = ThreadPoolExecutor(max_workers=max_executor_threads, thread_name_prefix="dbos-executor-")
+            self._executor_field = ThreadPoolExecutor(
+                max_workers=max_executor_threads, thread_name_prefix="dbos-executor-"
+            )
 
             self._background_event_loop.start()
             assert self._config["database"]["sys_db_engine_kwargs"] is not None
@@ -1086,7 +1088,7 @@ class DBOS:
         """Wait for any one of the given workflow handles to complete and return it.
 
         Polls the database until at least one workflow's status is no longer
-        PENDING or ENQUEUED, then returns the corresponding handle.
+        PENDING, ENQUEUED, or DELAYED, then returns the corresponding handle.
         """
         check_async("wait_first")
         if not handles:

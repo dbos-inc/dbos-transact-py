@@ -1053,7 +1053,7 @@ class SystemDatabase(ABC):
     def check_workflow_result(self, workflow_id: str) -> Union[NoResult, Any]:
         """Check if a workflow has completed and return its result.
 
-        Returns NoResult() if the workflow is still pending/enqueued/not found.
+        Returns NoResult() if the workflow is still pending/enqueued/delayed/not found.
         Returns the deserialized output on success.
         Raises on error, cancellation, or max recovery attempts exceeded.
         """
