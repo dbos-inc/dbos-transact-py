@@ -37,7 +37,7 @@ from dbos._error import (
 )
 from dbos._schemas.system_database import SystemSchema
 from dbos._utils import GlobalParams
-from tests.conftest import using_sqlite
+from tests.conftest import retry_until_success, using_sqlite
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -1870,6 +1870,36 @@ def test_workflow_timeout(dbos: DBOS) -> None:
             assert assert_current_dbos_context().workflow_timeout_ms is None
         assert assert_current_dbos_context().workflow_timeout_ms == 1000
     assert get_local_dbos_context() is None
+
+    # Verify all timeout tasks completed
+    assert len(dbos._timeout_tasks) == 0
+
+
+def test_timeout_cleanup_on_destroy(dbos: DBOS, config: DBOSConfig) -> None:
+    @DBOS.workflow()
+    def slow_workflow() -> None:
+        while True:
+            DBOS.sleep(0.1)
+
+    # Start a workflow with a long timeout so the timeout task is still live at destroy time
+    with SetWorkflowTimeout(60):
+        handle = DBOS.start_workflow(slow_workflow)
+
+    # Verify a timeout task was created (scheduled asynchronously on the event loop)
+    def check_timeout_task() -> None:
+        assert len(dbos._timeout_tasks) == 1
+
+    retry_until_success(check_timeout_task, interval=0.05, max_attempts=20)
+
+    # Destroy DBOS while the timeout task is still pending
+    DBOS.destroy(destroy_registry=True)
+
+    # Verify the timeout task was cancelled and cleaned up
+    assert len(dbos._timeout_tasks) == 0
+
+    # Re-initialize for fixture teardown
+    dbos = DBOS(config=config)
+    DBOS.launch()
 
 
 def test_custom_names(dbos: DBOS) -> None:
