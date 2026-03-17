@@ -6,13 +6,13 @@ from dbos._sys_db import WorkflowStatusString
 
 
 def test_delay(dbos: DBOS, client: DBOSClient) -> None:
-    queue = Queue("test_delay_queue")
+    queue = Queue("test_delay_queue", polling_interval_sec=0.1)
 
     @DBOS.workflow()
     def test_workflow() -> None:
         pass
 
-    delay_seconds = 60.0
+    delay_seconds = 2.0
 
     # Test via SetEnqueueOptions
     t_before = int(time.time() * 1000)
@@ -25,6 +25,13 @@ def test_delay(dbos: DBOS, client: DBOSClient) -> None:
     assert status.delay_until_epoch_ms is not None
     assert status.delay_until_epoch_ms >= t_before + int(delay_seconds * 1000)
     assert status.delay_until_epoch_ms <= t_after + int(delay_seconds * 1000)
+
+    handle.get_result()
+
+    final_status = handle.get_status()
+    assert final_status.status == WorkflowStatusString.SUCCESS.value
+    assert final_status.dequeued_at is not None
+    assert final_status.dequeued_at >= status.delay_until_epoch_ms
 
     # Test via client enqueue
     t_before = int(time.time() * 1000)
@@ -42,3 +49,10 @@ def test_delay(dbos: DBOS, client: DBOSClient) -> None:
     assert client_status.delay_until_epoch_ms is not None
     assert client_status.delay_until_epoch_ms >= t_before + int(delay_seconds * 1000)
     assert client_status.delay_until_epoch_ms <= t_after + int(delay_seconds * 1000)
+
+    client_handle.get_result()
+
+    final_client_status = client_handle.get_status()
+    assert final_client_status.status == WorkflowStatusString.SUCCESS.value
+    assert final_client_status.dequeued_at is not None
+    assert final_client_status.dequeued_at >= client_status.delay_until_epoch_ms

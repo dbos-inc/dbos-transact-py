@@ -2604,6 +2604,20 @@ class SystemDatabase(ABC):
             rows = c.execute(query).fetchall()
             return [row[0] for row in rows]
 
+    def transition_delayed_workflows(self) -> None:
+        """Transition DELAYED workflows whose delay has expired to ENQUEUED."""
+        now_ms = int(time.time() * 1000)
+        with self.engine.begin() as c:
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(
+                    SystemSchema.workflow_status.c.status
+                    == WorkflowStatusString.DELAYED.value
+                )
+                .where(SystemSchema.workflow_status.c.delay_until_epoch_ms <= now_ms)
+                .values(status=WorkflowStatusString.ENQUEUED.value)
+            )
+
     def start_queued_workflows(
         self,
         queue: "Queue",
