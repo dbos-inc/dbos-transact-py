@@ -733,7 +733,8 @@ class DBOS:
 
             try:
                 self._background_event_loop.submit_coroutine(cancel_timeout_tasks())
-            except RuntimeError:
+            except RuntimeError as e:
+                dbos_logger.warning(f"Exception cancelling timeout tasks: {e}")
                 pass
         self._background_event_loop.stop()
         if self._admin_server_field is not None:
