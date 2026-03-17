@@ -2533,7 +2533,8 @@ class SystemDatabase(ABC):
         event: threading.Event,
     ) -> None:
         """Poll the database directly for a workflow event and signal the event if found.
-        Used as a fallback in case the notification listener thread has failures."""
+        Used as a fallback in case the notification listener thread drops a notification.
+        """
         try:
             with self.engine.begin() as c:
                 rows = c.execute(
