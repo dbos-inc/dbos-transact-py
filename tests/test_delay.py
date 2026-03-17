@@ -3,7 +3,7 @@ import uuid
 
 import pytest
 
-from dbos import DBOS, DBOSClient, Queue, SetEnqueueOptions, SetWorkflowID
+from dbos import DBOS, DBOSClient, Queue, SetEnqueueOptions
 from dbos._dbos import WorkflowHandle
 from dbos._error import DBOSQueueDeduplicatedError
 from dbos._sys_db import WorkflowStatusString

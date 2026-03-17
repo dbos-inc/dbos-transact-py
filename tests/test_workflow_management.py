@@ -5,14 +5,7 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from dbos import (
-    DBOS,
-    DBOSClient,
-    Queue,
-    SetEnqueueOptions,
-    SetWorkflowID,
-    WorkflowHandle,
-)
+from dbos import DBOS, DBOSClient, Queue, SetEnqueueOptions, SetWorkflowID
 from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.application_database import ApplicationSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
