@@ -2459,19 +2459,7 @@ class SystemDatabase(ABC):
 
         try:
             # Check if the key is already in the database
-            with self.engine.begin() as c:
-                init_recv = c.execute(
-                    sa.select(
-                        SystemSchema.workflow_events.c.value,
-                        SystemSchema.workflow_events.c.serialization,
-                    ).where(
-                        SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
-                        SystemSchema.workflow_events.c.key == key,
-                    )
-                ).fetchall()
-
-            if len(init_recv) > 0:
-                event.set()
+            self._check_for_workflow_event(target_uuid, key, event)
 
             # Record the durable sleep timeout
             actual_timeout = timeout_seconds
@@ -2534,6 +2522,29 @@ class SystemDatabase(ABC):
             )
         return value
 
+    def _check_for_workflow_event(
+        self,
+        target_uuid: str,
+        key: str,
+        event: threading.Event,
+    ) -> None:
+        """Poll the database directly for a workflow event and signal the event if found.
+        Used as a fallback in case the notification listener thread has failures."""
+        try:
+            with self.engine.begin() as c:
+                rows = c.execute(
+                    sa.select(
+                        SystemSchema.workflow_events.c.value,
+                    ).where(
+                        SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
+                        SystemSchema.workflow_events.c.key == key,
+                    )
+                ).fetchall()
+            if len(rows) > 0:
+                event.set()
+        except Exception:
+            dbos_logger.warning("Fallback workflow event poll failed", exc_info=True)
+
     def get_event(
         self,
         target_uuid: str,
@@ -2546,7 +2557,14 @@ class SystemDatabase(ABC):
             return setup[1]
         _, event, actual_timeout, payload, start_time = setup
         try:
-            event.wait(timeout=actual_timeout)
+            deadline = time.time() + actual_timeout
+            while not event.is_set():
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                event.wait(timeout=min(remaining, self._notification_poll_interval))
+                if not event.is_set():
+                    self._check_for_workflow_event(target_uuid, key, event)
             return self.get_event_consume(target_uuid, key, start_time, caller_ctx)
         finally:
             self.workflow_events_map.pop(payload)
@@ -2570,11 +2588,21 @@ class SystemDatabase(ABC):
         _, event, actual_timeout, payload, start_time = setup
         try:
             deadline = time.time() + actual_timeout
+            last_poll = time.time()
             while not event.is_set():
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     break
                 await asyncio.sleep(min(remaining, 0.1))
+                now = time.time()
+                if (
+                    not event.is_set()
+                    and now - last_poll >= self._notification_poll_interval
+                ):
+                    last_poll = now
+                    await asyncio.to_thread(
+                        self._check_for_workflow_event, target_uuid, key, event
+                    )
             return await asyncio.to_thread(
                 self.get_event_consume,
                 target_uuid,
