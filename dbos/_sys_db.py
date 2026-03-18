@@ -78,12 +78,14 @@ class WorkflowStatusString(Enum):
     MAX_RECOVERY_ATTEMPTS_EXCEEDED = "MAX_RECOVERY_ATTEMPTS_EXCEEDED"
     CANCELLED = "CANCELLED"
     ENQUEUED = "ENQUEUED"
+    DELAYED = "DELAYED"
 
 
 def workflow_is_active(status: str) -> bool:
     return (
         status == WorkflowStatusString.ENQUEUED.value
         or status == WorkflowStatusString.PENDING.value
+        or status == WorkflowStatusString.DELAYED.value
     )
 
 
@@ -94,13 +96,14 @@ WorkflowStatuses = Literal[
     "MAX_RECOVERY_ATTEMPTS_EXCEEDED",
     "CANCELLED",
     "ENQUEUED",
+    "DELAYED",
 ]
 
 
 class WorkflowStatus:
     # The workflow ID
     workflow_id: str
-    # The workflow status. Must be one of ENQUEUED, PENDING, SUCCESS, ERROR, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED
+    # The workflow status. Must be one of DELAYED, ENQUEUED, PENDING, SUCCESS, ERROR, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED
     status: WorkflowStatuses
     # The name of the workflow function
     name: str
@@ -146,6 +149,8 @@ class WorkflowStatus:
     parent_workflow_id: Optional[str]
     # The UNIX epoch timestamp at which the workflow was last dequeued, if it had been enqueued
     dequeued_at: Optional[int]
+    # The UNIX epoch timestamp before which the workflow should not be dequeued
+    delay_until_epoch_ms: Optional[int]
 
     # INTERNAL FIELDS
 
@@ -184,6 +189,7 @@ class WorkflowStatusInternal(TypedDict):
     started_at_epoch_ms: Optional[int]
     serialization: Optional[str]
     owner_xid: Optional[str]
+    delay_until_epoch_ms: Optional[int]
 
 
 class MetricData(TypedDict):
@@ -205,6 +211,8 @@ class EnqueueOptionsInternal(TypedDict):
     app_version: Optional[str]
     # If the workflow is enqueued on a partitioned queue, its partition key
     queue_partition_key: Optional[str]
+    # The UNIX epoch timestamp before which the workflow should not be dequeued
+    delay_until_epoch_ms: Optional[int]
 
 
 class RecordedResult(TypedDict):
@@ -535,13 +543,16 @@ class SystemDatabase(ABC):
         workflow_deadline_epoch_ms: Optional[int] = status["workflow_deadline_epoch_ms"]
         force_execute = is_recovery_request or is_dequeued_request
         should_execute = True
+        _enqueued_statuses = [
+            WorkflowStatusString.ENQUEUED.value,
+            WorkflowStatusString.DELAYED.value,
+        ]
 
         # Values to update when a row already exists for this workflow
         update_values: dict[str, Any] = {
             "recovery_attempts": sa.case(
                 (
-                    SystemSchema.workflow_status.c.status
-                    != WorkflowStatusString.ENQUEUED.value,
+                    SystemSchema.workflow_status.c.status.notin_(_enqueued_statuses),
                     SystemSchema.workflow_status.c.recovery_attempts
                     + (1 if force_execute else 0),
                 ),
@@ -550,7 +561,7 @@ class SystemDatabase(ABC):
             "updated_at": sa.func.extract("epoch", sa.func.now()) * 1000,
         }
         # Don't update an existing executor ID when enqueueing a workflow.
-        if wf_status != WorkflowStatusString.ENQUEUED.value:
+        if wf_status not in _enqueued_statuses:
             update_values["executor_id"] = status["executor_id"]
 
         cmd = (
@@ -570,9 +581,7 @@ class SystemDatabase(ABC):
                 authenticated_roles=status["authenticated_roles"],
                 assumed_role=status["assumed_role"],
                 queue_name=status["queue_name"],
-                recovery_attempts=(
-                    1 if wf_status != WorkflowStatusString.ENQUEUED.value else 0
-                ),
+                recovery_attempts=(1 if wf_status not in _enqueued_statuses else 0),
                 workflow_timeout_ms=status["workflow_timeout_ms"],
                 workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
                 deduplication_id=status["deduplication_id"],
@@ -582,6 +591,7 @@ class SystemDatabase(ABC):
                 queue_partition_key=status["queue_partition_key"],
                 parent_workflow_id=status["parent_workflow_id"],
                 owner_xid=owner_xid,
+                delay_until_epoch_ms=status["delay_until_epoch_ms"],
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
@@ -974,6 +984,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.parent_workflow_id,
                     SystemSchema.workflow_status.c.started_at_epoch_ms,
                     SystemSchema.workflow_status.c.serialization,
+                    SystemSchema.workflow_status.c.delay_until_epoch_ms,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -1007,6 +1018,7 @@ class SystemDatabase(ABC):
                 "started_at_epoch_ms": row[22],
                 "serialization": row[23],
                 "owner_xid": None,
+                "delay_until_epoch_ms": row[24],
             }
             return status
 
@@ -1041,7 +1053,7 @@ class SystemDatabase(ABC):
     def check_workflow_result(self, workflow_id: str) -> Union[NoResult, Any]:
         """Check if a workflow has completed and return its result.
 
-        Returns NoResult() if the workflow is still pending/enqueued/not found.
+        Returns NoResult() if the workflow is still pending/enqueued/delayed/not found.
         Returns the deserialized output on success.
         Raises on error, cancellation, or max recovery attempts exceeded.
         """
@@ -1094,7 +1106,7 @@ class SystemDatabase(ABC):
         """Check if at least one of the given workflows has completed.
 
         A workflow is considered complete when its status is not PENDING
-        and not ENQUEUED.  Returns the workflow_uuid of the first
+        not ENQUEUED, and not DELAYED.  Returns the workflow_uuid of the first
         completed workflow found, or NoResult() if none have completed.
         """
         if not workflow_ids:
@@ -1110,6 +1122,7 @@ class SystemDatabase(ABC):
                         [
                             WorkflowStatusString.PENDING.value,
                             WorkflowStatusString.ENQUEUED.value,
+                            WorkflowStatusString.DELAYED.value,
                         ]
                     ),
                 )
@@ -1205,6 +1218,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.forked_from,
             SystemSchema.workflow_status.c.parent_workflow_id,
             SystemSchema.workflow_status.c.started_at_epoch_ms,
+            SystemSchema.workflow_status.c.delay_until_epoch_ms,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -1220,7 +1234,9 @@ class SystemDatabase(ABC):
             )
             if not status_list:
                 query = query.where(
-                    SystemSchema.workflow_status.c.status.in_(["ENQUEUED", "PENDING"])
+                    SystemSchema.workflow_status.c.status.in_(
+                        ["DELAYED", "ENQUEUED", "PENDING"]
+                    )
                 )
         else:
             query = sa.select(*load_columns)
@@ -1319,8 +1335,9 @@ class SystemDatabase(ABC):
             info.forked_from = row[20]
             info.parent_workflow_id = row[21]
             info.dequeued_at = row[22]
+            info.delay_until_epoch_ms = row[23]
 
-            idx = 23
+            idx = 24
             raw_input = row[idx] if load_input else None
             if load_input:
                 idx += 1
@@ -2637,17 +2654,28 @@ class SystemDatabase(ABC):
                 .distinct()
                 .where(SystemSchema.workflow_status.c.queue_name == queue_name)
                 .where(
-                    SystemSchema.workflow_status.c.status.in_(
-                        [
-                            WorkflowStatusString.ENQUEUED.value,
-                        ]
-                    )
+                    SystemSchema.workflow_status.c.status
+                    == WorkflowStatusString.ENQUEUED.value
                 )
                 .where(SystemSchema.workflow_status.c.queue_partition_key.isnot(None))
             )
 
             rows = c.execute(query).fetchall()
             return [row[0] for row in rows]
+
+    def transition_delayed_workflows(self) -> None:
+        """Transition DELAYED workflows whose delay has expired to ENQUEUED."""
+        now_ms = int(time.time() * 1000)
+        with self.engine.begin() as c:
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(
+                    SystemSchema.workflow_status.c.status
+                    == WorkflowStatusString.DELAYED.value
+                )
+                .where(SystemSchema.workflow_status.c.delay_until_epoch_ms <= now_ms)
+                .values(status=WorkflowStatusString.ENQUEUED.value)
+            )
 
     def start_queued_workflows(
         self,
@@ -2671,8 +2699,12 @@ class SystemDatabase(ABC):
                     .select_from(SystemSchema.workflow_status)
                     .where(SystemSchema.workflow_status.c.queue_name == queue.name)
                     .where(
-                        SystemSchema.workflow_status.c.status
-                        != WorkflowStatusString.ENQUEUED.value
+                        SystemSchema.workflow_status.c.status.notin_(
+                            [
+                                WorkflowStatusString.ENQUEUED.value,
+                                WorkflowStatusString.DELAYED.value,
+                            ]
+                        )
                     )
                     .where(
                         SystemSchema.workflow_status.c.started_at_epoch_ms
@@ -3176,7 +3208,7 @@ class SystemDatabase(ABC):
             return None
 
         with self.engine.begin() as c:
-            # Delete all workflows older than cutoff that are NOT PENDING or ENQUEUED
+            # Delete all workflows older than cutoff that are NOT PENDING, ENQUEUED, or DELAYED
             c.execute(
                 sa.delete(SystemSchema.workflow_status)
                 .where(
@@ -3188,6 +3220,7 @@ class SystemDatabase(ABC):
                         [
                             WorkflowStatusString.PENDING.value,
                             WorkflowStatusString.ENQUEUED.value,
+                            WorkflowStatusString.DELAYED.value,
                         ]
                     )
                 )
@@ -3407,6 +3440,7 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.forked_from,
                         SystemSchema.workflow_status.c.parent_workflow_id,
                         SystemSchema.workflow_status.c.serialization,
+                        SystemSchema.workflow_status.c.delay_until_epoch_ms,
                     ).where(SystemSchema.workflow_status.c.workflow_uuid == wf_id)
                 ).fetchone()
 
@@ -3441,6 +3475,7 @@ class SystemDatabase(ABC):
                     "forked_from": status_row[24],
                     "parent_workflow_id": status_row[25],
                     "serialization": status_row[26],
+                    "delay_until_epoch_ms": status_row[27],
                 }
 
                 # Export operation_outputs
@@ -3594,6 +3629,7 @@ class SystemDatabase(ABC):
                         forked_from=status["forked_from"],
                         parent_workflow_id=status.get("parent_workflow_id"),
                         serialization=status.get("serialization"),
+                        delay_until_epoch_ms=status.get("delay_until_epoch_ms"),
                     )
                 )
 

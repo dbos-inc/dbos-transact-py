@@ -366,7 +366,12 @@ def _init_workflow(
         "status": (
             WorkflowStatusString.PENDING.value
             if queue is None
-            else WorkflowStatusString.ENQUEUED.value
+            else (
+                WorkflowStatusString.DELAYED.value
+                if enqueue_options is not None
+                and enqueue_options["delay_until_epoch_ms"] is not None
+                else WorkflowStatusString.ENQUEUED.value
+            )
         ),
         "name": wf_name,
         "class_name": class_name,
@@ -417,6 +422,11 @@ def _init_workflow(
         "started_at_epoch_ms": None,
         "owner_xid": None,
         "serialization": serialization,
+        "delay_until_epoch_ms": (
+            enqueue_options["delay_until_epoch_ms"]
+            if enqueue_options is not None
+            else None
+        ),
     }
 
     # Synchronously record the status and inputs for workflows
@@ -819,6 +829,9 @@ def start_workflow(
         queue_partition_key=(
             local_ctx.queue_partition_key if local_ctx is not None else None
         ),
+        delay_until_epoch_ms=(
+            local_ctx.delay_until_epoch_ms if local_ctx is not None else None
+        ),
     )
     new_wf_ctx = DBOSContext.create_start_workflow_child(local_ctx)
     new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
@@ -934,6 +947,9 @@ async def start_workflow_async(
         app_version=local_ctx.app_version if local_ctx is not None else None,
         queue_partition_key=(
             local_ctx.queue_partition_key if local_ctx is not None else None
+        ),
+        delay_until_epoch_ms=(
+            local_ctx.delay_until_epoch_ms if local_ctx is not None else None
         ),
     )
     new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow

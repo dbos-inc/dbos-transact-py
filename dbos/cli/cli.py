@@ -414,7 +414,7 @@ def list(
         typer.Option(
             "--status",
             "-S",
-            help="Retrieve workflows with this status (PENDING, SUCCESS, ERROR, ENQUEUED, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED)",
+            help="Retrieve workflows with this status (PENDING, SUCCESS, ERROR, ENQUEUED, DELAYED, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED)",
         ),
     ] = None,
     appversion: Annotated[
@@ -762,7 +762,7 @@ def list_queue(
         typer.Option(
             "--status",
             "-S",
-            help="Retrieve functions with this status (PENDING, SUCCESS, ERROR, ENQUEUED, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED)",
+            help="Retrieve functions with this status (PENDING, SUCCESS, ERROR, ENQUEUED, DELAYED, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED)",
         ),
     ] = None,
     queue_name: Annotated[

@@ -92,10 +92,11 @@ def garbage_collect(
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
     cutoff_iso = datetime.fromtimestamp(cutoff_epoch_timestamp_ms / 1000).isoformat()
     for workflow in dbos.list_workflows(
-        status=WorkflowStatusString.PENDING.value, end_time=cutoff_iso
-    ):
-        dbos.cancel_workflow(workflow.workflow_id)
-    for workflow in dbos.list_workflows(
-        status=WorkflowStatusString.ENQUEUED.value, end_time=cutoff_iso
+        status=[
+            WorkflowStatusString.PENDING.value,
+            WorkflowStatusString.ENQUEUED.value,
+            WorkflowStatusString.DELAYED.value,
+        ],
+        end_time=cutoff_iso,
     ):
         dbos.cancel_workflow(workflow.workflow_id)
