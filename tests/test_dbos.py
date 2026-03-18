@@ -1104,7 +1104,9 @@ def test_send_idempotency_key(dbos: DBOS) -> None:
     assert handle4.get_result() == "hello_step-None"
 
 
-def test_set_get_events(dbos: DBOS, config: DBOSConfig) -> None:
+def test_set_get_events(
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite_imprecise_time: None
+) -> None:
     for use_listen_notify in [True, False]:
         # Test using both LISTEN/NOTIFY and polling
         DBOS.destroy(destroy_registry=True)
@@ -2806,3 +2808,56 @@ def test_recv_timeout(dbos: DBOS) -> None:
     assert handle.get_result() is None
     forked_handle = DBOS.fork_workflow(handle.workflow_id, 5)
     assert forked_handle.get_result() is None
+
+
+def test_notification_fallback_polling(dbos: DBOS) -> None:
+    """Test that recv and get_event still work when the notification listener thread is dead."""
+    sys_db = dbos._sys_db
+
+    # Set a fast poll interval so the test doesn't take 60s
+    sys_db._notification_fallback_polling_interval = 0.1
+
+    # Kill the notification listener thread
+    sys_db._run_background_processes = False
+    sys_db._cleanup_connections()
+
+    # Test recv fallback
+    @DBOS.workflow()
+    def recv_workflow() -> str:
+        msg = DBOS.recv(timeout_seconds=10)
+        return str(msg)
+
+    dest_uuid = str(uuid.uuid4())
+    with SetWorkflowID(dest_uuid):
+        handle = DBOS.start_workflow(recv_workflow)
+
+    @DBOS.workflow()
+    def send_workflow(dest: str) -> None:
+        DBOS.send(dest, "hello_fallback")
+
+    send_workflow(dest_uuid)
+    begin_time = time.time()
+    result = handle.get_result()
+    duration = time.time() - begin_time
+    assert result == "hello_fallback"
+    assert duration < 5.0
+
+    # Test get_event fallback
+    @DBOS.workflow()
+    def set_event_workflow() -> None:
+        DBOS.set_event("fallback_key", "fallback_value")
+
+    @DBOS.workflow()
+    def get_event_workflow(target: str) -> Optional[str]:
+        val = DBOS.get_event(target, "fallback_key", timeout_seconds=10)
+        return str(val) if val is not None else None
+
+    event_wf_uuid = str(uuid.uuid4())
+    with SetWorkflowID(event_wf_uuid):
+        set_event_workflow()
+
+    begin_time = time.time()
+    event_result = get_event_workflow(event_wf_uuid)
+    duration = time.time() - begin_time
+    assert event_result == "fallback_value"
+    assert duration < 5.0

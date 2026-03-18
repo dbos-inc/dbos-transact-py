@@ -1923,21 +1923,7 @@ class SystemDatabase(ABC):
 
         try:
             # Check if an unconsumed message is already in the database.
-            init_recv: Sequence[Any]
-            with self.engine.begin() as c:
-                init_recv = c.execute(
-                    sa.select(
-                        SystemSchema.notifications.c.topic,
-                    ).where(
-                        SystemSchema.notifications.c.destination_uuid == workflow_uuid,
-                        SystemSchema.notifications.c.topic == topic,
-                        SystemSchema.notifications.c.consumed == False,
-                    )
-                ).fetchall()
-
-            if len(init_recv) > 0:
-                # Message already available, signal the event so wait is a no-op
-                event.set()
+            self.recv_check(workflow_uuid, topic, event)
 
             # Record the durable sleep timeout
             actual_timeout = self.record_sleep(
@@ -2016,6 +2002,33 @@ class SystemDatabase(ABC):
             )
         return message
 
+    def recv_check(
+        self,
+        workflow_uuid: str,
+        topic: Optional[str],
+        event: threading.Event,
+    ) -> None:
+        """Poll the database directly for a pending notification and signal the event if found.
+        Used as a fallback in case the notification listener thread drops a notification.
+        """
+        normalized_topic = topic if topic is not None else _dbos_null_topic
+        try:
+            with self.engine.begin() as c:
+                rows = c.execute(
+                    sa.select(SystemSchema.notifications.c.topic).where(
+                        SystemSchema.notifications.c.destination_uuid == workflow_uuid,
+                        SystemSchema.notifications.c.topic == normalized_topic,
+                        SystemSchema.notifications.c.consumed == False,
+                    )
+                ).fetchall()
+            if len(rows) > 0:
+                event.set()
+        except Exception:
+            dbos_logger.warning("Fallback notification poll failed", exc_info=True)
+
+    # The interval that recv and get_event poll on as a fallback to catch dropped notifications
+    _notification_fallback_polling_interval: float = 60.0
+
     def recv(
         self,
         workflow_uuid: str,
@@ -2031,7 +2044,16 @@ class SystemDatabase(ABC):
             return setup[1]
         _, event, actual_timeout, payload, start_time = setup
         try:
-            event.wait(timeout=actual_timeout)
+            deadline = time.time() + actual_timeout
+            while not event.is_set():
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                event.wait(
+                    timeout=min(remaining, self._notification_fallback_polling_interval)
+                )
+                if not event.is_set():
+                    self.recv_check(workflow_uuid, topic, event)
             return self.recv_consume(workflow_uuid, function_id, topic, start_time)
         finally:
             self.notifications_map.pop(payload)
@@ -2057,11 +2079,21 @@ class SystemDatabase(ABC):
         _, event, actual_timeout, payload, start_time = setup
         try:
             deadline = time.time() + actual_timeout
+            last_poll = time.time()
             while not event.is_set():
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     break
                 await asyncio.sleep(min(remaining, 0.1))
+                now = time.time()
+                if (
+                    not event.is_set()
+                    and now - last_poll >= self._notification_fallback_polling_interval
+                ):
+                    last_poll = now
+                    await asyncio.to_thread(
+                        self.recv_check, workflow_uuid, topic, event
+                    )
             return await asyncio.to_thread(
                 self.recv_consume,
                 workflow_uuid,
@@ -2448,19 +2480,7 @@ class SystemDatabase(ABC):
 
         try:
             # Check if the key is already in the database
-            with self.engine.begin() as c:
-                init_recv = c.execute(
-                    sa.select(
-                        SystemSchema.workflow_events.c.value,
-                        SystemSchema.workflow_events.c.serialization,
-                    ).where(
-                        SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
-                        SystemSchema.workflow_events.c.key == key,
-                    )
-                ).fetchall()
-
-            if len(init_recv) > 0:
-                event.set()
+            self.get_event_check(target_uuid, key, event)
 
             # Record the durable sleep timeout
             actual_timeout = timeout_seconds
@@ -2523,6 +2543,30 @@ class SystemDatabase(ABC):
             )
         return value
 
+    def get_event_check(
+        self,
+        target_uuid: str,
+        key: str,
+        event: threading.Event,
+    ) -> None:
+        """Poll the database directly for a workflow event and signal the event if found.
+        Used as a fallback in case the notification listener thread drops a notification.
+        """
+        try:
+            with self.engine.begin() as c:
+                rows = c.execute(
+                    sa.select(
+                        SystemSchema.workflow_events.c.value,
+                    ).where(
+                        SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
+                        SystemSchema.workflow_events.c.key == key,
+                    )
+                ).fetchall()
+            if len(rows) > 0:
+                event.set()
+        except Exception:
+            dbos_logger.warning("Fallback workflow event poll failed", exc_info=True)
+
     def get_event(
         self,
         target_uuid: str,
@@ -2535,7 +2579,16 @@ class SystemDatabase(ABC):
             return setup[1]
         _, event, actual_timeout, payload, start_time = setup
         try:
-            event.wait(timeout=actual_timeout)
+            deadline = time.time() + actual_timeout
+            while not event.is_set():
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                event.wait(
+                    timeout=min(remaining, self._notification_fallback_polling_interval)
+                )
+                if not event.is_set():
+                    self.get_event_check(target_uuid, key, event)
             return self.get_event_consume(target_uuid, key, start_time, caller_ctx)
         finally:
             self.workflow_events_map.pop(payload)
@@ -2559,11 +2612,21 @@ class SystemDatabase(ABC):
         _, event, actual_timeout, payload, start_time = setup
         try:
             deadline = time.time() + actual_timeout
+            last_poll = time.time()
             while not event.is_set():
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     break
                 await asyncio.sleep(min(remaining, 0.1))
+                now = time.time()
+                if (
+                    not event.is_set()
+                    and now - last_poll >= self._notification_fallback_polling_interval
+                ):
+                    last_poll = now
+                    await asyncio.to_thread(
+                        self.get_event_check, target_uuid, key, event
+                    )
             return await asyncio.to_thread(
                 self.get_event_consume,
                 target_uuid,
