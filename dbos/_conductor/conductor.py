@@ -260,6 +260,36 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(fork_response.to_json())
+                        elif msg_type == p.MessageType.FORK_FROM_FAILURE:
+                            bulk_fork_message = p.ForkFromFailureRequest.from_json(
+                                message
+                            )
+                            bulk_fork_body = bulk_fork_message.body
+                            forked_workflow_ids: Optional[List[str]] = None
+                            try:
+                                forked_workflow_ids = (
+                                    self.dbos._sys_db.fork_from_failure(
+                                        bulk_fork_body["workflow_ids"],
+                                        application_version=bulk_fork_body.get(
+                                            "application_version"
+                                        ),
+                                        queue_name=bulk_fork_body.get("queue_name"),
+                                        queue_partition_key=bulk_fork_body.get(
+                                            "queue_partition_key"
+                                        ),
+                                    )
+                                )
+                            except Exception as e:
+                                error_message = f"Exception encountered when bulk forking workflows: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+
+                            bulk_fork_response = p.ForkFromFailureResponse(
+                                type=p.MessageType.FORK_FROM_FAILURE,
+                                request_id=base_message.request_id,
+                                forked_workflow_ids=forked_workflow_ids,
+                                error_message=error_message,
+                            )
+                            websocket.send(bulk_fork_response.to_json())
                         elif msg_type == p.MessageType.LIST_WORKFLOWS:
                             list_workflows_message = p.ListWorkflowsRequest.from_json(
                                 message
@@ -290,6 +320,7 @@ class ConductorWebsocket(threading.Thread):
                                     load_output=body.get("load_output", True),
                                     executor_id=body.get("executor_id", None),
                                     queues_only=body.get("queues_only", False),
+                                    was_forked_from=body.get("was_forked_from", None),
                                 )
                             except Exception as e:
                                 error_message = f"Exception encountered when listing workflows: {traceback.format_exc()}"
@@ -335,6 +366,7 @@ class ConductorWebsocket(threading.Thread):
                                     load_output=q_body.get("load_output", True),
                                     executor_id=q_body.get("executor_id", None),
                                     queues_only=True,
+                                    was_forked_from=q_body.get("was_forked_from", None),
                                 )
                             except Exception as e:
                                 error_message = f"Exception encountered when listing queued workflows: {traceback.format_exc()}"

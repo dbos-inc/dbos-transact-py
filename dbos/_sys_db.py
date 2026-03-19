@@ -1027,7 +1027,7 @@ class SystemDatabase(ABC):
 
         return forked_workflow_ids
 
-    def bulk_fork_from_last_failed_step(
+    def fork_from_failure(
         self,
         workflow_ids: list[str],
         *,

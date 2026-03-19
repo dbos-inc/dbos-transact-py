@@ -1133,7 +1133,7 @@ def test_fork_streams(dbos: DBOS) -> None:
         assert list(DBOS.read_stream(handle.workflow_id, key)) == [0, 1, 2]
 
 
-def test_bulk_fork_from_last_failed_step(dbos: DBOS) -> None:
+def test_fork_from_failure(dbos: DBOS) -> None:
     step_one_count = 0
     step_two_count = 0
     step_three_count = 0
@@ -1191,7 +1191,7 @@ def test_bulk_fork_from_last_failed_step(dbos: DBOS) -> None:
     assert step_three_count == 2
 
     # Bulk fork all three
-    forked_ids = dbos._sys_db.bulk_fork_from_last_failed_step(
+    forked_ids = dbos._sys_db.fork_from_failure(
         [wf1_id, wf2_id, wf3_id],
         application_version=None,
     )
