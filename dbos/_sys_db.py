@@ -1014,6 +1014,44 @@ class SystemDatabase(ABC):
 
         return forked_workflow_ids
 
+    def bulk_fork_from_last_failed_step(
+        self,
+        workflow_ids: list[str],
+        *,
+        application_version: Optional[str],
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+    ) -> list[str]:
+        oo = SystemSchema.operation_outputs
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(
+                    oo.c.workflow_uuid,
+                    sa.func.coalesce(
+                        sa.func.max(oo.c.function_id).filter(oo.c.error.is_not(None)),
+                        sa.func.max(oo.c.function_id),
+                    ).label("start_step"),
+                )
+                .where(oo.c.workflow_uuid.in_(workflow_ids))
+                .group_by(oo.c.workflow_uuid)
+            ).fetchall()
+
+        start_step_by_id = {row[0]: row[1] for row in rows}
+        for wid in workflow_ids:
+            if wid not in start_step_by_id:
+                raise Exception(f"Workflow {wid} not found")
+
+        start_steps = [start_step_by_id[wid] for wid in workflow_ids]
+        forked_ids = [generate_uuid() for _ in workflow_ids]
+        return self.fork_workflow(
+            workflow_ids,
+            forked_ids,
+            start_steps,
+            application_version=application_version,
+            queue_name=queue_name,
+            queue_partition_key=queue_partition_key,
+        )
+
     @db_retry()
     def get_workflow_status(
         self, workflow_uuid: str
