@@ -1284,6 +1284,7 @@ class SystemDatabase(ABC):
         load_output: bool = True,
         executor_id: Optional[str | list[str]] = None,
         queues_only: bool = False,
+        was_forked_from: Optional[bool] = None,
     ) -> List[WorkflowStatus]:
         """
         Retrieve a list of workflows based on the search criteria.
@@ -1411,6 +1412,10 @@ class SystemDatabase(ABC):
         if executor_id_list:
             query = query.where(
                 SystemSchema.workflow_status.c.executor_id.in_(executor_id_list)
+            )
+        if was_forked_from is not None:
+            query = query.where(
+                SystemSchema.workflow_status.c.was_forked_from == was_forked_from
             )
         if limit:
             query = query.limit(limit)

@@ -1884,6 +1884,7 @@ class DBOS:
         load_output: bool = True,
         executor_id: Optional[str | list[str]] = None,
         queues_only: bool = False,
+        was_forked_from: Optional[bool] = None,
     ) -> List[WorkflowStatus]:
         check_async("list_workflows")
 
@@ -1907,6 +1908,7 @@ class DBOS:
                 load_output=load_output,
                 executor_id=executor_id,
                 queues_only=queues_only,
+                was_forked_from=was_forked_from,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -1935,6 +1937,7 @@ class DBOS:
         load_output: bool = True,
         executor_id: Optional[str | list[str]] = None,
         queues_only: bool = False,
+        was_forked_from: Optional[bool] = None,
     ) -> List[WorkflowStatus]:
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
@@ -1959,6 +1962,7 @@ class DBOS:
                 load_output=load_output,
                 executor_id=executor_id,
                 queues_only=queues_only,
+                was_forked_from=was_forked_from,
             )
 
         return await asyncio.to_thread(

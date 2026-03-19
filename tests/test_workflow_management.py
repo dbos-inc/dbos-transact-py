@@ -501,6 +501,17 @@ def test_fork_steps(
     for fork in forks:
         assert fork.was_forked_from is False
 
+    # Filter by was_forked_from=True returns only the original; False returns only the forks.
+    forked_from_workflows = DBOS.list_workflows(was_forked_from=True)
+    assert len(forked_from_workflows) == 1
+    assert forked_from_workflows[0].workflow_id == wfid
+    not_forked_from_workflows = DBOS.list_workflows(was_forked_from=False)
+    assert {w.workflow_id for w in not_forked_from_workflows} == {
+        fork_id,
+        fork_id_2,
+        fork_id_3,
+    }
+
 
 def test_restart_fromsteps_transactionsonly(
     dbos: DBOS,
@@ -1210,6 +1221,13 @@ def test_bulk_fork_from_last_failed_step(dbos: DBOS) -> None:
         fid_status = DBOS.get_workflow_status(fid)
         assert fid_status is not None
         assert fid_status.was_forked_from is False
+
+    # Filter by was_forked_from=True returns exactly the three originals.
+    forked_from_workflows = DBOS.list_workflows(was_forked_from=True)
+    assert {w.workflow_id for w in forked_from_workflows} == {wf1_id, wf2_id, wf3_id}
+    # Filter by was_forked_from=False returns exactly the three forks.
+    not_forked_from_workflows = DBOS.list_workflows(was_forked_from=False)
+    assert {w.workflow_id for w in not_forked_from_workflows} == set(forked_ids)
 
 
 def test_get_all_events(dbos: DBOS) -> None:
