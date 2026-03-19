@@ -1039,7 +1039,7 @@ class SystemDatabase(ABC):
         start_step_by_id = {row[0]: row[1] for row in rows}
         for wid in workflow_ids:
             if wid not in start_step_by_id:
-                raise Exception(f"Workflow {wid} not found")
+                raise Exception(f"Workflow steps {wid} not found")
 
         start_steps = [start_step_by_id[wid] for wid in workflow_ids]
         forked_ids = [generate_uuid() for _ in workflow_ids]
