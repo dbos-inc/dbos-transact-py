@@ -44,9 +44,9 @@ def fork_workflow(
     else:
         forked_workflow_id = generate_uuid()
     sys_db.fork_workflow(
-        workflow_id,
-        forked_workflow_id,
-        start_step,
+        [workflow_id],
+        [forked_workflow_id],
+        [start_step],
         application_version=application_version,
         queue_name=queue_name,
         queue_partition_key=queue_partition_key,
