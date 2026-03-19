@@ -145,6 +145,8 @@ class WorkflowStatus:
     queue_partition_key: Optional[str]
     # If this workflow was forked from another, that workflow's ID.
     forked_from: Optional[str]
+    # Whether this workflow has been forked from by another workflow.
+    was_forked_from: bool
     # If this workflow was started as a child of another workflow, that workflow's ID.
     parent_workflow_id: Optional[str]
     # The UNIX epoch timestamp at which the workflow was last dequeued, if it had been enqueued
@@ -852,6 +854,17 @@ class SystemDatabase(ABC):
                 )
             )
 
+            # Mark the original workflows as having been forked from.
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(
+                    SystemSchema.workflow_status.c.workflow_uuid.in_(
+                        original_workflow_ids
+                    )
+                )
+                .values(was_forked_from=True)
+            )
+
             # For workflows with start_step > 1, copy checkpoints/events/streams.
             # Build a mapping subquery of (orig_id, fork_id, start_step) so that
             # each table copy is a single SQL statement regardless of batch size.
@@ -1318,6 +1331,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.parent_workflow_id,
             SystemSchema.workflow_status.c.started_at_epoch_ms,
             SystemSchema.workflow_status.c.delay_until_epoch_ms,
+            SystemSchema.workflow_status.c.was_forked_from,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -1435,8 +1449,9 @@ class SystemDatabase(ABC):
             info.parent_workflow_id = row[21]
             info.dequeued_at = row[22]
             info.delay_until_epoch_ms = row[23]
+            info.was_forked_from = row[24]
 
-            idx = 24
+            idx = 25
             raw_input = row[idx] if load_input else None
             if load_input:
                 idx += 1
