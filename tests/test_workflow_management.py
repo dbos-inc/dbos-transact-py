@@ -5,7 +5,14 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, DBOSClient, Queue, SetEnqueueOptions, SetWorkflowID
+from dbos import (
+    DBOS,
+    DBOSClient,
+    Queue,
+    SetEnqueueOptions,
+    SetWorkflowID,
+    WorkflowHandle,
+)
 from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.application_database import ApplicationSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
@@ -1105,6 +1112,85 @@ def test_fork_streams(dbos: DBOS) -> None:
     for handle in [fork_one, fork_two, fork_three, fork_four, fork_five]:
         assert handle.get_result()
         assert list(DBOS.read_stream(handle.workflow_id, key)) == [0, 1, 2]
+
+
+def test_bulk_fork_from_last_failed_step(dbos: DBOS) -> None:
+    step_one_count = 0
+    step_two_count = 0
+    step_three_count = 0
+
+    @DBOS.step()
+    def step_one() -> int:
+        nonlocal step_one_count
+        step_one_count += 1
+        return 1
+
+    @DBOS.step()
+    def step_two() -> int:
+        nonlocal step_two_count
+        step_two_count += 1
+        if step_two_count == 1:  # fail on first call only (wf1)
+            raise Exception("step two failed")
+        return 2
+
+    @DBOS.step()
+    def step_three() -> int:
+        nonlocal step_three_count
+        step_three_count += 1
+        if step_three_count == 1:  # fail on first call only (wf2)
+            raise Exception("step three failed")
+        return 3
+
+    @DBOS.workflow()
+    def three_step_workflow() -> int:
+        return step_one() + step_two() + step_three()
+
+    # wf1: step 2 fails → last failed step is 2
+    wf1_id = str(uuid.uuid4())
+    with SetWorkflowID(wf1_id):
+        with pytest.raises(Exception, match="step two failed"):
+            three_step_workflow()
+    assert step_one_count == 1
+    assert step_two_count == 1
+    assert step_three_count == 0
+
+    # wf2: step 2 succeeds, step 3 fails → last failed step is 3
+    wf2_id = str(uuid.uuid4())
+    with SetWorkflowID(wf2_id):
+        with pytest.raises(Exception, match="step three failed"):
+            three_step_workflow()
+    assert step_one_count == 2
+    assert step_two_count == 2
+    assert step_three_count == 1
+
+    # wf3: all steps succeed → no failed step, fall back to last step (3)
+    wf3_id = str(uuid.uuid4())
+    with SetWorkflowID(wf3_id):
+        assert three_step_workflow() == 6
+    assert step_one_count == 3
+    assert step_two_count == 3
+    assert step_three_count == 2
+
+    # Bulk fork all three
+    forked_ids = dbos._sys_db.bulk_fork_from_last_failed_step(
+        [wf1_id, wf2_id, wf3_id],
+        application_version=None,
+    )
+    assert len(forked_ids) == 3
+
+    fork1: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids[0])
+    fork2: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids[1])
+    fork3: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids[2])
+    assert fork1.get_result() == 6
+    assert fork2.get_result() == 6
+    assert fork3.get_result() == 6
+
+    # fork1 re-ran from step 2: step_one replayed, step_two and step_three re-executed
+    # fork2 re-ran from step 3: step_one and step_two replayed, step_three re-executed
+    # fork3 re-ran from step 3: step_one and step_two replayed, step_three re-executed
+    assert step_one_count == 3  # replayed for all three forks
+    assert step_two_count == 4  # re-run for fork1 only
+    assert step_three_count == 5  # re-run for all three forks
 
 
 def test_get_all_events(dbos: DBOS) -> None:
