@@ -303,6 +303,7 @@ class ScheduleInput(TypedDict, total=False):
     context: Any
     automatic_backfill: bool
     cron_timezone: Optional[str]
+    queue_name: Optional[str]
 
 
 class DBOS:
@@ -2112,6 +2113,7 @@ class DBOS:
         context: Any = None,
         automatic_backfill: bool = False,
         cron_timezone: Optional[str] = None,
+        queue_name: Optional[str] = None,
     ) -> None:
         """
         Create a cron schedule that periodically invokes a workflow function.
@@ -2127,13 +2129,18 @@ class DBOS:
             context: A context object passed as the second argument to every invocation. Defaults to ``None``.
             automatic_backfill: If ``True``, on startup the scheduler will automatically backfill missed executions since the last time the schedule fired. Defaults to ``False``.
             cron_timezone: IANA timezone name (e.g. ``"America/New_York"``) in which to evaluate the cron expression. Defaults to ``None`` (UTC).
+            queue_name: Optional name of a declared queue to enqueue scheduled workflows to. If ``None``, uses the internal queue. Defaults to ``None``.
 
         Raises:
-            DBOSException: If the cron expression is invalid, the workflow is not registered, or a schedule with the same name already exists
+            DBOSException: If the cron expression is invalid, the workflow is not registered, the queue is not declared, or a schedule with the same name already exists
         """
         if not croniter.is_valid(schedule, second_at_beginning=True):
             raise DBOSException(f"Invalid cron schedule: '{schedule}'")
         dbos = _get_dbos_instance()
+        if queue_name is not None and queue_name not in dbos._registry.queue_info_map:
+            raise DBOSException(
+                f"Queue '{queue_name}' is not declared. Please create the queue before using it in a schedule."
+            )
         workflow_name = get_dbos_func_name(workflow_fn)
         if workflow_name not in dbos._registry.workflow_info_map:
             raise DBOSException(
@@ -2165,6 +2172,7 @@ class DBOS:
             last_fired_at=None,
             automatic_backfill=automatic_backfill,
             cron_timezone=cron_timezone,
+            queue_name=queue_name,
         )
         ctx = snapshot_step_context(reserve_sleep_id=False)
         if ctx and ctx.is_workflow():
@@ -2266,6 +2274,7 @@ class DBOS:
         context: Any = None,
         automatic_backfill: bool = False,
         cron_timezone: Optional[str] = None,
+        queue_name: Optional[str] = None,
     ) -> None:
         """Async version of :meth:`create_schedule`."""
         await cls._configure_asyncio_thread_pool()
@@ -2277,6 +2286,7 @@ class DBOS:
             context=context,
             automatic_backfill=automatic_backfill,
             cron_timezone=cron_timezone,
+            queue_name=queue_name,
         )
 
     @classmethod
@@ -2393,6 +2403,14 @@ class DBOS:
                 if fi and fi.class_info and fi.func_type == DBOSFuncType.Class
                 else None
             )
+            entry_queue_name = entry.get("queue_name")
+            if (
+                entry_queue_name is not None
+                and entry_queue_name not in dbos._registry.queue_info_map
+            ):
+                raise DBOSException(
+                    f"Queue '{entry_queue_name}' is not declared. Please create the queue before using it in a schedule."
+                )
             to_apply.append(
                 WorkflowSchedule(
                     schedule_id=generate_uuid(),
@@ -2405,6 +2423,7 @@ class DBOS:
                     last_fired_at=None,
                     automatic_backfill=entry.get("automatic_backfill", False),
                     cron_timezone=entry.get("cron_timezone"),
+                    queue_name=entry_queue_name,
                 )
             )
         with dbos._sys_db.engine.begin() as c:
