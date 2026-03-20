@@ -277,6 +277,16 @@ class ConductorWebsocket(threading.Thread):
                                         queue_partition_key=bulk_fork_body.get(
                                             "queue_partition_key"
                                         ),
+                                        from_last_failure=bulk_fork_body.get(
+                                            "from_last_failure", False
+                                        ),
+                                        from_last_step=bulk_fork_body.get(
+                                            "from_last_step", False
+                                        ),
+                                        from_step=bulk_fork_body.get("from_step"),
+                                        from_step_name=bulk_fork_body.get(
+                                            "from_step_name"
+                                        ),
                                     )
                                 )
                             except Exception as e:

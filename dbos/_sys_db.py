@@ -1034,27 +1034,76 @@ class SystemDatabase(ABC):
         application_version: Optional[str],
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
+        from_last_failure: bool = False,
+        from_last_step: bool = False,
+        from_step: Optional[int] = None,
+        from_step_name: Optional[str] = None,
     ) -> list[str]:
-        oo = SystemSchema.operation_outputs
-        with self.engine.begin() as c:
-            rows = c.execute(
-                sa.select(
-                    oo.c.workflow_uuid,
-                    sa.func.coalesce(
+        modes = sum(
+            [
+                from_last_failure,
+                from_last_step,
+                from_step is not None,
+                from_step_name is not None,
+            ]
+        )
+        if modes != 1:
+            raise ValueError(
+                "Exactly one of from_last_failure, from_last_step, from_step, "
+                "or from_step_name must be specified"
+            )
+
+        if from_step is not None:
+            start_steps = [from_step] * len(workflow_ids)
+        else:
+            oo = SystemSchema.operation_outputs
+            with self.engine.begin() as c:
+                if from_last_failure:
+                    agg = sa.func.coalesce(
                         sa.func.max(oo.c.function_id).filter(oo.c.error.is_not(None)),
                         sa.func.max(oo.c.function_id),
-                    ).label("start_step"),
-                )
-                .where(oo.c.workflow_uuid.in_(workflow_ids))
-                .group_by(oo.c.workflow_uuid)
-            ).fetchall()
+                    ).label("start_step")
+                    query = (
+                        sa.select(oo.c.workflow_uuid, agg)
+                        .where(oo.c.workflow_uuid.in_(workflow_ids))
+                        .group_by(oo.c.workflow_uuid)
+                    )
+                elif from_last_step:
+                    query = (
+                        sa.select(
+                            oo.c.workflow_uuid,
+                            sa.func.max(oo.c.function_id).label("start_step"),
+                        )
+                        .where(oo.c.workflow_uuid.in_(workflow_ids))
+                        .group_by(oo.c.workflow_uuid)
+                    )
+                else:
+                    # from_step_name: find the last occurrence of the named step
+                    query = (
+                        sa.select(
+                            oo.c.workflow_uuid,
+                            sa.func.max(oo.c.function_id).label("start_step"),
+                        )
+                        .where(
+                            oo.c.workflow_uuid.in_(workflow_ids)
+                            & (oo.c.function_name == from_step_name)
+                        )
+                        .group_by(oo.c.workflow_uuid)
+                    )
 
-        start_step_by_id = {row[0]: row[1] for row in rows}
-        for wid in workflow_ids:
-            if wid not in start_step_by_id:
-                raise Exception(f"No steps were found for workflow {wid}")
+                rows = c.execute(query).fetchall()
 
-        start_steps = [start_step_by_id[wid] for wid in workflow_ids]
+            start_step_by_id = {row[0]: row[1] for row in rows}
+            for wid in workflow_ids:
+                if wid not in start_step_by_id:
+                    if from_step_name is not None:
+                        raise Exception(
+                            f"Workflow {wid} has no step named '{from_step_name}'"
+                        )
+                    raise Exception(f"Workflow {wid} has no steps")
+
+            start_steps = [start_step_by_id[wid] for wid in workflow_ids]
+
         forked_ids = [generate_uuid() for _ in workflow_ids]
         return self.fork_workflow(
             workflow_ids,

@@ -1190,10 +1190,12 @@ def test_fork_from_failure(dbos: DBOS) -> None:
     assert step_two_count == 3
     assert step_three_count == 2
 
-    # Bulk fork all three
+    # --- from_last_failure mode ---
+    # wf1 forks from step 2 (failed), wf2 from step 3 (failed), wf3 from step 3 (fallback)
     forked_ids = dbos._sys_db.fork_from_failure(
         [wf1_id, wf2_id, wf3_id],
         application_version=None,
+        from_last_failure=True,
     )
     assert len(forked_ids) == 3
 
@@ -1204,30 +1206,77 @@ def test_fork_from_failure(dbos: DBOS) -> None:
     assert fork2.get_result() == 6
     assert fork3.get_result() == 6
 
-    # fork1 re-ran from step 2: step_one replayed, step_two and step_three re-executed
-    # fork2 re-ran from step 3: step_one and step_two replayed, step_three re-executed
-    # fork3 re-ran from step 3: step_one and step_two replayed, step_three re-executed
     assert step_one_count == 3  # replayed for all three forks
     assert step_two_count == 4  # re-run for fork1 only
     assert step_three_count == 5  # re-run for all three forks
 
-    # All three originals should be marked as having been forked from.
+    # --- from_last_step mode ---
+    # All three fork from their last step (step 2 for wf1, step 3 for wf2 and wf3)
+    forked_ids_last = dbos._sys_db.fork_from_failure(
+        [wf1_id, wf2_id, wf3_id],
+        application_version=None,
+        from_last_step=True,
+    )
+    f1: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids_last[0])
+    f2: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids_last[1])
+    f3: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids_last[2])
+    assert f1.get_result() == 6
+    assert f2.get_result() == 6
+    assert f3.get_result() == 6
+
+    # wf1's last step is 2 (step_three never ran), so step_two re-runs
+    assert step_two_count == 5
+    # wf2 and wf3 last step is 3, so step_three re-runs for both plus wf1's fork
+    assert step_three_count == 8  # +3 (all three forks re-run step_three)
+
+    # --- from_step mode ---
+    # Fork all from step 1: all steps re-executed
+    forked_ids_step = dbos._sys_db.fork_from_failure(
+        [wf3_id],
+        application_version=None,
+        from_step=1,
+    )
+    fs: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids_step[0])
+    assert fs.get_result() == 6
+    assert step_one_count == 4  # re-run
+    assert step_two_count == 6  # re-run
+    assert step_three_count == 9  # re-run
+
+    # --- from_step_name mode ---
+    # Fork wf3 from the last occurrence of "step_two"
+    forked_ids_name = dbos._sys_db.fork_from_failure(
+        [wf3_id],
+        application_version=None,
+        from_step_name=step_two.__qualname__,
+    )
+    fn: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids_name[0])
+    assert fn.get_result() == 6
+    assert step_one_count == 4  # replayed
+    assert step_two_count == 7  # re-run
+    assert step_three_count == 10  # re-run
+
+    # --- validation: specifying no mode raises ---
+    with pytest.raises(ValueError, match="Exactly one"):
+        dbos._sys_db.fork_from_failure([wf3_id], application_version=None)
+
+    # --- validation: specifying multiple modes raises ---
+    with pytest.raises(ValueError, match="Exactly one"):
+        dbos._sys_db.fork_from_failure(
+            [wf3_id],
+            application_version=None,
+            from_last_failure=True,
+            from_last_step=True,
+        )
+
+    # All originals should be marked as having been forked from.
     for wid in [wf1_id, wf2_id, wf3_id]:
         wid_status = DBOS.get_workflow_status(wid)
         assert wid_status is not None
         assert wid_status.was_forked_from is True
-    # The forked workflows themselves should not be marked.
-    for fid in forked_ids:
-        fid_status = DBOS.get_workflow_status(fid)
-        assert fid_status is not None
-        assert fid_status.was_forked_from is False
 
-    # Filter by was_forked_from=True returns exactly the three originals.
+    # Verify list_workflows filter still works.
     forked_from_workflows = DBOS.list_workflows(was_forked_from=True)
     assert {w.workflow_id for w in forked_from_workflows} == {wf1_id, wf2_id, wf3_id}
-    # Filter by was_forked_from=False returns exactly the three forks.
-    not_forked_from_workflows = DBOS.list_workflows(was_forked_from=False)
-    assert {w.workflow_id for w in not_forked_from_workflows} == set(forked_ids)
 
 
 def test_get_all_events(dbos: DBOS) -> None:

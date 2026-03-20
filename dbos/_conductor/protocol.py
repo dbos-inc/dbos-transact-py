@@ -403,11 +403,15 @@ class ForkWorkflowResponse(BaseMessage):
     error_message: Optional[str] = None
 
 
-class ForkFromFailureBody(TypedDict):
+class ForkFromFailureBody(TypedDict, total=False):
     workflow_ids: List[str]
     application_version: Optional[str]
     queue_name: Optional[str]
     queue_partition_key: Optional[str]
+    from_last_failure: bool
+    from_last_step: bool
+    from_step: Optional[int]
+    from_step_name: Optional[str]
 
 
 @dataclass
