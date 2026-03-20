@@ -1295,6 +1295,71 @@ def test_fork_from_failure(dbos: DBOS) -> None:
     assert {w.workflow_id for w in forked_from_workflows} == {wf1_id, wf2_id, wf3_id}
 
 
+def test_fork_replacement_children(dbos: DBOS) -> None:
+    multiplier = 2
+
+    @DBOS.step()
+    def child_step(x: int) -> int:
+        return x * multiplier
+
+    @DBOS.workflow()
+    def child_wf(x: int) -> int:
+        return child_step(x)
+
+    @DBOS.step()
+    def combine(results: list[int]) -> int:
+        return sum(results)
+
+    child_ids: list[str] = []
+
+    @DBOS.workflow()
+    def parent_wf() -> int:
+        h1 = DBOS.start_workflow(child_wf, 10)
+        h2 = DBOS.start_workflow(child_wf, 20)
+        h3 = DBOS.start_workflow(child_wf, 30)
+        h4 = DBOS.start_workflow(child_wf, 40)
+        h5 = DBOS.start_workflow(child_wf, 50)
+        child_ids.clear()
+        child_ids.extend([h.workflow_id for h in [h1, h2, h3, h4, h5]])
+        results = [h.get_result() for h in [h1, h2, h3, h4, h5]]
+        return combine(results)
+
+    # Run the parent. Children return x*2.
+    parent_handle = DBOS.start_workflow(parent_wf)
+    original_result = parent_handle.get_result()
+    # [10*2, 20*2, 30*2, 40*2, 50*2] = [20, 40, 60, 80, 100] → sum = 300
+    assert original_result == 300
+    assert len(child_ids) == 5
+    orig_ids = list(child_ids)
+
+    # Change the multiplier so forked children produce different results.
+    multiplier = 10
+
+    # Fork children 0, 2, and 4 from step 1 (re-run child_step with new multiplier).
+    forked_child_0 = DBOS.fork_workflow(orig_ids[0], 1)
+    forked_child_2 = DBOS.fork_workflow(orig_ids[2], 1)
+    forked_child_4 = DBOS.fork_workflow(orig_ids[4], 1)
+    assert forked_child_0.get_result() == 100  # 10 * 10
+    assert forked_child_2.get_result() == 300  # 30 * 10
+    assert forked_child_4.get_result() == 500  # 50 * 10
+
+    # Fork the parent from step 6 (combine step, after the 5 start_workflow steps).
+    # Steps 1-5 are replayed with replaced child_workflow_ids.
+    # The workflow then re-reads results from the new children before re-executing combine.
+    forked_parent = DBOS.fork_workflow(
+        parent_handle.workflow_id,
+        6,
+        replacement_children={
+            orig_ids[0]: forked_child_0.workflow_id,
+            orig_ids[2]: forked_child_2.workflow_id,
+            orig_ids[4]: forked_child_4.workflow_id,
+        },
+    )
+    forked_result = forked_parent.get_result()
+    # [10*10, 20*2, 30*10, 40*2, 50*10] = [100, 40, 300, 80, 500] → sum = 1020
+    assert forked_result == 1020
+
+
 def test_get_all_events(dbos: DBOS) -> None:
     @DBOS.workflow()
     def event_workflow() -> str:

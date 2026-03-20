@@ -795,6 +795,7 @@ class SystemDatabase(ABC):
         application_version: Optional[str],
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
+        replacement_children: Optional[dict[str, str]] = None,
     ) -> list[str]:
         if not original_workflow_ids:
             return []
@@ -899,6 +900,19 @@ class SystemDatabase(ABC):
 
                 oo = SystemSchema.operation_outputs
 
+                child_wf_expr: sa.ColumnElement[Any] = oo.c.child_workflow_id
+                if replacement_children:
+                    child_wf_expr = sa.case(
+                        *[
+                            (
+                                oo.c.child_workflow_id == old_id,
+                                sa.literal(new_id),
+                            )
+                            for old_id, new_id in replacement_children.items()
+                        ],
+                        else_=oo.c.child_workflow_id,
+                    )
+
                 # Copy step checkpoints for all applicable workflows.
                 c.execute(
                     sa.insert(oo).from_select(
@@ -920,7 +934,7 @@ class SystemDatabase(ABC):
                             oo.c.error,
                             oo.c.serialization,
                             oo.c.function_name,
-                            oo.c.child_workflow_id,
+                            child_wf_expr,
                             oo.c.started_at_epoch_ms,
                             oo.c.completed_at_epoch_ms,
                         ).select_from(
