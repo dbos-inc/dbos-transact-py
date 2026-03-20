@@ -1255,6 +1255,22 @@ def test_fork_from_failure(dbos: DBOS) -> None:
     assert step_two_count == 7  # re-run
     assert step_three_count == 10  # re-run
 
+    # --- validation: from_step_name errors when step not found ---
+    # wf1 never ran step_three, so this should raise
+    with pytest.raises(Exception, match="has no step named"):
+        dbos._sys_db.fork_from_failure(
+            [wf1_id],
+            application_version=None,
+            from_step_name=step_three.__qualname__,
+        )
+    # Nonexistent step name should also raise
+    with pytest.raises(Exception, match="has no step named"):
+        dbos._sys_db.fork_from_failure(
+            [wf3_id],
+            application_version=None,
+            from_step_name="nonexistent_step",
+        )
+
     # --- validation: specifying no mode raises ---
     with pytest.raises(ValueError, match="Exactly one"):
         dbos._sys_db.fork_from_failure([wf3_id], application_version=None)
