@@ -796,6 +796,15 @@ class SystemDatabase(ABC):
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
     ) -> list[str]:
+        if not original_workflow_ids:
+            return []
+        if len(original_workflow_ids) != len(forked_workflow_ids) or len(
+            original_workflow_ids
+        ) != len(start_steps):
+            raise ValueError(
+                "original_workflow_ids, forked_workflow_ids, and start_steps "
+                "must have the same length"
+            )
 
         with self.engine.begin() as c:
             rows = c.execute(
