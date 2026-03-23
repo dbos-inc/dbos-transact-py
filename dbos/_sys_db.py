@@ -265,6 +265,7 @@ class WorkflowSchedule(TypedDict):
     last_fired_at: Optional[str]
     automatic_backfill: bool
     cron_timezone: Optional[str]  # IANA timezone name, stored as string in DB
+    queue_name: Optional[str]
 
 
 class ClientScheduleInput(TypedDict, total=False):
@@ -275,6 +276,7 @@ class ClientScheduleInput(TypedDict, total=False):
     context: Any
     automatic_backfill: bool
     cron_timezone: Optional[str]
+    queue_name: Optional[str]
 
 
 class VersionInfo(TypedDict):
@@ -3895,6 +3897,7 @@ class SystemDatabase(ABC):
                         last_fired_at=schedule.get("last_fired_at"),
                         automatic_backfill=schedule.get("automatic_backfill", False),
                         cron_timezone=schedule.get("cron_timezone"),
+                        queue_name=schedule.get("queue_name"),
                     )
                 )
             except sa.exc.IntegrityError:
@@ -3928,6 +3931,7 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_schedules.c.last_fired_at,
                 SystemSchema.workflow_schedules.c.automatic_backfill,
                 SystemSchema.workflow_schedules.c.cron_timezone,
+                SystemSchema.workflow_schedules.c.queue_name,
             )
             if status is not None:
                 vals = [status] if isinstance(status, str) else status
@@ -3968,6 +3972,7 @@ class SystemDatabase(ABC):
                     last_fired_at=row[7],
                     automatic_backfill=bool(row[8]),
                     cron_timezone=row[9],
+                    queue_name=row[10],
                 )
                 for row in rows
             ]
@@ -3993,6 +3998,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_schedules.c.last_fired_at,
                     SystemSchema.workflow_schedules.c.automatic_backfill,
                     SystemSchema.workflow_schedules.c.cron_timezone,
+                    SystemSchema.workflow_schedules.c.queue_name,
                 ).where(SystemSchema.workflow_schedules.c.schedule_name == name)
             ).fetchone()
             if row is None:
@@ -4008,6 +4014,7 @@ class SystemDatabase(ABC):
                 last_fired_at=row[7],
                 automatic_backfill=bool(row[8]),
                 cron_timezone=row[9],
+                queue_name=row[10],
             )
 
         if conn is not None:

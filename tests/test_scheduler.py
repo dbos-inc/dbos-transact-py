@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance
+from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance, Queue
 from dbos._error import DBOSException
 from dbos._utils import INTERNAL_QUEUE_NAME
 
@@ -1172,3 +1172,68 @@ def test_instance_method_schedule_rejected(dbos: DBOS) -> None:
             workflow_fn=inst.scheduled_wf,
             schedule="* * * * *",
         )
+
+
+def test_schedule_with_queue_name(dbos: DBOS) -> None:
+    my_queue = Queue("scheduler-test-queue")
+    received: list[Any] = []
+
+    @DBOS.workflow()
+    def queued_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        assert DBOS.workflow_id
+        status = DBOS.get_workflow_status(DBOS.workflow_id)
+        assert status
+        assert status.queue_name == "scheduler-test-queue"
+        received.append(ctx)
+
+    # Reject undeclared queue name
+    with pytest.raises(DBOSException, match="is not declared"):
+        DBOS.create_schedule(
+            schedule_name="bad-queue-schedule",
+            workflow_fn=queued_workflow,
+            schedule="0 0 * * *",
+            queue_name="nonexistent-queue",
+        )
+
+    # Create a schedule with a valid queue name
+    DBOS.create_schedule(
+        schedule_name="queued-schedule",
+        workflow_fn=queued_workflow,
+        schedule="* * * * * *",
+        context={"queued": True},
+        queue_name="scheduler-test-queue",
+    )
+
+    # Verify queue_name is stored via get and list
+    sched = DBOS.get_schedule("queued-schedule")
+    assert sched is not None
+    assert sched["queue_name"] == "scheduler-test-queue"
+    schedules = DBOS.list_schedules()
+    assert len(schedules) == 1
+    assert schedules[0]["queue_name"] == "scheduler-test-queue"
+
+    # Verify the schedule fires and workflows land on the specified queue
+    def check_fired() -> None:
+        assert len(received) >= 2
+        assert all(c == {"queued": True} for c in received)
+
+    retry_until_success(check_fired)
+
+    # Trigger also uses the queue
+    count_before = len(received)
+    handle = DBOS.trigger_schedule("queued-schedule")
+    handle.get_result()
+    assert len(received) > count_before
+
+    DBOS.delete_schedule("queued-schedule")
+
+    # Schedule without queue_name should have None
+    DBOS.create_schedule(
+        schedule_name="no-queue-schedule",
+        workflow_fn=queued_workflow,
+        schedule="0 0 * * *",
+    )
+    sched = DBOS.get_schedule("no-queue-schedule")
+    assert sched is not None
+    assert sched["queue_name"] is None
+    DBOS.delete_schedule("no-queue-schedule")

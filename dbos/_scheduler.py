@@ -33,6 +33,7 @@ class _ScheduleThread:
         self.context: Any = serializer.deserialize(self.serialized_context)
         tz_name = schedule.get("cron_timezone")
         self.tzinfo = ZoneInfo(tz_name) if tz_name else timezone.utc
+        self.queue_name: Optional[str] = schedule.get("queue_name")
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -71,6 +72,7 @@ class _ScheduleThread:
                         workflow_id,
                         self.context,
                         self.class_name,
+                        self.queue_name,
                     )
                 dbos._sys_db.update_last_fired_at(
                     self.schedule_name, next_exec_time.isoformat()
@@ -98,6 +100,7 @@ def _enqueue_scheduled_workflow(
     workflow_id: str,
     context: Any = None,
     class_name: Optional[str] = None,
+    queue_name: Optional[str] = None,
 ) -> None:
     """Enqueue a single scheduled workflow execution via init_workflow."""
     # Scheduled workflows are always enqueued to the latest application version
@@ -108,7 +111,7 @@ def _enqueue_scheduled_workflow(
         "status": WorkflowStatusString.ENQUEUED.value,
         "name": workflow_name,
         "class_name": class_name,
-        "queue_name": INTERNAL_QUEUE_NAME,
+        "queue_name": queue_name if queue_name else INTERNAL_QUEUE_NAME,
         "app_version": latest_application_version,
         "config_name": None,
         "authenticated_user": None,
@@ -155,6 +158,7 @@ def backfill_schedule(
         raise DBOSException(f"Schedule '{schedule_name}' does not exist")
     context = sys_db.serializer.deserialize(schedule["context"])
     class_name = schedule["workflow_class_name"]
+    queue_name = schedule.get("queue_name")
     tz_name = schedule.get("cron_timezone")
     tz = ZoneInfo(tz_name) if tz_name else timezone.utc
     start_in_tz = start.astimezone(tz)
@@ -173,6 +177,7 @@ def backfill_schedule(
                 workflow_id,
                 context,
                 class_name,
+                queue_name,
             )
         workflow_ids.append(workflow_id)
     return workflow_ids
@@ -185,10 +190,17 @@ def trigger_schedule(sys_db: "SystemDatabase", schedule_name: str) -> str:
         raise DBOSException(f"Schedule '{schedule_name}' does not exist")
     context = sys_db.serializer.deserialize(schedule["context"])
     class_name = schedule["workflow_class_name"]
+    queue_name = schedule.get("queue_name")
     now = datetime.now(timezone.utc)
     workflow_id = f"sched-{schedule_name}-trigger-{now.isoformat()}"
     _enqueue_scheduled_workflow(
-        sys_db, schedule["workflow_name"], now, workflow_id, context, class_name
+        sys_db,
+        schedule["workflow_name"],
+        now,
+        workflow_id,
+        context,
+        class_name,
+        queue_name,
     )
     return workflow_id
 

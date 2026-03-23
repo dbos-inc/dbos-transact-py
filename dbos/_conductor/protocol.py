@@ -513,6 +513,7 @@ class ScheduleOutput:
     last_fired_at: Optional[str]
     automatic_backfill: bool
     cron_timezone: Optional[str]
+    queue_name: Optional[str]
 
     @classmethod
     def from_schedule(
@@ -536,6 +537,7 @@ class ScheduleOutput:
             last_fired_at=s.get("last_fired_at"),
             automatic_backfill=s.get("automatic_backfill", False),
             cron_timezone=s.get("cron_timezone"),
+            queue_name=s.get("queue_name"),
         )
 
 
