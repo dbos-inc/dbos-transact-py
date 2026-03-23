@@ -218,6 +218,7 @@ class SystemSchema:
         Column("last_fired_at", Text, nullable=True),
         Column("automatic_backfill", Boolean, nullable=False, server_default="false"),
         Column("cron_timezone", Text, nullable=True),
+        Column("queue_name", Text, nullable=True),
     )
 
     application_versions = Table(

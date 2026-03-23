@@ -768,6 +768,7 @@ class DBOSClient:
         workflow_class_name: Optional[str] = None,
         automatic_backfill: bool = False,
         cron_timezone: Optional[str] = None,
+        queue_name: Optional[str] = None,
     ) -> None:
         """
         Create a cron schedule that periodically invokes a workflow.
@@ -780,6 +781,7 @@ class DBOSClient:
             workflow_class_name: Class name for static class method workflows. Defaults to ``None``.
             automatic_backfill: If ``True``, on startup the scheduler will automatically backfill missed executions since the last time the schedule fired. Defaults to ``False``.
             cron_timezone: IANA timezone name (e.g. ``"America/New_York"``) in which to evaluate the cron expression. Defaults to ``None`` (UTC).
+            queue_name: Optional name of a queue to enqueue scheduled workflows to. If ``None``, uses the internal queue. Defaults to ``None``.
 
         Raises:
             DBOSException: If the cron expression is invalid or a schedule with the same name already exists.
@@ -803,6 +805,7 @@ class DBOSClient:
                 last_fired_at=None,
                 automatic_backfill=automatic_backfill,
                 cron_timezone=cron_timezone,
+                queue_name=queue_name,
             )
         )
 
@@ -853,6 +856,7 @@ class DBOSClient:
         workflow_class_name: Optional[str] = None,
         automatic_backfill: bool = False,
         cron_timezone: Optional[str] = None,
+        queue_name: Optional[str] = None,
     ) -> None:
         """Async version of :meth:`create_schedule`."""
         await asyncio.to_thread(
@@ -864,6 +868,7 @@ class DBOSClient:
             workflow_class_name=workflow_class_name,
             automatic_backfill=automatic_backfill,
             cron_timezone=cron_timezone,
+            queue_name=queue_name,
         )
 
     async def list_schedules_async(
@@ -939,6 +944,7 @@ class DBOSClient:
                     last_fired_at=None,
                     automatic_backfill=entry.get("automatic_backfill", False),
                     cron_timezone=entry.get("cron_timezone"),
+                    queue_name=entry.get("queue_name"),
                 )
             )
         with self._sys_db.engine.begin() as c:
