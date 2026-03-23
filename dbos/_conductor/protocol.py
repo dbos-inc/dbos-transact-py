@@ -43,6 +43,7 @@ class MessageType(str, Enum):
     GET_WORKFLOW_NOTIFICATIONS = "get_workflow_notifications"
     GET_WORKFLOW_STREAMS = "get_workflow_streams"
     GET_WORKFLOW_AGGREGATES = "get_workflow_aggregates"
+    FORK_FROM_FAILURE = "fork_from_failure"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -172,6 +173,7 @@ class ListWorkflowsBody(TypedDict, total=False):
     load_output: bool
     executor_id: Optional[Union[str, List[str]]]
     queues_only: bool
+    was_forked_from: Optional[bool]
 
 
 @dataclass
@@ -198,8 +200,10 @@ class WorkflowsOutput:
     Priority: Optional[str]
     QueuePartitionKey: Optional[str]
     ForkedFrom: Optional[str]
+    WasForkedFrom: bool
     ParentWorkflowID: Optional[str]
     DequeuedAt: Optional[str]
+    DelayUntilEpochMS: Optional[str]
 
     @classmethod
     def from_workflow_information(cls, info: WorkflowStatus) -> "WorkflowsOutput":
@@ -228,6 +232,11 @@ class WorkflowsOutput:
         dequeued_at_str = (
             str(info.dequeued_at) if info.dequeued_at is not None else None
         )
+        delay_until_epoch_ms_str = (
+            str(info.delay_until_epoch_ms)
+            if info.delay_until_epoch_ms is not None
+            else None
+        )
 
         return cls(
             WorkflowUUID=info.workflow_id,
@@ -252,8 +261,10 @@ class WorkflowsOutput:
             Priority=priority_str,
             QueuePartitionKey=info.queue_partition_key,
             ForkedFrom=info.forked_from,
+            WasForkedFrom=info.was_forked_from,
             ParentWorkflowID=info.parent_workflow_id,
             DequeuedAt=dequeued_at_str,
+            DelayUntilEpochMS=delay_until_epoch_ms_str,
         )
 
 
@@ -321,6 +332,7 @@ class ListQueuedWorkflowsBody(TypedDict, total=False):
     load_input: bool
     load_output: bool
     executor_id: Optional[Union[str, List[str]]]
+    was_forked_from: Optional[bool]
 
 
 @dataclass
@@ -388,6 +400,28 @@ class ForkWorkflowRequest(BaseMessage):
 @dataclass
 class ForkWorkflowResponse(BaseMessage):
     new_workflow_id: Optional[str]
+    error_message: Optional[str] = None
+
+
+class ForkFromFailureBody(TypedDict, total=False):
+    workflow_ids: List[str]
+    application_version: Optional[str]
+    queue_name: Optional[str]
+    queue_partition_key: Optional[str]
+    from_last_failure: bool
+    from_last_step: bool
+    from_step: Optional[int]
+    from_step_name: Optional[str]
+
+
+@dataclass
+class ForkFromFailureRequest(BaseMessage):
+    body: ForkFromFailureBody
+
+
+@dataclass
+class ForkFromFailureResponse(BaseMessage):
+    forked_workflow_ids: Optional[List[str]]
     error_message: Optional[str] = None
 
 

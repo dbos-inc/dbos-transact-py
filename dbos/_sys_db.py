@@ -145,6 +145,8 @@ class WorkflowStatus:
     queue_partition_key: Optional[str]
     # If this workflow was forked from another, that workflow's ID.
     forked_from: Optional[str]
+    # Whether this workflow has been forked from by another workflow.
+    was_forked_from: bool
     # If this workflow was started as a child of another workflow, that workflow's ID.
     parent_workflow_id: Optional[str]
     # The UNIX epoch timestamp at which the workflow was last dequeued, if it had been enqueued
@@ -788,48 +790,134 @@ class SystemDatabase(ABC):
 
     def fork_workflow(
         self,
-        original_workflow_id: str,
-        forked_workflow_id: str,
-        start_step: int,
+        original_workflow_ids: list[str],
+        forked_workflow_ids: list[str],
+        start_steps: list[int],
         *,
         application_version: Optional[str],
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
-    ) -> str:
-
-        status = self.get_workflow_status(original_workflow_id)
-        if status is None:
-            raise Exception(f"Workflow {original_workflow_id} not found")
+        replacement_children: Optional[dict[str, str]] = None,
+    ) -> list[str]:
+        if not original_workflow_ids:
+            return []
+        if len(original_workflow_ids) != len(forked_workflow_ids) or len(
+            original_workflow_ids
+        ) != len(start_steps):
+            raise ValueError(
+                "original_workflow_ids, forked_workflow_ids, and start_steps "
+                "must have the same length"
+            )
 
         with self.engine.begin() as c:
-            # Create an entry for the forked workflow with the same
-            # initial values as the original.
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.workflow_uuid,
+                    SystemSchema.workflow_status.c.name,
+                    SystemSchema.workflow_status.c.class_name,
+                    SystemSchema.workflow_status.c.config_name,
+                    SystemSchema.workflow_status.c.application_id,
+                    SystemSchema.workflow_status.c.authenticated_user,
+                    SystemSchema.workflow_status.c.authenticated_roles,
+                    SystemSchema.workflow_status.c.assumed_role,
+                    SystemSchema.workflow_status.c.inputs,
+                    SystemSchema.workflow_status.c.serialization,
+                ).where(
+                    SystemSchema.workflow_status.c.workflow_uuid.in_(
+                        original_workflow_ids
+                    )
+                )
+            ).fetchall()
+
+            status_by_id = {row[0]: row for row in rows}
+            for original_workflow_id in original_workflow_ids:
+                if original_workflow_id not in status_by_id:
+                    raise Exception(f"Workflow {original_workflow_id} not found")
+            statuses = [status_by_id[wid] for wid in original_workflow_ids]
+            # Bulk insert all forked workflow status rows in one statement.
             c.execute(
                 sa.insert(SystemSchema.workflow_status).values(
-                    workflow_uuid=forked_workflow_id,
-                    status=WorkflowStatusString.ENQUEUED.value,
-                    name=status["name"],
-                    class_name=status["class_name"],
-                    config_name=status["config_name"],
-                    application_version=application_version,
-                    application_id=status["app_id"],
-                    authenticated_user=status["authenticated_user"],
-                    authenticated_roles=status["authenticated_roles"],
-                    serialization=status["serialization"],
-                    queue_name=(
-                        queue_name if queue_name is not None else INTERNAL_QUEUE_NAME
-                    ),
-                    queue_partition_key=queue_partition_key,
-                    inputs=status["inputs"],
-                    assumed_role=status["assumed_role"],
-                    forked_from=original_workflow_id,
+                    [
+                        dict(
+                            workflow_uuid=forked_workflow_id,
+                            status=WorkflowStatusString.ENQUEUED.value,
+                            name=status[1],
+                            class_name=status[2],
+                            config_name=status[3],
+                            application_version=application_version,
+                            application_id=status[4],
+                            authenticated_user=status[5],
+                            authenticated_roles=status[6],
+                            serialization=status[9],
+                            queue_name=(
+                                queue_name
+                                if queue_name is not None
+                                else INTERNAL_QUEUE_NAME
+                            ),
+                            queue_partition_key=queue_partition_key,
+                            inputs=status[8],
+                            assumed_role=status[7],
+                            forked_from=original_workflow_id,
+                        )
+                        for original_workflow_id, forked_workflow_id, status in zip(
+                            original_workflow_ids, forked_workflow_ids, statuses
+                        )
+                    ]
                 )
             )
 
-            if start_step > 1:
-                # Copy the original workflow's step checkpoints
+            # Mark the original workflows as having been forked from.
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(
+                    SystemSchema.workflow_status.c.workflow_uuid.in_(
+                        original_workflow_ids
+                    )
+                )
+                .values(was_forked_from=True)
+            )
+
+            # For workflows with start_step > 1, copy checkpoints/events/streams.
+            # Build a mapping subquery of (orig_id, fork_id, start_step) so that
+            # each table copy is a single SQL statement regardless of batch size.
+            fork_mappings = [
+                (orig, fork, step)
+                for orig, fork, step in zip(
+                    original_workflow_ids, forked_workflow_ids, start_steps
+                )
+                if step > 1
+            ]
+
+            if fork_mappings:
+                mapping_subquery = sa.union_all(
+                    *[
+                        sa.select(
+                            sa.literal(orig_id).label("orig_id"),
+                            sa.literal(fork_id).label("fork_id"),
+                            sa.literal(step).label("start_step"),
+                        )
+                        for orig_id, fork_id, step in fork_mappings
+                    ]
+                ).subquery("mapping")
+
+                oo = SystemSchema.operation_outputs
+
+                child_wf_expr: sa.ColumnElement[Any] = oo.c.child_workflow_id
+                if replacement_children:
+                    child_wf_expr = sa.case(
+                        *[
+                            (
+                                oo.c.child_workflow_id == old_id,
+                                sa.literal(new_id),
+                            )
+                            for old_id, new_id in replacement_children.items()
+                        ],
+                        else_=oo.c.child_workflow_id,
+                    )
+
+                # Copy step checkpoints for all applicable workflows.
                 c.execute(
-                    sa.insert(SystemSchema.operation_outputs).from_select(
+                    sa.insert(oo).from_select(
                         [
                             "workflow_uuid",
                             "function_id",
@@ -842,30 +930,30 @@ class SystemDatabase(ABC):
                             "completed_at_epoch_ms",
                         ],
                         sa.select(
-                            sa.literal(forked_workflow_id).label("workflow_uuid"),
-                            SystemSchema.operation_outputs.c.function_id,
-                            SystemSchema.operation_outputs.c.output,
-                            SystemSchema.operation_outputs.c.error,
-                            SystemSchema.operation_outputs.c.serialization,
-                            SystemSchema.operation_outputs.c.function_name,
-                            SystemSchema.operation_outputs.c.child_workflow_id,
-                            SystemSchema.operation_outputs.c.started_at_epoch_ms,
-                            SystemSchema.operation_outputs.c.completed_at_epoch_ms,
-                        ).where(
-                            (
-                                SystemSchema.operation_outputs.c.workflow_uuid
-                                == original_workflow_id
-                            )
-                            & (
-                                SystemSchema.operation_outputs.c.function_id
-                                < start_step
+                            mapping_subquery.c.fork_id.label("workflow_uuid"),
+                            oo.c.function_id,
+                            oo.c.output,
+                            oo.c.error,
+                            oo.c.serialization,
+                            oo.c.function_name,
+                            child_wf_expr,
+                            oo.c.started_at_epoch_ms,
+                            oo.c.completed_at_epoch_ms,
+                        ).select_from(
+                            mapping_subquery.join(
+                                oo,
+                                (oo.c.workflow_uuid == mapping_subquery.c.orig_id)
+                                & (oo.c.function_id < mapping_subquery.c.start_step),
                             )
                         ),
                     )
                 )
-                # Copy the original workflow's events
+
+                weh = SystemSchema.workflow_events_history
+
+                # Copy the workflow events history for all applicable workflows.
                 c.execute(
-                    sa.insert(SystemSchema.workflow_events_history).from_select(
+                    sa.insert(weh).from_select(
                         [
                             "workflow_uuid",
                             "function_id",
@@ -874,37 +962,43 @@ class SystemDatabase(ABC):
                             "serialization",
                         ],
                         sa.select(
-                            sa.literal(forked_workflow_id).label("workflow_uuid"),
-                            SystemSchema.workflow_events_history.c.function_id,
-                            SystemSchema.workflow_events_history.c.key,
-                            SystemSchema.workflow_events_history.c.value,
-                            SystemSchema.workflow_events_history.c.serialization,
-                        ).where(
-                            (
-                                SystemSchema.workflow_events_history.c.workflow_uuid
-                                == original_workflow_id
-                            )
-                            & (
-                                SystemSchema.workflow_events_history.c.function_id
-                                < start_step
+                            mapping_subquery.c.fork_id.label("workflow_uuid"),
+                            weh.c.function_id,
+                            weh.c.key,
+                            weh.c.value,
+                            weh.c.serialization,
+                        ).select_from(
+                            mapping_subquery.join(
+                                weh,
+                                (weh.c.workflow_uuid == mapping_subquery.c.orig_id)
+                                & (weh.c.function_id < mapping_subquery.c.start_step),
                             )
                         ),
                     )
                 )
-                # Copy only the latest version of each workflow event from the history table
-                # (the one with the maximum function_id for each key where function_id < start_step)
-                weh1 = SystemSchema.workflow_events_history.alias("weh1")
-                weh2 = SystemSchema.workflow_events_history.alias("weh2")
 
-                max_function_id_subquery = (
-                    sa.select(sa.func.max(weh2.c.function_id))
-                    .where(
-                        (weh2.c.workflow_uuid == original_workflow_id)
-                        & (weh2.c.key == weh1.c.key)
-                        & (weh2.c.function_id < start_step)
+                # Copy only the latest version of each workflow event using a window
+                # function instead of a per-workflow correlated subquery.
+                ranked = (
+                    sa.select(
+                        mapping_subquery.c.fork_id.label("workflow_uuid"),
+                        weh.c.key,
+                        weh.c.value,
+                        weh.c.serialization,
+                        sa.func.row_number()
+                        .over(
+                            partition_by=[weh.c.workflow_uuid, weh.c.key],
+                            order_by=weh.c.function_id.desc(),
+                        )
+                        .label("rn"),
+                    ).select_from(
+                        mapping_subquery.join(
+                            weh,
+                            (weh.c.workflow_uuid == mapping_subquery.c.orig_id)
+                            & (weh.c.function_id < mapping_subquery.c.start_step),
+                        )
                     )
-                    .scalar_subquery()
-                )
+                ).subquery("ranked")
 
                 c.execute(
                     sa.insert(SystemSchema.workflow_events).from_select(
@@ -915,19 +1009,19 @@ class SystemDatabase(ABC):
                             "serialization",
                         ],
                         sa.select(
-                            sa.literal(forked_workflow_id).label("workflow_uuid"),
-                            weh1.c.key,
-                            weh1.c.value,
-                            weh1.c.serialization,
-                        ).where(
-                            (weh1.c.workflow_uuid == original_workflow_id)
-                            & (weh1.c.function_id == max_function_id_subquery)
-                        ),
+                            ranked.c.workflow_uuid,
+                            ranked.c.key,
+                            ranked.c.value,
+                            ranked.c.serialization,
+                        ).where(ranked.c.rn == 1),
                     )
                 )
-                # Copy the original workflow's streams
+
+                streams = SystemSchema.streams
+
+                # Copy streams for all applicable workflows.
                 c.execute(
-                    sa.insert(SystemSchema.streams).from_select(
+                    sa.insert(streams).from_select(
                         [
                             "workflow_uuid",
                             "function_id",
@@ -937,23 +1031,113 @@ class SystemDatabase(ABC):
                             "offset",
                         ],
                         sa.select(
-                            sa.literal(forked_workflow_id).label("workflow_uuid"),
-                            SystemSchema.streams.c.function_id,
-                            SystemSchema.streams.c.key,
-                            SystemSchema.streams.c.value,
-                            SystemSchema.streams.c.serialization,
-                            SystemSchema.streams.c.offset,
-                        ).where(
-                            (
-                                SystemSchema.streams.c.workflow_uuid
-                                == original_workflow_id
+                            mapping_subquery.c.fork_id.label("workflow_uuid"),
+                            streams.c.function_id,
+                            streams.c.key,
+                            streams.c.value,
+                            streams.c.serialization,
+                            streams.c.offset,
+                        ).select_from(
+                            mapping_subquery.join(
+                                streams,
+                                (streams.c.workflow_uuid == mapping_subquery.c.orig_id)
+                                & (
+                                    streams.c.function_id
+                                    < mapping_subquery.c.start_step
+                                ),
                             )
-                            & (SystemSchema.streams.c.function_id < start_step)
                         ),
                     )
                 )
 
-        return forked_workflow_id
+        return forked_workflow_ids
+
+    def fork_from_failure(
+        self,
+        workflow_ids: list[str],
+        *,
+        application_version: Optional[str],
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+        from_last_failure: bool = False,
+        from_last_step: bool = False,
+        from_step: Optional[int] = None,
+        from_step_name: Optional[str] = None,
+    ) -> list[str]:
+        modes = sum(
+            [
+                from_last_failure,
+                from_last_step,
+                from_step is not None,
+                from_step_name is not None,
+            ]
+        )
+        if modes != 1:
+            raise ValueError(
+                "Exactly one of from_last_failure, from_last_step, from_step, "
+                "or from_step_name must be specified"
+            )
+
+        if from_step is not None:
+            start_steps = [from_step] * len(workflow_ids)
+        else:
+            oo = SystemSchema.operation_outputs
+            with self.engine.begin() as c:
+                if from_last_failure:
+                    agg = sa.func.coalesce(
+                        sa.func.max(oo.c.function_id).filter(oo.c.error.is_not(None)),
+                        sa.func.max(oo.c.function_id),
+                    ).label("start_step")
+                    query = (
+                        sa.select(oo.c.workflow_uuid, agg)
+                        .where(oo.c.workflow_uuid.in_(workflow_ids))
+                        .group_by(oo.c.workflow_uuid)
+                    )
+                elif from_last_step:
+                    query = (
+                        sa.select(
+                            oo.c.workflow_uuid,
+                            sa.func.max(oo.c.function_id).label("start_step"),
+                        )
+                        .where(oo.c.workflow_uuid.in_(workflow_ids))
+                        .group_by(oo.c.workflow_uuid)
+                    )
+                else:
+                    # from_step_name: find the last occurrence of the named step
+                    query = (
+                        sa.select(
+                            oo.c.workflow_uuid,
+                            sa.func.max(oo.c.function_id).label("start_step"),
+                        )
+                        .where(
+                            oo.c.workflow_uuid.in_(workflow_ids)
+                            & (oo.c.function_name == from_step_name)
+                        )
+                        .group_by(oo.c.workflow_uuid)
+                    )
+
+                rows = c.execute(query).fetchall()
+
+            start_step_by_id = {row[0]: row[1] for row in rows}
+            for wid in workflow_ids:
+                if wid not in start_step_by_id:
+                    if from_step_name is not None:
+                        raise Exception(
+                            f"Workflow {wid} has no step named '{from_step_name}'"
+                        )
+                    raise Exception(f"Workflow {wid} has no steps")
+
+            start_steps = [start_step_by_id[wid] for wid in workflow_ids]
+
+        forked_ids = [generate_uuid() for _ in workflow_ids]
+        return self.fork_workflow(
+            workflow_ids,
+            forked_ids,
+            start_steps,
+            application_version=application_version,
+            queue_name=queue_name,
+            queue_partition_key=queue_partition_key,
+        )
 
     @db_retry()
     def get_workflow_status(
@@ -1174,6 +1358,7 @@ class SystemDatabase(ABC):
         load_output: bool = True,
         executor_id: Optional[str | list[str]] = None,
         queues_only: bool = False,
+        was_forked_from: Optional[bool] = None,
     ) -> List[WorkflowStatus]:
         """
         Retrieve a list of workflows based on the search criteria.
@@ -1221,6 +1406,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.parent_workflow_id,
             SystemSchema.workflow_status.c.started_at_epoch_ms,
             SystemSchema.workflow_status.c.delay_until_epoch_ms,
+            SystemSchema.workflow_status.c.was_forked_from,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -1301,6 +1487,10 @@ class SystemDatabase(ABC):
             query = query.where(
                 SystemSchema.workflow_status.c.executor_id.in_(executor_id_list)
             )
+        if was_forked_from is not None:
+            query = query.where(
+                SystemSchema.workflow_status.c.was_forked_from == was_forked_from
+            )
         if limit:
             query = query.limit(limit)
         if offset:
@@ -1338,8 +1528,9 @@ class SystemDatabase(ABC):
             info.parent_workflow_id = row[21]
             info.dequeued_at = row[22]
             info.delay_until_epoch_ms = row[23]
+            info.was_forked_from = row[24]
 
-            idx = 24
+            idx = 25
             raw_input = row[idx] if load_input else None
             if load_input:
                 idx += 1

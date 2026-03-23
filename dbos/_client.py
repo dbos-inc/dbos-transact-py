@@ -493,6 +493,7 @@ class DBOSClient:
         load_output: bool = True,
         executor_id: Optional[str | list[str]] = None,
         queues_only: bool = False,
+        was_forked_from: Optional[bool] = None,
     ) -> List[WorkflowStatus]:
         return self._sys_db.list_workflows(
             workflow_ids=workflow_ids,
@@ -513,6 +514,7 @@ class DBOSClient:
             load_output=load_output,
             executor_id=executor_id,
             queues_only=queues_only,
+            was_forked_from=was_forked_from,
         )
 
     async def list_workflows_async(
@@ -536,6 +538,7 @@ class DBOSClient:
         load_output: bool = True,
         executor_id: Optional[str | list[str]] = None,
         queues_only: bool = False,
+        was_forked_from: Optional[bool] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_workflows,
@@ -557,6 +560,7 @@ class DBOSClient:
             load_output=load_output,
             executor_id=executor_id,
             queues_only=queues_only,
+            was_forked_from=was_forked_from,
         )
 
     def list_queued_workflows(
@@ -657,6 +661,7 @@ class DBOSClient:
         application_version: Optional[str] = None,
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
+        replacement_children: Optional[dict[str, str]] = None,
     ) -> "WorkflowHandle[Any]":
         forked_workflow_id = fork_workflow(
             self._sys_db,
@@ -665,6 +670,7 @@ class DBOSClient:
             application_version=application_version,
             queue_name=queue_name,
             queue_partition_key=queue_partition_key,
+            replacement_children=replacement_children,
         )
         return WorkflowHandleClientPolling[Any](forked_workflow_id, self._sys_db)
 
@@ -676,6 +682,7 @@ class DBOSClient:
         application_version: Optional[str] = None,
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
+        replacement_children: Optional[dict[str, str]] = None,
     ) -> "WorkflowHandleAsync[Any]":
         forked_workflow_id = await asyncio.to_thread(
             fork_workflow,
@@ -685,6 +692,7 @@ class DBOSClient:
             application_version=application_version,
             queue_name=queue_name,
             queue_partition_key=queue_partition_key,
+            replacement_children=replacement_children,
         )
         return WorkflowHandleClientAsyncPolling[Any](forked_workflow_id, self._sys_db)
 

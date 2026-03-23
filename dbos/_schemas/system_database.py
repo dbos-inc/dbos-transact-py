@@ -82,6 +82,7 @@ class SystemSchema:
         Column("priority", Integer(), nullable=False),
         Column("queue_partition_key", Text()),
         Column("forked_from", Text()),
+        Column("was_forked_from", Boolean, nullable=False, server_default="false"),
         Column("owner_xid", Text()),
         Column("parent_workflow_id", Text()),
         Column("serialization", Text()),

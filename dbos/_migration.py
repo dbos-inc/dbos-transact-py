@@ -454,6 +454,12 @@ ALTER TABLE "{schema}".workflow_schedules ADD COLUMN "queue_name" TEXT DEFAULT N
 """
 
 
+def get_dbos_migration_eighteen(schema: str) -> str:
+    return f"""
+ALTER TABLE "{schema}"."workflow_status" ADD COLUMN "was_forked_from" BOOLEAN NOT NULL DEFAULT FALSE;
+"""
+
+
 def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
     return [
         get_dbos_migration_one(schema, use_listen_notify),
@@ -473,6 +479,7 @@ def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
         get_dbos_migration_fifteen(schema),
         get_dbos_migration_sixteen(schema),
         get_dbos_migration_seventeen(schema),
+        get_dbos_migration_eighteen(schema),
     ]
 
 
@@ -654,6 +661,10 @@ sqlite_migration_seventeen = """
 ALTER TABLE workflow_schedules ADD COLUMN "queue_name" TEXT DEFAULT NULL;
 """
 
+sqlite_migration_eighteen = """
+ALTER TABLE workflow_status ADD COLUMN "was_forked_from" BOOLEAN NOT NULL DEFAULT FALSE;
+"""
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -671,4 +682,5 @@ sqlite_migrations = [
     sqlite_migration_fifteen,
     sqlite_migration_sixteen,
     sqlite_migration_seventeen,
+    sqlite_migration_eighteen,
 ]

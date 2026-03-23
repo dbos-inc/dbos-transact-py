@@ -35,6 +35,7 @@ def fork_workflow(
     application_version: Optional[str],
     queue_name: Optional[str] = None,
     queue_partition_key: Optional[str] = None,
+    replacement_children: Optional[dict[str, str]] = None,
 ) -> str:
 
     ctx = get_local_dbos_context()
@@ -44,12 +45,13 @@ def fork_workflow(
     else:
         forked_workflow_id = generate_uuid()
     sys_db.fork_workflow(
-        workflow_id,
-        forked_workflow_id,
-        start_step,
+        [workflow_id],
+        [forked_workflow_id],
+        [start_step],
         application_version=application_version,
         queue_name=queue_name,
         queue_partition_key=queue_partition_key,
+        replacement_children=replacement_children,
     )
     return forked_workflow_id
 

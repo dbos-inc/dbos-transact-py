@@ -5,7 +5,14 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, DBOSClient, Queue, SetEnqueueOptions, SetWorkflowID
+from dbos import (
+    DBOS,
+    DBOSClient,
+    Queue,
+    SetEnqueueOptions,
+    SetWorkflowID,
+    WorkflowHandle,
+)
 from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.application_database import ApplicationSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
@@ -485,6 +492,25 @@ def test_fork_steps(
     forks = DBOS.list_workflows(forked_from=wfid)
     assert len(forks) == 3
     assert [f.workflow_id for f in forks] == [fork_id, fork_id_2, fork_id_3]
+
+    # The original workflow should be marked as having been forked from.
+    original_status = DBOS.get_workflow_status(wfid)
+    assert original_status is not None
+    assert original_status.was_forked_from is True
+    # Forked workflows are not themselves forked from.
+    for fork in forks:
+        assert fork.was_forked_from is False
+
+    # Filter by was_forked_from=True returns only the original; False returns only the forks.
+    forked_from_workflows = DBOS.list_workflows(was_forked_from=True)
+    assert len(forked_from_workflows) == 1
+    assert forked_from_workflows[0].workflow_id == wfid
+    not_forked_from_workflows = DBOS.list_workflows(was_forked_from=False)
+    assert {w.workflow_id for w in not_forked_from_workflows} == {
+        fork_id,
+        fork_id_2,
+        fork_id_3,
+    }
 
 
 def test_restart_fromsteps_transactionsonly(
@@ -1105,6 +1131,233 @@ def test_fork_streams(dbos: DBOS) -> None:
     for handle in [fork_one, fork_two, fork_three, fork_four, fork_five]:
         assert handle.get_result()
         assert list(DBOS.read_stream(handle.workflow_id, key)) == [0, 1, 2]
+
+
+def test_fork_from_failure(dbos: DBOS) -> None:
+    step_one_count = 0
+    step_two_count = 0
+    step_three_count = 0
+
+    @DBOS.step()
+    def step_one() -> int:
+        nonlocal step_one_count
+        step_one_count += 1
+        return 1
+
+    @DBOS.step()
+    def step_two() -> int:
+        nonlocal step_two_count
+        step_two_count += 1
+        if step_two_count == 1:  # fail on first call only (wf1)
+            raise Exception("step two failed")
+        return 2
+
+    @DBOS.step()
+    def step_three() -> int:
+        nonlocal step_three_count
+        step_three_count += 1
+        if step_three_count == 1:  # fail on first call only (wf2)
+            raise Exception("step three failed")
+        return 3
+
+    @DBOS.workflow()
+    def three_step_workflow() -> int:
+        return step_one() + step_two() + step_three()
+
+    # wf1: step 2 fails → last failed step is 2
+    wf1_id = str(uuid.uuid4())
+    with SetWorkflowID(wf1_id):
+        with pytest.raises(Exception, match="step two failed"):
+            three_step_workflow()
+    assert step_one_count == 1
+    assert step_two_count == 1
+    assert step_three_count == 0
+
+    # wf2: step 2 succeeds, step 3 fails → last failed step is 3
+    wf2_id = str(uuid.uuid4())
+    with SetWorkflowID(wf2_id):
+        with pytest.raises(Exception, match="step three failed"):
+            three_step_workflow()
+    assert step_one_count == 2
+    assert step_two_count == 2
+    assert step_three_count == 1
+
+    # wf3: all steps succeed → no failed step, fall back to last step (3)
+    wf3_id = str(uuid.uuid4())
+    with SetWorkflowID(wf3_id):
+        assert three_step_workflow() == 6
+    assert step_one_count == 3
+    assert step_two_count == 3
+    assert step_three_count == 2
+
+    # --- from_last_failure mode ---
+    # wf1 forks from step 2 (failed), wf2 from step 3 (failed), wf3 from step 3 (fallback)
+    forked_ids = dbos._sys_db.fork_from_failure(
+        [wf1_id, wf2_id, wf3_id],
+        application_version=None,
+        from_last_failure=True,
+    )
+    assert len(forked_ids) == 3
+
+    fork1: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids[0])
+    fork2: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids[1])
+    fork3: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids[2])
+    assert fork1.get_result() == 6
+    assert fork2.get_result() == 6
+    assert fork3.get_result() == 6
+
+    assert step_one_count == 3  # replayed for all three forks
+    assert step_two_count == 4  # re-run for fork1 only
+    assert step_three_count == 5  # re-run for all three forks
+
+    # --- from_last_step mode ---
+    # All three fork from their last step (step 2 for wf1, step 3 for wf2 and wf3)
+    forked_ids_last = dbos._sys_db.fork_from_failure(
+        [wf1_id, wf2_id, wf3_id],
+        application_version=None,
+        from_last_step=True,
+    )
+    f1: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids_last[0])
+    f2: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids_last[1])
+    f3: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids_last[2])
+    assert f1.get_result() == 6
+    assert f2.get_result() == 6
+    assert f3.get_result() == 6
+
+    # wf1's last step is 2 (step_three never ran), so step_two re-runs
+    assert step_two_count == 5
+    # wf2 and wf3 last step is 3, so step_three re-runs for both plus wf1's fork
+    assert step_three_count == 8  # +3 (all three forks re-run step_three)
+
+    # --- from_step mode ---
+    # Fork all from step 1: all steps re-executed
+    forked_ids_step = dbos._sys_db.fork_from_failure(
+        [wf3_id],
+        application_version=None,
+        from_step=1,
+    )
+    fs: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids_step[0])
+    assert fs.get_result() == 6
+    assert step_one_count == 4  # re-run
+    assert step_two_count == 6  # re-run
+    assert step_three_count == 9  # re-run
+
+    # --- from_step_name mode ---
+    # Fork wf3 from the last occurrence of "step_two"
+    forked_ids_name = dbos._sys_db.fork_from_failure(
+        [wf3_id],
+        application_version=None,
+        from_step_name=step_two.__qualname__,
+    )
+    fn: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids_name[0])
+    assert fn.get_result() == 6
+    assert step_one_count == 4  # replayed
+    assert step_two_count == 7  # re-run
+    assert step_three_count == 10  # re-run
+
+    # --- validation: from_step_name errors when step not found ---
+    # wf1 never ran step_three, so this should raise
+    with pytest.raises(Exception, match="has no step named"):
+        dbos._sys_db.fork_from_failure(
+            [wf1_id],
+            application_version=None,
+            from_step_name=step_three.__qualname__,
+        )
+    # Nonexistent step name should also raise
+    with pytest.raises(Exception, match="has no step named"):
+        dbos._sys_db.fork_from_failure(
+            [wf3_id],
+            application_version=None,
+            from_step_name="nonexistent_step",
+        )
+
+    # --- validation: specifying no mode raises ---
+    with pytest.raises(ValueError, match="Exactly one"):
+        dbos._sys_db.fork_from_failure([wf3_id], application_version=None)
+
+    # --- validation: specifying multiple modes raises ---
+    with pytest.raises(ValueError, match="Exactly one"):
+        dbos._sys_db.fork_from_failure(
+            [wf3_id],
+            application_version=None,
+            from_last_failure=True,
+            from_last_step=True,
+        )
+
+    # All originals should be marked as having been forked from.
+    for wid in [wf1_id, wf2_id, wf3_id]:
+        wid_status = DBOS.get_workflow_status(wid)
+        assert wid_status is not None
+        assert wid_status.was_forked_from is True
+
+    # Verify list_workflows filter still works.
+    forked_from_workflows = DBOS.list_workflows(was_forked_from=True)
+    assert {w.workflow_id for w in forked_from_workflows} == {wf1_id, wf2_id, wf3_id}
+
+
+def test_fork_replacement_children(dbos: DBOS) -> None:
+    multiplier = 2
+
+    @DBOS.step()
+    def child_step(x: int) -> int:
+        return x * multiplier
+
+    @DBOS.workflow()
+    def child_wf(x: int) -> int:
+        return child_step(x)
+
+    @DBOS.step()
+    def combine(results: list[int]) -> int:
+        return sum(results)
+
+    child_ids: list[str] = []
+
+    @DBOS.workflow()
+    def parent_wf() -> int:
+        h1 = DBOS.start_workflow(child_wf, 10)
+        h2 = DBOS.start_workflow(child_wf, 20)
+        h3 = DBOS.start_workflow(child_wf, 30)
+        h4 = DBOS.start_workflow(child_wf, 40)
+        h5 = DBOS.start_workflow(child_wf, 50)
+        child_ids.clear()
+        child_ids.extend([h.workflow_id for h in [h1, h2, h3, h4, h5]])
+        results = [h.get_result() for h in [h1, h2, h3, h4, h5]]
+        return combine(results)
+
+    # Run the parent. Children return x*2.
+    parent_handle = DBOS.start_workflow(parent_wf)
+    original_result = parent_handle.get_result()
+    # [10*2, 20*2, 30*2, 40*2, 50*2] = [20, 40, 60, 80, 100] → sum = 300
+    assert original_result == 300
+    assert len(child_ids) == 5
+    orig_ids = list(child_ids)
+
+    # Change the multiplier so forked children produce different results.
+    multiplier = 10
+
+    # Fork children 0, 2, and 4 from step 1 (re-run child_step with new multiplier).
+    forked_child_0 = DBOS.fork_workflow(orig_ids[0], 1)
+    forked_child_2 = DBOS.fork_workflow(orig_ids[2], 1)
+    forked_child_4 = DBOS.fork_workflow(orig_ids[4], 1)
+    assert forked_child_0.get_result() == 100  # 10 * 10
+    assert forked_child_2.get_result() == 300  # 30 * 10
+    assert forked_child_4.get_result() == 500  # 50 * 10
+
+    # Fork the parent from step 6 (combine step, after the 5 start_workflow steps).
+    # Steps 1-5 are replayed with replaced child_workflow_ids.
+    # The workflow then re-reads results from the new children before re-executing combine.
+    forked_parent = DBOS.fork_workflow(
+        parent_handle.workflow_id,
+        6,
+        replacement_children={
+            orig_ids[0]: forked_child_0.workflow_id,
+            orig_ids[2]: forked_child_2.workflow_id,
+            orig_ids[4]: forked_child_4.workflow_id,
+        },
+    )
+    forked_result = forked_parent.get_result()
+    # [10*10, 20*2, 30*10, 40*2, 50*10] = [100, 40, 300, 80, 500] → sum = 1020
+    assert forked_result == 1020
 
 
 def test_get_all_events(dbos: DBOS) -> None:
