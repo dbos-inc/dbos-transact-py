@@ -960,6 +960,13 @@ class DBOSClient:
                 self._sys_db.delete_schedule(sched["schedule_name"], conn=c)
                 self._sys_db.create_schedule(sched, conn=c)
 
+    async def apply_schedules_async(
+        self,
+        schedules: List[ClientScheduleInput],
+    ) -> None:
+        """Async version of :meth:`apply_schedules`."""
+        await asyncio.to_thread(self.apply_schedules, schedules)
+
     def backfill_schedule(
         self, schedule_name: str, start: datetime, end: datetime
     ) -> List["WorkflowHandle[None]"]:

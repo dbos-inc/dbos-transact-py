@@ -298,7 +298,10 @@ class DBOSRegistry:
 
 class ScheduleInput(TypedDict, total=False):
     schedule_name: str
-    workflow_fn: Callable[[datetime, Any], None]
+    workflow_fn: Union[
+        Callable[[datetime, Any], None],
+        Callable[[datetime, Any], Coroutine[Any, Any, None]],
+    ]
     schedule: str
     context: Any
     automatic_backfill: bool
@@ -2438,6 +2441,15 @@ class DBOS:
             for sched in to_apply:
                 dbos._sys_db.delete_schedule(sched["schedule_name"], conn=c)
                 dbos._sys_db.create_schedule(sched, conn=c)
+
+    @classmethod
+    async def apply_schedules_async(
+        cls,
+        schedules: List[ScheduleInput],
+    ) -> None:
+        """Async version of :meth:`apply_schedules`."""
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(cls.apply_schedules, schedules)
 
     @classmethod
     def backfill_schedule(
