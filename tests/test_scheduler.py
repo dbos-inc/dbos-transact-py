@@ -957,8 +957,8 @@ async def test_schedule_crud_async(dbos: DBOS) -> None:
     assert await DBOS.get_schedule_async("async-schedule") is None
     assert len(await DBOS.list_schedules_async()) == 0
 
-    # Test apply_schedules from async context
-    DBOS.apply_schedules(
+    # Test apply_schedules_async
+    await DBOS.apply_schedules_async(
         [
             {
                 "schedule_name": "async-sched-a",
@@ -989,7 +989,7 @@ async def test_schedule_crud_async(dbos: DBOS) -> None:
     assert by_name["async-sched-b"]["cron_timezone"] == "Europe/London"
 
     # Replace async-sched-a, add async-sched-c
-    DBOS.apply_schedules(
+    await DBOS.apply_schedules_async(
         [
             {
                 "schedule_name": "async-sched-a",
@@ -1048,6 +1048,68 @@ async def test_client_schedule_crud_async(client: DBOSClient) -> None:
 
     await client.delete_schedule_async("async-client")
     assert await client.get_schedule_async("async-client") is None
+    assert len(await client.list_schedules_async()) == 0
+
+    # Test apply_schedules_async
+    await client.apply_schedules_async(
+        [
+            {
+                "schedule_name": "async-client-a",
+                "workflow_name": "wf.a",
+                "schedule": "* * * * *",
+                "context": {"region": "eu"},
+            },
+            {
+                "schedule_name": "async-client-b",
+                "workflow_name": "wf.b",
+                "schedule": "0 0 * * *",
+                "context": None,
+                "automatic_backfill": True,
+                "cron_timezone": "US/Pacific",
+            },
+        ]
+    )
+    schedules = await client.list_schedules_async()
+    assert len(schedules) == 2
+    by_name = {s["schedule_name"]: s for s in schedules}
+    assert by_name["async-client-a"]["schedule"] == "* * * * *"
+    assert by_name["async-client-a"]["context"] == {"region": "eu"}
+    assert by_name["async-client-a"]["automatic_backfill"] is False
+    assert by_name["async-client-a"]["cron_timezone"] is None
+    assert by_name["async-client-b"]["schedule"] == "0 0 * * *"
+    assert by_name["async-client-b"]["context"] is None
+    assert by_name["async-client-b"]["automatic_backfill"] is True
+    assert by_name["async-client-b"]["cron_timezone"] == "US/Pacific"
+
+    # Replace async-client-a, add async-client-c
+    await client.apply_schedules_async(
+        [
+            {
+                "schedule_name": "async-client-a",
+                "workflow_name": "wf.a",
+                "schedule": "0 * * * *",
+                "context": None,
+            },
+            {
+                "schedule_name": "async-client-c",
+                "workflow_name": "wf.c",
+                "schedule": "*/5 * * * *",
+                "context": [1, 2],
+            },
+        ]
+    )
+    schedules = await client.list_schedules_async()
+    assert len(schedules) == 3
+    by_name = {s["schedule_name"]: s for s in schedules}
+    assert by_name["async-client-a"]["schedule"] == "0 * * * *"
+    assert by_name["async-client-a"]["context"] is None
+    assert by_name["async-client-c"]["schedule"] == "*/5 * * * *"
+    assert by_name["async-client-c"]["context"] == [1, 2]
+
+    # Clean up
+    await client.delete_schedule_async("async-client-a")
+    await client.delete_schedule_async("async-client-b")
+    await client.delete_schedule_async("async-client-c")
     assert len(await client.list_schedules_async()) == 0
 
 
