@@ -118,6 +118,11 @@ class SystemSchema:
         Column("completed_at_epoch_ms", BigInteger, nullable=True),
         Column("serialization", Text()),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
+        Index(
+            "idx_operation_outputs_completed_at_function_name",
+            "completed_at_epoch_ms",
+            "function_name",
+        ),
     )
 
     notifications = Table(
