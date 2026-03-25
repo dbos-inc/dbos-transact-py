@@ -298,7 +298,10 @@ class DBOSRegistry:
 
 class ScheduleInput(TypedDict, total=False):
     schedule_name: str
-    workflow_fn: Callable[[datetime, Any], None]
+    workflow_fn: Union[
+        Callable[[datetime, Any], None],
+        Callable[[datetime, Any], Coroutine[Any, Any, None]],
+    ]
     schedule: str
     context: Any
     automatic_backfill: bool
