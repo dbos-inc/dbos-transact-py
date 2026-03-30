@@ -24,7 +24,7 @@ from .._dbos_config import (
     load_config,
 )
 from .._docker_pg_helper import start_docker_pg, stop_docker_pg
-from .._logger import dbos_logger
+from .._logger import dbos_logger, init_logger
 from .._sys_db import SystemDatabase
 from .._utils import GlobalParams
 from ..cli._github_init import create_template_from_github
@@ -286,7 +286,9 @@ def migrate(
         system_database_url=system_database_url,
         application_database_url=application_database_url,
     )
-
+    # Emit INFO logs from migrations
+    init_logger()
+    dbos_logger.setLevel(logging.INFO)
     typer.echo(f"Starting DBOS migrations")
     if application_database_url:
         typer.echo(f"Application database: {sa.make_url(application_database_url)}")
