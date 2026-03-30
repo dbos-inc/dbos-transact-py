@@ -45,23 +45,23 @@ def run_dbos_migrations(
     engine: sa.Engine, schema: str, use_listen_notify: bool
 ) -> None:
     """Run DBOS-managed migrations by executing each SQL command in dbos_migrations."""
+    # Get current migration version
     with engine.begin() as conn:
-        # Get current migration version
         result = conn.execute(
             sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
         )
         current_version = result.fetchone()
         last_applied = current_version[0] if current_version else 0
 
-        # Apply migrations starting from the next version
-        migrations = get_dbos_migrations(schema, use_listen_notify)
-        for i, migration_sql in enumerate(migrations, 1):
-            if i <= last_applied:
-                continue
+    # Apply each migration in its own transaction
+    migrations = get_dbos_migrations(schema, use_listen_notify)
+    for i, migration_sql in enumerate(migrations, 1):
+        if i <= last_applied:
+            continue
 
-            # Execute the migration
-            dbos_logger.info(f"Applying DBOS system database schema migration {i}")
+        dbos_logger.info(f"Applying DBOS system database schema migration {i}")
 
+        with engine.begin() as conn:
             # Migration 10 adds a primary key to the notifications table.
             # Skip it if the table already has one.
             if (
