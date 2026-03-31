@@ -647,11 +647,25 @@ class DBOSClient:
             executor_id=executor_id,
         )
 
-    def list_workflow_steps(self, workflow_id: str) -> List[StepInfo]:
-        return self._sys_db.list_workflow_steps(workflow_id)
+    def list_workflow_steps(
+        self,
+        workflow_id: str,
+        *,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> List[StepInfo]:
+        return self._sys_db.list_workflow_steps(workflow_id, limit=limit, offset=offset)
 
-    async def list_workflow_steps_async(self, workflow_id: str) -> List[StepInfo]:
-        return await asyncio.to_thread(self.list_workflow_steps, workflow_id)
+    async def list_workflow_steps_async(
+        self,
+        workflow_id: str,
+        *,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> List[StepInfo]:
+        return await asyncio.to_thread(
+            self.list_workflow_steps, workflow_id, limit=limit, offset=offset
+        )
 
     def fork_workflow(
         self,

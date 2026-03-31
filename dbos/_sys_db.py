@@ -1581,10 +1581,15 @@ class SystemDatabase(ABC):
             ]
 
     def list_workflow_steps(
-        self, workflow_id: str, *, load_output: bool = True
+        self,
+        workflow_id: str,
+        *,
+        load_output: bool = True,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
     ) -> List[StepInfo]:
         with self.engine.begin() as c:
-            rows = c.execute(
+            query = (
                 sa.select(
                     SystemSchema.operation_outputs.c.function_id,
                     SystemSchema.operation_outputs.c.function_name,
@@ -1597,7 +1602,12 @@ class SystemDatabase(ABC):
                 )
                 .where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
                 .order_by(SystemSchema.operation_outputs.c.function_id)
-            ).fetchall()
+            )
+            if limit is not None:
+                query = query.limit(limit)
+            if offset is not None:
+                query = query.offset(offset)
+            rows = c.execute(query).fetchall()
             steps = []
             for row in rows:
                 if load_output:

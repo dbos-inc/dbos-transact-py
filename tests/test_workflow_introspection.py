@@ -488,6 +488,52 @@ def test_list_2steps_sleep(dbos: DBOS) -> None:
     assert wfsteps[2]["function_name"] == "DBOS.sleep"
 
 
+def test_list_workflow_steps_limit(dbos: DBOS) -> None:
+
+    @DBOS.step()
+    def step_a() -> str:
+        return "a"
+
+    @DBOS.step()
+    def step_b() -> str:
+        return "b"
+
+    @DBOS.step()
+    def step_c() -> str:
+        return "c"
+
+    @DBOS.workflow()
+    def multi_step_workflow() -> None:
+        step_a()
+        step_b()
+        step_c()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        multi_step_workflow()
+
+    # All steps returned without pagination
+    all_steps = DBOS.list_workflow_steps(wfid)
+    assert len(all_steps) == 3
+
+    # Test LIMIT 2 returns the first two steps
+    steps = DBOS.list_workflow_steps(wfid, limit=2)
+    assert len(steps) == 2
+    assert steps[0]["function_name"] == step_a.__qualname__
+    assert steps[1]["function_name"] == step_b.__qualname__
+
+    # Test LIMIT 2 OFFSET 1 returns the second and third steps
+    steps = DBOS.list_workflow_steps(wfid, limit=2, offset=1)
+    assert len(steps) == 2
+    assert steps[0]["function_name"] == step_b.__qualname__
+    assert steps[1]["function_name"] == step_c.__qualname__
+
+    # Test OFFSET 2 returns only the last step
+    steps = DBOS.list_workflow_steps(wfid, offset=2)
+    assert len(steps) == 1
+    assert steps[0]["function_name"] == step_c.__qualname__
+
+
 def test_send_recv(dbos: DBOS) -> None:
 
     @DBOS.workflow()

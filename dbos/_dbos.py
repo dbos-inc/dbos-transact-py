@@ -2087,23 +2087,39 @@ class DBOS:
         )
 
     @classmethod
-    def list_workflow_steps(cls, workflow_id: str) -> List[StepInfo]:
+    def list_workflow_steps(
+        cls,
+        workflow_id: str,
+        *,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> List[StepInfo]:
         check_async("list_workflow_steps")
 
         def fn() -> List[StepInfo]:
-            return _get_dbos_instance()._sys_db.list_workflow_steps(workflow_id)
+            return _get_dbos_instance()._sys_db.list_workflow_steps(
+                workflow_id, limit=limit, offset=offset
+            )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
             fn, "DBOS.listWorkflowSteps", snapshot_step_context(reserve_sleep_id=False)
         )
 
     @classmethod
-    async def list_workflow_steps_async(cls, workflow_id: str) -> List[StepInfo]:
+    async def list_workflow_steps_async(
+        cls,
+        workflow_id: str,
+        *,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> List[StepInfo]:
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
 
         def fn() -> List[StepInfo]:
-            return _get_dbos_instance()._sys_db.list_workflow_steps(workflow_id)
+            return _get_dbos_instance()._sys_db.list_workflow_steps(
+                workflow_id, limit=limit, offset=offset
+            )
 
         return await asyncio.to_thread(
             _get_dbos_instance()._sys_db.call_function_as_step,
