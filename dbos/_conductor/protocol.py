@@ -375,6 +375,8 @@ class ExistPendingWorkflowsResponse(BaseMessage):
 class ListStepsRequest(BaseMessage):
     workflow_id: str
     load_output: bool = True
+    limit: Optional[int] = None
+    offset: Optional[int] = None
 
 
 @dataclass

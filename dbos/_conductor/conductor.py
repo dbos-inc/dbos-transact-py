@@ -526,6 +526,8 @@ class ConductorWebsocket(threading.Thread):
                                 step_info = self.dbos._sys_db.list_workflow_steps(
                                     list_steps_message.workflow_id,
                                     load_output=list_steps_message.load_output,
+                                    limit=list_steps_message.limit,
+                                    offset=list_steps_message.offset,
                                 )
                             except Exception as e:
                                 error_message = f"Exception encountered when getting workflow {list_steps_message.workflow_id}: {traceback.format_exc()}"
