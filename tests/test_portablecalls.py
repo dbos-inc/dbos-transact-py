@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, DBOSConfig, Queue, WorkflowHandle, pydantic_args_validator
+from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID, WorkflowHandle, pydantic_args_validator
 from dbos._client import DBOSClient
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import (
@@ -342,6 +342,89 @@ def test_portable_ser(dbos: DBOS, client: DBOSClient) -> None:
         DBOS.retrieve_workflow(lwfid).get_result()
     assert ex_info.value.name == "Exception"
     assert ex_info.value.message == "This is just a plain error"
+
+
+@pytest.mark.asyncio
+async def test_client_send_async_serialization(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    @DBOS.workflow()
+    async def recv_workflow(topic: str) -> Any:
+        return await dbos.recv_async(topic, timeout_seconds=10)
+
+    def check_msg_ser(dstid: str, topic: str, ser: str) -> None:
+        with dbos._sys_db.engine.connect() as c:
+            result = c.execute(
+                sa.select(SystemSchema.notifications.c.serialization).where(
+                    SystemSchema.notifications.c.destination_uuid == dstid,
+                    SystemSchema.notifications.c.topic == topic,
+                )
+            )
+            row = result.fetchone()
+            assert row is not None
+            assert row.serialization == ser
+
+    # Test default serialization
+    dest_default = str(uuid.uuid4())
+    with SetWorkflowID(dest_default):
+        h_default = await dbos.start_workflow_async(recv_workflow, "default")
+    await client.send_async(
+        dest_default, {"msg": "hello"}, topic="default"
+    )
+    assert (await h_default.get_result()) == {"msg": "hello"}
+    check_msg_ser(dest_default, "default", DBOSDefaultSerializer.name())
+
+    # Test portable serialization
+    dest_portable = str(uuid.uuid4())
+    with SetWorkflowID(dest_portable):
+        h_portable = await dbos.start_workflow_async(recv_workflow, "portable")
+    await client.send_async(
+        dest_portable,
+        {"msg": "hello"},
+        topic="portable",
+        serialization_type=WorkflowSerializationFormat.PORTABLE,
+    )
+    assert (await h_portable.get_result()) == {"msg": "hello"}
+    check_msg_ser(dest_portable, "portable", DBOSPortableJSON.name())
+
+
+def test_client_send_serialization(dbos: DBOS, client: DBOSClient) -> None:
+    @DBOS.workflow()
+    def recv_workflow(topic: str) -> Any:
+        return DBOS.recv(topic, timeout_seconds=10)
+
+    def check_msg_ser(dstid: str, topic: str, ser: str) -> None:
+        with dbos._sys_db.engine.connect() as c:
+            result = c.execute(
+                sa.select(SystemSchema.notifications.c.serialization).where(
+                    SystemSchema.notifications.c.destination_uuid == dstid,
+                    SystemSchema.notifications.c.topic == topic,
+                )
+            )
+            row = result.fetchone()
+            assert row is not None
+            assert row.serialization == ser
+
+    # Test default serialization
+    dest_default = str(uuid.uuid4())
+    with SetWorkflowID(dest_default):
+        h_default = DBOS.start_workflow(recv_workflow, "default")
+    client.send(dest_default, {"msg": "hello"}, topic="default")
+    assert h_default.get_result() == {"msg": "hello"}
+    check_msg_ser(dest_default, "default", DBOSDefaultSerializer.name())
+
+    # Test portable serialization
+    dest_portable = str(uuid.uuid4())
+    with SetWorkflowID(dest_portable):
+        h_portable = DBOS.start_workflow(recv_workflow, "portable")
+    client.send(
+        dest_portable,
+        {"msg": "hello"},
+        topic="portable",
+        serialization_type=WorkflowSerializationFormat.PORTABLE,
+    )
+    assert h_portable.get_result() == {"msg": "hello"}
+    check_msg_ser(dest_portable, "portable", DBOSPortableJSON.name())
 
 
 def test_directinsert_workflows(dbos: DBOS) -> None:
