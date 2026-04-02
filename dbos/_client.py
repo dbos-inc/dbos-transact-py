@@ -361,9 +361,18 @@ class DBOSClient:
         message: Any,
         topic: Optional[str] = None,
         idempotency_key: Optional[str] = None,
+        *,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
     ) -> None:
         return await asyncio.to_thread(
-            self.send, destination_id, message, topic, idempotency_key
+            self.send,
+            destination_id,
+            message,
+            topic,
+            idempotency_key,
+            serialization_type=serialization_type,
         )
 
     def get_event(self, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:
