@@ -1326,6 +1326,41 @@ def test_list_workflows_by_parent(dbos: DBOS) -> None:
     assert len(no_children) == 0
 
 
+def test_list_workflows_has_parent(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def child_workflow() -> None:
+        return
+
+    @DBOS.workflow()
+    def parent_workflow() -> None:
+        child_workflow()
+
+    # Run a parent workflow (which starts a child) and a standalone workflow
+    parent_id = str(uuid.uuid4())
+    with SetWorkflowID(parent_id):
+        parent_workflow()
+
+    standalone_id = str(uuid.uuid4())
+    with SetWorkflowID(standalone_id):
+        child_workflow()
+
+    # All workflows: parent + child + standalone = 3
+    all_wfs = DBOS.list_workflows()
+    assert len(all_wfs) == 3
+
+    # has_parent=True returns only the child (which has a parent)
+    with_parent = DBOS.list_workflows(has_parent=True)
+    assert len(with_parent) == 1
+    assert with_parent[0].parent_workflow_id == parent_id
+
+    # has_parent=False returns workflows without a parent
+    without_parent = DBOS.list_workflows(has_parent=False)
+    assert len(without_parent) == 2
+    ids = {wf.workflow_id for wf in without_parent}
+    assert parent_id in ids
+    assert standalone_id in ids
+
+
 def test_get_workflow_aggregates(dbos: DBOS) -> None:
     @DBOS.workflow()
     def workflow_a() -> None:

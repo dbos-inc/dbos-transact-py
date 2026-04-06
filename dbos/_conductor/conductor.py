@@ -331,6 +331,7 @@ class ConductorWebsocket(threading.Thread):
                                     executor_id=body.get("executor_id", None),
                                     queues_only=body.get("queues_only", False),
                                     was_forked_from=body.get("was_forked_from", None),
+                                    has_parent=body.get("has_parent", None),
                                 )
                             except Exception as e:
                                 error_message = f"Exception encountered when listing workflows: {traceback.format_exc()}"
@@ -377,6 +378,7 @@ class ConductorWebsocket(threading.Thread):
                                     executor_id=q_body.get("executor_id", None),
                                     queues_only=True,
                                     was_forked_from=q_body.get("was_forked_from", None),
+                                    has_parent=q_body.get("has_parent", None),
                                 )
                             except Exception as e:
                                 error_message = f"Exception encountered when listing queued workflows: {traceback.format_exc()}"
