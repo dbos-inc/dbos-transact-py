@@ -45,7 +45,12 @@ from dbos._serialization import (
     serialize_value,
 )
 from dbos._sys_db import SystemDatabase, WorkflowStatus
-from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, generate_uuid
+from dbos._utils import (
+    INTERNAL_QUEUE_NAME,
+    GlobalParams,
+    _resolve_delay_epoch_ms,
+    generate_uuid,
+)
 from dbos._workflow_commands import fork_workflow
 
 from ._classproperty import classproperty
@@ -1790,6 +1795,58 @@ class DBOS:
             WorkflowHandleAsyncPolling(wfid, _get_dbos_instance())
             for wfid in workflow_ids
         ]
+
+    @classmethod
+    def set_workflow_delay(
+        cls,
+        workflow_id: str,
+        *,
+        delay_seconds: Optional[float] = None,
+        delay_until_epoch_ms: Optional[int] = None,
+    ) -> None:
+        """Set or update the delay on a workflow.
+
+        Provide exactly one of delay_seconds (relative) or delay_until_epoch_ms (absolute).
+        Only affects DELAYED or ENQUEUED workflows.
+        """
+        check_async("set_workflow_delay")
+        resolved = _resolve_delay_epoch_ms(delay_seconds, delay_until_epoch_ms)
+
+        def fn() -> None:
+            _get_dbos_instance()._sys_db.set_workflow_delay(workflow_id, resolved)
+
+        _get_dbos_instance()._sys_db.call_function_as_step(
+            fn,
+            "DBOS.setWorkflowDelay",
+            snapshot_step_context(reserve_sleep_id=False),
+        )
+
+    @classmethod
+    async def set_workflow_delay_async(
+        cls,
+        workflow_id: str,
+        *,
+        delay_seconds: Optional[float] = None,
+        delay_until_epoch_ms: Optional[int] = None,
+    ) -> None:
+        """Set or update the delay on a workflow.
+
+        Provide exactly one of delay_seconds (relative) or delay_until_epoch_ms (absolute).
+        Only affects DELAYED or ENQUEUED workflows.
+        """
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
+        await cls._configure_asyncio_thread_pool()
+        resolved = _resolve_delay_epoch_ms(delay_seconds, delay_until_epoch_ms)
+
+        def fn() -> None:
+            _get_dbos_instance()._sys_db.set_workflow_delay(workflow_id, resolved)
+
+        await asyncio.to_thread(
+            _get_dbos_instance()._sys_db.call_function_as_step,
+            fn,
+            "DBOS.setWorkflowDelay",
+            step_ctx,
+        )
 
     @classmethod
     def fork_workflow(

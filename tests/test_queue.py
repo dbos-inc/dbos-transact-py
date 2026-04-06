@@ -2061,3 +2061,42 @@ def test_delay_cancel_resume_list(dbos: DBOS) -> None:
     assert resume_handle.get_result() == "done"
     final = resume_handle.get_status()
     assert final.status == WorkflowStatusString.SUCCESS.value
+
+
+def test_set_workflow_delay(dbos: DBOS) -> None:
+    queue = Queue("test_set_workflow_delay_queue", polling_interval_sec=0.1)
+
+    @DBOS.workflow()
+    def test_workflow() -> str:
+        return "done"
+
+    # Enqueue with a long delay, then shorten it with set_workflow_delay
+    with SetEnqueueOptions(delay_seconds=600.0):
+        handle = queue.enqueue(test_workflow)
+    assert handle.get_status().status == WorkflowStatusString.DELAYED.value
+
+    # Use delay_seconds to set a short delay
+    DBOS.set_workflow_delay(handle.workflow_id, delay_seconds=0.5)
+    status = handle.get_status()
+    assert status.status == WorkflowStatusString.DELAYED.value
+    # The delay should have been shortened
+    assert status.delay_until_epoch_ms is not None
+    assert status.delay_until_epoch_ms < int(time.time() * 1000) + 5000
+
+    # Should complete after the short delay
+    assert handle.get_result() == "done"
+    assert handle.get_status().status == WorkflowStatusString.SUCCESS.value
+
+    # Test with delay_until_epoch_ms (absolute timestamp)
+    with SetEnqueueOptions(delay_seconds=600.0):
+        handle2 = queue.enqueue(test_workflow)
+    assert handle2.get_status().status == WorkflowStatusString.DELAYED.value
+
+    soon = int(time.time() * 1000) + 500  # 0.5 seconds from now
+    DBOS.set_workflow_delay(handle2.workflow_id, delay_until_epoch_ms=soon)
+    status2 = handle2.get_status()
+    assert status2.status == WorkflowStatusString.DELAYED.value
+    assert status2.delay_until_epoch_ms == soon
+
+    assert handle2.get_result() == "done"
+    assert handle2.get_status().status == WorkflowStatusString.SUCCESS.value

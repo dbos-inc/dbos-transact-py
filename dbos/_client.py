@@ -23,7 +23,7 @@ import sqlalchemy as sa
 from dbos._context import MaxPriority, MinPriority
 from dbos._core import DEFAULT_POLLING_INTERVAL
 from dbos._sys_db import SystemDatabase
-from dbos._utils import generate_uuid
+from dbos._utils import _resolve_delay_epoch_ms, generate_uuid
 
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
@@ -480,6 +480,30 @@ class DBOSClient:
             WorkflowHandleClientAsyncPolling[Any](wfid, self._sys_db)
             for wfid in workflow_ids
         ]
+
+    def set_workflow_delay(
+        self,
+        workflow_id: str,
+        *,
+        delay_seconds: Optional[float] = None,
+        delay_until_epoch_ms: Optional[int] = None,
+    ) -> None:
+        resolved = _resolve_delay_epoch_ms(delay_seconds, delay_until_epoch_ms)
+        self._sys_db.set_workflow_delay(workflow_id, resolved)
+
+    async def set_workflow_delay_async(
+        self,
+        workflow_id: str,
+        *,
+        delay_seconds: Optional[float] = None,
+        delay_until_epoch_ms: Optional[int] = None,
+    ) -> None:
+        await asyncio.to_thread(
+            self.set_workflow_delay,
+            workflow_id,
+            delay_seconds=delay_seconds,
+            delay_until_epoch_ms=delay_until_epoch_ms,
+        )
 
     def list_workflows(
         self,

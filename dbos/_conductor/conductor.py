@@ -209,6 +209,27 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(resume_response.to_json())
+                        elif msg_type == p.MessageType.SET_WORKFLOW_DELAY:
+                            set_delay_message = p.SetWorkflowDelayRequest.from_json(
+                                message
+                            )
+                            success = True
+                            try:
+                                self.dbos._sys_db.set_workflow_delay(
+                                    set_delay_message.workflow_id,
+                                    set_delay_message.delay_until_epoch_ms,
+                                )
+                            except Exception as e:
+                                error_message = f"Exception encountered when setting workflow delay for {set_delay_message.workflow_id}: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                                success = False
+                            set_delay_response = p.SetWorkflowDelayResponse(
+                                type=p.MessageType.SET_WORKFLOW_DELAY,
+                                request_id=base_message.request_id,
+                                success=success,
+                                error_message=error_message,
+                            )
+                            websocket.send(set_delay_response.to_json())
                         elif msg_type == p.MessageType.RESTART:
                             # TODO: deprecate this message type in favor of Fork
                             restart_message = p.RestartRequest.from_json(message)

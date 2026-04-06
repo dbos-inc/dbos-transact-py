@@ -779,6 +779,27 @@ class SystemDatabase(ABC):
                 )
             )
 
+    def set_workflow_delay(self, workflow_id: str, delay_until_epoch_ms: int) -> None:
+        """Set or update the delay on a workflow. Only affects DELAYED or ENQUEUED workflows."""
+        with self.engine.begin() as c:
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .where(
+                    SystemSchema.workflow_status.c.status.in_(
+                        [
+                            WorkflowStatusString.DELAYED.value,
+                            WorkflowStatusString.ENQUEUED.value,
+                        ]
+                    )
+                )
+                .values(
+                    status=WorkflowStatusString.DELAYED.value,
+                    delay_until_epoch_ms=delay_until_epoch_ms,
+                    updated_at=func.extract("epoch", func.now()) * 1000,
+                )
+            )
+
     def delete_workflows(self, workflow_ids: list[str]) -> None:
         """Delete workflows and all associated data from the system database."""
         with self.engine.begin() as c:
