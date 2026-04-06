@@ -1802,7 +1802,7 @@ class DBOS:
         """Set or update the delay on a workflow.
 
         Provide exactly one of delay_seconds (relative) or delay_until_epoch_ms (absolute).
-        Only affects DELAYED or ENQUEUED workflows.
+        Only affects DELAYED workflows.
         """
         check_async("set_workflow_delay")
 
@@ -1830,7 +1830,7 @@ class DBOS:
         """Set or update the delay on a workflow.
 
         Provide exactly one of delay_seconds (relative) or delay_until_epoch_ms (absolute).
-        Only affects DELAYED or ENQUEUED workflows.
+        Only affects DELAYED workflows.
         """
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()

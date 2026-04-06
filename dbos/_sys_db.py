@@ -786,7 +786,7 @@ class SystemDatabase(ABC):
         delay_seconds: Optional[float] = None,
         delay_until_epoch_ms: Optional[int] = None,
     ) -> None:
-        """Set or update the delay on a workflow. Only affects DELAYED or ENQUEUED workflows."""
+        """Set or update the delay on a workflow. Only affects DELAYED workflows."""
         if delay_until_epoch_ms is not None and delay_seconds is not None:
             raise DBOSException(
                 "Specify either delay_seconds or delay_until_epoch_ms, not both"
@@ -808,15 +808,10 @@ class SystemDatabase(ABC):
                 sa.update(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
                 .where(
-                    SystemSchema.workflow_status.c.status.in_(
-                        [
-                            WorkflowStatusString.DELAYED.value,
-                            WorkflowStatusString.ENQUEUED.value,
-                        ]
-                    )
+                    SystemSchema.workflow_status.c.status
+                    == WorkflowStatusString.DELAYED.value
                 )
                 .values(
-                    status=WorkflowStatusString.DELAYED.value,
                     delay_until_epoch_ms=resolved,
                     updated_at=func.extract("epoch", func.now()) * 1000,
                 )
