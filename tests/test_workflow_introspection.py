@@ -488,6 +488,52 @@ def test_list_2steps_sleep(dbos: DBOS) -> None:
     assert wfsteps[2]["function_name"] == "DBOS.sleep"
 
 
+def test_list_workflow_steps_limit(dbos: DBOS) -> None:
+
+    @DBOS.step()
+    def step_a() -> str:
+        return "a"
+
+    @DBOS.step()
+    def step_b() -> str:
+        return "b"
+
+    @DBOS.step()
+    def step_c() -> str:
+        return "c"
+
+    @DBOS.workflow()
+    def multi_step_workflow() -> None:
+        step_a()
+        step_b()
+        step_c()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        multi_step_workflow()
+
+    # All steps returned without pagination
+    all_steps = DBOS.list_workflow_steps(wfid)
+    assert len(all_steps) == 3
+
+    # Test LIMIT 2 returns the first two steps
+    steps = DBOS.list_workflow_steps(wfid, limit=2)
+    assert len(steps) == 2
+    assert steps[0]["function_name"] == step_a.__qualname__
+    assert steps[1]["function_name"] == step_b.__qualname__
+
+    # Test LIMIT 2 OFFSET 1 returns the second and third steps
+    steps = DBOS.list_workflow_steps(wfid, limit=2, offset=1)
+    assert len(steps) == 2
+    assert steps[0]["function_name"] == step_b.__qualname__
+    assert steps[1]["function_name"] == step_c.__qualname__
+
+    # Test OFFSET 2 returns only the last step
+    steps = DBOS.list_workflow_steps(wfid, offset=2)
+    assert len(steps) == 1
+    assert steps[0]["function_name"] == step_c.__qualname__
+
+
 def test_send_recv(dbos: DBOS) -> None:
 
     @DBOS.workflow()
@@ -1278,6 +1324,41 @@ def test_list_workflows_by_parent(dbos: DBOS) -> None:
         parent_workflow_id=["nonexistent", "also_nonexistent"]
     )
     assert len(no_children) == 0
+
+
+def test_list_workflows_has_parent(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def child_workflow() -> None:
+        return
+
+    @DBOS.workflow()
+    def parent_workflow() -> None:
+        child_workflow()
+
+    # Run a parent workflow (which starts a child) and a standalone workflow
+    parent_id = str(uuid.uuid4())
+    with SetWorkflowID(parent_id):
+        parent_workflow()
+
+    standalone_id = str(uuid.uuid4())
+    with SetWorkflowID(standalone_id):
+        child_workflow()
+
+    # All workflows: parent + child + standalone = 3
+    all_wfs = DBOS.list_workflows()
+    assert len(all_wfs) == 3
+
+    # has_parent=True returns only the child (which has a parent)
+    with_parent = DBOS.list_workflows(has_parent=True)
+    assert len(with_parent) == 1
+    assert with_parent[0].parent_workflow_id == parent_id
+
+    # has_parent=False returns workflows without a parent
+    without_parent = DBOS.list_workflows(has_parent=False)
+    assert len(without_parent) == 2
+    ids = {wf.workflow_id for wf in without_parent}
+    assert parent_id in ids
+    assert standalone_id in ids
 
 
 def test_get_workflow_aggregates(dbos: DBOS) -> None:
