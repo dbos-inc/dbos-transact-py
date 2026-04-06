@@ -1,14 +1,10 @@
 import importlib.metadata
 import os
 import sys
-import time
 import uuid
-from typing import Optional
 
 import psycopg
 from sqlalchemy.exc import DBAPIError
-
-from dbos._error import DBOSException
 
 INTERNAL_QUEUE_NAME = "_dbos_internal_queue"
 
@@ -64,22 +60,6 @@ def retriable_sqlite_exception(e: Exception) -> bool:
         return True
     else:
         return False
-
-
-def _resolve_delay_epoch_ms(
-    delay_seconds: Optional[float] = None,
-    delay_until_epoch_ms: Optional[int] = None,
-) -> int:
-    """Resolve delay parameters to an absolute epoch millisecond timestamp."""
-    if delay_until_epoch_ms is not None and delay_seconds is not None:
-        raise DBOSException(
-            "Specify either delay_seconds or delay_until_epoch_ms, not both"
-        )
-    if delay_until_epoch_ms is not None:
-        return delay_until_epoch_ms
-    if delay_seconds is not None:
-        return int((time.time() + delay_seconds) * 1000)
-    raise DBOSException("Must specify either delay_seconds or delay_until_epoch_ms")
 
 
 def generate_uuid() -> str:
