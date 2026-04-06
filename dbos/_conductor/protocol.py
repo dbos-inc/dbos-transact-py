@@ -44,7 +44,6 @@ class MessageType(str, Enum):
     GET_WORKFLOW_STREAMS = "get_workflow_streams"
     GET_WORKFLOW_AGGREGATES = "get_workflow_aggregates"
     FORK_FROM_FAILURE = "fork_from_failure"
-    SET_WORKFLOW_DELAY = "set_workflow_delay"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -151,18 +150,6 @@ class RestartRequest(BaseMessage):
 
 @dataclass
 class RestartResponse(BaseMessage):
-    success: bool
-    error_message: Optional[str] = None
-
-
-@dataclass
-class SetWorkflowDelayRequest(BaseMessage):
-    workflow_id: str
-    delay_until_epoch_ms: int
-
-
-@dataclass
-class SetWorkflowDelayResponse(BaseMessage):
     success: bool
     error_message: Optional[str] = None
 
