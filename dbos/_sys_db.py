@@ -1402,6 +1402,7 @@ class SystemDatabase(ABC):
         executor_id: Optional[str | list[str]] = None,
         queues_only: bool = False,
         was_forked_from: Optional[bool] = None,
+        has_parent: Optional[bool] = None,
     ) -> List[WorkflowStatus]:
         """
         Retrieve a list of workflows based on the search criteria.
@@ -1534,6 +1535,15 @@ class SystemDatabase(ABC):
             query = query.where(
                 SystemSchema.workflow_status.c.was_forked_from == was_forked_from
             )
+        if has_parent is not None:
+            if has_parent:
+                query = query.where(
+                    SystemSchema.workflow_status.c.parent_workflow_id.isnot(None)
+                )
+            else:
+                query = query.where(
+                    SystemSchema.workflow_status.c.parent_workflow_id.is_(None)
+                )
         if limit:
             query = query.limit(limit)
         if offset:
@@ -1624,10 +1634,15 @@ class SystemDatabase(ABC):
             ]
 
     def list_workflow_steps(
-        self, workflow_id: str, *, load_output: bool = True
+        self,
+        workflow_id: str,
+        *,
+        load_output: bool = True,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
     ) -> List[StepInfo]:
         with self.engine.begin() as c:
-            rows = c.execute(
+            query = (
                 sa.select(
                     SystemSchema.operation_outputs.c.function_id,
                     SystemSchema.operation_outputs.c.function_name,
@@ -1640,7 +1655,12 @@ class SystemDatabase(ABC):
                 )
                 .where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
                 .order_by(SystemSchema.operation_outputs.c.function_id)
-            ).fetchall()
+            )
+            if limit is not None:
+                query = query.limit(limit)
+            if offset is not None:
+                query = query.offset(offset)
+            rows = c.execute(query).fetchall()
             steps = []
             for row in rows:
                 if load_output:

@@ -174,6 +174,7 @@ class ListWorkflowsBody(TypedDict, total=False):
     executor_id: Optional[Union[str, List[str]]]
     queues_only: bool
     was_forked_from: Optional[bool]
+    has_parent: Optional[bool]
 
 
 @dataclass
@@ -333,6 +334,7 @@ class ListQueuedWorkflowsBody(TypedDict, total=False):
     load_output: bool
     executor_id: Optional[Union[str, List[str]]]
     was_forked_from: Optional[bool]
+    has_parent: Optional[bool]
 
 
 @dataclass
@@ -375,6 +377,8 @@ class ExistPendingWorkflowsResponse(BaseMessage):
 class ListStepsRequest(BaseMessage):
     workflow_id: str
     load_output: bool = True
+    limit: Optional[int] = None
+    offset: Optional[int] = None
 
 
 @dataclass
