@@ -481,6 +481,33 @@ class DBOSClient:
             for wfid in workflow_ids
         ]
 
+    def set_workflow_delay(
+        self,
+        workflow_id: str,
+        *,
+        delay_seconds: Optional[float] = None,
+        delay_until_epoch_ms: Optional[int] = None,
+    ) -> None:
+        self._sys_db.set_workflow_delay(
+            workflow_id,
+            delay_seconds=delay_seconds,
+            delay_until_epoch_ms=delay_until_epoch_ms,
+        )
+
+    async def set_workflow_delay_async(
+        self,
+        workflow_id: str,
+        *,
+        delay_seconds: Optional[float] = None,
+        delay_until_epoch_ms: Optional[int] = None,
+    ) -> None:
+        await asyncio.to_thread(
+            self.set_workflow_delay,
+            workflow_id,
+            delay_seconds=delay_seconds,
+            delay_until_epoch_ms=delay_until_epoch_ms,
+        )
+
     def list_workflows(
         self,
         *,

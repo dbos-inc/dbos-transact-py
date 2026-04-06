@@ -779,6 +779,44 @@ class SystemDatabase(ABC):
                 )
             )
 
+    def set_workflow_delay(
+        self,
+        workflow_id: str,
+        *,
+        delay_seconds: Optional[float] = None,
+        delay_until_epoch_ms: Optional[int] = None,
+    ) -> None:
+        """Set or update the delay on a workflow. Only affects DELAYED workflows."""
+        if delay_until_epoch_ms is not None and delay_seconds is not None:
+            raise DBOSException(
+                "Specify either delay_seconds or delay_until_epoch_ms, not both"
+            )
+        if delay_until_epoch_ms is not None:
+            if delay_until_epoch_ms < 0:
+                raise DBOSException("delay_until_epoch_ms must be >= 0")
+            resolved = delay_until_epoch_ms
+        elif delay_seconds is not None:
+            if delay_seconds < 0:
+                raise DBOSException("delay_seconds must be >= 0")
+            resolved = int((time.time() + delay_seconds) * 1000)
+        else:
+            raise DBOSException(
+                "Must specify either delay_seconds or delay_until_epoch_ms"
+            )
+        with self.engine.begin() as c:
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .where(
+                    SystemSchema.workflow_status.c.status
+                    == WorkflowStatusString.DELAYED.value
+                )
+                .values(
+                    delay_until_epoch_ms=resolved,
+                    updated_at=func.extract("epoch", func.now()) * 1000,
+                )
+            )
+
     def delete_workflows(self, workflow_ids: list[str]) -> None:
         """Delete workflows and all associated data from the system database."""
         with self.engine.begin() as c:
