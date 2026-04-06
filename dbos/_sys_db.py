@@ -792,8 +792,12 @@ class SystemDatabase(ABC):
                 "Specify either delay_seconds or delay_until_epoch_ms, not both"
             )
         if delay_until_epoch_ms is not None:
+            if delay_until_epoch_ms < 0:
+                raise DBOSException("delay_until_epoch_ms must be >= 0")
             resolved = delay_until_epoch_ms
         elif delay_seconds is not None:
+            if delay_seconds < 0:
+                raise DBOSException("delay_seconds must be >= 0")
             resolved = int((time.time() + delay_seconds) * 1000)
         else:
             raise DBOSException(
