@@ -56,13 +56,17 @@ class PostgresSystemDatabase(SystemDatabase):
         # Try to acquire the lock for up to 30 seconds. If we can't, log a
         # warning and proceed to run migrations without it, rather than
         # hanging startup indefinitely.
-        # Some Postgres implementations do not support advisory locks, so
-        # fall back to running without a lock if the call fails.
         MIGRATION_LOCK_ID = 1234567890
         MIGRATION_LOCK_TIMEOUT_SEC = 30
         locked = False
-        conn = self.engine.connect()
-        try:
+        # Use AUTOCOMMIT so the lock connection does not sit idle-in-transaction
+        # while migrations run. CockroachDB's online schema changes wait for
+        # older transactions to drain, which deadlocks against an idle-in-tx
+        # lock connection. Session-level advisory locks are independent of
+        # transaction state, so AUTOCOMMIT is safe.
+        with self.engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as conn:
             try:
                 deadline = time.monotonic() + MIGRATION_LOCK_TIMEOUT_SEC
                 while True:
@@ -78,20 +82,16 @@ class PostgresSystemDatabase(SystemDatabase):
                             f"Could not acquire migration advisory lock within {MIGRATION_LOCK_TIMEOUT_SEC}s. "
                             f"Attempting migrations without lock."
                         )
-                        conn.close()
                         break
                     time.sleep(1)
-            except Exception:
-                conn.close()
-            ensure_dbos_schema(self.engine, self.schema)
-            run_dbos_migrations(self.engine, self.schema, self.use_listen_notify)
-        finally:
-            if locked:
-                conn.execute(
-                    sa.text("SELECT pg_advisory_unlock(:lock_id)"),
-                    {"lock_id": MIGRATION_LOCK_ID},
-                )
-                conn.close()
+                ensure_dbos_schema(self.engine, self.schema)
+                run_dbos_migrations(self.engine, self.schema, self.use_listen_notify)
+            finally:
+                if locked:
+                    conn.execute(
+                        sa.text("SELECT pg_advisory_unlock(:lock_id)"),
+                        {"lock_id": MIGRATION_LOCK_ID},
+                    )
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
