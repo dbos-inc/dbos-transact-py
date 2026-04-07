@@ -75,8 +75,8 @@ class PostgresSystemDatabase(SystemDatabase):
                         break
                     if time.monotonic() >= deadline:
                         dbos_logger.warning(
-                            f"Could not acquire migration advisory lock within "
-                            f"{MIGRATION_LOCK_TIMEOUT_SEC}s. Attempting migrations without lock"
+                            f"Could not acquire migration advisory lock within {MIGRATION_LOCK_TIMEOUT_SEC}s. "
+                            f"Attempting migrations without lock."
                         )
                         conn.close()
                         break
