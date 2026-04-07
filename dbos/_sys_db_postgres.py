@@ -60,9 +60,7 @@ class PostgresSystemDatabase(SystemDatabase):
         MIGRATION_LOCK_TIMEOUT_SEC = 30
         locked = False
         # Use AUTOCOMMIT so the lock connection does not sit idle-in-transaction
-        # while migrations run. CockroachDB's online schema changes wait for
-        # older transactions to drain, which deadlocks against an idle-in-tx
-        # lock connection. Session-level advisory locks are independent of
+        # while migrations run. Session-level advisory locks are independent of
         # transaction state, so AUTOCOMMIT is safe.
         with self.engine.connect().execution_options(
             isolation_level="AUTOCOMMIT"
