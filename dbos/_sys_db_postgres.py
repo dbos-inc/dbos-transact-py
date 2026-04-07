@@ -53,8 +53,8 @@ class PostgresSystemDatabase(SystemDatabase):
 
         assert self.schema
         # Use an advisory lock to serialize concurrent migrations.
-        # Try to acquire the lock for up to 30 seconds. If another process
-        # holds it, return without running migrations ourselves, rather than
+        # Try to acquire the lock for up to 30 seconds. If we can't, log a
+        # warning and proceed to run migrations without it, rather than
         # hanging startup indefinitely.
         # Some Postgres implementations do not support advisory locks, so
         # fall back to running without a lock if the call fails.
@@ -76,10 +76,10 @@ class PostgresSystemDatabase(SystemDatabase):
                     if time.monotonic() >= deadline:
                         dbos_logger.warning(
                             f"Could not acquire migration advisory lock within "
-                            f"{MIGRATION_LOCK_TIMEOUT_SEC}s. Skipping migrations."
+                            f"{MIGRATION_LOCK_TIMEOUT_SEC}s. Attempting migrations without lock"
                         )
                         conn.close()
-                        return
+                        break
                     time.sleep(1)
             except Exception:
                 conn.close()
