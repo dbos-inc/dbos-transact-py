@@ -105,7 +105,10 @@ class ConductorWebsocket(threading.Thread):
                         )
                         self.keepalive_thread.start()
                     while not self.evt.is_set():
-                        message = websocket.recv()
+                        try:
+                            message = websocket.recv(timeout=30)
+                        except TimeoutError:
+                            continue
                         if not isinstance(message, str):
                             self.dbos.logger.warning(
                                 "Received unexpected non-str message"
