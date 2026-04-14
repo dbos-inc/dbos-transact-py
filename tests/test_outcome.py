@@ -112,3 +112,27 @@ async def test_pending_retry() -> None:
         await o2()
 
     assert count == 3
+
+
+@pytest.mark.asyncio
+async def test_pending_wrap_propagates_exception() -> None:
+    # Regression test for a closure bug in Pending._wrap where the lambda
+    # captured `exp` from `except BaseException as exp:` by reference. On
+    # Python 3.12+ the except target is cleared when the block exits, so
+    # invoking the lambda later (via asyncio.to_thread) raised
+    # "cannot access free variable 'exp'" instead of the original exception.
+
+    class MyError(Exception):
+        pass
+
+    async def raiser() -> int:
+        raise MyError("boom")
+
+    def after(result: Callable[[], int]) -> int:
+        return result()
+
+    o1 = Outcome[int].make(raiser).wrap(lambda: after)
+    assert isinstance(o1, Pending)
+
+    with pytest.raises(MyError, match="boom"):
+        await o1()
