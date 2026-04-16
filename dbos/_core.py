@@ -546,8 +546,7 @@ def _get_wf_invoke_func(
 class ActiveWorkflowById:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        # Value is the queue bucket (queue_name, queue_partition_key) so concurrency
-        # limits can be applied per-partition. None for non-queued workflows.
+        # Value is the queue bucket (queue_name, queue_partition_key)
         self._m: dict[str, Optional[Tuple[str, Optional[str]]]] = {}
 
     def acquire(

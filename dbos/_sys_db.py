@@ -3063,8 +3063,6 @@ class SystemDatabase(ABC):
                         break
 
                 # Start the workflow by marking it as PENDING and updating its executor ID.
-                # Only claim the workflow if the UPDATE actually transitioned an ENQUEUED row —
-                # otherwise another worker won the race and we must not re-dispatch it.
                 update_res = c.execute(
                     SystemSchema.workflow_status.update()
                     .where(SystemSchema.workflow_status.c.workflow_uuid == id)
