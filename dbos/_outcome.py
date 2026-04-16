@@ -189,7 +189,14 @@ class Pending(Outcome[T]):
             dbos_logger.warning(f"Asyncio task cancelled for workflow or step {func}")
             raise
         except BaseException as exp:
-            return await asyncio.to_thread(after, lambda: Pending._raise(exp))
+            # Rebind the exception to a local that is not subject to the
+            # implicit `del exp` Python performs at the end of an
+            # `except ... as exp:` block. On Python 3.12+ a lambda that
+            # closes over `exp` directly can raise
+            # "cannot access free variable 'exp'" when it runs later on
+            # the asyncio thread pool.
+            saved_exp = exp
+            return await asyncio.to_thread(after, lambda: Pending._raise(saved_exp))
 
     def wrap(
         self,
