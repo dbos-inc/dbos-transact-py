@@ -144,11 +144,15 @@ def queue_worker_thread(
             if queue.partition_queue:
                 queue_partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
                 for key in queue_partition_keys:
+                    local_running_count = (
+                        dbos._active_workflows_set.count_for_queue(queue.name, key)
+                    )
                     dequeued_workflows = dbos._sys_db.start_queued_workflows(
                         queue,
                         GlobalParams.executor_id,
                         GlobalParams.app_version,
                         key,
+                        local_running_count,
                     )
                     for id in dequeued_workflows:
                         try:
@@ -156,8 +160,15 @@ def queue_worker_thread(
                         except Exception as e:
                             dbos.logger.error(f"Error executing workflow {id}: {e}")
             else:
+                local_running_count = dbos._active_workflows_set.count_for_queue(
+                    queue.name, None
+                )
                 dequeued_workflows = dbos._sys_db.start_queued_workflows(
-                    queue, GlobalParams.executor_id, GlobalParams.app_version, None
+                    queue,
+                    GlobalParams.executor_id,
+                    GlobalParams.app_version,
+                    None,
+                    local_running_count,
                 )
                 for id in dequeued_workflows:
                     try:

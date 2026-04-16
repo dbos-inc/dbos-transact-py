@@ -18,6 +18,7 @@ from typing import (
     List,
     Optional,
     ParamSpec,
+    Tuple,
     TypedDict,
     TypeVar,
     Union,
@@ -545,18 +546,26 @@ def _get_wf_invoke_func(
 class ActiveWorkflowById:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._m: dict[str, bool] = {}
+        # Value is the queue bucket (queue_name, queue_partition_key) so concurrency
+        # limits can be applied per-partition. None for non-queued workflows.
+        self._m: dict[str, Optional[Tuple[str, Optional[str]]]] = {}
 
-    def acquire(self, key: str) -> bool:
+    def acquire(
+        self,
+        key: str,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+    ) -> bool:
         """
         Returns is_owner
         """
         with self._lock:
-            entry = self._m.get(key)
-            if entry is None:
-                self._m[key] = True
-                return True
-            return False
+            if key in self._m:
+                return False
+            self._m[key] = (
+                (queue_name, queue_partition_key) if queue_name is not None else None
+            )
+            return True
 
     def release(
         self,
@@ -570,6 +579,17 @@ class ActiveWorkflowById:
 
     def activeList(self) -> List[str]:
         return list(self._m.keys())
+
+    def count_for_queue(
+        self, queue_name: str, queue_partition_key: Optional[str] = None
+    ) -> int:
+        """
+        Count the number of active workflows associated with a given queue
+        (and partition key, if the queue is partitioned).
+        """
+        target = (queue_name, queue_partition_key)
+        with self._lock:
+            return sum(1 for bucket in self._m.values() if bucket == target)
 
 
 def _execute_workflow_wthread(
@@ -589,7 +609,11 @@ def _execute_workflow_wthread(
     with EnterDBOSWorkflow(attributes, ctx):
         rr: Optional[str] = check_required_roles(func, fi)
         with DBOSAssumeRole(rr):
-            owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
+            owned = dbos._active_workflows_set.acquire(
+                status["workflow_uuid"],
+                status.get("queue_name"),
+                status.get("queue_partition_key"),
+            )
             try:
                 if owned:
                     return _get_wf_invoke_func(dbos, status)(
@@ -628,7 +652,11 @@ async def _execute_workflow_async(
     with EnterDBOSWorkflow(attributes, ctx):
         rr: Optional[str] = check_required_roles(func, fi)
         with DBOSAssumeRole(rr):
-            owned = dbos._active_workflows_set.acquire(status["workflow_uuid"])
+            owned = dbos._active_workflows_set.acquire(
+                status["workflow_uuid"],
+                status.get("queue_name"),
+                status.get("queue_partition_key"),
+            )
             try:
                 if owned:
                     result = Pending[R](functools.partial(func, *args, **kwargs)).then(
