@@ -78,7 +78,7 @@ def test_custom_serializer(
     # Portable deserialization builds a tuple from positionalArgs; custom
     # JSON deserialization returns a list.
     expected_args = (val,) if is_portable else [val]
-    expected_input = {
+    expected_input: dict[str, Any] = {
         "args": expected_args,
         "kwargs": {},
     }
