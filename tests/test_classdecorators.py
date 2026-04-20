@@ -1,4 +1,6 @@
+import logging
 import threading
+import time
 import uuid
 from typing import Callable, Optional
 
@@ -907,6 +909,69 @@ def test_class_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
     DBOS.launch()
 
     assert inst.step(input) == input + input
+
+
+def test_inst_recovery_missing_instance(
+    dbos: DBOS, config: DBOSConfig, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Reproduces issue #645: when startup recovery runs for an instance-method
+    # workflow whose DBOSConfiguredInstance has not been registered, the lookup
+    # raises DBOSWorkflowFunctionNotFoundError but the recovery thread swallows
+    # it without any log or other indication to the user.
+    wfid = str(uuid.uuid4())
+    DBOS.destroy(destroy_registry=True)
+    config["application_version"] = "1.0.0"
+    dbos = DBOS(config=config)
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):
+        def __init__(self) -> None:
+            super().__init__("test_class")
+
+        @DBOS.workflow()
+        def wf(self, x: int) -> int:
+            return x
+
+    inst = TestClass()
+    DBOS.launch()
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(inst.wf, 1)
+    assert handle.get_result() == 1
+
+    # Mark the workflow pending so startup recovery will attempt to recover it.
+    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+
+    # Restart DBOS, re-registering the class but NOT creating the instance.
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):  # type: ignore[no-redef]
+        def __init__(self) -> None:
+            super().__init__("test_class")
+
+        @DBOS.workflow()
+        def wf(self, x: int) -> int:
+            return x
+
+    original_propagate = logging.getLogger("dbos").propagate
+    logging.getLogger("dbos").propagate = True
+    caplog.set_level(logging.WARNING, "dbos")
+    try:
+        DBOS.launch()
+        # Give startup_recovery_thread a moment to run and emit a warning.
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            if "is not registered" in caplog.text:
+                break
+            time.sleep(0.1)
+    finally:
+        logging.getLogger("dbos").propagate = original_propagate
+
+    assert f"is not registered" in caplog.text
+    assert "test_class" in caplog.text
+    inst = TestClass()
+    assert DBOS.retrieve_workflow(wfid).get_result()
 
 
 def test_class_with_only_steps(dbos: DBOS) -> None:

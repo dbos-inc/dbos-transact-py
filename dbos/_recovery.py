@@ -34,7 +34,11 @@ def startup_recovery_thread(
             try:
                 _recover_workflow(dbos, pending_workflow)
                 pending_workflows.remove(pending_workflow)
-            except DBOSWorkflowFunctionNotFoundError:
+            except DBOSWorkflowFunctionNotFoundError as e:
+                with UseLogAttributes(workflow_id=pending_workflow.workflow_id):
+                    dbos.logger.warning(
+                        f"Exception encountered when recovering workflow {pending_workflow.workflow_id}: {e.message}"
+                    )
                 time.sleep(1)
             except Exception as e:
                 with UseLogAttributes(workflow_id=pending_workflow.workflow_id):
