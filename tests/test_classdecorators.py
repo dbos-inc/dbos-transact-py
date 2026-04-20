@@ -954,9 +954,24 @@ def test_inst_recovery_missing_instance(
         def wf(self, x: int) -> int:
             return x
 
-    DBOS.launch()
-    # Give startup_recovery_thread a moment to run and retry.
-    time.sleep(3)
+    original_propagate = logging.getLogger("dbos").propagate
+    logging.getLogger("dbos").propagate = True
+    caplog.set_level(logging.WARNING, "dbos")
+    try:
+        DBOS.launch()
+        # Give startup_recovery_thread a moment to run and emit a warning.
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            if "is not registered" in caplog.text:
+                break
+            time.sleep(0.1)
+    finally:
+        logging.getLogger("dbos").propagate = original_propagate
+
+    assert f"is not registered" in caplog.text
+    assert "test_class" in caplog.text
+    inst = TestClass()
+    assert DBOS.retrieve_workflow(wfid).get_result()
 
 
 def test_class_with_only_steps(dbos: DBOS) -> None:
