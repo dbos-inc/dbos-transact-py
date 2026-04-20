@@ -20,6 +20,7 @@ from ._debouncer import Debouncer, DebouncerClient
 from ._kafka_message import KafkaMessage
 from ._queue import Queue
 from ._serialization import (
+    DBOSPortableJSONSerializer,
     PortableWorkflowError,
     Serializer,
     WorkflowSerializationFormat,
@@ -40,6 +41,7 @@ __all__ = [
     "DBOS",
     "DBOSClient",
     "DBOSConfiguredInstance",
+    "DBOSPortableJSONSerializer",
     "DBOSContextEnsure",
     "DBOSContextSetAuth",
     "ScheduleInput",

@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from dbos import (
     DBOS,
     DBOSConfig,
+    DBOSPortableJSONSerializer,
     Queue,
     SetWorkflowID,
     WorkflowHandle,
@@ -29,24 +30,35 @@ from dbos._serialization import (
 )
 
 
+class JsonSerializer(Serializer):
+    def serialize(self, data: Any) -> str:
+        return json.dumps(data)
+
+    def deserialize(self, serialized_data: str) -> Any:
+        return json.loads(serialized_data)
+
+    def name(self) -> Any:
+        return "custom_json"
+
+
+@pytest.mark.parametrize(
+    "make_serializer",
+    [
+        pytest.param(JsonSerializer, id="custom_json"),
+        pytest.param(DBOSPortableJSONSerializer, id="portable_json"),
+    ],
+)
 def test_custom_serializer(
     config: DBOSConfig,
     cleanup_test_databases: None,
+    make_serializer: Any,
 ) -> None:
 
-    class JsonSerializer(Serializer):
-        def serialize(self, data: Any) -> str:
-            return json.dumps(data)
+    is_portable = make_serializer is DBOSPortableJSONSerializer
 
-        def deserialize(self, serialized_data: str) -> Any:
-            return json.loads(serialized_data)
-
-        def name(self) -> Any:
-            return "custom_json"
-
-    # Configure DBOS with a JSON-based custom serializer
+    # Configure DBOS with the chosen serializer
     DBOS.destroy(destroy_registry=True)
-    config["serializer"] = JsonSerializer()
+    config["serializer"] = make_serializer()
     DBOS(config=config)
     DBOS.launch()
 
@@ -63,8 +75,11 @@ def test_custom_serializer(
         send_evt.wait()
         return DBOS.recv()
 
+    # Portable deserialization builds a tuple from positionalArgs; custom
+    # JSON deserialization returns a list.
+    expected_args = (val,) if is_portable else [val]
     expected_input = {
-        "args": [val],
+        "args": expected_args,
         "kwargs": {},
     }
 
@@ -85,10 +100,10 @@ def test_custom_serializer(
     assert "DBOS.recv" in steps[1]["function_name"]
     assert steps[1]["output"] == val
 
-    # Verify the client also supports custom serialization
+    # Verify the client also supports the same serialization
     client = DBOSClient(
         system_database_url=config["system_database_url"],
-        serializer=JsonSerializer(),
+        serializer=make_serializer(),
     )
     assert len(client.list_workflows()) == 1
     steps = client.list_workflow_steps(handle.workflow_id)
@@ -102,16 +117,22 @@ def test_custom_serializer(
     client.send(handle.workflow_id, val)
     assert handle.get_result() == val
 
-    # Verify that a client without the custom serializer does not fail,
-    # but emits warnings and falls back to returning raw strings
-
+    # A client without an explicit serializer still works:
+    #   - for the custom JSON serializer: the client does not know about it,
+    #     so it falls back to returning raw strings.
+    #   - for the portable JSON serializer: the client recognizes it natively
+    #     and deserializes correctly.
     client = DBOSClient(
         system_database_url=config["system_database_url"],
     )
     workflows = client.list_workflows()
     assert len(workflows) == 2
-    assert cast(str, workflows[0].input) == json.dumps(expected_input)
-    assert workflows[0].output == json.dumps(val)
+    if is_portable:
+        assert workflows[0].input == expected_input
+        assert workflows[0].output == val
+    else:
+        assert cast(str, workflows[0].input) == json.dumps(expected_input)
+        assert workflows[0].output == json.dumps(val)
 
     DBOS.destroy(destroy_registry=True)
 
