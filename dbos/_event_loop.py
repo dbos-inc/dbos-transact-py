@@ -2,6 +2,8 @@ import asyncio
 import threading
 from typing import Any, Coroutine, Optional, TypeVar
 
+from ._logger import dbos_logger
+
 
 class BackgroundEventLoop:
     """
@@ -28,12 +30,16 @@ class BackgroundEventLoop:
         self._thread.start()
         self._ready.wait()  # Wait until the loop is running
 
-    def stop(self) -> None:
+    def stop(self, timeout: Optional[float] = 10.0) -> None:
         if not self._running or self._loop is None or self._thread is None:
             return
 
         asyncio.run_coroutine_threadsafe(self._shutdown(), self._loop)
-        self._thread.join()
+        self._thread.join(timeout=timeout)
+        if self._thread.is_alive():
+            dbos_logger.warning(
+                "BackgroundEventLoop thread did not exit within timeout"
+            )
         self._running = False
 
     def _run_event_loop(self) -> None:
