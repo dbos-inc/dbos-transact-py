@@ -144,8 +144,8 @@ def queue_worker_thread(
             if queue.partition_queue:
                 queue_partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
                 for key in queue_partition_keys:
-                    local_running_count = (
-                        dbos._active_workflows_set.count_for_queue(queue.name, key)
+                    local_running_count = dbos._active_workflows_set.count_for_queue(
+                        queue.name, key
                     )
                     dequeued_workflows = dbos._sys_db.start_queued_workflows(
                         queue,

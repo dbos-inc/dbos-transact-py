@@ -1,15 +1,23 @@
 import json
 import os
 import subprocess
+import threading
 import time
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional, cast
 
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID, WorkflowHandle, pydantic_args_validator
+from dbos import (
+    DBOS,
+    DBOSConfig,
+    Queue,
+    SetWorkflowID,
+    WorkflowHandle,
+    pydantic_args_validator,
+)
 from dbos._client import DBOSClient
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import (
@@ -19,6 +27,93 @@ from dbos._serialization import (
     Serializer,
     WorkflowSerializationFormat,
 )
+
+
+def test_custom_serializer(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+) -> None:
+
+    class JsonSerializer(Serializer):
+        def serialize(self, data: Any) -> str:
+            return json.dumps(data)
+
+        def deserialize(self, serialized_data: str) -> Any:
+            return json.loads(serialized_data)
+
+        def name(self) -> Any:
+            return "custom_json"
+
+    # Configure DBOS with a JSON-based custom serializer
+    DBOS.destroy(destroy_registry=True)
+    config["serializer"] = JsonSerializer()
+    DBOS(config=config)
+    DBOS.launch()
+
+    key = "key"
+    val = "val"
+
+    ready_evt = threading.Event()
+    send_evt = threading.Event()
+
+    @DBOS.workflow()
+    def recv_workflow(input: str) -> Any:
+        DBOS.set_event(key, input)
+        ready_evt.set()
+        send_evt.wait()
+        return DBOS.recv()
+
+    expected_input = {
+        "args": [val],
+        "kwargs": {},
+    }
+
+    # Run an enqueued workflow testing workflow communication methods
+    queue = Queue("example_queue")
+    handle = queue.enqueue(recv_workflow, val)
+    ready_evt.wait()
+    DBOS.send(handle.workflow_id, val)
+    send_evt.set()
+    assert handle.get_result() == val
+    assert handle.get_status().input == expected_input
+
+    # Verify the workflow is correctly stored in the system database
+    assert len(DBOS.list_workflows()) == 1
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 3
+    assert "setEvent" in steps[0]["function_name"]
+    assert "DBOS.recv" in steps[1]["function_name"]
+    assert steps[1]["output"] == val
+
+    # Verify the client also supports custom serialization
+    client = DBOSClient(
+        system_database_url=config["system_database_url"],
+        serializer=JsonSerializer(),
+    )
+    assert len(client.list_workflows()) == 1
+    steps = client.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 3
+    assert "setEvent" in steps[0]["function_name"]
+    assert "DBOS.recv" in steps[1]["function_name"]
+    assert steps[1]["output"] == val
+    handle = client.enqueue(
+        {"queue_name": queue.name, "workflow_name": recv_workflow.__qualname__}, val
+    )
+    client.send(handle.workflow_id, val)
+    assert handle.get_result() == val
+
+    # Verify that a client without the custom serializer does not fail,
+    # but emits warnings and falls back to returning raw strings
+
+    client = DBOSClient(
+        system_database_url=config["system_database_url"],
+    )
+    workflows = client.list_workflows()
+    assert len(workflows) == 2
+    assert cast(str, workflows[0].input) == json.dumps(expected_input)
+    assert workflows[0].output == json.dumps(val)
+
+    DBOS.destroy(destroy_registry=True)
 
 
 def workflow_func(
@@ -345,9 +440,7 @@ def test_portable_ser(dbos: DBOS, client: DBOSClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_send_async_serialization(
-    dbos: DBOS, client: DBOSClient
-) -> None:
+async def test_client_send_async_serialization(dbos: DBOS, client: DBOSClient) -> None:
     @DBOS.workflow()
     async def recv_workflow(topic: str) -> Any:
         return await dbos.recv_async(topic, timeout_seconds=10)
@@ -368,9 +461,7 @@ async def test_client_send_async_serialization(
     dest_default = str(uuid.uuid4())
     with SetWorkflowID(dest_default):
         h_default = await dbos.start_workflow_async(recv_workflow, "default")
-    await client.send_async(
-        dest_default, {"msg": "hello"}, topic="default"
-    )
+    await client.send_async(dest_default, {"msg": "hello"}, topic="default")
     assert (await h_default.get_result()) == {"msg": "hello"}
     check_msg_ser(dest_default, "default", DBOSDefaultSerializer.name())
 
