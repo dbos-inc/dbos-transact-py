@@ -1,4 +1,6 @@
+import logging
 import threading
+import time
 import uuid
 from typing import Callable, Optional
 
@@ -907,6 +909,54 @@ def test_class_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
     DBOS.launch()
 
     assert inst.step(input) == input + input
+
+
+def test_inst_recovery_missing_instance(
+    dbos: DBOS, config: DBOSConfig, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Reproduces issue #645: when startup recovery runs for an instance-method
+    # workflow whose DBOSConfiguredInstance has not been registered, the lookup
+    # raises DBOSWorkflowFunctionNotFoundError but the recovery thread swallows
+    # it without any log or other indication to the user.
+    wfid = str(uuid.uuid4())
+    DBOS.destroy(destroy_registry=True)
+    config["application_version"] = "1.0.0"
+    dbos = DBOS(config=config)
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):
+        def __init__(self) -> None:
+            super().__init__("test_class")
+
+        @DBOS.workflow()
+        def wf(self, x: int) -> int:
+            return x
+
+    inst = TestClass()
+    DBOS.launch()
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(inst.wf, 1)
+    assert handle.get_result() == 1
+
+    # Mark the workflow pending so startup recovery will attempt to recover it.
+    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+
+    # Restart DBOS, re-registering the class but NOT creating the instance.
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+
+    @DBOS.dbos_class()
+    class TestClass(DBOSConfiguredInstance):  # type: ignore[no-redef]
+        def __init__(self) -> None:
+            super().__init__("test_class")
+
+        @DBOS.workflow()
+        def wf(self, x: int) -> int:
+            return x
+
+    DBOS.launch()
+    # Give startup_recovery_thread a moment to run and retry.
+    time.sleep(3)
 
 
 def test_class_with_only_steps(dbos: DBOS) -> None:
