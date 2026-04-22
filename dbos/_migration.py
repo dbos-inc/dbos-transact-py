@@ -466,6 +466,24 @@ CREATE INDEX "idx_operation_outputs_completed_at_function_name" ON "{schema}"."o
 """
 
 
+def get_dbos_migration_twenty(schema: str, use_listen_notify: bool) -> str:
+    migration = f"""
+ALTER FUNCTION "{schema}".enqueue_workflow(
+    TEXT, TEXT, JSON[], JSON, TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, INTEGER, TEXT
+) SET search_path = pg_catalog, pg_temp;
+
+ALTER FUNCTION "{schema}".send_message(
+    TEXT, JSON, TEXT, TEXT
+) SET search_path = pg_catalog, pg_temp;
+"""
+    if use_listen_notify:
+        migration += f"""
+ALTER FUNCTION "{schema}".notifications_function() SET search_path = pg_catalog, pg_temp;
+ALTER FUNCTION "{schema}".workflow_events_function() SET search_path = pg_catalog, pg_temp;
+"""
+    return migration
+
+
 def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
     return [
         get_dbos_migration_one(schema, use_listen_notify),
@@ -487,6 +505,7 @@ def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
         get_dbos_migration_seventeen(schema),
         get_dbos_migration_eighteen(schema),
         get_dbos_migration_nineteen(schema),
+        get_dbos_migration_twenty(schema, use_listen_notify),
     ]
 
 
@@ -689,10 +708,11 @@ sqlite_migrations = [
     sqlite_migration_eleven,
     sqlite_migration_twelve,
     sqlite_migration_thirteen,
-    # Note, there is no sqlite version of migration fourteen
+    # There is no SQLite version of migration fourteen
     sqlite_migration_fifteen,
     sqlite_migration_sixteen,
     sqlite_migration_seventeen,
     sqlite_migration_eighteen,
     sqlite_migration_nineteen,
+    # There is no SQLite version of migration twenty
 ]
