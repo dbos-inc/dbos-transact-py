@@ -351,6 +351,163 @@ def test_step_retries(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+class ShouldRetryFatalError(Exception):
+    pass
+
+
+class ShouldRetryRetryableError(Exception):
+    pass
+
+
+def test_step_should_retry(dbos: DBOS) -> None:
+    # A step that fails with a non-retryable exception should bail out on the
+    # first failure instead of exhausting retries.
+    step_counter = 0
+    max_attempts = 4
+
+    @DBOS.step(
+        retries_allowed=True,
+        interval_seconds=0,
+        max_attempts=max_attempts,
+        should_retry=lambda e: not isinstance(e, ShouldRetryFatalError),
+    )
+    def fatal_step() -> None:
+        nonlocal step_counter
+        step_counter += 1
+        raise ShouldRetryFatalError("no retry")
+
+    @DBOS.workflow()
+    def fatal_workflow() -> None:
+        fatal_step()
+
+    # should_retry returns False -> the original exception propagates, not
+    # DBOSMaxStepRetriesExceeded.
+    with pytest.raises(ShouldRetryFatalError, match="no retry"):
+        fatal_workflow()
+    assert step_counter == 1
+
+    # Sanity check: a retryable exception exhausts max_attempts as usual.
+    retryable_counter = 0
+
+    @DBOS.step(
+        retries_allowed=True,
+        interval_seconds=0,
+        max_attempts=max_attempts,
+        should_retry=lambda e: not isinstance(e, ShouldRetryFatalError),
+    )
+    def retryable_step() -> None:
+        nonlocal retryable_counter
+        retryable_counter += 1
+        raise ShouldRetryRetryableError("retry")
+
+    @DBOS.workflow()
+    def retryable_workflow() -> None:
+        retryable_step()
+
+    with pytest.raises(DBOSMaxStepRetriesExceeded):
+        retryable_workflow()
+    assert retryable_counter == max_attempts
+
+
+def test_run_step_should_retry(dbos: DBOS) -> None:
+    # DBOS.run_step should honor should_retry passed via StepOptions.
+    sync_counter = 0
+    async_counter = 0
+
+    def fatal_step() -> None:
+        nonlocal sync_counter
+        sync_counter += 1
+        raise ShouldRetryFatalError("no retry sync")
+
+    async def fatal_step_async() -> None:
+        nonlocal async_counter
+        async_counter += 1
+        raise ShouldRetryFatalError("no retry async")
+
+    @DBOS.workflow()
+    def run_step_wf() -> None:
+        with pytest.raises(ShouldRetryFatalError, match="no retry sync"):
+            DBOS.run_step(
+                {
+                    "retries_allowed": True,
+                    "max_attempts": 3,
+                    "interval_seconds": 0,
+                    "should_retry": lambda e: not isinstance(e, ShouldRetryFatalError),
+                },
+                fatal_step,
+            )
+        with pytest.raises(ShouldRetryFatalError, match="no retry async"):
+            DBOS.run_step(
+                {
+                    "retries_allowed": True,
+                    "max_attempts": 3,
+                    "interval_seconds": 0,
+                    "should_retry": lambda e: not isinstance(e, ShouldRetryFatalError),
+                },
+                fatal_step_async,
+            )
+
+    run_step_wf()
+    # Each inner step should have run exactly once — no retries.
+    assert sync_counter == 1
+    assert async_counter == 1
+
+
+@pytest.mark.asyncio
+async def test_run_step_async_should_retry(dbos: DBOS) -> None:
+    # DBOS.run_step_async should honor should_retry passed via StepOptions.
+    counter = 0
+
+    async def fatal_step_async() -> None:
+        nonlocal counter
+        counter += 1
+        raise ShouldRetryFatalError("no retry")
+
+    @DBOS.workflow()
+    async def run_step_async_wf() -> None:
+        with pytest.raises(ShouldRetryFatalError, match="no retry"):
+            await DBOS.run_step_async(
+                {
+                    "retries_allowed": True,
+                    "max_attempts": 3,
+                    "interval_seconds": 0,
+                    "should_retry": lambda e: not isinstance(e, ShouldRetryFatalError),
+                },
+                fatal_step_async,
+            )
+
+    await run_step_async_wf()
+    assert counter == 1
+
+
+def test_step_should_retry_on_last_attempt(dbos: DBOS) -> None:
+    # If should_retry returns False on the final attempt, the caught exception
+    # should propagate instead of being wrapped as DBOSMaxStepRetriesExceeded.
+    step_counter = 0
+    max_attempts = 3
+
+    @DBOS.step(
+        retries_allowed=True,
+        interval_seconds=0,
+        max_attempts=max_attempts,
+        should_retry=lambda e: not isinstance(e, ShouldRetryFatalError),
+    )
+    def mixed_step() -> None:
+        nonlocal step_counter
+        step_counter += 1
+        if step_counter < max_attempts:
+            raise Exception("retry me")
+        raise ShouldRetryFatalError("stop now")
+
+    @DBOS.workflow()
+    def mixed_workflow() -> None:
+        mixed_step()
+
+    with pytest.raises(ShouldRetryFatalError, match="stop now"):
+        mixed_workflow()
+    assert step_counter == max_attempts
+
+
 def test_step_status(dbos: DBOS) -> None:
     step_counter = 0
 

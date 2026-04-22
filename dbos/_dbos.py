@@ -828,6 +828,7 @@ class DBOS:
         interval_seconds: float = 1.0,
         max_attempts: int = 3,
         backoff_rate: float = 2.0,
+        should_retry: Optional[Callable[[BaseException], bool]] = None,
     ) -> Callable[[Callable[P, R]], Callable[P, R]]:
         """
         Decorate and configure a function for use as a DBOS step.
@@ -837,6 +838,9 @@ class DBOS:
             interval_seconds(float): Time between retry attempts
             backoff_rate(float): Multiplier for exponentially increasing `interval_seconds` between retries
             max_attempts(int): Maximum number of retries before raising an exception
+            should_retry(Callable[[BaseException], bool]): Optional predicate called with a raised
+                exception to decide whether the step should be retried. If it returns False,
+                the exception is re-raised immediately without further retries.
 
         """
 
@@ -847,6 +851,7 @@ class DBOS:
             interval_seconds=interval_seconds,
             max_attempts=max_attempts,
             backoff_rate=backoff_rate,
+            should_retry=should_retry,
         )
 
     @classmethod

@@ -59,6 +59,7 @@ class Outcome(Protocol[T]):
         attempts: int,
         on_exception: Callable[[int, BaseException], float],
         exceeded_retries: Callable[[int, list[Exception]], Exception],
+        should_retry: Optional[Callable[[BaseException], bool]] = None,
     ) -> "Outcome[T]": ...
 
     def intercept(
@@ -130,6 +131,7 @@ class Immediate(Outcome[T]):
         attempts: int,
         on_exception: Callable[[int, BaseException], float],
         exceeded_retries: Callable[[int, list[Exception]], Exception],
+        should_retry: Optional[Callable[[BaseException], bool]] = None,
     ) -> T:
         errors: list[Exception] = []
         for i in range(attempts):
@@ -137,6 +139,8 @@ class Immediate(Outcome[T]):
                 with EnterDBOSStepRetry(i, attempts):
                     return func()
             except Exception as exp:
+                if should_retry is not None and not should_retry(exp):
+                    raise
                 errors.append(exp)
                 wait_time = on_exception(i, exp)
                 time.sleep(wait_time)
@@ -148,11 +152,12 @@ class Immediate(Outcome[T]):
         attempts: int,
         on_exception: Callable[[int, BaseException], float],
         exceeded_retries: Callable[[int, list[Exception]], Exception],
+        should_retry: Optional[Callable[[BaseException], bool]] = None,
     ) -> "Immediate[T]":
         assert attempts > 0
         return Immediate[T](
             lambda: Immediate._retry(
-                self._func, attempts, on_exception, exceeded_retries
+                self._func, attempts, on_exception, exceeded_retries, should_retry
             )
         )
 
@@ -251,6 +256,7 @@ class Pending(Outcome[T]):
         attempts: int,
         on_exception: Callable[[int, BaseException], float],
         exceeded_retries: Callable[[int, list[Exception]], Exception],
+        should_retry: Optional[Callable[[BaseException], bool]] = None,
     ) -> T:
         errors: list[Exception] = []
         for i in range(attempts):
@@ -258,6 +264,8 @@ class Pending(Outcome[T]):
                 with EnterDBOSStepRetry(i, attempts):
                     return await func()
             except Exception as exp:
+                if should_retry is not None and not should_retry(exp):
+                    raise
                 errors.append(exp)
                 wait_time = on_exception(i, exp)
                 await asyncio.sleep(wait_time)
@@ -269,10 +277,13 @@ class Pending(Outcome[T]):
         attempts: int,
         on_exception: Callable[[int, BaseException], float],
         exceeded_retries: Callable[[int, list[Exception]], Exception],
+        should_retry: Optional[Callable[[BaseException], bool]] = None,
     ) -> "Pending[T]":
         assert attempts > 0
         return Pending[T](
-            lambda: Pending._retry(self._func, attempts, on_exception, exceeded_retries)
+            lambda: Pending._retry(
+                self._func, attempts, on_exception, exceeded_retries, should_retry
+            )
         )
 
     async def __call__(self) -> T:
