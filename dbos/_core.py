@@ -12,6 +12,7 @@ from functools import wraps
 from typing import (
     TYPE_CHECKING,
     Any,
+    Awaitable,
     Callable,
     Coroutine,
     Generic,
@@ -308,8 +309,10 @@ class StepOptions(TypedDict, total=False):
 
         should_retry:
             Optional predicate called with a raised exception to decide
-            whether the step should be retried. If it returns False,
-            the exception is re-raised immediately without further retries.
+            whether the step should be retried. If it returns False (or
+            an awaitable resolving to False), the exception is re-raised
+            immediately without further retries. Async validators are
+            only supported for async steps.
     """
 
     name: Optional[str]
@@ -317,7 +320,7 @@ class StepOptions(TypedDict, total=False):
     interval_seconds: float
     max_attempts: int
     backoff_rate: float
-    should_retry: Optional[Callable[[BaseException], bool]]
+    should_retry: Optional[Callable[[BaseException], Union[bool, Awaitable[bool]]]]
 
 
 DEFAULT_STEP_OPTIONS: StepOptions = {
@@ -1540,8 +1543,20 @@ def invoke_step(
     interval_seconds: float,
     max_attempts: int,
     backoff_rate: float,
-    should_retry: Optional[Callable[[BaseException], bool]] = None,
+    should_retry: Optional[
+        Callable[[BaseException], Union[bool, Awaitable[bool]]]
+    ] = None,
 ) -> R | Coroutine[Any, Any, R]:
+    if (
+        should_retry is not None
+        and inspect.iscoroutinefunction(should_retry)
+        and not inspect.iscoroutinefunction(func)
+    ):
+        raise DBOSException(
+            f"Step {step_name} is sync but should_retry is async. "
+            f"Use an async step to pair with an async validator."
+        )
+
     attributes: TracedAttributes = {
         "name": step_name,
         "operationType": OperationType.STEP.value,
@@ -1741,7 +1756,9 @@ def decorate_step(
     interval_seconds: float,
     max_attempts: int,
     backoff_rate: float,
-    should_retry: Optional[Callable[[BaseException], bool]] = None,
+    should_retry: Optional[
+        Callable[[BaseException], Union[bool, Awaitable[bool]]]
+    ] = None,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
 

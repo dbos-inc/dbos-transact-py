@@ -828,7 +828,9 @@ class DBOS:
         interval_seconds: float = 1.0,
         max_attempts: int = 3,
         backoff_rate: float = 2.0,
-        should_retry: Optional[Callable[[BaseException], bool]] = None,
+        should_retry: Optional[
+            Callable[[BaseException], Union[bool, Awaitable[bool]]]
+        ] = None,
     ) -> Callable[[Callable[P, R]], Callable[P, R]]:
         """
         Decorate and configure a function for use as a DBOS step.
@@ -838,9 +840,11 @@ class DBOS:
             interval_seconds(float): Time between retry attempts
             backoff_rate(float): Multiplier for exponentially increasing `interval_seconds` between retries
             max_attempts(int): Maximum number of retries before raising an exception
-            should_retry(Callable[[BaseException], bool]): Optional predicate called with a raised
-                exception to decide whether the step should be retried. If it returns False,
-                the exception is re-raised immediately without further retries.
+            should_retry(Callable[[BaseException], Union[bool, Awaitable[bool]]]):
+                Optional predicate called with a raised exception to decide whether the
+                step should be retried. If it returns False (or an awaitable resolving
+                to False), the exception is re-raised immediately without further
+                retries. Async validators are only supported for async steps.
 
         """
 
