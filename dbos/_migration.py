@@ -45,7 +45,7 @@ def run_dbos_migrations(
     engine: sa.Engine, schema: str, use_listen_notify: bool
 ) -> None:
     """Run DBOS-managed migrations by executing each SQL command in dbos_migrations."""
-    # Get current migration version
+    # Get current migration version and detect CockroachDB via server version string
     with engine.begin() as conn:
         result = conn.execute(
             sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
@@ -53,8 +53,11 @@ def run_dbos_migrations(
         current_version = result.fetchone()
         last_applied = current_version[0] if current_version else 0
 
+        version_str = conn.execute(sa.text("SELECT version()")).scalar() or ""
+        is_cockroach = "cockroachdb" in version_str.lower()
+
     # Apply each migration in its own transaction
-    migrations = get_dbos_migrations(schema, use_listen_notify)
+    migrations = get_dbos_migrations(schema, use_listen_notify, is_cockroach)
     for i, migration_sql in enumerate(migrations, 1):
         if i <= last_applied:
             continue
@@ -76,6 +79,8 @@ def run_dbos_migrations(
                 ).scalar()
             ):
                 dbos_logger.info("Migration 10 skipped, primary key already exists")
+            elif not migration_sql.strip():
+                dbos_logger.info(f"Migration {i} has no statements; skipping.")
             else:
                 conn.execute(sa.text(migration_sql))
 
@@ -466,7 +471,31 @@ CREATE INDEX "idx_operation_outputs_completed_at_function_name" ON "{schema}"."o
 """
 
 
-def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
+def get_dbos_migration_twenty(
+    schema: str, use_listen_notify: bool, is_cockroach: bool
+) -> str:
+    if is_cockroach:
+        return ""
+    migration = f"""
+ALTER FUNCTION "{schema}".enqueue_workflow(
+    TEXT, TEXT, JSON[], JSON, TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, INTEGER, TEXT
+) SET search_path = pg_catalog, pg_temp;
+
+ALTER FUNCTION "{schema}".send_message(
+    TEXT, JSON, TEXT, TEXT
+) SET search_path = pg_catalog, pg_temp;
+"""
+    if use_listen_notify:
+        migration += f"""
+ALTER FUNCTION "{schema}".notifications_function() SET search_path = pg_catalog, pg_temp;
+ALTER FUNCTION "{schema}".workflow_events_function() SET search_path = pg_catalog, pg_temp;
+"""
+    return migration
+
+
+def get_dbos_migrations(
+    schema: str, use_listen_notify: bool, is_cockroach: bool = False
+) -> list[str]:
     return [
         get_dbos_migration_one(schema, use_listen_notify),
         get_dbos_migration_two(schema),
@@ -487,6 +516,7 @@ def get_dbos_migrations(schema: str, use_listen_notify: bool) -> list[str]:
         get_dbos_migration_seventeen(schema),
         get_dbos_migration_eighteen(schema),
         get_dbos_migration_nineteen(schema),
+        get_dbos_migration_twenty(schema, use_listen_notify, is_cockroach),
     ]
 
 
@@ -689,10 +719,11 @@ sqlite_migrations = [
     sqlite_migration_eleven,
     sqlite_migration_twelve,
     sqlite_migration_thirteen,
-    # Note, there is no sqlite version of migration fourteen
+    # There is no SQLite version of migration fourteen
     sqlite_migration_fifteen,
     sqlite_migration_sixteen,
     sqlite_migration_seventeen,
     sqlite_migration_eighteen,
     sqlite_migration_nineteen,
+    # There is no SQLite version of migration twenty
 ]
