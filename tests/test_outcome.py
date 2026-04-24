@@ -65,6 +65,32 @@ def test_immediate_retry() -> None:
     assert count == 3
 
 
+def test_immediate_retry_should_retry() -> None:
+    count = 0
+
+    class Fatal(Exception):
+        pass
+
+    def raiser() -> int:
+        nonlocal count
+        count += 1
+        raise Fatal("stop")
+
+    o1 = Outcome[int].make(raiser)
+    o2 = o1.retry(
+        3,
+        lambda i, e: 0.1,
+        lambda i, e: ExceededRetries(),
+        should_retry=lambda e: not isinstance(e, Fatal),
+    )
+
+    assert isinstance(o2, Immediate)
+    with pytest.raises(Fatal):
+        o2()
+
+    assert count == 1
+
+
 @pytest.mark.asyncio
 async def test_pending() -> None:
     func_called = False
@@ -112,6 +138,63 @@ async def test_pending_retry() -> None:
         await o2()
 
     assert count == 3
+
+
+@pytest.mark.asyncio
+async def test_pending_retry_should_retry() -> None:
+    count = 0
+
+    class Fatal(Exception):
+        pass
+
+    async def raiser() -> int:
+        nonlocal count
+        count += 1
+        raise Fatal("stop")
+
+    o1 = Outcome[int].make(raiser)
+    o2 = o1.retry(
+        3,
+        lambda i, e: 0.1,
+        lambda i, e: ExceededRetries(),
+        should_retry=lambda e: not isinstance(e, Fatal),
+    )
+
+    assert isinstance(o2, Pending)
+    with pytest.raises(Fatal):
+        await o2()
+
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_pending_retry_should_retry_async_validator() -> None:
+    count = 0
+
+    class Fatal(Exception):
+        pass
+
+    async def raiser() -> int:
+        nonlocal count
+        count += 1
+        raise Fatal("stop")
+
+    async def validator(e: BaseException) -> bool:
+        return not isinstance(e, Fatal)
+
+    o1 = Outcome[int].make(raiser)
+    o2 = o1.retry(
+        3,
+        lambda i, e: 0.1,
+        lambda i, e: ExceededRetries(),
+        should_retry=validator,
+    )
+
+    assert isinstance(o2, Pending)
+    with pytest.raises(Fatal):
+        await o2()
+
+    assert count == 1
 
 
 @pytest.mark.asyncio
