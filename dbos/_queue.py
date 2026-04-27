@@ -237,8 +237,15 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
             # Always listen to the internal queue
             current_queues[INTERNAL_QUEUE_NAME] = dbos._registry.get_internal_queue()
         else:
-            # Else, check all declared queues
+            # Else, check all in-memory and database-backed queues
             current_queues = dict(dbos._registry.queue_info_map)
+            try:
+                for queue in dbos._sys_db.list_queues():
+                    if queue.name in current_queues or queue.name in queue_threads:
+                        continue
+                    current_queues[queue.name] = queue
+            except Exception as e:
+                dbos.logger.warning(f"Exception listing database-backed queues: {e}")
 
         # Transition any DELAYED workflows whose delay has expired to ENQUEUED.
         try:

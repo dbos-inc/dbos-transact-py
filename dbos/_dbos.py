@@ -850,26 +850,7 @@ class DBOS:
         system database. The returned Queue is not added to the in-memory queue
         registry.
         """
-        dbos = _get_dbos_instance()
-        row = dbos._sys_db.get_queue(name)
-        if row is None:
-            return None
-        limiter: Optional[QueueRateLimit] = None
-        if row["rate_limit_max"] is not None:
-            limiter = {
-                "limit": row["rate_limit_max"],
-                "period": row["rate_limit_period_sec"],
-            }
-        return Queue(
-            row["name"],
-            row["concurrency"],
-            limiter,
-            worker_concurrency=row["worker_concurrency"],
-            priority_enabled=row["priority_enabled"],
-            partition_queue=row["partition_queue"],
-            polling_interval_sec=row["polling_interval_sec"],
-            database_backed_queue=True,
-        )
+        return _get_dbos_instance()._sys_db.get_queue(name)
 
     # Decorators for DBOS functionality
     @classmethod

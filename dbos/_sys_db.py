@@ -17,7 +17,6 @@ from typing import (
     List,
     Literal,
     Optional,
-    Sequence,
     Tuple,
     TypedDict,
     TypeVar,
@@ -66,7 +65,30 @@ from ._serialization import (
 )
 
 if TYPE_CHECKING:
+    from ._queue import Queue, QueueRateLimit
+
+
+def queue_from_db_row(row: sa.Row[Any]) -> "Queue":
+    """Build a database-backed Queue from a queues-table row."""
     from ._queue import Queue
+
+    m = row._mapping
+    limiter: Optional["QueueRateLimit"] = None
+    if m["rate_limit_max"] is not None:
+        limiter = {
+            "limit": m["rate_limit_max"],
+            "period": m["rate_limit_period_sec"],
+        }
+    return Queue(
+        m["name"],
+        m["concurrency"],
+        limiter,
+        worker_concurrency=m["worker_concurrency"],
+        priority_enabled=bool(m["priority_enabled"]),
+        partition_queue=bool(m["partition_queue"]),
+        polling_interval_sec=m["polling_interval_sec"],
+        database_backed_queue=True,
+    )
 
 
 class WorkflowStatusString(Enum):
@@ -4159,32 +4181,17 @@ class SystemDatabase(ABC):
 
     # ── Queue Registration ──────────────────────────────────────
 
-    def get_queue(self, name: str) -> Optional[Dict[str, Any]]:
+    def get_queue(self, name: str) -> Optional["Queue"]:
         with self.engine.begin() as c:
             row = c.execute(
-                sa.select(
-                    SystemSchema.queues.c.name,
-                    SystemSchema.queues.c.concurrency,
-                    SystemSchema.queues.c.worker_concurrency,
-                    SystemSchema.queues.c.rate_limit_max,
-                    SystemSchema.queues.c.rate_limit_period_sec,
-                    SystemSchema.queues.c.priority_enabled,
-                    SystemSchema.queues.c.partition_queue,
-                    SystemSchema.queues.c.polling_interval_sec,
-                ).where(SystemSchema.queues.c.name == name)
+                sa.select(SystemSchema.queues).where(SystemSchema.queues.c.name == name)
             ).fetchone()
-            if row is None:
-                return None
-            return {
-                "name": row[0],
-                "concurrency": row[1],
-                "worker_concurrency": row[2],
-                "rate_limit_max": row[3],
-                "rate_limit_period_sec": row[4],
-                "priority_enabled": bool(row[5]),
-                "partition_queue": bool(row[6]),
-                "polling_interval_sec": row[7],
-            }
+            return queue_from_db_row(row) if row is not None else None
+
+    def list_queues(self) -> List["Queue"]:
+        with self.engine.begin() as c:
+            rows = c.execute(sa.select(SystemSchema.queues)).fetchall()
+            return [queue_from_db_row(row) for row in rows]
 
     def upsert_queue(
         self,
