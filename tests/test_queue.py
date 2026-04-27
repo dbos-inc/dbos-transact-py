@@ -1852,6 +1852,55 @@ async def test_priority_queue_async(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+@pytest.mark.asyncio
+async def test_enqueue_async_validation(dbos: DBOS) -> None:
+    """Same enqueue-time validation rules should fire for enqueue_async."""
+
+    @DBOS.workflow()
+    async def noop_workflow() -> None:
+        return
+
+    DBOS.register_queue("async_validation_no_priority")
+    DBOS.register_queue("async_validation_priority", priority_enabled=True)
+    DBOS.register_queue("async_validation_partition", partition_queue=True)
+    DBOS.register_queue("async_validation_no_partition")
+
+    # Priority on a non-priority queue
+    with pytest.raises(Exception, match="Priority is not enabled for queue"):
+        with SetEnqueueOptions(priority=1):
+            await DBOS.enqueue_workflow_async(
+                "async_validation_no_priority", noop_workflow
+            )
+
+    # Partition queue requires a partition key
+    with pytest.raises(Exception, match="without a partition key"):
+        await DBOS.enqueue_workflow_async("async_validation_partition", noop_workflow)
+
+    # Partition key on a non-partitioned queue
+    with pytest.raises(
+        Exception, match="only use a partition key on a partition-enabled queue"
+    ):
+        with SetEnqueueOptions(queue_partition_key="key"):
+            await DBOS.enqueue_workflow_async(
+                "async_validation_no_partition", noop_workflow
+            )
+
+    # Deduplication is not supported for partitioned queues
+    with pytest.raises(
+        Exception, match="Deduplication is not supported for partitioned queues"
+    ):
+        with SetEnqueueOptions(queue_partition_key="key", deduplication_id="dedupe"):
+            await DBOS.enqueue_workflow_async(
+                "async_validation_partition", noop_workflow
+            )
+
+    # Sanity check: priority on a priority-enabled queue works
+    handle = await DBOS.enqueue_workflow_async(
+        "async_validation_priority", noop_workflow
+    )
+    await handle.get_result()
+
+
 def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient) -> None:
     DBOS.register_queue("test_worker_concurrency_across_versions", worker_concurrency=1)
 

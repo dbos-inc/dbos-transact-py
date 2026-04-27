@@ -213,34 +213,29 @@ class Queue:
                 "object. Use DBOSClient.enqueue instead."
             )
 
-    def enqueue(
-        self, func: "Callable[P, R]", *args: P.args, **kwargs: P.kwargs
-    ) -> "WorkflowHandle[R]":
+    def _validate_enqueue(self, ctx: Optional[DBOSContext]) -> None:
         self._require_dbos_bound()
-        from ._dbos import _get_dbos_instance
-
-        context = get_local_dbos_context()
-        if (
-            context is not None
-            and context.priority is not None
-            and not self.priority_enabled
-        ):
+        if ctx is not None and ctx.priority is not None and not self.priority_enabled:
             raise Exception(
                 f"Priority is not enabled for queue {self.name}. Setting priority will not have any effect."
             )
-        if self.partition_queue and (
-            context is None or context.queue_partition_key is None
-        ):
+        if self.partition_queue and (ctx is None or ctx.queue_partition_key is None):
             raise Exception(
                 f"A workflow cannot be enqueued on partitioned queue {self.name} without a partition key"
             )
-        if context and context.queue_partition_key and not self.partition_queue:
+        if ctx and ctx.queue_partition_key and not self.partition_queue:
             raise Exception(
-                f"You can only use a partition key on a partition-enabled queue. Key {context.queue_partition_key} was used with non-partitioned queue {self.name}"
+                f"You can only use a partition key on a partition-enabled queue. Key {ctx.queue_partition_key} was used with non-partitioned queue {self.name}"
             )
-        if context and context.queue_partition_key and context.deduplication_id:
+        if ctx and ctx.queue_partition_key and ctx.deduplication_id:
             raise Exception("Deduplication is not supported for partitioned queues")
 
+    def enqueue(
+        self, func: "Callable[P, R]", *args: P.args, **kwargs: P.kwargs
+    ) -> "WorkflowHandle[R]":
+        from ._dbos import _get_dbos_instance
+
+        self._validate_enqueue(get_local_dbos_context())
         dbos = _get_dbos_instance()
         return start_workflow(
             dbos, func, args, kwargs, queue_name=self.name, execute_workflow=False
@@ -252,11 +247,11 @@ class Queue:
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> "WorkflowHandleAsync[R]":
-        self._require_dbos_bound()
         from ._dbos import _get_dbos_instance
 
-        dbos = _get_dbos_instance()
         ctx = get_local_dbos_context()
+        self._validate_enqueue(ctx)
+        dbos = _get_dbos_instance()
         parent_ctx_copy = copy.copy(ctx)
         child_ctx = DBOSContext.create_start_workflow_child(ctx)
         return await start_workflow_async(
