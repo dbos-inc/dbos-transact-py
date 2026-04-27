@@ -507,6 +507,44 @@ def test_backfill_schedule(dbos: DBOS) -> None:
     DBOS.delete_schedule("backfill-test")
 
 
+def test_backfill_naive_datetime(dbos: DBOS) -> None:
+    """Test timezone-naive datetimes for backfilling — they should be treated as UTC and not throw."""
+    received: list[datetime] = []
+
+    @DBOS.workflow()
+    def wf(scheduled_at: datetime, ctx: Any) -> None:
+        received.append(scheduled_at)
+
+    DBOS.create_schedule(
+        schedule_name="backfill-naive",
+        workflow_fn=wf,
+        schedule="0 * * * *",  # every hour
+    )
+
+    # Naive start and end — equivalent to 00:30..03:30 UTC, yields 01:00, 02:00, 03:00
+    naive_start = datetime(2025, 1, 1, 0, 30, 0)
+    naive_end = datetime(2025, 1, 1, 3, 30, 0)
+
+    handles = DBOS.backfill_schedule("backfill-naive", naive_start, naive_end)
+    assert len(handles) == 3
+    for h in handles:
+        h.get_result()
+
+    expected = [
+        datetime(2025, 1, 1, h, 0, 0, tzinfo=timezone.utc) for h in range(1, 4)
+    ]
+    assert sorted(received) == expected
+
+    # Mixed (aware start, naive end) should also work
+    received.clear()
+    aware_start = datetime(2025, 1, 1, 4, 30, 0, tzinfo=timezone.utc)
+    naive_end_2 = datetime(2025, 1, 1, 6, 30, 0)
+    handles = DBOS.backfill_schedule("backfill-naive", aware_start, naive_end_2)
+    assert len(handles) == 2
+
+    DBOS.delete_schedule("backfill-naive")
+
+
 def test_backfill_with_timezone(dbos: DBOS) -> None:
     received_utc: list[datetime] = []
     received_ny: list[datetime] = []
