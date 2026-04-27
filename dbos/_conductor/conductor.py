@@ -919,6 +919,48 @@ class ConductorWebsocket(threading.Thread):
                                     error_message=error_message,
                                 ).to_json()
                             )
+                        elif msg_type == p.MessageType.LIST_QUEUES:
+                            queues_output: list[p.QueueOutput] = []
+                            try:
+                                queues_output = [
+                                    p.QueueOutput.from_queue(q)
+                                    for q in self.dbos._sys_db.list_queues()
+                                ]
+                            except Exception:
+                                error_message = (
+                                    f"Exception encountered when listing queues: "
+                                    f"{traceback.format_exc()}"
+                                )
+                                self.dbos.logger.error(error_message)
+                            websocket.send(
+                                p.ListQueuesResponse(
+                                    type=p.MessageType.LIST_QUEUES,
+                                    request_id=base_message.request_id,
+                                    output=queues_output,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
+                        elif msg_type == p.MessageType.GET_QUEUE:
+                            get_queue_msg = p.GetQueueRequest.from_json(message)
+                            queue_output: p.QueueOutput | None = None
+                            try:
+                                q = self.dbos._sys_db.get_queue(get_queue_msg.name)
+                                if q is not None:
+                                    queue_output = p.QueueOutput.from_queue(q)
+                            except Exception:
+                                error_message = (
+                                    f"Exception encountered when getting queue "
+                                    f"'{get_queue_msg.name}': {traceback.format_exc()}"
+                                )
+                                self.dbos.logger.error(error_message)
+                            websocket.send(
+                                p.GetQueueResponse(
+                                    type=p.MessageType.GET_QUEUE,
+                                    request_id=base_message.request_id,
+                                    output=queue_output,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
                         else:
                             self.dbos.logger.warning(
                                 f"Unexpected message type: {msg_type}"

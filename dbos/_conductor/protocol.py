@@ -1,7 +1,7 @@
 import json
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Type, TypedDict, TypeVar, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Type, TypedDict, TypeVar, Union
 
 from dbos._serialization import Serializer
 from dbos._sys_db import (
@@ -11,6 +11,9 @@ from dbos._sys_db import (
     WorkflowSchedule,
     WorkflowStatus,
 )
+
+if TYPE_CHECKING:
+    from dbos._queue import Queue
 
 
 class MessageType(str, Enum):
@@ -44,6 +47,8 @@ class MessageType(str, Enum):
     GET_WORKFLOW_STREAMS = "get_workflow_streams"
     GET_WORKFLOW_AGGREGATES = "get_workflow_aggregates"
     FORK_FROM_FAILURE = "fork_from_failure"
+    LIST_QUEUES = "list_queues"
+    GET_QUEUE = "get_queue"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -763,4 +768,54 @@ class WorkflowAggregateOutput:
 @dataclass
 class GetWorkflowAggregatesResponse(BaseMessage):
     output: List[WorkflowAggregateOutput]
+    error_message: Optional[str] = None
+
+
+# --- Queue messages ---
+
+
+@dataclass
+class QueueOutput:
+    name: str
+    concurrency: Optional[int]
+    worker_concurrency: Optional[int]
+    rate_limit_max: Optional[int]
+    rate_limit_period_sec: Optional[float]
+    priority_enabled: bool
+    partition_queue: bool
+    polling_interval_sec: float
+
+    @classmethod
+    def from_queue(cls, q: "Queue") -> "QueueOutput":
+        return cls(
+            name=q.name,
+            concurrency=q._concurrency,
+            worker_concurrency=q._worker_concurrency,
+            rate_limit_max=q._limiter["limit"] if q._limiter else None,
+            rate_limit_period_sec=q._limiter["period"] if q._limiter else None,
+            priority_enabled=q._priority_enabled,
+            partition_queue=q._partition_queue,
+            polling_interval_sec=q._polling_interval_sec,
+        )
+
+
+@dataclass
+class ListQueuesRequest(BaseMessage):
+    pass
+
+
+@dataclass
+class ListQueuesResponse(BaseMessage):
+    output: List[QueueOutput]
+    error_message: Optional[str] = None
+
+
+@dataclass
+class GetQueueRequest(BaseMessage):
+    name: str
+
+
+@dataclass
+class GetQueueResponse(BaseMessage):
+    output: Optional[QueueOutput]
     error_message: Optional[str] = None
