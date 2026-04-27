@@ -829,7 +829,9 @@ class DBOS:
             polling_interval_sec=polling_interval_sec,
             update_existing=update_existing,
         )
-        return dbos.retrieve_queue(name)
+        queue = dbos.retrieve_queue(name)
+        assert queue is not None, f"Queue {name} missing from database after upsert"
+        return queue
 
     @classmethod
     def retrieve_queue(cls, name: str) -> Optional[Queue]:

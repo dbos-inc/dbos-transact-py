@@ -241,6 +241,41 @@ def test_queue_dynamic_config(dbos: DBOS) -> None:
         legacy.set_concurrency(5)
 
 
+def test_dynamic_concurrency_takes_effect(dbos: DBOS) -> None:
+    """Verify that updating a queue's concurrency at runtime is picked up by
+    the worker thread on its next poll iteration.
+    """
+    queue_name = f"test_dyn_runtime_{uuid.uuid4()}"
+    queue = DBOS.register_queue(queue_name, concurrency=1, polling_interval_sec=0.1)
+
+    started = threading.Semaphore(0)
+    release = threading.Event()
+
+    @DBOS.workflow()
+    def blocking() -> None:
+        started.release()
+        release.wait()
+
+    handles = [DBOS.enqueue_workflow(queue_name, blocking) for _ in range(3)]
+
+    # With concurrency=1, only one workflow should start.
+    assert started.acquire(timeout=5)
+    time.sleep(1.0)  # Plenty of poll iterations for a second to start (it shouldn't).
+    assert not started.acquire(blocking=False)
+
+    # Bump concurrency. The worker reloads from DB on its next iteration and
+    # should immediately start the remaining two.
+    queue.set_concurrency(3)
+    assert started.acquire(timeout=5)
+    assert started.acquire(timeout=5)
+
+    # Release all three; everything completes.
+    release.set()
+    for handle in handles:
+        handle.get_result()
+    assert queue_entries_are_cleaned_up(dbos)
+
+
 def test_one_at_a_time(dbos: DBOS) -> None:
     wf_counter = 0
     flag = False
