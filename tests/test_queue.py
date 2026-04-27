@@ -360,7 +360,7 @@ def test_one_at_a_time(dbos: DBOS) -> None:
         nonlocal flag
         flag = True
 
-    DBOS.register_queue("test_queue", 1)
+    DBOS.register_queue("test_queue", concurrency=1)
     handle1 = DBOS.enqueue_workflow("test_queue", workflow_one)
     assert handle1.get_status().queue_name == "test_queue"
     handle2 = DBOS.enqueue_workflow("test_queue", workflow_two)
@@ -410,7 +410,7 @@ def test_one_at_a_time_with_limiter(dbos: DBOS) -> None:
 
 
 def test_queue_childwf(dbos: DBOS) -> None:
-    DBOS.register_queue("child_queue", 3)
+    DBOS.register_queue("child_queue", concurrency=3)
 
     @DBOS.workflow()
     def test_child_wf(val: str) -> str:
@@ -547,7 +547,7 @@ def test_multiple_queues(dbos: DBOS) -> None:
         nonlocal flag
         flag = True
 
-    DBOS.register_queue("test_concurrency_queue", 1)
+    DBOS.register_queue("test_concurrency_queue", concurrency=1)
     handle1 = DBOS.enqueue_workflow("test_concurrency_queue", workflow_one)
     assert handle1.get_status().queue_name == "test_concurrency_queue"
     handle2 = DBOS.enqueue_workflow("test_concurrency_queue", workflow_two)
@@ -1730,7 +1730,7 @@ async def test_queue_deduplication_async(dbos: DBOS) -> None:
 
 def test_priority_queue(dbos: DBOS) -> None:
     # Make sure that we can enqueue workflows with different priorities correctly
-    DBOS.register_queue("test_queue_priority", 1, priority_enabled=True)
+    DBOS.register_queue("test_queue_priority", concurrency=1, priority_enabled=True)
     DBOS.register_queue("test_queue_child")
 
     workflow_event = threading.Event()
@@ -1787,7 +1787,9 @@ def test_priority_queue(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_priority_queue_async(dbos: DBOS) -> None:
     # Make sure that we can enqueue workflows with different priorities correctly
-    DBOS.register_queue("test_queue_priority_async", 1, priority_enabled=True)
+    DBOS.register_queue(
+        "test_queue_priority_async", concurrency=1, priority_enabled=True
+    )
     DBOS.register_queue("test_queue_child_async")
 
     workflow_event = asyncio.Event()

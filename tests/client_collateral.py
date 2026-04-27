@@ -16,7 +16,7 @@ class Person(TypedDict):
 # the database-backed queues on the second pass.
 if _dbos_global_instance is not None and _dbos_global_instance._launched:
     DBOS.register_queue("test_queue")
-    DBOS.register_queue("inorder_queue", 1, priority_enabled=True)
+    DBOS.register_queue("inorder_queue", concurrency=1, priority_enabled=True)
 inorder_results: List[str] = []
 
 

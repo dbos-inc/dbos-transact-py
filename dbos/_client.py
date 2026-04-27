@@ -284,9 +284,9 @@ class DBOSClient:
     def register_queue(
         self,
         name: str,
+        *,
         concurrency: Optional[int] = None,
         limiter: Optional[QueueRateLimit] = None,
-        *,
         worker_concurrency: Optional[int] = None,
         priority_enabled: bool = False,
         partition_queue: bool = False,
