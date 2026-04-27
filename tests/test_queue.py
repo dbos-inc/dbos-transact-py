@@ -72,6 +72,79 @@ def test_simple_queue(dbos: DBOS) -> None:
     assert status.dequeued_at > status.created_at
 
 
+def test_queue_crud(dbos: DBOS) -> None:
+    queue_name = f"test_crud_queue_{uuid.uuid4()}"
+
+    # retrieve_queue returns None when nothing is registered.
+    assert DBOS.retrieve_queue(queue_name) is None
+
+    # register_queue persists a fully configured queue.
+    registered = DBOS.register_queue(
+        queue_name,
+        concurrency=10,
+        limiter={"limit": 5, "period": 1.5},
+        worker_concurrency=2,
+        priority_enabled=True,
+        polling_interval_sec=2.5,
+    )
+    assert registered.name == queue_name
+    assert registered.database_backed_queue is True
+    # Database-backed queues are not added to the in-memory registry.
+    assert queue_name not in dbos._registry.queue_info_map
+
+    # retrieve_queue reconstructs the queue from the database.
+    retrieved = DBOS.retrieve_queue(queue_name)
+    assert retrieved is not None
+    assert retrieved.name == queue_name
+    assert retrieved.concurrency == 10
+    assert retrieved.worker_concurrency == 2
+    assert retrieved.limiter == {"limit": 5, "period": 1.5}
+    assert retrieved.priority_enabled is True
+    assert retrieved.partition_queue is False
+    assert retrieved.polling_interval_sec == 2.5
+    assert retrieved.database_backed_queue is True
+    assert queue_name not in dbos._registry.queue_info_map
+
+    # on_conflict="never_update" leaves the existing row alone.
+    DBOS.register_queue(queue_name, concurrency=99, on_conflict="never_update")
+    retrieved = DBOS.retrieve_queue(queue_name)
+    assert retrieved is not None
+    assert retrieved.concurrency == 10
+    assert retrieved.limiter == {"limit": 5, "period": 1.5}
+
+    # on_conflict="always_update" overwrites every column.
+    DBOS.register_queue(queue_name, concurrency=20, on_conflict="always_update")
+    retrieved = DBOS.retrieve_queue(queue_name)
+    assert retrieved is not None
+    assert retrieved.concurrency == 20
+    assert retrieved.worker_concurrency is None
+    assert retrieved.limiter is None
+    assert retrieved.priority_enabled is False
+    assert retrieved.polling_interval_sec == 1.0
+
+    # on_conflict="update_if_latest_version" updates when the running version
+    # is the latest registered version.
+    DBOS.register_queue(
+        queue_name, concurrency=30, on_conflict="update_if_latest_version"
+    )
+    retrieved = DBOS.retrieve_queue(queue_name)
+    assert retrieved is not None
+    assert retrieved.concurrency == 30
+
+    # If a newer application version exists, update_if_latest_version no-ops.
+    newer_version = f"newer-{uuid.uuid4()}"
+    dbos._sys_db.create_application_version(newer_version)
+    dbos._sys_db.update_application_version_timestamp(
+        newer_version, int(time.time() * 1000) + 1_000_000
+    )
+    DBOS.register_queue(
+        queue_name, concurrency=999, on_conflict="update_if_latest_version"
+    )
+    retrieved = DBOS.retrieve_queue(queue_name)
+    assert retrieved is not None
+    assert retrieved.concurrency == 30
+
+
 def test_one_at_a_time(dbos: DBOS) -> None:
     wf_counter = 0
     flag = False

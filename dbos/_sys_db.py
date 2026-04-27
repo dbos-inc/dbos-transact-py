@@ -4157,6 +4157,71 @@ class SystemDatabase(ABC):
                 for row in rows
             ]
 
+    # ── Queue Registration ──────────────────────────────────────
+
+    def get_queue(self, name: str) -> Optional[Dict[str, Any]]:
+        with self.engine.begin() as c:
+            row = c.execute(
+                sa.select(
+                    SystemSchema.queues.c.name,
+                    SystemSchema.queues.c.concurrency,
+                    SystemSchema.queues.c.worker_concurrency,
+                    SystemSchema.queues.c.rate_limit_max,
+                    SystemSchema.queues.c.rate_limit_period_sec,
+                    SystemSchema.queues.c.priority_enabled,
+                    SystemSchema.queues.c.partition_queue,
+                    SystemSchema.queues.c.polling_interval_sec,
+                ).where(SystemSchema.queues.c.name == name)
+            ).fetchone()
+            if row is None:
+                return None
+            return {
+                "name": row[0],
+                "concurrency": row[1],
+                "worker_concurrency": row[2],
+                "rate_limit_max": row[3],
+                "rate_limit_period_sec": row[4],
+                "priority_enabled": bool(row[5]),
+                "partition_queue": bool(row[6]),
+                "polling_interval_sec": row[7],
+            }
+
+    def upsert_queue(
+        self,
+        *,
+        name: str,
+        concurrency: Optional[int],
+        worker_concurrency: Optional[int],
+        rate_limit_max: Optional[int],
+        rate_limit_period_sec: Optional[float],
+        priority_enabled: bool,
+        partition_queue: bool,
+        polling_interval_sec: float,
+        update_existing: bool,
+    ) -> None:
+        values = {
+            "name": name,
+            "concurrency": concurrency,
+            "worker_concurrency": worker_concurrency,
+            "rate_limit_max": rate_limit_max,
+            "rate_limit_period_sec": rate_limit_period_sec,
+            "priority_enabled": priority_enabled,
+            "partition_queue": partition_queue,
+            "polling_interval_sec": polling_interval_sec,
+            "updated_at": int(time.time() * 1000),
+        }
+        with self.engine.begin() as c:
+            stmt = self.dialect.insert(SystemSchema.queues).values(**values)
+            if update_existing:
+                update_set = {k: v for k, v in values.items() if k != "name"}
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["name"],
+                    set_=update_set,
+                )
+            else:
+                stmt = stmt.on_conflict_do_nothing(index_elements=["name"])
+            c.execute(stmt)
+
     def get_latest_application_version(self) -> VersionInfo:
         with self.engine.begin() as c:
             row = c.execute(

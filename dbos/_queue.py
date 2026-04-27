@@ -1,7 +1,11 @@
 import copy
 import random
 import threading
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Literal, Optional, TypedDict
+
+QueueConflictResolution = Literal[
+    "update_if_latest_version", "always_update", "never_update"
+]
 
 from psycopg import errors
 from sqlalchemy.exc import OperationalError
@@ -46,6 +50,7 @@ class Queue:
         priority_enabled: bool = False,
         partition_queue: bool = False,
         polling_interval_sec: float = 1.0,
+        database_backed_queue: bool = False,
     ) -> None:
         if (
             worker_concurrency is not None
@@ -64,6 +69,13 @@ class Queue:
         self.priority_enabled = priority_enabled
         self.partition_queue = partition_queue
         self.polling_interval_sec = polling_interval_sec
+        self.database_backed_queue = database_backed_queue
+
+        # Database-backed queues skip the in-memory global registry; their
+        # source of truth is the queues table.
+        if database_backed_queue:
+            return
+
         from ._dbos import _get_or_create_dbos_registry
 
         registry = _get_or_create_dbos_registry()

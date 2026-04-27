@@ -72,7 +72,7 @@ from ._core import (
     write_stream,
 )
 from ._croniter import croniter  # type: ignore
-from ._queue import Queue, queue_thread
+from ._queue import Queue, QueueConflictResolution, QueueRateLimit, queue_thread
 from ._recovery import recover_pending_workflows, startup_recovery_thread
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
@@ -781,6 +781,95 @@ class DBOS:
     @classmethod
     def register_instance(cls, inst: object) -> None:
         return _get_or_create_dbos_registry().register_instance(inst)
+
+    @classmethod
+    def register_queue(
+        cls,
+        name: str,
+        concurrency: Optional[int] = None,
+        limiter: Optional[QueueRateLimit] = None,
+        *,
+        worker_concurrency: Optional[int] = None,
+        priority_enabled: bool = False,
+        partition_queue: bool = False,
+        polling_interval_sec: float = 1.0,
+        on_conflict: QueueConflictResolution = "update_if_latest_version",
+    ) -> Queue:
+        """
+        Register a queue and persist its configuration to the system database.
+
+        ``on_conflict`` controls behavior when a queue with the same name already
+        exists in the database:
+
+        - ``"update_if_latest_version"`` (default): overwrite the existing row
+          only when the running application version is the latest registered
+          version. Older versions in a rolling deploy will not clobber the
+          newer config.
+        - ``"always_update"``: always overwrite the existing row.
+        - ``"never_update"``: leave the existing row unchanged.
+        """
+        dbos = _get_dbos_instance()
+        queue = Queue(
+            name,
+            concurrency,
+            limiter,
+            worker_concurrency=worker_concurrency,
+            priority_enabled=priority_enabled,
+            partition_queue=partition_queue,
+            polling_interval_sec=polling_interval_sec,
+            database_backed_queue=True,
+        )
+
+        if on_conflict == "always_update":
+            update_existing = True
+        elif on_conflict == "never_update":
+            update_existing = False
+        else:
+            latest = dbos._sys_db.get_latest_application_version()
+            update_existing = latest["version_name"] == GlobalParams.app_version
+
+        dbos._sys_db.upsert_queue(
+            name=queue.name,
+            concurrency=queue.concurrency,
+            worker_concurrency=queue.worker_concurrency,
+            rate_limit_max=queue.limiter["limit"] if queue.limiter else None,
+            rate_limit_period_sec=(queue.limiter["period"] if queue.limiter else None),
+            priority_enabled=queue.priority_enabled,
+            partition_queue=queue.partition_queue,
+            polling_interval_sec=queue.polling_interval_sec,
+            update_existing=update_existing,
+        )
+        return queue
+
+    @classmethod
+    def retrieve_queue(cls, name: str) -> Optional[Queue]:
+        """
+        Retrieve a database-backed queue by name.
+
+        Returns None if no queue with the given name has been registered in the
+        system database. The returned Queue is not added to the in-memory queue
+        registry.
+        """
+        dbos = _get_dbos_instance()
+        row = dbos._sys_db.get_queue(name)
+        if row is None:
+            return None
+        limiter: Optional[QueueRateLimit] = None
+        if row["rate_limit_max"] is not None:
+            limiter = {
+                "limit": row["rate_limit_max"],
+                "period": row["rate_limit_period_sec"],
+            }
+        return Queue(
+            row["name"],
+            row["concurrency"],
+            limiter,
+            worker_concurrency=row["worker_concurrency"],
+            priority_enabled=row["priority_enabled"],
+            partition_queue=row["partition_queue"],
+            polling_interval_sec=row["polling_interval_sec"],
+            database_backed_queue=True,
+        )
 
     # Decorators for DBOS functionality
     @classmethod
