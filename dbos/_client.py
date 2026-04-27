@@ -24,7 +24,7 @@ from dbos._context import MaxPriority, MinPriority
 from dbos._core import DEFAULT_POLLING_INTERVAL
 from dbos._queue import Queue, QueueConflictResolution, QueueRateLimit
 from dbos._sys_db import SystemDatabase
-from dbos._utils import GlobalParams, generate_uuid
+from dbos._utils import generate_uuid
 
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
@@ -291,19 +291,25 @@ class DBOSClient:
         priority_enabled: bool = False,
         partition_queue: bool = False,
         polling_interval_sec: float = 1.0,
-        on_conflict: QueueConflictResolution = "update_if_latest_version",
+        on_conflict: QueueConflictResolution = "always_update",
     ) -> Queue:
         """Register a queue from a client and persist it to the system database.
 
-        See :meth:`DBOS.register_queue` for ``on_conflict`` semantics.
+        Defaults to ``"always_update"``. ``"update_if_latest_version"`` is
+        rejected because clients are not associated with an application
+        version. See :meth:`DBOS.register_queue` for the other semantics.
         """
         if on_conflict == "always_update":
             update_existing = True
         elif on_conflict == "never_update":
             update_existing = False
         else:
-            latest = self._sys_db.get_latest_application_version()
-            update_existing = latest["version_name"] == GlobalParams.app_version
+            raise DBOSException(
+                "DBOSClient.register_queue does not support "
+                "on_conflict='update_if_latest_version' because clients are "
+                "not associated with an application version. Use "
+                "'always_update' or 'never_update'."
+            )
 
         self._sys_db.upsert_queue(
             name=name,

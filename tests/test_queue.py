@@ -292,6 +292,20 @@ def test_client_queue_crud(dbos: DBOS, client: DBOSClient) -> None:
     assert handle.get_result() == 42
     assert handle.get_status().queue_name == queue_name
 
+    # Clients have no application version, so update_if_latest_version is
+    # rejected.
+    with pytest.raises(DBOSException):
+        client.register_queue(
+            queue_name, concurrency=1, on_conflict="update_if_latest_version"
+        )
+
+    # The default for clients is always_update: re-registering with new
+    # config overwrites the existing row.
+    client.register_queue(queue_name, concurrency=99)
+    overwritten = DBOS.retrieve_queue(queue_name)
+    assert overwritten is not None
+    assert overwritten.concurrency == 99
+
 
 def test_dynamic_concurrency_takes_effect(dbos: DBOS) -> None:
     """Verify that updating a queue's concurrency at runtime is picked up by
