@@ -145,7 +145,7 @@ def test_debouncer_queue(dbos: DBOS) -> None:
         return x
 
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
-    queue = Queue("test-queue", priority_enabled=True)
+    queue = DBOS.register_queue("test-queue", priority_enabled=True)
 
     debouncer = Debouncer.create(workflow, queue=queue)
     debounce_period_sec = 2
@@ -230,11 +230,11 @@ def test_debouncer_client(dbos: DBOS, client: DBOSClient) -> None:
         return x
 
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
-    queue = Queue("test-queue")
+    DBOS.register_queue("test-queue")
 
     options: EnqueueOptions = {
         "workflow_name": workflow.__qualname__,
-        "queue_name": queue.name,
+        "queue_name": "test-queue",
     }
     debouncer = DebouncerClient(client, options)
     debounce_period_sec = 2
@@ -277,11 +277,11 @@ async def test_debouncer_client_async(dbos: DBOS, client: DBOSClient) -> None:
         return x
 
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
-    queue = Queue("test-queue")
+    DBOS.register_queue("test-queue")
 
     options: EnqueueOptions = {
         "workflow_name": workflow_async.__qualname__,
-        "queue_name": queue.name,
+        "queue_name": "test-queue",
     }
     debouncer = DebouncerClient(client, options)
     debounce_period_sec = 2

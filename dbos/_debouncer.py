@@ -133,6 +133,8 @@ def debouncer_workflow(
             if options["queue_name"]:
                 queue = dbos._registry.queue_info_map.get(options["queue_name"], None)
                 if not queue:
+                    queue = dbos._sys_db.get_queue(options["queue_name"])
+                if not queue:
                     raise Exception(
                         f"Invalid queue name provided to debouncer: {options['queue_name']}"
                     )

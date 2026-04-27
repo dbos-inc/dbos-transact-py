@@ -2337,7 +2337,11 @@ class DBOS:
         if not croniter.is_valid(schedule, second_at_beginning=True):
             raise DBOSException(f"Invalid cron schedule: '{schedule}'")
         dbos = _get_dbos_instance()
-        if queue_name is not None and queue_name not in dbos._registry.queue_info_map:
+        if (
+            queue_name is not None
+            and queue_name not in dbos._registry.queue_info_map
+            and dbos._sys_db.get_queue(queue_name) is None
+        ):
             raise DBOSException(
                 f"Queue '{queue_name}' is not declared. Please create the queue before using it in a schedule."
             )
@@ -2607,6 +2611,7 @@ class DBOS:
             if (
                 entry_queue_name is not None
                 and entry_queue_name not in dbos._registry.queue_info_map
+                and dbos._sys_db.get_queue(entry_queue_name) is None
             ):
                 raise DBOSException(
                     f"Queue '{entry_queue_name}' is not declared. Please create the queue before using it in a schedule."

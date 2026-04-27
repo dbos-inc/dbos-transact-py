@@ -4,7 +4,7 @@ from urllib.parse import urlparse, urlunparse
 import pytest
 from sqlalchemy import create_engine, text
 
-from dbos import DBOS, DBOSConfig, Queue
+from dbos import DBOS, DBOSConfig
 
 
 def test_cockroachdb() -> None:
@@ -32,8 +32,6 @@ def test_cockroachdb() -> None:
         message: str = DBOS.recv()
         return message
 
-    queue = Queue("queue")
-
     try:
         engine = create_engine(test_url)
         config: DBOSConfig = {
@@ -44,7 +42,8 @@ def test_cockroachdb() -> None:
         }
         DBOS(config=config)
         DBOS.launch()
-        handle = queue.enqueue(workflow)
+        DBOS.register_queue("queue")
+        handle = DBOS.enqueue_workflow("queue", workflow)
         assert DBOS.get_event(handle.workflow_id, key) == value
         DBOS.send(handle.workflow_id, value)
         assert handle.get_result() == value

@@ -17,7 +17,6 @@ from sqlalchemy.exc import OperationalError
 from dbos import (
     DBOS,
     DBOSConfig,
-    Queue,
     SetWorkflowID,
     SetWorkflowTimeout,
     WorkflowHandle,
@@ -1906,7 +1905,7 @@ def test_custom_names(dbos: DBOS) -> None:
     workflow_name = "workflow_name"
     step_name = "step_name"
     txn_name = "txn_name"
-    queue = Queue("test-queue")
+    DBOS.register_queue("test-queue")
 
     @DBOS.workflow(name=workflow_name)
     def workflow() -> str:
@@ -1914,7 +1913,7 @@ def test_custom_names(dbos: DBOS) -> None:
         assert workflow_id is not None
         return workflow_id
 
-    handle = queue.enqueue(workflow)
+    handle = DBOS.enqueue_workflow("test-queue", workflow)
     assert handle.get_status().name == workflow_name
     assert handle.get_result() == handle.workflow_id
     assert DBOS.get_result(handle.workflow_id) == handle.workflow_id
@@ -1925,7 +1924,7 @@ def test_custom_names(dbos: DBOS) -> None:
         assert workflow_id is not None
         return workflow_id
 
-    handle = queue.enqueue(step)
+    handle = DBOS.enqueue_workflow("test-queue", step)
     assert handle.get_status().name == f"<temp>.{step_name}"
     assert handle.get_result() == handle.workflow_id
 
@@ -1935,7 +1934,7 @@ def test_custom_names(dbos: DBOS) -> None:
         assert workflow_id is not None
         return workflow_id
 
-    handle = queue.enqueue(txn)
+    handle = DBOS.enqueue_workflow("test-queue", txn)
     assert handle.get_status().name == f"<temp>.{txn_name}"
     assert handle.get_result() == handle.workflow_id
 

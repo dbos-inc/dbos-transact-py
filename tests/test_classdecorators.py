@@ -601,7 +601,7 @@ def test_class_queue_recovery(dbos: DBOS) -> None:
     multiplier = 5
 
     wfid = str(uuid.uuid4())
-    queue = Queue("test_queue")
+    DBOS.register_queue("test_queue")
 
     @DBOS.dbos_class()
     class TestClass(DBOSConfiguredInstance):
@@ -616,7 +616,7 @@ def test_class_queue_recovery(dbos: DBOS) -> None:
             handles = []
             for i in range(queued_steps):
                 step_enqueues += 1
-                h = queue.enqueue(self.test_step, i)
+                h = DBOS.enqueue_workflow("test_queue", self.test_step, i)
                 handles.append(h)
             return [h.get_result() for h in handles]
 
@@ -673,7 +673,7 @@ def test_class_static_queue_recovery(dbos: DBOS) -> None:
     queued_steps = 5
 
     wfid = str(uuid.uuid4())
-    queue = Queue("test_queue")
+    DBOS.register_queue("test_queue")
 
     @DBOS.dbos_class()
     class TestClass:
@@ -685,7 +685,7 @@ def test_class_static_queue_recovery(dbos: DBOS) -> None:
             handles = []
             for i in range(queued_steps):
                 step_enqueues += 1
-                h = queue.enqueue(TestClass.test_step, i)
+                h = DBOS.enqueue_workflow("test_queue", TestClass.test_step, i)
                 handles.append(h)
             return [h.get_result() for h in handles]
 
@@ -743,7 +743,7 @@ def test_class_classmethod_queue_recovery(dbos: DBOS) -> None:
     queued_steps = 5
 
     wfid = str(uuid.uuid4())
-    queue = Queue("test_queue")
+    DBOS.register_queue("test_queue")
 
     @DBOS.dbos_class()
     class TestClass:
@@ -758,7 +758,7 @@ def test_class_classmethod_queue_recovery(dbos: DBOS) -> None:
             handles = []
             for i in range(queued_steps):
                 step_enqueues += 1
-                h = queue.enqueue(TestClass.test_step, i)
+                h = DBOS.enqueue_workflow("test_queue", TestClass.test_step, i)
                 handles.append(h)
             return [h.get_result() for h in handles]
 

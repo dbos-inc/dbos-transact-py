@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 import sqlalchemy as sa
 
-from dbos import DBOS, Queue, WorkflowHandle, pydantic_args_validator
+from dbos import DBOS, WorkflowHandle, pydantic_args_validator
 from dbos._client import DBOSClient
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import WorkflowSerializationFormat
@@ -113,7 +113,7 @@ def test_interop_canonical(dbos: DBOS, client: DBOSClient) -> None:
                 "received": msg,
             }
 
-    queue = Queue("interopq")
+    DBOS.register_queue("interopq")
 
     # Start the canonical workflow w/ Enqueue
     wfh: WorkflowHandle[str] = client.enqueue(
@@ -264,7 +264,7 @@ def test_interop_direct_insert(dbos: DBOS) -> None:
                 "received": msg,
             }
 
-    queue = Queue("interopq")
+    DBOS.register_queue("interopq")
 
     wf_id = str(uuid.uuid4())
     with dbos._sys_db.engine.begin() as c:
@@ -385,7 +385,7 @@ def test_interop_kwargs(dbos: DBOS) -> None:
         '{"positionalArgs":[],"namedArgs":{"name":"test","count":42,"tags":["a","b"]}}'
     )
 
-    queue = Queue("interopkq")
+    DBOS.register_queue("interopkq")
 
     wf_id2 = str(uuid.uuid4())
     with dbos._sys_db.engine.begin() as c:

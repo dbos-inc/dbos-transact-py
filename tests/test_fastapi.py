@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 # Public API
-from dbos import DBOS, DBOSConfig, Queue
+from dbos import DBOS, DBOSConfig
 
 # Private API because this is a unit test
 from dbos._context import assert_current_dbos_context
@@ -159,12 +159,11 @@ async def test_custom_lifespan(
     DBOS.destroy()
     DBOS(fastapi=app, config=config)
 
-    queue = Queue("queue")
-
     @app.get("/")
     @DBOS.workflow()
     async def resource_workflow() -> Any:
-        handle = await queue.enqueue_async(queue_workflow)
+        DBOS.register_queue("queue")
+        handle = await DBOS.enqueue_workflow_async("queue", queue_workflow)
         return {
             "resource": resource,
             "loop": id(asyncio.get_event_loop()),

@@ -411,7 +411,7 @@ async def test_retrieve_workflow_async(dbos: DBOS) -> None:
 def test_unawaited_workflow(dbos: DBOS) -> None:
     input = 5
     child_id = str(uuid.uuid4())
-    queue = Queue("test_queue")
+    DBOS.register_queue("test_queue")
 
     @DBOS.workflow()
     async def child_workflow(x: int) -> int:
@@ -423,7 +423,9 @@ def test_unawaited_workflow(dbos: DBOS) -> None:
         with SetWorkflowID(child_id):
             await DBOS.start_workflow_async(child_workflow, x)
 
-    assert queue.enqueue(parent_workflow, input).get_result() is None
+    assert (
+        DBOS.enqueue_workflow("test_queue", parent_workflow, input).get_result() is None
+    )
     handle: WorkflowHandle[int] = DBOS.retrieve_workflow(
         child_id, existing_workflow=False
     )
@@ -432,7 +434,7 @@ def test_unawaited_workflow(dbos: DBOS) -> None:
 
 def test_unawaited_workflow_exception(dbos: DBOS) -> None:
     child_id = str(uuid.uuid4())
-    queue = Queue("test_queue")
+    DBOS.register_queue("test_queue")
 
     @DBOS.workflow()
     async def child_workflow(s: str) -> int:
@@ -446,7 +448,9 @@ def test_unawaited_workflow_exception(dbos: DBOS) -> None:
 
     # Verify the unawaited child properly throws an exception
     input = "alice"
-    assert queue.enqueue(parent_workflow, input).get_result() is None
+    assert (
+        DBOS.enqueue_workflow("test_queue", parent_workflow, input).get_result() is None
+    )
     handle: WorkflowHandle[int] = DBOS.retrieve_workflow(
         child_id, existing_workflow=False
     )
@@ -457,7 +461,9 @@ def test_unawaited_workflow_exception(dbos: DBOS) -> None:
     # Verify it works if run again
     input = "bob"
     child_id = str(uuid.uuid4())
-    assert queue.enqueue(parent_workflow, input).get_result() is None
+    assert (
+        DBOS.enqueue_workflow("test_queue", parent_workflow, input).get_result() is None
+    )
     handle = DBOS.retrieve_workflow(child_id, existing_workflow=False)
     with pytest.raises(Exception) as exc_info:
         handle.get_result()
@@ -525,7 +531,7 @@ async def test_workflow_timeout_async(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_max_parallel_workflows(dbos: DBOS) -> None:
-    queue = Queue("parallel_queue")
+    DBOS.register_queue("parallel_queue")
 
     @DBOS.workflow()
     async def test_workflow(i: int) -> int:
@@ -552,7 +558,9 @@ async def test_max_parallel_workflows(dbos: DBOS) -> None:
     tasks = []
 
     for i in range(50):
-        tasks.append(await queue.enqueue_async(test_workflow, i))
+        tasks.append(
+            await DBOS.enqueue_workflow_async("parallel_queue", test_workflow, i)
+        )
 
     # Wait for all tasks to complete
     for i in range(50):
@@ -570,7 +578,7 @@ async def test_main_loop(dbos: DBOS, config: DBOSConfig) -> None:
     dbos = DBOS(config=config)
     DBOS.launch()
 
-    queue = Queue("queue")
+    DBOS.register_queue("queue")
 
     @DBOS.workflow()
     async def test_workflow() -> int:
@@ -578,7 +586,7 @@ async def test_main_loop(dbos: DBOS, config: DBOSConfig) -> None:
         return id(asyncio.get_running_loop())
 
     # Verify the enqueued task is submitted into the main event loop
-    handle = await queue.enqueue_async(test_workflow)
+    handle = await DBOS.enqueue_workflow_async("queue", test_workflow)
     assert await handle.get_result() == id(asyncio.get_running_loop())
 
 
