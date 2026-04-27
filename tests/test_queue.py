@@ -52,11 +52,10 @@ def test_simple_queue(dbos: DBOS) -> None:
         step_counter += 1
         return var + "d"
 
-    queue = Queue("test_queue")
-
-    # Test that redeclaring a queue is an exception
-    with pytest.raises(Exception):
-        Queue(queue.name)
+    DBOS.register_queue("test_queue")
+    queue = DBOS.retrieve_queue("test_queue")
+    assert queue is not None
+    assert queue.database_backed_queue is True
 
     with SetWorkflowID(wfid):
         handle = queue.enqueue(test_workflow, "abc", "123")
