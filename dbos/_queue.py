@@ -220,18 +220,7 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     # Check interval for monitoring queue registration changes
     check_interval = 1.0
 
-    if dbos._listening_queues is not None:
-        dbos.logger.info(f"Listening to {len(dbos._listening_queues)} queues:")
-        for name in dbos._listening_queues:
-            dbos_logger.info(f"Queue: {name}")
-    else:
-        listening_queues = [
-            q
-            for q in dbos._registry.queue_info_map.values()
-            if q.name != INTERNAL_QUEUE_NAME
-        ]
-        dbos.logger.info(f"Listening to {len(listening_queues)} queues:")
-        log_queues(listening_queues)
+    log_queues(dbos, dbos._listening_queues)
 
     while not stop_event.is_set():
         if dbos._listening_queues is not None:
@@ -303,9 +292,27 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                 )
 
 
-def log_queues(queues: list[Queue]) -> None:
-    """Helper function to log queues on DBOS launch."""
-    for q in queues:
+def log_queues(dbos: "DBOS", listening_queues: Optional[list[str]]) -> None:
+    """Log all queues this process will listen to on DBOS launch.
+
+    Combines in-memory registered queues with database-backed queues, applies
+    the listen_queues filter if any, and excludes the internal queue.
+    """
+    queues: dict[str, Queue] = dict(dbos._registry.queue_info_map)
+    try:
+        for q in dbos._sys_db.list_queues():
+            queues.setdefault(q.name, q)
+    except Exception as e:
+        dbos.logger.warning(f"Exception listing database-backed queues: {e}")
+
+    if listening_queues is not None:
+        listening_set = set(listening_queues)
+        queues = {n: q for n, q in queues.items() if n in listening_set}
+
+    queues.pop(INTERNAL_QUEUE_NAME, None)
+
+    dbos.logger.info(f"Listening to {len(queues)} queues:")
+    for q in queues.values():
         opts = []
         if q.concurrency is not None:
             opts.append(f"concurrency={q.concurrency}")
