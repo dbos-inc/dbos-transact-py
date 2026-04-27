@@ -209,7 +209,7 @@ def test_one_at_a_time_with_limiter(dbos: DBOS) -> None:
 
 
 def test_queue_childwf(dbos: DBOS) -> None:
-    queue = Queue("child_queue", 3)
+    DBOS.register_queue("child_queue", 3)
 
     @DBOS.workflow()
     def test_child_wf(val: str) -> str:
@@ -218,10 +218,10 @@ def test_queue_childwf(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def test_workflow(var1: str, var2: str) -> str:
-        wfh1 = queue.enqueue(test_child_wf, var1)
-        wfh2 = queue.enqueue(test_child_wf, var2)
-        wfh3 = queue.enqueue(test_child_wf, var1)
-        wfh4 = queue.enqueue(test_child_wf, var2)
+        wfh1 = DBOS.enqueue_workflow("child_queue", test_child_wf, var1)
+        wfh2 = DBOS.enqueue_workflow("child_queue", test_child_wf, var2)
+        wfh3 = DBOS.enqueue_workflow("child_queue", test_child_wf, var1)
+        wfh4 = DBOS.enqueue_workflow("child_queue", test_child_wf, var2)
 
         DBOS.sleep(1)
         assert wfh4.get_status().status == "ENQUEUED"
