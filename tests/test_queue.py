@@ -206,10 +206,10 @@ def test_one_at_a_time(dbos: DBOS) -> None:
         nonlocal flag
         flag = True
 
-    queue = Queue("test_queue", 1)
-    handle1 = queue.enqueue(workflow_one)
+    DBOS.register_queue("test_queue", 1)
+    handle1 = DBOS.enqueue_workflow("test_queue", workflow_one)
     assert handle1.get_status().queue_name == "test_queue"
-    handle2 = queue.enqueue(workflow_two)
+    handle2 = DBOS.enqueue_workflow("test_queue", workflow_two)
 
     main_thread_event.wait()
     time.sleep(2)  # Verify the other task isn't scheduled on subsequent poller ticks.
@@ -240,9 +240,9 @@ def test_one_at_a_time_with_limiter(dbos: DBOS) -> None:
         nonlocal flag
         flag = True
 
-    queue = Queue("test_queue", concurrency=1, limiter={"limit": 10, "period": 1})
-    handle1 = queue.enqueue(workflow_one)
-    handle2 = queue.enqueue(workflow_two)
+    DBOS.register_queue("test_queue", concurrency=1, limiter={"limit": 10, "period": 1})
+    handle1 = DBOS.enqueue_workflow("test_queue", workflow_one)
+    handle2 = DBOS.enqueue_workflow("test_queue", workflow_two)
 
     main_thread_event.wait()
     time.sleep(2)  # Verify the other task isn't scheduled on subsequent poller ticks.
@@ -299,13 +299,13 @@ def test_queue_step(dbos: DBOS) -> None:
         step_counter += 1
         return var + "1"
 
-    queue = Queue("test_queue")
+    DBOS.register_queue("test_queue")
 
     with SetWorkflowID(wfid):
-        handle = queue.enqueue(test_step, "abc")
+        handle = DBOS.enqueue_workflow("test_queue", test_step, "abc")
     assert handle.get_result() == "abc1"
     with SetWorkflowID(wfid):
-        handle = queue.enqueue(test_step, "abc")
+        handle = DBOS.enqueue_workflow("test_queue", test_step, "abc")
     assert handle.get_result() == "abc1"
     assert step_counter == 1
 
@@ -321,10 +321,10 @@ def test_queue_transaction(dbos: DBOS) -> None:
         step_counter += 1
         return var + "1"
 
-    queue = Queue("test_queue")
+    DBOS.register_queue("test_queue")
 
     with SetWorkflowID(wfid):
-        handle = queue.enqueue(test_transaction, "abc")
+        handle = DBOS.enqueue_workflow("test_queue", test_transaction, "abc")
     assert handle.get_result() == "abc1"
     with SetWorkflowID(wfid):
         assert test_transaction("abc") == "abc1"
@@ -340,7 +340,7 @@ def test_limiter(dbos: DBOS) -> None:
 
     limit = 5
     period = 1.8
-    queue = Queue("test_queue", limiter={"limit": limit, "period": period})
+    DBOS.register_queue("test_queue", limiter={"limit": limit, "period": period})
 
     handles: list[WorkflowHandle[float]] = []
     times: list[float] = []
@@ -351,7 +351,7 @@ def test_limiter(dbos: DBOS) -> None:
     # followed by the next wave.
     num_waves = 3
     for _ in range(limit * num_waves):
-        h = queue.enqueue(test_workflow, "abc", "123")
+        h = DBOS.enqueue_workflow("test_queue", test_workflow, "abc", "123")
         handles.append(h)
     for h in handles:
         times.append(h.get_result())
@@ -393,10 +393,10 @@ def test_multiple_queues(dbos: DBOS) -> None:
         nonlocal flag
         flag = True
 
-    concurrency_queue = Queue("test_concurrency_queue", 1)
-    handle1 = concurrency_queue.enqueue(workflow_one)
+    DBOS.register_queue("test_concurrency_queue", 1)
+    handle1 = DBOS.enqueue_workflow("test_concurrency_queue", workflow_one)
     assert handle1.get_status().queue_name == "test_concurrency_queue"
-    handle2 = concurrency_queue.enqueue(workflow_two)
+    handle2 = DBOS.enqueue_workflow("test_concurrency_queue", workflow_two)
 
     @DBOS.workflow()
     def limited_workflow(var1: str, var2: str) -> float:
@@ -405,9 +405,7 @@ def test_multiple_queues(dbos: DBOS) -> None:
 
     limit = 5
     period = 1.8
-    limiter_queue = Queue(
-        "test_limit_queue", limiter={"limit": limit, "period": period}
-    )
+    DBOS.register_queue("test_limit_queue", limiter={"limit": limit, "period": period})
 
     handles: list[WorkflowHandle[float]] = []
     times: list[float] = []
@@ -418,7 +416,7 @@ def test_multiple_queues(dbos: DBOS) -> None:
     # followed by the next wave.
     num_waves = 3
     for _ in range(limit * num_waves):
-        h = limiter_queue.enqueue(limited_workflow, "abc", "123")
+        h = DBOS.enqueue_workflow("test_limit_queue", limited_workflow, "abc", "123")
         handles.append(h)
     for h in handles:
         times.append(h.get_result())
@@ -514,9 +512,9 @@ def test_one_at_a_time_with_worker_concurrency(dbos: DBOS) -> None:
         nonlocal flag
         flag = True
 
-    queue = Queue("test_queue", worker_concurrency=1)
-    handle1 = queue.enqueue(workflow_one)
-    handle2 = queue.enqueue(workflow_two)
+    DBOS.register_queue("test_queue", worker_concurrency=1)
+    handle1 = DBOS.enqueue_workflow("test_queue", workflow_one)
+    handle2 = DBOS.enqueue_workflow("test_queue", workflow_two)
 
     # Wait until the first task is dequeued
     main_thread_event.wait()
@@ -563,11 +561,8 @@ def run_dbos_test_in_process(
     dbos = DBOS(config=dbos_config)
     DBOS.launch()
 
-    Queue(
-        "test_queue",
-        worker_concurrency=local_concurrency_limit,
-        concurrency=global_concurrency_limit,
-    )
+    # The queue is already registered in the database by the parent process;
+    # the queue manager picks it up via list_queues.
     # Wait to dequeue as many tasks as we can locally
     for _ in range(0, local_concurrency_limit):
         start_event.wait()
@@ -592,14 +587,26 @@ def test_worker_concurrency_with_n_dbos_instances(
     # Ensure children processes do not share global variables (including DBOS instance) with the parent
     multiprocessing.set_start_method("spawn")
 
-    queue = Queue(
-        "test_queue", limiter={"limit": 0, "period": 1}
-    )  # This process cannot dequeue tasks
+    # Re-initialize so the parent opts out of dequeuing — only the children should
+    # dequeue and run workflows.
+    config = default_config()
+    DBOS.destroy()
+    dbos = DBOS(config=config)
+    DBOS.listen_queues([])
+    DBOS.launch()
+
+    DBOS.register_queue(
+        "test_queue",
+        worker_concurrency=local_concurrency_limit,
+        concurrency=global_concurrency_limit,
+    )
 
     # First, start local concurrency limit tasks
     handles = []
     for _ in range(0, local_concurrency_limit):
-        handles.append(queue.enqueue(worker_concurrency_test_workflow))
+        handles.append(
+            DBOS.enqueue_workflow("test_queue", worker_concurrency_test_workflow)
+        )
 
     # Start 2 workers
     processes = []
@@ -638,7 +645,9 @@ def test_worker_concurrency_with_n_dbos_instances(
     # Now enqueue less than the local concurrency limit. Check that the 2nd worker acquired them. We won't have a signal set from the worker so we need to sleep a little.
     handles = []
     for _ in range(0, local_concurrency_limit - 1):
-        handles.append(queue.enqueue(worker_concurrency_test_workflow))
+        handles.append(
+            DBOS.enqueue_workflow("test_queue", worker_concurrency_test_workflow)
+        )
     time.sleep(2)
     executors = []
     for handle in handles:
@@ -651,7 +660,9 @@ def test_worker_concurrency_with_n_dbos_instances(
     # We should have 1 tasks PENDING and 1 ENQUEUED, thus meeting both local and global concurrency limits
     handles = []
     for _ in range(0, 2):
-        handles.append(queue.enqueue(worker_concurrency_test_workflow))
+        handles.append(
+            DBOS.enqueue_workflow("test_queue", worker_concurrency_test_workflow)
+        )
     # we can check the signal because the 2nd executor will set it
     num_dequeued = 0
     while num_dequeued < 2:
@@ -779,9 +790,9 @@ def test_duplicate_workflow_id(dbos: DBOS) -> None:
         )
 
     # Call the same function in a different queue would generate a warning, but is allowed.
-    queue = Queue("test_queue")
+    DBOS.register_queue("test_queue")
     with SetWorkflowID(wfid):
-        handle = queue.enqueue(test_workflow, "abc")
+        handle = DBOS.enqueue_workflow("test_queue", test_workflow, "abc")
     assert handle.get_result() == "abc"
 
     # Call with a different input still uses the recorded input.
@@ -801,7 +812,7 @@ def test_queue_recovery(dbos: DBOS) -> None:
     queued_steps = 5
 
     wfid = str(uuid.uuid4())
-    queue = Queue("test_queue")
+    DBOS.register_queue("test_queue")
 
     @DBOS.workflow()
     def test_workflow() -> list[int]:
@@ -810,7 +821,7 @@ def test_queue_recovery(dbos: DBOS) -> None:
         handles = []
         for i in range(queued_steps):
             step_enqueued += 1
-            h = queue.enqueue(test_step, i)
+            h = DBOS.enqueue_workflow("test_queue", test_step, i)
             handles.append(h)
         return [h.get_result() for h in handles]
 
@@ -868,12 +879,12 @@ def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
     def noop() -> None:
         pass
 
-    queue = Queue(
+    DBOS.register_queue(
         "test_queue", worker_concurrency=2
     )  # covers global concurrency limit because we have a single process
-    handle1 = queue.enqueue(blocked_workflow, 0)
-    handle2 = queue.enqueue(blocked_workflow, 1)
-    handle3 = queue.enqueue(noop)
+    handle1 = DBOS.enqueue_workflow("test_queue", blocked_workflow, 0)
+    handle2 = DBOS.enqueue_workflow("test_queue", blocked_workflow, 1)
+    handle3 = DBOS.enqueue_workflow("test_queue", noop)
 
     # Wait for the two first workflows to be dequeued
     for e in wf_events:
@@ -943,11 +954,11 @@ def test_cancelling_queued_workflows(dbos: DBOS) -> None:
         return
 
     # Enqueue both the blocked workflow and a regular workflow on a queue with concurrency 1
-    queue = Queue("test_queue", concurrency=1)
+    DBOS.register_queue("test_queue", concurrency=1)
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        blocked_handle = queue.enqueue(stuck_workflow)
-    regular_handle = queue.enqueue(regular_workflow)
+        blocked_handle = DBOS.enqueue_workflow("test_queue", stuck_workflow)
+    regular_handle = DBOS.enqueue_workflow("test_queue", regular_workflow)
 
     # Verify that the blocked workflow starts and is PENDING while the regular workflow remains ENQUEUED.
     start_event.wait()
@@ -982,19 +993,19 @@ def test_timeout_queue(dbos: DBOS) -> None:
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         return
 
-    queue = Queue("test_queue", concurrency=1, polling_interval_sec=0.1)
+    DBOS.register_queue("test_queue", concurrency=1, polling_interval_sec=0.1)
 
     # Enqueue a few blocked workflow
     num_workflows = 3
     handles: list[WorkflowHandle[None]] = []
     for _ in range(num_workflows):
         with SetWorkflowTimeout(0.1):
-            handle = queue.enqueue(blocking_workflow)
+            handle = DBOS.enqueue_workflow("test_queue", blocking_workflow)
             handles.append(handle)
 
     # Also enqueue a normal workflow
     with SetWorkflowTimeout(1.0):
-        normal_handle = queue.enqueue(normal_workflow)
+        normal_handle = DBOS.enqueue_workflow("test_queue", normal_workflow)
 
     # Verify the blocked workflows are cancelled
     for handle in handles:
@@ -1007,16 +1018,16 @@ def test_timeout_queue(dbos: DBOS) -> None:
     # Verify if a parent called with a timeout enqueues a blocked child
     # the deadline propagates and the child is also cancelled.
     child_id = str(uuid.uuid4())
-    queue = Queue("regular_queue", polling_interval_sec=0.1)
+    DBOS.register_queue("regular_queue", polling_interval_sec=0.1)
 
     @DBOS.workflow()
     def parent_workflow() -> None:
         with SetWorkflowID(child_id):
-            handle = queue.enqueue(blocking_workflow)
+            handle = DBOS.enqueue_workflow("regular_queue", blocking_workflow)
         handle.get_result()
 
     with SetWorkflowTimeout(1.0):
-        handle = queue.enqueue(parent_workflow)
+        handle = DBOS.enqueue_workflow("regular_queue", parent_workflow)
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
 
@@ -1028,7 +1039,7 @@ def test_timeout_queue(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def exiting_parent_workflow() -> str:
-        handle = queue.enqueue(blocking_workflow)
+        handle = DBOS.enqueue_workflow("regular_queue", blocking_workflow)
         return handle.get_workflow_id()
 
     with SetWorkflowTimeout(1.0):
@@ -1040,7 +1051,7 @@ def test_timeout_queue(dbos: DBOS) -> None:
     # never starts because the queue is blocked, the deadline propagates
     # and both parent and child are cancelled.
     child_id = str(uuid.uuid4())
-    queue = Queue("stuck_queue", concurrency=1, polling_interval_sec=0.1)
+    DBOS.register_queue("stuck_queue", concurrency=1, polling_interval_sec=0.1)
 
     start_event = threading.Event()
     blocking_event = threading.Event()
@@ -1050,13 +1061,13 @@ def test_timeout_queue(dbos: DBOS) -> None:
         start_event.set()
         blocking_event.wait()
 
-    stuck_handle = queue.enqueue(stuck_workflow)
+    stuck_handle = DBOS.enqueue_workflow("stuck_queue", stuck_workflow)
     start_event.wait()
 
     @DBOS.workflow()
     def blocked_parent_workflow() -> None:
         with SetWorkflowID(child_id):
-            queue.enqueue(blocking_workflow)
+            DBOS.enqueue_workflow("stuck_queue", blocking_workflow)
         while True:
             DBOS.sleep(0.1)
 
@@ -1095,19 +1106,23 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         return
 
-    queue = Queue("test_queue_async", concurrency=1, polling_interval_sec=0.1)
+    DBOS.register_queue("test_queue_async", concurrency=1, polling_interval_sec=0.1)
 
     # Enqueue a few blocked workflows
     num_workflows = 3
     handles: list[WorkflowHandleAsync[None]] = []
     for _ in range(num_workflows):
         with SetWorkflowTimeout(0.1):
-            handle = await queue.enqueue_async(blocking_workflow)
+            handle = await DBOS.enqueue_workflow_async(
+                "test_queue_async", blocking_workflow
+            )
             handles.append(handle)
 
     # Also enqueue a normal workflow
     with SetWorkflowTimeout(1.0):
-        normal_handle = await queue.enqueue_async(normal_workflow)
+        normal_handle = await DBOS.enqueue_workflow_async(
+            "test_queue_async", normal_workflow
+        )
 
     # Verify the blocked workflows are cancelled
     for handle in handles:
@@ -1120,16 +1135,20 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
     # Verify if a parent called with a timeout enqueues a blocked child
     # the deadline propagates and the child is also cancelled.
     child_id = str(uuid.uuid4())
-    queue = Queue("regular_queue_async", polling_interval_sec=0.1)
+    DBOS.register_queue("regular_queue_async", polling_interval_sec=0.1)
 
     @DBOS.workflow()
     async def parent_workflow() -> None:
         with SetWorkflowID(child_id):
-            handle = await queue.enqueue_async(blocking_workflow)
+            handle = await DBOS.enqueue_workflow_async(
+                "regular_queue_async", blocking_workflow
+            )
         await handle.get_result()
 
     with SetWorkflowTimeout(1.0):
-        handle = await queue.enqueue_async(parent_workflow)
+        handle = await DBOS.enqueue_workflow_async(
+            "regular_queue_async", parent_workflow
+        )
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         await handle.get_result()
 
@@ -1141,7 +1160,9 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
 
     @DBOS.workflow()
     async def exiting_parent_workflow() -> str:
-        handle = await queue.enqueue_async(blocking_workflow)
+        handle = await DBOS.enqueue_workflow_async(
+            "regular_queue_async", blocking_workflow
+        )
         return handle.get_workflow_id()
 
     with SetWorkflowTimeout(1.0):
@@ -1153,7 +1174,7 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
     # never starts because the queue is blocked, the deadline propagates
     # and both parent and child are cancelled.
     child_id = str(uuid.uuid4())
-    queue = Queue("stuck_queue_async", concurrency=1, polling_interval_sec=0.1)
+    DBOS.register_queue("stuck_queue_async", concurrency=1, polling_interval_sec=0.1)
 
     start_event = asyncio.Event()
     blocking_event = asyncio.Event()
@@ -1163,13 +1184,15 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
         start_event.set()
         await blocking_event.wait()
 
-    stuck_handle = await queue.enqueue_async(stuck_workflow)
+    stuck_handle = await DBOS.enqueue_workflow_async(
+        "stuck_queue_async", stuck_workflow
+    )
     await start_event.wait()
 
     @DBOS.workflow()
     async def blocked_parent_workflow() -> None:
         with SetWorkflowID(child_id):
-            await queue.enqueue_async(blocking_workflow)
+            await DBOS.enqueue_workflow_async("stuck_queue_async", blocking_workflow)
         while True:
             await DBOS.sleep_async(0.1)
 
@@ -1203,12 +1226,12 @@ def test_resuming_queued_workflows(dbos: DBOS) -> None:
         return
 
     # Enqueue a blocked workflow and two regular workflows on a queue with concurrency 1
-    queue = Queue("test_queue", concurrency=1)
+    DBOS.register_queue("test_queue", concurrency=1)
     wfid = str(uuid.uuid4())
-    blocked_handle = queue.enqueue(stuck_workflow)
+    blocked_handle = DBOS.enqueue_workflow("test_queue", stuck_workflow)
     with SetWorkflowID(wfid):
-        regular_handle_1 = queue.enqueue(regular_workflow)
-    regular_handle_2 = queue.enqueue(regular_workflow)
+        regular_handle_1 = DBOS.enqueue_workflow("test_queue", regular_workflow)
+    regular_handle_2 = DBOS.enqueue_workflow("test_queue", regular_workflow)
 
     # Verify that the blocked workflow starts and is PENDING while the regular workflows remain ENQUEUED.
     start_event.wait()
@@ -1243,13 +1266,13 @@ def test_resuming_queued_partitioned_workflows(dbos: DBOS) -> None:
         return
 
     # Enqueue a blocked workflow and two regular workflows on a queue with concurrency 1
-    queue = Queue("test_queue", concurrency=1, partition_queue=True)
+    DBOS.register_queue("test_queue", concurrency=1, partition_queue=True)
     wfid = str(uuid.uuid4())
     with SetEnqueueOptions(queue_partition_key="key"):
-        blocked_handle = queue.enqueue(stuck_workflow)
+        blocked_handle = DBOS.enqueue_workflow("test_queue", stuck_workflow)
         with SetWorkflowID(wfid):
-            regular_handle_1 = queue.enqueue(regular_workflow)
-        regular_handle_2 = queue.enqueue(regular_workflow)
+            regular_handle_1 = DBOS.enqueue_workflow("test_queue", regular_workflow)
+        regular_handle_2 = DBOS.enqueue_workflow("test_queue", regular_workflow)
 
     # Verify that the blocked workflow starts and is PENDING while the regular workflows remain ENQUEUED.
     start_event.wait()
@@ -1288,14 +1311,14 @@ def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
         return
 
     # Enqueue both the blocked workflow and a regular workflow on a queue with concurrency 1
-    queue = Queue("test_queue", concurrency=1)
-    blocked_handle = queue.enqueue(blocked_workflow)
-    regular_handle = queue.enqueue(regular_workflow)
+    DBOS.register_queue("test_queue", concurrency=1)
+    blocked_handle = DBOS.enqueue_workflow("test_queue", blocked_workflow)
+    regular_handle = DBOS.enqueue_workflow("test_queue", regular_workflow)
 
     # Enqueue the blocked workflow repeatedly, verify recovery attempts is not increased
     for _ in range(max_recovery_attempts):
         with SetWorkflowID(blocked_handle.workflow_id):
-            queue.enqueue(blocked_workflow)
+            DBOS.enqueue_workflow("test_queue", blocked_workflow)
     recovery_attempts = blocked_handle.get_status().recovery_attempts
     assert recovery_attempts is not None and recovery_attempts <= 1
 
@@ -1364,10 +1387,12 @@ async def test_simple_queue_async(dbos: DBOS) -> None:
         step_counter += 1
         return var + "d"
 
-    queue = Queue("test_queue")
+    DBOS.register_queue("test_queue")
 
     with SetWorkflowID(wfid):
-        handle = await queue.enqueue_async(test_workflow, "abc", "123")
+        handle = await DBOS.enqueue_workflow_async(
+            "test_queue", test_workflow, "abc", "123"
+        )
     assert (await handle.get_result()) == "abcd123"
     with SetWorkflowID(wfid):
         assert (await test_workflow("abc", "123")) == "abcd123"
@@ -1377,7 +1402,7 @@ async def test_simple_queue_async(dbos: DBOS) -> None:
 
 def test_queue_deduplication(dbos: DBOS) -> None:
     queue_name = "test_dedup_queue"
-    queue = Queue(queue_name)
+    DBOS.register_queue(queue_name)
     workflow_event = threading.Event()
 
     @DBOS.workflow()
@@ -1388,7 +1413,7 @@ def test_queue_deduplication(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_workflow(var1: str) -> str:
         # Make sure the child workflow is not blocked by the same deduplication ID
-        child_handle = queue.enqueue(child_workflow, var1)
+        child_handle = DBOS.enqueue_workflow(queue_name, child_workflow, var1)
         workflow_event.wait()
         return child_handle.get_result() + "-p"
 
@@ -1397,26 +1422,26 @@ def test_queue_deduplication(dbos: DBOS) -> None:
     dedup_id = "my_dedup_id"
     with SetEnqueueOptions(deduplication_id=dedup_id):
         with SetWorkflowID(wfid):
-            handle1 = queue.enqueue(test_workflow, "abc")
+            handle1 = DBOS.enqueue_workflow(queue_name, test_workflow, "abc")
     assert handle1.get_status().deduplication_id == dedup_id
 
     # Enqueue the same workflow with a different deduplication ID should be fine.
     with SetEnqueueOptions(deduplication_id="my_other_dedup_id"):
-        another_handle = queue.enqueue(test_workflow, "ghi")
+        another_handle = DBOS.enqueue_workflow(queue_name, test_workflow, "ghi")
 
     # Enqueue a workflow without deduplication ID should be fine.
-    nodedup_handle1 = queue.enqueue(test_workflow, "jkl")
+    nodedup_handle1 = DBOS.enqueue_workflow(queue_name, test_workflow, "jkl")
 
     # Enqueued multiple times without deduplication ID but with different inputs should be fine, but get the result of the first one.
     with SetWorkflowID(wfid):
-        nodedup_handle2 = queue.enqueue(test_workflow, "mno")
+        nodedup_handle2 = DBOS.enqueue_workflow(queue_name, test_workflow, "mno")
 
     # Enqueue the same workflow with the same deduplication ID should raise an exception.
     wfid2 = str(uuid.uuid4())
     with SetEnqueueOptions(deduplication_id=dedup_id):
         with SetWorkflowID(wfid2):
             with pytest.raises(Exception) as exc_info:
-                queue.enqueue(test_workflow, "def")
+                DBOS.enqueue_workflow(queue_name, test_workflow, "def")
         assert (
             f"Workflow {wfid2} was deduplicated due to an existing workflow in queue {queue_name} with deduplication ID {dedup_id}."
             in str(exc_info.value)
@@ -1432,7 +1457,7 @@ def test_queue_deduplication(dbos: DBOS) -> None:
     # Invoke the workflow again with the same deduplication ID now should be fine because it's no longer in the queue.
     with SetEnqueueOptions(deduplication_id=dedup_id):
         with SetWorkflowID(wfid2):
-            handle2 = queue.enqueue(test_workflow, "def")
+            handle2 = DBOS.enqueue_workflow(queue_name, test_workflow, "def")
     assert handle2.get_result() == "def-c-p"
 
     assert queue_entries_are_cleaned_up(dbos)
@@ -1440,7 +1465,7 @@ def test_queue_deduplication(dbos: DBOS) -> None:
 
 def test_queue_deduplication_recovery(dbos: DBOS) -> None:
     queue_name = "test_dedup_queue"
-    queue = Queue(queue_name)
+    DBOS.register_queue(queue_name)
     workflow_event = threading.Event()
     dedup_id = "my_dedup_id"
 
@@ -1451,9 +1476,9 @@ def test_queue_deduplication_recovery(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_workflow() -> str:
         with SetEnqueueOptions(deduplication_id=dedup_id):
-            handle = queue.enqueue(child_workflow)
+            handle = DBOS.enqueue_workflow(queue_name, child_workflow)
             with pytest.raises(DBOSQueueDeduplicatedError):
-                queue.enqueue(child_workflow)
+                DBOS.enqueue_workflow(queue_name, child_workflow)
         return handle.workflow_id
 
     parent_id = str(uuid.uuid4())
@@ -1477,7 +1502,7 @@ def test_queue_deduplication_recovery(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_queue_deduplication_async(dbos: DBOS) -> None:
     queue_name = "test_dedup_queue_async"
-    queue = Queue(queue_name)
+    DBOS.register_queue(queue_name)
     workflow_event = asyncio.Event()
 
     @DBOS.workflow()
@@ -1488,7 +1513,9 @@ async def test_queue_deduplication_async(dbos: DBOS) -> None:
     @DBOS.workflow()
     async def test_workflow(var1: str) -> str:
         # Make sure the child workflow is not blocked by the same deduplication ID
-        child_handle = await queue.enqueue_async(child_workflow, var1)
+        child_handle = await DBOS.enqueue_workflow_async(
+            queue_name, child_workflow, var1
+        )
         await workflow_event.wait()
         return (await child_handle.get_result()) + "-p"
 
@@ -1497,25 +1524,33 @@ async def test_queue_deduplication_async(dbos: DBOS) -> None:
     dedup_id = "my_dedup_id"
     with SetEnqueueOptions(deduplication_id=dedup_id):
         with SetWorkflowID(wfid):
-            handle1 = await queue.enqueue_async(test_workflow, "abc")
+            handle1 = await DBOS.enqueue_workflow_async(
+                queue_name, test_workflow, "abc"
+            )
 
     # Enqueue the same workflow with a different deduplication ID should be fine.
     with SetEnqueueOptions(deduplication_id="my_other_dedup_id"):
-        another_handle = await queue.enqueue_async(test_workflow, "ghi")
+        another_handle = await DBOS.enqueue_workflow_async(
+            queue_name, test_workflow, "ghi"
+        )
 
     # Enqueue a workflow without deduplication ID should be fine.
-    nodedup_handle1 = await queue.enqueue_async(test_workflow, "jkl")
+    nodedup_handle1 = await DBOS.enqueue_workflow_async(
+        queue_name, test_workflow, "jkl"
+    )
 
     # Enqueued multiple times without deduplication ID but with different inputs should be fine, but get the result of the first one.
     with SetWorkflowID(wfid):
-        nodedup_handle2 = await queue.enqueue_async(test_workflow, "mno")
+        nodedup_handle2 = await DBOS.enqueue_workflow_async(
+            queue_name, test_workflow, "mno"
+        )
 
     # Enqueue the same workflow with the same deduplication ID should raise an exception.
     wfid2 = str(uuid.uuid4())
     with SetEnqueueOptions(deduplication_id=dedup_id):
         with SetWorkflowID(wfid2):
             with pytest.raises(Exception) as exc_info:
-                await queue.enqueue_async(test_workflow, "def")
+                await DBOS.enqueue_workflow_async(queue_name, test_workflow, "def")
         assert (
             f"Workflow {wfid2} was deduplicated due to an existing workflow in queue {queue_name} with deduplication ID {dedup_id}."
             in str(exc_info.value)
@@ -1531,7 +1566,9 @@ async def test_queue_deduplication_async(dbos: DBOS) -> None:
     # Invoke the workflow again with the same deduplication ID now should be fine because it's no longer in the queue.
     with SetEnqueueOptions(deduplication_id=dedup_id):
         with SetWorkflowID(wfid2):
-            handle2 = await queue.enqueue_async(test_workflow, "def")
+            handle2 = await DBOS.enqueue_workflow_async(
+                queue_name, test_workflow, "def"
+            )
     assert (await handle2.get_result()) == "def-c-p"
 
     assert queue_entries_are_cleaned_up(dbos)
@@ -1539,8 +1576,8 @@ async def test_queue_deduplication_async(dbos: DBOS) -> None:
 
 def test_priority_queue(dbos: DBOS) -> None:
     # Make sure that we can enqueue workflows with different priorities correctly
-    queue = Queue("test_queue_priority", 1, priority_enabled=True)
-    child_queue = Queue("test_queue_child")
+    DBOS.register_queue("test_queue_priority", 1, priority_enabled=True)
+    DBOS.register_queue("test_queue_child")
 
     workflow_event = threading.Event()
     wf_priority_list = []
@@ -1555,31 +1592,33 @@ def test_priority_queue(dbos: DBOS) -> None:
         wf_priority_list.append(priority)
         # Make sure the priority is not propagated
         assert assert_current_dbos_context().priority == None
-        child_handle = child_queue.enqueue(child_workflow, priority)
+        child_handle = DBOS.enqueue_workflow(
+            "test_queue_child", child_workflow, priority
+        )
         workflow_event.wait()
         return child_handle.get_result() + priority
 
     # Enqueue an invalid priority
     with pytest.raises(Exception) as exc_info:
         with SetEnqueueOptions(priority=-100):
-            queue.enqueue(test_workflow, -100)
+            DBOS.enqueue_workflow("test_queue_priority", test_workflow, -100)
     assert "Invalid priority" in str(exc_info.value)
 
     wf_handles: list[WorkflowHandle[int]] = []
     # First, enqueue a workflow without priority
-    handle = queue.enqueue(test_workflow, 0)
+    handle = DBOS.enqueue_workflow("test_queue_priority", test_workflow, 0)
     wf_handles.append(handle)
 
     # Then, enqueue a workflow with priority 1 to 5
     for i in range(1, 6):
         with SetEnqueueOptions(priority=i):
-            handle = queue.enqueue(test_workflow, i)
+            handle = DBOS.enqueue_workflow("test_queue_priority", test_workflow, i)
             assert handle.get_status().priority == i
         wf_handles.append(handle)
 
     # Finally, enqueue two workflows without priority again
-    wf_handles.append(queue.enqueue(test_workflow, 6))
-    wf_handles.append(queue.enqueue(test_workflow, 7))
+    wf_handles.append(DBOS.enqueue_workflow("test_queue_priority", test_workflow, 6))
+    wf_handles.append(DBOS.enqueue_workflow("test_queue_priority", test_workflow, 7))
 
     # The finish sequence should be 0, 6, 7, 1, 2, 3, 4, 5
     workflow_event.set()
@@ -1594,8 +1633,8 @@ def test_priority_queue(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_priority_queue_async(dbos: DBOS) -> None:
     # Make sure that we can enqueue workflows with different priorities correctly
-    queue = Queue("test_queue_priority_async", 1, priority_enabled=True)
-    child_queue = Queue("test_queue_child_async")
+    DBOS.register_queue("test_queue_priority_async", 1, priority_enabled=True)
+    DBOS.register_queue("test_queue_child_async")
 
     workflow_event = asyncio.Event()
     wf_priority_list = []
@@ -1610,30 +1649,42 @@ async def test_priority_queue_async(dbos: DBOS) -> None:
         wf_priority_list.append(priority)
         # Make sure the priority is not propagated
         assert assert_current_dbos_context().priority == None
-        child_handle = await child_queue.enqueue_async(child_workflow, priority)
+        child_handle = await DBOS.enqueue_workflow_async(
+            "test_queue_child_async", child_workflow, priority
+        )
         await workflow_event.wait()
         return (await child_handle.get_result()) + priority
 
     # Enqueue an invalid priority
     with pytest.raises(Exception) as exc_info:
         with SetEnqueueOptions(priority=-100):
-            await queue.enqueue_async(test_workflow, -100)
+            await DBOS.enqueue_workflow_async(
+                "test_queue_priority_async", test_workflow, -100
+            )
     assert "Invalid priority" in str(exc_info.value)
 
     wf_handles: List[WorkflowHandleAsync[int]] = []
     # First, enqueue a workflow without priority
-    handle = await queue.enqueue_async(test_workflow, 0)
+    handle = await DBOS.enqueue_workflow_async(
+        "test_queue_priority_async", test_workflow, 0
+    )
     wf_handles.append(handle)
 
     # Then, enqueue a workflow with priority 1 to 5
     for i in range(1, 6):
         with SetEnqueueOptions(priority=i):
-            handle = await queue.enqueue_async(test_workflow, i)
+            handle = await DBOS.enqueue_workflow_async(
+                "test_queue_priority_async", test_workflow, i
+            )
         wf_handles.append(handle)
 
     # Finally, enqueue two workflows without priority again
-    wf_handles.append(await queue.enqueue_async(test_workflow, 6))
-    wf_handles.append(await queue.enqueue_async(test_workflow, 7))
+    wf_handles.append(
+        await DBOS.enqueue_workflow_async("test_queue_priority_async", test_workflow, 6)
+    )
+    wf_handles.append(
+        await DBOS.enqueue_workflow_async("test_queue_priority_async", test_workflow, 7)
+    )
 
     # The finish sequence should be 0, 6, 7, 1, 2, 3, 4, 5
     workflow_event.set()
@@ -1646,7 +1697,7 @@ async def test_priority_queue_async(dbos: DBOS) -> None:
 
 
 def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient) -> None:
-    queue = Queue("test_worker_concurrency_across_versions", worker_concurrency=1)
+    DBOS.register_queue("test_worker_concurrency_across_versions", worker_concurrency=1)
 
     @DBOS.workflow()
     def test_workflow() -> str:
@@ -1663,7 +1714,9 @@ def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient) -> N
             "app_version": other_version,
         }
     )
-    handle = queue.enqueue(test_workflow)
+    handle = DBOS.enqueue_workflow(
+        "test_worker_concurrency_across_versions", test_workflow
+    )
 
     # Verify the workflow on the current version completes, but the other version is still ENQUEUED
     assert handle.get_result()
@@ -1675,7 +1728,7 @@ def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient) -> N
 
 
 def test_timeout_queue_recovery(dbos: DBOS) -> None:
-    queue = Queue("test_queue")
+    DBOS.register_queue("test_queue")
     evt = threading.Event()
 
     @DBOS.workflow()
@@ -1687,7 +1740,7 @@ def test_timeout_queue_recovery(dbos: DBOS) -> None:
     timeout = 3.0
     enqueue_time = time.time()
     with SetWorkflowTimeout(timeout):
-        original_handle = queue.enqueue(blocking_workflow)
+        original_handle = DBOS.enqueue_workflow("test_queue", blocking_workflow)
 
     # Verify the workflow's timeout is properly configured
     evt.wait()
@@ -1718,7 +1771,7 @@ def test_timeout_queue_recovery(dbos: DBOS) -> None:
 
 def test_unsetting_timeout(dbos: DBOS) -> None:
 
-    queue = Queue("test_queue")
+    DBOS.register_queue("test_queue")
 
     @DBOS.workflow()
     def child() -> str:
@@ -1732,14 +1785,14 @@ def test_unsetting_timeout(dbos: DBOS) -> None:
     def parent(child_one: str, child_two: str) -> None:
         with SetWorkflowID(child_two):
             with SetWorkflowTimeout(None):
-                queue.enqueue(child)
+                DBOS.enqueue_workflow("test_queue", child)
 
         with SetWorkflowID(child_one):
-            queue.enqueue(child)
+            DBOS.enqueue_workflow("test_queue", child)
 
     child_one, child_two = str(uuid.uuid4()), str(uuid.uuid4())
     with SetWorkflowTimeout(2.0):
-        queue.enqueue(parent, child_one, child_two).get_result()
+        DBOS.enqueue_workflow("test_queue", parent, child_one, child_two).get_result()
 
     # Verify child one, which has a propagated timeout, is cancelled
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(child_one)
@@ -1753,7 +1806,7 @@ def test_unsetting_timeout(dbos: DBOS) -> None:
 
 def test_queue_executor_id(dbos: DBOS) -> None:
 
-    queue = Queue("test-queue")
+    DBOS.register_queue("test-queue")
 
     @DBOS.workflow()
     def example_workflow() -> str:
@@ -1768,7 +1821,7 @@ def test_queue_executor_id(dbos: DBOS) -> None:
     # Enqueue the workflow, validate its executor ID
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        handle = queue.enqueue(example_workflow)
+        handle = DBOS.enqueue_workflow("test-queue", example_workflow)
     assert handle.get_result() == wfid
     assert handle.get_status().executor_id == original_executor_id
 
@@ -1778,7 +1831,7 @@ def test_queue_executor_id(dbos: DBOS) -> None:
 
     # Re-enqueue the workflow, verify its executor ID does not change.
     with SetWorkflowID(wfid):
-        handle = queue.enqueue(example_workflow)
+        handle = DBOS.enqueue_workflow("test-queue", example_workflow)
         assert handle.get_result() == wfid
     assert handle.get_status().executor_id == original_executor_id
 
@@ -1795,7 +1848,7 @@ class OuterType(BaseModel):
 
 
 def test_complex_type(dbos: DBOS) -> None:
-    queue = Queue("test_queue")
+    DBOS.register_queue("test_queue")
 
     @DBOS.workflow()
     def workflow(input: OuterType) -> OuterType:
@@ -1805,7 +1858,7 @@ def test_complex_type(dbos: DBOS) -> None:
     inner = InnerType(one="one", two=2)
     outer = OuterType(inner=inner)
 
-    handle = queue.enqueue(workflow, outer)
+    handle = DBOS.enqueue_workflow("test_queue", workflow, outer)
     result = handle.get_result()
 
     def check(result: Any) -> None:
@@ -1826,7 +1879,7 @@ def test_complex_type(dbos: DBOS) -> None:
         event.wait()
         return input
 
-    handle = queue.enqueue(blocked_workflow, outer)
+    handle = DBOS.enqueue_workflow("test_queue", blocked_workflow, outer)
 
     start_event.wait()
     recovery_handle = DBOS._recover_pending_workflows()[0]
@@ -1841,13 +1894,13 @@ def test_enqueue_version(dbos: DBOS) -> None:
     def workflow(x: int) -> int:
         return x
 
-    queue = Queue("queue")
+    DBOS.register_queue("queue")
     input = 5
 
     # Enqueue the app on a different version, verify it has that version
     future_version = str(uuid.uuid4())
     with SetEnqueueOptions(app_version=future_version):
-        handle = queue.enqueue(workflow, input)
+        handle = DBOS.enqueue_workflow("queue", workflow, input)
     assert handle.get_status().app_version == future_version
 
     # Change the global version, verify it works
@@ -1862,13 +1915,13 @@ async def test_enqueue_version_async(dbos: DBOS) -> None:
     async def workflow(x: int) -> int:
         return x
 
-    queue = Queue("queue")
+    DBOS.register_queue("queue")
     input = 5
 
     # Enqueue the app on a different version, verify it has that version
     future_version = str(uuid.uuid4())
     with SetEnqueueOptions(app_version=future_version):
-        handle = await queue.enqueue_async(workflow, input)
+        handle = await DBOS.enqueue_workflow_async("queue", workflow, input)
     assert (await handle.get_status()).app_version == future_version
 
     # Change the global version, verify it works
@@ -1893,7 +1946,7 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
         assert DBOS.workflow_id
         return DBOS.workflow_id
 
-    queue = Queue("queue", partition_queue=True, worker_concurrency=1)
+    DBOS.register_queue("queue", partition_queue=True, worker_concurrency=1)
 
     blocked_partition_key = "blocked"
     normal_partition_key = "normal"
@@ -1902,8 +1955,8 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
     # the blocked partition. Verify the blocked workflow starts
     # but the normal workflow is stuck behind it.
     with SetEnqueueOptions(queue_partition_key=blocked_partition_key):
-        blocked_blocked_handle = queue.enqueue(blocked_workflow)
-        blocked_normal_handle = queue.enqueue(normal_workflow)
+        blocked_blocked_handle = DBOS.enqueue_workflow("queue", blocked_workflow)
+        blocked_normal_handle = DBOS.enqueue_workflow("queue", normal_workflow)
 
     waiting_event.wait()
     assert (
@@ -1919,7 +1972,7 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
     )
     # Enqueue a normal workflow on the other partition and verify it runs normally
     with SetEnqueueOptions(queue_partition_key=normal_partition_key):
-        normal_handle = queue.enqueue(normal_workflow)
+        normal_handle = DBOS.enqueue_workflow("queue", normal_workflow)
 
     assert normal_handle.get_result()
 
@@ -1931,7 +1984,7 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
     # Confirm client enqueue works with partitions
     client_handle: WorkflowHandle[None] = client.enqueue(
         {
-            "queue_name": queue.name,
+            "queue_name": "queue",
             "workflow_name": normal_workflow.__qualname__,
             "queue_partition_key": blocked_partition_key,
         }
@@ -1940,36 +1993,38 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
 
     # You can only enqueue on a partitioned queue with a partition key
     with pytest.raises(Exception):
-        queue.enqueue(normal_workflow)
+        DBOS.enqueue_workflow("queue", normal_workflow)
 
     # Deduplication is not supported for partitioned queues
     with pytest.raises(Exception):
         with SetEnqueueOptions(
             queue_partition_key=normal_partition_key, deduplication_id="key"
         ):
-            queue.enqueue(normal_workflow)
+            DBOS.enqueue_workflow("queue", normal_workflow)
 
     # You can only enqueue with a partition key on a partitioned queue
-    partitionless_queue = Queue("partitionless-queue")
+    DBOS.register_queue("partitionless-queue")
 
     with pytest.raises(Exception):
         with SetEnqueueOptions(queue_partition_key="test"):
-            partitionless_queue.enqueue(normal_workflow)
+            DBOS.enqueue_workflow("partitionless-queue", normal_workflow)
 
 
 def test_polling_interval(dbos: DBOS) -> None:
-    queue = Queue("queue", polling_interval_sec=0.1)
+    DBOS.register_queue("queue", polling_interval_sec=0.1)
 
     @DBOS.workflow()
     def workflow() -> str:
         assert DBOS.workflow_id
         return DBOS.workflow_id
 
-    assert queue.enqueue(workflow).get_result()
+    assert DBOS.enqueue_workflow("queue", workflow).get_result()
 
     for _ in range(10):
         start_time = time.time()
-        assert queue.enqueue(workflow).get_result(polling_interval_sec=0.1)
+        assert DBOS.enqueue_workflow("queue", workflow).get_result(
+            polling_interval_sec=0.1
+        )
         assert time.time() - start_time < 1.0
 
 
@@ -2006,7 +2061,7 @@ def test_listen_queue(dbos: DBOS, config: DBOSConfig) -> None:
 
 def test_wait_first_queue(dbos: DBOS) -> None:
     num_tasks = 5
-    queue = Queue("wait_first_queue", concurrency=num_tasks)
+    DBOS.register_queue("wait_first_queue", concurrency=num_tasks)
 
     go_events = [threading.Event() for _ in range(num_tasks)]
     consumed_events = [threading.Event() for _ in range(num_tasks)]
@@ -2020,7 +2075,7 @@ def test_wait_first_queue(dbos: DBOS) -> None:
     def process_tasks() -> List[str]:
         handles: List[WorkflowHandle[str]] = []
         for i in range(num_tasks):
-            handle = queue.enqueue(process_task, i)
+            handle = DBOS.enqueue_workflow("wait_first_queue", process_task, i)
             handles.append(handle)
 
         results: List[str] = []
@@ -2072,7 +2127,7 @@ def test_wait_first_queue(dbos: DBOS) -> None:
 
 
 def test_delay(dbos: DBOS, client: DBOSClient) -> None:
-    queue = Queue("test_delay_queue", polling_interval_sec=0.1)
+    DBOS.register_queue("test_delay_queue", polling_interval_sec=0.1)
 
     @DBOS.workflow()
     def test_workflow() -> None:
@@ -2083,7 +2138,7 @@ def test_delay(dbos: DBOS, client: DBOSClient) -> None:
     # Test via SetEnqueueOptions
     t_before = int(time.time() * 1000)
     with SetEnqueueOptions(delay_seconds=delay_seconds):
-        handle = queue.enqueue(test_workflow)
+        handle = DBOS.enqueue_workflow("test_delay_queue", test_workflow)
     t_after = int(time.time() * 1000)
 
     status = handle.get_status()
@@ -2103,7 +2158,7 @@ def test_delay(dbos: DBOS, client: DBOSClient) -> None:
     t_before = int(time.time() * 1000)
     client_handle: WorkflowHandle[None] = client.enqueue(
         {
-            "queue_name": queue.name,
+            "queue_name": "test_delay_queue",
             "workflow_name": test_workflow.__qualname__,
             "delay_seconds": delay_seconds,
         }
@@ -2125,7 +2180,7 @@ def test_delay(dbos: DBOS, client: DBOSClient) -> None:
 
     # Delayed workflows appear in list_workflows and list_queued_workflows
     with SetEnqueueOptions(delay_seconds=60.0):
-        listed_handle = queue.enqueue(test_workflow)
+        listed_handle = DBOS.enqueue_workflow("test_delay_queue", test_workflow)
     all_workflows = DBOS.list_workflows(status=WorkflowStatusString.DELAYED.value)
     assert any(w.workflow_id == listed_handle.workflow_id for w in all_workflows)
     queued_workflows = DBOS.list_queued_workflows()
@@ -2133,7 +2188,7 @@ def test_delay(dbos: DBOS, client: DBOSClient) -> None:
 
     # wait_first treats DELAYED as active and unblocks when it completes
     with SetEnqueueOptions(delay_seconds=1.0):
-        wait_handle = queue.enqueue(test_workflow)
+        wait_handle = DBOS.enqueue_workflow("test_delay_queue", test_workflow)
     assert wait_handle.get_status().status == WorkflowStatusString.DELAYED.value
     completed = DBOS.wait_first([wait_handle])
     assert completed.workflow_id == wait_handle.workflow_id
@@ -2143,15 +2198,15 @@ def test_delay(dbos: DBOS, client: DBOSClient) -> None:
     # Deduplication: a second enqueue with the same dedup ID should fail while DELAYED
     dedup_id = str(uuid.uuid4())
     with SetEnqueueOptions(delay_seconds=60.0, deduplication_id=dedup_id):
-        dedup_handle = queue.enqueue(test_workflow)
+        dedup_handle = DBOS.enqueue_workflow("test_delay_queue", test_workflow)
     assert dedup_handle.get_status().status == WorkflowStatusString.DELAYED.value
     with pytest.raises(DBOSQueueDeduplicatedError):
         with SetEnqueueOptions(delay_seconds=60.0, deduplication_id=dedup_id):
-            queue.enqueue(test_workflow)
+            DBOS.enqueue_workflow("test_delay_queue", test_workflow)
 
 
 def test_delay_cancel_resume_list(dbos: DBOS) -> None:
-    queue = Queue("test_delay_cancel_resume_queue", polling_interval_sec=0.1)
+    DBOS.register_queue("test_delay_cancel_resume_queue", polling_interval_sec=0.1)
 
     @DBOS.workflow()
     def test_workflow() -> str:
@@ -2159,7 +2214,9 @@ def test_delay_cancel_resume_list(dbos: DBOS) -> None:
 
     # Cancel a DELAYED workflow — it should never run
     with SetEnqueueOptions(delay_seconds=60.0):
-        cancel_handle = queue.enqueue(test_workflow)
+        cancel_handle = DBOS.enqueue_workflow(
+            "test_delay_cancel_resume_queue", test_workflow
+        )
     assert cancel_handle.get_status().status == WorkflowStatusString.DELAYED.value
     DBOS.cancel_workflow(cancel_handle.workflow_id)
     assert cancel_handle.get_status().status == WorkflowStatusString.CANCELLED.value
@@ -2170,7 +2227,9 @@ def test_delay_cancel_resume_list(dbos: DBOS) -> None:
 
     # Resume a DELAYED workflow — it should run immediately, bypassing the delay
     with SetEnqueueOptions(delay_seconds=60.0):
-        resume_handle = queue.enqueue(test_workflow)
+        resume_handle = DBOS.enqueue_workflow(
+            "test_delay_cancel_resume_queue", test_workflow
+        )
     assert resume_handle.get_status().status == WorkflowStatusString.DELAYED.value
     DBOS.resume_workflow(resume_handle.workflow_id)
     assert resume_handle.get_result() == "done"
@@ -2179,7 +2238,7 @@ def test_delay_cancel_resume_list(dbos: DBOS) -> None:
 
 
 def test_set_workflow_delay(dbos: DBOS) -> None:
-    queue = Queue("test_set_workflow_delay_queue", polling_interval_sec=0.1)
+    DBOS.register_queue("test_set_workflow_delay_queue", polling_interval_sec=0.1)
 
     @DBOS.workflow()
     def test_workflow() -> str:
@@ -2187,7 +2246,7 @@ def test_set_workflow_delay(dbos: DBOS) -> None:
 
     # Enqueue with a long delay, then shorten it with set_workflow_delay
     with SetEnqueueOptions(delay_seconds=600.0):
-        handle = queue.enqueue(test_workflow)
+        handle = DBOS.enqueue_workflow("test_set_workflow_delay_queue", test_workflow)
     assert handle.get_status().status == WorkflowStatusString.DELAYED.value
 
     # Use delay_seconds to set a short delay
@@ -2204,7 +2263,7 @@ def test_set_workflow_delay(dbos: DBOS) -> None:
 
     # Test with delay_until_epoch_ms (absolute timestamp)
     with SetEnqueueOptions(delay_seconds=600.0):
-        handle2 = queue.enqueue(test_workflow)
+        handle2 = DBOS.enqueue_workflow("test_set_workflow_delay_queue", test_workflow)
     assert handle2.get_status().status == WorkflowStatusString.DELAYED.value
 
     soon = int(time.time() * 1000) + 500  # 0.5 seconds from now
