@@ -809,16 +809,6 @@ class DBOS:
         - ``"never_update"``: leave the existing row unchanged.
         """
         dbos = _get_dbos_instance()
-        queue = Queue(
-            name,
-            concurrency,
-            limiter,
-            worker_concurrency=worker_concurrency,
-            priority_enabled=priority_enabled,
-            partition_queue=partition_queue,
-            polling_interval_sec=polling_interval_sec,
-            database_backed_queue=True,
-        )
 
         if on_conflict == "always_update":
             update_existing = True
@@ -829,17 +819,17 @@ class DBOS:
             update_existing = latest["version_name"] == GlobalParams.app_version
 
         dbos._sys_db.upsert_queue(
-            name=queue.name,
-            concurrency=queue.concurrency,
-            worker_concurrency=queue.worker_concurrency,
-            rate_limit_max=queue.limiter["limit"] if queue.limiter else None,
-            rate_limit_period_sec=(queue.limiter["period"] if queue.limiter else None),
-            priority_enabled=queue.priority_enabled,
-            partition_queue=queue.partition_queue,
-            polling_interval_sec=queue.polling_interval_sec,
+            name=name,
+            concurrency=concurrency,
+            worker_concurrency=worker_concurrency,
+            rate_limit_max=limiter["limit"] if limiter else None,
+            rate_limit_period_sec=limiter["period"] if limiter else None,
+            priority_enabled=priority_enabled,
+            partition_queue=partition_queue,
+            polling_interval_sec=polling_interval_sec,
             update_existing=update_existing,
         )
-        return queue
+        return dbos.retrieve_queue(name)
 
     @classmethod
     def retrieve_queue(cls, name: str) -> Optional[Queue]:

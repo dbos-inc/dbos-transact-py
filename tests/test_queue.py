@@ -25,7 +25,11 @@ from dbos import (
 )
 from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandleAsync
-from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSQueueDeduplicatedError
+from dbos._error import (
+    DBOSAwaitedWorkflowCancelledError,
+    DBOSException,
+    DBOSQueueDeduplicatedError,
+)
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
@@ -186,6 +190,55 @@ def test_queue_crud(dbos: DBOS) -> None:
     retrieved = DBOS.retrieve_queue(queue_name)
     assert retrieved is not None
     assert retrieved.concurrency == 30
+
+
+def test_queue_dynamic_config(dbos: DBOS) -> None:
+    queue_name = f"test_dyn_queue_{uuid.uuid4()}"
+    queue = DBOS.register_queue(
+        queue_name,
+        concurrency=4,
+        worker_concurrency=2,
+        priority_enabled=False,
+        polling_interval_sec=1.0,
+    )
+
+    # Setters write to the database; getters read from it.
+    queue.set_concurrency(8)
+    queue.set_worker_concurrency(3)
+    queue.set_limiter({"limit": 7, "period": 2.0})
+    queue.set_priority_enabled(True)
+    queue.set_partition_queue(True)
+    queue.set_polling_interval_sec(0.5)
+
+    fresh = DBOS.retrieve_queue(queue_name)
+    for q in [queue, fresh]:
+        assert q is not None
+        assert q.concurrency == 8
+        assert q.worker_concurrency == 3
+        assert q.limiter == {"limit": 7, "period": 2.0}
+        assert q.priority_enabled is True
+        assert q.partition_queue is True
+        assert q.polling_interval_sec == 0.5
+
+    # Setters validate. worker_concurrency cannot exceed concurrency.
+    with pytest.raises(ValueError):
+        queue.set_worker_concurrency(100)
+    # polling_interval must be positive.
+    with pytest.raises(ValueError):
+        queue.set_polling_interval_sec(0.0)
+
+    # Limiter can be cleared.
+    queue.set_limiter(None)
+    q = DBOS.retrieve_queue(queue_name)
+    assert q is not None
+    assert q.limiter is None
+
+    # In-memory queues read from their local fields, not the database.
+    legacy = Queue(f"legacy_dyn_queue_{uuid.uuid4()}", concurrency=2)
+    assert legacy.concurrency == 2
+    # In-memory queues do not support setters.
+    with pytest.raises(DBOSException):
+        legacy.set_concurrency(5)
 
 
 def test_one_at_a_time(dbos: DBOS) -> None:

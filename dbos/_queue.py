@@ -11,6 +11,7 @@ from psycopg import errors
 from sqlalchemy.exc import OperationalError
 
 from dbos._context import DBOSContext, get_local_dbos_context
+from dbos._error import DBOSException
 from dbos._logger import dbos_logger
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
@@ -63,13 +64,15 @@ class Queue:
         if polling_interval_sec <= 0.0:
             raise ValueError("polling_interval_sec must be positive")
         self.name = name
-        self.concurrency = concurrency
-        self.worker_concurrency = worker_concurrency
-        self.limiter = limiter
-        self.priority_enabled = priority_enabled
-        self.partition_queue = partition_queue
-        self.polling_interval_sec = polling_interval_sec
         self.database_backed_queue = database_backed_queue
+        # Local cache of configurable params. Property getters consult this
+        # for in-memory queues and the database for database-backed queues.
+        self._concurrency = concurrency
+        self._worker_concurrency = worker_concurrency
+        self._limiter = limiter
+        self._priority_enabled = priority_enabled
+        self._partition_queue = partition_queue
+        self._polling_interval_sec = polling_interval_sec
 
         # Database-backed queues skip the in-memory global registry; their
         # source of truth is the queues table.
@@ -82,6 +85,115 @@ class Queue:
         if self.name in registry.queue_info_map and self.name != INTERNAL_QUEUE_NAME:
             raise Exception(f"Queue {name} has already been declared")
         registry.queue_info_map[self.name] = self
+
+    def _require_database_backed(self) -> None:
+        if not self.database_backed_queue:
+            raise DBOSException(
+                f"Cannot configure queue {self.name}: dynamic configuration is "
+                "only supported for queues registered via DBOS.register_queue."
+            )
+
+    def _read_from_db(self) -> "Queue":
+        from ._dbos import _get_dbos_instance
+
+        latest = _get_dbos_instance()._sys_db.get_queue(self.name)
+        if latest is None:
+            raise DBOSException(f"Queue {self.name} not found in the database")
+        return latest
+
+    def _write_to_db(self, fields: dict[str, Any]) -> None:
+        from ._dbos import _get_dbos_instance
+
+        _get_dbos_instance()._sys_db.update_queue(self.name, fields)
+
+    @property
+    def concurrency(self) -> Optional[int]:
+        if self.database_backed_queue:
+            self._concurrency = self._read_from_db()._concurrency
+        return self._concurrency
+
+    def set_concurrency(self, value: Optional[int]) -> None:
+        self._require_database_backed()
+        if (
+            value is not None
+            and self._worker_concurrency is not None
+            and self._worker_concurrency > value
+        ):
+            raise ValueError(
+                "worker_concurrency must be less than or equal to concurrency"
+            )
+        self._write_to_db({"concurrency": value})
+        self._concurrency = value
+
+    @property
+    def worker_concurrency(self) -> Optional[int]:
+        if self.database_backed_queue:
+            self._worker_concurrency = self._read_from_db()._worker_concurrency
+        return self._worker_concurrency
+
+    def set_worker_concurrency(self, value: Optional[int]) -> None:
+        self._require_database_backed()
+        if (
+            value is not None
+            and self._concurrency is not None
+            and value > self._concurrency
+        ):
+            raise ValueError(
+                "worker_concurrency must be less than or equal to concurrency"
+            )
+        self._write_to_db({"worker_concurrency": value})
+        self._worker_concurrency = value
+
+    @property
+    def limiter(self) -> Optional[QueueRateLimit]:
+        if self.database_backed_queue:
+            self._limiter = self._read_from_db()._limiter
+        return self._limiter
+
+    def set_limiter(self, value: Optional[QueueRateLimit]) -> None:
+        self._require_database_backed()
+        self._write_to_db(
+            {
+                "rate_limit_max": value["limit"] if value else None,
+                "rate_limit_period_sec": value["period"] if value else None,
+            }
+        )
+        self._limiter = value
+
+    @property
+    def priority_enabled(self) -> bool:
+        if self.database_backed_queue:
+            self._priority_enabled = self._read_from_db()._priority_enabled
+        return self._priority_enabled
+
+    def set_priority_enabled(self, value: bool) -> None:
+        self._require_database_backed()
+        self._write_to_db({"priority_enabled": value})
+        self._priority_enabled = value
+
+    @property
+    def partition_queue(self) -> bool:
+        if self.database_backed_queue:
+            self._partition_queue = self._read_from_db()._partition_queue
+        return self._partition_queue
+
+    def set_partition_queue(self, value: bool) -> None:
+        self._require_database_backed()
+        self._write_to_db({"partition_queue": value})
+        self._partition_queue = value
+
+    @property
+    def polling_interval_sec(self) -> float:
+        if self.database_backed_queue:
+            self._polling_interval_sec = self._read_from_db()._polling_interval_sec
+        return self._polling_interval_sec
+
+    def set_polling_interval_sec(self, value: float) -> None:
+        self._require_database_backed()
+        if value <= 0.0:
+            raise ValueError("polling_interval_sec must be positive")
+        self._write_to_db({"polling_interval_sec": value})
+        self._polling_interval_sec = value
 
     def enqueue(
         self, func: "Callable[P, R]", *args: P.args, **kwargs: P.kwargs
@@ -143,17 +255,40 @@ def queue_worker_thread(
     stop_event: threading.Event, dbos: "DBOS", queue: Queue
 ) -> None:
     """Worker thread for processing a single queue."""
-    polling_interval = queue.polling_interval_sec
-    min_polling_interval = queue.polling_interval_sec
-    max_polling_interval = max(queue.polling_interval_sec, 120.0)
+    polling_interval = queue._polling_interval_sec
+    max_polling_interval = max(queue._polling_interval_sec, 120.0)
 
     while not stop_event.is_set():
+        # Reload database-backed queue config once per iteration so dynamic
+        # changes (concurrency, polling interval, etc.) take effect without
+        # a restart. If the row was deleted, exit the worker.
+        if queue.database_backed_queue:
+            try:
+                latest = dbos._sys_db.get_queue(queue.name)
+            except Exception as e:
+                dbos.logger.warning(
+                    f"Exception reloading queue {queue.name} from database: {e}"
+                )
+                latest = queue
+            if latest is None:
+                dbos.logger.info(
+                    f"Queue {queue.name} no longer exists in database, stopping worker"
+                )
+                return
+            queue = latest
+
+        min_polling_interval = queue._polling_interval_sec
+        max_polling_interval = max(queue._polling_interval_sec, 120.0)
+        polling_interval = max(
+            min_polling_interval, min(polling_interval, max_polling_interval)
+        )
+
         # Wait for the polling interval with jitter
         if stop_event.wait(timeout=polling_interval * random.uniform(0.95, 1.05)):
             return
 
         try:
-            if queue.partition_queue:
+            if queue._partition_queue:
                 queue_partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
                 for key in queue_partition_keys:
                     local_running_count = dbos._active_workflows_set.count_for_queue(
