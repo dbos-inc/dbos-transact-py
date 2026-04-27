@@ -68,6 +68,53 @@ def test_simple_queue(dbos: DBOS) -> None:
     assert status.dequeued_at > status.created_at
 
 
+def test_in_memory_queues(dbos: DBOS, config: DBOSConfig) -> None:
+    """Cover the legacy `Queue(...)` constructor API and confirm in-memory and
+    database-backed queues coexist correctly.
+    """
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+
+    queue_one = Queue("in_memory_queue_one")
+    queue_two = Queue("in_memory_queue_two", concurrency=2)
+
+    # Re-declaring an in-memory queue raises.
+    with pytest.raises(Exception):
+        Queue(queue_one.name)
+
+    @DBOS.workflow()
+    def workflow(val: str) -> str:
+        return val + "!"
+
+    # listen_queues accepts a mix of Queue objects and string names.
+    DBOS.listen_queues([queue_one, "db_backed_queue"])
+    DBOS.launch()
+
+    # Register the database-backed queue post-launch (it requires _sys_db).
+    DBOS.register_queue("db_backed_queue")
+
+    # In-memory listened queue runs workflows.
+    handle_one = queue_one.enqueue(workflow, "hello")
+    assert handle_one.get_result() == "hello!"
+
+    # Database-backed listened queue also runs workflows.
+    handle_db = DBOS.enqueue_workflow("db_backed_queue", workflow, "db")
+    assert handle_db.get_result() == "db!"
+
+    # Workflows enqueued on a queue we are not listening to stay ENQUEUED.
+    handle_two = queue_two.enqueue(workflow, "world")
+    time.sleep(2)
+    assert handle_two.get_status().status == "ENQUEUED"
+
+    # Restart listening to queue_two and confirm the pending workflow runs.
+    DBOS.destroy()
+    DBOS(config=config)
+    DBOS.listen_queues([queue_two])
+    DBOS.launch()
+
+    assert DBOS.retrieve_workflow(handle_two.workflow_id).get_result() == "world!"
+
+
 def test_queue_crud(dbos: DBOS) -> None:
     queue_name = f"test_crud_queue_{uuid.uuid4()}"
 
