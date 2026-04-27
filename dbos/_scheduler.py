@@ -161,6 +161,10 @@ def backfill_schedule(
     queue_name = schedule.get("queue_name")
     tz_name = schedule.get("cron_timezone")
     tz = ZoneInfo(tz_name) if tz_name else timezone.utc
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
     start_in_tz = start.astimezone(tz)
     it = croniter(schedule["schedule"], start_in_tz, second_at_beginning=True)
     workflow_ids: list[str] = []
