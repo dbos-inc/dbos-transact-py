@@ -22,8 +22,9 @@ import sqlalchemy as sa
 
 from dbos._context import MaxPriority, MinPriority
 from dbos._core import DEFAULT_POLLING_INTERVAL
+from dbos._queue import Queue, QueueConflictResolution, QueueRateLimit
 from dbos._sys_db import SystemDatabase
-from dbos._utils import generate_uuid
+from dbos._utils import GlobalParams, generate_uuid
 
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
@@ -279,6 +280,49 @@ class DBOSClient:
     ) -> "WorkflowHandleAsync[R]":
         workflow_id = await asyncio.to_thread(self._enqueue, options, *args, **kwargs)
         return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
+
+    def register_queue(
+        self,
+        name: str,
+        concurrency: Optional[int] = None,
+        limiter: Optional[QueueRateLimit] = None,
+        *,
+        worker_concurrency: Optional[int] = None,
+        priority_enabled: bool = False,
+        partition_queue: bool = False,
+        polling_interval_sec: float = 1.0,
+        on_conflict: QueueConflictResolution = "update_if_latest_version",
+    ) -> Queue:
+        """Register a queue from a client and persist it to the system database.
+
+        See :meth:`DBOS.register_queue` for ``on_conflict`` semantics.
+        """
+        if on_conflict == "always_update":
+            update_existing = True
+        elif on_conflict == "never_update":
+            update_existing = False
+        else:
+            latest = self._sys_db.get_latest_application_version()
+            update_existing = latest["version_name"] == GlobalParams.app_version
+
+        self._sys_db.upsert_queue(
+            name=name,
+            concurrency=concurrency,
+            worker_concurrency=worker_concurrency,
+            rate_limit_max=limiter["limit"] if limiter else None,
+            rate_limit_period_sec=limiter["period"] if limiter else None,
+            priority_enabled=priority_enabled,
+            partition_queue=partition_queue,
+            polling_interval_sec=polling_interval_sec,
+            update_existing=update_existing,
+        )
+        queue = self._sys_db.get_queue(name, client_system_database=self._sys_db)
+        assert queue is not None, f"Queue {name} missing from database after upsert"
+        return queue
+
+    def retrieve_queue(self, name: str) -> Optional[Queue]:
+        """Retrieve a database-backed queue by name from the client."""
+        return self._sys_db.get_queue(name, client_system_database=self._sys_db)
 
     def retrieve_workflow(self, workflow_id: str) -> "WorkflowHandle[R]":
         status = get_workflow(self._sys_db, workflow_id)

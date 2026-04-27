@@ -241,6 +241,58 @@ def test_queue_dynamic_config(dbos: DBOS) -> None:
         legacy.set_concurrency(5)
 
 
+def test_client_queue_crud(dbos: DBOS, client: DBOSClient) -> None:
+    queue_name = f"test_client_queue_{uuid.uuid4()}"
+
+    # retrieve_queue returns None for an unknown queue.
+    assert client.retrieve_queue(queue_name) is None
+
+    # register_queue persists configuration without depending on the DBOS
+    # singleton's _sys_db.
+    queue = client.register_queue(
+        queue_name,
+        concurrency=4,
+        limiter={"limit": 5, "period": 1.5},
+        worker_concurrency=2,
+        priority_enabled=True,
+        polling_interval_sec=2.5,
+    )
+    assert queue.name == queue_name
+    assert queue.database_backed_queue is True
+    assert queue._client_system_database is client._sys_db
+
+    # Getters route through the client's SystemDatabase.
+    retrieved = client.retrieve_queue(queue_name)
+    assert retrieved is not None
+    assert retrieved._client_system_database is client._sys_db
+    assert retrieved.concurrency == 4
+    assert retrieved.worker_concurrency == 2
+    assert retrieved.limiter == {"limit": 5, "period": 1.5}
+    assert retrieved.priority_enabled is True
+    assert retrieved.polling_interval_sec == 2.5
+
+    # Setters write through the client's SystemDatabase too.
+    retrieved.set_concurrency(8)
+    fresh = DBOS.retrieve_queue(queue_name)
+    assert fresh is not None
+    assert fresh.concurrency == 8
+
+    # Enqueueing on a client-bound queue is forbidden.
+    @DBOS.workflow()
+    def echo(x: int) -> int:
+        return x
+
+    with pytest.raises(DBOSException):
+        retrieved.enqueue(echo, 42)
+
+    # Speed up the worker so the test finishes quickly, then enqueue through
+    # the DBOS singleton onto the client-registered queue and verify it runs.
+    retrieved.set_polling_interval_sec(0.1)
+    handle = DBOS.enqueue_workflow(queue_name, echo, 42)
+    assert handle.get_result() == 42
+    assert handle.get_status().queue_name == queue_name
+
+
 def test_dynamic_concurrency_takes_effect(dbos: DBOS) -> None:
     """Verify that updating a queue's concurrency at runtime is picked up by
     the worker thread on its next poll iteration.

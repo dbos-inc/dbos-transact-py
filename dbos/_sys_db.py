@@ -68,7 +68,10 @@ if TYPE_CHECKING:
     from ._queue import Queue, QueueRateLimit
 
 
-def queue_from_db_row(row: sa.Row[Any]) -> "Queue":
+def queue_from_db_row(
+    row: sa.Row[Any],
+    client_system_database: Optional["SystemDatabase"] = None,
+) -> "Queue":
     """Build a database-backed Queue from a queues-table row."""
     from ._queue import Queue
 
@@ -88,6 +91,7 @@ def queue_from_db_row(row: sa.Row[Any]) -> "Queue":
         partition_queue=bool(m["partition_queue"]),
         polling_interval_sec=m["polling_interval_sec"],
         database_backed_queue=True,
+        client_system_database=client_system_database,
     )
 
 
@@ -4183,17 +4187,31 @@ class SystemDatabase(ABC):
 
     # ── Queue Registration ──────────────────────────────────────
 
-    def get_queue(self, name: str) -> Optional["Queue"]:
+    def get_queue(
+        self,
+        name: str,
+        *,
+        client_system_database: Optional["SystemDatabase"] = None,
+    ) -> Optional["Queue"]:
         with self.engine.begin() as c:
             row = c.execute(
                 sa.select(SystemSchema.queues).where(SystemSchema.queues.c.name == name)
             ).fetchone()
-            return queue_from_db_row(row) if row is not None else None
+            if row is None:
+                return None
+            return queue_from_db_row(row, client_system_database=client_system_database)
 
-    def list_queues(self) -> List["Queue"]:
+    def list_queues(
+        self,
+        *,
+        client_system_database: Optional["SystemDatabase"] = None,
+    ) -> List["Queue"]:
         with self.engine.begin() as c:
             rows = c.execute(sa.select(SystemSchema.queues)).fetchall()
-            return [queue_from_db_row(row) for row in rows]
+            return [
+                queue_from_db_row(row, client_system_database=client_system_database)
+                for row in rows
+            ]
 
     def update_queue(self, name: str, fields: Dict[str, Any]) -> None:
         """Apply a partial update to a database-backed queue's row."""

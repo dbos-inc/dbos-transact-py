@@ -19,6 +19,7 @@ from ._core import P, R, execute_workflow_by_id, start_workflow, start_workflow_
 
 if TYPE_CHECKING:
     from ._dbos import DBOS, WorkflowHandle, WorkflowHandleAsync
+    from ._sys_db import SystemDatabase
 
 
 class QueueRateLimit(TypedDict):
@@ -52,6 +53,7 @@ class Queue:
         partition_queue: bool = False,
         polling_interval_sec: float = 1.0,
         database_backed_queue: bool = False,
+        client_system_database: Optional["SystemDatabase"] = None,
     ) -> None:
         if (
             worker_concurrency is not None
@@ -65,6 +67,10 @@ class Queue:
             raise ValueError("polling_interval_sec must be positive")
         self.name = name
         self.database_backed_queue = database_backed_queue
+        # When set, getters/setters use this SystemDatabase instead of the
+        # DBOS singleton's. This allows a DBOSClient to manipulate queues
+        # without depending on a launched DBOS process.
+        self._client_system_database = client_system_database
         # Local cache of configurable params. Property getters consult this
         # for in-memory queues and the database for database-backed queues.
         self._concurrency = concurrency
@@ -93,18 +99,23 @@ class Queue:
                 "only supported for queues registered via DBOS.register_queue."
             )
 
-    def _read_from_db(self) -> "Queue":
+    def _sys_db(self) -> "SystemDatabase":
+        if self._client_system_database is not None:
+            return self._client_system_database
         from ._dbos import _get_dbos_instance
 
-        latest = _get_dbos_instance()._sys_db.get_queue(self.name)
+        return _get_dbos_instance()._sys_db
+
+    def _read_from_db(self) -> "Queue":
+        latest = self._sys_db().get_queue(
+            self.name, client_system_database=self._client_system_database
+        )
         if latest is None:
             raise DBOSException(f"Queue {self.name} not found in the database")
         return latest
 
     def _write_to_db(self, fields: dict[str, Any]) -> None:
-        from ._dbos import _get_dbos_instance
-
-        _get_dbos_instance()._sys_db.update_queue(self.name, fields)
+        self._sys_db().update_queue(self.name, fields)
 
     @property
     def concurrency(self) -> Optional[int]:
@@ -195,9 +206,17 @@ class Queue:
         self._write_to_db({"polling_interval_sec": value})
         self._polling_interval_sec = value
 
+    def _require_dbos_bound(self) -> None:
+        if self._client_system_database is not None:
+            raise DBOSException(
+                f"Cannot enqueue on queue {self.name} from a client-bound Queue "
+                "object. Use DBOSClient.enqueue instead."
+            )
+
     def enqueue(
         self, func: "Callable[P, R]", *args: P.args, **kwargs: P.kwargs
     ) -> "WorkflowHandle[R]":
+        self._require_dbos_bound()
         from ._dbos import _get_dbos_instance
 
         context = get_local_dbos_context()
@@ -233,6 +252,7 @@ class Queue:
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> "WorkflowHandleAsync[R]":
+        self._require_dbos_bound()
         from ._dbos import _get_dbos_instance
 
         dbos = _get_dbos_instance()
