@@ -53,12 +53,9 @@ def test_simple_queue(dbos: DBOS) -> None:
         return var + "d"
 
     DBOS.register_queue("test_queue")
-    queue = DBOS.retrieve_queue("test_queue")
-    assert queue is not None
-    assert queue.database_backed_queue is True
 
     with SetWorkflowID(wfid):
-        handle = queue.enqueue(test_workflow, "abc", "123")
+        handle = DBOS.enqueue_workflow("test_queue", test_workflow, "abc", "123")
     assert handle.get_result() == "abcd123"
     with SetWorkflowID(wfid):
         assert test_workflow("abc", "123") == "abcd123"

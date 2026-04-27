@@ -1030,6 +1030,34 @@ class DBOS:
         )
 
     @classmethod
+    def enqueue_workflow(
+        cls,
+        queue_name: str,
+        func: Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> WorkflowHandle[R]:
+        """Enqueue a workflow on a database-backed queue, returning a handle to the ongoing execution."""
+        queue = cls.retrieve_queue(queue_name)
+        if queue is None:
+            raise DBOSException(f"Queue {queue_name} is not registered")
+        return queue.enqueue(func, *args, **kwargs)
+
+    @classmethod
+    async def enqueue_workflow_async(
+        cls,
+        queue_name: str,
+        func: Callable[P, Coroutine[Any, Any, R]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> WorkflowHandleAsync[R]:
+        """Async version of :meth:`enqueue_workflow`."""
+        queue = cls.retrieve_queue(queue_name)
+        if queue is None:
+            raise DBOSException(f"Queue {queue_name} is not registered")
+        return await queue.enqueue_async(func, *args, **kwargs)
+
+    @classmethod
     @overload
     def run_step(
         cls,
