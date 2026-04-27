@@ -390,7 +390,7 @@ class DBOS:
         self._app_db_field: Optional[ApplicationDatabase] = None
         self._registry: DBOSRegistry = _get_or_create_dbos_registry()
         self._registry.dbos = self
-        self._listening_queues: Optional[List[Queue]] = None
+        self._listening_queues: Optional[List[str]] = None
         self._admin_server_field: Optional[AdminServer] = None
         # Stop internal background threads (queue thread, timeout threads, etc.)
         self.background_thread_stop_events: List[threading.Event] = []
@@ -3030,19 +3030,19 @@ class DBOS:
         return dbos_tracer
 
     @classmethod
-    def listen_queues(cls, queues: List[Queue]) -> None:
+    def listen_queues(cls, queues: List[Union[Queue, str]]) -> None:
         """
         Configure this DBOS process to only listen to (dequeue workflows from) specific queues.
 
         Args:
-            queues(List[Queue]): The list of queues to listen to
+            queues: The queues to listen to, either as ``Queue`` objects or as queue names.
         """
         dbos = _get_dbos_instance()
         if dbos._launched:
             raise DBOSException("listen_queues called after DBOS is launched")
         if dbos._listening_queues is not None:
             raise DBOSException("listen_queues called more than once")
-        dbos._listening_queues = queues
+        dbos._listening_queues = [q if isinstance(q, str) else q.name for q in queues]
 
     @classmethod
     def alert_handler(

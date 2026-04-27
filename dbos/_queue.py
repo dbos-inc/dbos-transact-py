@@ -221,19 +221,34 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     check_interval = 1.0
 
     if dbos._listening_queues is not None:
-        listening_queues = dbos._listening_queues
+        dbos.logger.info(f"Listening to {len(dbos._listening_queues)} queues:")
+        for name in dbos._listening_queues:
+            dbos_logger.info(f"Queue: {name}")
     else:
-        listening_queues = list(dbos._registry.queue_info_map.values())
         listening_queues = [
-            q for q in listening_queues if q.name != INTERNAL_QUEUE_NAME
+            q
+            for q in dbos._registry.queue_info_map.values()
+            if q.name != INTERNAL_QUEUE_NAME
         ]
-    dbos.logger.info(f"Listening to {len(listening_queues)} queues:")
-    log_queues(listening_queues)
+        dbos.logger.info(f"Listening to {len(listening_queues)} queues:")
+        log_queues(listening_queues)
 
     while not stop_event.is_set():
         if dbos._listening_queues is not None:
-            # If explicitly listening for queues, only use those queues
-            current_queues = {queue.name: queue for queue in dbos._listening_queues}
+            # If explicitly listening for queues, resolve each name to a Queue
+            # from either the in-memory registry or the database.
+            listening_set = set(dbos._listening_queues)
+            current_queues = {
+                name: q
+                for name, q in dbos._registry.queue_info_map.items()
+                if name in listening_set
+            }
+            try:
+                for queue in dbos._sys_db.list_queues():
+                    if queue.name in listening_set and queue.name not in current_queues:
+                        current_queues[queue.name] = queue
+            except Exception as e:
+                dbos.logger.warning(f"Exception listing database-backed queues: {e}")
             # Always listen to the internal queue
             current_queues[INTERNAL_QUEUE_NAME] = dbos._registry.get_internal_queue()
         else:

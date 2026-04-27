@@ -1930,26 +1930,25 @@ def test_listen_queue(dbos: DBOS, config: DBOSConfig) -> None:
     DBOS.destroy(destroy_registry=True)
     DBOS(config=config)
 
-    queue_one = Queue("queue_one")
-    queue_two = Queue("queue_two")
-
     @DBOS.workflow()
     def workflow() -> str:
         assert DBOS.workflow_id
         return DBOS.workflow_id
 
-    DBOS.listen_queues([queue_one])
+    DBOS.listen_queues(["queue_one"])
     DBOS.launch()
+    DBOS.register_queue("queue_one")
+    DBOS.register_queue("queue_two")
 
     # While only listening to queue one, only workflows enqueued there execute
-    handle_one = queue_one.enqueue(workflow)
-    handle_two = queue_two.enqueue(workflow)
+    handle_one = DBOS.enqueue_workflow("queue_one", workflow)
+    handle_two = DBOS.enqueue_workflow("queue_two", workflow)
     assert handle_one.get_result()
     assert handle_two.get_status().status == "ENQUEUED"
 
     DBOS.destroy()
     DBOS(config=config)
-    DBOS.listen_queues([queue_two])
+    DBOS.listen_queues(["queue_two"])
     DBOS.launch()
 
     # Listening to queue two completes its workflows
