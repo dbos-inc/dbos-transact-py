@@ -183,6 +183,10 @@ class Queue:
 
     def set_limiter(self, value: Optional[QueueRateLimit]) -> None:
         self._require_database_backed()
+        if value is not None and (
+            value.get("limit") is None or value.get("period") is None
+        ):
+            raise ValueError("limiter must specify both 'limit' and 'period'")
         self._write_to_db(
             {
                 "rate_limit_max": value["limit"] if value else None,
