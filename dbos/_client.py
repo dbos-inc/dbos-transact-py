@@ -364,7 +364,7 @@ class DBOSClient:
         return self._sys_db.get_queue(name, client_system_database=self._sys_db)
 
     def delete_queue(self, name: str) -> None:
-        """Delete a database-backed queue by name. No-op if it does not exist."""
+        """Delete a database-backed queue. Pending workflows on it are unrecoverable."""
         self._sys_db.delete_queue(name)
 
     def retrieve_workflow(self, workflow_id: str) -> "WorkflowHandle[R]":

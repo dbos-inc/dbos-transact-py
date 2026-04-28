@@ -875,7 +875,7 @@ class DBOS:
 
     @classmethod
     def delete_queue(cls, name: str) -> None:
-        """Delete a database-backed queue by name. No-op if it does not exist."""
+        """Delete a database-backed queue. Pending workflows on it are unrecoverable."""
         _get_dbos_instance()._sys_db.delete_queue(name)
 
     # Decorators for DBOS functionality
