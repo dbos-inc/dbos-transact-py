@@ -103,7 +103,7 @@ class Queue:
             and worker_concurrency > concurrency
         ):
             raise ValueError(
-                "worker_concurrency must be less than or equal to concurrency"
+                "concurrency must be greater than or equal to worker_concurrency"
             )
         if polling_interval_sec <= 0.0:
             raise ValueError("polling_interval_sec must be positive")
