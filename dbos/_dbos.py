@@ -803,7 +803,7 @@ class DBOS:
 
         - ``"update_if_latest_version"`` (default): overwrite the existing row
           only when the running application version is the latest registered
-          version. Older versions in a rolling deploy will not clobber the
+          version. Older versions in a rolling deploy will not overwrite the
           newer config.
         - ``"always_update"``: always overwrite the existing row.
         - ``"never_update"``: leave the existing row unchanged.

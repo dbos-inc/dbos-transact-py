@@ -295,7 +295,7 @@ class DBOSClient:
     ) -> Queue:
         """Register a queue from a client and persist it to the system database.
 
-        Defaults to ``"always_update"``. ``"update_if_latest_version"`` is
+        ``on_conflict`` defaults to ``"always_update"``. ``"update_if_latest_version"`` is
         rejected because clients are not associated with an application
         version. See :meth:`DBOS.register_queue` for the other semantics.
         """
