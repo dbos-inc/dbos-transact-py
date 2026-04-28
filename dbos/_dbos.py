@@ -831,6 +831,12 @@ class DBOS:
 
         :returns: A :class:`Queue` reflecting the persisted configuration.
         """
+        Queue._validate_queue(
+            concurrency=concurrency,
+            worker_concurrency=worker_concurrency,
+            polling_interval_sec=polling_interval_sec,
+            limiter=limiter,
+        )
         dbos = _get_dbos_instance()
 
         if on_conflict == "always_update":

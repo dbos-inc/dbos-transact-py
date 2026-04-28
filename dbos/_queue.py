@@ -55,16 +55,12 @@ class Queue:
         database_backed_queue: bool = False,
         client_system_database: Optional["SystemDatabase"] = None,
     ) -> None:
-        if (
-            worker_concurrency is not None
-            and concurrency is not None
-            and worker_concurrency > concurrency
-        ):
-            raise ValueError(
-                "worker_concurrency must be less than or equal to concurrency"
-            )
-        if polling_interval_sec <= 0.0:
-            raise ValueError("polling_interval_sec must be positive")
+        Queue._validate_queue(
+            concurrency=concurrency,
+            worker_concurrency=worker_concurrency,
+            polling_interval_sec=polling_interval_sec,
+            limiter=limiter,
+        )
         self.name = name
         self.database_backed_queue = database_backed_queue
         # When set, getters/setters use this SystemDatabase instead of the
@@ -91,6 +87,30 @@ class Queue:
         if self.name in registry.queue_info_map and self.name != INTERNAL_QUEUE_NAME:
             raise Exception(f"Queue {name} has already been declared")
         registry.queue_info_map[self.name] = self
+
+    @staticmethod
+    def _validate_queue(
+        *,
+        concurrency: Optional[int],
+        worker_concurrency: Optional[int],
+        polling_interval_sec: float,
+        limiter: Optional[QueueRateLimit],
+    ) -> None:
+        """Validate queue configuration parameters, raising ValueError on bad input."""
+        if (
+            worker_concurrency is not None
+            and concurrency is not None
+            and worker_concurrency > concurrency
+        ):
+            raise ValueError(
+                "worker_concurrency must be less than or equal to concurrency"
+            )
+        if polling_interval_sec <= 0.0:
+            raise ValueError("polling_interval_sec must be positive")
+        if limiter is not None and (
+            limiter.get("limit") is None or limiter.get("period") is None
+        ):
+            raise ValueError("limiter must specify both 'limit' and 'period'")
 
     def _require_database_backed(self) -> None:
         if not self.database_backed_queue:

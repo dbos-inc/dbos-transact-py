@@ -326,6 +326,12 @@ class DBOSClient:
 
         :returns: A :class:`Queue` bound to this client's system database.
         """
+        Queue._validate_queue(
+            concurrency=concurrency,
+            worker_concurrency=worker_concurrency,
+            polling_interval_sec=polling_interval_sec,
+            limiter=limiter,
+        )
         if on_conflict == "always_update":
             update_existing = True
         elif on_conflict == "never_update":
