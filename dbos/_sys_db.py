@@ -4213,6 +4213,13 @@ class SystemDatabase(ABC):
                 for row in rows
             ]
 
+    def delete_queue(self, name: str) -> None:
+        """Delete a database-backed queue's row, if it exists."""
+        with self.engine.begin() as c:
+            c.execute(
+                sa.delete(SystemSchema.queues).where(SystemSchema.queues.c.name == name)
+            )
+
     def update_queue(self, name: str, fields: Dict[str, Any]) -> None:
         """Apply a partial update to a database-backed queue's row."""
         if not fields:

@@ -873,6 +873,11 @@ class DBOS:
         """
         return _get_dbos_instance()._sys_db.get_queue(name)
 
+    @classmethod
+    def delete_queue(cls, name: str) -> None:
+        """Delete a database-backed queue by name. No-op if it does not exist."""
+        _get_dbos_instance()._sys_db.delete_queue(name)
+
     # Decorators for DBOS functionality
     @classmethod
     def workflow(

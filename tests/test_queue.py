@@ -306,6 +306,45 @@ def test_client_queue_crud(dbos: DBOS, client: DBOSClient) -> None:
     assert overwritten is not None
     assert overwritten.concurrency == 99
 
+    # delete_queue removes the row; subsequent retrievals return None and
+    # deleting again is a harmless no-op.
+    client.delete_queue(queue_name)
+    assert client.retrieve_queue(queue_name) is None
+    assert DBOS.retrieve_queue(queue_name) is None
+    client.delete_queue(queue_name)
+
+
+def test_queue_delete_and_recreate(dbos: DBOS) -> None:
+    """Create a queue, run a workflow on it, delete it, recreate it, and verify
+    the recreated queue still processes workflows."""
+    queue_name = f"test_delete_recreate_{uuid.uuid4()}"
+
+    @DBOS.workflow()
+    def echo(x: int) -> int:
+        return x
+
+    DBOS.register_queue(queue_name, polling_interval_sec=0.1)
+
+    # Initial queue works.
+    handle1 = DBOS.enqueue_workflow(queue_name, echo, 1)
+    assert handle1.get_result() == 1
+
+    # Delete the queue. Subsequent retrievals should return None.
+    DBOS.delete_queue(queue_name)
+    assert DBOS.retrieve_queue(queue_name) is None
+
+    # Recreate the queue with a different config; the new row should be used.
+    DBOS.register_queue(queue_name, concurrency=5, polling_interval_sec=0.1)
+    recreated = DBOS.retrieve_queue(queue_name)
+    assert recreated is not None
+    assert recreated.concurrency == 5
+
+    # The recreated queue still processes workflows.
+    handle2 = DBOS.enqueue_workflow(queue_name, echo, 2)
+    assert handle2.get_result() == 2
+
+    DBOS.delete_queue(queue_name)
+
 
 def test_dynamic_concurrency_takes_effect(dbos: DBOS) -> None:
     """Verify that updating a queue's concurrency at runtime is picked up by
