@@ -415,7 +415,16 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
             current_queues = dict(dbos._registry.queue_info_map)
             try:
                 for queue in dbos._sys_db.list_queues():
-                    if queue.name in current_queues or queue.name in queue_threads:
+                    if queue.name in dbos._registry.queue_info_map:
+                        dbos.logger.warning(
+                            f"Database-backed queue {queue.name} has the same "
+                            "name as an in-memory queue. The in-memory queue's "
+                            "configuration is being used; the database-backed "
+                            "queue is ignored. Rename one of them to resolve "
+                            "the conflict."
+                        )
+                        continue
+                    if queue.name in queue_threads:
                         continue
                     current_queues[queue.name] = queue
             except Exception as e:
