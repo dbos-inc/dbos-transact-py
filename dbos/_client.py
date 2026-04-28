@@ -295,9 +295,36 @@ class DBOSClient:
     ) -> Queue:
         """Register a queue from a client and persist it to the system database.
 
-        ``on_conflict`` defaults to ``"always_update"``. ``"update_if_latest_version"`` is
-        rejected because clients are not associated with an application
-        version. See :meth:`DBOS.register_queue` for the other semantics.
+        :param name: Unique name of the queue. Used as the lookup key in the
+            ``queues`` table and on every ``enqueue`` call.
+        :param concurrency: Maximum number of workflows from this queue that may
+            be running globally (across all executors) at once. ``None`` (the
+            default) means no global limit.
+        :param limiter: Rate limit configuration of the form
+            ``{"limit": int, "period": float}``. At most ``limit`` workflows
+            from the queue will start within any rolling window of ``period``
+            seconds. ``None`` disables rate limiting.
+        :param worker_concurrency: Maximum number of workflows from this queue
+            that may be running on a single executor at once. ``None`` means no
+            per-executor limit. May be combined with ``concurrency``.
+        :param priority_enabled: When ``True``, callers may set a workflow
+            priority via ``SetEnqueueOptions(priority=...)`` and lower numbers
+            are dequeued first. When ``False``, supplying a priority raises an
+            error at enqueue time.
+        :param partition_queue: When ``True``, every enqueue must specify a
+            ``queue_partition_key`` and concurrency / worker_concurrency limits
+            are applied per partition rather than to the queue as a whole.
+            Deduplication is not supported on partitioned queues.
+        :param polling_interval_sec: How often (in seconds) the worker thread
+            wakes up to look for runnable workflows on this queue. Smaller
+            values reduce dequeue latency at the cost of more database load.
+        :param on_conflict: Behavior when a queue with the same name already
+            exists in the database. Defaults to ``"always_update"``.
+            ``"update_if_latest_version"`` is rejected because clients are not
+            associated with an application version. ``"never_update"`` leaves
+            the existing row unchanged.
+
+        :returns: A :class:`Queue` bound to this client's system database.
         """
         if on_conflict == "always_update":
             update_existing = True
