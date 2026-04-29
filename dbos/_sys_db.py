@@ -4245,7 +4245,10 @@ class SystemDatabase(ABC):
         partition_queue: bool,
         polling_interval_sec: float,
         update_existing: bool,
-    ) -> None:
+    ) -> bool:
+        """Upsert a queue row. Returns True iff a new row was inserted (i.e.
+        the queue did not previously exist). False if the row already existed,
+        regardless of whether it was updated."""
         values = {
             "name": name,
             "concurrency": concurrency,
@@ -4258,6 +4261,14 @@ class SystemDatabase(ABC):
             "updated_at": int(time.time() * 1000),
         }
         with self.engine.begin() as c:
+            existed = (
+                c.execute(
+                    sa.select(SystemSchema.queues.c.name).where(
+                        SystemSchema.queues.c.name == name
+                    )
+                ).fetchone()
+                is not None
+            )
             stmt = self.dialect.insert(SystemSchema.queues).values(**values)
             if update_existing:
                 update_set = {k: v for k, v in values.items() if k != "name"}
@@ -4268,6 +4279,7 @@ class SystemDatabase(ABC):
             else:
                 stmt = stmt.on_conflict_do_nothing(index_elements=["name"])
             c.execute(stmt)
+            return not existed
 
     def get_latest_application_version(self) -> VersionInfo:
         with self.engine.begin() as c:

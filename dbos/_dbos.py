@@ -72,7 +72,13 @@ from ._core import (
     write_stream,
 )
 from ._croniter import croniter  # type: ignore
-from ._queue import Queue, QueueConflictResolution, QueueRateLimit, queue_thread
+from ._queue import (
+    Queue,
+    QueueConflictResolution,
+    QueueRateLimit,
+    log_queue,
+    queue_thread,
+)
 from ._recovery import recover_pending_workflows, startup_recovery_thread
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
@@ -847,7 +853,7 @@ class DBOS:
             latest = dbos._sys_db.get_latest_application_version()
             update_existing = latest["version_name"] == GlobalParams.app_version
 
-        dbos._sys_db.upsert_queue(
+        inserted = dbos._sys_db.upsert_queue(
             name=name,
             concurrency=concurrency,
             worker_concurrency=worker_concurrency,
@@ -860,6 +866,9 @@ class DBOS:
         )
         queue = dbos.retrieve_queue(name)
         assert queue is not None, f"Queue {name} missing from database after upsert"
+        if inserted:
+            dbos.logger.info("Registered new queue:")
+            log_queue(queue)
         return queue
 
     @classmethod
