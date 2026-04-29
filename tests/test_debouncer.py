@@ -188,6 +188,14 @@ def test_debouncer_queue(dbos: DBOS) -> None:
     assert handle.get_status().queue_name == queue.name
     assert handle.get_status().app_version == test_version
 
+    # The queue argument also accepts a queue name as a string.
+    debouncer_by_name = Debouncer.create(workflow, queue=queue.name)
+    name_handle = debouncer_by_name.debounce(
+        "string-key", debounce_period_sec, first_value
+    )
+    assert name_handle.get_result() == first_value
+    assert name_handle.get_status().queue_name == queue.name
+
 
 @pytest.mark.asyncio
 async def test_debouncer_async(dbos: DBOS) -> None:

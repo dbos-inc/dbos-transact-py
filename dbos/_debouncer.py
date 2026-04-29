@@ -14,6 +14,7 @@ from typing import (
     Tuple,
     TypedDict,
     TypeVar,
+    Union,
 )
 
 from dbos._client import (
@@ -49,6 +50,14 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 
 _DEBOUNCER_TOPIC = "DEBOUNCER_TOPIC"
+
+
+def _resolve_queue_name(queue: Optional[Union[Queue, str]]) -> Optional[str]:
+    if queue is None:
+        return None
+    if isinstance(queue, Queue):
+        return queue.name
+    return queue
 
 
 # Options saved from the local context to pass through to the debounced function
@@ -159,12 +168,12 @@ class Debouncer(Generic[P, R]):
         workflow_name: str,
         *,
         debounce_timeout_sec: Optional[float] = None,
-        queue: Optional[Queue] = None,
+        queue: Optional[Union[Queue, str]] = None,
     ):
         self.func_name = workflow_name
         self.options: DebouncerOptions = {
             "debounce_timeout_sec": debounce_timeout_sec,
-            "queue_name": queue.name if queue else None,
+            "queue_name": _resolve_queue_name(queue),
             "workflow_name": workflow_name,
         }
 
@@ -173,7 +182,7 @@ class Debouncer(Generic[P, R]):
         workflow: Callable[P, R],
         *,
         debounce_timeout_sec: Optional[float] = None,
-        queue: Optional[Queue] = None,
+        queue: Optional[Union[Queue, str]] = None,
     ) -> "Debouncer[P, R]":
 
         if isinstance(workflow, (types.MethodType)):
@@ -189,7 +198,7 @@ class Debouncer(Generic[P, R]):
         workflow: Callable[P, Coroutine[Any, Any, R]],
         *,
         debounce_timeout_sec: Optional[float] = None,
-        queue: Optional[Queue] = None,
+        queue: Optional[Union[Queue, str]] = None,
     ) -> "Debouncer[P, R]":
 
         if isinstance(workflow, (types.MethodType)):
@@ -317,12 +326,12 @@ class DebouncerClient:
         workflow_options: EnqueueOptions,
         *,
         debounce_timeout_sec: Optional[float] = None,
-        queue: Optional[Queue] = None,
+        queue: Optional[Union[Queue, str]] = None,
     ):
         self.workflow_options = workflow_options
         self.debouncer_options: DebouncerOptions = {
             "debounce_timeout_sec": debounce_timeout_sec,
-            "queue_name": queue.name if queue else None,
+            "queue_name": _resolve_queue_name(queue),
             "workflow_name": workflow_options["workflow_name"],
         }
         self.client = client
