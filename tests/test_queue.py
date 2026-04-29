@@ -334,6 +334,7 @@ def test_queue_delete_and_recreate(dbos: DBOS) -> None:
     assert DBOS.retrieve_queue(queue_name) is None
 
     # Recreate the queue with a different config; the new row should be used.
+    time.sleep(2)
     DBOS.register_queue(queue_name, concurrency=5, polling_interval_sec=0.1)
     recreated = DBOS.retrieve_queue(queue_name)
     assert recreated is not None

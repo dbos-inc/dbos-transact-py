@@ -428,7 +428,10 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                             "the conflict."
                         )
                         continue
-                    if queue.name in queue_threads:
+                    if (
+                        queue.name in queue_threads
+                        and queue_threads[queue.name].is_alive()
+                    ):
                         continue
                     current_queues[queue.name] = queue
             except Exception as e:
