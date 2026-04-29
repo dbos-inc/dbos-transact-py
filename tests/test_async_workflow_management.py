@@ -186,7 +186,7 @@ async def test_list_workflows_async(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_list_queued_workflows_async(dbos: DBOS) -> None:
     """Test async list_queued_workflows method."""
-    queue = Queue("test_queue_async")
+    DBOS.register_queue("test_queue_async")
     workflow_event = asyncio.Event()
 
     @DBOS.workflow()
@@ -197,7 +197,9 @@ async def test_list_queued_workflows_async(dbos: DBOS) -> None:
     # Enqueue a workflow but don't let it complete yet
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        handle = await queue.enqueue_async(blocking_workflow, 42)
+        handle = await DBOS.enqueue_workflow_async(
+            "test_queue_async", blocking_workflow, 42
+        )
 
     # List queued workflows async while workflow is still running
     queued_workflows = await DBOS.list_queued_workflows_async(

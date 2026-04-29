@@ -72,7 +72,7 @@ from ._core import (
     write_stream,
 )
 from ._croniter import croniter  # type: ignore
-from ._queue import Queue, queue_thread
+from ._queue import Queue, QueueConflictResolution, QueueRateLimit, queue_thread
 from ._recovery import recover_pending_workflows, startup_recovery_thread
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
@@ -390,7 +390,7 @@ class DBOS:
         self._app_db_field: Optional[ApplicationDatabase] = None
         self._registry: DBOSRegistry = _get_or_create_dbos_registry()
         self._registry.dbos = self
-        self._listening_queues: Optional[List[Queue]] = None
+        self._listening_queues: Optional[List[str]] = None
         self._admin_server_field: Optional[AdminServer] = None
         # Stop internal background threads (queue thread, timeout threads, etc.)
         self.background_thread_stop_events: List[threading.Event] = []
@@ -782,6 +782,102 @@ class DBOS:
     def register_instance(cls, inst: object) -> None:
         return _get_or_create_dbos_registry().register_instance(inst)
 
+    @classmethod
+    def register_queue(
+        cls,
+        name: str,
+        *,
+        worker_concurrency: Optional[int] = None,
+        concurrency: Optional[int] = None,
+        limiter: Optional[QueueRateLimit] = None,
+        priority_enabled: bool = False,
+        partition_queue: bool = False,
+        polling_interval_sec: float = 1.0,
+        on_conflict: QueueConflictResolution = "update_if_latest_version",
+    ) -> Queue:
+        """
+        Register a queue and persist its configuration to the system database.
+
+        :param name: Unique name of the queue.
+        :param worker_concurrency: Maximum number of workflows from this queue
+            that may be running on a single executor at once. ``None`` means no
+            per-executor limit. May be combined with ``concurrency``.
+        :param concurrency: Maximum number of workflows from this queue that may
+            be running globally (across all executors) at once. ``None`` (the
+            default) means no global limit.
+        :param limiter: Rate limit configuration of the form
+            ``{"limit": int, "period": float}``. At most ``limit`` workflows
+            from the queue will start within any rolling window of ``period``
+            seconds. ``None`` disables rate limiting.
+        :param priority_enabled: When ``True``, callers may set a workflow
+            priority via ``SetEnqueueOptions(priority=...)`` and lower numbers
+            are dequeued first. When ``False``, supplying a priority raises an
+            error at enqueue time.
+        :param partition_queue: When ``True``, every enqueue must specify a
+            ``queue_partition_key`` and concurrency / worker_concurrency limits
+            are applied per partition rather than to the queue as a whole.
+            Deduplication is not supported on partitioned queues.
+        :param polling_interval_sec: How often (in seconds) the worker thread
+            wakes up to look for runnable workflows on this queue.
+        :param on_conflict: Behavior when a queue with the same name already
+            exists in the database:
+
+            - ``"update_if_latest_version"`` (default): overwrite the existing
+              row only when the running application version is the latest
+              registered version. Older versions in a rolling deploy will not
+              overwrite the newer config.
+            - ``"always_update"``: always overwrite the existing row.
+            - ``"never_update"``: leave the existing row unchanged.
+
+        :returns: A :class:`Queue` reflecting the persisted configuration.
+        """
+        Queue._validate_queue(
+            concurrency=concurrency,
+            worker_concurrency=worker_concurrency,
+            polling_interval_sec=polling_interval_sec,
+            limiter=limiter,
+        )
+        dbos = _get_dbos_instance()
+
+        if on_conflict == "always_update":
+            update_existing = True
+        elif on_conflict == "never_update":
+            update_existing = False
+        else:
+            latest = dbos._sys_db.get_latest_application_version()
+            update_existing = latest["version_name"] == GlobalParams.app_version
+
+        dbos._sys_db.upsert_queue(
+            name=name,
+            concurrency=concurrency,
+            worker_concurrency=worker_concurrency,
+            rate_limit_max=limiter["limit"] if limiter else None,
+            rate_limit_period_sec=limiter["period"] if limiter else None,
+            priority_enabled=priority_enabled,
+            partition_queue=partition_queue,
+            polling_interval_sec=polling_interval_sec,
+            update_existing=update_existing,
+        )
+        queue = dbos.retrieve_queue(name)
+        assert queue is not None, f"Queue {name} missing from database after upsert"
+        return queue
+
+    @classmethod
+    def retrieve_queue(cls, name: str) -> Optional[Queue]:
+        """
+        Retrieve a database-backed queue by name.
+
+        Returns None if no queue with the given name has been registered in the
+        system database. The returned Queue is not added to the in-memory queue
+        registry.
+        """
+        return _get_dbos_instance()._sys_db.get_queue(name)
+
+    @classmethod
+    def delete_queue(cls, name: str) -> None:
+        """Delete a database-backed queue. Pending workflows on it are unrecoverable."""
+        _get_dbos_instance()._sys_db.delete_queue(name)
+
     # Decorators for DBOS functionality
     @classmethod
     def workflow(
@@ -958,6 +1054,34 @@ class DBOS:
         return await start_workflow_async(
             _get_dbos_instance(), parent_ctx_copy, child_ctx, func, args, kwargs
         )
+
+    @classmethod
+    def enqueue_workflow(
+        cls,
+        queue_name: str,
+        func: Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> WorkflowHandle[R]:
+        """Enqueue a workflow on a database-backed queue, returning a handle to the ongoing execution."""
+        queue = cls.retrieve_queue(queue_name)
+        if queue is None:
+            raise DBOSException(f"Queue {queue_name} is not registered")
+        return queue.enqueue(func, *args, **kwargs)
+
+    @classmethod
+    async def enqueue_workflow_async(
+        cls,
+        queue_name: str,
+        func: Callable[P, Coroutine[Any, Any, R]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> WorkflowHandleAsync[R]:
+        """Async version of :meth:`enqueue_workflow`."""
+        queue = cls.retrieve_queue(queue_name)
+        if queue is None:
+            raise DBOSException(f"Queue {queue_name} is not registered")
+        return await queue.enqueue_async(func, *args, **kwargs)
 
     @classmethod
     @overload
@@ -2239,7 +2363,11 @@ class DBOS:
         if not croniter.is_valid(schedule, second_at_beginning=True):
             raise DBOSException(f"Invalid cron schedule: '{schedule}'")
         dbos = _get_dbos_instance()
-        if queue_name is not None and queue_name not in dbos._registry.queue_info_map:
+        if (
+            queue_name is not None
+            and queue_name not in dbos._registry.queue_info_map
+            and dbos._sys_db.get_queue(queue_name) is None
+        ):
             raise DBOSException(
                 f"Queue '{queue_name}' is not declared. Please create the queue before using it in a schedule."
             )
@@ -2509,6 +2637,7 @@ class DBOS:
             if (
                 entry_queue_name is not None
                 and entry_queue_name not in dbos._registry.queue_info_map
+                and dbos._sys_db.get_queue(entry_queue_name) is None
             ):
                 raise DBOSException(
                     f"Queue '{entry_queue_name}' is not declared. Please create the queue before using it in a schedule."
@@ -2932,19 +3061,19 @@ class DBOS:
         return dbos_tracer
 
     @classmethod
-    def listen_queues(cls, queues: List[Queue]) -> None:
+    def listen_queues(cls, queues: List[Union[Queue, str]]) -> None:
         """
         Configure this DBOS process to only listen to (dequeue workflows from) specific queues.
 
         Args:
-            queues(List[Queue]): The list of queues to listen to
+            queues: The queues to listen to, either as ``Queue`` objects or as queue names.
         """
         dbos = _get_dbos_instance()
         if dbos._launched:
             raise DBOSException("listen_queues called after DBOS is launched")
         if dbos._listening_queues is not None:
             raise DBOSException("listen_queues called more than once")
-        dbos._listening_queues = queues
+        dbos._listening_queues = [q if isinstance(q, str) else q.name for q in queues]
 
     @classmethod
     def alert_handler(

@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from requests.exceptions import ConnectionError
 
 # Public API
-from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID, WorkflowHandle
+from dbos import DBOS, DBOSConfig, SetWorkflowID, WorkflowHandle
 from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
@@ -35,10 +35,12 @@ def test_admin_endpoints(dbos: DBOS) -> None:
     assert response.json() == []
 
     # Test GET /dbos-workflow-queues-metadata
-    Queue("q1")
-    Queue("q2", concurrency=1)
-    Queue("q3", concurrency=1, worker_concurrency=1)
-    Queue("q4", concurrency=1, worker_concurrency=1, limiter={"limit": 0, "period": 0})
+    DBOS.register_queue("q1")
+    DBOS.register_queue("q2", concurrency=1)
+    DBOS.register_queue("q3", concurrency=1, worker_concurrency=1)
+    DBOS.register_queue(
+        "q4", concurrency=1, worker_concurrency=1, limiter={"limit": 0, "period": 0}
+    )
     response = requests.get(
         "http://localhost:3001/dbos-workflow-queues-metadata", timeout=5
     )
@@ -74,7 +76,7 @@ def test_admin_endpoints(dbos: DBOS) -> None:
 def test_deactivate(dbos: DBOS, config: DBOSConfig) -> None:
     wf_counter: int = 0
 
-    queue = Queue("example-queue")
+    DBOS.register_queue("example-queue")
 
     @DBOS.scheduled("* * * * * *")
     @DBOS.workflow()
@@ -99,7 +101,7 @@ def test_deactivate(dbos: DBOS, config: DBOSConfig) -> None:
     time.sleep(5)
     assert wf_counter <= val + 2
     # Enqueue a workflow, verify it still runs
-    assert queue.enqueue(regular_workflow).get_result() == 5
+    assert DBOS.enqueue_workflow("example-queue", regular_workflow).get_result() == 5
 
     # Test deferred event receivers
     DBOS.destroy(destroy_registry=True)
@@ -766,8 +768,8 @@ def test_queued_workflows_endpoint(
     """Test the /queues endpoint with various filters and scenarios."""
 
     # Set up a queue for testing
-    test_queue1 = Queue("test-queue-1", concurrency=1)
-    test_queue2 = Queue("test-queue-2", concurrency=1)
+    DBOS.register_queue("test-queue-1", concurrency=1)
+    DBOS.register_queue("test-queue-2", concurrency=1)
 
     @DBOS.workflow()
     def blocking_workflow(i: int) -> str:
@@ -776,9 +778,9 @@ def test_queued_workflows_endpoint(
 
     # Enqueue some workflows to create queued entries
     handles: list[WorkflowHandle[str]] = []
-    handles.append(test_queue1.enqueue(blocking_workflow, 1))
-    handles.append(test_queue1.enqueue(blocking_workflow, 2))
-    handles.append(test_queue2.enqueue(blocking_workflow, 3))
+    handles.append(DBOS.enqueue_workflow("test-queue-1", blocking_workflow, 1))
+    handles.append(DBOS.enqueue_workflow("test-queue-1", blocking_workflow, 2))
+    handles.append(DBOS.enqueue_workflow("test-queue-2", blocking_workflow, 3))
 
     # Test basic queued workflows endpoint
     response = requests.post("http://localhost:3001/queues", json={}, timeout=5)
@@ -817,7 +819,7 @@ def test_queued_workflows_endpoint(
         queued_workflows[0]["UpdatedAt"] is not None
         and len(queued_workflows[0]["UpdatedAt"]) > 0
     )
-    assert queued_workflows[0]["QueueName"] == test_queue1.name
+    assert queued_workflows[0]["QueueName"] == "test-queue-1"
     assert queued_workflows[0]["ApplicationVersion"] == DBOS.application_version
     assert queued_workflows[0]["ExecutorID"] == GlobalParams.executor_id
 
@@ -878,14 +880,14 @@ def test_queued_workflows_endpoint(
     assert len(filtered_workflows) == len(handles)
 
     filters = {
-        "queue_name": test_queue1.name,
+        "queue_name": "test-queue-1",
     }
     response = requests.post("http://localhost:3001/queues", json=filters, timeout=5)
     assert response.status_code == 200
     filtered_workflows = response.json()
     assert len(filtered_workflows) == 2
 
-    filters = {"queue_name": test_queue1.name, "limit": 1, "offset": 1}
+    filters = {"queue_name": "test-queue-1", "limit": 1, "offset": 1}
     response = requests.post("http://localhost:3001/queues", json=filters, timeout=5)
     assert response.status_code == 200
     filtered_workflows = response.json()

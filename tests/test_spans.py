@@ -8,7 +8,7 @@ from inline_snapshot import snapshot
 from opentelemetry import trace
 from opentelemetry.trace.span import format_trace_id
 
-from dbos import DBOS, DBOSConfig, Queue
+from dbos import DBOS, DBOSConfig
 from dbos._utils import GlobalParams
 from tests.conftest import TestOtelType
 
@@ -414,19 +414,18 @@ def test_queue_span_has_queue_name(
     config["enable_otlp"] = True
     DBOS(config=config)
 
-    queue = Queue("test_queue")
-
     @DBOS.workflow()
     def queued_workflow() -> str:
         return "queued_result"
 
     DBOS.launch()
+    DBOS.register_queue("test_queue")
 
     log_processor.force_flush(timeout_millis=5000)
     log_exporter.clear()
     exporter.clear()
 
-    handle = queue.enqueue(queued_workflow)
+    handle = DBOS.enqueue_workflow("test_queue", queued_workflow)
     result = handle.get_result()
     assert result == "queued_result"
 

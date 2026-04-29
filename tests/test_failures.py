@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from psycopg.errors import SerializationFailure
 from sqlalchemy.exc import InvalidRequestError, OperationalError
 
-from dbos import DBOS, Queue, SetWorkflowID
+from dbos import DBOS, SetWorkflowID
 from dbos._client import DBOSClient
 from dbos._dbos import WorkflowHandle
 from dbos._dbos_config import DBOSConfig
@@ -290,7 +290,7 @@ def test_nondeterministic_workflow_txn(dbos: DBOS) -> None:
 def test_step_retries(dbos: DBOS) -> None:
     step_counter = 0
 
-    queue = Queue("test-queue")
+    DBOS.register_queue("test-queue")
     max_attempts = 2
 
     @DBOS.step(retries_allowed=True, interval_seconds=0, max_attempts=max_attempts)
@@ -305,7 +305,7 @@ def test_step_retries(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def enqueue_failing_step() -> None:
-        queue.enqueue(failing_step).get_result()
+        DBOS.enqueue_workflow("test-queue", failing_step).get_result()
 
     error_message = f"Step {failing_step.__qualname__} has exceeded its maximum of {max_attempts} retries"
 
@@ -327,7 +327,7 @@ def test_step_retries(dbos: DBOS) -> None:
 
     # Test enqueueing the step
     step_counter = 0
-    handle = queue.enqueue(failing_step)
+    handle = DBOS.enqueue_workflow("test-queue", failing_step)
     with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:
         handle.get_result()
     assert error_message in str(excinfo.value)
@@ -335,7 +335,7 @@ def test_step_retries(dbos: DBOS) -> None:
 
     # Test enqueuing the workflow
     step_counter = 0
-    handle = queue.enqueue(failing_workflow)
+    handle = DBOS.enqueue_workflow("test-queue", failing_workflow)
     with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:
         handle.get_result()
     assert error_message in str(excinfo.value)
@@ -823,9 +823,9 @@ def test_recovery_attempts(dbos: DBOS, config: DBOSConfig) -> None:
             child_workflow()
         event.wait()
 
-    queue = Queue("test_queue", polling_interval_sec=0.1)
+    DBOS.register_queue("test_queue", polling_interval_sec=0.1)
 
-    parent_handle = queue.enqueue(parent_workflow)
+    parent_handle = DBOS.enqueue_workflow("test_queue", parent_workflow)
     child_handle: WorkflowHandle[None] = DBOS.retrieve_workflow(
         child_id, existing_workflow=False
     )

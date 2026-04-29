@@ -1,7 +1,8 @@
 import json
 from typing import List, Optional, TypedDict, cast
 
-from dbos import DBOS, Queue
+from dbos import DBOS
+from dbos._dbos import _dbos_global_instance
 
 
 class Person(TypedDict):
@@ -10,8 +11,12 @@ class Person(TypedDict):
     age: int
 
 
-queue = Queue("test_queue")
-inorder_queue = Queue("inorder_queue", 1, priority_enabled=True)
+# This module is imported at test collection time (DBOS not yet launched) and
+# also re-executed via runpy from inside tests (DBOS launched). Only register
+# the database-backed queues on the second pass.
+if _dbos_global_instance is not None and _dbos_global_instance._launched:
+    DBOS.register_queue("test_queue")
+    DBOS.register_queue("inorder_queue", concurrency=1, priority_enabled=True)
 inorder_results: List[str] = []
 
 

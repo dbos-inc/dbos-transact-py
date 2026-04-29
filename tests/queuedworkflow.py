@@ -1,10 +1,8 @@
 # Public API
 import os
 
-from dbos import DBOS, Queue, SetWorkflowID
+from dbos import DBOS, SetWorkflowID
 from tests.conftest import default_config
-
-q = Queue("testq", concurrency=1, limiter={"limit": 1, "period": 1})
 
 
 @DBOS.dbos_class()
@@ -41,6 +39,7 @@ def main() -> None:
         }
     )
     DBOS.launch()
+    DBOS.register_queue("testq", concurrency=1, limiter={"limit": 1, "period": 1})
     DBOS._recover_pending_workflows()
 
     with SetWorkflowID("testqueuedwfcrash"):

@@ -9,7 +9,7 @@ Bug 2: `DBOS._destroy` closes the database BEFORE joining background threads,
 
 import pytest
 
-from dbos import DBOS, DBOSConfig, Queue
+from dbos import DBOS, DBOSConfig
 from dbos._sys_db_sqlite import SQLiteSystemDatabase
 from tests.conftest import default_config, using_sqlite
 
@@ -83,8 +83,8 @@ def test_destroy_joins_threads_before_closing_db(
     def simple_workflow() -> str:
         return "done"
 
-    queue = Queue("destroy_test_queue")
-    handle = queue.enqueue(simple_workflow)
+    DBOS.register_queue("destroy_test_queue")
+    handle = DBOS.enqueue_workflow("destroy_test_queue", simple_workflow)
     result = handle.get_result()
     assert result == "done"
 

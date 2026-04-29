@@ -14,7 +14,6 @@ from dbos import (
     DBOS,
     DBOSConfig,
     DBOSPortableJSONSerializer,
-    Queue,
     SetWorkflowID,
     WorkflowHandle,
     pydantic_args_validator,
@@ -84,8 +83,8 @@ def test_custom_serializer(
     }
 
     # Run an enqueued workflow testing workflow communication methods
-    queue = Queue("example_queue")
-    handle = queue.enqueue(recv_workflow, val)
+    DBOS.register_queue("example_queue")
+    handle = DBOS.enqueue_workflow("example_queue", recv_workflow, val)
     ready_evt.wait()
     DBOS.send(handle.workflow_id, val)
     send_evt.set()
@@ -112,7 +111,8 @@ def test_custom_serializer(
     assert "DBOS.recv" in steps[1]["function_name"]
     assert steps[1]["output"] == val
     handle = client.enqueue(
-        {"queue_name": queue.name, "workflow_name": recv_workflow.__qualname__}, val
+        {"queue_name": "example_queue", "workflow_name": recv_workflow.__qualname__},
+        val,
     )
     client.send(handle.workflow_id, val)
     assert handle.get_result() == val
@@ -246,7 +246,7 @@ def test_portable_ser(dbos: DBOS, client: DBOSClient) -> None:
             WFTest.last_wf_id = DBOS.workflow_id
             raise Exception("This is just a plain error")
 
-    queue = Queue("testq")
+    DBOS.register_queue("testq")
 
     def check_wf_ser(wfid: str, ser: str) -> None:
         with dbos._sys_db.engine.connect() as c:
@@ -558,7 +558,7 @@ def test_directinsert_workflows(dbos: DBOS) -> None:
             DBOS.logger.info("defSerPortable was called...")
             return workflow_func(s, x, o, wfid)
 
-    queue = Queue("testq")
+    DBOS.register_queue("testq")
 
     id = str(uuid.uuid4())
     with dbos._sys_db.engine.begin() as c:
@@ -639,7 +639,7 @@ def test_directinsert_invalid_json(dbos: DBOS) -> None:
         ) -> str:
             return f"{s}-{x}"
 
-    queue = Queue("testq_badjson")
+    DBOS.register_queue("testq_badjson")
 
     wf_id = str(uuid.uuid4())
     with dbos._sys_db.engine.begin() as c:
@@ -691,7 +691,7 @@ def test_directinsert_wrong_args(dbos: DBOS) -> None:
         ) -> str:
             return f"{s}-{x}-{o['k']}"
 
-    queue = Queue("testq_wrongargs")
+    DBOS.register_queue("testq_wrongargs")
 
     # Test: missing required positional args (only 1 of 3)
     wf_id = str(uuid.uuid4())
@@ -780,7 +780,7 @@ def test_directinsert_bogus_notification(dbos: DBOS) -> None:
         def recvWorkflow(cls, topic: str) -> Any:
             return DBOS.recv(topic)
 
-    queue = Queue("testq_bogusnotif")
+    DBOS.register_queue("testq_bogusnotif")
 
     # Test 1: Unparseable JSON in notification message
     wf_id = str(uuid.uuid4())
@@ -902,7 +902,7 @@ def test_directinsert_with_pydantic_validation(dbos: DBOS) -> None:
         ) -> str:
             return f"{s}-{x}-{o['k']}"
 
-    queue = Queue("testq_pydantic")
+    DBOS.register_queue("testq_pydantic")
 
     # Test 1: Valid args should succeed
     wf_id_ok = str(uuid.uuid4())
@@ -937,7 +937,9 @@ def test_directinsert_with_pydantic_validation(dbos: DBOS) -> None:
     assert wfh_ok.get_result() == "hello-42-key"
 
     # Test: enqueue round-trip through the queue with portable serialization
-    wfh_enq = queue.enqueue(WFTest.validatedWorkflow, "enqueued", 7, {"k": "val"})
+    wfh_enq = DBOS.enqueue_workflow(
+        "testq_pydantic", WFTest.validatedWorkflow, "enqueued", 7, {"k": "val"}
+    )
     assert wfh_enq.get_result() == "enqueued-7-val"
 
     # Test 2: String where int expected — pydantic should reject it
@@ -1032,7 +1034,7 @@ def test_directinsert_datetime_validation(dbos: DBOS) -> None:
         ) -> str:
             return f"{name}@{due.isoformat()}#{','.join(tags)}"
 
-    queue = Queue("testq_datetime")
+    DBOS.register_queue("testq_datetime")
 
     # Test 1: ISO date string should be coerced to datetime by pydantic
     wf_id_ok = str(uuid.uuid4())
@@ -1076,7 +1078,9 @@ def test_directinsert_datetime_validation(dbos: DBOS) -> None:
 
     # Test: enqueue round-trip with a real datetime object through portable serialization
     dt = datetime(2026, 1, 20, 14, 0, 0)
-    wfh_enq = queue.enqueue(WFTest.datetimeWorkflow, "enqueued", dt, ["live"])
+    wfh_enq = DBOS.enqueue_workflow(
+        "testq_datetime", WFTest.datetimeWorkflow, "enqueued", dt, ["live"]
+    )
     enq_result = wfh_enq.get_result()
     assert "enqueued@2026-01-20T14:00:00" in enq_result
     assert "live" in enq_result
@@ -1228,7 +1232,7 @@ def test_nodejs_invoke(dbos: DBOS) -> None:
                 "received_msg": msg,
             }
 
-    queue = Queue("testq")
+    DBOS.register_queue("testq")
 
     script_path = os.path.join(
         os.path.dirname(__file__), "ts_client", "bundles", "portableinvoke.cjs"

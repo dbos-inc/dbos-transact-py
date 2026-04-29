@@ -88,7 +88,13 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             from ._dbos import _get_or_create_dbos_registry
 
             registry = _get_or_create_dbos_registry()
-            for queue in registry.queue_info_map.values():
+            queues = dict(registry.queue_info_map)
+            try:
+                for q in self.dbos._sys_db.list_queues():
+                    queues.setdefault(q.name, q)
+            except Exception as e:
+                dbos_logger.warning(f"Exception listing database-backed queues: {e}")
+            for queue in queues.values():
                 queue_metadata = {
                     "name": queue.name,
                     "concurrency": queue.concurrency,

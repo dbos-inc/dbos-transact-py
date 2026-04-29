@@ -6,6 +6,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -41,6 +42,7 @@ class SystemSchema:
         cls.workflow_events_history.schema = schema_name
         cls.workflow_schedules.schema = schema_name
         cls.application_versions.schema = schema_name
+        cls.queues.schema = schema_name
 
     workflow_status = Table(
         "workflow_status",
@@ -242,4 +244,25 @@ class SystemSchema:
             BigInteger,
             nullable=False,
         ),
+    )
+
+    queues = Table(
+        "queues",
+        metadata_obj,
+        Column(
+            "queue_id",
+            Text,
+            primary_key=True,
+            server_default=text("gen_random_uuid()::TEXT"),
+        ),
+        Column("name", Text, nullable=False, unique=True),
+        Column("concurrency", Integer, nullable=True),
+        Column("worker_concurrency", Integer, nullable=True),
+        Column("rate_limit_max", Integer, nullable=True),
+        Column("rate_limit_period_sec", Float, nullable=True),
+        Column("priority_enabled", Boolean, nullable=False, server_default="false"),
+        Column("partition_queue", Boolean, nullable=False, server_default="false"),
+        Column("polling_interval_sec", Float, nullable=False, server_default="1.0"),
+        Column("created_at", BigInteger, nullable=False),
+        Column("updated_at", BigInteger, nullable=False),
     )

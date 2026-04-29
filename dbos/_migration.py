@@ -493,6 +493,24 @@ ALTER FUNCTION "{schema}".workflow_events_function() SET search_path = pg_catalo
     return migration
 
 
+def get_dbos_migration_twentyone(schema: str) -> str:
+    return f"""
+CREATE TABLE "{schema}".queues (
+    queue_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    name TEXT NOT NULL UNIQUE,
+    concurrency INTEGER,
+    worker_concurrency INTEGER,
+    rate_limit_max INTEGER,
+    rate_limit_period_sec DOUBLE PRECISION,
+    priority_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    partition_queue BOOLEAN NOT NULL DEFAULT FALSE,
+    polling_interval_sec DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
+    updated_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
+);
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -517,6 +535,7 @@ def get_dbos_migrations(
         get_dbos_migration_eighteen(schema),
         get_dbos_migration_nineteen(schema),
         get_dbos_migration_twenty(schema, use_listen_notify, is_cockroach),
+        get_dbos_migration_twentyone(schema),
     ]
 
 
@@ -706,6 +725,22 @@ sqlite_migration_nineteen = """
 CREATE INDEX "idx_operation_outputs_completed_at_function_name" ON "operation_outputs" ("completed_at_epoch_ms", "function_name");
 """
 
+sqlite_migration_twentyone = f"""
+CREATE TABLE queues (
+    queue_id TEXT PRIMARY KEY DEFAULT (hex(randomblob(16))),
+    name TEXT NOT NULL UNIQUE,
+    concurrency INTEGER,
+    worker_concurrency INTEGER,
+    rate_limit_max INTEGER,
+    rate_limit_period_sec REAL,
+    priority_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    partition_queue BOOLEAN NOT NULL DEFAULT FALSE,
+    polling_interval_sec REAL NOT NULL DEFAULT 1.0,
+    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
+    updated_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
+);
+"""
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -726,4 +761,5 @@ sqlite_migrations = [
     sqlite_migration_eighteen,
     sqlite_migration_nineteen,
     # There is no SQLite version of migration twenty
+    sqlite_migration_twentyone,
 ]

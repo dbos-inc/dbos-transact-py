@@ -5,14 +5,7 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from dbos import (
-    DBOS,
-    DBOSClient,
-    Queue,
-    SetEnqueueOptions,
-    SetWorkflowID,
-    WorkflowHandle,
-)
+from dbos import DBOS, DBOSClient, SetEnqueueOptions, SetWorkflowID, WorkflowHandle
 from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.application_database import ApplicationSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
@@ -347,7 +340,7 @@ def test_cancel_resume_queue(dbos: DBOS) -> None:
     main_thread_event = threading.Event()
     input = 5
 
-    queue = Queue("test_queue")
+    DBOS.register_queue("test_queue")
 
     @DBOS.step()
     def step_one() -> None:
@@ -371,7 +364,7 @@ def test_cancel_resume_queue(dbos: DBOS) -> None:
     # Verify it stops after step one but before step two
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        handle = queue.enqueue(simple_workflow, input)
+        handle = DBOS.enqueue_workflow("test_queue", simple_workflow, input)
     main_thread_event.wait()
     DBOS.cancel_workflow(wfid)
     workflow_event.set()
@@ -855,14 +848,14 @@ def test_resume_and_fork_to_queue(dbos: DBOS) -> None:
         b = step_two(x)
         return a + b
 
-    queue = Queue("test_resume_fork_queue")
+    DBOS.register_queue("test_resume_fork_queue")
     input = 5
     output = (input + 1) + (input + 2)
 
     # Enqueue workflow, let step_one run, then cancel before step_two
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        handle = queue.enqueue(simple_workflow, input)
+        handle = DBOS.enqueue_workflow("test_resume_fork_queue", simple_workflow, input)
     main_thread_event.wait()
     DBOS.cancel_workflow(wfid)
     workflow_event.set()
@@ -967,15 +960,15 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     assert len(workflows) == 0
 
     # ENQUEUED and DELAYED workflows must not be garbage collected
-    queue = Queue("gc_test_queue")
+    DBOS.register_queue("gc_test_queue")
 
     @DBOS.workflow()
     def gc_test_workflow() -> None:
         pass
 
-    enqueued_handle = queue.enqueue(gc_test_workflow)
+    enqueued_handle = DBOS.enqueue_workflow("gc_test_queue", gc_test_workflow)
     with SetEnqueueOptions(delay_seconds=60.0):
-        delayed_handle = queue.enqueue(gc_test_workflow)
+        delayed_handle = DBOS.enqueue_workflow("gc_test_queue", gc_test_workflow)
 
     garbage_collect(
         dbos, cutoff_epoch_timestamp_ms=int(time.time() * 1000), rows_threshold=None

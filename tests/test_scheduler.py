@@ -1341,7 +1341,7 @@ def test_instance_method_schedule_rejected(dbos: DBOS) -> None:
 
 
 def test_schedule_with_queue_name(dbos: DBOS) -> None:
-    my_queue = Queue("scheduler-test-queue")
+    DBOS.register_queue("scheduler-test-queue")
     received: list[Any] = []
 
     @DBOS.workflow()

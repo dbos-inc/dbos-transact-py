@@ -299,13 +299,13 @@ def test_queued_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> 
     queued_steps = 5
     step_events = [threading.Event() for _ in range(queued_steps)]
     event = threading.Event()
-    queue = Queue("test_queue")
+    DBOS.register_queue("test_queue")
 
     @DBOS.workflow()
     def test_workflow() -> list[int]:
         handles = []
         for i in range(queued_steps):
-            h = queue.enqueue(blocking_step, i)
+            h = DBOS.enqueue_workflow("test_queue", blocking_step, i)
             handles.append(h)
         return [h.get_result() for h in handles]
 
@@ -325,7 +325,7 @@ def test_queued_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> 
     assert len(workflows) == queued_steps
     for i, workflow in enumerate(workflows):
         assert workflow.status == WorkflowStatusString.PENDING.value
-        assert workflow.queue_name == queue.name
+        assert workflow.queue_name == "test_queue"
         assert workflow.input is not None
         # Verify oldest queue entries appear first
         assert workflow.input["args"][0] == i
@@ -359,7 +359,7 @@ def test_queued_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> 
     assert len(workflows) == queued_steps + 1
     for i, workflow in enumerate(workflows[1:]):
         assert workflow.status == WorkflowStatusString.PENDING.value
-        assert workflow.queue_name == queue.name
+        assert workflow.queue_name == "test_queue"
         assert workflow.input is not None
         # Verify oldest queue entries appear first
         assert workflow.input["args"][0] == i
@@ -379,13 +379,13 @@ def test_queued_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> 
     assert len(workflows) == 0
     workflows = DBOS.list_queued_workflows(status=["ENQUEUED", "PENDING"])
     assert len(workflows) == queued_steps
-    workflows = DBOS.list_workflows(queue_name=queue.name)
+    workflows = DBOS.list_workflows(queue_name="test_queue")
     assert len(workflows) == queued_steps
-    workflows = DBOS.list_queued_workflows(queue_name=queue.name)
+    workflows = DBOS.list_queued_workflows(queue_name="test_queue")
     assert len(workflows) == queued_steps
     workflows = DBOS.list_queued_workflows(queue_name="no")
     assert len(workflows) == 0
-    workflows = DBOS.list_queued_workflows(queue_name=[queue.name, "no"])
+    workflows = DBOS.list_queued_workflows(queue_name=["test_queue", "no"])
     assert len(workflows) == queued_steps
     workflows = DBOS.list_queued_workflows(queue_name=["no", "also_no"])
     assert len(workflows) == 0
@@ -750,7 +750,7 @@ def test_callchild_first_async_thread(dbos: DBOS) -> None:
 
 
 def test_list_steps_errors(dbos: DBOS) -> None:
-    queue = Queue("test-queue")
+    DBOS.register_queue("test-queue")
 
     @DBOS.step()
     def failing_step() -> None:
@@ -767,7 +767,7 @@ def test_list_steps_errors(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def enqueue_step() -> None:
-        handle = queue.enqueue(failing_step)
+        handle = DBOS.enqueue_workflow("test-queue", failing_step)
         return handle.get_result()
 
     # Test calling a failing step directly
@@ -817,7 +817,7 @@ def test_list_steps_errors(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_list_steps_errors_async(dbos: DBOS) -> None:
-    queue = Queue("test-queue")
+    DBOS.register_queue("test-queue")
 
     @DBOS.step()
     async def failing_step() -> None:
@@ -834,7 +834,7 @@ async def test_list_steps_errors_async(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def enqueue_step() -> None:
-        handle = await queue.enqueue_async(failing_step)
+        handle = await DBOS.enqueue_workflow_async("test-queue", failing_step)
         return await handle.get_result()
 
     # Test calling a failing step directly
