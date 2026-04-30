@@ -4,6 +4,66 @@ import sqlalchemy as sa
 
 from ._logger import dbos_logger
 
+# Migration versions that contain CONCURRENTLY index DDL and must run with
+# autocommit (CREATE/DROP INDEX CONCURRENTLY cannot run inside a transaction
+# block on Postgres). On CockroachDB, schema changes are inherently online,
+# so this set is ignored and the regular transactional path is used.
+_ONLINE_MIGRATIONS = {22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 34, 35}
+
+
+def _concurrently(is_cockroach: bool) -> str:
+    """Render the CONCURRENTLY keyword for online index DDL.
+
+    Empty on CockroachDB, where schema changes are online by default and the
+    keyword is not supported."""
+    return "" if is_cockroach else "CONCURRENTLY"
+
+
+def _cleanup_invalid_indexes(engine: sa.Engine, schema: str) -> None:
+    """Drop indexes left in an INVALID state by a prior failed CONCURRENTLY run.
+
+    A failed CREATE INDEX CONCURRENTLY leaves an index marked invalid that
+    will not be used by the planner but blocks recreating the same name.
+    Must be called before retrying an online migration."""
+    with engine.connect() as raw_conn:
+        conn = raw_conn.execution_options(isolation_level="AUTOCOMMIT")
+        rows = conn.execute(
+            sa.text(
+                "SELECT i.relname FROM pg_index ix "
+                "JOIN pg_class i ON i.oid = ix.indexrelid "
+                "JOIN pg_class t ON t.oid = ix.indrelid "
+                "JOIN pg_namespace n ON n.oid = t.relnamespace "
+                "WHERE NOT ix.indisvalid AND n.nspname = :schema"
+            ),
+            {"schema": schema},
+        ).fetchall()
+        for (idx_name,) in rows:
+            dbos_logger.warning(
+                f"Dropping invalid index {schema}.{idx_name} left by a prior failed migration"
+            )
+            conn.execute(
+                sa.text(f'DROP INDEX CONCURRENTLY IF EXISTS "{schema}"."{idx_name}"')
+            )
+
+
+def _bump_migration_version(
+    engine: sa.Engine, schema: str, version: int, last_applied: int
+) -> None:
+    """Update the dbos_migrations version row in its own transaction."""
+    with engine.begin() as conn:
+        if last_applied == 0:
+            conn.execute(
+                sa.text(
+                    f'INSERT INTO "{schema}".dbos_migrations (version) VALUES (:version)'
+                ),
+                {"version": version},
+            )
+        else:
+            conn.execute(
+                sa.text(f'UPDATE "{schema}".dbos_migrations SET version = :version'),
+                {"version": version},
+            )
+
 
 def ensure_dbos_schema(engine: sa.Engine, schema: str) -> None:
     """
@@ -56,13 +116,35 @@ def run_dbos_migrations(
         version_str = conn.execute(sa.text("SELECT version()")).scalar() or ""
         is_cockroach = "cockroachdb" in version_str.lower()
 
-    # Apply each migration in its own transaction
+    # Apply each migration in its own transaction (or autocommit for online ones)
     migrations = get_dbos_migrations(schema, use_listen_notify, is_cockroach)
     for i, migration_sql in enumerate(migrations, 1):
         if i <= last_applied:
             continue
 
         dbos_logger.info(f"Applying DBOS system database schema migration {i}")
+
+        if not migration_sql.strip():
+            dbos_logger.info(f"Migration {i} has no statements; skipping.")
+            _bump_migration_version(engine, schema, i, last_applied)
+            last_applied = i
+            continue
+
+        # Online migrations contain CONCURRENTLY index DDL and must run with
+        # autocommit. On CockroachDB, schema changes are inherently online, so
+        # we use the regular transactional path.
+        if i in _ONLINE_MIGRATIONS and not is_cockroach:
+            # Clean up any invalid indexes left by a prior failed attempt at
+            # this or a later online migration before retrying.
+            _cleanup_invalid_indexes(engine, schema)
+
+            with engine.connect() as raw_conn:
+                conn = raw_conn.execution_options(isolation_level="AUTOCOMMIT")
+                conn.execute(sa.text(migration_sql))
+
+            _bump_migration_version(engine, schema, i, last_applied)
+            last_applied = i
+            continue
 
         with engine.begin() as conn:
             # Migration 10 adds a primary key to the notifications table.
@@ -79,8 +161,6 @@ def run_dbos_migrations(
                 ).scalar()
             ):
                 dbos_logger.info("Migration 10 skipped, primary key already exists")
-            elif not migration_sql.strip():
-                dbos_logger.info(f"Migration {i} has no statements; skipping.")
             else:
                 conn.execute(sa.text(migration_sql))
 
@@ -511,81 +591,88 @@ CREATE TABLE "{schema}".queues (
 """
 
 
-def get_dbos_migration_twentytwo(schema: str) -> str:
-    return f"""
-DROP INDEX IF EXISTS "{schema}"."idx_workflow_status_forked_from";
-CREATE INDEX "idx_workflow_status_forked_from" ON "{schema}"."workflow_status" ("forked_from") WHERE "forked_from" IS NOT NULL;
-"""
+def get_dbos_migration_twentytwo(schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'DROP INDEX {c} IF EXISTS "{schema}"."idx_workflow_status_forked_from"'
 
 
-def get_dbos_migration_twentythree(schema: str) -> str:
-    return f"""
-DROP INDEX IF EXISTS "{schema}"."idx_workflow_status_parent_workflow_id";
-CREATE INDEX "idx_workflow_status_parent_workflow_id" ON "{schema}"."workflow_status" ("parent_workflow_id") WHERE "parent_workflow_id" IS NOT NULL;
-"""
+def get_dbos_migration_twentythree(schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} "idx_workflow_status_forked_from" ON "{schema}"."workflow_status" ("forked_from") WHERE "forked_from" IS NOT NULL'
 
 
-def get_dbos_migration_twentyfour(schema: str) -> str:
-    return f"""
-DROP INDEX IF EXISTS "{schema}"."workflow_status_executor_id_index";
-"""
+def get_dbos_migration_twentyfour(schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return (
+        f'DROP INDEX {c} IF EXISTS "{schema}"."idx_workflow_status_parent_workflow_id"'
+    )
 
 
 def get_dbos_migration_twentyfive(schema: str, is_cockroach: bool) -> str:
-    # CockroachDB implements unique constraints as indexes and does not support
-    # ALTER TABLE DROP CONSTRAINT for them; it requires DROP INDEX ... CASCADE.
-    # Postgres rejects DROP INDEX on a constraint-backed index, so we dispatch.
-    drop = (
-        f'DROP INDEX IF EXISTS "{schema}"."uq_workflow_status_queue_name_dedup_id" CASCADE;'
-        if is_cockroach
-        else f'ALTER TABLE "{schema}".workflow_status DROP CONSTRAINT IF EXISTS uq_workflow_status_queue_name_dedup_id;'
-    )
-    return f"""
-{drop}
-CREATE UNIQUE INDEX "uq_workflow_status_queue_name_dedup_id" ON "{schema}"."workflow_status" ("queue_name", "deduplication_id") WHERE "deduplication_id" IS NOT NULL;
-"""
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} "idx_workflow_status_parent_workflow_id" ON "{schema}"."workflow_status" ("parent_workflow_id") WHERE "parent_workflow_id" IS NOT NULL'
 
 
-def get_dbos_migration_twentysix(schema: str) -> str:
-    return f"""
-CREATE INDEX "idx_workflow_status_pending" ON "{schema}"."workflow_status" ("workflow_uuid") WHERE "status" = 'PENDING';
-"""
+def get_dbos_migration_twentysix(schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'DROP INDEX {c} IF EXISTS "{schema}"."workflow_status_executor_id_index"'
 
 
-def get_dbos_migration_twentyseven(schema: str) -> str:
-    return f"""
-CREATE INDEX "idx_workflow_status_failed" ON "{schema}"."workflow_status" ("status", "created_at") WHERE "status" IN ('ERROR', 'CANCELLED', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED');
-"""
+def get_dbos_migration_twentyseven(schema: str, is_cockroach: bool) -> str:
+    # The new partial unique index uses a different name from the original
+    # constraint to avoid a naming collision: Postgres auto-creates an index
+    # with the constraint name, so we can't reuse it until the constraint is
+    # dropped. Creating with a new name first preserves uniqueness throughout
+    # the transition (both the old constraint and new index enforce identical
+    # semantics, since NULLs are SQL-distinct in the old constraint).
+    c = _concurrently(is_cockroach)
+    return f'CREATE UNIQUE INDEX {c} "uq_workflow_status_dedup_id" ON "{schema}"."workflow_status" ("queue_name", "deduplication_id") WHERE "deduplication_id" IS NOT NULL'
 
 
-def get_dbos_migration_twentyeight(schema: str) -> str:
-    return f"""
-DROP INDEX IF EXISTS "{schema}"."workflow_status_status_index";
-"""
+def get_dbos_migration_twentyeight(schema: str, is_cockroach: bool) -> str:
+    # CockroachDB implements unique constraints as indexes and rejects
+    # ALTER TABLE DROP CONSTRAINT for them; Postgres rejects DROP INDEX on a
+    # constraint-backed index. Both paths are fast catalog operations, no
+    # CONCURRENTLY needed.
+    if is_cockroach:
+        return f'DROP INDEX IF EXISTS "{schema}"."uq_workflow_status_queue_name_dedup_id" CASCADE'
+    return f'ALTER TABLE "{schema}".workflow_status DROP CONSTRAINT IF EXISTS uq_workflow_status_queue_name_dedup_id'
 
 
-def get_dbos_migration_twentynine(schema: str) -> str:
-    return f"""
-CREATE INDEX "idx_workflow_status_in_flight" ON "{schema}"."workflow_status" ("queue_name", "status", "priority", "created_at") WHERE "status" IN ('ENQUEUED', 'PENDING');
-"""
+def get_dbos_migration_twentynine(schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} "idx_workflow_status_pending" ON "{schema}"."workflow_status" ("workflow_uuid") WHERE "status" = \'PENDING\''
 
 
-def get_dbos_migration_thirty(schema: str) -> str:
-    return f"""
-ALTER TABLE "{schema}"."workflow_status" ADD COLUMN "rate_limited" BOOLEAN NOT NULL DEFAULT FALSE;
-"""
+def get_dbos_migration_thirty(schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} "idx_workflow_status_failed" ON "{schema}"."workflow_status" ("status", "created_at") WHERE "status" IN (\'ERROR\', \'CANCELLED\', \'MAX_RECOVERY_ATTEMPTS_EXCEEDED\')'
 
 
-def get_dbos_migration_thirtyone(schema: str) -> str:
-    return f"""
-CREATE INDEX "idx_workflow_status_rate_limited" ON "{schema}"."workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "rate_limited" = TRUE;
-"""
+def get_dbos_migration_thirtyone(schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'DROP INDEX {c} IF EXISTS "{schema}"."workflow_status_status_index"'
 
 
-def get_dbos_migration_thirtytwo(schema: str) -> str:
-    return f"""
-DROP INDEX IF EXISTS "{schema}"."idx_workflow_status_queue_status_started";
-"""
+def get_dbos_migration_thirtytwo(schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} "idx_workflow_status_in_flight" ON "{schema}"."workflow_status" ("queue_name", "status", "priority", "created_at") WHERE "status" IN (\'ENQUEUED\', \'PENDING\')'
+
+
+def get_dbos_migration_thirtythree(schema: str) -> str:
+    # ALTER TABLE ADD COLUMN with constant default is fast on Postgres 11+
+    # (catalog-only update via attmissingval); runs in a regular transaction.
+    return f'ALTER TABLE "{schema}"."workflow_status" ADD COLUMN "rate_limited" BOOLEAN NOT NULL DEFAULT FALSE'
+
+
+def get_dbos_migration_thirtyfour(schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} "idx_workflow_status_rate_limited" ON "{schema}"."workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "rate_limited" = TRUE'
+
+
+def get_dbos_migration_thirtyfive(schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'DROP INDEX {c} IF EXISTS "{schema}"."idx_workflow_status_queue_status_started"'
 
 
 def get_dbos_migrations(
@@ -613,17 +700,20 @@ def get_dbos_migrations(
         get_dbos_migration_nineteen(schema),
         get_dbos_migration_twenty(schema, use_listen_notify, is_cockroach),
         get_dbos_migration_twentyone(schema),
-        get_dbos_migration_twentytwo(schema),
-        get_dbos_migration_twentythree(schema),
-        get_dbos_migration_twentyfour(schema),
+        get_dbos_migration_twentytwo(schema, is_cockroach),
+        get_dbos_migration_twentythree(schema, is_cockroach),
+        get_dbos_migration_twentyfour(schema, is_cockroach),
         get_dbos_migration_twentyfive(schema, is_cockroach),
-        get_dbos_migration_twentysix(schema),
-        get_dbos_migration_twentyseven(schema),
-        get_dbos_migration_twentyeight(schema),
-        get_dbos_migration_twentynine(schema),
-        get_dbos_migration_thirty(schema),
-        get_dbos_migration_thirtyone(schema),
-        get_dbos_migration_thirtytwo(schema),
+        get_dbos_migration_twentysix(schema, is_cockroach),
+        get_dbos_migration_twentyseven(schema, is_cockroach),
+        get_dbos_migration_twentyeight(schema, is_cockroach),
+        get_dbos_migration_twentynine(schema, is_cockroach),
+        get_dbos_migration_thirty(schema, is_cockroach),
+        get_dbos_migration_thirtyone(schema, is_cockroach),
+        get_dbos_migration_thirtytwo(schema, is_cockroach),
+        get_dbos_migration_thirtythree(schema),
+        get_dbos_migration_thirtyfour(schema, is_cockroach),
+        get_dbos_migration_thirtyfive(schema, is_cockroach),
     ]
 
 
@@ -829,52 +919,39 @@ CREATE TABLE queues (
 );
 """
 
-sqlite_migration_twentytwo = """
-DROP INDEX IF EXISTS "idx_workflow_status_forked_from";
-CREATE INDEX "idx_workflow_status_forked_from" ON "workflow_status" ("forked_from") WHERE "forked_from" IS NOT NULL;
-"""
+sqlite_migration_twentytwo = 'DROP INDEX IF EXISTS "idx_workflow_status_forked_from"'
 
-sqlite_migration_twentythree = """
-DROP INDEX IF EXISTS "idx_workflow_status_parent_workflow_id";
-CREATE INDEX "idx_workflow_status_parent_workflow_id" ON "workflow_status" ("parent_workflow_id") WHERE "parent_workflow_id" IS NOT NULL;
-"""
+sqlite_migration_twentythree = 'CREATE INDEX "idx_workflow_status_forked_from" ON "workflow_status" ("forked_from") WHERE "forked_from" IS NOT NULL'
 
-sqlite_migration_twentyfour = """
-DROP INDEX IF EXISTS "workflow_status_executor_id_index";
-"""
+sqlite_migration_twentyfour = (
+    'DROP INDEX IF EXISTS "idx_workflow_status_parent_workflow_id"'
+)
 
-sqlite_migration_twentyfive = """
-DROP INDEX IF EXISTS "uq_workflow_status_queue_name_dedup_id";
-CREATE UNIQUE INDEX "uq_workflow_status_queue_name_dedup_id" ON "workflow_status" ("queue_name", "deduplication_id") WHERE "deduplication_id" IS NOT NULL;
-"""
+sqlite_migration_twentyfive = 'CREATE INDEX "idx_workflow_status_parent_workflow_id" ON "workflow_status" ("parent_workflow_id") WHERE "parent_workflow_id" IS NOT NULL'
 
-sqlite_migration_twentysix = """
-CREATE INDEX "idx_workflow_status_pending" ON "workflow_status" ("workflow_uuid") WHERE "status" = 'PENDING';
-"""
+sqlite_migration_twentysix = 'DROP INDEX IF EXISTS "workflow_status_executor_id_index"'
 
-sqlite_migration_twentyseven = """
-CREATE INDEX "idx_workflow_status_failed" ON "workflow_status" ("status", "created_at") WHERE "status" IN ('ERROR', 'CANCELLED', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED');
-"""
+sqlite_migration_twentyseven = 'CREATE UNIQUE INDEX "uq_workflow_status_dedup_id" ON "workflow_status" ("queue_name", "deduplication_id") WHERE "deduplication_id" IS NOT NULL'
 
-sqlite_migration_twentyeight = """
-DROP INDEX IF EXISTS "workflow_status_status_index";
-"""
+sqlite_migration_twentyeight = (
+    'DROP INDEX IF EXISTS "uq_workflow_status_queue_name_dedup_id"'
+)
 
-sqlite_migration_twentynine = """
-CREATE INDEX "idx_workflow_status_in_flight" ON "workflow_status" ("queue_name", "status", "priority", "created_at") WHERE "status" IN ('ENQUEUED', 'PENDING');
-"""
+sqlite_migration_twentynine = 'CREATE INDEX "idx_workflow_status_pending" ON "workflow_status" ("workflow_uuid") WHERE "status" = \'PENDING\''
 
-sqlite_migration_thirty = """
-ALTER TABLE "workflow_status" ADD COLUMN "rate_limited" BOOLEAN NOT NULL DEFAULT FALSE;
-"""
+sqlite_migration_thirty = 'CREATE INDEX "idx_workflow_status_failed" ON "workflow_status" ("status", "created_at") WHERE "status" IN (\'ERROR\', \'CANCELLED\', \'MAX_RECOVERY_ATTEMPTS_EXCEEDED\')'
 
-sqlite_migration_thirtyone = """
-CREATE INDEX "idx_workflow_status_rate_limited" ON "workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "rate_limited" = TRUE;
-"""
+sqlite_migration_thirtyone = 'DROP INDEX IF EXISTS "workflow_status_status_index"'
 
-sqlite_migration_thirtytwo = """
-DROP INDEX IF EXISTS "idx_workflow_status_queue_status_started";
-"""
+sqlite_migration_thirtytwo = 'CREATE INDEX "idx_workflow_status_in_flight" ON "workflow_status" ("queue_name", "status", "priority", "created_at") WHERE "status" IN (\'ENQUEUED\', \'PENDING\')'
+
+sqlite_migration_thirtythree = 'ALTER TABLE "workflow_status" ADD COLUMN "rate_limited" BOOLEAN NOT NULL DEFAULT FALSE'
+
+sqlite_migration_thirtyfour = 'CREATE INDEX "idx_workflow_status_rate_limited" ON "workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "rate_limited" = TRUE'
+
+sqlite_migration_thirtyfive = (
+    'DROP INDEX IF EXISTS "idx_workflow_status_queue_status_started"'
+)
 
 sqlite_migrations = [
     sqlite_migration_one,
@@ -908,4 +985,7 @@ sqlite_migrations = [
     sqlite_migration_thirty,
     sqlite_migration_thirtyone,
     sqlite_migration_thirtytwo,
+    sqlite_migration_thirtythree,
+    sqlite_migration_thirtyfour,
+    sqlite_migration_thirtyfive,
 ]

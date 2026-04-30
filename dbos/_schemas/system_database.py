@@ -130,7 +130,7 @@ class SystemSchema:
             sqlite_where=text("rate_limited = TRUE"),
         ),
         Index(
-            "uq_workflow_status_queue_name_dedup_id",
+            "uq_workflow_status_dedup_id",
             "queue_name",
             "deduplication_id",
             unique=True,
