@@ -564,11 +564,17 @@ CREATE INDEX "idx_workflow_status_in_flight" ON "{schema}"."workflow_status" ("q
 
 def get_dbos_migration_thirty(schema: str) -> str:
     return f"""
-CREATE INDEX "idx_workflow_status_started" ON "{schema}"."workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "started_at_epoch_ms" IS NOT NULL;
+ALTER TABLE "{schema}"."workflow_status" ADD COLUMN "rate_limited" BOOLEAN NOT NULL DEFAULT FALSE;
 """
 
 
 def get_dbos_migration_thirtyone(schema: str) -> str:
+    return f"""
+CREATE INDEX "idx_workflow_status_rate_limited" ON "{schema}"."workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "rate_limited" = TRUE;
+"""
+
+
+def get_dbos_migration_thirtytwo(schema: str) -> str:
     return f"""
 DROP INDEX IF EXISTS "{schema}"."idx_workflow_status_queue_status_started";
 """
@@ -609,6 +615,7 @@ def get_dbos_migrations(
         get_dbos_migration_twentynine(schema),
         get_dbos_migration_thirty(schema),
         get_dbos_migration_thirtyone(schema),
+        get_dbos_migration_thirtytwo(schema),
     ]
 
 
@@ -850,10 +857,14 @@ CREATE INDEX "idx_workflow_status_in_flight" ON "workflow_status" ("queue_name",
 """
 
 sqlite_migration_thirty = """
-CREATE INDEX "idx_workflow_status_started" ON "workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "started_at_epoch_ms" IS NOT NULL;
+ALTER TABLE "workflow_status" ADD COLUMN "rate_limited" BOOLEAN NOT NULL DEFAULT FALSE;
 """
 
 sqlite_migration_thirtyone = """
+CREATE INDEX "idx_workflow_status_rate_limited" ON "workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "rate_limited" = TRUE;
+"""
+
+sqlite_migration_thirtytwo = """
 DROP INDEX IF EXISTS "idx_workflow_status_queue_status_started";
 """
 
@@ -888,4 +899,5 @@ sqlite_migrations = [
     sqlite_migration_twentynine,
     sqlite_migration_thirty,
     sqlite_migration_thirtyone,
+    sqlite_migration_thirtytwo,
 ]

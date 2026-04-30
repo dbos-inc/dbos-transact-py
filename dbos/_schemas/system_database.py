@@ -88,6 +88,7 @@ class SystemSchema:
         Column("parent_workflow_id", Text()),
         Column("serialization", Text()),
         Column("delay_until_epoch_ms", BigInteger, nullable=True),
+        Column("rate_limited", Boolean, nullable=False, server_default="false"),
         Index("workflow_status_created_at_index", "created_at"),
         Index(
             "idx_workflow_status_delayed",
@@ -122,11 +123,11 @@ class SystemSchema:
             sqlite_where=text("status IN ('ENQUEUED', 'PENDING')"),
         ),
         Index(
-            "idx_workflow_status_started",
+            "idx_workflow_status_rate_limited",
             "queue_name",
             "started_at_epoch_ms",
-            postgresql_where=text("started_at_epoch_ms IS NOT NULL"),
-            sqlite_where=text("started_at_epoch_ms IS NOT NULL"),
+            postgresql_where=text("rate_limited = TRUE"),
+            sqlite_where=text("rate_limited = TRUE"),
         ),
         Index(
             "uq_workflow_status_queue_name_dedup_id",
