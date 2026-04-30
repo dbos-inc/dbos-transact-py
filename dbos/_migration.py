@@ -525,6 +525,12 @@ CREATE INDEX "idx_workflow_status_parent_workflow_id" ON "{schema}"."workflow_st
 """
 
 
+def get_dbos_migration_twentyfour(schema: str) -> str:
+    return f"""
+DROP INDEX IF EXISTS "{schema}"."workflow_status_executor_id_index";
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -552,6 +558,7 @@ def get_dbos_migrations(
         get_dbos_migration_twentyone(schema),
         get_dbos_migration_twentytwo(schema),
         get_dbos_migration_twentythree(schema),
+        get_dbos_migration_twentyfour(schema),
     ]
 
 
@@ -767,6 +774,10 @@ DROP INDEX IF EXISTS "idx_workflow_status_parent_workflow_id";
 CREATE INDEX "idx_workflow_status_parent_workflow_id" ON "workflow_status" ("parent_workflow_id") WHERE "parent_workflow_id" IS NOT NULL;
 """
 
+sqlite_migration_twentyfour = """
+DROP INDEX IF EXISTS "workflow_status_executor_id_index";
+"""
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -790,4 +801,5 @@ sqlite_migrations = [
     sqlite_migration_twentyone,
     sqlite_migration_twentytwo,
     sqlite_migration_twentythree,
+    sqlite_migration_twentyfour,
 ]
