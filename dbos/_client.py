@@ -22,7 +22,7 @@ import sqlalchemy as sa
 
 from dbos._context import MaxPriority, MinPriority
 from dbos._core import DEFAULT_POLLING_INTERVAL
-from dbos._queue import Queue, QueueConflictResolution, QueueRateLimit
+from dbos._queue import Queue, QueueConflictResolution, QueueRateLimit, log_queue
 from dbos._sys_db import SystemDatabase
 from dbos._utils import generate_uuid
 
@@ -344,7 +344,7 @@ class DBOSClient:
                 "'always_update' or 'never_update'."
             )
 
-        self._sys_db.upsert_queue(
+        inserted = self._sys_db.upsert_queue(
             name=name,
             concurrency=concurrency,
             worker_concurrency=worker_concurrency,
@@ -357,6 +357,8 @@ class DBOSClient:
         )
         queue = self._sys_db.get_queue(name, client_system_database=self._sys_db)
         assert queue is not None, f"Queue {name} missing from database after upsert"
+        if inserted:
+            log_queue(queue)
         return queue
 
     def retrieve_queue(self, name: str) -> Optional[Queue]:

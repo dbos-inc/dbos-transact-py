@@ -428,7 +428,10 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                             "the conflict."
                         )
                         continue
-                    if queue.name in queue_threads:
+                    if (
+                        queue.name in queue_threads
+                        and queue_threads[queue.name].is_alive()
+                    ):
                         continue
                     current_queues[queue.name] = queue
             except Exception as e:
@@ -475,6 +478,25 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                 )
 
 
+def log_queue(q: Queue) -> None:
+    """Log a single queue's name and its set parameters. Unset parameters
+    are omitted, matching ``Queue: <name> (concurrency=…, worker_concurrency=…,
+    limit=N/Ts, priority, partitioned)``."""
+    opts = []
+    if q.concurrency is not None:
+        opts.append(f"concurrency={q.concurrency}")
+    if q.worker_concurrency is not None:
+        opts.append(f"worker_concurrency={q.worker_concurrency}")
+    if q.limiter is not None:
+        opts.append(f"limit={q.limiter['limit']}/{q.limiter['period']}s")
+    if q.priority_enabled:
+        opts.append("priority")
+    if q.partition_queue:
+        opts.append("partitioned")
+    opts_str = f" ({', '.join(opts)})" if opts else ""
+    dbos_logger.info(f"Queue: {q.name}{opts_str}")
+
+
 def log_queues(dbos: "DBOS", listening_queues: Optional[list[str]]) -> None:
     """Log all queues this process will listen to on DBOS launch.
 
@@ -496,16 +518,4 @@ def log_queues(dbos: "DBOS", listening_queues: Optional[list[str]]) -> None:
 
     dbos.logger.info(f"Listening to {len(queues)} queues:")
     for q in queues.values():
-        opts = []
-        if q.concurrency is not None:
-            opts.append(f"concurrency={q.concurrency}")
-        if q.worker_concurrency is not None:
-            opts.append(f"worker_concurrency={q.worker_concurrency}")
-        if q.limiter is not None:
-            opts.append(f"limit={q.limiter['limit']}/{q.limiter['period']}s")
-        if q.priority_enabled:
-            opts.append("priority")
-        if q.partition_queue:
-            opts.append("partitioned")
-        opts_str = f" ({', '.join(opts)})" if opts else ""
-        dbos_logger.info(f"Queue: {q.name}{opts_str}")
+        log_queue(q)
