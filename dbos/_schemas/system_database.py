@@ -15,7 +15,6 @@ from sqlalchemy import (
     String,
     Table,
     Text,
-    UniqueConstraint,
     text,
 )
 
@@ -93,10 +92,13 @@ class SystemSchema:
         Index("idx_workflow_status_delayed", "delay_until_epoch_ms"),
         Index("workflow_status_executor_id_index", "executor_id"),
         Index("workflow_status_status_index", "status"),
-        UniqueConstraint(
+        Index(
+            "uq_workflow_status_queue_name_dedup_id",
             "queue_name",
             "deduplication_id",
-            name="uq_workflow_status_queue_name_dedup_id",
+            unique=True,
+            postgresql_where=text("deduplication_id IS NOT NULL"),
+            sqlite_where=text("deduplication_id IS NOT NULL"),
         ),
     )
 

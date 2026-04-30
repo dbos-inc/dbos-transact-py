@@ -531,6 +531,13 @@ DROP INDEX IF EXISTS "{schema}"."workflow_status_executor_id_index";
 """
 
 
+def get_dbos_migration_twentyfive(schema: str) -> str:
+    return f"""
+ALTER TABLE "{schema}".workflow_status DROP CONSTRAINT IF EXISTS uq_workflow_status_queue_name_dedup_id;
+CREATE UNIQUE INDEX "uq_workflow_status_queue_name_dedup_id" ON "{schema}"."workflow_status" ("queue_name", "deduplication_id") WHERE "deduplication_id" IS NOT NULL;
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -559,6 +566,7 @@ def get_dbos_migrations(
         get_dbos_migration_twentytwo(schema),
         get_dbos_migration_twentythree(schema),
         get_dbos_migration_twentyfour(schema),
+        get_dbos_migration_twentyfive(schema),
     ]
 
 
@@ -778,6 +786,11 @@ sqlite_migration_twentyfour = """
 DROP INDEX IF EXISTS "workflow_status_executor_id_index";
 """
 
+sqlite_migration_twentyfive = """
+DROP INDEX IF EXISTS "uq_workflow_status_queue_name_dedup_id";
+CREATE UNIQUE INDEX "uq_workflow_status_queue_name_dedup_id" ON "workflow_status" ("queue_name", "deduplication_id") WHERE "deduplication_id" IS NOT NULL;
+"""
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -802,4 +815,5 @@ sqlite_migrations = [
     sqlite_migration_twentytwo,
     sqlite_migration_twentythree,
     sqlite_migration_twentyfour,
+    sqlite_migration_twentyfive,
 ]
