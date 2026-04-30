@@ -459,3 +459,71 @@ def test_concurrent_migrations(db_engine: sa.Engine, skip_with_sqlite: None) -> 
         pytest.fail(
             f"{len(errors)}/{num_instances} concurrent migrations failed:\n{error_details}"
         )
+
+
+def test_runner_resumes_after_invalid_index(dbos: DBOS, skip_with_sqlite: None) -> None:
+    """Simulate a CREATE INDEX CONCURRENTLY that crashed mid-build (leaving an
+    INVALID index) and verify the runner cleans it up and re-runs the
+    migration on the next start."""
+    from dbos._migration import run_dbos_migrations
+
+    engine = dbos._sys_db.engine
+    schema = "dbos"
+    target_index = "idx_workflow_status_in_flight"
+    rewind_to_version = 31  # one before migration 32 which builds target_index
+    final_version = len(get_dbos_migrations(schema, True))
+
+    # Drop the existing valid index, then plant an INVALID index of the same
+    # name. Flipping pg_index.indisvalid mimics what Postgres leaves behind
+    # when CREATE INDEX CONCURRENTLY aborts mid-build.
+    with engine.connect() as raw_conn:
+        conn = raw_conn.execution_options(isolation_level="AUTOCOMMIT")
+        conn.execute(sa.text(f'DROP INDEX IF EXISTS "{schema}"."{target_index}"'))
+        conn.execute(
+            sa.text(
+                f'CREATE INDEX "{target_index}" ON "{schema}"."workflow_status" '
+                "(queue_name, status, priority, created_at) "
+                "WHERE status IN ('ENQUEUED', 'PENDING')"
+            )
+        )
+        conn.execute(
+            sa.text(
+                "UPDATE pg_index SET indisvalid = false "
+                f"WHERE indexrelid = '{schema}.{target_index}'::regclass"
+            )
+        )
+
+    # Confirm the planted index is INVALID
+    with engine.connect() as conn:
+        valid = conn.execute(
+            sa.text(
+                "SELECT indisvalid FROM pg_index "
+                f"WHERE indexrelid = '{schema}.{target_index}'::regclass"
+            )
+        ).scalar()
+        assert valid is False
+
+    # Rewind the version counter so the runner re-executes migration 32
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(f'UPDATE "{schema}".dbos_migrations SET version = :v'),
+            {"v": rewind_to_version},
+        )
+
+    # Re-run migrations: cleanup should drop the invalid index, then 32+ rebuild
+    run_dbos_migrations(engine, schema, use_listen_notify=True)
+
+    # The index now exists and is valid, and the version is back at the latest
+    with engine.connect() as conn:
+        valid = conn.execute(
+            sa.text(
+                "SELECT indisvalid FROM pg_index "
+                f"WHERE indexrelid = '{schema}.{target_index}'::regclass"
+            )
+        ).scalar()
+        assert valid is True
+
+        version = conn.execute(
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+        ).scalar()
+        assert version == final_version

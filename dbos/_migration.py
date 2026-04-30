@@ -598,7 +598,7 @@ def get_dbos_migration_twentytwo(schema: str, is_cockroach: bool) -> str:
 
 def get_dbos_migration_twentythree(schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} "idx_workflow_status_forked_from" ON "{schema}"."workflow_status" ("forked_from") WHERE "forked_from" IS NOT NULL'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_forked_from" ON "{schema}"."workflow_status" ("forked_from") WHERE "forked_from" IS NOT NULL'
 
 
 def get_dbos_migration_twentyfour(schema: str, is_cockroach: bool) -> str:
@@ -610,7 +610,7 @@ def get_dbos_migration_twentyfour(schema: str, is_cockroach: bool) -> str:
 
 def get_dbos_migration_twentyfive(schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} "idx_workflow_status_parent_workflow_id" ON "{schema}"."workflow_status" ("parent_workflow_id") WHERE "parent_workflow_id" IS NOT NULL'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_parent_workflow_id" ON "{schema}"."workflow_status" ("parent_workflow_id") WHERE "parent_workflow_id" IS NOT NULL'
 
 
 def get_dbos_migration_twentysix(schema: str, is_cockroach: bool) -> str:
@@ -620,13 +620,9 @@ def get_dbos_migration_twentysix(schema: str, is_cockroach: bool) -> str:
 
 def get_dbos_migration_twentyseven(schema: str, is_cockroach: bool) -> str:
     # The new partial unique index uses a different name from the original
-    # constraint to avoid a naming collision: Postgres auto-creates an index
-    # with the constraint name, so we can't reuse it until the constraint is
-    # dropped. Creating with a new name first preserves uniqueness throughout
-    # the transition (both the old constraint and new index enforce identical
-    # semantics, since NULLs are SQL-distinct in the old constraint).
+    # constraint to avoid a naming collision
     c = _concurrently(is_cockroach)
-    return f'CREATE UNIQUE INDEX {c} "uq_workflow_status_dedup_id" ON "{schema}"."workflow_status" ("queue_name", "deduplication_id") WHERE "deduplication_id" IS NOT NULL'
+    return f'CREATE UNIQUE INDEX {c} IF NOT EXISTS "uq_workflow_status_dedup_id" ON "{schema}"."workflow_status" ("queue_name", "deduplication_id") WHERE "deduplication_id" IS NOT NULL'
 
 
 def get_dbos_migration_twentyeight(schema: str, is_cockroach: bool) -> str:
@@ -641,12 +637,12 @@ def get_dbos_migration_twentyeight(schema: str, is_cockroach: bool) -> str:
 
 def get_dbos_migration_twentynine(schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} "idx_workflow_status_pending" ON "{schema}"."workflow_status" ("workflow_uuid") WHERE "status" = \'PENDING\''
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_pending" ON "{schema}"."workflow_status" ("workflow_uuid") WHERE "status" = \'PENDING\''
 
 
 def get_dbos_migration_thirty(schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} "idx_workflow_status_failed" ON "{schema}"."workflow_status" ("status", "created_at") WHERE "status" IN (\'ERROR\', \'CANCELLED\', \'MAX_RECOVERY_ATTEMPTS_EXCEEDED\')'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_failed" ON "{schema}"."workflow_status" ("status", "created_at") WHERE "status" IN (\'ERROR\', \'CANCELLED\', \'MAX_RECOVERY_ATTEMPTS_EXCEEDED\')'
 
 
 def get_dbos_migration_thirtyone(schema: str, is_cockroach: bool) -> str:
@@ -656,18 +652,17 @@ def get_dbos_migration_thirtyone(schema: str, is_cockroach: bool) -> str:
 
 def get_dbos_migration_thirtytwo(schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} "idx_workflow_status_in_flight" ON "{schema}"."workflow_status" ("queue_name", "status", "priority", "created_at") WHERE "status" IN (\'ENQUEUED\', \'PENDING\')'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_in_flight" ON "{schema}"."workflow_status" ("queue_name", "status", "priority", "created_at") WHERE "status" IN (\'ENQUEUED\', \'PENDING\')'
 
 
 def get_dbos_migration_thirtythree(schema: str) -> str:
-    # ALTER TABLE ADD COLUMN with constant default is fast on Postgres 11+
-    # (catalog-only update via attmissingval); runs in a regular transaction.
-    return f'ALTER TABLE "{schema}"."workflow_status" ADD COLUMN "rate_limited" BOOLEAN NOT NULL DEFAULT FALSE'
+    # ALTER TABLE ADD COLUMN with constant default is fast (catalog-only update via attmissingval).
+    return f'ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "rate_limited" BOOLEAN NOT NULL DEFAULT FALSE'
 
 
 def get_dbos_migration_thirtyfour(schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} "idx_workflow_status_rate_limited" ON "{schema}"."workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "rate_limited" = TRUE'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_rate_limited" ON "{schema}"."workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "rate_limited" = TRUE'
 
 
 def get_dbos_migration_thirtyfive(schema: str, is_cockroach: bool) -> str:
@@ -921,33 +916,33 @@ CREATE TABLE queues (
 
 sqlite_migration_twentytwo = 'DROP INDEX IF EXISTS "idx_workflow_status_forked_from"'
 
-sqlite_migration_twentythree = 'CREATE INDEX "idx_workflow_status_forked_from" ON "workflow_status" ("forked_from") WHERE "forked_from" IS NOT NULL'
+sqlite_migration_twentythree = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_forked_from" ON "workflow_status" ("forked_from") WHERE "forked_from" IS NOT NULL'
 
 sqlite_migration_twentyfour = (
     'DROP INDEX IF EXISTS "idx_workflow_status_parent_workflow_id"'
 )
 
-sqlite_migration_twentyfive = 'CREATE INDEX "idx_workflow_status_parent_workflow_id" ON "workflow_status" ("parent_workflow_id") WHERE "parent_workflow_id" IS NOT NULL'
+sqlite_migration_twentyfive = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_parent_workflow_id" ON "workflow_status" ("parent_workflow_id") WHERE "parent_workflow_id" IS NOT NULL'
 
 sqlite_migration_twentysix = 'DROP INDEX IF EXISTS "workflow_status_executor_id_index"'
 
-sqlite_migration_twentyseven = 'CREATE UNIQUE INDEX "uq_workflow_status_dedup_id" ON "workflow_status" ("queue_name", "deduplication_id") WHERE "deduplication_id" IS NOT NULL'
+sqlite_migration_twentyseven = 'CREATE UNIQUE INDEX IF NOT EXISTS "uq_workflow_status_dedup_id" ON "workflow_status" ("queue_name", "deduplication_id") WHERE "deduplication_id" IS NOT NULL'
 
 sqlite_migration_twentyeight = (
     'DROP INDEX IF EXISTS "uq_workflow_status_queue_name_dedup_id"'
 )
 
-sqlite_migration_twentynine = 'CREATE INDEX "idx_workflow_status_pending" ON "workflow_status" ("workflow_uuid") WHERE "status" = \'PENDING\''
+sqlite_migration_twentynine = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_pending" ON "workflow_status" ("workflow_uuid") WHERE "status" = \'PENDING\''
 
-sqlite_migration_thirty = 'CREATE INDEX "idx_workflow_status_failed" ON "workflow_status" ("status", "created_at") WHERE "status" IN (\'ERROR\', \'CANCELLED\', \'MAX_RECOVERY_ATTEMPTS_EXCEEDED\')'
+sqlite_migration_thirty = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_failed" ON "workflow_status" ("status", "created_at") WHERE "status" IN (\'ERROR\', \'CANCELLED\', \'MAX_RECOVERY_ATTEMPTS_EXCEEDED\')'
 
 sqlite_migration_thirtyone = 'DROP INDEX IF EXISTS "workflow_status_status_index"'
 
-sqlite_migration_thirtytwo = 'CREATE INDEX "idx_workflow_status_in_flight" ON "workflow_status" ("queue_name", "status", "priority", "created_at") WHERE "status" IN (\'ENQUEUED\', \'PENDING\')'
+sqlite_migration_thirtytwo = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_in_flight" ON "workflow_status" ("queue_name", "status", "priority", "created_at") WHERE "status" IN (\'ENQUEUED\', \'PENDING\')'
 
 sqlite_migration_thirtythree = 'ALTER TABLE "workflow_status" ADD COLUMN "rate_limited" BOOLEAN NOT NULL DEFAULT FALSE'
 
-sqlite_migration_thirtyfour = 'CREATE INDEX "idx_workflow_status_rate_limited" ON "workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "rate_limited" = TRUE'
+sqlite_migration_thirtyfour = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_rate_limited" ON "workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "rate_limited" = TRUE'
 
 sqlite_migration_thirtyfive = (
     'DROP INDEX IF EXISTS "idx_workflow_status_queue_status_started"'
