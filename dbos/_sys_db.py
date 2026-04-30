@@ -3064,13 +3064,10 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.queue_partition_key
                     == queue_partition_key
                 )
-            if queue._priority_enabled:
-                query = query.order_by(
-                    SystemSchema.workflow_status.c.priority.asc(),
-                    SystemSchema.workflow_status.c.created_at.asc(),
-                )
-            else:
-                query = query.order_by(SystemSchema.workflow_status.c.created_at.asc())
+            query = query.order_by(
+                SystemSchema.workflow_status.c.priority.asc(),
+                SystemSchema.workflow_status.c.created_at.asc(),
+            )
             if max_tasks != sys.maxsize:
                 query = query.limit(int(max_tasks))
 
