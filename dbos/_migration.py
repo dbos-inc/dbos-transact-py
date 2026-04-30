@@ -511,6 +511,20 @@ CREATE TABLE "{schema}".queues (
 """
 
 
+def get_dbos_migration_twentytwo(schema: str) -> str:
+    return f"""
+DROP INDEX IF EXISTS "{schema}"."idx_workflow_status_forked_from";
+CREATE INDEX "idx_workflow_status_forked_from" ON "{schema}"."workflow_status" ("forked_from") WHERE "forked_from" IS NOT NULL;
+"""
+
+
+def get_dbos_migration_twentythree(schema: str) -> str:
+    return f"""
+DROP INDEX IF EXISTS "{schema}"."idx_workflow_status_parent_workflow_id";
+CREATE INDEX "idx_workflow_status_parent_workflow_id" ON "{schema}"."workflow_status" ("parent_workflow_id") WHERE "parent_workflow_id" IS NOT NULL;
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -536,6 +550,8 @@ def get_dbos_migrations(
         get_dbos_migration_nineteen(schema),
         get_dbos_migration_twenty(schema, use_listen_notify, is_cockroach),
         get_dbos_migration_twentyone(schema),
+        get_dbos_migration_twentytwo(schema),
+        get_dbos_migration_twentythree(schema),
     ]
 
 
@@ -741,6 +757,16 @@ CREATE TABLE queues (
 );
 """
 
+sqlite_migration_twentytwo = """
+DROP INDEX IF EXISTS "idx_workflow_status_forked_from";
+CREATE INDEX "idx_workflow_status_forked_from" ON "workflow_status" ("forked_from") WHERE "forked_from" IS NOT NULL;
+"""
+
+sqlite_migration_twentythree = """
+DROP INDEX IF EXISTS "idx_workflow_status_parent_workflow_id";
+CREATE INDEX "idx_workflow_status_parent_workflow_id" ON "workflow_status" ("parent_workflow_id") WHERE "parent_workflow_id" IS NOT NULL;
+"""
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -762,4 +788,6 @@ sqlite_migrations = [
     sqlite_migration_nineteen,
     # There is no SQLite version of migration twenty
     sqlite_migration_twentyone,
+    sqlite_migration_twentytwo,
+    sqlite_migration_twentythree,
 ]
