@@ -531,9 +531,17 @@ DROP INDEX IF EXISTS "{schema}"."workflow_status_executor_id_index";
 """
 
 
-def get_dbos_migration_twentyfive(schema: str) -> str:
+def get_dbos_migration_twentyfive(schema: str, is_cockroach: bool) -> str:
+    # CockroachDB implements unique constraints as indexes and does not support
+    # ALTER TABLE DROP CONSTRAINT for them; it requires DROP INDEX ... CASCADE.
+    # Postgres rejects DROP INDEX on a constraint-backed index, so we dispatch.
+    drop = (
+        f'DROP INDEX IF EXISTS "{schema}"."uq_workflow_status_queue_name_dedup_id" CASCADE;'
+        if is_cockroach
+        else f'ALTER TABLE "{schema}".workflow_status DROP CONSTRAINT IF EXISTS uq_workflow_status_queue_name_dedup_id;'
+    )
     return f"""
-ALTER TABLE "{schema}".workflow_status DROP CONSTRAINT IF EXISTS uq_workflow_status_queue_name_dedup_id;
+{drop}
 CREATE UNIQUE INDEX "uq_workflow_status_queue_name_dedup_id" ON "{schema}"."workflow_status" ("queue_name", "deduplication_id") WHERE "deduplication_id" IS NOT NULL;
 """
 
@@ -608,7 +616,7 @@ def get_dbos_migrations(
         get_dbos_migration_twentytwo(schema),
         get_dbos_migration_twentythree(schema),
         get_dbos_migration_twentyfour(schema),
-        get_dbos_migration_twentyfive(schema),
+        get_dbos_migration_twentyfive(schema, is_cockroach),
         get_dbos_migration_twentysix(schema),
         get_dbos_migration_twentyseven(schema),
         get_dbos_migration_twentyeight(schema),
