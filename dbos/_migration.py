@@ -556,6 +556,24 @@ DROP INDEX IF EXISTS "{schema}"."workflow_status_status_index";
 """
 
 
+def get_dbos_migration_twentynine(schema: str) -> str:
+    return f"""
+CREATE INDEX "idx_workflow_status_in_flight" ON "{schema}"."workflow_status" ("queue_name", "status", "priority", "created_at") WHERE "status" IN ('ENQUEUED', 'PENDING');
+"""
+
+
+def get_dbos_migration_thirty(schema: str) -> str:
+    return f"""
+CREATE INDEX "idx_workflow_status_started" ON "{schema}"."workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "started_at_epoch_ms" IS NOT NULL;
+"""
+
+
+def get_dbos_migration_thirtyone(schema: str) -> str:
+    return f"""
+DROP INDEX IF EXISTS "{schema}"."idx_workflow_status_queue_status_started";
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -588,6 +606,9 @@ def get_dbos_migrations(
         get_dbos_migration_twentysix(schema),
         get_dbos_migration_twentyseven(schema),
         get_dbos_migration_twentyeight(schema),
+        get_dbos_migration_twentynine(schema),
+        get_dbos_migration_thirty(schema),
+        get_dbos_migration_thirtyone(schema),
     ]
 
 
@@ -824,6 +845,18 @@ sqlite_migration_twentyeight = """
 DROP INDEX IF EXISTS "workflow_status_status_index";
 """
 
+sqlite_migration_twentynine = """
+CREATE INDEX "idx_workflow_status_in_flight" ON "workflow_status" ("queue_name", "status", "priority", "created_at") WHERE "status" IN ('ENQUEUED', 'PENDING');
+"""
+
+sqlite_migration_thirty = """
+CREATE INDEX "idx_workflow_status_started" ON "workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "started_at_epoch_ms" IS NOT NULL;
+"""
+
+sqlite_migration_thirtyone = """
+DROP INDEX IF EXISTS "idx_workflow_status_queue_status_started";
+"""
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -852,4 +885,7 @@ sqlite_migrations = [
     sqlite_migration_twentysix,
     sqlite_migration_twentyseven,
     sqlite_migration_twentyeight,
+    sqlite_migration_twentynine,
+    sqlite_migration_thirty,
+    sqlite_migration_thirtyone,
 ]

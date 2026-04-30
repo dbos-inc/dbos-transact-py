@@ -113,6 +113,22 @@ class SystemSchema:
             ),
         ),
         Index(
+            "idx_workflow_status_in_flight",
+            "queue_name",
+            "status",
+            "priority",
+            "created_at",
+            postgresql_where=text("status IN ('ENQUEUED', 'PENDING')"),
+            sqlite_where=text("status IN ('ENQUEUED', 'PENDING')"),
+        ),
+        Index(
+            "idx_workflow_status_started",
+            "queue_name",
+            "started_at_epoch_ms",
+            postgresql_where=text("started_at_epoch_ms IS NOT NULL"),
+            sqlite_where=text("started_at_epoch_ms IS NOT NULL"),
+        ),
+        Index(
             "uq_workflow_status_queue_name_dedup_id",
             "queue_name",
             "deduplication_id",
