@@ -89,9 +89,29 @@ class SystemSchema:
         Column("serialization", Text()),
         Column("delay_until_epoch_ms", BigInteger, nullable=True),
         Index("workflow_status_created_at_index", "created_at"),
-        Index("idx_workflow_status_delayed", "delay_until_epoch_ms"),
-        Index("workflow_status_executor_id_index", "executor_id"),
-        Index("workflow_status_status_index", "status"),
+        Index(
+            "idx_workflow_status_delayed",
+            "delay_until_epoch_ms",
+            postgresql_where=text("status = 'DELAYED'"),
+            sqlite_where=text("status = 'DELAYED'"),
+        ),
+        Index(
+            "idx_workflow_status_pending",
+            "workflow_uuid",
+            postgresql_where=text("status = 'PENDING'"),
+            sqlite_where=text("status = 'PENDING'"),
+        ),
+        Index(
+            "idx_workflow_status_failed",
+            "status",
+            "created_at",
+            postgresql_where=text(
+                "status IN ('ERROR', 'CANCELLED', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED')"
+            ),
+            sqlite_where=text(
+                "status IN ('ERROR', 'CANCELLED', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED')"
+            ),
+        ),
         Index(
             "uq_workflow_status_queue_name_dedup_id",
             "queue_name",

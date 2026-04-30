@@ -538,6 +538,24 @@ CREATE UNIQUE INDEX "uq_workflow_status_queue_name_dedup_id" ON "{schema}"."work
 """
 
 
+def get_dbos_migration_twentysix(schema: str) -> str:
+    return f"""
+CREATE INDEX "idx_workflow_status_pending" ON "{schema}"."workflow_status" ("workflow_uuid") WHERE "status" = 'PENDING';
+"""
+
+
+def get_dbos_migration_twentyseven(schema: str) -> str:
+    return f"""
+CREATE INDEX "idx_workflow_status_failed" ON "{schema}"."workflow_status" ("status", "created_at") WHERE "status" IN ('ERROR', 'CANCELLED', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED');
+"""
+
+
+def get_dbos_migration_twentyeight(schema: str) -> str:
+    return f"""
+DROP INDEX IF EXISTS "{schema}"."workflow_status_status_index";
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -567,6 +585,9 @@ def get_dbos_migrations(
         get_dbos_migration_twentythree(schema),
         get_dbos_migration_twentyfour(schema),
         get_dbos_migration_twentyfive(schema),
+        get_dbos_migration_twentysix(schema),
+        get_dbos_migration_twentyseven(schema),
+        get_dbos_migration_twentyeight(schema),
     ]
 
 
@@ -791,6 +812,18 @@ DROP INDEX IF EXISTS "uq_workflow_status_queue_name_dedup_id";
 CREATE UNIQUE INDEX "uq_workflow_status_queue_name_dedup_id" ON "workflow_status" ("queue_name", "deduplication_id") WHERE "deduplication_id" IS NOT NULL;
 """
 
+sqlite_migration_twentysix = """
+CREATE INDEX "idx_workflow_status_pending" ON "workflow_status" ("workflow_uuid") WHERE "status" = 'PENDING';
+"""
+
+sqlite_migration_twentyseven = """
+CREATE INDEX "idx_workflow_status_failed" ON "workflow_status" ("status", "created_at") WHERE "status" IN ('ERROR', 'CANCELLED', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED');
+"""
+
+sqlite_migration_twentyeight = """
+DROP INDEX IF EXISTS "workflow_status_status_index";
+"""
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -816,4 +849,7 @@ sqlite_migrations = [
     sqlite_migration_twentythree,
     sqlite_migration_twentyfour,
     sqlite_migration_twentyfive,
+    sqlite_migration_twentysix,
+    sqlite_migration_twentyseven,
+    sqlite_migration_twentyeight,
 ]
