@@ -98,7 +98,7 @@ class SystemSchema:
         ),
         Index(
             "idx_workflow_status_pending",
-            "workflow_uuid",
+            "created_at",
             postgresql_where=text("status = 'PENDING'"),
             sqlite_where=text("status = 'PENDING'"),
         ),

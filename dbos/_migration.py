@@ -637,7 +637,7 @@ def get_dbos_migration_twentyeight(schema: str, is_cockroach: bool) -> str:
 
 def get_dbos_migration_twentynine(schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_pending" ON "{schema}"."workflow_status" ("workflow_uuid") WHERE "status" = \'PENDING\''
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_pending" ON "{schema}"."workflow_status" ("created_at") WHERE "status" = \'PENDING\''
 
 
 def get_dbos_migration_thirty(schema: str, is_cockroach: bool) -> str:
@@ -932,7 +932,7 @@ sqlite_migration_twentyeight = (
     'DROP INDEX IF EXISTS "uq_workflow_status_queue_name_dedup_id"'
 )
 
-sqlite_migration_twentynine = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_pending" ON "workflow_status" ("workflow_uuid") WHERE "status" = \'PENDING\''
+sqlite_migration_twentynine = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_pending" ON "workflow_status" ("created_at") WHERE "status" = \'PENDING\''
 
 sqlite_migration_thirty = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_failed" ON "workflow_status" ("status", "created_at") WHERE "status" IN (\'ERROR\', \'CANCELLED\', \'MAX_RECOVERY_ATTEMPTS_EXCEEDED\')'
 
