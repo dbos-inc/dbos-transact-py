@@ -461,6 +461,53 @@ def test_concurrent_migrations(db_engine: sa.Engine, skip_with_sqlite: None) -> 
         )
 
 
+def test_version_not_bumped_on_migration_failure(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """If a migration raises mid-flight, the version counter must stay at the
+    prior value so the runner re-attempts it on the next start."""
+    from unittest.mock import patch
+
+    from dbos._migration import run_dbos_migrations
+
+    engine = dbos._sys_db.engine
+    schema = "dbos"
+    rewind_to_version = 31  # one before migration 32
+    final_version = len(get_dbos_migrations(schema, True))
+
+    # Rewind so migration 32 is pending again
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(f'UPDATE "{schema}".dbos_migrations SET version = :v'),
+            {"v": rewind_to_version},
+        )
+
+    # Replace migration 32 with invalid SQL. Its execution must raise, and
+    # the runner must not advance the version past 31.
+    with patch(
+        "dbos._migration.get_dbos_migration_thirtytwo",
+        return_value="THIS IS NOT VALID SQL",
+    ):
+        with pytest.raises(Exception):
+            run_dbos_migrations(engine, schema, use_listen_notify=True)
+
+    with engine.connect() as conn:
+        version = conn.execute(
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+        ).scalar()
+        assert version == rewind_to_version
+
+    # Re-run with the real migrations: IF NOT EXISTS guards make 32+ idempotent
+    # given the index still exists from the original fixture migration.
+    run_dbos_migrations(engine, schema, use_listen_notify=True)
+
+    with engine.connect() as conn:
+        version = conn.execute(
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+        ).scalar()
+        assert version == final_version
+
+
 def test_runner_resumes_after_invalid_index(dbos: DBOS, skip_with_sqlite: None) -> None:
     """Simulate a CREATE INDEX CONCURRENTLY that crashed mid-build (leaving an
     INVALID index) and verify the runner cleans it up and re-runs the
