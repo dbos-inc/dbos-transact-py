@@ -461,6 +461,32 @@ def test_concurrent_migrations(db_engine: sa.Engine, skip_with_sqlite: None) -> 
         )
 
 
+def test_online_migrations_are_idempotent(dbos: DBOS, skip_with_sqlite: None) -> None:
+    """Re-running every migration from the first online one onward against an
+    already-migrated schema must succeed without error. Guards against
+    missing IF [NOT] EXISTS clauses in any drop/create migration."""
+    from dbos._migration import _ONLINE_MIGRATIONS, run_dbos_migrations
+
+    engine = dbos._sys_db.engine
+    schema = "dbos"
+    rewind_to = min(_ONLINE_MIGRATIONS) - 1
+    final_version = len(get_dbos_migrations(schema, True))
+
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(f'UPDATE "{schema}".dbos_migrations SET version = :v'),
+            {"v": rewind_to},
+        )
+
+    run_dbos_migrations(engine, schema, use_listen_notify=True)
+
+    with engine.connect() as conn:
+        version = conn.execute(
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+        ).scalar()
+        assert version == final_version
+
+
 def test_version_not_bumped_on_migration_failure(
     dbos: DBOS, skip_with_sqlite: None
 ) -> None:
