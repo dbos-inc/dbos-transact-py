@@ -239,15 +239,15 @@ class Queue:
 
     def _validate_enqueue(self, ctx: Optional[DBOSContext]) -> None:
         self._require_dbos_bound()
-        if ctx is not None and ctx.priority is not None and not self.priority_enabled:
+        if ctx is not None and ctx.priority is not None and not self._priority_enabled:
             raise Exception(
                 f"Priority is not enabled for queue {self.name}. Setting priority will not have any effect."
             )
-        if self.partition_queue and (ctx is None or ctx.queue_partition_key is None):
+        if self._partition_queue and (ctx is None or ctx.queue_partition_key is None):
             raise Exception(
                 f"A workflow cannot be enqueued on partitioned queue {self.name} without a partition key"
             )
-        if ctx and ctx.queue_partition_key and not self.partition_queue:
+        if ctx and ctx.queue_partition_key and not self._partition_queue:
             raise Exception(
                 f"You can only use a partition key on a partition-enabled queue. Key {ctx.queue_partition_key} was used with non-partitioned queue {self.name}"
             )
@@ -483,15 +483,15 @@ def log_queue(q: Queue) -> None:
     are omitted, matching ``Queue: <name> (concurrency=…, worker_concurrency=…,
     limit=N/Ts, priority, partitioned)``."""
     opts = []
-    if q.concurrency is not None:
-        opts.append(f"concurrency={q.concurrency}")
-    if q.worker_concurrency is not None:
-        opts.append(f"worker_concurrency={q.worker_concurrency}")
-    if q.limiter is not None:
-        opts.append(f"limit={q.limiter['limit']}/{q.limiter['period']}s")
-    if q.priority_enabled:
+    if q._concurrency is not None:
+        opts.append(f"concurrency={q._concurrency}")
+    if q._worker_concurrency is not None:
+        opts.append(f"worker_concurrency={q._worker_concurrency}")
+    if q._limiter is not None:
+        opts.append(f"limit={q._limiter['limit']}/{q._limiter['period']}s")
+    if q._priority_enabled:
         opts.append("priority")
-    if q.partition_queue:
+    if q._partition_queue:
         opts.append("partitioned")
     opts_str = f" ({', '.join(opts)})" if opts else ""
     dbos_logger.info(f"Queue: {q.name}{opts_str}")
