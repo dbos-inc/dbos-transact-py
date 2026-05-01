@@ -97,9 +97,9 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             for queue in queues.values():
                 queue_metadata = {
                     "name": queue.name,
-                    "concurrency": queue.concurrency,
-                    "workerConcurrency": queue.worker_concurrency,
-                    "rateLimit": queue.limiter,
+                    "concurrency": queue._concurrency,
+                    "workerConcurrency": queue._worker_concurrency,
+                    "rateLimit": queue._limiter,
                 }
                 # Remove keys with None values
                 queue_metadata = {
