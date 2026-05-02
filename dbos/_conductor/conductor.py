@@ -29,7 +29,12 @@ if TYPE_CHECKING:
     from dbos import DBOS
 
 ws_version = version("websockets")
-use_keepalive = ws_version < "15.0"
+# Always run our own keepalive thread. On websockets>=15.0 the library's
+# built-in keepalive can wedge: a ping timeout followed by a stuck close
+# handshake leaves the underlying socket open, recv_events blocked, and
+# our run() loop's recv() blocked forever — orphaning the executor from
+# the conductor with no reconnect.
+use_keepalive = True
 
 
 class ConductorWebsocket(threading.Thread):
@@ -50,7 +55,6 @@ class ConductorWebsocket(threading.Thread):
         self.url = (
             conductor_url.rstrip("/") + f"/websocket/{self.app_name}/{conductor_key}"
         )
-        # TODO: once we can upgrade to websockets>=15.0, we can always use the built-in keepalive
         self.ping_interval = 20  # Time between pings in seconds
         self.ping_timeout = 15  # Time to wait for a pong response in seconds
         self.keepalive_thread: Optional[threading.Thread] = None
@@ -101,6 +105,11 @@ class ConductorWebsocket(threading.Thread):
                     close_timeout=5,
                     logger=self.dbos.logger,
                     max_size=None,
+                    # Disable the library's built-in keepalive — we run our
+                    # own (see use_keepalive). The library's keepalive can
+                    # wedge if the close handshake stalls, leaving recv()
+                    # blocked indefinitely.
+                    ping_interval=None,
                 ) as websocket:
                     self.websocket = websocket
                     if use_keepalive and self.keepalive_thread is None:
