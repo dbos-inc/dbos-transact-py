@@ -655,6 +655,27 @@ class DBOS:
                 )
                 self.conductor_websocket.start()
                 self._background_threads.append(self.conductor_websocket)
+            elif GlobalParams.dbos_cloud:
+                cloud_app_name = os.environ.get("DBOS__CONDUCTOR_APP_NAME")
+                cloud_conductor_key = os.environ.get("DBOS__CONDUCTOR_KEY")
+                cloud_conductor_url = os.environ.get("DBOS__CONDUCTOR_URL")
+                if (
+                    cloud_app_name is not None
+                    and cloud_conductor_key is not None
+                    and cloud_conductor_url is not None
+                ):
+                    evt = threading.Event()
+                    self.background_thread_stop_events.append(evt)
+                    dbos_logger.debug("Starting Conductor thread (DBOS Cloud)")
+                    self.conductor_websocket = ConductorWebsocket(
+                        self,
+                        app_name=cloud_app_name,
+                        conductor_url=cloud_conductor_url,
+                        conductor_key=cloud_conductor_key,
+                        evt=evt,
+                    )
+                    self.conductor_websocket.start()
+                    self._background_threads.append(self.conductor_websocket)
 
             # Grab any pollers that were deferred and start them
             dbos_logger.debug("Starting event receivers")
